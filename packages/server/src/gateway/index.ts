@@ -601,7 +601,7 @@ export class MachineGateway {
       "loopany — in-run agent CLI. Verbs:",
       "",
       "always available:",
-      "  report [--status new|done|error] [--message <s>] [--sample <n>] [--state '{\"k\":n}' | --state-file <p>]",
+      "  report [--status new|resolved|nothing-new] [--message <s>] [--sample <n>] [--state '{\"k\":n}' | --state-file <p>]",
       "          record this run's outcome + metrics (keys must match the loop's schema)",
       "  show    print this loop's current config + recent state",
       "",

@@ -244,7 +244,7 @@ loop report --status new --sample 23
 - `--status` ∈ `new | resolved | nothing-new`; `new` = something new/changed worth mentioning, `resolved` = a previously reported problem has disappeared,
   `nothing-new` = nothing worth saying (including a known problem continuing unchanged); `nothing-new` must still be reported (still log a line in the Timeline).
   Whether it actually sends is decided by the Job's `notify`, so the status must be truthful.
-- `--message` short, human, Chinese; don't dump logs / raw output into it; use `--message-file` for long content to guard against shell escaping.
+- `--message` short, human; don't dump logs / raw output into it; use `--message-file` for long content to guard against shell escaping.
 - **Fallback**: if the agent finishes without calling `loop report`, the daemon uses the final stdout text as the message and records status `new`
   (better to over-report once than to silently swallow it).
 
@@ -307,14 +307,14 @@ A `loop` command is on your PATH. End the run by reporting through it (raw termi
 output is shown to nobody):
 
     loop report --status nothing-new
-    loop report --status new --message "<one short message, in Chinese>"
+    loop report --status new --message "<one short message>"
     loop report --status new --sample <number>     # optional metric for charts
 
 - `--status` ∈ new | resolved | nothing-new. Report `nothing-new` when there
   is nothing worth saying — still do it, so the run is recorded. The scheduler decides
   whether to actually message the user (per this job's notify policy); always report the
   true status.
-- `--message` short, human, Chinese; never dump logs into it. Long bodies: `--message-file`.
+- `--message` short, human; never dump logs into it. Long bodies: `--message-file`.
 
 ## 4. Change your own schedule — the `loop` command
 {{#if allowControl}}
@@ -341,7 +341,7 @@ rejected). Just do the task and `loop report`.
 One pass, then exit. You'll be woken again on schedule. Do not poll, sleep, or wait.
 ```
 
-> Instructions are in English (claude-code is more stable that way), except §3 requires **the one sentence to the user to be in Chinese**, matching c0's tone of speaking to family.
+> Instructions are in English (claude-code is more stable that way), except §3 requires **the one sentence to the user**, matching c0's tone of speaking to family.
 > The user turn is minimal ("Begin this scheduled run."); all content lives in the system prompt.
 
 ---

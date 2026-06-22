@@ -56,6 +56,7 @@ conceptual gaps may remain.
 
 To do:
 - [ ] Review each prompt one by one: are capability boundaries stated clearly, any misleading wording, any mechanism left unexplained?
-- [ ] Add the `loopany` subcommand list to the exec/evolve standing prompts (the agent currently has to probe with
-      `loopany --help`, which doesn't exist yet, wasting a few tool calls)
+- [x] Add the `loopany` subcommand list to the exec/evolve standing prompts. Done for exec-loop.md: its intro now points the
+      agent at `loopany help`, the role-aware verb list. (Correction: that verb list already exists - `-h` / `--help` / `help`
+      all route to it in `gateway/index.ts:536`; the earlier "doesn't exist yet" note was wrong.) evolve.md still TBD.
 - [ ] Investigate the character-dropping bug in transcript storage (`unknown command` rendered as `u k ow comma d`)
