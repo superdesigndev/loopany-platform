@@ -283,6 +283,11 @@ class LoopWatcher {
     }
   }
 
+  /** The resolved folder this watcher is bound to (compared on reconcile). */
+  get watchDir(): string {
+    return this.dir;
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer);
@@ -315,9 +320,17 @@ export class WatchManager {
     }
     // Open watchers for newly-seen loops whose folder currently exists (a folder
     // that doesn't exist yet is retried on the next poll — it isn't recorded).
+    // A loop's taskFile/workdir are mutable server-side, so re-resolve the dir of
+    // an already-watched loop and reopen when it moved (else edits in the new
+    // folder never sync and the server's view goes permanently stale).
     for (const [id, spec] of want) {
-      if (this.watchers.has(id)) continue;
       const dir = resolveWatchDir(spec);
+      const existing = this.watchers.get(id);
+      if (existing) {
+        if (dir && existing.watchDir === dir) continue; // unchanged → leave alone
+        void existing.close(); // dir moved (or no longer resolvable) → drop the stale watcher
+        this.watchers.delete(id);
+      }
       if (!dir || !fs.existsSync(dir)) continue;
       const w = new LoopWatcher(id, dir, this.server, this.token);
       w.start();

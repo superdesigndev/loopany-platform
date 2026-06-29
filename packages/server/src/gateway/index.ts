@@ -615,8 +615,8 @@ export class MachineGateway {
       const hash = (raw as { hash?: unknown })?.hash;
       const oversize = !!(raw as { oversize?: unknown })?.oversize || (sizeOk && rawSize > BLOB_CAP);
 
-      if (oversize || !isValidHash(hash)) {
-        // Metadata-only: oversize file (no bytes) or an entry without usable bytes.
+      if (oversize) {
+        // Metadata-only: genuinely over the per-file cap (path + size, no bytes).
         store.upsertArtifactFile({
           loopId,
           path: rel,
@@ -627,6 +627,13 @@ export class MachineGateway {
           lastRunId: runId,
         });
         keepPaths.push(rel);
+        continue;
+      }
+
+      if (!isValidHash(hash)) {
+        // In-cap entry with a missing/invalid content hash (the real daemon never
+        // sends this). We can't represent a real file without bytes, so drop it
+        // entirely rather than mislabel it oversize.
         continue;
       }
 
