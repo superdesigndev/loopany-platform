@@ -17,7 +17,7 @@ import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3"
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 
 import { dbPath } from "../env.js";
-import { machines, loops, runs, teams, teamMembers, notificationChannels } from "./schema.js";
+import { machines, loops, runs, teams, teamMembers, notificationChannels, blobs, artifactFiles } from "./schema.js";
 import { user, session, account, verification } from "./auth-schema.js";
 
 // Business tables + Better Auth tables share one Drizzle instance (the auth
@@ -29,6 +29,8 @@ const schema = {
   teams,
   teamMembers,
   notificationChannels,
+  blobs,
+  artifactFiles,
   user,
   session,
   account,

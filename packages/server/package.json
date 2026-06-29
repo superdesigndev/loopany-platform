@@ -15,6 +15,7 @@
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
     "@base-ui/react": "^1.6.0",
     "@better-auth/drizzle-adapter": "^1.6.19",
     "@react-three/fiber": "^9.6.1",

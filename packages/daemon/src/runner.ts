@@ -14,6 +14,7 @@ import { runWorkflow } from "./workflow.js";
 import { sessionTrace, type RunArtifact, type TranscriptStep } from "./artifacts.js";
 import { CALLBACK_BIN_DIR } from "./callback-bin.js";
 import { setProgress, clearProgress } from "./progress.js";
+import { markRunActive, markRunDone } from "./watcher.js";
 import { LOOPANY_DIR } from "./config.js";
 
 export interface Delivery {
@@ -70,6 +71,17 @@ interface ClaudeJson {
 }
 
 export async function runDelivery(d: Delivery, serverUrl: string, roots: string[]): Promise<void> {
+  // Attribute artifact syncs that happen during this run to its runId (Phase 3
+  // seam) — the loop's folder watcher reads this while the run is in-flight.
+  markRunActive(d.loop.id, d.runId);
+  try {
+    return await runDeliveryImpl(d, serverUrl, roots);
+  } finally {
+    markRunDone(d.loop.id);
+  }
+}
+
+async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[]): Promise<void> {
   const start = Date.now();
   // Server-configured roots win; the daemon's env LOOPANY_ROOTS is a fallback.
   const effectiveRoots = d.roots ?? roots;

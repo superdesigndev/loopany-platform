@@ -250,6 +250,7 @@ Reclaim: machine took the delivery but no report within timeoutMs+grace (default
 - cross Slack-workspace multi-tenancy (per-user Slack OAuth).
 - codex backend; persistent claude sessions / `--resume`; machine-offline inbox queueing + catch-up; multi-machine fallback.
 - daemon keep-alive (`loopany install` writes launchd/systemd).
+- web **Files view** for live-synced loop artifacts (the daemon→server sync foundation already landed, see **D10**); per-run artifact diff (`run_snapshots`, Phase 3).
 
 ---
 
@@ -344,6 +345,17 @@ Reclaim: machine took the delivery but no report within timeoutMs+grace (default
 - **UI**: `components/TeamSwitcher.tsx`, to the left of the header "Notifications". **Renders only when >1 team** (transparent to normal users); admins get an extra "All teams" item. Switching writes the cookie + `router.invalidate()`.
 - **Verification**: both packages typecheck clean; server unit tests 20 passed.
 - **Limitation (marked as follow-up)**: under the aggregate view `New Loop` / push channel still land in the admin's personal team (creation/channel not cross-team); the team member invitation UI is still missing, so multiple teams are in practice visible only to the admin.
+
+### D10 — Loop artifact live-sync, Phase 1 (landed, new feature not in the original plan)
+
+- **Motivation**: a loop produces files (reports, exports, generated output) in its own folder, but the server only ever saw the report text + the slim transcript (D7) - never the files themselves. Phase 1 lays the foundation for a future web Files view: the daemon **live-syncs each loop's folder up to the server**, content-addressed, including idle-time human edits between runs.
+- **Watch scope (captain decision)**: each loop's **own folder** - `dirname(taskFile)` → `workdir` → a per-loop scratch dir - **not** the whole project workdir, so `node_modules`/`.git` are never traversed. The daemon (`packages/daemon/src/watcher.ts`, **chokidar v4**) learns the watch set **server-authoritatively** from the poll response's `watch:[…]` (restart-safe; no client guessing), sha256-hashes the folder into a **FULL manifest** (a deleted file = its absence from the manifest), and syncs the diff.
+- **Wire protocol**: `POST /api/machine/sync` (**device token**, NOT the run token - that's revoked at run end, and sync continues idle) posts the full manifest; the server replies `needHashes` (the blobs it lacks); the daemon `PUT /api/machine/blob/:hash` uploads the missing bytes (the server verifies `sha256(body) === :hash` before storing). Small text blobs (**≤64KB**) are inlined in the POST to save the round-trip. `runId` is threaded onto each sync.
+- **Storage (captain decision)**: blob **BYTES** live in **Cloudflare R2** (S3-compatible via `@aws-sdk/client-s3`), keyed by content hash, behind a `BlobStore` interface (`gateway/blobstore.ts`) wired from `LOOPANY_R2_*` env (**no hardcoded creds**); when those are unset the **in-memory** implementation is the **test/dev default**, so tests need no live R2 or network. Metadata lives in two new additive tables, **`blobs`** + **`artifact_files`** (migration **`0011`**) - the R2 variant has **no `content` column**, so the server's zero-exec invariant holds (it only stores/reads bytes, never interprets them). `artifact_files` extends the originally-planned schema with `binary`/`oversize` flags to represent metadata-only files; `lastRunId` records the in-flight run (null for idle edits) purely as the **Phase 3 seam**.
+- **Caps + security (enforced on BOTH daemon and server)**: per-file cap **10MB** → larger files sync as **metadata only** (path + size + `oversize`, no bytes). Path-safety (reject absolute / `..` paths) + the secret/junk **ignore list** (`.git`/`node_modules`/`.loopany`/`.env*`/`*.pem`/`id_rsa*`/`credentials`/`.DS_Store`) are enforced by the daemon (don't send) **and** defensively by the server (`gateway/artifacts.ts`, don't store). Deletions are recorded as **tombstones** (`artifact_files.deleted`), not hard deletes.
+- **Out of scope (intentional)**: Phase 2 (the web **Files view**) and Phase 3 (`run_snapshots` per-run diff) are **not** built - `runId` on syncs + `artifact_files.lastRunId` are the only seams left for them.
+- **Dependencies**: `chokidar` v4 (daemon), `@aws-sdk/client-s3` (server).
+- **Verification**: `pnpm -r typecheck` + both package builds clean; **35 server tests pass (12 new**, driving the in-memory blob store - no creds/network).
 
 ### Verified (local e2e)
 

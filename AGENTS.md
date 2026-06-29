@@ -17,8 +17,8 @@ LLM and executes no user code**.
   in-process Scheduler (croner) + machine routes (`/api/machine/poll`,
   `/agent-api/loop`, `/machine/report`) + Better Auth + push notifications. Drizzle/SQLite.
   - `src/scheduler/` — the cron engine (tick → pending run → Dispatcher).
-  - `src/gateway/` — machine gateway (poll/agent-api/report), run tokens, delivery, prompt, notify (per-team push channels).
-  - `src/db/` — Drizzle schema (machines/loops/runs) + store + auth-schema.
+  - `src/gateway/` — machine gateway (poll/agent-api/report/**sync/blob**), run tokens, delivery, prompt, notify (per-team push channels), **blobstore** (R2/in-memory), **artifacts** (path-safety/ignore/caps).
+  - `src/db/` — Drizzle schema (machines/loops/runs/**blobs/artifact_files**) + store + auth-schema.
   - `src/server/` — boot (`ensureServer`), adapters (Loop/Run → JobSummary/JobDetail), loopApi server fns.
   - `src/routes/` — pages + server-only route files.
 - `packages/daemon` (`@crewlet/loopany`) — poll loop + `loopany` callback; spawns claude.
@@ -45,6 +45,22 @@ LLM and executes no user code**.
   plain `text` with no DB-level CHECK (confirmed in `drizzle/*.sql`). Adding/removing an
   enum value (e.g. dropping the deprecated `draft` RunRole) is a pure type change; it needs
   no migration and cannot break existing rows.
+- **Artifact live-sync (Phase 1).** The daemon (`packages/daemon/src/watcher.ts`,
+  chokidar v4) watches each loop's own folder (`dirname(taskFile)` → `workdir` →
+  scratch), learns the watch set from the poll response's `watch:[…]` (server-
+  authoritative, restart-safe), sha256-hashes the folder into a FULL manifest
+  (deletions = absence), and content-addressed-syncs to `POST /api/machine/sync`
+  (**device token**, NOT the run token — it's revoked at run end). Negotiated upload:
+  server replies `needHashes`; daemon `PUT /api/machine/blob/:hash` (server verifies
+  `sha256(body)===:hash`); small text blobs (≤64KB) inline in the POST. Per-file cap
+  **10MB** → larger files sync as metadata only (`artifact_files.oversize`). Blob BYTES
+  live in **Cloudflare R2** (`gateway/blobstore.ts`, `LOOPANY_R2_*` env; in-memory store
+  when unset — that's the test/dev default, so tests need no creds/network), metadata in
+  `blobs`/`artifact_files`. The zero-exec invariant holds: the server only stores/reads
+  bytes. The ignore list (`.git`/`node_modules`/`.loopany`/`.env*`/`*.pem`/`id_rsa*`/…)
+  is enforced on BOTH daemon (don't send) and server (`gateway/artifacts.ts`, don't store).
+  Phases 2 (web Files view) + 3 (`run_snapshots` per-run diff) are NOT built yet — `runId`
+  is already threaded onto syncs and `artifact_files.lastRunId` recorded as the Phase 3 seam.
 
 ## Commands
 

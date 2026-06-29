@@ -21,6 +21,8 @@ import type { ControlAction, NewLoop, NotifyPolicy, RunArtifact, RunStatus, Stat
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
 import { dispatchNotification, shouldNotify } from "./notify.js";
+import { createBlobStore, type BlobStore } from "./blobstore.js";
+import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
 import {
   machineIdFromToken,
   getDeviceOwner,
@@ -88,7 +90,11 @@ export interface HttpResult {
 }
 
 export class MachineGateway {
-  constructor(private readonly scheduler: Scheduler) {}
+  constructor(
+    private readonly scheduler: Scheduler,
+    /** Artifact blob byte store (R2 in prod; injectable in-memory store for tests). */
+    private readonly blobStore: BlobStore = createBlobStore(),
+  ) {}
 
   /**
    * Dispatcher for the Scheduler. Short-poll transport: a no-op — the pending
@@ -220,8 +226,18 @@ export class MachineGateway {
       deliveries.push(buildDelivery(loop, run.id, token, machine.roots ?? []));
     }
 
+    // Watch set: every loop bound to this machine (not just those with a pending
+    // run) so the daemon watches each loop's folder continuously — between runs
+    // and across restarts (the set is re-learned each poll, server-authoritative).
+    // The daemon resolves the actual folder per loop (dirname(taskFile) → workdir).
+    const watch = store.loopsForMachine(machineId).map((l) => ({
+      loopId: l.id,
+      workdir: l.workdir ?? null,
+      taskFile: l.taskFile ?? null,
+    }));
+
     if (deliveries.length) log.info({ machineId, exec: deliveries.length }, "poll: delivered");
-    return { status: 200, body: { deliveries } };
+    return { status: 200, body: { deliveries, watch } };
   }
 
   // ---- GET /api/machine/status ----
@@ -520,6 +536,161 @@ export class MachineGateway {
     }
     log.info({ runId: slot.runId, ok }, "report: finalized");
     return { status: 200, body: { ok: true } };
+  }
+
+  // ---- POST /api/machine/sync ----
+
+  /**
+   * Live artifact sync (Bearer DEVICE token — the durable machine identity, NOT
+   * the run token which is revoked at run end; live sync runs continuously,
+   * including between runs and on idle-time human edits). The daemon posts the
+   * FULL current manifest of a loop's folder plus optional inline bytes for small
+   * files; the server stores verified blobs in R2, reconciles `artifact_files`
+   * (vanished paths become tombstones), and replies with the hashes it still
+   * needs — content-addressed dedupe means an unchanged folder uploads nothing.
+   */
+  async sync(
+    deviceToken: string,
+    body: {
+      loopId?: unknown;
+      runId?: unknown;
+      manifest?: unknown;
+      blobs?: unknown;
+    },
+  ): Promise<HttpResult> {
+    const machineId = machineIdFromToken(deviceToken);
+    const machine = store.getMachine(machineId);
+    if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+
+    const loopId = typeof body.loopId === "string" ? body.loopId : "";
+    if (!loopId) return { status: 400, body: { error: "loopId required" } };
+    const loop = store.getLoop(loopId);
+    if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
+
+    // runId attribution (Phase 3 seam): honored only when it names a run on this loop.
+    let runId: string | null = null;
+    if (typeof body.runId === "string" && body.runId) {
+      const run = store.getRun(body.runId);
+      if (run && run.loopId === loopId) runId = body.runId;
+    }
+
+    // Verified inline bytes, indexed by hash (small files sent in the POST to skip
+    // the PUT round-trip). Anything failing integrity/cap is silently dropped → it
+    // simply lands in needHashes and arrives via PUT instead.
+    const inline = new Map<string, Buffer>();
+    if (Array.isArray(body.blobs)) {
+      for (const b of body.blobs) {
+        const hash = (b as { hash?: unknown }).hash;
+        const data = (b as { data?: unknown }).data;
+        const enc: BufferEncoding = (b as { encoding?: unknown }).encoding === "utf8" ? "utf8" : "base64";
+        if (!isValidHash(hash) || typeof data !== "string") continue;
+        let bytes: Buffer;
+        try {
+          bytes = Buffer.from(data, enc);
+        } catch {
+          continue;
+        }
+        if (bytes.length > BLOB_CAP) continue;
+        if (sha256Buf(bytes) !== hash) continue; // integrity / anti-poisoning
+        inline.set(hash, bytes);
+      }
+    }
+
+    const manifest = Array.isArray(body.manifest) ? body.manifest : [];
+    const keepPaths: string[] = [];
+    const seenPaths = new Set<string>();
+    const needHashes = new Set<string>();
+    const toStore = new Map<string, Buffer>();
+
+    for (const raw of manifest) {
+      const rel = safeRelPath((raw as { path?: unknown })?.path);
+      if (!rel) continue; // absolute / traversal / empty → reject
+      if (isIgnoredPath(rel)) continue; // secret/junk → never store (defense in depth)
+      if (seenPaths.has(rel)) continue;
+      seenPaths.add(rel);
+
+      const rawSize = Number((raw as { size?: unknown })?.size);
+      const sizeOk = Number.isFinite(rawSize) && rawSize >= 0;
+      const binary = !!(raw as { binary?: unknown })?.binary;
+      const hash = (raw as { hash?: unknown })?.hash;
+      const oversize = !!(raw as { oversize?: unknown })?.oversize || (sizeOk && rawSize > BLOB_CAP);
+
+      if (oversize) {
+        // Metadata-only: genuinely over the per-file cap (path + size, no bytes).
+        store.upsertArtifactFile({
+          loopId,
+          path: rel,
+          hash: null,
+          size: sizeOk ? rawSize : null,
+          binary,
+          oversize: true,
+          lastRunId: runId,
+        });
+        keepPaths.push(rel);
+        continue;
+      }
+
+      if (!isValidHash(hash)) {
+        // In-cap entry with a missing/invalid content hash (the real daemon never
+        // sends this). We can't represent a real file without bytes, so drop it
+        // entirely rather than mislabel it oversize.
+        continue;
+      }
+
+      const inlined = inline.get(hash);
+      if (inlined) toStore.set(hash, inlined);
+      else if (!store.blobExists(hash)) needHashes.add(hash);
+
+      store.upsertArtifactFile({
+        loopId,
+        path: rel,
+        hash,
+        size: sizeOk ? rawSize : (inlined?.length ?? null),
+        binary: binary || (inlined ? looksBinary(inlined) : false),
+        oversize: false,
+        lastRunId: runId,
+      });
+      keepPaths.push(rel);
+    }
+
+    // Persist the inline blobs (bytes-first, then metadata row).
+    for (const [hash, bytes] of toStore) {
+      await this.blobStore.put(hash, bytes);
+      store.recordBlob(hash, bytes.length, looksBinary(bytes));
+    }
+
+    // Deletions = absence from the full manifest → tombstone the vanished paths.
+    const tombstoned = store.tombstoneMissingArtifacts(loopId, keepPaths, runId);
+
+    log.info(
+      { machineId, loopId, files: keepPaths.length, inlined: toStore.size, need: needHashes.size, tombstoned },
+      "sync: reconciled",
+    );
+    return { status: 200, body: { ok: true, needHashes: [...needHashes] } };
+  }
+
+  // ---- PUT /api/machine/blob/:hash ----
+
+  /**
+   * Upload one content-addressed blob's raw bytes (Bearer device token). The
+   * server recomputes sha256(body) and rejects any mismatch before storing —
+   * integrity + anti-poisoning, so a blob's bytes always match its key.
+   */
+  async putBlob(deviceToken: string, hash: string, bytes: Buffer): Promise<HttpResult> {
+    const machineId = machineIdFromToken(deviceToken);
+    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (!isValidHash(hash)) return { status: 400, body: { error: "invalid hash (expect sha256 hex)" } };
+    if (bytes.length > BLOB_CAP) return { status: 413, body: { error: "blob exceeds size cap" } };
+    if (sha256Buf(bytes) !== hash) return { status: 400, body: { error: "hash mismatch (sha256(body) !== :hash)" } };
+    await this.blobStore.put(hash, bytes);
+    store.recordBlob(hash, bytes.length, looksBinary(bytes));
+    return { status: 200, body: { ok: true } };
+  }
+
+  /** Read a stored blob's bytes (Phase 2 download seam; null when absent). */
+  readBlob(hash: string): Promise<Buffer | null> {
+    if (!isValidHash(hash)) return Promise.resolve(null);
+    return this.blobStore.get(hash);
   }
 
   // ---- agent-api verb dispatch (compact port of control.ts) ----

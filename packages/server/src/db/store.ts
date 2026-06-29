@@ -18,6 +18,9 @@ import {
   teams,
   teamMembers,
   notificationChannels,
+  blobs,
+  artifactFiles,
+  type ArtifactFile,
   type Loop,
   type Machine,
   type NewLoop,
@@ -317,5 +320,105 @@ export function deleteChannel(id: string): boolean {
   db.update(loops).set({ channelId: null, updatedAt: nowIso() }).where(eq(loops.channelId, id)).run();
   const r = db.delete(notificationChannels).where(eq(notificationChannels.id, id)).run();
   return r.changes > 0;
+}
+
+// ---- blobs (content-addressed artifact bytes; metadata only — bytes live in R2) ----
+
+/** Does the server already have metadata for this blob hash? (drives needHashes). */
+export function blobExists(hash: string): boolean {
+  return !!db.select({ hash: blobs.hash }).from(blobs).where(eq(blobs.hash, hash)).get();
+}
+
+/** Record a blob's metadata (idempotent — same hash ⇒ same bytes, so a no-op on conflict). */
+export function recordBlob(hash: string, size: number, binary: boolean): void {
+  db.insert(blobs).values({ hash, size, binary, createdAt: nowIso() }).onConflictDoNothing().run();
+}
+
+// ---- artifact_files (the current file set of each loop) ----
+
+export interface ArtifactFileInput {
+  loopId: string;
+  path: string;
+  hash: string | null;
+  size: number | null;
+  binary: boolean;
+  oversize: boolean;
+  lastRunId: string | null;
+}
+
+/** Upsert one live file row (keyed by loopId+path); clears any prior tombstone. */
+export function upsertArtifactFile(input: ArtifactFileInput): void {
+  const ts = nowIso();
+  db.insert(artifactFiles)
+    .values({
+      id: randomUUID(),
+      loopId: input.loopId,
+      path: input.path,
+      hash: input.hash,
+      size: input.size,
+      binary: input.binary,
+      oversize: input.oversize,
+      deleted: false,
+      updatedAt: ts,
+      lastRunId: input.lastRunId,
+    })
+    .onConflictDoUpdate({
+      target: [artifactFiles.loopId, artifactFiles.path],
+      set: {
+        hash: input.hash,
+        size: input.size,
+        binary: input.binary,
+        oversize: input.oversize,
+        deleted: false,
+        updatedAt: ts,
+        lastRunId: input.lastRunId,
+      },
+    })
+    .run();
+}
+
+/** Tombstone the paths that vanished from a loop's manifest (keep != in `keepPaths`). */
+export function tombstoneMissingArtifacts(loopId: string, keepPaths: string[], lastRunId: string | null): number {
+  const keep = new Set(keepPaths);
+  const live = db
+    .select()
+    .from(artifactFiles)
+    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)))
+    .all();
+  const ts = nowIso();
+  let tombstoned = 0;
+  for (const row of live) {
+    if (keep.has(row.path)) continue;
+    db.update(artifactFiles)
+      .set({ hash: null, deleted: true, updatedAt: ts, lastRunId })
+      .where(eq(artifactFiles.id, row.id))
+      .run();
+    tombstoned++;
+  }
+  return tombstoned;
+}
+
+/** The loop's current (non-deleted) file set, path-sorted. */
+export function listArtifacts(loopId: string): ArtifactFile[] {
+  return db
+    .select()
+    .from(artifactFiles)
+    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)))
+    .orderBy(artifactFiles.path)
+    .all();
+}
+
+/** Every artifact_files row for a loop, including tombstones (Phase 3 diff seam). */
+export function listAllArtifactFiles(loopId: string): ArtifactFile[] {
+  return db.select().from(artifactFiles).where(eq(artifactFiles.loopId, loopId)).orderBy(artifactFiles.path).all();
+}
+
+/** One file row by loop + path (live or tombstoned). */
+export function getArtifactFile(loopId: string, path: string): ArtifactFile | undefined {
+  return db
+    .select()
+    .from(artifactFiles)
+    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.path, path)))
+    .get();
 }
 

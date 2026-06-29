@@ -11,7 +11,7 @@
  * (de)serialization. Booleans use `{ mode: "boolean" }` over INTEGER.
  */
 import { sql } from "drizzle-orm";
-import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // ---- shared value shapes (mirror the carried-over scheduler types) ----
 
@@ -250,6 +250,59 @@ export const notificationChannels = sqliteTable(
   (t) => [index("notification_channels_team_idx").on(t.teamId)],
 );
 
+// ---- artifacts: content-addressed live-synced loop files (Phase 1 foundation) ----
+//
+// The daemon watches each loop's folder and live-syncs changed files. Blob BYTES
+// live in external object storage (Cloudflare R2), keyed by sha256 content hash —
+// NOT in the DB (no `content` column), keeping the business DB lean + Postgres-
+// portable and preserving the server's zero-exec invariant (it only stores/reads
+// bytes, never interprets them). These two tables hold only metadata.
+
+/**
+ * One content-addressed blob (deduped across every loop/run). The bytes live in
+ * R2 under the hash; this row records that the server has them + their shape.
+ */
+export const blobs = sqliteTable("blobs", {
+  /** sha256 hex of the bytes (the R2 object key). */
+  hash: text("hash").primaryKey(),
+  size: integer("size").notNull(),
+  /** Heuristic: the bytes contain a NUL (download-only; no inline text render). */
+  binary: integer("binary", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at").notNull(),
+});
+
+/**
+ * The CURRENT file set of each loop — one row per live (or tombstoned) path,
+ * relative to the loop's watch folder. `hash` → `blobs.hash`; null when the file
+ * is deleted (tombstone) or oversize (metadata-only, no bytes synced). The
+ * unique (loopId, path) index is the upsert key the sync reconciliation drives.
+ */
+export const artifactFiles = sqliteTable(
+  "artifact_files",
+  {
+    id: text("id").primaryKey(),
+    loopId: text("loop_id").notNull(),
+    /** Normalized, loop-folder-relative (never absolute, never escaping the dir). */
+    path: text("path").notNull(),
+    /** → blobs.hash. Null when deleted or oversize (no bytes stored). */
+    hash: text("hash"),
+    size: integer("size"),
+    /** Bytes contain a NUL (mirrors blobs.binary; set even for oversize files). */
+    binary: integer("binary", { mode: "boolean" }).notNull().default(false),
+    /** File exceeds the per-file byte cap → metadata-only (path + size), no blob. */
+    oversize: integer("oversize", { mode: "boolean" }).notNull().default(false),
+    /** Tombstone: the file vanished from the loop's manifest (kept for future diffs). */
+    deleted: integer("deleted", { mode: "boolean" }).notNull().default(false),
+    updatedAt: text("updated_at").notNull(),
+    /** The run in-flight when this change synced (null for idle-time human edits). */
+    lastRunId: text("last_run_id"),
+  },
+  (t) => [
+    index("artifact_files_loop_idx").on(t.loopId),
+    uniqueIndex("artifact_files_loop_path_idx").on(t.loopId, t.path),
+  ],
+);
+
 export type Machine = typeof machines.$inferSelect;
 export type NewMachine = typeof machines.$inferInsert;
 export type Loop = typeof loops.$inferSelect;
@@ -262,9 +315,13 @@ export type TeamMember = typeof teamMembers.$inferSelect;
 export type NewTeamMember = typeof teamMembers.$inferInsert;
 export type NotificationChannel = typeof notificationChannels.$inferSelect;
 export type NewNotificationChannel = typeof notificationChannels.$inferInsert;
+export type Blob = typeof blobs.$inferSelect;
+export type NewBlob = typeof blobs.$inferInsert;
+export type ArtifactFile = typeof artifactFiles.$inferSelect;
+export type NewArtifactFile = typeof artifactFiles.$inferInsert;
 
 /** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, notificationChannels };
+export const businessSchema = { machines, loops, runs, teams, teamMembers, notificationChannels, blobs, artifactFiles };
 
 // Keep a default no-op SQL reference so `sql` import isn't flagged before use.
 export const _schemaVersion = sql`1`;

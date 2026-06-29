@@ -14,6 +14,7 @@ or executes your code; it only schedules, stores, authenticates, and notifies.
 ┌── LoopAny server (TanStack Start · one process · zero code-exec · zero LLM) ──┐
 │  dashboard + server fns · Better Auth (GitHub) · in-process Scheduler (croner) │
 │  machine routes: /api/machine/poll · /agent-api/loop · /machine/report          │
+│                  /api/machine/sync · /api/machine/blob/:hash (artifact sync)     │
 │  SQLite (Drizzle) on a volume                                                    │
 └───────────▲ HTTP short-poll ────────────────────────────────────────────────────┘
             │

@@ -15,6 +15,7 @@ import { runDelivery, type Delivery } from "./runner.js";
 import { DEVICE_FILE, SERVER_FILE, persist, readStored } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
 import { snapshotProgress } from "./progress.js";
+import { WatchManager, type WatchSpec } from "./watcher.js";
 
 const POLL_MS = Number(process.env.LOOPANY_POLL_MS || 3000);
 
@@ -64,6 +65,11 @@ export async function runDaemon(): Promise<number> {
     process.on(sig, () => ac.abort());
   }
 
+  // Continuously watch each loop's folder and live-sync artifacts to the server.
+  // The watch set is learned from the poll response (server-authoritative), so it
+  // survives restarts and covers idle-time human edits, not just in-run output.
+  const watchManager = new WatchManager(server, token);
+
   logger.info({ server, pollMs: POLL_MS, roots: roots.length ? roots : "(no workdir jail)" }, "polling for deliveries");
 
   // Runs execute in the BACKGROUND so the poll loop keeps heart-beating and can
@@ -85,7 +91,9 @@ export async function runDaemon(): Promise<number> {
         signal: ac.signal,
       });
       if (res.ok) {
-        const data = (await res.json()) as { deliveries?: Delivery[] };
+        const data = (await res.json()) as { deliveries?: Delivery[]; watch?: WatchSpec[] };
+        // Reconcile the loop-folder watchers against the server's current set.
+        watchManager.reconcile(data.watch ?? []);
         for (const d of data.deliveries ?? []) {
           if (inFlight.has(d.runId)) continue;
           inFlight.add(d.runId);
@@ -106,6 +114,7 @@ export async function runDaemon(): Promise<number> {
     }
     await sleep(POLL_MS, ac.signal);
   }
+  await watchManager.closeAll();
   return 0;
 }
 
