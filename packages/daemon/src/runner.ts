@@ -14,7 +14,7 @@ import { runWorkflow } from "./workflow.js";
 import { sessionTrace, type RunArtifact, type TranscriptStep } from "./artifacts.js";
 import { CALLBACK_BIN_DIR } from "./callback-bin.js";
 import { setProgress, clearProgress } from "./progress.js";
-import { markRunActive, markRunDone } from "./watcher.js";
+import { flushLoop, markRunActive, markRunDone } from "./watcher.js";
 import { LOOPANY_DIR } from "./config.js";
 
 export interface Delivery {
@@ -83,13 +83,21 @@ export async function runDelivery(d: Delivery, serverUrl: string, roots: string[
 
 async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[]): Promise<void> {
   const start = Date.now();
+  // Force a final, run-tagged sync of the loop folder right before reporting so
+  // the server's run snapshot (Phase 3) captures end-state even if a late write
+  // slipped the watcher's debounce. Best-effort — a failed flush never blocks the
+  // report (the reclaim sweep + continuous watcher still converge the server).
+  const reportRun = async (body: ReportBody): Promise<void> => {
+    await flushLoop(d.loop.id).catch(() => {});
+    return report(serverUrl, d.runToken, body);
+  };
   // Server-configured roots win; the daemon's env LOOPANY_ROOTS is a fallback.
   const effectiveRoots = d.roots ?? roots;
   let workdir: string;
   try {
     workdir = resolveWorkdir(d.loop.workdir, d.loop.id, effectiveRoots);
   } catch (err) {
-    return report(serverUrl, d.runToken, { runId: d.runId, ok: false, durationMs: Date.now() - start, error: msg(err) });
+    return reportRun({ runId: d.runId, ok: false, durationMs: Date.now() - start, error: msg(err) });
   }
 
   // 1. Workflow gate (cheap, zero-LLM). Pure result → report directly, no claude.
@@ -100,7 +108,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[]):
     const wf = await runWorkflow(d.loop.workflow, d.prevState, workdir);
     if (!wf.ok) {
       const tail = wf.stderr.trim().slice(-400);
-      return report(serverUrl, d.runToken, {
+      return reportRun({
         runId: d.runId, ok: false, durationMs: Date.now() - start,
         error: tail ? `${wf.error} — ${tail}` : wf.error,
       });
@@ -109,7 +117,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[]):
     if (wf.result!.agentCalls.length === 0) {
       // Pure workflow: direct message (or silent). No claude — but still sync
       // the task file if the loop maintains one (the workflow may write it).
-      return report(serverUrl, d.runToken, {
+      return reportRun({
         runId: d.runId, ok: true, durationMs: Date.now() - start,
         outcome: wf.result!.message ? "direct" : "silent",
         message: wf.result!.message, cursor,
@@ -192,7 +200,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[]):
     }
   }
 
-  await report(serverUrl, d.runToken, {
+  await reportRun({
     runId: d.runId,
     ok,
     durationMs: Date.now() - start,

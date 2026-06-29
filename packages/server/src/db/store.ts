@@ -20,6 +20,7 @@ import {
   notificationChannels,
   blobs,
   artifactFiles,
+  runSnapshots,
   type ArtifactFile,
   type Loop,
   type Machine,
@@ -29,6 +30,8 @@ import {
   type NotificationChannel,
   type NewNotificationChannel,
   type Run,
+  type RunSnapshot,
+  type SnapshotManifest,
   type StateField,
   type Team,
 } from "./schema.js";
@@ -420,5 +423,46 @@ export function getArtifactFile(loopId: string, path: string): ArtifactFile | un
     .from(artifactFiles)
     .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.path, path)))
     .get();
+}
+
+/** The loop's CURRENT live file set as a snapshot manifest (path → metadata) —
+ *  what report() captures as the finishing run's end-state. */
+export function buildLoopManifest(loopId: string): SnapshotManifest {
+  const manifest: SnapshotManifest = {};
+  for (const f of listArtifacts(loopId)) {
+    manifest[f.path] = { hash: f.hash, size: f.size, binary: f.binary, oversize: f.oversize };
+  }
+  return manifest;
+}
+
+// ---- run_snapshots (the loop's full manifest at each run boundary; Phase 3 diff) ----
+
+/** Write/overwrite a run's snapshot (path → file metadata). Idempotent on runId
+ *  so a re-report of the same run just refreshes the captured end-state. */
+export function putRunSnapshot(runId: string, loopId: string, manifest: SnapshotManifest): void {
+  db.insert(runSnapshots)
+    .values({ runId, loopId, manifest, createdAt: nowIso() })
+    .onConflictDoUpdate({ target: runSnapshots.runId, set: { loopId, manifest, createdAt: nowIso() } })
+    .run();
+}
+
+/** A run's captured snapshot, or undefined when the run predates the feature. */
+export function getRunSnapshot(runId: string): RunSnapshot | undefined {
+  return db.select().from(runSnapshots).where(eq(runSnapshots.runId, runId)).get();
+}
+
+/** The most recent snapshot for this loop strictly before `beforeTs` (the prior
+ *  run's end-state — the diff baseline). Joins run_snapshots to runs for the ts
+ *  ordering; undefined when there is no earlier snapshotted run. */
+export function prevRunSnapshot(loopId: string, beforeTs: string): RunSnapshot | undefined {
+  const row = db
+    .select({ snap: runSnapshots })
+    .from(runSnapshots)
+    .innerJoin(runs, eq(runSnapshots.runId, runs.id))
+    .where(and(eq(runSnapshots.loopId, loopId), lt(runs.ts, beforeTs)))
+    .orderBy(desc(runs.ts))
+    .limit(1)
+    .get();
+  return row?.snap;
 }
 

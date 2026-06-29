@@ -303,6 +303,40 @@ export const artifactFiles = sqliteTable(
   ],
 );
 
+/**
+ * One file's metadata in a run snapshot (path → this). Richer than a bare
+ * path→hash map so the per-run diff can compute a size delta and pick a render
+ * mode (text diff vs "binary changed ±KB") without re-reading artifact_files.
+ */
+export interface SnapshotEntry {
+  /** → blobs.hash; null for an oversize (metadata-only) file. */
+  hash: string | null;
+  size: number | null;
+  binary: boolean;
+  oversize: boolean;
+}
+
+/** A loop's full file set at a run boundary: path → {hash,size,binary,oversize}. */
+export type SnapshotManifest = Record<string, SnapshotEntry>;
+
+/**
+ * The loop's full artifact manifest captured at each run's finalize — the input
+ * to the per-run diff (Phase 3). Written cheaply on report (no diff computed on
+ * write); `getRunDiff` lazily diffs run N's snapshot against the prior run's.
+ * One row per run (runId PK); runs predating the feature simply have no row
+ * (the diff view degrades to its "no recorded changes" copy).
+ */
+export const runSnapshots = sqliteTable(
+  "run_snapshots",
+  {
+    runId: text("run_id").primaryKey(),
+    loopId: text("loop_id").notNull(),
+    manifest: text("manifest", { mode: "json" }).$type<SnapshotManifest>().notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("run_snapshots_loop_idx").on(t.loopId)],
+);
+
 export type Machine = typeof machines.$inferSelect;
 export type NewMachine = typeof machines.$inferInsert;
 export type Loop = typeof loops.$inferSelect;
@@ -319,9 +353,11 @@ export type Blob = typeof blobs.$inferSelect;
 export type NewBlob = typeof blobs.$inferInsert;
 export type ArtifactFile = typeof artifactFiles.$inferSelect;
 export type NewArtifactFile = typeof artifactFiles.$inferInsert;
+export type RunSnapshot = typeof runSnapshots.$inferSelect;
+export type NewRunSnapshot = typeof runSnapshots.$inferInsert;
 
 /** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, notificationChannels, blobs, artifactFiles };
+export const businessSchema = { machines, loops, runs, teams, teamMembers, notificationChannels, blobs, artifactFiles, runSnapshots };
 
 // Keep a default no-op SQL reference so `sql` import isn't flagged before use.
 export const _schemaVersion = sql`1`;

@@ -53,6 +53,17 @@ export function markRunDone(loopId: string): void {
   activeRuns.delete(loopId);
 }
 
+// Live watcher registry (by loopId) so the runner can force a final, run-tagged
+// sync of a loop's end-state right before it reports (Phase 3) — guaranteeing the
+// run snapshot captures even a late write that slipped the debounce window.
+const watchersByLoop = new Map<string, LoopWatcher>();
+
+/** Immediately flush the loop's watcher (if any), awaiting the sync round-trip.
+ *  Best-effort + a no-op when the loop isn't being watched. */
+export async function flushLoop(loopId: string): Promise<void> {
+  await watchersByLoop.get(loopId)?.flushNow();
+}
+
 function expandTilde(p: string): string {
   return p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
 }
@@ -183,7 +194,18 @@ class LoopWatcher {
     });
     this.fsw.on("all", () => this.schedule());
     this.fsw.on("error", (err) => log.warn({ loopId: this.loopId, err: msg(err) }, "watch error"));
+    watchersByLoop.set(this.loopId, this);
     log.info({ loopId: this.loopId, dir: this.dir }, "watching loop folder");
+  }
+
+  /** Force an immediate flush (bypassing the debounce timer) and await it — the
+   *  runner calls this before reporting so the run's snapshot captures end-state. */
+  async flushNow(): Promise<void> {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    await this.flush();
   }
 
   /** Debounce: coalesce a burst of events into one flush. */
@@ -291,6 +313,9 @@ class LoopWatcher {
   async close(): Promise<void> {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer);
+    // Only drop the registry entry if it still points at THIS watcher (a dir-move
+    // reconcile may have already replaced it with a fresh one for the same loop).
+    if (watchersByLoop.get(this.loopId) === this) watchersByLoop.delete(this.loopId);
     if (this.fsw) await this.fsw.close().catch(() => {});
     this.fsw = null;
   }

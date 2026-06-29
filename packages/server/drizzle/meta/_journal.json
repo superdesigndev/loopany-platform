@@ -85,6 +85,13 @@
       "when": 1782742289392,
       "tag": "0011_sudden_thunderbolt_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1782746386717,
+      "tag": "0012_yielding_dazzler",
+      "breakpoints": true
     }
   ]
 }

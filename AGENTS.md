@@ -59,8 +59,22 @@ LLM and executes no user code**.
   `blobs`/`artifact_files`. The zero-exec invariant holds: the server only stores/reads
   bytes. The ignore list (`.git`/`node_modules`/`.loopany`/`.env*`/`*.pem`/`id_rsa*`/…)
   is enforced on BOTH daemon (don't send) and server (`gateway/artifacts.ts`, don't store).
-  Phases 2 (web Files view) + 3 (`run_snapshots` per-run diff) are NOT built yet — `runId`
-  is already threaded onto syncs and `artifact_files.lastRunId` recorded as the Phase 3 seam.
+- **Artifact live-sync Phase 2 (web Files view) + Phase 3 (per-run diff).** Read-only,
+  built on Phase 1. **Phase 2:** lazy-by-id server fns `getArtifacts`/`getArtifact`
+  (`server/loopApi.ts`) → pure helpers in `server/artifactFiles.ts` (read bytes via
+  `gateway.readBlob`, decode text; binary/oversize → download marker) → `FilesView.tsx`
+  "Files" section in `JobDetailView`. Binary downloads stream from the
+  session-authed, path-safe route `routes/api.artifact.$loopId.$.ts` (splat path;
+  team-scoped via the shared `auth.loopInScope` predicate that `ownedLoop` also uses).
+  **Phase 3:** `run_snapshots` table (migration `0012`, manifest = path→{hash,size,
+  binary,oversize}); the gateway `report()` writes a snapshot from `artifact_files` at
+  finalize (`store.buildLoopManifest`); `getRunDiff({runId})` lazily diffs run N vs the
+  prior run (`store.prevRunSnapshot`) — unified text diff via the pure-string `diff`
+  (jsdiff) lib in `server/runDiff.ts`, size-delta marker for binary/oversize — rendered
+  in `RunView`'s "Changes (N)" section. The daemon flushes a final run-tagged sync
+  before reporting (`watcher.flushLoop` + `runner` `reportRun`) so the snapshot captures
+  end-state. Old runs with no snapshot degrade to a calm fallback; zero-exec invariant
+  holds (server only stores/reads bytes + computes pure-string diffs).
 
 ## Commands
 

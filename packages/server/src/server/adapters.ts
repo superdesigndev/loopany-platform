@@ -6,8 +6,8 @@
 import { Cron } from "croner";
 
 import * as store from "../db/store.js";
-import type { Loop, Run } from "../db/schema.js";
-import type { JobDetail, JobFull, JobSummary, RunSummary } from "../types.js";
+import type { ArtifactFile, Loop, Run } from "../db/schema.js";
+import type { ArtifactSummary, JobDetail, JobFull, JobSummary, RunSummary } from "../types.js";
 
 const SUMMARY_RUNS = 18;
 /** Mirrors gateway's ONLINE_TTL_MS — a machine is "online" only if it polled recently. */
@@ -43,6 +43,18 @@ export function toRunSummary(r: Run): RunSummary {
     sessionId: r.sessionId ?? null,
     artifacts: r.artifacts ?? null,
     progress: (r.progress as RunSummary["progress"]) ?? null,
+  };
+}
+
+/** One live artifact_files row → the compact UI shape (metadata only; the bytes
+ *  are fetched lazily by getArtifact / the download route, mirroring getTranscript). */
+export function toArtifactSummary(row: ArtifactFile): ArtifactSummary {
+  return {
+    path: row.path,
+    size: row.size ?? null,
+    updatedAt: row.updatedAt,
+    binary: row.binary,
+    oversize: row.oversize,
   };
 }
 

@@ -11,10 +11,13 @@
 import { createServerFn } from '@tanstack/react-start'
 
 import type {
+  ArtifactContent,
+  ArtifactSummary,
   JobDetail,
   JobPayload,
   JobSummary,
   MutationResult,
+  RunDiffResult,
   RunSummary,
   TeamsView,
   TemplateInfo,
@@ -22,7 +25,7 @@ import type {
   TranscriptStep,
 } from '../types'
 import * as store from '../db/store.js'
-import { ALL_TEAMS, requestScope } from '../auth.js'
+import { ALL_TEAMS, loopInScope, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
 
@@ -38,13 +41,13 @@ function backend() {
 async function ownedLoop(id: string) {
   const loop = store.getLoop(id)
   if (!loop) return undefined
-  const { enforce, teamId, isAdmin, allTeams } = await requestScope()
+  const scope = await requestScope()
   // Admins in the "All teams" view may open/act on any team's loop; everyone
-  // else is confined to the active team.
-  if (enforce && !(isAdmin && allTeams) && loop.teamId !== teamId) return undefined
+  // else is confined to the active team (loopInScope is the shared gate).
+  if (!loopInScope(loop.teamId, scope)) return undefined
   // Hand back the scope too — callers that mutate (e.g. patchJob) need `enforce`
   // and would otherwise re-run requestScope() (a second session decrypt).
-  return { loop, enforce, teamId }
+  return { loop, enforce: scope.enforce, teamId: scope.teamId }
 }
 
 /** Whether the auth gate is active (a GitHub OAuth app is configured). */
@@ -129,6 +132,42 @@ export const getTranscript = createServerFn({ method: 'GET' })
     if (!run) return { error: 'run not found' }
     if (!(await ownedLoop(run.loopId))) return { error: 'run not found' }
     return { steps: (run.transcript as TranscriptStep[] | null) ?? [] }
+  })
+
+/** GET — the loop's current live-synced files (metadata only; path-sorted).
+ *  Lazy by loopId like getTranscript so the loop-detail payload stays small. */
+export const getArtifacts = createServerFn({ method: 'GET' })
+  .validator((d: { loopId: string }) => d)
+  .handler(async ({ data }): Promise<ArtifactSummary[]> => {
+    backend()
+    if (!(await ownedLoop(data.loopId))) return []
+    const { listLoopArtifacts } = await import('./artifactFiles.js')
+    return listLoopArtifacts(data.loopId)
+  })
+
+/** GET — one artifact's content: decoded text, or a binary/oversize marker the
+ *  UI turns into a download link (bytes stream from the /api/artifact route). */
+export const getArtifact = createServerFn({ method: 'GET' })
+  .validator((d: { loopId: string; path: string }) => d)
+  .handler(async ({ data }): Promise<ArtifactContent> => {
+    backend()
+    if (!(await ownedLoop(data.loopId))) return { error: 'file not found' }
+    const { readLoopArtifact } = await import('./artifactFiles.js')
+    return readLoopArtifact(data.loopId, data.path)
+  })
+
+/** GET — a run's per-file diff vs the previous run (Phase 3). Lazy by runId like
+ *  getTranscript; computed on the server at read time (no stored diffs). Old runs
+ *  with no snapshot return `hasSnapshot: false` for the degrade copy. */
+export const getRunDiff = createServerFn({ method: 'GET' })
+  .validator((d: { runId: string }) => d)
+  .handler(async ({ data }): Promise<RunDiffResult> => {
+    backend()
+    const run = store.getRun(data.runId)
+    if (!run) return { hasSnapshot: false, files: [] }
+    if (!(await ownedLoop(run.loopId))) return { hasSnapshot: false, files: [] }
+    const { computeRunDiff } = await import('./runDiff.js')
+    return computeRunDiff(data.runId)
   })
 
 // ---- catalog ----

@@ -125,6 +125,20 @@ export async function requestScope(): Promise<RequestScope> {
   return { enforce, userId, teamId: personalTeam, isAdmin, allTeams: false };
 }
 
+/**
+ * Whether a loop (by its owning team) is visible/actionable in the given request
+ * scope. The single source for loop authorization: open mode sees everything,
+ * an admin's "All teams" view sees everything, otherwise the loop must belong to
+ * the active team. Shared by the server fns (`ownedLoop`) and the artifact
+ * download route so the gate can't drift between them.
+ */
+export function loopInScope(loopTeamId: string | null, scope: RequestScope): boolean {
+  const { enforce, teamId, isAdmin, allTeams } = scope;
+  if (!enforce) return true;
+  if (isAdmin && allTeams) return true;
+  return loopTeamId === teamId;
+}
+
 export const auth = betterAuth({
   baseURL: process.env.LOOPANY_BASE_URL || "http://127.0.0.1:3000",
   secret: process.env.LOOPANY_AUTH_SECRET || "dev-insecure-secret-change-in-prod",

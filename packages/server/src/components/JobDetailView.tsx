@@ -7,6 +7,7 @@ import { listChannels } from '../server/notifyFns'
 import { ModalHead, ModalSection } from './Modal'
 import { LoopView } from './LoopView'
 import { TaskFileView } from './TaskFileView'
+import { FilesView } from './FilesView'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { ArtifactList, btn, btnCost, btnKey, btnKeyPrimary, btnPrimary, ErrorBanner, Pre } from './ui'
 import { ConfirmBar, FlashLine, useDeferredDelete, useFlash } from './actionUi'
@@ -528,6 +529,11 @@ export function JobDetailView({
     </>
   )
 
+  // The loop's live-synced artifacts (Phase 2) — its own lazy-by-loopId section
+  // (the detail payload stays small; FilesView fetches + self-polls). Sits under
+  // the run history, the loop's "what it produced" surface beside "what it ran".
+  const filesBlock = <FilesView loopId={id} running={running} />
+
   // ---- edit-via-Claude-Code mode: the primary path (Agent-First). Describe the
   // change; the server dispatches a one-off `edit` run to the loop's machine, where
   // claude applies it (schedule + task.md). No claim/paste — the dashboard's poll
@@ -718,6 +724,7 @@ export function JobDetailView({
       <div className="min-w-0">
         <LoopView html={job.ui!} runs={runs} />
         {runsBlock}
+        {filesBlock}
       </div>
       <div className="min-w-0 lg:flex lg:flex-col">
         {toolbar}
@@ -726,11 +733,12 @@ export function JobDetailView({
     </div>
   ) : (
     // Plain layout (no agent-authored UI yet): a single column — toolbar, then
-    // task spec, then run history. Each stays capped (no fill needed here).
+    // task spec, run history, then the loop's synced files. Each stays capped.
     <div className="mt-5">
       {toolbar}
       {taskBlock(false)}
       {runsBlock}
+      {filesBlock}
     </div>
   )
 

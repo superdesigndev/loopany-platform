@@ -515,6 +515,17 @@ export class MachineGateway {
     });
     revokeRunToken(runToken);
 
+    // Capture the loop's full file set as THIS run's snapshot (Phase 3 diff
+    // baseline). Cheap: just record the manifest from the already-synced
+    // artifact_files; the diff is computed lazily on read (getRunDiff), never
+    // here. The daemon flushes a final run-tagged sync before reporting, so this
+    // reflects the run's end-state. Best-effort — never let it fail the report.
+    try {
+      store.putRunSnapshot(slot.runId, slot.loopId, store.buildLoopManifest(slot.loopId));
+    } catch (err) {
+      log.warn({ runId: slot.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
+    }
+
     if (slot.role === "evolve") {
       this.scheduler.finishEvolution(slot.loopId);
     } else if (slot.role === "edit") {
