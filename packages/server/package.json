@@ -8,7 +8,8 @@
     "dev": "vite dev",
     "build": "vite build",
     "start": "drizzle-kit migrate && node .output/server/index.mjs",
-    "typecheck": "tsc --noEmit",
+    "routes:generate": "tsr generate",
+    "typecheck": "tsr generate && tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
@@ -36,6 +37,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.1",
     "@tanstack/react-router-devtools": "^1.167.0",
+    "@tanstack/router-cli": "1.167.17",
     "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
