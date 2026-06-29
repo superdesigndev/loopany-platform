@@ -15,68 +15,57 @@ The user pasted these values along with this link — use them verbatim:
 - **server-url** — the LoopAny server base URL (e.g. `http://localhost:3000`)
 - **connect-key** — a one-time token (starts with `dk_`). It both authorizes a NEW
   machine and tags the loop back to the web dialog (its `claim`).
-- **daemon-cmd** *(optional)* — the command to start the daemon. If absent, use
-  `npx @crewlet/loopany@latest`.
+- **loopany-cli** *(optional)* — the command that runs the loopany CLI, used as the
+  prefix for every `loopany` invocation below. **If it's not pasted, use
+  `npx @crewlet/loopany@latest`.** (A dev server may paste a local command instead.)
 
 ## 1 · Make sure a daemon is running for THIS machine
 
-This machine keeps a stable identity in `~/.loopany/device-token`. Decide the
-device token to use:
+One idempotent command does the whole thing — run it verbatim (substitute
+**loopany-cli**, defaulting to `npx @crewlet/loopany@latest`):
 
 ```bash
-if [ -s ~/.loopany/device-token ]; then
-  DEVICE_TOKEN="$(cat ~/.loopany/device-token)"      # already connected before → reuse this machine
-else
-  DEVICE_TOKEN="<connect-key>"                        # first time → adopt the connect-key as this machine
-fi                                                    # (the daemon persists it to ~/.loopany/device-token on start)
+<loopany-cli> up --server-url <server-url> --connect-key <connect-key>
 ```
 
-Then check whether its daemon is already live — **don't start a second one**:
+`loopany up` resolves this machine's stable identity (reuses the stored device
+token, else adopts the connect-key), checks whether a daemon is already live,
+starts a single detached one if not — surviving this Claude Code session — and
+waits until the server reports the machine online. It never starts a second
+daemon. It exits `0` once connected (printing `daemon online …` or `daemon
+already running …`); then continue to step 2. If it can't come online, it says
+where the log is.
 
-```bash
-curl -s "<server-url>/api/machine/status" -H "Authorization: Bearer $DEVICE_TOKEN"
-# -> {"online": true|false, ...}
-```
+## 2 · Create the loop's folder and task file
 
-If `online` is **true**, skip to step 2. Otherwise start it **detached** so it
-survives this Claude Code session (it long-polls forever; a plain `&` dies with the
-session):
+Every loop gets its **own folder** under the project: `<project>/loopany/<slug>/`
+(make it if needed; pick a short `<slug>` from the loop name). That folder is the
+loop's home — its task file lives there, and by default every artifact the loop
+produces (reports, exports, generated files, scratch) lands there too, so each
+loop's output stays self-contained and out of the project's way.
 
-```bash
-mkdir -p ~/.loopany
-nohup <daemon-cmd> --server-url <server-url> --api-key "$DEVICE_TOKEN" > ~/.loopany/daemon.log 2>&1 &
-```
-
-Re-check `/api/machine/status` every couple of seconds until `online` is true
-before continuing (the daemon self-registers the machine on its first poll).
-
-## 2 · Write the task file
-
-Every loop is anchored by a **task file**: a markdown doc kept in the project that
-is the loop's durable brief and running memory. Each scheduled run reads it for
-context and appends what it did, so the loop stays coherent over time.
-
-Create it at `<project>/loopany/<slug>.md` (make the folder if needed), filled in
-from what we ACTUALLY just did — real URLs, paths, commands, thresholds:
+Inside it, write the **task file** at `<project>/loopany/<slug>/README.md`: a markdown
+doc that is the loop's durable brief and running memory. Each scheduled run reads it
+for context and maintains it, so the loop stays coherent over time. Fill it from
+what we ACTUALLY just did — real URLs, paths, commands, thresholds:
 
 ```markdown
 # <Loop name>
 
-## Goal
-What this loop checks or does, and why.
+## Spec
+What this loop checks or does and why, plus the concrete steps / commands /
+endpoints / files involved — the real ones from this session. State when to message
+the user vs. stay silent.
 
-## How it runs
-The concrete steps / commands / endpoints / files involved — the real ones from
-this session.
+## Current understanding
+The baseline / known state / open issues — what the loop currently expects. Seed it
+with what we established this session; each run updates it.
 
-## Notify
-When to message the user vs. stay silent.
-
-## Log
+## Timeline
 <!-- one dated entry per run, appended below by the loop -->
 ```
 
-Keep the absolute path to this file — it goes in the config as `taskFile`.
+Keep the absolute path to `README.md` — it goes in the config as `taskFile`.
 
 ## 3 · Author the loop config
 
@@ -97,86 +86,81 @@ in step 2, keep `task` SHORT — don't restate the steps/filters/queries there.
 `task` is just the trigger: point the agent at the task file and state the notify
 behavior. For example:
 
-> "Read the task file `loopany/<slug>.md` (and any docs it links) and run it for
-> today. Append a Log entry when done. Per its Notify section, message the user
-> only when warranted; otherwise return nothing."
+> "Read the task file `loopany/<slug>/README.md` (and any docs it links) and run it
+> for today. Append a Timeline entry when done. Per its Spec, message the user only
+> when warranted; otherwise return nothing."
 
-A bare cron carries no timezone — the server interprets it in **its own** zone
-(UTC in prod), so "8am" would fire at 8am UTC, not the user's morning. Always pin
-the user's IANA timezone in `timezone` so the cadence means what they said. Detect
-it from this machine:
+Pick a sensible 5-field `cron` cadence. **Don't worry about the timezone** — you
+don't compute or set it. `loopany new` (step 4) auto-detects this machine's IANA
+zone and pins it for you, so "8am" means the user's 8am, not the server's UTC.
+(Override only if the user states a different zone: pass `--tz <IANA>` in step 4.)
 
-```bash
-# IANA name, e.g. "Asia/Shanghai" — prefer this
-readlink /etc/localtime | sed 's#.*/zoneinfo/##'        # linux/mac; falls back below if empty
-[ -z "$TZ_NAME" ] && TZ_NAME="$(cat /etc/timezone 2>/dev/null)"
-```
-
-(or just ask the user their timezone if you can't resolve a clean IANA name).
-
-Build the config as a JSON object:
+Write the config to **`loopany/<slug>/loop.tmp.json`** (next to the task file) —
+only the loop's real intent goes in it; the CLI fills the fixed envelope. It's a
+**throwaway creation payload**, not the live loop: once `loopany new` POSTs it the
+server owns the schedule/envelope and only the task file syncs back, so the
+`.tmp.json` name flags that it goes stale and is safe to delete after step 4
+(later changes go through `loopany edit` + the task file, never this file):
 
 ```json
 {
   "name": "short human name",
   "cron": "m h dom mon dow",
-  "timezone": "Asia/Shanghai",
   "workflow": "<JS function body>",
   "task": "<SHORT trigger — read + run the task file, then the notify rule>",
   "workdir": "<absolute project dir>",
   "taskFile": "<absolute path to the task file from step 2>",
   "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
   "notify": "auto",
-  "summary": "one short sentence describing what this loop does",
-  "claim": "<connect-key>"
+  "summary": "one short sentence describing what this loop does"
 }
 ```
 
 Rules:
-- Set `claim` to the **connect-key** verbatim — it's how the web dialog learns the
-  loop was created (do this even when reusing an existing machine).
 - Include **either** `workflow` **or** `task` (or both, if the workflow escalates).
 - Always set `workdir` and `taskFile`. Put the real instructions in the **task
   file**; keep `task` a short pointer to it (avoid duplicating content).
-- Pick a sensible `cron` cadence (5 fields) and set `timezone` to the user's IANA
-  zone (detected above) so the cadence fires in their local time, not the server's.
 - Make the `workflow` self-contained and defensive (handle fetch failures).
 - `stateSchema` is optional — declare numeric per-run metrics to get a chart.
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
+- **Don't add `timezone`, `claim`, or any auth** — `loopany new` injects the
+  timezone, the connect-key claim, and this machine's device token for you.
 
 ## 4 · Create the loop
 
-POST the config to `<server-url>/api/machine/loop` with **this machine's device
-token** as the Bearer (so the loop binds to this machine) — the `claim` field
-inside carries the connect-key:
+One command creates it from the config file — pass the connect-key so the web
+dialog learns the loop was created:
 
 ```bash
-curl -sS -X POST "<server-url>/api/machine/loop" \
-  -H "Authorization: Bearer $DEVICE_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '<the JSON object from step 3>'
+<loopany-cli> new \
+  --config loopany/<slug>/loop.tmp.json \
+  --connect-key <connect-key>
 ```
 
-On success the response is `{ "ok": true, "id": "...", "name": "..." }`. Tell the
-user the loop is created (with its name and cadence); it now appears in the
-LoopAny web UI and runs on schedule. If the response has an `error`, fix the
-config and retry.
+`loopany new` detects the IANA timezone, injects the claim, authenticates as this
+machine, validates the config, and POSTs it. On success it prints `created loop
+<name> — <cron> <timezone>`; the loop now appears in the LoopAny web UI and runs
+on schedule. Tell the user it's created (name + cadence) — the `loop.tmp.json` has
+served its purpose and can be deleted. If it prints `loopany: <error>`, fix
+`loop.tmp.json` and re-run.
 
 ## 5 · Edit an existing loop
 
 The loop lives in two places, and you edit each where it lives:
 
 - **Schedule / delivery envelope** (cadence, name, timezone, notify, model, pause)
-  — the server owns it. Use the `loopany` CLI; it reuses this machine's persisted
-  device token, so no auth or flags are needed.
+  — the server owns it. Use the same **loopany-cli** prefix as above; it reuses
+  this machine's persisted device token, so no `--server-url`/`--connect-key` or
+  other auth is needed.
 - **What the loop does** (its instructions, context, log) — that's the loop's
-  **task file (`task.md`) on this machine**. Just edit that file directly in the
-  repo. It syncs back to the server on the loop's next run; nothing else to do.
+  **task file (`loopany/<slug>/README.md`) on this machine**. Just edit that file
+  directly in the repo. It syncs back to the server on the loop's next run; nothing
+  else to do.
 
 First find the loop id (only loops bound to THIS machine are listed):
 
 ```bash
-loopany loops
+<loopany-cli> loops
 # -> loop-xxxx  on      0 8 * * *  Asia/Shanghai  Cookie Daily Breakfast Report
 #    loop-yyyy  paused  0 * * * *                 Hourly metrics
 ```
@@ -184,16 +168,15 @@ loopany loops
 Then change the envelope (pass only what changes):
 
 ```bash
-loopany edit <loop-id> --cron "0 9 * * *"      # reschedule (5-field cron)
-loopany edit <loop-id> --tz "America/New_York"  # change the timezone
-loopany edit <loop-id> --name "New name" --notify always
-loopany edit <loop-id> --pause                  # or --resume
-loopany edit <loop-id> --run-at 2h              # one extra run in 2h, then resume cadence
+<loopany-cli> edit <loop-id> --cron "0 9 * * *"      # reschedule (5-field cron)
+<loopany-cli> edit <loop-id> --name "New name" --notify always
+<loopany-cli> edit <loop-id> --pause                 # or --resume
+<loopany-cli> edit <loop-id> --run-at 2h             # one extra run in 2h, then resume cadence
 ```
 
 It prints `updated <name> — <fields>` on success, or `loopany: <error>` to fix.
-You can only edit loops bound to this machine; if `loopany loops` doesn't list it,
-the user is on a different machine than the one running the loop.
+You can only edit loops bound to this machine; if `<loopany-cli> loops` doesn't
+list it, the user is on a different machine than the one running the loop.
 
 > Pausing, deleting, or running a loop now are also one-click in the LoopAny web
 > dashboard — point the user there for those rather than the CLI if they prefer.

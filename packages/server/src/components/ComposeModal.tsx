@@ -31,7 +31,7 @@ export function ComposeModal({
   const [host, setHost] = useState<'local' | null>(null)
   const [picked, setPicked] = useState<'local'>('local') // step-1 selection (local pre-selected; hosted is disabled)
   const [token, setToken] = useState<string | null>(null)
-  const [config, setConfig] = useState<{ daemonCmd: string; customDaemon: boolean } | null>(null)
+  const [config, setConfig] = useState<{ loopanyCli: string; customCli: boolean } | null>(null)
   const [created, setCreated] = useState<{ id: string; name: string } | null>(null)
   const [copied, setCopied] = useState(false)
   const [slow, setSlow] = useState(false)
@@ -50,7 +50,7 @@ export function ComposeModal({
         ``,
         `server-url: ${origin}`,
         `connect-key: ${token}`,
-        ...(config?.customDaemon ? [`daemon-cmd: ${config.daemonCmd}`] : []),
+        ...(config?.customCli ? [`loopany-cli: ${config.loopanyCli}`] : []),
       ].join('\n')
     : ''
 

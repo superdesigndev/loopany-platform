@@ -33,3 +33,17 @@ export function readStored(file: string): string | undefined {
     return undefined;
   }
 }
+
+/** Read a `--flag value` from an argv slice (bare/terminal `--flag` → ""). */
+export function flag(args: string[], name: string): string | undefined {
+  const i = args.indexOf(`--${name}`);
+  if (i < 0) return undefined;
+  const next = args[i + 1];
+  return next === undefined || next.startsWith("--") ? "" : next;
+}
+
+/** Resolve this machine's server URL: explicit flag → env → stored, with any
+ *  trailing slash stripped (so `${server}/api/...` never doubles up). */
+export function resolveServerUrl(flagValue: string | undefined): string {
+  return (flagValue || process.env.LOOPANY_SERVER_URL || readStored(SERVER_FILE) || "").replace(/\/$/, "");
+}
