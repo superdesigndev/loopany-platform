@@ -41,6 +41,10 @@ LLM and executes no user code**.
   SQL + snapshot under `drizzle/`) **then** `db:migrate` (applies to the dev DB). Dev
   does NOT auto-migrate on `pnpm dev` — skip the apply and the running server hits a
   missing column. Prod applies on `pnpm start`; local is on you.
+- **Drizzle `text(col, { enum: [...] })` is a TS-only constraint** — SQLite columns are
+  plain `text` with no DB-level CHECK (confirmed in `drizzle/*.sql`). Adding/removing an
+  enum value (e.g. dropping the deprecated `draft` RunRole) is a pure type change; it needs
+  no migration and cannot break existing rows.
 
 ## Commands
 
