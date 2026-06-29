@@ -194,11 +194,12 @@ Reclaim: machine took the delivery but no report within timeoutMs+grace (default
 
 1. The Modal, on open, `mintClaim()`s a `dk_` **claim code** (without creating a machine row), and shows a copyable **connect line**:
    ```
-   Follow <origin>/api/skill and build a loop for the thing you did above.
+   Follow <origin>/api/skill and build a loop for the thing you did above. Run it <schedule>, and <action> each time.
    server-url: <origin>
    connect-key: dk_…              // both the new machine's device token and the loop's claim
    [daemon-cmd: …]                // included only when LOOPANY_DAEMON_CMD is configured (local dev)
    ```
+   The instruction line is an **editable template**: `<schedule>` (default `every day at 9am`) and `<action>` (default `write an article`) are inline click-to-edit chips the user can customize before copying, so the pasted text carries their own cadence + task. The `/api/skill` URL and the `server-url`/`connect-key`/`daemon-cmd` config lines stay fixed and read-only. A cleared chip falls back to its default so the instruction never reads broken.
 2. The user **pastes it into their own Claude Code** (in the project where they just got the task working). Claude follows `<origin>/api/skill` (server route returns `src/SKILL.md`, inlined with `?raw`): ① settle the device token (`~/.loopany/device-token` present → reuse = associate the existing machine; absent → take the connect-key as this machine's = authorize a new machine) → status check online, and if offline `nohup`-detach the daemon (**self-registers** this machine); ② write the task file + the loop config JSON; ③ `POST <origin>/api/machine/loop` (Bearer **device token**, body carries `claim`=connect-key).
 3. The Web side **polls `claimStatus(connect-key)`**, and once the claim is redeemed by `createLoop` it knows which loop was created → the Modal flips to "Loop created ✓" → refresh the dashboard. **The Web never needs to know which machine it was.**
 
