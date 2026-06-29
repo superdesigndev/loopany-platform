@@ -14,6 +14,9 @@ export const Route = createFileRoute('/api/machine/sync')({
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const { SYNC_BODY_CAP } = await import('../gateway/artifacts.js')
+        const declared = Number(request.headers.get('content-length') ?? '')
+        if (Number.isFinite(declared) && declared > SYNC_BODY_CAP)
+          return Response.json({ error: 'sync body too large' }, { status: 413 })
         const text = await request.text().catch(() => '')
         if (text.length > SYNC_BODY_CAP) return Response.json({ error: 'sync body too large' }, { status: 413 })
         let body: unknown

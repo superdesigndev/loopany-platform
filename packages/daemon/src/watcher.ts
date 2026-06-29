@@ -32,6 +32,8 @@ const BLOB_CAP = 10 * 1024 * 1024; // 10MB
 const INLINE_CAP = 64 * 1024; // 64KB
 /** Coalesce a burst of file events into a single sync push. */
 const COALESCE_MS = Number(process.env.LOOPANY_SYNC_COALESCE_MS || 1500);
+/** After a transient sync failure, re-arm one flush after this delay (no hot-loop). */
+const RETRY_MS = Number(process.env.LOOPANY_SYNC_RETRY_MS || 5000);
 
 /** One loop folder the server asked this machine to watch. */
 export interface WatchSpec {
@@ -153,6 +155,8 @@ class LoopWatcher {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private dirty = false;
+  /** A transient sync failure asked for a delayed retry (idle folder self-heals). */
+  private retry = false;
   /** Hashes we believe the server already has (skip re-inlining). */
   private synced = new Set<string>();
   private closed = false;
@@ -183,13 +187,13 @@ class LoopWatcher {
   }
 
   /** Debounce: coalesce a burst of events into one flush. */
-  private schedule(): void {
+  private schedule(delay = COALESCE_MS): void {
     if (this.closed) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.flush();
-    }, COALESCE_MS);
+    }, delay);
   }
 
   private async flush(): Promise<void> {
@@ -213,7 +217,10 @@ class LoopWatcher {
 
       const manifest = entries.map((e) => ({ path: e.path, hash: e.hash, size: e.size, binary: e.binary, oversize: e.oversize }));
       const res = await this.postSync({ loopId: this.loopId, runId, manifest, blobs: inline });
-      if (!res) return; // transient failure → retry on the next event/flush
+      if (!res) {
+        this.retry = true; // transient failure → re-arm a delayed flush (idle self-heal)
+        return;
+      }
 
       const need = new Set(res.needHashes ?? []);
       const failed = new Set<string>();
@@ -228,13 +235,19 @@ class LoopWatcher {
       // Mark everything the server now has as synced (exclude PUTs that failed so
       // the next flush retries them).
       this.synced = new Set(entries.map((e) => e.hash).filter((h): h is string => !!h && !failed.has(h)));
+      if (failed.size > 0) this.retry = true; // a PUT failed → re-arm so it retries without a new event
     } catch (err) {
       log.warn({ loopId: this.loopId, err: msg(err) }, "sync flush failed");
+      this.retry = true;
     } finally {
       this.running = false;
       if (this.dirty) {
         this.dirty = false;
+        this.retry = false;
         this.schedule();
+      } else if (this.retry) {
+        this.retry = false;
+        this.schedule(RETRY_MS);
       }
     }
   }
