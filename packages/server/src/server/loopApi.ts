@@ -54,18 +54,20 @@ export const getAuthState = createServerFn({ method: 'GET' }).handler(async () =
 })
 
 /**
- * Client config. `daemonCmd` is the base command shown in the connect dialog —
- * defaults to the published `npx` form; set LOOPANY_DAEMON_CMD locally to a
- * runnable command, e.g. `tsx /abs/packages/daemon/src/cli.ts` or
- * `node /abs/packages/daemon/dist/cli.js`.
+ * Client config. `loopanyCli` is the CLI invocation prefix the skill + connect
+ * dialog use for every verb (`up`, `new`, …) — defaults to the published `npx`
+ * form. Set LOOPANY_CLI locally to a runnable command that points at the in-repo
+ * daemon, e.g. `tsx /abs/packages/daemon/src/cli.ts` or
+ * `node /abs/packages/daemon/dist/cli.js`, so loops created from THIS server tell
+ * Claude Code to run your local code instead of the registry build.
  */
 export const getConfig = createServerFn({ method: 'GET' }).handler(() => {
-  const custom = process.env.LOOPANY_DAEMON_CMD?.trim()
+  const custom = process.env.LOOPANY_CLI?.trim()
   return {
-    daemonCmd: custom || 'npx @crewlet/loopany@latest',
-    /** True when a non-default (dev) daemon command is configured — the New-loop
-     *  paste then carries an explicit `daemon-cmd:` line so Claude Code uses it. */
-    customDaemon: !!custom,
+    loopanyCli: custom || 'npx @crewlet/loopany@latest',
+    /** True when a non-default (dev) CLI is configured — the New-loop paste then
+     *  carries an explicit `loopany-cli:` line so Claude Code uses it verbatim. */
+    customCli: !!custom,
   }
 })
 
@@ -240,7 +242,7 @@ export const evolveJob = createServerFn({ method: 'POST' })
   })
 
 /** Agent-First edit: queue an owner instruction; the next tick runs an `edit`
- *  agent on the loop's machine that applies it (schedule + task.md), then clears. */
+ *  agent on the loop's machine that applies it (schedule + the loop's README.md), then clears. */
 export const requestEdit = createServerFn({ method: 'POST' })
   .validator((d: { id: string; instruction: string }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {

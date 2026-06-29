@@ -16,3 +16,6 @@ dist/
 # local runtime artifacts (daemon shim, downloaded delivery prompts, scratch task files)
 .loopany/
 /loopany/
+
+# development docs
+.lavish/

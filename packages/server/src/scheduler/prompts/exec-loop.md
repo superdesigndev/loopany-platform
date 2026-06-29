@@ -14,6 +14,8 @@ Read the task file first. It is this loop's single source of truth and persists 
 - `## Timeline` — append-only log of prior runs
 If it does not exist yet, create it from the instruction you were given.
 
+The task file lives in this loop's own folder (the directory that contains it, `loopany/<slug>/`). Treat that folder as the loop's home: write any artifacts you produce — reports, exports, generated files, scratch — inside it by default, so this loop's output stays self-contained and doesn't clutter the project.
+
 ## 2. Do the work, surface only what changed
 - Carry out the Spec against the current state of the system.
 - Compare against `## Current understanding`. Surface only what is new or changed — don't re-describe the whole picture.

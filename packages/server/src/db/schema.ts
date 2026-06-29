@@ -157,7 +157,7 @@ export const loops = sqliteTable(
     /** Marker: next tick runs the evolution pass as its sole work. */
     evolveDue: integer("evolve_due", { mode: "boolean" }),
     /** Pending owner edit: the next tick runs an `edit` agent that applies this
-     *  instruction (schedule via `loopany edit`, content via task.md) then clears it. */
+     *  instruction (schedule via `loopany edit`, content via the loop's README.md) then clears it. */
     editRequest: text("edit_request"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),

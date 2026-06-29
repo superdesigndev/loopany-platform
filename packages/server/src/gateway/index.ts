@@ -339,7 +339,7 @@ export class MachineGateway {
    * (`loopany edit`). Authed by the machine's device token and scoped to loops
    * bound to THAT machine — deliberately NOT gated by allowControl (that flag
    * governs a running run rescheduling ITSELF; the human owner may always edit).
-   * Task CONTENT lives in task.md on the machine, so it's edited there, not here.
+   * Task CONTENT lives in the loop's README.md on the machine, so it's edited there, not here.
    */
   editLoop(
     deviceToken: string,

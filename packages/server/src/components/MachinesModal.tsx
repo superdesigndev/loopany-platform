@@ -12,10 +12,10 @@ import {
 import { getConfig } from '../server/loopApi'
 import type { MachineSummary } from '../types'
 
-/** The daemon connect command (origin known client-side; base cmd from server config). */
-function connectCmd(token: string, daemonCmd: string): string {
+/** The daemon connect command (origin known client-side; CLI prefix from server config). */
+function connectCmd(token: string, cli: string): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3000'
-  return `${daemonCmd} --server-url ${origin} --api-key ${token}`
+  return `${cli} --server-url ${origin} --api-key ${token}`
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -43,10 +43,10 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [delErr, setDelErr] = useState<string | null>(null)
-  const [daemonCmd, setDaemonCmd] = useState('npx @crewlet/loopany@latest')
+  const [cliCmd, setCliCmd] = useState('npx @crewlet/loopany@latest')
 
   useEffect(() => {
-    if (open) void getConfig().then((c) => setDaemonCmd(c.daemonCmd))
+    if (open) void getConfig().then((c) => setCliCmd(c.loopanyCli))
     else setDelErr(null) // don't carry a stale delete error into the next open
   }, [open])
 
@@ -137,9 +137,9 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
             <div className="mt-2 flex items-start gap-2">
               <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-display p-4 font-mono text-[12px] leading-relaxed text-paper">
-                {connectCmd(pending.token, daemonCmd)}
+                {connectCmd(pending.token, cliCmd)}
               </pre>
-              <CopyButton text={connectCmd(pending.token, daemonCmd)} />
+              <CopyButton text={connectCmd(pending.token, cliCmd)} />
             </div>
             <div className="mt-4 flex items-center gap-2.5 rounded-lg border border-[color:var(--color-warn,#eab308)] bg-[color:var(--color-warn,#eab308)]/10 px-4 py-3">
               <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-[color:var(--color-warn,#eab308)]" />
@@ -218,9 +218,9 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
                 </summary>
                 <div className="mt-2 flex items-start gap-2">
                   <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-display p-3 font-mono text-[11px] leading-relaxed text-paper">
-                    {connectCmd(m.token, daemonCmd)}
+                    {connectCmd(m.token, cliCmd)}
                   </pre>
-                  <CopyButton text={connectCmd(m.token, daemonCmd)} />
+                  <CopyButton text={connectCmd(m.token, cliCmd)} />
                 </div>
               </details>
             )}

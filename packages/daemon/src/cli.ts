@@ -3,6 +3,10 @@
  * LoopAny daemon — one binary, two roles (BYOA MINIMAL_DAEMON §1):
  *
  *   loopany                    → daemon mode: poll the server, run deliveries.
+ *   loopany up […]             → setup mode: ensure a daemon is running for this
+ *                                machine (idempotent) — folds SKILL.md §1.
+ *   loopany new --config […]   → setup mode: create a loop from a config file,
+ *                                filling timezone/claim/auth — folds SKILL.md §3–4.
  *   loopany loops|edit […]     → interactive mode: the owner edits a loop from
  *                                their own Claude Code, reusing the persisted
  *                                device token (→ /api/machine/loop).
@@ -19,6 +23,13 @@ async function main(): Promise<number> {
   // In-run callback (run token present) takes precedence: `loopany report` etc.
   if (process.env.LOOPANY_RUN_TOKEN && argv.length > 0) {
     return (await import("./callback.js")).runCallback(argv);
+  }
+  // Setup verbs the owner's Claude Code calls OUTSIDE a run to stand a loop up.
+  if (argv[0] === "up") {
+    return (await import("./ensure.js")).runEnsure(argv.slice(1));
+  }
+  if (argv[0] === "new") {
+    return (await import("./create.js")).runCreate(argv.slice(1));
   }
   // Owner editing outside a run — no run token, an explicit interactive verb.
   if (argv.length > 0 && INTERACTIVE_VERBS.has(argv[0]!)) {
