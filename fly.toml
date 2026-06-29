@@ -7,9 +7,10 @@
 #   fly secrets set LOOPANY_AUTH_SECRET=$(openssl rand -hex 32) \
 #       GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
 #       LOOPANY_BASE_URL=https://<app>.fly.dev \
-#       LOOPANY_ALLOWED_LOGINS=you@example.com \
-#       LOOPANY_SLACK_BOT_TOKEN=xoxb-... LOOPANY_SLACK_CHANNEL=C...
+#       LOOPANY_ALLOWED_LOGINS=you@example.com
 #   fly deploy
+#   # Push channels (Telegram/Slack/Feishu) are configured per team in the
+#   # dashboard (Notifications), not via secrets.
 
 app = "loopany-testing"
 primary_region = "nrt"

@@ -15,9 +15,9 @@ LLM and executes no user code**.
 
 - `packages/server` (`@loopany/server`) — TanStack Start UI + server fns +
   in-process Scheduler (croner) + machine routes (`/api/machine/poll`,
-  `/agent-api/loop`, `/machine/report`) + Better Auth + Slack. Drizzle/SQLite.
+  `/agent-api/loop`, `/machine/report`) + Better Auth + push notifications. Drizzle/SQLite.
   - `src/scheduler/` — the cron engine (tick → pending run → Dispatcher).
-  - `src/gateway/` — machine gateway (poll/agent-api/report), run tokens, delivery, prompt, slack.
+  - `src/gateway/` — machine gateway (poll/agent-api/report), run tokens, delivery, prompt, notify (per-team push channels).
   - `src/db/` — Drizzle schema (machines/loops/runs) + store + auth-schema.
   - `src/server/` — boot (`ensureServer`), adapters (Loop/Run → JobSummary/JobDetail), loopApi server fns.
   - `src/routes/` — pages + server-only route files.

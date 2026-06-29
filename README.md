@@ -2,7 +2,7 @@
 
 Scheduled **agent loops** for your team. You describe a recurring task; LoopAny runs
 it on a schedule via **your own machine's claude-code** (BYOA — bring your own agent)
-and surfaces the result on a shared dashboard + Slack. The server never runs an LLM
+and surfaces the result on a shared dashboard + your team's push channel. The server never runs an LLM
 or executes your code; it only schedules, stores, authenticates, and notifies.
 
 > Carved out of [c0](../c0)'s loop engine. Full design + decision log:
@@ -24,7 +24,7 @@ or executes your code; it only schedules, stores, authenticates, and notifies.
 ```
 
 A scheduler tick creates a *pending run*; the bound machine's next poll claims it,
-runs claude, and reports the result (which can post to Slack).
+runs claude, and reports the result (which can post to the loop's push channel).
 
 ## Run it locally
 
@@ -60,8 +60,11 @@ SQLite on a volume. See `fly.toml` for the setup commands. Build = nitro
 
 - **Auth** is off by default (open). Set `GITHUB_CLIENT_ID/SECRET` +
   `LOOPANY_ALLOWED_LOGINS` to gate the dashboard behind GitHub login.
-- **Slack**: set `LOOPANY_SLACK_BOT_TOKEN` + `LOOPANY_SLACK_CHANNEL` to push loop
-  results to a channel.
+- **Push channels** are configured per team in the dashboard (the **Notifications**
+  modal), not via global env. Each team can add Telegram or Feishu channels; a loop
+  routes its results to one of them (or to the dashboard only). Slack is also a
+  supported delivery transport but has no UI add-form yet. Channel secrets are
+  stored server-side per team, never in environment variables.
 
 See [`.env.example`](.env.example) for all variables.
 
