@@ -55,7 +55,7 @@ LoopAny takes only c0's **loop management + scheduling + execution** core, cutti
 │ WS /machine/connect (device-token → machine → userId)                  │
 │ /agent-api/loop (run-token, reuse control.ts logic, UDS→HTTP)          │
 │ /machine/report   ·   Slack push (global token, fixed channel)         │
-│ Draft/Evolve: synthesize system prompt(recipe/evolve) + history → delivery │
+│ Evolve: synthesize system prompt(evolve) + run history → delivery          │
 │ SQLite on volume: user/session/account + machines/loops/runs           │
 └─────────▲ WS push delivery        ▲ HTTP callback(Bearer)──────────────┘
           │                          │
@@ -99,8 +99,8 @@ loops
   cron        TEXT
   task        TEXT NULL
   taskFile    TEXT NULL           -- path on the machine; the persistent memory of an exec loop
-  workflow    TEXT NULL           -- zero-LLM pre-filter JS (written by a human / draft / evolve author)
-  ui          TEXT NULL           -- generative UI template (draft/evolve author, sanitized at render time)
+  workflow    TEXT NULL           -- zero-LLM pre-filter JS (written by a human / evolve author)
+  ui          TEXT NULL           -- generative UI template (evolve author, sanitized at render time)
   stateSchema JSON NULL           -- metric schema [{key,label,unit}]
   notify      TEXT                -- always | auto | never
   allowControl INTEGER            -- whether a run may self-modify its schedule
@@ -120,7 +120,7 @@ runs
   userId      TEXT FK->user
   machineId   TEXT FK->machines
   phase       TEXT                -- pending | running | done | error
-  role        TEXT                -- exec | draft | evolve
+  role        TEXT                -- exec | evolve | edit  (draft deprecated → D5)
   ts          TEXT
   outcome     TEXT                -- silent | direct | exec | error | evolve
   status      TEXT NULL           -- new | resolved | nothing-new (returned by report)
@@ -148,7 +148,7 @@ runs
 - **`/agent-api/loop`**: `Authorization: Bearer <run-token>`, body `{argv}`. Reuses c0 `control.ts`'s RunSlot logic (transport switched from Unix socket to an HTTP route). Verbs opened in MVP: `report`, `show` (always available); `reschedule/set-cron/pause/resume/notify` (`allowControl` opt-in); `set-ui/set-schema/set-workflow` (only run-tokens of the `evolve` role). `graduate` is cut.
 - **`/machine/report`**: `{runId, ok, exitCode, durationMs, sessionId}` → fetch this run's accumulated report+controls → write the done/error run → push Slack per the notify setting.
 - **Slack push**: global `LOOPANY_SLACK_BOT_TOKEN`, fixed `LOOPANY_SLACK_CHANNEL`, `chat.postMessage`, the body carrying a loop name/owner prefix.
-- **Draft/Evolve synthesis**: the server holds the recipe directory + draft-builder / evolve prompts, synthesizes the system prompt + stuffs the intent (draft) / the most recent N run histories (evolve) into the delivery payload.
+- **Evolve synthesis**: the server holds the evolve prompt, synthesizes the system prompt + stuffs the most recent N run histories into the delivery payload. (The `draft` role synthesis + the recipe directory / draft-builder prompt were dropped → see D5.)
 
 ### 4.2 Daemon (`@crewlet/loopany` · `packages/daemon`)
 
