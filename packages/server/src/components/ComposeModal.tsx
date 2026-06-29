@@ -12,6 +12,17 @@ const SLOW_WAIT_MS = 100_000
 const SCHEDULE_DEFAULT = 'every day at 9am'
 const ACTION_DEFAULT = 'write an article'
 
+// Static fragments of the capture instruction, split at the three dynamic slots
+// (origin URL, schedule chip, action chip). Both the rendered JSX prose and the
+// composed clipboard text are built from these same fragments so the two can
+// never desync — spacing is baked into each fragment so neither side adds its own.
+const INSTRUCTION = {
+  beforeOrigin: 'Follow ',
+  beforeSchedule: '/api/skill and build a loop for the thing you did above. Run it ',
+  beforeAction: ', and ',
+  afterAction: ' each time.',
+} as const
+
 /**
  * An inline, click-to-edit chip that flows inside the instruction prose. It is an
  * UNCONTROLLED contentEditable span (managed via ref) so React re-renders never
@@ -122,13 +133,18 @@ export function ComposeModal({
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
 
   // Resolve each slot to its committed value or the default fallback, then build
-  // the natural-language instruction. This is the single source the chips edit
-  // and Copy reads — keep it in lockstep with the rendered template below.
+  // the natural-language instruction from the shared INSTRUCTION fragments — the
+  // same fragments the rendered template below uses, so copy and prose can't desync.
   const scheduleText = schedule.trim() || SCHEDULE_DEFAULT
   const actionText = action.trim() || ACTION_DEFAULT
   const instruction =
-    `Follow ${origin}/api/skill and build a loop for the thing you did above. ` +
-    `Run it ${scheduleText}, and ${actionText} each time.`
+    INSTRUCTION.beforeOrigin +
+    origin +
+    INSTRUCTION.beforeSchedule +
+    scheduleText +
+    INSTRUCTION.beforeAction +
+    actionText +
+    INSTRUCTION.afterAction
 
   // The machine config lines stay fixed and read-only — never user-editable.
   const configLines = token
@@ -316,21 +332,23 @@ export function ComposeModal({
                   like prose. leading-loose gives the bordered chips vertical room
                   so wrapped lines don't collide. */}
               <p className="leading-loose">
-                Follow {origin}/api/skill and build a loop for the thing you did above. Run it{' '}
+                {INSTRUCTION.beforeOrigin}
+                {origin}
+                {INSTRUCTION.beforeSchedule}
                 <EditableChip
                   initialValue={schedule}
                   placeholder={SCHEDULE_DEFAULT}
                   ariaLabel="schedule — how often the loop runs"
                   onChange={setSchedule}
                 />
-                , and{' '}
+                {INSTRUCTION.beforeAction}
                 <EditableChip
                   initialValue={action}
                   placeholder={ACTION_DEFAULT}
                   ariaLabel="action — what the loop does each run"
                   onChange={setAction}
-                />{' '}
-                each time.
+                />
+                {INSTRUCTION.afterAction}
               </p>
               {/* Machine config — fixed, read-only. */}
               {configLines ? (
