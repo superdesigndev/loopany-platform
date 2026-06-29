@@ -152,7 +152,7 @@ export type TranscriptResult =
   | { query?: string; system?: string; steps: TranscriptStep[] }
   | { error: string }
 
-// ---- writes: form / template / draft ----
+// ---- writes: form / template ----
 
 export interface OwnerRef {
   gateway?: string

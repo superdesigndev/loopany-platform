@@ -50,7 +50,7 @@ export interface TranscriptStep {
 
 export type NotifyPolicy = "always" | "auto" | "never";
 export type RunPhase = "pending" | "running" | "done" | "error" | "canceled";
-export type RunRole = "exec" | "draft" | "evolve" | "edit";
+export type RunRole = "exec" | "evolve" | "edit";
 export type RunOutcome = "silent" | "direct" | "exec" | "error" | "evolve";
 export type RunStatus = "new" | "resolved" | "nothing-new";
 
@@ -137,9 +137,9 @@ export const loops = sqliteTable(
     taskFileContent: text("task_file_content"),
     /** When `taskFileContent` was last synced from the machine (ISO). */
     taskFileSyncedAt: text("task_file_synced_at"),
-    /** Zero-LLM pre-filter JS (authored by human / draft / evolve). Runs on the machine. */
+    /** Zero-LLM pre-filter JS (authored by human / evolve). Runs on the machine. */
     workflow: text("workflow"),
-    /** Generative-UI template (authored by draft/evolve; sanitized at render). */
+    /** Generative-UI template (authored by evolve; sanitized at render). */
     ui: text("ui"),
     /** Per-run metric schema. */
     stateSchema: text("state_schema", { mode: "json" }).$type<StateField[]>(),
@@ -179,7 +179,7 @@ export const runs = sqliteTable(
     userId: text("user_id").notNull(),
     machineId: text("machine_id").notNull(),
     phase: text("phase", { enum: ["pending", "running", "done", "error", "canceled"] }).notNull(),
-    role: text("role", { enum: ["exec", "draft", "evolve", "edit"] }).notNull(),
+    role: text("role", { enum: ["exec", "evolve", "edit"] }).notNull(),
     ts: text("ts").notNull(),
     outcome: text("outcome", { enum: ["silent", "direct", "exec", "error", "evolve"] }),
     status: text("status", { enum: ["new", "resolved", "nothing-new"] }),

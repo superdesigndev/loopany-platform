@@ -149,9 +149,6 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   if (m === "GET" && p === "/api/templates") return send(res, 200, []);
   if (m === "GET" && p === "/api/roots") return send(res, 200, store.listMachines().flatMap((mc) => mc.roots ?? []));
   if (m === "GET" && p === "/api/defaults") return send(res, 200, { owner: null });
-  if (m === "POST" && p === "/api/draft") {
-    return send(res, 400, { ok: false, error: "AI compose (draft role) is coming — create via the form / machine API for now." });
-  }
   if (m === "GET" && p === "/api/transcript") {
     return send(res, 400, { error: "Run transcript view is not available in v1 (the transcript lives on the machine)." });
   }

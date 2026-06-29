@@ -8,7 +8,7 @@
  * error ("machine offline") and the next cron tick retries (best-effort, no
  * inbox/catch-up). Overlapping ticks for a loop with an open run are skipped.
  *
- * Evolution / draft roles and timeout-reclaim land in later phases; the run
+ * Evolution and timeout-reclaim land in later phases; the run
  * lifecycle (pending → running → done/error) and the Dispatcher seam are shaped
  * to absorb them without reshaping the engine.
  */
