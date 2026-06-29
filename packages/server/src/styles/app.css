@@ -175,6 +175,44 @@
   padding-right: 2rem;
 }
 
+/*
+ * Inline editable chip — a click-to-edit fragment that flows INSIDE prose (the
+ * capture snippet's schedule/action slots). `display: inline` keeps it in the
+ * text flow so it wraps word-by-word; box-decoration-break:clone re-paints the
+ * background/border/padding on every wrapped line fragment (otherwise the chip
+ * splits ugly at the line break). The wire outline + raised fill mark it as a
+ * field; hover/focus pull the border to display ink. The :empty placeholder
+ * mirrors a real <input>'s — shown only when the user clears the slot, muted so
+ * it reads as a hint, never as committed text. overflow-wrap:anywhere lets a
+ * long custom value break instead of forcing horizontal scroll on the modal.
+ */
+.lp-chip {
+  display: inline;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  margin: 0 0.04em;
+  padding: 0.06em 0.36em;
+  border: 1px solid var(--color-wire);
+  border-radius: 5px;
+  background: var(--color-surface);
+  color: var(--color-display);
+  cursor: text;
+  outline: none;
+  overflow-wrap: anywhere;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.lp-chip:hover {
+  border-color: var(--color-display);
+}
+.lp-chip:focus {
+  border-color: var(--color-display);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-display) 16%, transparent);
+}
+.lp-chip:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-disabled);
+}
+
 /* Dot-matrix motif — the Nothing signature. Subtle page texture (the off-white
  * "paper" reads as a faint instrument grid; cards sit on top as flat surfaces). */
 .dot-grid-subtle {

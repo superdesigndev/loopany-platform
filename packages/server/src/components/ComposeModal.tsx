@@ -6,6 +6,78 @@ import { btn, btnPrimary, btnSm } from './ui'
 // How long to wait on a silent paste before nudging the user to check things.
 const SLOW_WAIT_MS = 100_000
 
+// The two click-to-edit slots in the capture instruction. Defaults double as the
+// placeholder (shown when a slot is cleared) AND the fallback baked into the
+// copied text, so the instruction never reads broken even with an empty field.
+const SCHEDULE_DEFAULT = 'every day at 9am'
+const ACTION_DEFAULT = 'write an article'
+
+/**
+ * An inline, click-to-edit chip that flows inside the instruction prose. It is an
+ * UNCONTROLLED contentEditable span (managed via ref) so React re-renders never
+ * reset the caret; the latest text is mirrored up via `onChange` purely to
+ * recompose the copied snippet. Single logical line (Enter commits/blurs, pasted
+ * newlines collapse to spaces) but it still wraps visually like any word. We only
+ * ever read `textContent` — never set user content as HTML — so there's no XSS
+ * surface. When emptied, CSS `:empty::before` shows `placeholder` muted.
+ */
+function EditableChip({
+  initialValue,
+  placeholder,
+  ariaLabel,
+  onChange,
+}: {
+  initialValue: string
+  placeholder: string
+  ariaLabel: string
+  onChange: (value: string) => void
+}) {
+  const ref = useRef<HTMLSpanElement>(null)
+
+  // Seed the field once on mount (uncontrolled — never re-write content on
+  // re-render, which would fight the cursor). `initialValue` is the live state
+  // value, so edits survive a Back→Continue round-trip without React re-setting it.
+  // Mount-only: intentionally not keyed on initialValue — re-seeding on every
+  // render would clobber the caret. `initialValue` is the live state at mount.
+  useEffect(() => {
+    if (ref.current) ref.current.textContent = initialValue
+  }, [])
+
+  return (
+    <span
+      ref={ref}
+      role="textbox"
+      aria-label={ariaLabel}
+      contentEditable
+      suppressContentEditableWarning
+      spellCheck={false}
+      data-placeholder={placeholder}
+      className="lp-chip"
+      onInput={(e) => {
+        const el = e.currentTarget
+        const text = el.textContent ?? ''
+        // Collapse a stray <br> the browser may leave behind so :empty matches
+        // and the placeholder shows once the field is truly cleared.
+        if (text === '' && el.innerHTML !== '') el.innerHTML = ''
+        onChange(text)
+      }}
+      onKeyDown={(e) => {
+        // Enter commits (blur) instead of inserting a newline — single-line field.
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          e.currentTarget.blur()
+        }
+      }}
+      onPaste={(e) => {
+        // Plain text only — strip rich HTML and flatten any newlines to spaces.
+        e.preventDefault()
+        const text = (e.clipboardData.getData('text/plain') || '').replace(/[\r\n]+/g, ' ')
+        document.execCommand('insertText', false, text)
+      }}
+    />
+  )
+}
+
 /**
  * New loop = capture-from-Claude-Code (paste-forward, no machine picker). The web
  * mints a claim token, shows ONE instruction block, and waits. The user pastes it
@@ -36,6 +108,11 @@ export function ComposeModal({
   const [copied, setCopied] = useState(false)
   const [slow, setSlow] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The two editable slots in the instruction line. Held as state so editing a
+  // chip changes exactly what Copy puts on the clipboard. Empty falls back to
+  // the default so the composed text is never broken.
+  const [schedule, setSchedule] = useState(SCHEDULE_DEFAULT)
+  const [action, setAction] = useState(ACTION_DEFAULT)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Hold the callback in a ref so the poll effect doesn't re-subscribe (and
   // restart the slow-wait timer) every time the parent passes a fresh onCreated.
@@ -44,15 +121,25 @@ export function ComposeModal({
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
 
-  const snippet = token
+  // Resolve each slot to its committed value or the default fallback, then build
+  // the natural-language instruction. This is the single source the chips edit
+  // and Copy reads — keep it in lockstep with the rendered template below.
+  const scheduleText = schedule.trim() || SCHEDULE_DEFAULT
+  const actionText = action.trim() || ACTION_DEFAULT
+  const instruction =
+    `Follow ${origin}/api/skill and build a loop for the thing you did above. ` +
+    `Run it ${scheduleText}, and ${actionText} each time.`
+
+  // The machine config lines stay fixed and read-only — never user-editable.
+  const configLines = token
     ? [
-        `Follow ${origin}/api/skill and build a loop for the thing you did above.`,
-        ``,
         `server-url: ${origin}`,
         `connect-key: ${token}`,
         ...(config?.customCli ? [`loopany-cli: ${config.loopanyCli}`] : []),
       ].join('\n')
     : ''
+
+  const snippet = token ? [instruction, '', configLines].join('\n') : ''
 
   // Reset to the chooser screen each time the dialog opens.
   useEffect(() => {
@@ -64,6 +151,8 @@ export function ComposeModal({
     setError(null)
     setCopied(false)
     setSlow(false)
+    setSchedule(SCHEDULE_DEFAULT)
+    setAction(ACTION_DEFAULT)
   }, [open])
 
   // Mint a claim + load config once the user picks the local agent.
@@ -221,11 +310,42 @@ export function ComposeModal({
                 </button>
               )}
             </div>
-            <pre className="mt-2 overflow-auto whitespace-pre-wrap rounded-lg border border-wire bg-raised p-3 font-mono text-[12px] leading-relaxed text-primary">
-              {snippet || 'minting a connect key…'}
-            </pre>
+            <div className="mt-2 overflow-hidden rounded-lg border border-wire bg-raised p-3 font-mono text-[12px] text-primary">
+              {/* Instruction line — an editable template. The /api/skill URL is
+                  fixed; the two chips (schedule, action) flow inline and wrap
+                  like prose. leading-loose gives the bordered chips vertical room
+                  so wrapped lines don't collide. */}
+              <p className="leading-loose">
+                Follow {origin}/api/skill and build a loop for the thing you did above. Run it{' '}
+                <EditableChip
+                  initialValue={schedule}
+                  placeholder={SCHEDULE_DEFAULT}
+                  ariaLabel="schedule — how often the loop runs"
+                  onChange={setSchedule}
+                />
+                , and{' '}
+                <EditableChip
+                  initialValue={action}
+                  placeholder={ACTION_DEFAULT}
+                  ariaLabel="action — what the loop does each run"
+                  onChange={setAction}
+                />{' '}
+                each time.
+              </p>
+              {/* Machine config — fixed, read-only. */}
+              {configLines ? (
+                <pre className="mt-3 overflow-x-auto whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-secondary">
+                  {configLines}
+                </pre>
+              ) : (
+                <div className="mt-3 border-t border-hairline pt-3 leading-relaxed text-secondary">
+                  minting a connect key…
+                </div>
+              )}
+            </div>
             <p className="mt-2 text-[13px] leading-snug text-secondary">
-              Paste it in that same session — reuses this machine automatically.
+              Tweak the highlighted bits, then paste it in that same session — reuses this machine
+              automatically.
             </p>
           </div>
         </div>
