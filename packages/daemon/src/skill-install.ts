@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
-/** Hard ceiling on the `npx skills` call so a hung install can't wedge `loopany up`. */
+/** Hard ceiling on the `npx skills` call so a hung install can't wedge `loopany new`. */
 const INSTALL_TIMEOUT_MS = 90_000;
 
 /**
