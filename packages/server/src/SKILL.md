@@ -1,6 +1,6 @@
 ---
 name: loopany-build-loop
-description: Turn a task you just completed in this Claude Code session into a scheduled LoopAny loop — write its task file, register this machine, and create the loop via the API.
+description: Turn a task you just completed in this coding-agent session into a scheduled LoopAny loop — write its task file, register this machine, and create the loop via the API.
 ---
 
 # LoopAny — build a loop from what we just did
@@ -18,6 +18,12 @@ The user pasted these values along with this link — use them verbatim:
 - **loopany-cli** *(optional)* — the command that runs the loopany CLI, used as the
   prefix for every `loopany` invocation below. **If it's not pasted, use
   `npx @crewlet/loopany@latest`.** (A dev server may paste a local command instead.)
+- **agent** *(optional)* — the coding agent this loop should be recorded against
+  (`claude-code` or `codex`). If a value is pasted, use it; otherwise **declare
+  yourself** — tell LoopAny which agent you are by passing `--agent <you>` to
+  `loopany new` in step 4 (e.g. `--agent claude-code` if you are Claude Code,
+  `--agent codex` if you are Codex). LoopAny also sniffs its own env to confirm the
+  host, so this is just a fallback; recording it is honest, not load-bearing.
 
 ## 1 · Make sure a daemon is running for THIS machine
 
@@ -134,11 +140,13 @@ dialog learns the loop was created:
 ```bash
 <loopany-cli> new \
   --config loopany/<slug>/loop.tmp.json \
-  --connect-key <connect-key>
+  --connect-key <connect-key> \
+  --agent <agent>          # which coding agent you are (claude-code | codex); omit to auto-detect
 ```
 
-`loopany new` detects the IANA timezone, injects the claim, authenticates as this
-machine, validates the config, and POSTs it. On success it prints `created loop
+`loopany new` detects the IANA timezone, injects the claim, **records the coding
+agent** (the `--agent` you pass, or — preferred — the host it sniffs from its own
+env), authenticates as this machine, validates the config, and POSTs it. On success it prints `created loop
 <name> — <cron> <timezone>`; the loop now appears in the LoopAny web UI and runs
 on schedule. Tell the user it's created (name + cadence) — the `loop.tmp.json` has
 served its purpose and can be deleted. If it prints `loopany: <error>`, fix

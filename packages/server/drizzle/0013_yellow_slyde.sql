@@ -1,0 +1,1 @@
+ALTER TABLE `loops` ADD `agent` text DEFAULT 'claude-code' NOT NULL;

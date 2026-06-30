@@ -180,7 +180,7 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
   // ---- Machine list ----
   return (
     <Modal open={open} onClose={onClose}>
-      <ModalHead title="Machines" sub="Each machine runs a loopany daemon that executes your loops via local claude-code." />
+      <ModalHead title="Machines" sub="Each machine runs a loopany daemon that executes your loops via your local coding agent." />
 
       <ModalSection>Connected machines</ModalSection>
       {delErr && <ErrorBanner message={delErr} onDismiss={() => setDelErr(null)} />}

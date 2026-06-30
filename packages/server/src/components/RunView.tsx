@@ -191,8 +191,9 @@ function Transcript({ runId }: { runId: string }) {
   )
 }
 
-// The claude-code session id behind this run — handy for `claude --resume <id>`
-// or feeding the auto-evolve context. Mono + click-to-copy.
+// The coding agent's session id behind this run — handy for resuming that session
+// in your agent (e.g. `claude --resume <id>`) or feeding the auto-evolve context.
+// Mono + click-to-copy.
 function SessionId({ id }: { id: string }) {
   const [copied, setCopied] = useState(false)
   return (

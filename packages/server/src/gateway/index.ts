@@ -17,7 +17,7 @@ import { Cron } from "croner";
 
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
-import type { ControlAction, NewLoop, NotifyPolicy, RunArtifact, RunStatus, StateField, TranscriptStep } from "../db/schema.js";
+import type { CodingAgent, ControlAction, NewLoop, NotifyPolicy, RunArtifact, RunStatus, StateField, TranscriptStep } from "../db/schema.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
 import { dispatchNotification, shouldNotify } from "./notify.js";
@@ -277,6 +277,10 @@ export class MachineGateway {
       taskFile?: unknown;
       stateSchema?: unknown;
       notify?: unknown;
+      /** Coding agent the daemon recorded as this loop's host (claude-code | codex).
+       *  Absent for older daemons → defaults to claude-code. Recording-only: a codex
+       *  loop is still executed via Claude for now. */
+      agent?: unknown;
       /** Web's New-loop claim token — correlates this loop back to the dialog. */
       claim?: unknown;
     },
@@ -300,6 +304,10 @@ export class MachineGateway {
     if (!task && !workflow) return { status: 400, body: { error: "provide a workflow (JS) or a task (instruction)" } };
 
     const notify = body.notify === "always" || body.notify === "never" ? body.notify : "auto";
+    // Recorded coding agent: trust the daemon's resolved value when it's a known
+    // agent, else default to claude-code (older daemons omit it; an unrecognized /
+    // "unknown" value also degrades to the default rather than rejecting the loop).
+    const agent: CodingAgent = body.agent === "codex" ? "codex" : "claude-code";
     const teamId = machine.teamId ?? store.teamIdForUser(machine.userId);
     // Default to the team's most recently configured channel (listChannels is
     // newest-first) so a freshly-added Feishu/Telegram channel auto-applies to new loops.
@@ -318,6 +326,7 @@ export class MachineGateway {
       taskFile: str(body.taskFile),
       stateSchema: store.coerceStateSchema(body.stateSchema) ?? null,
       notify,
+      agent,
       enabled: true,
     });
     this.scheduler.addLoop(loop);
@@ -328,7 +337,7 @@ export class MachineGateway {
     if (typeof body.claim === "string" && body.claim.trim()) {
       fulfillClaim(body.claim.trim(), { loopId: loop.id, name, machineId });
     }
-    log.info({ machineId, loopId: loop.id }, "createLoop: created from Claude Code");
+    log.info({ machineId, loopId: loop.id, agent }, "createLoop: created from a coding agent");
     return { status: 200, body: { ok: true, id: loop.id, name } };
   }
 
