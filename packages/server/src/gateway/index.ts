@@ -103,6 +103,11 @@ export class MachineGateway {
     private readonly notify: (loop: Loop, message: string) => Promise<void> = dispatchNotification,
   ) {}
 
+  /** In-flight latch: the maintenance pass is sequential and the first post-deploy
+   *  backlog reclamation can overrun the interval, so a fresh tick skips rather than
+   *  running a second pass concurrently (idempotent but wasteful + double-counts). */
+  private maintenanceRunning = false;
+
   /**
    * Alert the user that an exec run FAILED (error / timeout / machine-offline),
    * through the loop's chosen channel, gated by the anti-spam streak policy
@@ -178,11 +183,18 @@ export class MachineGateway {
    * idempotent with no garbage. Best-effort — never throws into the caller.
    */
   async maintainStorage(): Promise<MaintainResult> {
+    if (this.maintenanceRunning) {
+      log.info("storage maintenance already in progress — skipping this tick");
+      return { snapshotsPruned: 0, blobsReclaimed: 0 };
+    }
+    this.maintenanceRunning = true;
     try {
       return await maintainStorage(this.blobStore);
     } catch (err) {
       log.warn({ err: err instanceof Error ? err.message : String(err) }, "storage maintenance failed");
       return { snapshotsPruned: 0, blobsReclaimed: 0 };
+    } finally {
+      this.maintenanceRunning = false;
     }
   }
 

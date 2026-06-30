@@ -639,11 +639,15 @@ export function loopsReferencingHash(hash: string): string[] {
 
 /** A loop's live byte footprint EXCLUDING any rows pointing at `hash` — the base
  *  the putBlob cap guard adds the blob's REAL byte length to (the placeholder row
- *  a sync wrote for `hash` carries a client-reported size we must not trust). */
+ *  a sync wrote for `hash` carries a client-reported size we must not trust). Sums
+ *  the VERIFIED blobs.size where the bytes are stored, falling back to the reported
+ *  artifact_files.size only for not-yet-stored (pending) rows, so a daemon that
+ *  under-reports sizes can't keep the base artificially low. */
 export function loopStoredBytesExcludingHash(loopId: string, hash: string): number {
   const row = db
-    .select({ total: sql<number>`coalesce(sum(${artifactFiles.size}), 0)` })
+    .select({ total: sql<number>`coalesce(sum(coalesce(${blobs.size}, ${artifactFiles.size})), 0)` })
     .from(artifactFiles)
+    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
     .where(
       and(
         eq(artifactFiles.loopId, loopId),
@@ -669,12 +673,16 @@ export function dropArtifactFilesForHash(loopId: string, hash: string): number {
 }
 
 /** A loop's current live (non-deleted) byte footprint: sum of sizes over files
- *  that actually have bytes stored (hash non-null, not oversize). This is the
+ *  that actually have bytes stored (hash non-null, not oversize). Prefers the
+ *  VERIFIED blobs.size (real length recorded at recordBlob) and only falls back to
+ *  the client-reported artifact_files.size for a row whose blob isn't stored yet
+ *  (pending), so an under-reporting daemon can't creep past the cap. This is the
  *  figure the per-loop storage cap is enforced against. */
 export function loopStoredBytes(loopId: string): number {
   const row = db
-    .select({ total: sql<number>`coalesce(sum(${artifactFiles.size}), 0)` })
+    .select({ total: sql<number>`coalesce(sum(coalesce(${blobs.size}, ${artifactFiles.size})), 0)` })
     .from(artifactFiles)
+    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
     .where(
       and(
         eq(artifactFiles.loopId, loopId),

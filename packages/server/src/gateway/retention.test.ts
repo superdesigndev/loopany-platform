@@ -171,10 +171,10 @@ test("GC deletes bytes before metadata: a blob re-referenced mid-delete drops me
   };
 
   const reclaimed = await retention.gcBlobs(racing, FORCE);
-  // Raced ⇒ not counted as a clean reclaim, bytes deleted, AND metadata dropped so
-  // blobExists()=false — the live row re-uploads on the next sync (self-heal). The
-  // invariant: never a live blobs row left pointing at deleted bytes.
-  expect(reclaimed).toBe(0);
+  // The bytes were reclaimed (counted), AND the metadata row is dropped
+  // unconditionally so blobExists()=false — the live row re-uploads on the next sync
+  // (self-heal). The invariant: never a live blobs row left pointing at deleted bytes.
+  expect(reclaimed).toBe(1);
   expect(await base.has(hash)).toBe(false);
   expect(store.blobExists(hash)).toBe(false);
   expect(store.getArtifactFile(loop.id, "racer.txt")!.deleted).toBe(false);
@@ -398,6 +398,97 @@ test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate sna
   expect(store.blobExists(h1)).toBe(false);
   expect(await base.has(h2)).toBe(true);
   expect(store.blobExists(h2)).toBe(true);
+});
+
+test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size", async () => {
+  process.env.LOOPANY_LOOP_BYTES_CAP = "100";
+  const { token, loop } = seed();
+  const { gw, blobs } = gatewayWithStore();
+
+  // Sync 1: an 80B file whose size the daemon UNDER-reports as 10B. Inline bytes are
+  // authoritative, so the blob is recorded at its real 80B while the artifact_files
+  // row keeps the under-reported 10B.
+  const a = "a".repeat(80);
+  const ha = sha256(a);
+  await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [{ path: "a.txt", hash: ha, size: 10 }],
+    blobs: [{ hash: ha, encoding: "utf8", data: a }],
+  });
+  expect(await blobs.has(ha)).toBe(true);
+  // The cap base reflects the REAL 80B (blobs.size), not the reported 10B — so an
+  // under-reporting daemon can't keep the base artificially low.
+  expect(store.loopStoredBytes(loop.id)).toBe(80);
+
+  // Sync 2: a NEW 80B file, again under-reported (10B), slips past sync's projected
+  // check (80 base + 10 reported = 90 ≤ 100) and lands in needHashes (no bytes yet).
+  const b = "b".repeat(80);
+  const hb = sha256(b);
+  const s = await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "a.txt", hash: ha, size: 10 },
+      { path: "b.txt", hash: hb, size: 10 },
+    ],
+  });
+  expect((s.body as any).needHashes).toContain(hb);
+
+  // putBlob measures the real 80B against the AUTHORITATIVE base (a.txt's verified
+  // 80B), so 80 + 80 = 160 > 100 → refused. A reported-size base (10B) would have let
+  // the loop creep past the cap one under-reported blob at a time.
+  const p = await gw.putBlob(token, hb, Buffer.from(b));
+  expect(p.status).toBe(413);
+  expect((p.body as any).capExceeded).toBe(true);
+  expect(await blobs.has(hb)).toBe(false);
+  expect(store.blobExists(hb)).toBe(false);
+});
+
+test("maintainStorage skips a concurrent pass while one is already running (in-flight guard)", async () => {
+  // One garbage blob with the grace forced open so gcBlobs awaits its byte delete.
+  process.env.LOOPANY_BLOB_GC_GRACE_MS = "1";
+  const base = new MemoryBlobStore();
+  const content = "garbage bytes";
+  const hash = sha256(content);
+  await base.put(hash, Buffer.from(content));
+  store.recordBlob(hash, content.length, false);
+  await new Promise((r) => setTimeout(r, 5)); // elapse the 1ms grace
+
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let deletes = 0;
+  const blocking = {
+    has: (h: string) => base.has(h),
+    put: (h: string, b: Buffer) => base.put(h, b),
+    get: (h: string) => base.get(h),
+    async delete(h: string): Promise<void> {
+      deletes++;
+      await gate; // hold the FIRST pass inside its delete await
+      return base.delete(h);
+    },
+  };
+  const gw = new gatewayMod.MachineGateway(scheduler, blocking as any);
+
+  try {
+    const p1 = gw.maintainStorage(); // enters and blocks in delete()
+    await new Promise((r) => setTimeout(r, 5));
+    // A second tick fired while the first is in-flight must SKIP, not run a second
+    // pass concurrently (which would re-scan + race the same deletes).
+    const r2 = await gw.maintainStorage();
+    expect(r2).toEqual({ snapshotsPruned: 0, blobsReclaimed: 0 });
+    expect(deletes).toBe(1); // only the first pass attempted a delete
+
+    release();
+    const r1 = await p1;
+    expect(r1.blobsReclaimed).toBe(1);
+    expect(await base.has(hash)).toBe(false);
+    // After it settles the latch is released → a fresh pass runs normally again.
+    const r3 = await gw.maintainStorage();
+    expect(r3).toEqual({ snapshotsPruned: 0, blobsReclaimed: 0 });
+  } finally {
+    delete process.env.LOOPANY_BLOB_GC_GRACE_MS;
+  }
 });
 
 test("maintainStorage is idempotent and safe with no garbage", async () => {

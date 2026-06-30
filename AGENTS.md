@@ -196,8 +196,10 @@ LLM and executes no user code**.
   untouchable); a per-candidate `store.blobIsReferenced` re-check right before the byte
   delete (skip ⇒ keep both bytes AND metadata); and a **bytes-before-metadata delete
   ordering** that closes a TOCTOU data-loss window. Per garbage hash the GC deletes the
-  BYTES first, then drops the metadata row **unconditionally** (re-checking referencedness
-  only to log/uncount a raced reclaim): so even if a sync raced the byte delete (re-
+  BYTES first, then drops the metadata row **unconditionally** (no post-delete re-scan —
+  `deleteBlob` runs regardless, so re-checking referencedness afterward would only adjust a
+  counter while paying a full snapshot manifest scan on the common genuine-garbage path; the
+  pre-delete guard is the correctness gate): so even if a sync raced the byte delete (re-
   referencing the hash + recreating the `blobs` row mid-await), `blobExists()` still goes
   false and that file re-uploads its bytes on the next sync — the GC NEVER leaves a live
   `blobs` row pointing at deleted bytes. A failed byte-delete leaves both bytes and metadata
@@ -220,7 +222,11 @@ LLM and executes no user code**.
   (survivors)` predicate (survivors bounded by `keep` ≤20), NOT an `inArray` of every victim
   runId, so a large pre-feature backlog prunes in one statement without tripping SQLite's
   bound-variable limit. **(3) Per-loop byte cap** — `store.loopStoredBytes`
-  (sum of live, byte-backed `artifact_files.size`); `sync()` tracks a projected footprint
+  (sum of live, byte-backed file sizes, preferring the VERIFIED `blobs.size` via a
+  `artifact_files→blobs` join and falling back to the client-reported `artifact_files.size`
+  only for a not-yet-stored/pending row — so an under-reporting daemon can't keep the base
+  artificially low and creep one blob at a time past the cap; `loopStoredBytesExcludingHash`
+  does the same for the `putBlob` re-check base); `sync()` tracks a projected footprint
   and, when accepting a file's NEW bytes (a hash the server doesn't already have — dedup
   reuse adds none) would exceed `LOOPANY_LOOP_BYTES_CAP` (default **500MB**), rejects THAT
   file (skips its bytes + row, NOT tombstoned — prior version kept) and surfaces
@@ -240,7 +246,11 @@ LLM and executes no user code**.
   rows (`store.dropArtifactFilesForHash`) so nothing points at a blob never stored — a later
   sync re-reconciles (self-healing). **When GC runs:** a dedicated `boot.ts` interval (`gcIntervalMs`, default
   **15min**, independent of the faster offline-sweep) calls `gateway.maintainStorage()`
-  (prune snapshots → GC blobs; best-effort, never throws). All knobs are lazy env reads
+  (prune snapshots → GC blobs; best-effort, never throws). `maintainStorage` holds an
+  **in-flight latch** (`maintenanceRunning`, released in `finally`) so a first-backlog pass
+  that overruns the interval makes the next tick skip rather than run a second pass
+  concurrently (the GC awaits blob deletes sequentially; overlap is idempotent but wastes
+  work and double-counts). All knobs are lazy env reads
   (`env.ts`) so tests set them per-case. Tests: `gateway/retention.test.ts`.
 - **Coding-agent recording (`loops.agent`).** A loop records WHICH coding agent it's
   bound to / was created by: `loops.agent` (`text`, TS-only enum `claude-code|codex`,

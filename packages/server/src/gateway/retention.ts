@@ -85,13 +85,11 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGrac
       // …then metadata, unconditionally. If a sync raced the await and re-referenced
       // the hash, dropping the (possibly sync-recreated) blobs row forces blobExists()
       // false so the bytes self-heal on the next sync; if not, this is plain cleanup.
-      const raced = store.blobIsReferenced(hash);
+      // No post-delete recheck: deleteBlob runs regardless, so re-scanning snapshots
+      // here would only adjust a counter while paying a full manifest scan on the
+      // common genuine-garbage path. The pre-delete guard above is the correctness gate.
       store.deleteBlob(hash);
-      if (raced) {
-        log.warn({ hash }, "gc: blob re-referenced mid-delete — dropped metadata to force re-upload");
-      } else {
-        reclaimed++;
-      }
+      reclaimed++;
     } catch (err) {
       // A failed byte-delete leaves BOTH the bytes and the metadata row intact, so a
       // later pass simply retries — no live row ever points at deleted bytes.
