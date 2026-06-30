@@ -389,7 +389,13 @@ LLM and executes no user code**.
   card row scrolls inside the dashboard box, a responsive auto-fit grid wraps), and
   `.taskmd table` is a `display:block; width:max-content; max-width:100%; overflow-x:
   auto` block so a wide markdown table scrolls inside the viewer, never widening the
-  page / shoving the runs rail off-screen.
+  page / shoving the runs rail off-screen. Same rule for the **runs timeline strip**
+  (`components/Timeline.tsx`): its root flex row is `min-w-0 overflow-x-auto` because a
+  full `WINDOW` of fixed-width (`shrink-0`) cube blocks + the next-run marker is wider
+  than the ~320px runs rail — unbounded they painted past the card's right edge and
+  forced a page-level horizontal scrollbar (`timelineWidth.regression.test.ts` guards
+  this). Contain on the ROW, not the blocks (blocks stay `shrink-0`); tooltips/pagers
+  are unaffected (popups portal out, the `+N` pagers still page the window).
 - **Unified Files panel (`components/LoopFilesPanel.tsx`).** Merges the former
   separate task-file box + `FilesView` (both DELETED) into ONE master-detail: a file
   list (task file pinned first with a `TASK` chip, then synced artifacts path-sorted)
@@ -437,4 +443,4 @@ LLM and executes no user code**.
 
 The **Cookie Daily Breakfast Report** loop runs end-to-end: scheduler → daemon poll → claude →
 `loopany report` → run `done` (real breakfast report). Dashboard renders real data
-(browser-verified, Geist style). 91 server tests + 28 daemon tests green; both packages typecheck.
+(browser-verified, Geist style). 113 server tests + 28 daemon tests green; both packages typecheck.
