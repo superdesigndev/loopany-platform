@@ -184,6 +184,31 @@ export function countRuns(loopId: string): number {
   return r?.n ?? 0;
 }
 
+/**
+ * Count consecutive FAILED exec runs ending at the loop's most recent finalized
+ * exec run (newest-first; stop at the first non-error). Drives the failure-alert
+ * anti-spam cadence (`shouldNotifyFailure`) entirely from persisted state — no
+ * in-memory counter to reset on deploy. Only `exec` runs count: evolve/edit are
+ * internal and never produce user-facing failure noise. Canceled / still-open
+ * runs are ignored (neither success nor failure), so a user-stopped run doesn't
+ * break or extend the streak.
+ */
+export function execFailureStreak(loopId: string): number {
+  const rows = db
+    .select({ phase: runs.phase })
+    .from(runs)
+    .where(and(eq(runs.loopId, loopId), eq(runs.role, "exec"), inArray(runs.phase, ["done", "error"])))
+    .orderBy(desc(runs.ts))
+    .limit(64)
+    .all();
+  let streak = 0;
+  for (const r of rows) {
+    if (r.phase !== "error") break;
+    streak++;
+  }
+  return streak;
+}
+
 /** Open runs (pending/running) — used by the timeout-reclaim sweep. */
 export function openRuns(): Run[] {
   return db.select().from(runs).where(inArray(runs.phase, ["pending", "running"])).all();

@@ -17,10 +17,10 @@ import { Cron } from "croner";
 
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
-import type { CodingAgent, ControlAction, NewLoop, NotifyPolicy, RunArtifact, RunStatus, StateField, TranscriptStep } from "../db/schema.js";
+import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, RunArtifact, RunRole, RunStatus, StateField, TranscriptStep } from "../db/schema.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
-import { dispatchNotification, shouldNotify } from "./notify.js";
+import { dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
 import {
@@ -96,7 +96,28 @@ export class MachineGateway {
     private readonly scheduler: Scheduler,
     /** Artifact blob byte store (R2 in prod; injectable in-memory store for tests). */
     private readonly blobStore: BlobStore = createBlobStore(),
+    /** Push dispatcher — injectable (like blobStore) so tests observe notifications
+     *  without a network call; defaults to the real per-channel `dispatchNotification`. */
+    private readonly notify: (loop: Loop, message: string) => Promise<void> = dispatchNotification,
   ) {}
+
+  /**
+   * Alert the user that an exec run FAILED (error / timeout / machine-offline),
+   * through the loop's chosen channel, gated by the anti-spam streak policy
+   * (`shouldNotifyFailure` over `store.execFailureStreak`). Evolve/edit runs are
+   * internal — they never produce user-facing failure noise. Best-effort + non-
+   * throwing: the run's error is already on the dashboard regardless. Call AFTER
+   * the run row has been finalized to `error`, so the streak count includes it.
+   */
+  private notifyRunFailure(loopId: string, role: RunRole, reason: string | null): void {
+    if (role !== "exec") return;
+    const loop = store.getLoop(loopId);
+    if (!loop) return;
+    const streak = store.execFailureStreak(loopId);
+    if (shouldNotifyFailure(loop.notify, streak)) {
+      void this.notify(loop, failureMessage(reason));
+    }
+  }
 
   /**
    * Dispatcher for the Scheduler. Short-poll transport: a no-op — the pending
@@ -132,13 +153,16 @@ export class MachineGateway {
         if (!online && age > PENDING_GRACE_MS) {
           store.updateRun(run.id, { phase: "error", outcome: "error", error: "machine offline", ts: nowIso() });
           if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
+          this.notifyRunFailure(run.loopId, run.role, "machine offline");
         } else if (age > RUN_TIMEOUT_MS) {
           store.updateRun(run.id, { phase: "error", outcome: "error", error: "run never claimed", ts: nowIso() });
           if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
+          this.notifyRunFailure(run.loopId, run.role, "run never claimed");
         }
       } else if (run.phase === "running" && age > RUN_TIMEOUT_MS) {
         store.updateRun(run.id, { phase: "error", outcome: "error", error: "machine timed out / disconnected", ts: nowIso() });
         if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
+        this.notifyRunFailure(run.loopId, run.role, "machine timed out / disconnected");
       }
     }
   }
@@ -581,13 +605,21 @@ export class MachineGateway {
       this.scheduler.maybeFlagEvolve(slot.loopId);
     }
 
-    // Notify (the loop's chosen channel), best-effort, per the loop's notify
-    // policy + the run's status. Edit runs are owner-initiated config changes —
-    // never notify. `updateRun` already returned the finalized row.
-    if (ok && slot.role !== "evolve" && slot.role !== "edit") {
-      const loop = store.getLoop(slot.loopId);
-      if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
-        void dispatchNotification(loop, finalized.message);
+    // Notify (the loop's chosen channel), best-effort. Edit/evolve runs are
+    // internal (owner config change / self-shaping) — never user-facing, success
+    // OR failure. `updateRun` already returned the finalized row.
+    if (slot.role !== "evolve" && slot.role !== "edit") {
+      if (ok) {
+        // Success: gate on the loop's notify policy + the run's content status.
+        const loop = store.getLoop(slot.loopId);
+        if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
+          void this.notify(loop, finalized.message);
+        }
+      } else {
+        // Failure: surface it (silent failure is the BYOA default failure mode),
+        // anti-spam'd by the consecutive-failure streak so a persistently-broken
+        // loop doesn't push every tick.
+        this.notifyRunFailure(slot.loopId, slot.role, finalized?.error ?? null);
       }
     }
     log.info({ runId: slot.runId, ok }, "report: finalized");

@@ -32,15 +32,42 @@ beforeEach(() => {
   db.sqlite.exec("DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
-function gateway(): InstanceType<typeof gatewayMod.MachineGateway> {
-  return new gatewayMod.MachineGateway({
-    maybeFlagEvolve(): void {},
-    finishEvolution(): void {},
-    finishEdit(): void {},
-    addLoop(): void {},
-    removeLoop(): void {},
-    runNow(): void {},
-  } as any);
+function gateway(
+  notify?: (loop: any, message: string) => Promise<void>,
+): InstanceType<typeof gatewayMod.MachineGateway> {
+  return new gatewayMod.MachineGateway(
+    {
+      maybeFlagEvolve(): void {},
+      finishEvolution(): void {},
+      finishEdit(): void {},
+      addLoop(): void {},
+      removeLoop(): void {},
+      runNow(): void {},
+    } as any,
+    undefined, // default in-memory blobstore
+    notify,
+  );
+}
+
+/** A recording notifier: captures (loopId, message) instead of pushing to a channel. */
+function recordingNotify() {
+  const sent: Array<{ loopId: string; message: string }> = [];
+  const fn = (loop: any, message: string): Promise<void> => {
+    sent.push({ loopId: loop.id, message });
+    return Promise.resolve();
+  };
+  return { sent, fn };
+}
+
+/** Seed a loop with an exec run already RUNNING, ready for a report() call. */
+function seededExecRun(notify: "always" | "auto" | "never" = "auto") {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify });
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+  return { machineId, loop, run, rt };
 }
 
 /** Insert a team (+ optional member rows) directly, bypassing store.ensureTeam's
@@ -473,4 +500,134 @@ test("set-workflow updates only through an evolution token", () => {
   expect(res.status).toBe(200);
   expect(store.getLoop(loop.id)!.workflow).toBe("return { state: prev }");
   expect(store.getRun(run.id)!.control?.[0]?.command).toBe("set-workflow");
+});
+
+// ---- failure visibility / alerting (notify on run failure + machine-offline) ----
+
+/** Add a finalized exec run with an explicit ts (deterministic streak ordering). */
+function addExecRun(loopId: string, machineId: string, phase: "done" | "error", ts: string) {
+  return store.addRun({ loopId, userId: "u1", machineId, phase, role: "exec", ts });
+}
+
+test("a FAILED exec run notifies the user (first failure of a streak)", () => {
+  const { loop, rt } = seededExecRun();
+  const { sent, fn } = recordingNotify();
+
+  const res = gateway(fn).report(rt, { ok: false, error: "claude exited 1", durationMs: 5 });
+  expect(res.status).toBe(200);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.loopId).toBe(loop.id);
+  expect(sent[0]!.message).toContain("Run failed");
+  expect(sent[0]!.message).toContain("claude exited 1");
+});
+
+test("a SUCCESSFUL exec run still notifies as before (unchanged success path)", () => {
+  const { loop, rt } = seededExecRun();
+  const { sent, fn } = recordingNotify();
+
+  const res = gateway(fn).report(rt, { ok: true, message: "Breakfast report ready", durationMs: 5 });
+  expect(res.status).toBe(200);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.loopId).toBe(loop.id);
+  expect(sent[0]!.message).toBe("Breakfast report ready");
+});
+
+test("repeated consecutive failures are anti-spam'd: notify on the 1st and every Nth, not every tick", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const { sent, fn } = recordingNotify();
+  const gw = gateway(fn);
+
+  // 12 consecutive failing runs. With FAILURE_NOTIFY_EVERY === 5, the user is
+  // alerted on streaks 1, 5, 10 → exactly 3 pushes (not 12).
+  for (let i = 1; i <= 12; i++) {
+    const run = addExecRun(loop.id, machineId, "error", `2026-06-01T00:00:${String(i).padStart(2, "0")}Z`).id;
+    // The run row is already error; drive report on a token for it to exercise the path.
+    const rt = tokens.registerRunToken({ runId: run, loopId: loop.id, machineId, role: "exec", allowControl: false });
+    gw.report(rt, { ok: false, error: "boom", durationMs: 1 });
+  }
+  expect(sent).toHaveLength(3);
+});
+
+test("a success between failures resets the streak so the next failure re-alerts (transition)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const { sent, fn } = recordingNotify();
+
+  // Prior history: a failure, then a success (the streak is broken at the success).
+  addExecRun(loop.id, machineId, "error", "2026-06-01T00:00:01Z");
+  addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:02Z");
+
+  // Now a fresh failure → streak is 1 again → it must re-alert.
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: "2026-06-01T00:00:03Z" });
+  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+  gateway(fn).report(rt, { ok: false, error: "boom", durationMs: 1 });
+
+  expect(sent).toHaveLength(1);
+});
+
+test("evolve and edit run failures never produce user-facing failure notifications", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "always" });
+  const { sent, fn } = recordingNotify();
+  const gw = gateway(fn);
+
+  for (const role of ["evolve", "edit"] as const) {
+    const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() });
+    const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
+    gw.report(rt, { ok: false, error: "boom", durationMs: 1 });
+  }
+  expect(sent).toHaveLength(0);
+});
+
+test("notify: 'never' suppresses failure alerts entirely", () => {
+  const { rt } = seededExecRun("never");
+  const { sent, fn } = recordingNotify();
+  gateway(fn).report(rt, { ok: false, error: "boom", durationMs: 1 });
+  expect(sent).toHaveLength(0);
+});
+
+test("sweep surfaces a machine-offline pending run once (anti-spam'd while it stays offline)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  // Machine offline + last seen long ago.
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false, lastSeen: "2000-01-01T00:00:00Z" });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const { sent, fn } = recordingNotify();
+  const gw = gateway(fn);
+
+  // Two stale pending exec runs (older than the 60s grace) — both reclaim as
+  // "machine offline". The first is streak 1 (alert); the second is streak 2 (silent).
+  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: "2026-06-01T00:00:01Z" });
+  gw.sweep();
+  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: "2026-06-01T00:00:02Z" });
+  gw.sweep();
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.loopId).toBe(loop.id);
+  expect(sent[0]!.message).toMatch(/offline/i);
+});
+
+test("execFailureStreak counts only consecutive trailing exec errors, ignoring evolve/canceled/open", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+
+  addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:01Z");
+  addExecRun(loop.id, machineId, "error", "2026-06-01T00:00:02Z");
+  addExecRun(loop.id, machineId, "error", "2026-06-01T00:00:03Z");
+  // An interleaved evolve error must NOT count (internal role).
+  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "error", role: "evolve", ts: "2026-06-01T00:00:04Z" });
+  expect(store.execFailureStreak(loop.id)).toBe(2);
+
+  // A trailing success breaks the streak to 0.
+  addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:05Z");
+  expect(store.execFailureStreak(loop.id)).toBe(0);
 });

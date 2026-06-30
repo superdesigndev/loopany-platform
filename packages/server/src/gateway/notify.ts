@@ -42,6 +42,46 @@ export function shouldNotify(notify: NotifyPolicy, status: RunStatus | null): bo
   return status !== "nothing-new"; // auto
 }
 
+/**
+ * Anti-spam cadence for FAILURE alerts: re-notify at most once per this many
+ * consecutive failures. A loop that fails every tick would otherwise push on
+ * every run — instead we alert on the first failure (the success→failure
+ * transition) and then only every Nth consecutive failure as a "still broken"
+ * reminder. Derived from persisted run rows (see `store.execFailureStreak`), so
+ * it survives deploys without any in-memory counter.
+ */
+export const FAILURE_NOTIFY_EVERY = 5;
+
+/**
+ * Should a FAILED run (error / timeout / machine-offline) message the user?
+ * Orthogonal to `shouldNotify` (which gates success-path content): failures
+ * carry no RunStatus. Policy:
+ *   - `never` ⇒ silent (the user opted out of all pushes).
+ *   - otherwise (`auto`/`always`) ⇒ notify on the FIRST failure of a streak,
+ *     then once every `FAILURE_NOTIFY_EVERY` consecutive failures.
+ * `streak` is the number of consecutive failed exec runs ending at this one
+ * (1 = this is the first failure after a success / the loop's first run ever).
+ */
+export function shouldNotifyFailure(notify: NotifyPolicy, streak: number): boolean {
+  if (notify === "never") return false;
+  if (streak <= 0) return false;
+  return streak === 1 || streak % FAILURE_NOTIFY_EVERY === 0;
+}
+
+/**
+ * Build the user-facing failure message from a run's recorded `error`. Machine-
+ * availability reasons ("machine offline", "run never claimed", "machine timed
+ * out / disconnected") get a distinct, actionable phrasing (reconnect your
+ * machine); anything else reads as a plain run failure with the reason appended.
+ */
+export function failureMessage(reason?: string | null): string {
+  const r = (reason ?? "").trim();
+  if (/offline|disconnect|never claimed/i.test(r)) {
+    return "📵 Your machine appears offline — the scheduled run was skipped. Reconnect it to resume this loop.";
+  }
+  return r ? `⚠️ Run failed — ${r}` : "⚠️ Run failed.";
+}
+
 /** fetch + parse JSON + map to a SendResult, never throwing. `fault` returns an
  *  error string when the parsed body signals failure, or null on success. */
 async function postJson(

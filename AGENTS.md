@@ -34,6 +34,27 @@ LLM and executes no user code**.
   `router-generator` the Start plugin uses) — a fresh checkout typechecks with **no
   prior build**. Run `routes:generate` standalone if you need the file otherwise.
 - Machine transport is **HTTP short-poll** (not WS) — see design doc §11 D1.
+- **Failure visibility / alerting (`gateway/notify.ts` + `gateway/index.ts`).** Notifications
+  fire on **failure**, not only success — silent failure is the BYOA default failure mode
+  (the daemon lives on a laptop that sleeps/disconnects). Two server-side paths, both reusing
+  the existing per-channel `dispatchNotification` (no new provider): (1) `report()` — when a
+  run finalizes `!ok`, alerts via `notifyRunFailure(loopId, role, reason)`; (2) `sweep()` —
+  when a stale pending/running run is reclaimed (`machine offline` / `run never claimed` /
+  `machine timed out / disconnected`), same call. **Anti-spam is derived from persisted run
+  rows, NOT an in-memory counter** (deploy-safe): `store.execFailureStreak(loopId)` counts
+  consecutive trailing `error` **exec** runs (newest-first, stop at first non-error; evolve/
+  edit/canceled/open ignored); `shouldNotifyFailure(notify, streak)` notifies on streak `1`
+  (the success→failure transition) and then every `FAILURE_NOTIFY_EVERY` (=5) — so a loop that
+  fails every tick pushes at 1, 5, 10…, not every run; a success between failures resets the
+  streak so the next failure re-alerts. `notify:"never"` suppresses failure alerts too.
+  **Role gating:** only `exec` failures notify — evolve/edit are internal (config change /
+  self-shaping) and never produce user-facing noise, success OR failure (mirrors the success
+  path's existing exclusion). `failureMessage(reason)` maps machine-availability reasons
+  (offline/disconnect/never-claimed) to a distinct "reconnect your machine" phrasing. The
+  gateway takes an **injectable notifier** (3rd ctor arg, defaulting to `dispatchNotification`,
+  mirroring the injectable `blobStore`) so tests observe pushes without network. Zero-exec
+  invariant holds: the server only reads its own run rows to decide. No UI change needed — runs
+  already persist `phase:"error"` + `error`, which `JobDetailView`/run lists already render.
 - **The loopany agent skill (`packages/server/src/skill/`).** The loop-builder
   knowledge is a real, installable agent skill — NOT one inline doc. Single source of
   truth: `packages/server/src/skill/{SKILL.md,references/{create,update,evolve}.md}`.
