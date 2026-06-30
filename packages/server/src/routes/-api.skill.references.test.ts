@@ -33,6 +33,23 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('loopany new')
   })
 
+  test('create.md carries the §0.5 propose → confirm → build guidance', async () => {
+    const body = await (await call('/api/skill/references/create.md')).text()
+    // The new constraint: never silently guess cadence/output — propose, confirm, then build.
+    expect(body).toContain('0.5 · Settle the cadence and output format')
+    expect(body).toContain('propose → confirm → build')
+    expect(body).toContain('never silently guess')
+    // Both parameters the agent must settle before `loopany new`.
+    expect(body).toContain('Cadence.')
+    expect(body).toContain('Per-run output.')
+    // Concrete proposed defaults the guidance offers as examples.
+    expect(body).toContain('every day at 9am your time')
+    expect(body).toContain('every hour')
+    expect(body).toContain('a short markdown summary in `report.md`')
+    // The §2 cron step now consumes the cadence settled in §0.5.
+    expect(body).toContain('the cadence you settled in §0.5')
+  })
+
   test('unknown name → 404 json', async () => {
     const res = await call('/api/skill/references/nope.md')
     expect(res.status).toBe(404)

@@ -19,6 +19,30 @@ they'd like to create, and offer a few concrete examples to make it easy to answ
 Only continue to the steps below once there's a real intent — either already in this
 session, or supplied by the user's answer.
 
+## 0.5 · Settle the cadence and output format — propose, confirm, then build
+
+Even with a clear task, two parameters are easy to leave unspecified, and you must
+**never silently guess** them: **how often the loop runs** and **what each run
+produces**. When the user hasn't stated one, reason about a sensible default for
+*this specific task*, propose it in plain language, and get a yes (or an adjustment)
+before you run `loopany new`. The pattern is **propose → confirm → build**.
+
+- **Cadence.** If the user didn't say how often, propose a schedule that fits the
+  task: a daily digest → "every day at 9am your time"; a monitor / health check →
+  "every hour"; a weekly roundup → "Monday mornings". State it in human terms — you
+  turn it into a cron expression in §2.
+- **Per-run output.** If the user didn't say what each run should produce, propose a
+  concrete artifact or message format: "a short markdown summary in `report.md`", "a
+  one-line status, with an alert only when something looks off", "an article at
+  `articles/<date>.md`". This becomes the loop's Spec and notify rule (§1–§2).
+
+Propose both together in one short message — e.g. *"I'll run this every morning at
+9am and drop a short markdown summary in `report.md` each day — sound good?"* — so
+the user can confirm or adjust in a single reply. Once they've confirmed, continue to
+the steps below with the agreed cadence and output. (This pairs with §0: if there's
+no task at all, ask first; if there's a task but loose parameters, propose and
+confirm. Both are quick check-ins, not a full interview.)
+
 ## 1 · Create the loop's folder and task file
 
 Every loop gets its **own folder** under the project: `<project>/loopany/<slug>/`
@@ -74,7 +98,9 @@ For example:
 > for today. Append a Timeline entry when done. Per its Spec, message the user only
 > when warranted; otherwise return nothing."
 
-Pick a sensible 5-field `cron` cadence. **Don't worry about the timezone** — you
+Turn the cadence you settled in §0.5 into a 5-field `cron` expression (if the user
+never gave one and you haven't proposed-and-confirmed yet, do that first). **Don't
+worry about the timezone** — you
 don't compute or set it. `loopany new` (next step) auto-detects this machine's IANA
 zone and pins it for you, so "8am" means the user's 8am, not the server's UTC.
 (Override only if the user states a different zone: pass `--tz <IANA>` below.)

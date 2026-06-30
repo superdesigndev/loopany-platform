@@ -278,8 +278,10 @@ LLM and executes no user code**.
   (`server-url`/`connect-key`/optional `loopany-cli`). The old pre-filled task + schedule
   inputs (`EditableChip`s baked into a multi-clause "build a loop for the thing you did
   above … each time" instruction) were removed: ALL loop-building intelligence lives in the
-  skill (it asks for task, cadence, and per-run output format and handles the empty-context
-  case), so the snippet is a dumb bootstrap with nothing to mis-prefill. The claim/
+  skill (it asks what to build when the session is empty, and **proposes-then-confirms** a
+  sensible cadence + per-run output format whenever the user left them loose — it never
+  silently guesses; see `create.md` §0/§0.5), so the snippet is a dumb bootstrap with
+  nothing to mis-prefill. The claim/
   connect-key binding stays so a created loop still resolves back to the dialog. Execution-path copy that
   truly means Claude (run-now, edit-via-Claude-Code in `LoopDetailView`) stays "Claude"
   on purpose — that IS what runs. Daemon now has vitest (`create.test.ts`) for the
