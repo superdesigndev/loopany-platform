@@ -5,6 +5,20 @@ step 1). Now author the loop and create it. Use the **loopany-cli** prefix the u
 pasted (default `npx @crewlet/loopany@latest`) and the **connect-key** from the
 capture snippet.
 
+## 0 · Make sure there's a real task to loop
+
+A loop only makes sense when there's a real task behind it. If the session is
+essentially empty — the user just pasted the onboarding prompt and there's no actual
+task or intent in context — **do not invent a loop.** Ask the user what kind of loop
+they'd like to create, and offer a few concrete examples to make it easy to answer:
+
+- "Find and summarize the single most relevant Hacker News story for me each day"
+- "Monitor our service's health and alert me when something looks off"
+- "Analyze this project's codebase and report on <something you care about>"
+
+Only continue to the steps below once there's a real intent — either already in this
+session, or supplied by the user's answer.
+
 ## 1 · Create the loop's folder and task file
 
 Every loop gets its **own folder** under the project: `<project>/loopany/<slug>/`
@@ -116,3 +130,6 @@ it prints `created loop <name> — <cron> <timezone>`; the loop now appears in t
 LoopAny web UI and runs on schedule. Tell the user it's created (name + cadence) —
 the `loop.tmp.json` has served its purpose and can be deleted. If it prints
 `loopany: <error>`, fix `loop.tmp.json` and re-run.
+
+Finally, let the user know what happens next: this loop will run automatically for
+the first time shortly, so head to the LoopAny web UI to watch for the first result.
