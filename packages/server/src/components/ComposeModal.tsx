@@ -16,88 +16,12 @@ const AGENT_LABEL: Record<CodingAgent, string> = {
   codex: 'Codex',
 }
 
-// The two click-to-edit slots in the capture instruction. Defaults double as the
-// placeholder (shown when a slot is cleared) AND the fallback baked into the
-// copied text, so the instruction never reads broken even with an empty field.
-const SCHEDULE_DEFAULT = 'every day at 9am'
-const ACTION_DEFAULT = 'write an article'
-
-// Static fragments of the capture instruction, split at the three dynamic slots
-// (origin URL, schedule chip, action chip). Both the rendered JSX prose and the
-// composed clipboard text are built from these same fragments so the two can
-// never desync — spacing is baked into each fragment so neither side adds its own.
-const INSTRUCTION = {
-  beforeOrigin: 'Follow ',
-  beforeSchedule: '/api/skill and build a loop for the thing you did above. Run it ',
-  beforeAction: ', and ',
-  afterAction: ' each time.',
-} as const
-
-/**
- * An inline, click-to-edit chip that flows inside the instruction prose. It is an
- * UNCONTROLLED contentEditable span (managed via ref) so React re-renders never
- * reset the caret; the latest text is mirrored up via `onChange` purely to
- * recompose the copied snippet. Single logical line (Enter commits/blurs, pasted
- * newlines collapse to spaces) but it still wraps visually like any word. We only
- * ever read `textContent` — never set user content as HTML — so there's no XSS
- * surface. When emptied, CSS `:empty::before` shows `placeholder` muted.
- */
-function EditableChip({
-  initialValue,
-  placeholder,
-  ariaLabel,
-  onChange,
-}: {
-  initialValue: string
-  placeholder: string
-  ariaLabel: string
-  onChange: (value: string) => void
-}) {
-  const ref = useRef<HTMLSpanElement>(null)
-
-  // Seed the field once on mount (uncontrolled — never re-write content on
-  // re-render, which would fight the cursor). `initialValue` is the live state
-  // value, so edits survive a Back→Continue round-trip without React re-setting it.
-  // Mount-only: intentionally not keyed on initialValue — re-seeding on every
-  // render would clobber the caret. `initialValue` is the live state at mount.
-  useEffect(() => {
-    if (ref.current) ref.current.textContent = initialValue
-  }, [])
-
-  return (
-    <span
-      ref={ref}
-      role="textbox"
-      aria-label={ariaLabel}
-      contentEditable
-      suppressContentEditableWarning
-      spellCheck={false}
-      data-placeholder={placeholder}
-      className="lp-chip"
-      onInput={(e) => {
-        const el = e.currentTarget
-        const text = el.textContent ?? ''
-        // Collapse a stray <br> the browser may leave behind so :empty matches
-        // and the placeholder shows once the field is truly cleared.
-        if (text === '' && el.innerHTML !== '') el.innerHTML = ''
-        onChange(text)
-      }}
-      onKeyDown={(e) => {
-        // Enter commits (blur) instead of inserting a newline — single-line field.
-        if (e.key === 'Enter') {
-          e.preventDefault()
-          e.currentTarget.blur()
-        }
-      }}
-      onPaste={(e) => {
-        // Plain text only — strip rich HTML and flatten any newlines to spaces.
-        e.preventDefault()
-        const text = (e.clipboardData.getData('text/plain') || '').replace(/[\r\n]+/g, ' ')
-        document.execCommand('insertText', false, text)
-      }}
-    />
-  )
-}
+// The one human-readable instruction the snippet carries. The skill (served at
+// `<origin>/api/skill`) owns ALL loop-building intelligence — it asks the user for
+// the task, the cadence, and the per-run output format — so the snippet is just a
+// bootstrap: fetch the skill and ask to build a loop. No pre-filled task/schedule
+// fields to take literally; an empty-context paste is handled entirely by the skill.
+const instructionFor = (origin: string) => `Fetch ${origin}/api/skill and help me build a loop.`
 
 /**
  * New loop = capture-from-Claude-Code (paste-forward, no machine picker). The web
@@ -131,11 +55,6 @@ export function ComposeModal({
   const [copied, setCopied] = useState(false)
   const [slow, setSlow] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // The two editable slots in the instruction line. Held as state so editing a
-  // chip changes exactly what Copy puts on the clipboard. Empty falls back to
-  // the default so the composed text is never broken.
-  const [schedule, setSchedule] = useState(SCHEDULE_DEFAULT)
-  const [action, setAction] = useState(ACTION_DEFAULT)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Hold the callback in a ref so the poll effect doesn't re-subscribe (and
   // restart the slow-wait timer) every time the parent passes a fresh onCreated.
@@ -144,19 +63,9 @@ export function ComposeModal({
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
 
-  // Resolve each slot to its committed value or the default fallback, then build
-  // the natural-language instruction from the shared INSTRUCTION fragments — the
-  // same fragments the rendered template below uses, so copy and prose can't desync.
-  const scheduleText = schedule.trim() || SCHEDULE_DEFAULT
-  const actionText = action.trim() || ACTION_DEFAULT
-  const instruction =
-    INSTRUCTION.beforeOrigin +
-    origin +
-    INSTRUCTION.beforeSchedule +
-    scheduleText +
-    INSTRUCTION.beforeAction +
-    actionText +
-    INSTRUCTION.afterAction
+  // The single bootstrap instruction. The same string renders in the snippet box
+  // and goes on the clipboard, so the two can't desync.
+  const instruction = instructionFor(origin)
 
   // The machine config lines stay fixed and read-only — never user-editable. No
   // `agent:` line: `loopany new` resolves the agent from the host env fingerprint
@@ -181,8 +90,6 @@ export function ComposeModal({
     setError(null)
     setCopied(false)
     setSlow(false)
-    setSchedule(SCHEDULE_DEFAULT)
-    setAction(ACTION_DEFAULT)
   }, [open])
 
   // Mint a claim + load config once the user picks the local agent.
@@ -309,11 +216,12 @@ export function ComposeModal({
     <Modal open={open} onClose={onClose}>
       <ModalHead title="New loop" />
 
-      {/* Two ordered steps. The snippet builds a loop from "the thing you did
-          above", so the task must already exist in the session — the sequence is
-          the point. A numbered rail (echoing the Timeline's connector motif)
-          makes do-then-capture explicit; step 1 stays a light one-liner and
-          step 2 carries the snippet as the visual anchor. */}
+      {/* Two ordered steps. The snippet just bootstraps the skill ("fetch … and
+          help me build a loop") — the skill asks for the task, cadence, and output
+          format, so it handles both a real task done above AND an empty session.
+          Doing the task once first is recommended (better loop), not required. A
+          numbered rail (echoing the Timeline's connector motif) keeps do-then-
+          capture explicit; step 2 carries the snippet as the visual anchor. */}
       <div className="mt-6">
         {/* Step 1 — do the task. No box; the rail carries the weight. */}
         <div className="flex gap-3.5">
@@ -348,29 +256,9 @@ export function ComposeModal({
               )}
             </div>
             <div className="mt-2 overflow-hidden rounded-lg border border-wire bg-raised p-3 font-mono text-[12px] text-primary">
-              {/* Instruction line — an editable template. The /api/skill URL is
-                  fixed; the two chips (schedule, action) flow inline and wrap
-                  like prose. leading-loose gives the bordered chips vertical room
-                  so wrapped lines don't collide. */}
-              <p className="leading-loose">
-                {INSTRUCTION.beforeOrigin}
-                {origin}
-                {INSTRUCTION.beforeSchedule}
-                <EditableChip
-                  initialValue={schedule}
-                  placeholder={SCHEDULE_DEFAULT}
-                  ariaLabel="schedule — how often the loop runs"
-                  onChange={setSchedule}
-                />
-                {INSTRUCTION.beforeAction}
-                <EditableChip
-                  initialValue={action}
-                  placeholder={ACTION_DEFAULT}
-                  ariaLabel="action — what the loop does each run"
-                  onChange={setAction}
-                />
-                {INSTRUCTION.afterAction}
-              </p>
+              {/* Instruction line — a single fixed bootstrap line; the skill (not
+                  the snippet) collects the task, cadence, and output format. */}
+              <p className="leading-relaxed">{instruction}</p>
               {/* Machine config — fixed, read-only. */}
               {configLines ? (
                 <pre className="mt-3 overflow-x-auto whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-secondary">
@@ -383,8 +271,8 @@ export function ComposeModal({
               )}
             </div>
             <p className="mt-2 text-[13px] leading-snug text-secondary">
-              Tweak the highlighted bits, then paste it in that same session — reuses this machine
-              automatically.
+              Paste it in that same session — reuses this machine automatically. Your agent will ask
+              what the loop should do.
             </p>
           </div>
         </div>
