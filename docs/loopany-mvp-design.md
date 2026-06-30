@@ -248,7 +248,7 @@ Reclaim: machine took the delivery but no report within timeoutMs+grace (default
 - ~~transcript view~~ (**already landed early, see D7** - a slimmed-down push version, not the originally envisioned read-and-stream-live over WS). Phase 2 adds back system/query echo + full trace.
 - live token streaming (`--output-format stream-json` + a reworked report channel).
 - cross Slack-workspace multi-tenancy (per-user Slack OAuth).
-- codex backend; persistent claude sessions / `--resume`; machine-offline inbox queueing + catch-up; multi-machine fallback.
+- codex backend (**execution** still deferred - every loop is still run via claude regardless of its recorded agent; codex *recording* has since landed, see D12); persistent claude sessions / `--resume`; machine-offline inbox queueing + catch-up; multi-machine fallback.
 - daemon keep-alive (`loopany install` writes launchd/systemd).
 - ~~web **Files view** for live-synced loop artifacts~~ + ~~per-run artifact diff (`run_snapshots`, Phase 3)~~ (**both landed, see D11** - read-only, built on the D10 sync foundation).
 
@@ -367,6 +367,15 @@ Reclaim: machine took the delivery but no report within timeoutMs+grace (default
 - **Shared helper**: byte counts render through `humanBytes` in `lib/format.ts` (extracted, reused by the Files view + diff markers).
 - **Dependencies**: `diff` (jsdiff) v9 (server, pure-string - no exec).
 - **Verification**: `pnpm -r typecheck` + builds clean; new server tests `server/artifactFiles.test.ts` + `server/runDiff.test.ts` drive the in-memory blob store (no creds/network).
+
+### D12 — Coding-agent recording (`loops.agent`, landed, recording-only, new feature not in the original plan)
+
+- **Motivation**: a loop is created from inside a coding-agent session (Claude Code today, Codex emerging), but the platform hardcoded `executor:"claude"` everywhere and couldn't even record which agent a loop was bound to. D12 introduces the **concept** of a loop's coding agent and records it honestly - **recording-only**, deliberately not execution: the daemon still **executes every loop via Claude** regardless of this value (codex execution stays the deferred §10 item), so codex loops are surfaced as "recorded - runs via Claude for now".
+- **Schema**: `loops` adds **`agent`** (`text`, TS-only enum `claude-code | codex`, **NOT NULL default `claude-code`**, additive migration **`0013`**) - existing rows backfill to `claude-code` via the default. As with the other `text(col,{enum})` columns, SQLite stores plain text with no CHECK, so **widening the agent set later is a pure type change, no migration**.
+- **Capture at `loopany new` (daemon `create.ts`)**: `resolveAgent(env, declared)` resolves by the agreed precedence **measured CLI env-fingerprint > declared (`--agent` flag / config `agent:`) > undefined** (undefined ⇒ let the server default it; we never invent a value the host didn't evidence). The fingerprints (verified, not memory): Claude Code = `CLAUDECODE` / `CLAUDE_CODE_*`; Codex = `CODEX_SANDBOX` / `CODEX_SANDBOX_NETWORK_DISABLED` (sandbox-only ⇒ best-effort, falls back to the declared value; `CODEX_COMPANION_*` is **deliberately ignored** since a Claude session also exports it). The daemon sends `agent` in the `POST /api/machine/loop` body.
+- **Server (`gateway.createLoop`)**: accepts/**coerces** `body.agent` - an unknown/absent value degrades to `claude-code` (back-compat: older daemons omit it), it **never rejects** the loop. `adapters.ts` now reads `loop.agent` instead of the hardcoded `executor:"claude"`: `JobSummary.kind` is `exec:<agent>` and `JobFull.agent` carries it out to the UI.
+- **UI (de-Claude where a loop is in view, captioned for codex)**: `ComposeModal` gains an **agent selector** - codex is **selectable** (captain decision: record it honestly now) but messaged "recorded - runs via Claude for now"; the connect snippet carries an `agent:` line; `SKILL.md` tells the agent to self-declare via `--agent`. Generic/loop-in-view copy in `MachinesModal`/`RunView` is neutralized too. **Execution-path copy stays "Claude" on purpose** (run-now, edit-via-Claude-Code in `JobDetailView`) - that IS what runs.
+- **Verification**: `pnpm -r typecheck` + build clean; the daemon gains vitest (`create.test.ts`) for the detector/precedence; server tests cover `createLoop` persistence + the adapter mapping.
 
 ### Verified (local e2e)
 

@@ -75,6 +75,26 @@ LLM and executes no user code**.
   before reporting (`watcher.flushLoop` + `runner` `reportRun`) so the snapshot captures
   end-state. Old runs with no snapshot degrade to a calm fallback; zero-exec invariant
   holds (server only stores/reads bytes + computes pure-string diffs).
+- **Coding-agent recording (`loops.agent`).** A loop records WHICH coding agent it's
+  bound to / was created by: `loops.agent` (`text`, TS-only enum `claude-code|codex`,
+  NOT NULL default `claude-code`, migration `0013`). **Recording-only** — the daemon
+  still EXECUTES every loop via Claude regardless of this value (Codex execution is a
+  separate later phase, deliberately unbuilt). Capture at `loopany new`
+  (`daemon/src/create.ts`): `resolveAgent(env, declared)` with precedence **measured
+  env-fingerprint > declared (`--agent` flag / config `agent:`) > undefined**;
+  undefined lets the server default it. Env fingerprints (verified, not memory):
+  Claude Code = `CLAUDECODE`/`CLAUDE_CODE_*`; Codex = `CODEX_SANDBOX`/
+  `CODEX_SANDBOX_NETWORK_DISABLED` (sandbox-only, so best-effort; we ignore
+  `CODEX_COMPANION_*` which a Claude session also sets). The daemon sends `agent` in
+  the `/api/machine/loop` POST; `gateway.createLoop` coerces an unknown value to the
+  default (never rejects). `adapters.ts` reads `loop.agent` (no more hardcoded
+  `executor:"claude"`); `JobSummary.kind` is `exec:<agent>` and `JobFull.agent`
+  carries it. UI: `ComposeModal` has an agent selector — Codex is **selectable** but
+  messaged "recorded — runs via Claude for now"; the snippet carries an `agent:` line;
+  `SKILL.md` tells the agent to self-declare via `--agent`. Execution-path copy that
+  truly means Claude (run-now, edit-via-Claude-Code in `JobDetailView`) stays "Claude"
+  on purpose — that IS what runs. Daemon now has vitest (`create.test.ts`) for the
+  detector/precedence; server tests cover createLoop persistence + adapter mapping.
 
 ## Commands
 

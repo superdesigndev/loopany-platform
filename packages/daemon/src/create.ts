@@ -46,10 +46,50 @@ function cronLooksValid(cron: unknown): cron is string {
   return typeof cron === "string" && cron.trim().split(/\s+/).length === 5;
 }
 
+/** The coding agents LoopAny can record a loop against (TS-only; cheap to widen). */
+export type CodingAgent = "claude-code" | "codex";
+
+/** Coerce an arbitrary declared value (--agent flag / config.agent) to a known
+ *  agent, or null when it's absent/unrecognized (so it can't override a measurement
+ *  and the server falls back to its own default). */
+export function coerceAgent(v: unknown): CodingAgent | null {
+  return v === "claude-code" || v === "codex" ? v : null;
+}
+
+/**
+ * Best-effort fingerprint of the coding agent hosting THIS `loopany new` process,
+ * read from the env the host agent exported into our shell. This MEASURES the real
+ * host (it can't be fooled by a wrong dialog selection), but it's best-effort: a
+ * host that runs us without its marker env (e.g. Codex under bypass-sandbox mode)
+ * is undetectable here, so callers fall back to the declared/selected value.
+ *
+ * Fingerprints (verified against the live Claude Code env + current Codex CLI docs,
+ * `CODEX_SANDBOX*` per openai/codex AGENTS.md, not memory):
+ *   - Claude Code: `CLAUDECODE` (also exports many `CLAUDE_CODE_*`).
+ *   - Codex CLI:  `CODEX_SANDBOX` / `CODEX_SANDBOX_NETWORK_DISABLED` (set for its
+ *     shell tool under the sandbox). We deliberately ignore `CODEX_COMPANION_*`,
+ *     which a Claude Code session can also export and would misattribute.
+ */
+export function detectAgentFromEnv(env: NodeJS.ProcessEnv): CodingAgent | null {
+  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT || env.CLAUDE_CODE_SESSION_ID) return "claude-code";
+  if (env.CODEX_SANDBOX || env.CODEX_SANDBOX_NETWORK_DISABLED) return "codex";
+  return null;
+}
+
+/**
+ * Resolve the recorded agent by the agreed precedence:
+ *   measured CLI env-fingerprint > declared (--agent / config.agent) > undefined.
+ * Returns undefined when nothing is known so the server applies its own default
+ * (claude-code) — we never invent a value the host didn't actually evidence.
+ */
+export function resolveAgent(env: NodeJS.ProcessEnv, declared: unknown): CodingAgent | undefined {
+  return detectAgentFromEnv(env) ?? coerceAgent(declared) ?? undefined;
+}
+
 export async function runCreate(args: string[]): Promise<number> {
   const configPath = flag(args, "config");
   if (!configPath) {
-    process.stderr.write("loopany: usage: loopany new --config <loop.json> [--connect-key dk_…] [--tz <IANA>]\n");
+    process.stderr.write("loopany: usage: loopany new --config <loop.json> [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex]\n");
     return 2;
   }
 
@@ -81,7 +121,16 @@ export async function runCreate(args: string[]): Promise<number> {
   // claim (so the web dialog learns the loop was created), auth (the bearer).
   const timezone = (typeof config.timezone === "string" && config.timezone) || flag(args, "tz") || detectTimezone();
   const connectKey = flag(args, "connect-key");
+  // Record which coding agent this loop is bound to: measure our host from the env
+  // first (honest), else fall back to what was declared via --agent or the config's
+  // `agent:` line (the dialog's selection, carried through the skill). Undefined ⇒
+  // let the server default it to claude-code.
+  const agent = resolveAgent(process.env, flag(args, "agent") ?? config.agent);
   const body: Record<string, unknown> = { ...config, timezone };
+  // Send only a coerced agent (or none) — never a raw config.agent that skipped
+  // resolution; the server defaults a missing value to claude-code.
+  if (agent) body.agent = agent;
+  else delete body.agent;
   if (connectKey) body.claim = connectKey;
 
   try {

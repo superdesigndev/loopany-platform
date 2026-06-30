@@ -65,7 +65,7 @@ export function toJobSummary(loop: Loop): JobSummary {
     id: loop.id,
     name: loop.name ?? loop.id,
     cron: loop.cron,
-    kind: loop.workflow ? "workflow" : "exec:claude",
+    kind: loop.workflow ? "workflow" : `exec:${loop.agent}`,
     hasUi: !!loop.ui,
     enabled: loop.enabled,
     notify: loop.notify,
@@ -91,8 +91,11 @@ function toJobFull(loop: Loop): JobFull {
     stateSchema: loop.stateSchema ?? undefined,
     ui: loop.ui ?? undefined,
     channelId: loop.channelId ?? null,
+    agent: loop.agent,
     exec: {
-      executor: "claude",
+      // The recorded coding agent (claude-code | codex), no longer hardcoded.
+      // Recording-only: a `codex` loop is still executed by the daemon via Claude.
+      executor: loop.agent,
       workdir: loop.workdir ?? "",
       model: loop.model ?? undefined,
       allowControl: loop.allowControl,

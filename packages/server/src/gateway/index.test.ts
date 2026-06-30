@@ -235,6 +235,27 @@ test("createLoop persists a valid IANA timezone and rejects a bogus one", () => 
   expect((bad.body as any).error).toMatch(/invalid timezone/);
 });
 
+test("createLoop records the coding agent: codex when declared, claude-code by default, and degrades an unknown value", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+
+  // Explicit codex (the dialog pick / --agent codex) is persisted verbatim.
+  const codex = gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", task: "x", agent: "codex" });
+  expect(codex.status).toBe(200);
+  expect(store.getLoop((codex.body as any).id)!.agent).toBe("codex");
+
+  // Absent agent (older daemon) back-fills to claude-code via the column default.
+  const legacy = gateway().createLoop(token, { name: "Legacy loop", cron: "0 8 * * *", task: "x" });
+  expect(legacy.status).toBe(200);
+  expect(store.getLoop((legacy.body as any).id)!.agent).toBe("claude-code");
+
+  // An unrecognized / "unknown" value degrades to the default rather than rejecting.
+  const weird = gateway().createLoop(token, { name: "Weird loop", cron: "0 8 * * *", task: "x", agent: "unknown" });
+  expect(weird.status).toBe(200);
+  expect(store.getLoop((weird.body as any).id)!.agent).toBe("claude-code");
+});
+
 test("editLoop changes a loop's envelope from its machine's device token", () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);

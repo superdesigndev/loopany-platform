@@ -7,6 +7,10 @@
 /** JSON-serializable value — server fn returns must be serializable (no `unknown`). */
 export type Json = string | number | boolean | null | { [k: string]: Json } | Json[]
 
+/** The coding agent a loop is bound to / recorded as its host. Recording-only:
+ *  a `codex` loop is still executed by the daemon via Claude for now. */
+export type CodingAgent = 'claude-code' | 'codex'
+
 export type RunOutcome = 'error' | 'silent' | 'exec' | 'agent' | 'direct' | string
 export type RunStatus =
   | 'nothing-new'
@@ -113,6 +117,9 @@ export interface JobFull {
   ui?: string
   /** Push channel this loop notifies through (notification_channels.id). */
   channelId?: string | null
+  /** Coding agent this loop is recorded as (claude-code | codex). Read-only in the
+   *  UI; a codex loop is still executed via Claude for now (recording-only). */
+  agent?: CodingAgent
   owner?: {
     gateway?: string
     accountId?: string
