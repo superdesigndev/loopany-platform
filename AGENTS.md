@@ -110,7 +110,7 @@ LLM and executes no user code**.
 - **Daemon CLI ergonomics (`loopany --help` / `status` / `down`).** `cli.ts`
   `main()` dispatch order: in-run callback (`LOOPANY_RUN_TOKEN`+args) → `--help`/`-h`/
   `help` (`help.ts`, prints usage, exit 0, NEVER starts the daemon) → `up` → `new` →
-  `skill` → `status`/`down` (`control.ts`) → interactive verbs → fallback. The fallback
+  `skill` → `status`/`down` (`control.ts`) → `log` → interactive verbs → fallback. The fallback
   is **guarded**: bare `loopany` (no args) OR a leading `DAEMON_FLAGS` token
   (`--server-url`/`--api-key`, the detached spawn re-execs us that way) runs the daemon;
   **any other leading verb/flag errors `unknown command … try --help` (exit 2)** rather
@@ -139,6 +139,27 @@ LLM and executes no user code**.
   `control.test.ts` needs no real process/network; `cli.test.ts` runs the entry as a real
   subprocess to prove help/unknown EXIT (never launch the daemon). Shipped in daemon
   **0.5.0**.
+- **Run-log read endpoint + `loopany log` (daemon 0.6.0).** The on-machine agent can
+  pull a loop's recent run **transcripts** so create/update/evolve aren't blind to how
+  past runs went. The transcript used to be web-UI-only (`getTranscript` server fn).
+  **Server:** `MachineGateway.loopLog(deviceToken, loopId, limit?)` (`gateway/index.ts`)
+  is the device-facing twin of `getTranscript` — authed by the **same device token**
+  the daemon already uses and scoped **strictly** to a loop bound to THAT machine
+  (`loop.machineId === machineId`, exactly like `editLoop`/`sync`; a cross-loop or
+  cross-device token gets a flat 404, existence never leaks). Read-only. Returns the
+  newest N runs (default 8, max 20) newest-first with id/ts/role/phase/outcome/status/
+  durationMs/error/message + the transcript flattened to text (`renderTranscript`,
+  clipped to 8000 chars/run → `transcriptTruncated`). Mounted at `GET /api/machine/log?
+  loopId&limit` (`routes/api.machine.log.ts`, Bearer device token). NO new auth scheme.
+  **Daemon:** `loopany log [<loop>] [--limit N] [--json]` (`log.ts`, wired in `cli.ts`
+  after `down`) — an owner-outside-a-run command like `loops`/`edit` reusing the stored
+  device token. It resolves which loop via the **shared `resolveLoopDir`** (extracted
+  from the watcher into `loopdir.ts`, no chokidar): an explicit `<loop>` id/name wins,
+  else the current cwd is matched against each loop's resolved folder (most-specific
+  wins; a subdir of the workdir still matches). `listLoops` now also returns
+  `workdir`/`taskFile` so the daemon can do that match. Every external touch (cwd/fetch/
+  out/err/server/token) is an injectable seam (`log.test.ts`, no network). The skill's
+  `references/update.md` tells the agent to run `loopany log` before reshaping a loop.
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.

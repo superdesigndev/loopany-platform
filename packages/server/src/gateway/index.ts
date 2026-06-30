@@ -52,6 +52,12 @@ const MIN_INTERVAL_MS = 60_000;
 const MAX_ARTIFACTS = 200;
 const MAX_TRANSCRIPT_STEPS = 200;
 const STEP_FIELD_MAX = 4000;
+/** `loopany log`: how many recent runs to return, and the per-run transcript cap.
+ *  The on-machine agent wants recent history before editing/evolving — not an
+ *  unbounded dump — so default to a handful of runs and clip each transcript. */
+const LOG_RUNS_DEFAULT = 8;
+const LOG_RUNS_MAX = 20;
+const LOG_TRANSCRIPT_CAP = 8000;
 
 /** Validate the daemon-reported artifact list (untrusted wire input). */
 function coerceArtifacts(raw: unknown): RunArtifact[] | undefined {
@@ -446,8 +452,55 @@ export class MachineGateway {
       enabled: l.enabled,
       notify: l.notify,
       nextRunAt: l.nextRunAt,
+      // Folder hints so a workdir-scoped CLI (`loopany log`) can map the current
+      // directory back to a loop the same way the watcher resolves it.
+      workdir: l.workdir ?? null,
+      taskFile: l.taskFile ?? null,
     }));
     return { status: 200, body: { ok: true, loops } };
+  }
+
+  /**
+   * Recent run execution logs (transcripts) for a loop, for the on-machine agent
+   * (`loopany log`). The device-facing twin of the web-only `getTranscript`:
+   * authed by the SAME device token the daemon already uses, and scoped strictly
+   * to a loop bound to THAT machine (`loop.machineId === machineId`, exactly like
+   * `editLoop`/`sync`) — a token can never read another loop's or another device's
+   * runs. Read-only. Returns the most recent N runs newest-first with each run's
+   * outcome + a clipped transcript so the create/update/evolve flows can see how
+   * past runs actually went before reshaping the loop.
+   */
+  loopLog(deviceToken: string, loopId: unknown, limit?: unknown): HttpResult {
+    const machineId = machineIdFromToken(deviceToken);
+    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (typeof loopId !== "string" || !loopId) return { status: 400, body: { error: "loopId required" } };
+    const loop = store.getLoop(loopId);
+    // Loop+device scoping: only a loop bound to this machine is visible. A token
+    // for device A, or for a different loop, gets a flat 404 (existence never leaks).
+    if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
+
+    const want = Number(limit);
+    const n = Math.min(Math.max(Number.isFinite(want) && want > 0 ? Math.floor(want) : LOG_RUNS_DEFAULT, 1), LOG_RUNS_MAX);
+    // listRuns returns the newest n runs oldest-first; reverse to newest-first so
+    // the agent reads the most recent history at the top.
+    const rows = store.listRuns(loopId, n).slice().reverse();
+    const runs = rows.map((r) => {
+      const { text, truncated } = renderTranscript(r.transcript as TranscriptStep[] | null);
+      return {
+        id: r.id,
+        ts: r.ts,
+        role: r.role,
+        phase: r.phase,
+        outcome: r.outcome ?? null,
+        status: r.status ?? null,
+        durationMs: r.durationMs ?? null,
+        error: r.error ?? null,
+        message: r.message ?? null,
+        transcript: text,
+        transcriptTruncated: truncated,
+      };
+    });
+    return { status: 200, body: { ok: true, loopId: loop.id, name: loop.name ?? loop.id, runs } };
   }
 
   /**
@@ -1155,6 +1208,24 @@ function schemaKeysInUse(loopId: string): string[] {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Flatten a run's slimmed transcript steps into plain text for `loopany log`,
+ *  clipped to LOG_TRANSCRIPT_CAP (the agent wants recent history, not a dump).
+ *  Tool steps render as `$ <name> <input>`; text/result steps as their text. */
+function renderTranscript(steps: TranscriptStep[] | null | undefined): { text: string; truncated: boolean } {
+  if (!Array.isArray(steps) || steps.length === 0) return { text: "", truncated: false };
+  const lines: string[] = [];
+  for (const s of steps) {
+    if (s.kind === "tool") {
+      lines.push(`$ ${s.name ?? "tool"}${s.input ? ` ${s.input}` : ""}`);
+    } else if (typeof s.text === "string" && s.text) {
+      lines.push(s.text);
+    }
+  }
+  const joined = lines.join("\n\n");
+  if (joined.length > LOG_TRANSCRIPT_CAP) return { text: joined.slice(0, LOG_TRANSCRIPT_CAP), truncated: true };
+  return { text: joined, truncated: false };
 }
 
 /** Scalar (number/string) fields of a workflow's returned cursor — the run's

@@ -644,3 +644,102 @@ test("execFailureStreak counts only consecutive trailing exec errors, ignoring e
   addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:05Z");
   expect(store.execFailureStreak(loop.id)).toBe(0);
 });
+
+// ---- loopLog (device-token-scoped run-log read for `loopany log`) ----
+
+/** A machine + a loop on it, with `count` exec runs (newest ts last). */
+function seededLoopWithRuns(machineId: string, count: number) {
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h-" + machineId, online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  for (let i = 0; i < count; i++) {
+    store.addRun({
+      loopId: loop.id,
+      userId: "u1",
+      machineId,
+      phase: i % 2 === 0 ? "done" : "error",
+      role: "exec",
+      ts: `2026-06-01T00:00:${String(i + 1).padStart(2, "0")}Z`,
+      outcome: i % 2 === 0 ? "exec" : "error",
+      ...(i % 2 === 0 ? {} : { error: `boom ${i}` }),
+      transcript: [
+        { kind: "text", text: `run ${i} thinking` },
+        { kind: "tool", name: "Bash", input: `{"cmd":"echo ${i}"}` },
+      ],
+    });
+  }
+  return loop;
+}
+
+test("loopLog returns the loop's recent runs newest-first with transcript text", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  const loop = seededLoopWithRuns(machineId, 3);
+
+  const res = gateway().loopLog(token, loop.id);
+  expect(res.status).toBe(200);
+  const body = res.body as { ok: boolean; loopId: string; runs: any[] };
+  expect(body.ok).toBe(true);
+  expect(body.loopId).toBe(loop.id);
+  expect(body.runs).toHaveLength(3);
+  // Newest-first.
+  expect(body.runs[0].ts > body.runs[1].ts).toBe(true);
+  // Transcript flattened to text (tool steps render as `$ <name> <input>`).
+  expect(body.runs[0].transcript).toContain("$ Bash");
+  expect(body.runs[0].transcript).toContain("thinking");
+});
+
+test("loopLog honors and caps the run limit", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  const loop = seededLoopWithRuns(machineId, 5);
+
+  expect((gateway().loopLog(token, loop.id, 2).body as { runs: any[] }).runs).toHaveLength(2);
+  // Limit is clamped to the max (20), so a huge value just returns everything.
+  expect((gateway().loopLog(token, loop.id, 9999).body as { runs: any[] }).runs).toHaveLength(5);
+  // A non-positive / garbage limit falls back to the default (≥ all 5 here).
+  expect((gateway().loopLog(token, loop.id, -1).body as { runs: any[] }).runs).toHaveLength(5);
+});
+
+test("loopLog truncates an over-cap transcript and flags it", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  store.addRun({
+    loopId: loop.id,
+    userId: "u1",
+    machineId,
+    phase: "done",
+    role: "exec",
+    ts: "2026-06-01T00:00:01Z",
+    transcript: [{ kind: "text", text: "x".repeat(20_000) }],
+  });
+  const run = (gateway().loopLog(token, loop.id).body as { runs: any[] }).runs[0];
+  expect(run.transcriptTruncated).toBe(true);
+  expect(run.transcript.length).toBeLessThan(20_000);
+});
+
+test("loopLog refuses a token whose machine does not own the loop (cross-device)", () => {
+  const tokenA = tokens.mintDeviceToken();
+  const machineA = tokens.machineIdFromToken(tokenA);
+  const loop = seededLoopWithRuns(machineA, 2);
+
+  // A different device with its own token cannot read machine A's loop's runs.
+  const tokenB = tokens.mintDeviceToken();
+  const machineB = tokens.machineIdFromToken(tokenB);
+  store.createMachine({ id: machineB, userId: "u2", name: "MB", tokenHash: "hb", online: true });
+  const res = gateway().loopLog(tokenB, loop.id);
+  expect(res.status).toBe(404);
+});
+
+test("loopLog rejects an unknown loop id and an unregistered token", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true });
+  // Loop that doesn't exist → 404 (existence never leaks).
+  expect(gateway().loopLog(token, "loop-nope").status).toBe(404);
+  // Missing loop id → 400.
+  expect(gateway().loopLog(token, "").status).toBe(400);
+  // Token for a machine that was never registered → 401.
+  expect(gateway().loopLog(tokens.mintDeviceToken(), "loop-x").status).toBe(401);
+});

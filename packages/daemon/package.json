@@ -1,6 +1,6 @@
 {
   "name": "@crewlet/loopany",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "LoopAny daemon — runs on your machine, connects to a LoopAny server, and executes scheduled loops via your local claude-code. One binary, two roles (daemon / loop callback).",
   "type": "module",
   "bin": {

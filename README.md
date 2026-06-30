@@ -34,7 +34,9 @@ executes it with your local agent, and reports the result back to the dashboard
 (and, if configured, your team's push channel).
 
 To check on or stop the machine's daemon later, run `npx @crewlet/loopany status`
-(is it running? + connection state) or `npx @crewlet/loopany down` (stop it). Run
+(is it running? + connection state) or `npx @crewlet/loopany down` (stop it). To
+see how a loop's recent runs went (status + transcript) before editing it, run
+`npx @crewlet/loopany log` from the loop's folder. Run
 `npx @crewlet/loopany --help` for the full command list.
 
 ## How it works

@@ -16,13 +16,12 @@
  * Files at/under BLOB_CAP sync their bytes; larger files sync as metadata only.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { watch, type FSWatcher } from "chokidar";
 
 import { logger } from "./logger.js";
-import { LOOPANY_DIR } from "./config.js";
+import { resolveLoopDir } from "./loopdir.js";
 
 const log = logger.child({ mod: "watcher" });
 
@@ -64,10 +63,6 @@ export async function flushLoop(loopId: string): Promise<void> {
   await watchersByLoop.get(loopId)?.flushNow();
 }
 
-function expandTilde(p: string): string {
-  return p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
-}
-
 function sha256(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
 }
@@ -92,18 +87,6 @@ function isIgnoredRel(rel: string): boolean {
   if (base.startsWith("id_rsa") || base.startsWith("id_ed25519")) return true;
   if (base === ".npmrc" || base === ".netrc" || base === "credentials") return true;
   return false;
-}
-
-/** Resolve the folder to watch for a loop: the loop's own folder, then workdir,
- *  then the daemon scratch dir (mirrors runner.resolveWorkdir's fallbacks). */
-function resolveWatchDir(spec: WatchSpec): string | null {
-  if (spec.taskFile) {
-    const tf = expandTilde(spec.taskFile);
-    if (path.isAbsolute(tf)) return path.dirname(tf);
-    if (spec.workdir) return path.dirname(path.resolve(expandTilde(spec.workdir), tf));
-  }
-  if (spec.workdir) return path.resolve(expandTilde(spec.workdir));
-  return path.join(LOOPANY_DIR, "work", spec.loopId);
 }
 
 interface ManifestEntry {
@@ -368,14 +351,14 @@ export class WatchManager {
     // an already-watched loop and reopen when it moved (else edits in the new
     // folder never sync and the server's view goes permanently stale).
     for (const [id, spec] of want) {
-      const dir = resolveWatchDir(spec);
+      const dir = resolveLoopDir(spec);
       const existing = this.watchers.get(id);
       if (existing) {
-        if (dir && existing.watchDir === dir) continue; // unchanged → leave alone
-        void existing.close(); // dir moved (or no longer resolvable) → drop the stale watcher
+        if (existing.watchDir === dir) continue; // unchanged → leave alone
+        void existing.close(); // dir moved → drop the stale watcher
         this.watchers.delete(id);
       }
-      if (!dir || !fs.existsSync(dir)) continue;
+      if (!fs.existsSync(dir)) continue;
       const w = new LoopWatcher(id, dir, this.server, this.token);
       w.start();
       this.watchers.set(id, w);

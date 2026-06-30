@@ -26,6 +26,11 @@ First find the loop id (only loops bound to THIS machine are listed):
 #    loop-yyyy  paused  0 * * * *                 Hourly metrics
 ```
 
+Before reshaping a loop, see how its recent runs actually went — their status and
+execution transcript — with `<loopany-cli> log` (the loop for the current
+directory) or `<loopany-cli> log <loop-id>` (`--limit N`, `--json`). Read it first
+so an edit is grounded in what the runs really did, not a guess.
+
 Then change the envelope — pass only the fields that change:
 
 ```bash
