@@ -13,9 +13,22 @@ import { getGateway } from "./boot.js";
 import type { SnapshotEntry, SnapshotManifest } from "../db/schema.js";
 import type { RunDiffFile, RunDiffResult } from "../types.js";
 
+/**
+ * Upper bound for computing an inline unified diff. jsdiff is synchronous and
+ * roughly O(N*D); on a multi-MB or minified text file it would block the
+ * single-process server (which also owns the scheduler) for seconds. Above this
+ * a changed text file degrades to the size-delta marker, like binary/oversize.
+ */
+const MAX_DIFF_BYTES = 512 * 1024;
+
 /** A file is text-diffable only when it has stored bytes and isn't binary/oversize. */
 function isText(e: SnapshotEntry | undefined): boolean {
   return !!e && !e.binary && !e.oversize && !!e.hash;
+}
+
+/** Within the inline-diff size cap (unknown size ⇒ allowed). */
+function withinDiffCap(e: SnapshotEntry | undefined): boolean {
+  return !!e && (e.size == null || e.size <= MAX_DIFF_BYTES);
 }
 
 /** Decode a snapshot entry's blob to text, or null when bytes are absent. */
@@ -49,8 +62,9 @@ export async function computeRunDiff(runId: string): Promise<RunDiffResult> {
 
     if (c && !p) {
       // Added.
-      const file: RunDiffFile = { path, status: "added", binary: !isText(c), sizeDelta: c.size ?? null };
-      if (isText(c)) {
+      const diffable = isText(c) && withinDiffCap(c);
+      const file: RunDiffFile = { path, status: "added", binary: !diffable, sizeDelta: c.size ?? null };
+      if (diffable) {
         const text = await textOf(c);
         if (text != null) file.diff = unified(path, "", text);
         else file.binary = true; // bytes gone → can't show a diff
@@ -58,8 +72,9 @@ export async function computeRunDiff(runId: string): Promise<RunDiffResult> {
       files.push(file);
     } else if (!c && p) {
       // Removed.
-      const file: RunDiffFile = { path, status: "removed", binary: !isText(p), sizeDelta: p.size != null ? -p.size : null };
-      if (isText(p)) {
+      const diffable = isText(p) && withinDiffCap(p);
+      const file: RunDiffFile = { path, status: "removed", binary: !diffable, sizeDelta: p.size != null ? -p.size : null };
+      if (diffable) {
         const text = await textOf(p);
         if (text != null) file.diff = unified(path, text, "");
         else file.binary = true;
@@ -69,9 +84,9 @@ export async function computeRunDiff(runId: string): Promise<RunDiffResult> {
       // Present in both — unchanged content ⇒ skip.
       if (c.hash === p.hash && c.oversize === p.oversize && c.size === p.size) continue;
       const sizeDelta = c.size != null && p.size != null ? c.size - p.size : null;
-      const bothText = isText(c) && isText(p);
-      const file: RunDiffFile = { path, status: "modified", binary: !bothText, sizeDelta };
-      if (bothText) {
+      const diffable = isText(c) && isText(p) && withinDiffCap(c) && withinDiffCap(p);
+      const file: RunDiffFile = { path, status: "modified", binary: !diffable, sizeDelta };
+      if (diffable) {
         const [oldText, newText] = await Promise.all([textOf(p), textOf(c)]);
         if (oldText != null && newText != null) file.diff = unified(path, oldText, newText);
         else file.binary = true;
