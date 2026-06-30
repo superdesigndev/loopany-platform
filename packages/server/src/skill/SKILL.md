@@ -8,6 +8,8 @@ description: Create, update, and evolve scheduled LoopAny agent loops from a cod
 You just helped the user accomplish something they want to run **automatically on a
 schedule**. Turn it into a LoopAny *loop*. The user's LoopAny web tab is open and
 waiting for the loop to appear — so work end to end; don't ask follow-up questions.
+(The one exception: if the session is essentially empty and there's no real task to
+loop yet, ask what to build rather than inventing one — see `references/create.md` §0.)
 
 This skill routes to focused references — read the one for the job:
 
