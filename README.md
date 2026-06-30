@@ -33,6 +33,10 @@ That's it. The server schedules the loop; your machine picks up each due run,
 executes it with your local agent, and reports the result back to the dashboard
 (and, if configured, your team's push channel).
 
+To check on or stop the machine's daemon later, run `npx @crewlet/loopany status`
+(is it running? + connection state) or `npx @crewlet/loopany down` (stop it). Run
+`npx @crewlet/loopany --help` for the full command list.
+
 ## How it works
 
 LoopAny is one server process plus one daemon per machine.

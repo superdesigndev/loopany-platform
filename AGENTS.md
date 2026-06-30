@@ -94,6 +94,38 @@ LLM and executes no user code**.
   intentionally NOT covered (deferred lazy-at-run-time idea). Thin verb `loopany skill
   {status,install}` (`skill-cli.ts`, `-g`/`--global`) is the **manual escape hatch** —
   install into cwd, or `-g` for `~/.claude`.
+- **Daemon CLI ergonomics (`loopany --help` / `status` / `down`).** `cli.ts`
+  `main()` dispatch order: in-run callback (`LOOPANY_RUN_TOKEN`+args) → `--help`/`-h`/
+  `help` (`help.ts`, prints usage, exit 0, NEVER starts the daemon) → `up` → `new` →
+  `skill` → `status`/`down` (`control.ts`) → interactive verbs → fallback. The fallback
+  is **guarded**: bare `loopany` (no args) OR a leading `DAEMON_FLAGS` token
+  (`--server-url`/`--api-key`, the detached spawn re-execs us that way) runs the daemon;
+  **any other leading verb/flag errors `unknown command … try --help` (exit 2)** rather
+  than silently backgrounding a daemon (the old fall-through bug). All new verbs sit
+  AFTER the callback guard, so they never hijack an in-run callback. **Local pidfile**
+  (`pidfile.ts`, `~/.loopany/daemon.pid` under the same `LOOPANY_DIR` as the device
+  token): `runDaemon()` writes it on boot, clears it on clean exit. The pidfile records
+  **two identity fields** — `<pid>:<startTime>` — where `startTime` is the daemon
+  process's start time, derived best-effort from `ps -p <pid> -o lstart=` via the ONE
+  shared `processStartTime()` helper (same string at write- and check-time; macOS+Linux
+  portable; undefined when `ps` is unavailable, and the file degrades to a bare `<pid>`,
+  which old files also parse as). A recorded pid is treated as "our daemon" only when it
+  is alive (`kill(pid,0)`; ESRCH=dead, EPERM=alive-but-not-ours) **AND** (no recorded
+  startTime, OR the live `processStartTime(pid)` still equals the recorded one) — so a pid
+  **reused** by an unrelated process after an unclean crash (which left the pidfile
+  behind) is NOT mistaken for the daemon and `down` never SIGTERMs it. A start-time
+  mismatch OR dead pid clears the stale pidfile as a side effect; when the start-time
+  can't be read at check time it degrades to alive-only (best-effort, never crashes).
+  `status` reports running+pid plus server URL, a device-token **fingerprint** (last 6
+  chars, never the full token), and a best-effort server `connection` line
+  (`/api/machine/status`, **3s `AbortSignal.timeout`** so a hung server degrades quickly
+  to "unknown — server unreachable" instead of blocking on undici's ~5min default);
+  `down` SIGTERMs the verified pid and is a **clean no-op** when none runs (and on the
+  probe→signal ESRCH race). `control.ts` exposes every external touch (pid read, liveness,
+  start-time lookup, kill, fetch, server/token, output) as an **injectable seam** so
+  `control.test.ts` needs no real process/network; `cli.test.ts` runs the entry as a real
+  subprocess to prove help/unknown EXIT (never launch the daemon). Shipped in daemon
+  **0.5.0**.
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.

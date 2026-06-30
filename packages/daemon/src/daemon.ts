@@ -16,6 +16,7 @@ import { DEVICE_FILE, SERVER_FILE, persist, readStored } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
 import { snapshotProgress } from "./progress.js";
 import { WatchManager, type WatchSpec } from "./watcher.js";
+import { writePidFile, clearPidFile } from "./pidfile.js";
 
 const POLL_MS = Number(process.env.LOOPANY_POLL_MS || 3000);
 
@@ -59,6 +60,10 @@ export async function runDaemon(): Promise<number> {
   // Write the `loopany` callback wrapper once, before any run can fire. Each run
   // prepends CALLBACK_BIN_DIR to claude's PATH (no per-run shim in the workdir).
   ensureCallbackBin();
+
+  // Record our pid so `loopany status`/`loopany down` can find this detached
+  // daemon locally (the server only knows online-ness, not the local process).
+  writePidFile();
 
   const ac = new AbortController();
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
@@ -115,6 +120,7 @@ export async function runDaemon(): Promise<number> {
     await sleep(POLL_MS, ac.signal);
   }
   await watchManager.closeAll();
+  clearPidFile();
   return 0;
 }
 
