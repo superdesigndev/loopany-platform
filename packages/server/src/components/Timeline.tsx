@@ -160,7 +160,15 @@ export function Timeline({
   const showNext = atLatest && en && !done && !!job.nextRun && !running
 
   return (
-    <div className="flex items-center gap-[3px]">
+    // Contain the strip to its track. A full WINDOW of fixed-width (shrink-0) run
+    // blocks plus the next-run marker can be wider than a narrow rail (e.g. the loop
+    // page's ~320px runs rail) — left unbounded those blocks paint past the card's
+    // right edge and force a page-level horizontal scrollbar (against the hard
+    // no-page-scroll rule). `min-w-0` lets the row shrink below its content and
+    // `overflow-x-auto` scrolls any surplus INSIDE its own box, so the strip never
+    // widens the card. Behavior is preserved: tooltips/next-run popups portal out of
+    // the scroll box, and the +N pagers still page the window.
+    <div className="flex min-w-0 items-center gap-[3px] overflow-x-auto">
       <Pager count={olderHidden} onClick={pageBack} loading={loading} />
       {visible.map((r) => (
         <RunSeg key={r.id} run={r} onClick={() => onPickRun(r)} />
