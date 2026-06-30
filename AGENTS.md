@@ -94,6 +94,26 @@ LLM and executes no user code**.
   intentionally NOT covered (deferred lazy-at-run-time idea). Thin verb `loopany skill
   {status,install}` (`skill-cli.ts`, `-g`/`--global`) is the **manual escape hatch** —
   install into cwd, or `-g` for `~/.claude`.
+- **Daemon CLI ergonomics (`loopany --help` / `status` / `down`).** `cli.ts`
+  `main()` dispatch order: in-run callback (`LOOPANY_RUN_TOKEN`+args) → `--help`/`-h`/
+  `help` (`help.ts`, prints usage, exit 0, NEVER starts the daemon) → `up` → `new` →
+  `skill` → `status`/`down` (`control.ts`) → interactive verbs → fallback. The fallback
+  is **guarded**: bare `loopany` (no args) OR a leading `DAEMON_FLAGS` token
+  (`--server-url`/`--api-key`, the detached spawn re-execs us that way) runs the daemon;
+  **any other leading verb/flag errors `unknown command … try --help` (exit 2)** rather
+  than silently backgrounding a daemon (the old fall-through bug). All new verbs sit
+  AFTER the callback guard, so they never hijack an in-run callback. **Local pidfile**
+  (`pidfile.ts`, `~/.loopany/daemon.pid` under the same `LOOPANY_DIR` as the device
+  token): `runDaemon()` writes it on boot, clears it on clean exit; `status` reports
+  running+pid (probes with `kill(pid,0)`; ESRCH=dead, EPERM=alive-but-not-ours) plus
+  server URL, a device-token **fingerprint** (last 6 chars, never the full token), and a
+  best-effort server `connection` line (`/api/machine/status`); `down` SIGTERMs the
+  tracked pid and is a **clean no-op** when none runs (and on the probe→signal ESRCH
+  race). A stale pidfile (crashed daemon) is cleared as a side effect of the liveness
+  probe. `control.ts` exposes every external touch (pid read, liveness, kill, fetch,
+  server/token, output) as an **injectable seam** so `control.test.ts` needs no real
+  process/network; `cli.test.ts` runs the entry as a real subprocess to prove
+  help/unknown EXIT (never launch the daemon). Shipped in daemon **0.5.0**.
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.
