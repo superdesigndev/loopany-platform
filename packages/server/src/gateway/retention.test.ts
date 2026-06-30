@@ -145,6 +145,82 @@ test("the grace window protects freshly-written (unreferenced) blobs", async () 
   expect(await blobs.has(hash)).toBe(false);
 });
 
+test("GC deletes bytes before metadata: a blob re-referenced mid-delete drops metadata to self-heal", async () => {
+  const { loop } = seed();
+  const base = new MemoryBlobStore();
+  const content = "racy bytes";
+  const hash = sha256(content);
+  await base.put(hash, Buffer.from(content));
+  store.recordBlob(hash, content.length, false);
+  // No live row references it at pass start → it's garbage.
+
+  // A BlobStore whose delete() simulates a concurrent sync racing the byte delete:
+  // it re-references the hash (live file row + recreated blobs metadata) DURING the
+  // await — the exact TOCTOU window the bytes-before-metadata ordering must survive.
+  const racing = {
+    has: (h: string) => base.has(h),
+    put: (h: string, b: Buffer) => base.put(h, b),
+    get: (h: string) => base.get(h),
+    async delete(h: string): Promise<void> {
+      if (h === hash) {
+        store.upsertArtifactFile({ loopId: loop.id, path: "racer.txt", hash, size: content.length, binary: false, oversize: false, lastRunId: null });
+        store.recordBlob(hash, content.length, false);
+      }
+      return base.delete(h);
+    },
+  };
+
+  const reclaimed = await retention.gcBlobs(racing, FORCE);
+  // Raced ⇒ not counted as a clean reclaim, bytes deleted, AND metadata dropped so
+  // blobExists()=false — the live row re-uploads on the next sync (self-heal). The
+  // invariant: never a live blobs row left pointing at deleted bytes.
+  expect(reclaimed).toBe(0);
+  expect(await base.has(hash)).toBe(false);
+  expect(store.blobExists(hash)).toBe(false);
+  expect(store.getArtifactFile(loop.id, "racer.txt")!.deleted).toBe(false);
+});
+
+test("putBlob enforces the per-loop cap against the REAL byte length (sync under-reported the size)", async () => {
+  process.env.LOOPANY_LOOP_BYTES_CAP = "100";
+  const { token, loop } = seed();
+  const { gw, blobs } = gatewayWithStore();
+
+  const big = "z".repeat(200); // real bytes exceed the 100B cap…
+  const hbig = sha256(big);
+
+  // …but the sync under-reports the size (10B) for a NON-inline file, so it slips
+  // past sync's projected-footprint check and lands in needHashes (no bytes yet).
+  const s = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "big.bin", hash: hbig, size: 10 }] });
+  expect(s.status).toBe(200);
+  expect((s.body as any).needHashes).toContain(hbig);
+  expect(store.getArtifactFile(loop.id, "big.bin")).toBeDefined();
+
+  // The daemon then PUTs the real (over-cap) bytes → refused at putBlob, with the
+  // dangling row dropped so nothing points at a blob the server won't store.
+  const p = await gw.putBlob(token, hbig, Buffer.from(big));
+  expect(p.status).toBe(413);
+  expect((p.body as any).capExceeded).toBe(true);
+  expect(await blobs.has(hbig)).toBe(false);
+  expect(store.blobExists(hbig)).toBe(false);
+  expect(store.getArtifactFile(loop.id, "big.bin")).toBeUndefined();
+});
+
+test("putBlob stores a NEW blob that fits the per-loop cap (honest path not falsely rejected)", async () => {
+  process.env.LOOPANY_LOOP_BYTES_CAP = "1000";
+  const { token, loop } = seed();
+  const { gw, blobs } = gatewayWithStore();
+
+  const data = "y".repeat(200);
+  const h = sha256(data);
+  const s = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "f.bin", hash: h, size: data.length }] });
+  expect((s.body as any).needHashes).toContain(h);
+
+  const p = await gw.putBlob(token, h, Buffer.from(data));
+  expect(p.status).toBe(200);
+  expect(await blobs.has(h)).toBe(true);
+  expect(store.blobExists(h)).toBe(true);
+});
+
 test("snapshot retention prunes the oldest beyond the window, keeps the newest N", async () => {
   const { loop, machineId } = seed();
   const ids: string[] = [];

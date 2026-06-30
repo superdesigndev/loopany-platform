@@ -99,6 +99,13 @@
       "when": 1782790404058,
       "tag": "0013_yellow_slyde",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1782818950461,
+      "tag": "0014_stiff_bug",
+      "breakpoints": true
     }
   ]
 }

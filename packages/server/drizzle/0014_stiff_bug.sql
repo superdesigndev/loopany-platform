@@ -1,0 +1,1 @@
+CREATE INDEX `artifact_files_hash_idx` ON `artifact_files` (`hash`);

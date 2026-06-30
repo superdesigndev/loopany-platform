@@ -14,13 +14,16 @@
  *      hash. CORRECTNESS over aggressiveness — a still-referenced blob is never
  *      deleted; a leaked blob is only a cost bug the next pass reclaims.
  *
- * Concurrency: gcBlobs is safe to run alongside active syncs. Two guards combine —
+ * Concurrency: gcBlobs is safe to run alongside active syncs. Three guards combine —
  * a grace window (a blob whose metadata row is younger than the window is never
- * collected, so a blob a sync just wrote/referenced is untouchable) and a final
- * point re-check of each candidate immediately before its bytes are deleted (so a
- * blob re-referenced mid-pass keeps its bytes). The metadata read + delete phase
- * is fully synchronous (better-sqlite3), so no concurrent handler interleaves with
- * the keep-set computation.
+ * collected, so a blob a sync just wrote/referenced is untouchable), a point
+ * re-check of each candidate immediately before its bytes are deleted (so a blob
+ * re-referenced before we touch it keeps both its bytes and metadata), and a
+ * bytes-before-metadata delete ordering: each candidate's bytes are reclaimed
+ * FIRST, then its metadata row is dropped unconditionally — so blobExists() goes
+ * false and any sync that re-references the hash (even one that raced the byte
+ * delete) re-uploads the bytes (self-healing). We never leave a live blobs row
+ * pointing at deleted bytes.
  */
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
@@ -50,39 +53,48 @@ export function pruneSnapshots(keep: number = snapshotRetention()): number {
 /**
  * Reclaim unreferenced blob bytes. Returns the number of blobs collected.
  *
- * Algorithm (the synchronous phase is interleave-free under the single-threaded
- * event loop, so the keep-set is consistent with the metadata deletions):
+ * Algorithm:
  *   1. Compute the live keep-set (all hashes any artifact_files row / retained
- *      snapshot references).
- *   2. Candidates = blobs older than the grace window (younger blobs are off-limits
- *      — a concurrent sync may be about to reference them) and not in the keep-set.
- *   3. Delete each candidate's metadata row (synchronous, no await between them).
- *   4. Then, for each, re-check referencedness one last time and — if still
- *      unreferenced — delete its bytes (the only awaits in the whole pass).
+ *      snapshot references) and the grace-windowed candidate list — both reads are
+ *      synchronous (interleave-free under the single-threaded event loop).
+ *   2. Garbage = candidates not in the keep-set.
+ *   3. For each garbage hash, in order:
+ *      a. Pre-delete guard: if a sync re-referenced it since the keep-set was
+ *         computed, skip it — leaving both its bytes AND metadata row intact
+ *         (a consistent live blob, nothing to heal).
+ *      b. Otherwise delete the BYTES (the await), then drop the metadata row
+ *         UNCONDITIONALLY. Bytes-before-metadata is the data-loss fix: if a sync
+ *         raced the byte delete (re-referencing the hash + recreating the blobs
+ *         row mid-await), dropping the metadata still leaves blobExists()=false,
+ *         so that file re-uploads its bytes on the next sync. We never leave a
+ *         live blobs row pointing at deleted bytes.
  */
 export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGraceMs()): Promise<number> {
   const refs = store.liveBlobRefs();
   const cutoff = new Date(Date.now() - graceMs).toISOString();
   const candidates = store.blobHashesOlderThan(cutoff);
-
-  // Phase A (synchronous, atomic wrt the event loop): pick the garbage and drop
-  // its metadata rows. After this, blobExists() is false for each — so a sync that
-  // re-references one will re-request the bytes (self-healing), never end up with a
-  // live row pointing at deleted bytes.
   const garbage = candidates.filter((h) => !refs.has(h));
-  for (const hash of garbage) store.deleteBlob(hash);
 
-  // Phase B (async): reclaim the bytes. Re-check each hash right before deleting —
-  // if a concurrent sync re-referenced it during a prior await, keep its bytes.
   let reclaimed = 0;
   for (const hash of garbage) {
-    if (store.blobIsReferenced(hash)) continue; // re-referenced mid-pass → keep bytes
+    // Pre-delete guard: re-referenced before we touched it → keep bytes + metadata.
+    if (store.blobIsReferenced(hash)) continue;
     try {
+      // Bytes first…
       await blobStore.delete(hash);
-      reclaimed++;
+      // …then metadata, unconditionally. If a sync raced the await and re-referenced
+      // the hash, dropping the (possibly sync-recreated) blobs row forces blobExists()
+      // false so the bytes self-heal on the next sync; if not, this is plain cleanup.
+      const raced = store.blobIsReferenced(hash);
+      store.deleteBlob(hash);
+      if (raced) {
+        log.warn({ hash }, "gc: blob re-referenced mid-delete — dropped metadata to force re-upload");
+      } else {
+        reclaimed++;
+      }
     } catch (err) {
-      // A failed byte-delete just leaks the bytes (cost bug) — the metadata row is
-      // already gone, so a later pass won't even retry it; that's the safe bias.
+      // A failed byte-delete leaves BOTH the bytes and the metadata row intact, so a
+      // later pass simply retries — no live row ever points at deleted bytes.
       log.warn({ hash, err: err instanceof Error ? err.message : String(err) }, "gc: blob byte-delete failed");
     }
   }

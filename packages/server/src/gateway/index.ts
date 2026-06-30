@@ -765,7 +765,13 @@ export class MachineGateway {
       // Does accepting this file add NEW bytes to storage? It doesn't if the server
       // already has the blob (global content-addressed dedupe) or we're already
       // taking it this same sync. Only NEW bytes count toward the per-loop cap.
-      const fileSize = inlined?.length ?? (sizeOk ? rawSize : 0);
+      // Size source, conservatively: inline bytes (authoritative) → the reported
+      // size → BLOB_CAP for a non-inline file with a missing/invalid size. NEVER 0:
+      // a 0 estimate would let an under-reported size slip past the cap here and
+      // arrive uncapped via PUT (the daemon always sends a size, so this only bites
+      // a buggy/hostile client, which we want to bound, not trust). putBlob re-checks
+      // against the real byte length regardless.
+      const fileSize = inlined?.length ?? (sizeOk ? rawSize : BLOB_CAP);
       const addsNewBytes = !(store.blobExists(hash) || toStore.has(hash) || needHashes.has(hash));
       if (addsNewBytes && projectedBytes + fileSize > bytesCap) {
         // Per-loop storage cap reached → refuse THIS new file's bytes. Skip the row
@@ -838,6 +844,26 @@ export class MachineGateway {
     if (!isValidHash(hash)) return { status: 400, body: { error: "invalid hash (expect sha256 hex)" } };
     if (bytes.length > BLOB_CAP) return { status: 413, body: { error: "blob exceeds size cap" } };
     if (sha256Buf(bytes) !== hash) return { status: 400, body: { error: "hash mismatch (sha256(body) !== :hash)" } };
+
+    // Per-loop storage cap, authoritative re-check (defense in depth). sync() caps
+    // from the daemon-reported size; a NEW blob (one the server doesn't already
+    // have) arriving here is re-measured against its REAL byte length for every
+    // loop that already references the hash (the rows a prior sync wrote when it
+    // returned this hash in needHashes). If storing would push a referencing loop
+    // past its cap, refuse the bytes AND drop that loop's dangling rows so nothing
+    // points at a blob we won't store — a later sync re-reconciles (self-healing).
+    if (!store.blobExists(hash)) {
+      const cap = loopBytesCap();
+      const overLoops = store
+        .loopsReferencingHash(hash)
+        .filter((loopId) => store.loopStoredBytesExcludingHash(loopId, hash) + bytes.length > cap);
+      if (overLoops.length) {
+        for (const loopId of overLoops) store.dropArtifactFilesForHash(loopId, hash);
+        log.warn({ machineId, hash, bytes: bytes.length, loops: overLoops.length }, "putBlob: per-loop storage cap reached — refused");
+        return { status: 413, body: { error: "blob would exceed per-loop storage cap", capExceeded: true } };
+      }
+    }
+
     await this.blobStore.put(hash, bytes);
     store.recordBlob(hash, bytes.length, looksBinary(bytes));
     return { status: 200, body: { ok: true } };

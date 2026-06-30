@@ -600,18 +600,60 @@ export function deleteBlob(hash: string): void {
   db.delete(blobs).where(eq(blobs.hash, hash)).run();
 }
 
-/** Point check: is this single hash still referenced by any live artifact_files
- *  row or retained run_snapshot? Used by the GC as a final guard right before
- *  reclaiming a blob's bytes — if a concurrent sync re-referenced it during the
- *  GC pass, the bytes are kept. (Distinct from liveBlobRefs's bulk keep-set.) */
+/** Point check: is this single hash still referenced by any artifact_files row?
+ *  Used by the GC as a per-candidate guard during the byte-reclaim pass — if a
+ *  concurrent sync re-referenced the hash mid-pass, its bytes are kept. Only the
+ *  artifact_files table is consulted (indexed point query): a garbage blob can
+ *  become re-referenced mid-pass ONLY via a live artifact_files row, because a
+ *  run_snapshot is written solely at report() and built from the live file set
+ *  (buildLoopManifest), so any snapshot reference implies a live file reference.
+ *  The full snapshot scan stays in liveBlobRefs (the bulk keep-set computed once
+ *  at pass start, where snapshots existing then must be honored). */
 export function blobIsReferenced(hash: string): boolean {
-  if (db.select({ id: artifactFiles.id }).from(artifactFiles).where(eq(artifactFiles.hash, hash)).get()) return true;
-  for (const r of db.select({ manifest: runSnapshots.manifest }).from(runSnapshots).all()) {
-    for (const entry of Object.values(r.manifest)) {
-      if (entry?.hash === hash) return true;
-    }
-  }
-  return false;
+  return !!db.select({ id: artifactFiles.id }).from(artifactFiles).where(eq(artifactFiles.hash, hash)).get();
+}
+
+/** Distinct loop ids with a LIVE (non-deleted) file row pointing at this hash.
+ *  Drives the per-loop cap re-check at putBlob, where the only loop context is
+ *  the artifact_files rows a prior sync already wrote for the requested hash. */
+export function loopsReferencingHash(hash: string): string[] {
+  return db
+    .selectDistinct({ loopId: artifactFiles.loopId })
+    .from(artifactFiles)
+    .where(and(eq(artifactFiles.hash, hash), eq(artifactFiles.deleted, false)))
+    .all()
+    .map((r) => r.loopId);
+}
+
+/** A loop's live byte footprint EXCLUDING any rows pointing at `hash` — the base
+ *  the putBlob cap guard adds the blob's REAL byte length to (the placeholder row
+ *  a sync wrote for `hash` carries a client-reported size we must not trust). */
+export function loopStoredBytesExcludingHash(loopId: string, hash: string): number {
+  const row = db
+    .select({ total: sql<number>`coalesce(sum(${artifactFiles.size}), 0)` })
+    .from(artifactFiles)
+    .where(
+      and(
+        eq(artifactFiles.loopId, loopId),
+        eq(artifactFiles.deleted, false),
+        eq(artifactFiles.oversize, false),
+        isNotNull(artifactFiles.hash),
+        ne(artifactFiles.hash, hash),
+      ),
+    )
+    .get();
+  return row?.total ?? 0;
+}
+
+/** Hard-delete a loop's file rows pointing at `hash` — used when putBlob refuses
+ *  the bytes (per-loop cap), so nothing dangles pointing at a blob never stored.
+ *  Returns the number removed. */
+export function dropArtifactFilesForHash(loopId: string, hash: string): number {
+  const r = db
+    .delete(artifactFiles)
+    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.hash, hash)))
+    .run();
+  return r.changes;
 }
 
 /** A loop's current live (non-deleted) byte footprint: sum of sizes over files

@@ -190,15 +190,25 @@ LLM and executes no user code**.
   (`store.liveBlobRefs`: every non-null `artifact_files.hash` UNION every hash in every
   retained `run_snapshots` manifest — tombstones carry `hash=null` so they don't pin a
   blob) and reclaims only blobs NOT in it. CRITICAL invariant: a blob shared by multiple
-  file rows AND/OR retained snapshots is never deleted. Concurrency-safe via two guards: a
-  **grace window** (`blobGcGraceMs`, default **1h** — a blob whose `blobs.createdAt` is
+  file rows AND/OR retained snapshots is never deleted. Concurrency-safe via three guards:
+  a **grace window** (`blobGcGraceMs`, default **1h** — a blob whose `blobs.createdAt` is
   younger is never collected, so a blob a concurrent sync just wrote/referenced is
-  untouchable) plus a final per-candidate `store.blobIsReferenced` re-check right before the
-  byte delete. Phase A (pick garbage + delete metadata rows) is fully synchronous
-  (better-sqlite3) so the keep-set can't go stale mid-computation; after a metadata row is
-  dropped, a re-referencing sync sees `blobExists=false` and re-PUTs (self-healing) — never
-  a live row pointing at deleted bytes. Bias: a leaked blob is a cost bug the next pass
-  reclaims; a wrongly-deleted blob would be data loss, so when in doubt KEEP.
+  untouchable); a per-candidate `store.blobIsReferenced` re-check right before the byte
+  delete (skip ⇒ keep both bytes AND metadata); and a **bytes-before-metadata delete
+  ordering** that closes a TOCTOU data-loss window. Per garbage hash the GC deletes the
+  BYTES first, then drops the metadata row **unconditionally** (re-checking referencedness
+  only to log/uncount a raced reclaim): so even if a sync raced the byte delete (re-
+  referencing the hash + recreating the `blobs` row mid-await), `blobExists()` still goes
+  false and that file re-uploads its bytes on the next sync — the GC NEVER leaves a live
+  `blobs` row pointing at deleted bytes. A failed byte-delete leaves both bytes and metadata
+  intact, so a later pass retries (no dangling row). `store.blobIsReferenced` is now an
+  **indexed** artifact_files-only point query (`artifact_files_hash_idx`, migration `0014`):
+  a garbage blob can only become re-referenced mid-pass via a live artifact_files row (a
+  snapshot is written solely at `report()` and built from the live file set, so any snapshot
+  ref implies a live file ref), so the recheck needs no snapshot scan — the full snapshot
+  scan stays only in `liveBlobRefs` (the bulk keep-set computed once at pass start). Bias: a
+  leaked blob is a cost bug the next pass reclaims; a wrongly-deleted blob would be data
+  loss, so when in doubt KEEP.
   **(2) Snapshot retention** — `store.pruneRunSnapshots(loopId, keep)` keeps the newest
   `keep` (by `createdAt`); `LOOPANY_SNAPSHOT_RETENTION` default **20** (the diff only needs
   the prior snapshot; 20 keeps ample "Changes" history while bounding blob retention).
@@ -210,7 +220,15 @@ LLM and executes no user code**.
   file (skips its bytes + row, NOT tombstoned — prior version kept) and surfaces
   `{capExceeded, bytesUsed, bytesCap, rejected:[paths]}` on the sync response (mirrors the
   per-file 10MB oversize signal); existing files + deletions still reconcile so the loop
-  never wedges. **When GC runs:** a dedicated `boot.ts` interval (`gcIntervalMs`, default
+  never wedges. The cap is enforced in **two places** so a client-reported size can't bypass
+  it: in `sync()` a non-inline file with a missing/invalid size is sized at `BLOB_CAP` (10MB,
+  conservative — never `0`, which would slip past the projected-footprint check) instead of
+  trusting the client; and authoritatively at **`putBlob`** (the uncapped-before route), which
+  re-checks a NEW blob's REAL byte length against every loop that already references the hash
+  (`store.loopsReferencingHash` × `store.loopStoredBytesExcludingHash`) and, if storing would
+  exceed a loop's cap, refuses the bytes (413 `capExceeded`) and drops that loop's dangling
+  rows (`store.dropArtifactFilesForHash`) so nothing points at a blob never stored — a later
+  sync re-reconciles (self-healing). **When GC runs:** a dedicated `boot.ts` interval (`gcIntervalMs`, default
   **15min**, independent of the faster offline-sweep) calls `gateway.maintainStorage()`
   (prune snapshots → GC blobs; best-effort, never throws). All knobs are lazy env reads
   (`env.ts`) so tests set them per-case. Tests: `gateway/retention.test.ts`.

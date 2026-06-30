@@ -310,6 +310,9 @@ export const artifactFiles = sqliteTable(
   (t) => [
     index("artifact_files_loop_idx").on(t.loopId),
     uniqueIndex("artifact_files_loop_path_idx").on(t.loopId, t.path),
+    // The blob GC's per-candidate referenced re-check + the putBlob cap guard both
+    // do a point lookup by hash; without this they full-scan artifact_files.
+    index("artifact_files_hash_idx").on(t.hash),
   ],
 );
 
