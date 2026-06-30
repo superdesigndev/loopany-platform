@@ -60,7 +60,8 @@ SQLite on a volume. See `fly.toml` for the setup commands. Build = nitro
 A push to `main` auto-deploys the server to Fly via GitHub Actions
 (`.github/workflows/deploy.yml`, `flyctl deploy --remote-only`; needs the
 `FLY_API_TOKEN` repo secret). The daemon (`@crewlet/loopany`) publishes to npm on
-a `vX.Y.Z` tag (`.github/workflows/publish-daemon.yml`; needs `NPM_TOKEN`).
+a `vX.Y.Z` tag (`.github/workflows/publish-daemon.yml`; authenticates via npm OIDC
+trusted publishing — no `NPM_TOKEN` secret needed).
 
 ## Auth & notifications (optional)
 

@@ -1,10 +1,15 @@
-# Publish @crewlet/loopany (packages/daemon) to npm.
-# Fires on a version tag (vX.Y.Z) or manual dispatch. Publishes ONLY the daemon.
+# Publish @crewlet/loopany (packages/daemon) to npm via OIDC Trusted Publishing.
+# No NPM_TOKEN: the runner mints a short-lived OIDC token that npm verifies against
+# the Trusted Publisher configured on npmjs.com (GitHub Actions / this repo / this
+# workflow file). Fires on a version tag (vX.Y.Z) or manual dispatch. Publishes ONLY
+# the daemon. Provenance is emitted automatically by trusted publishing once the
+# source repo is public (npm skips provenance while the repo is private, but the
+# publish still succeeds) — no `--provenance` flag is needed under OIDC.
 name: Publish daemon (npm)
 
 on:
   push:
-    tags: ['v*']             # e.g. v0.3.0  (also matches v0.3.0-rc.1)
+    tags: ['v*']             # e.g. v0.3.1  (also matches v0.3.1-rc.1)
   workflow_dispatch: {}      # manual re-publish button
 
 jobs:
@@ -13,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # id-token: write      # <-- enable when the repo is public (provenance requires a public source repo)
+      id-token: write        # <-- lets the runner mint the OIDC token npm verifies (Trusted Publishing)
     steps:
       - uses: actions/checkout@v7
 
@@ -26,9 +31,17 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 22                      # matches engines.node ">=22"
-          registry-url: 'https://registry.npmjs.org'  # writes .npmrc with auth
+          node-version: 22                      # matches engines.node ">=22" (>= 22.14.0)
+          registry-url: 'https://registry.npmjs.org'  # target the public registry (no token written/used)
           cache: pnpm
+
+      # Trusted publishing requires npm CLI >= 11.5.1; Node 22 bundles npm 10.x, so
+      # upgrade the global npm before publishing. (pnpm install/build below are unaffected.)
+      # Pinned to npm@11 (not @latest) for reproducibility — satisfies the >= 11.5.1
+      # minimum while shielding the publish from a future npm 12 changing behavior. Bump
+      # this pin if npm ever requires 12+ for OIDC trusted publishing.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@11
 
       - name: Install (workspace, frozen)
         run: pnpm install --frozen-lockfile
@@ -47,7 +60,6 @@ jobs:
 
       - name: Publish
         working-directory: packages/daemon       # <-- ONLY the daemon, never the server
-        # Add `--provenance` when the repo is public (provenance requires a public source repo).
+        # OIDC trusted publishing: no NODE_AUTH_TOKEN. npm authenticates via the
+        # id-token minted above and emits provenance automatically (when repo is public).
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

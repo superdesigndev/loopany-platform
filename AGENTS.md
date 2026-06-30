@@ -106,11 +106,23 @@ LLM and executes no user code**.
   daemon → npm: fires on **`push: tags: ['v*']`** plus `workflow_dispatch`; pnpm 8 +
   node 22; a **tag↔`packages/daemon/package.json` version guard** (a stray/mismatched tag
   can't publish); `npm publish` with `working-directory: packages/daemon` — **publishes ONLY
-  the daemon, never the private `@loopany/server`**. Required repo secrets (captain adds
-  them, never in the files): **`FLY_API_TOKEN`** (deploy) and **`NPM_TOKEN`** (publish).
-  **Provenance is wired but OFF** (commented `id-token: write` + a note on the publish line):
-  the repo is private now and provenance requires a public source repo — flip both when it
-  goes public. These workflows only run on GitHub (push/tag), not in the local pipeline.
+  the daemon, never the private `@loopany/server`**. **Auth is npm OIDC Trusted Publishing,
+  NOT a token** — the job has `permissions: id-token: write` (+ `contents: read`) so the
+  runner mints a short-lived OIDC token npm verifies against the Trusted Publisher configured
+  on npmjs.com (publisher GitHub Actions, repo `superdesigndev/loopany-platform`, workflow
+  `publish-daemon.yml`, no environment). The publish step has **no `NODE_AUTH_TOKEN`**;
+  `setup-node`'s `registry-url` is kept only to target the public registry. Trusted publishing
+  needs **npm CLI >= 11.5.1** (and Node >= 22.14.0); Node 22 bundles npm 10.x, so a
+  `npm install -g npm@11` step runs after `setup-node` (pinned to npm@11, not `@latest`, for
+  reproducibility — bump if npm ever requires 12+ for OIDC). **Provenance is automatic under
+  OIDC — no `--provenance` flag** (npm emits it itself); per npm docs + the GH changelog,
+  provenance is generated **only when the source repo is public** (Sigstore limitation — the
+  same public-repo requirement applies to OIDC, it is NOT relaxed), but a **private-repo
+  publish still succeeds, just without provenance**, and provenance starts emitting
+  automatically the moment the repo goes public with **zero workflow change**. Required repo
+  secret: **`FLY_API_TOKEN`** (deploy) — captain adds it, never in the files. **`NPM_TOKEN`
+  is no longer used** and can be deleted from repo secrets. These workflows only run on GitHub
+  (push/tag), not in the local pipeline.
 - **Per-team connect-key → loop team (multi-team capture).** A user can belong to
   multiple teams; a loop captured from team B's dashboard must land in team B even
   though the user has ONE machine/daemon. A loop's team is decoupled from the
