@@ -1,10 +1,11 @@
 /**
  * `loopany skill {status,install}` — a thin verb wrapping the same best-effort
- * install path `loopany up` runs. Lets a user (re)install the loopany agent skill
- * on demand or check where it's installed, without re-running `up`.
+ * install path `loopany new` runs at loop creation. The manual escape hatch: lets
+ * a user (re)install the loopany agent skill on demand, anywhere, or check where
+ * it's installed.
  *
  *   loopany skill              # same as `loopany skill install`
- *   loopany skill install      # install into ./.claude/skills/loopany (project)
+ *   loopany skill install      # install into ./.claude/skills/loopany (project, cwd)
  *   loopany skill install -g   # install into ~/.claude/skills/loopany (global)
  *   loopany skill status       # report where the skill is installed + bundle state
  */

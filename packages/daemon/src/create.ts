@@ -13,8 +13,11 @@
  * sole validator; we pre-check the obvious local mistakes for a clear message.
  */
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
+import { DEVICE_FILE, LOOPANY_DIR, flag, readStored, resolveServerUrl } from "./config.js";
+import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
 
 /**
  * Best-effort IANA zone for THIS machine. `Intl` is the portable primary (works
@@ -86,7 +89,37 @@ export function resolveAgent(env: NodeJS.ProcessEnv, declared: unknown): CodingA
   return detectAgentFromEnv(env) ?? coerceAgent(declared) ?? undefined;
 }
 
-export async function runCreate(args: string[]): Promise<number> {
+/**
+ * Resolve the absolute directory this loop's agent will run in — the place the
+ * skill should be installed at creation. Mirrors the daemon's own resolution
+ * (runner.resolveWorkdir / watcher.resolveWatchDir): an explicit `workdir`
+ * (tilde-expanded, made absolute) when set, else the per-loop daemon scratch dir
+ * `~/.loopany/work/<loopId>`. Never `process.cwd()` — `loopany new` may be invoked
+ * from anywhere, and we want the loop's real workdir. Returns "" when there's no
+ * explicit workdir AND no loopId, so the scratch path can't collapse to the shared
+ * `~/.loopany/work` parent (the caller then skips the install). The dir is NOT
+ * created here — announceSkillInstall ensures it exists before installing.
+ */
+export function resolveLoopWorkdir(workdir: unknown, loopId: string): string {
+  if (typeof workdir === "string" && workdir.trim()) {
+    const expanded = workdir.startsWith("~/") ? path.join(os.homedir(), workdir.slice(2)) : workdir;
+    return path.resolve(expanded);
+  }
+  if (!loopId.trim()) return "";
+  return path.join(LOOPANY_DIR, "work", loopId);
+}
+
+/** Tests inject these to assert the post-create skill install without network/npx. */
+export interface CreateDeps {
+  fetchImpl?: typeof fetch;
+  installer?: (opts: InstallOpts) => Promise<InstallOutcome>;
+  stdout?: (s: string) => void;
+}
+
+export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<number> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const installer = deps.installer ?? installSkill;
+  const write = deps.stdout ?? ((s: string) => void process.stdout.write(s));
   const configPath = flag(args, "config");
   if (!configPath) {
     process.stderr.write("loopany: usage: loopany new --config <loop.json> [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex]\n");
@@ -134,7 +167,7 @@ export async function runCreate(args: string[]): Promise<number> {
   if (connectKey) body.claim = connectKey;
 
   try {
-    const res = await fetch(`${server}/api/machine/loop`, {
+    const res = await fetchImpl(`${server}/api/machine/loop`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -144,10 +177,37 @@ export async function runCreate(args: string[]): Promise<number> {
       process.stderr.write(`loopany: ${data.error || `create failed (${res.status})`}\n`);
       return 1;
     }
-    process.stdout.write(`created loop ${data.name ?? data.id} — ${config.cron} ${timezone}\n`);
+    write(`created loop ${data.name ?? data.id} — ${config.cron} ${timezone}\n`);
+    // Best-effort: now that the loop exists, install/refresh the loopany skill into
+    // the dir its agent will run in (project-level), so the coding agent discovers
+    // the references there. Announced, never blocks — any failure degrades to the
+    // always-working /api/skill path, exactly like before. Only runs after a
+    // confirmed create.
+    await announceSkillInstall(installer, resolveLoopWorkdir(config.workdir, data.id ?? ""), write);
     return 0;
   } catch (err) {
     process.stderr.write(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
+  }
+}
+
+/** Best-effort, announced project-level install into `workdir`. Ensures the dir
+ *  exists first (the scratch dir is created lazily by the runner only at first run,
+ *  and an explicit workdir may not exist yet — npx ENOENTs on a missing cwd, which
+ *  would silently no-op the install). Swallows every error and prints one line —
+ *  loop creation must never fail on the skill. An empty workdir (no explicit dir +
+ *  no loopId) skips the install rather than targeting the shared scratch parent. */
+async function announceSkillInstall(
+  installer: (opts: InstallOpts) => Promise<InstallOutcome>,
+  workdir: string,
+  write: (s: string) => void,
+): Promise<void> {
+  if (!workdir.trim()) return;
+  try {
+    fs.mkdirSync(workdir, { recursive: true });
+    const r = await installer({ cwd: workdir });
+    write(r.line + "\n");
+  } catch {
+    /* truly never block create */
   }
 }

@@ -3,10 +3,39 @@
  * resolution precedence (measured env > declared --agent/config > undefined).
  * Pure functions, no network — they decide the `agent` field the create POST
  * carries (or omits, letting the server default it to claude-code).
+ *
+ * Plus the skill-install trigger at create: where the workdir resolves and that
+ * the install fires only after a confirmed create, never blocking it (both with
+ * the fetch + installer seams injected, so nothing hits the network or spawns npx).
  */
-import { describe, expect, test } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { coerceAgent, detectAgentFromEnv, resolveAgent } from "./create.js";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+
+import { LOOPANY_DIR } from "./config.js";
+import { coerceAgent, detectAgentFromEnv, resolveAgent, resolveLoopWorkdir, runCreate } from "./create.js";
+import type { InstallOpts, InstallOutcome } from "./skill-install.js";
+
+const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
+const errResponse = (status: number, body: unknown) =>
+  ({ ok: false, status, json: async () => body }) as unknown as Response;
+
+/** Write a throwaway config file and return its path. */
+function tmpConfig(cfg: object): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-create-"));
+  const f = path.join(dir, "loop.json");
+  fs.writeFileSync(f, JSON.stringify(cfg));
+  return f;
+}
+
+/** An absolute path under a fresh temp dir that does NOT yet exist — so a test can
+ *  prove the installer's cwd is created before the install spawns (the ENOENT fix). */
+function tmpWorkdir(): string {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-workdir-"));
+  return path.join(base, "loop", "run");
+}
 
 describe("detectAgentFromEnv", () => {
   test("fingerprints Claude Code from CLAUDECODE (verified live)", () => {
@@ -57,5 +86,109 @@ describe("resolveAgent (precedence: measured > declared > undefined)", () => {
     expect(resolveAgent({ PATH: "/usr/bin" }, undefined)).toBeUndefined();
     expect(resolveAgent({ PATH: "/usr/bin" }, "")).toBeUndefined();
     expect(resolveAgent({ PATH: "/usr/bin" }, "garbage")).toBeUndefined();
+  });
+});
+
+describe("resolveLoopWorkdir (where the skill installs at create)", () => {
+  test("an explicit workdir is used verbatim (made absolute)", () => {
+    expect(resolveLoopWorkdir("/srv/loops/cookie", "loop-1")).toBe(path.resolve("/srv/loops/cookie"));
+  });
+
+  test("a ~/ workdir expands to the home dir", () => {
+    expect(resolveLoopWorkdir("~/loops/cookie", "loop-1")).toBe(path.join(os.homedir(), "loops/cookie"));
+  });
+
+  test("no workdir → the per-loop daemon scratch dir, never process.cwd()", () => {
+    const expected = path.join(LOOPANY_DIR, "work", "loop-xyz");
+    expect(resolveLoopWorkdir(undefined, "loop-xyz")).toBe(expected);
+    expect(resolveLoopWorkdir("   ", "loop-xyz")).toBe(expected);
+    expect(resolveLoopWorkdir(undefined, "loop-xyz")).not.toBe(process.cwd());
+  });
+
+  test("no workdir AND no loopId → \"\" (never collapses to the shared scratch parent)", () => {
+    expect(resolveLoopWorkdir(undefined, "")).toBe("");
+    expect(resolveLoopWorkdir("   ", "  ")).toBe("");
+    expect(resolveLoopWorkdir(undefined, "")).not.toBe(path.join(LOOPANY_DIR, "work"));
+  });
+});
+
+describe("runCreate — skill install fires only after a confirmed create, never blocks it", () => {
+  const prevToken = process.env.LOOPANY_TOKEN;
+  beforeEach(() => {
+    process.env.LOOPANY_TOKEN = "dk_test"; // satisfy the "machine connected" precheck without touching disk
+  });
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.LOOPANY_TOKEN;
+    else process.env.LOOPANY_TOKEN = prevToken;
+  });
+
+  test("a successful create creates the (not-yet-existing) workdir and installs there (project-level)", async () => {
+    const workdir = tmpWorkdir(); // nested + absent → proves the dir is created before install
+    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir });
+    const installed: InstallOpts[] = [];
+    const installer = async (opts: InstallOpts): Promise<InstallOutcome> => {
+      installed.push(opts);
+      return { ok: true, line: "loopany skill: installed" };
+    };
+    const code = await runCreate(["--config", cfg, "--server-url", "http://test"], {
+      fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie" }),
+      installer,
+      stdout: () => {},
+    });
+    expect(code).toBe(0);
+    // The missing workdir was created (no ENOENT on npx's cwd) ...
+    expect(fs.existsSync(workdir)).toBe(true);
+    // ... and the install targets it (NOT global, NOT cwd) so it lands in <workdir>/.claude/skills.
+    expect(installed).toEqual([{ cwd: path.resolve(workdir) }]);
+  });
+
+  test("a successful create with no workdir + no returned id does NOT install (no shared-parent fallback)", async () => {
+    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report" }); // no workdir
+    let called = false;
+    const installer = async (): Promise<InstallOutcome> => {
+      called = true;
+      return { ok: true, line: "" };
+    };
+    const code = await runCreate(["--config", cfg, "--server-url", "http://test"], {
+      fetchImpl: async () => okResponse({ ok: true, name: "Cookie" }), // no id
+      installer,
+      stdout: () => {},
+    });
+    expect(code).toBe(0);
+    expect(called).toBe(false); // resolveLoopWorkdir → "" → install skipped
+  });
+
+  test("a failed create does NOT install the skill", async () => {
+    const workdir = tmpWorkdir();
+    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir });
+    let called = false;
+    const installer = async (): Promise<InstallOutcome> => {
+      called = true;
+      return { ok: true, line: "" };
+    };
+    const code = await runCreate(["--config", cfg, "--server-url", "http://test"], {
+      fetchImpl: async () => errResponse(400, { error: "bad cron" }),
+      installer,
+      stdout: () => {},
+    });
+    expect(code).toBe(1);
+    expect(called).toBe(false);
+    expect(fs.existsSync(workdir)).toBe(false); // a failed create touches nothing
+  });
+
+  test("an install failure does NOT fail the create (best-effort, swallowed)", async () => {
+    const workdir = tmpWorkdir();
+    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir });
+    const installer = async (): Promise<InstallOutcome> => {
+      throw new Error("npx ENOENT");
+    };
+    const out: string[] = [];
+    const code = await runCreate(["--config", cfg, "--server-url", "http://test"], {
+      fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie" }),
+      installer,
+      stdout: (s) => out.push(s),
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).toContain("created loop Cookie");
   });
 });
