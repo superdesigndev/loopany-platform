@@ -222,4 +222,4 @@ LLM and executes no user code**.
 
 The **Cookie Daily Breakfast Report** loop runs end-to-end: scheduler → daemon poll → claude →
 `loopany report` → run `done` (real breakfast report). Dashboard renders real data
-(browser-verified, Geist style). 64 server tests + 26 daemon tests green; both packages typecheck.
+(browser-verified, Geist style). 64 server tests + 28 daemon tests green; both packages typecheck.
