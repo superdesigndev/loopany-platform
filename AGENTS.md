@@ -104,7 +104,10 @@ LLM and executes no user code**.
   runs `drizzle-kit migrate` on container boot, so **every deploy applies pending
   migrations** (single machine, forward-only, no auto-rollback). **`publish-daemon.yml`** —
   daemon → npm: fires on **`push: tags: ['v*']`** plus `workflow_dispatch`; pnpm 8 +
-  node 22; a **tag↔`packages/daemon/package.json` version guard** (a stray/mismatched tag
+  node 22 — the pnpm version comes **solely from the root `packageManager: pnpm@8.15.0`**
+  (matching `lockfileVersion 6.0`); `pnpm/action-setup@v6` is given **NO `version:` input**,
+  since it errors (`Multiple versions of pnpm specified`) if both a `version:` input AND
+  `packageManager` name pnpm; a **tag↔`packages/daemon/package.json` version guard** (a stray/mismatched tag
   can't publish); `npm publish` with `working-directory: packages/daemon` — **publishes ONLY
   the daemon, never the private `@loopany/server`**. **Auth is npm OIDC Trusted Publishing,
   NOT a token** — the job has `permissions: id-token: write` (+ `contents: read`) so the

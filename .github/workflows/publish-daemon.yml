@@ -22,12 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # pnpm 8 to match the lockfileVersion 6.0 / packageManager pnpm@8.15.0.
-      # action-setup reads the version from package.json "packageManager", so no
-      # explicit version needed — but pinning is harmless and clear.
+      # pnpm version comes solely from the root package.json "packageManager"
+      # (pnpm@8.15.0, matching lockfileVersion 6.0). action-setup@v6 errors if both
+      # a `version:` input AND "packageManager" specify pnpm, so we set neither here.
       - uses: pnpm/action-setup@v6
-        with:
-          version: 8
 
       - uses: actions/setup-node@v6
         with:
