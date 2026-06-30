@@ -395,7 +395,7 @@ export class MachineGateway {
     if (loop.enabled) this.scheduler.runNow(loop.id);
     const name = loop.name ?? loop.id;
     if (typeof body.claim === "string" && body.claim.trim()) {
-      fulfillClaim(body.claim.trim(), { loopId: loop.id, name, machineId });
+      fulfillClaim(body.claim.trim(), { loopId: loop.id, name, machineId, agent });
     }
     log.info({ machineId, loopId: loop.id, agent }, "createLoop: created from a coding agent");
     return { status: 200, body: { ok: true, id: loop.id, name } };

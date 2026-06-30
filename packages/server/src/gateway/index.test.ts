@@ -282,7 +282,7 @@ test("createLoop records the coding agent: codex when declared, claude-code by d
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
 
-  // Explicit codex (the dialog pick / --agent codex) is persisted verbatim.
+  // Explicit codex (the daemon's measured env / --agent codex) is persisted verbatim.
   const codex = gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", task: "x", agent: "codex" });
   expect(codex.status).toBe(200);
   expect(store.getLoop((codex.body as any).id)!.agent).toBe("codex");
@@ -471,6 +471,19 @@ test("createLoop with a claim for the machine's OWN home team needs no membershi
   const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x", claim: token });
   expect(res.status).toBe(200);
   expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-shared");
+});
+
+test("claimStatus surfaces the MEASURED agent so the New-loop confirmation shows what actually ran", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const claim = "ck_confirm_agent";
+
+  // The daemon measured Codex on the host and sent it on the create; the claim
+  // result must carry that recorded value (not a removed dialog pre-selection).
+  const res = gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", task: "x", agent: "codex", claim });
+  expect(res.status).toBe(200);
+  expect(gateway().claimStatus(claim)?.agent).toBe("codex");
 });
 
 test("listMachinesForTeam is membership-scoped — a machine shows in its owner's team regardless of its home team", () => {

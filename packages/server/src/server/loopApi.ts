@@ -13,6 +13,7 @@ import { createServerFn } from '@tanstack/react-start'
 import type {
   ArtifactContent,
   ArtifactSummary,
+  CodingAgent,
   JobDetail,
   JobPayload,
   JobSummary,
@@ -348,7 +349,7 @@ export const mintClaim = createServerFn({ method: 'POST' }).handler(
 /** Poll a claim while the New-loop dialog waits for Claude Code to create the loop. */
 export const claimStatus = createServerFn({ method: 'GET' })
   .validator((token: string) => token)
-  .handler(({ data: token }): { done: boolean; id?: string; name?: string } => {
+  .handler(({ data: token }): { done: boolean; id?: string; name?: string; agent?: CodingAgent } => {
     const r = backend().gateway.claimStatus(token)
-    return r ? { done: true, id: r.loopId, name: r.name } : { done: false }
+    return r ? { done: true, id: r.loopId, name: r.name, agent: r.agent } : { done: false }
   })

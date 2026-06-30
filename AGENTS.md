@@ -150,9 +150,14 @@ LLM and executes no user code**.
   the `/api/machine/loop` POST; `gateway.createLoop` coerces an unknown value to the
   default (never rejects). `adapters.ts` reads `loop.agent` (no more hardcoded
   `executor:"claude"`); `JobSummary.kind` is `exec:<agent>` and `JobFull.agent`
-  carries it. UI: `ComposeModal` has an agent selector — Codex is **selectable** but
-  messaged "recorded — runs via Claude for now"; the snippet carries an `agent:` line;
-  `SKILL.md` tells the agent to self-declare via `--agent`. Execution-path copy that
+  carries it. UI: the New-loop dialog (`ComposeModal`) has **no agent selector** — the
+  upfront picker + its `agent:` snippet line were removed because the daemon's
+  `resolveAgent` already measures the real host (env fingerprint > declared > default),
+  making a dialog declaration a rarely-hit fallback that could only go stale. The snippet
+  no longer emits `agent:`; `SKILL.md` tells the agent to self-declare via `--agent`. The
+  recorded agent is now driven purely by daemon self-detection, and the "Loop created"
+  confirmation shows the **measured** `loops.agent` (threaded back via `ClaimResult.agent`
+  → `claimStatus`), never a pre-selected value. Execution-path copy that
   truly means Claude (run-now, edit-via-Claude-Code in `LoopDetailView`) stays "Claude"
   on purpose — that IS what runs. Daemon now has vitest (`create.test.ts`) for the
   detector/precedence; server tests cover createLoop persistence + adapter mapping.
