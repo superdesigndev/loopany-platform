@@ -596,33 +596,34 @@ export function deleteBlob(hash: string): void {
   db.delete(blobs).where(eq(blobs.hash, hash)).run();
 }
 
-/** Point check: is this single hash still referenced by any LIVE artifact_files row
- *  OR any retained run_snapshot? Used by the GC as a per-candidate guard during the
- *  byte-reclaim pass — if a concurrent sync re-referenced the hash (or a report()
- *  captured it into a retained snapshot) mid-pass, its bytes are kept. The cheap
- *  indexed artifact_files point query runs first (the common re-reference path); only
- *  when it misses do we scan snapshots, so the JSON-manifest scan is bounded to the
- *  few garbage candidates that survive the file check. This closes the GC-check-time
- *  gap where a snapshot can come to reference a hash no live file row does (a sync
- *  re-references an old garbage hash → report() snapshots it → a later sync removes
- *  the file row), which the artifact_files-only guard would wrongly collect.
- *  The bulk keep-set (liveBlobRefs) still does the one full snapshot scan at pass start. */
-export function blobIsReferenced(hash: string): boolean {
-  if (db.select({ id: artifactFiles.id }).from(artifactFiles).where(eq(artifactFiles.hash, hash)).get()) {
-    return true;
-  }
-  return snapshotReferencesHash(hash);
+/** Indexed point check: does any LIVE artifact_files row still point at this hash?
+ *  The GC's cheap, always-fresh per-candidate guard (the common re-reference path) —
+ *  uses the artifact_files_hash index, so it stays O(1) even as candidates pile up. */
+export function artifactFileReferencesHash(hash: string): boolean {
+  return !!db.select({ id: artifactFiles.id }).from(artifactFiles).where(eq(artifactFiles.hash, hash)).get();
 }
 
-/** Does any retained run_snapshot's manifest reference this blob hash? (bounded
- *  snapshot scan — the GC's per-candidate fallback guard). */
-export function snapshotReferencesHash(hash: string): boolean {
+/** Every blob hash referenced by ANY retained run_snapshot's manifest — the full
+ *  snapshot scan deserialized ONCE into a Set so the GC can answer per-candidate
+ *  snapshot membership in O(1) instead of re-scanning the whole table per garbage
+ *  hash. The GC rebuilds this only when the snapshot row count changes (a report()
+ *  raced the pass), so a snapshot that comes to reference a hash mid-pass is still
+ *  caught — closing the GC-check-time gap where a snapshot references a hash no live
+ *  file row does — without paying O(garbage × snapshots). */
+export function snapshotBlobRefs(): Set<string> {
+  const refs = new Set<string>();
   for (const r of db.select({ manifest: runSnapshots.manifest }).from(runSnapshots).all()) {
     for (const entry of Object.values(r.manifest)) {
-      if (entry?.hash === hash) return true;
+      if (entry?.hash) refs.add(entry.hash);
     }
   }
-  return false;
+  return refs;
+}
+
+/** Count of retained run_snapshot rows — the GC's cheap change-detector for deciding
+ *  whether to rebuild its precomputed snapshotBlobRefs() set mid-pass. */
+export function countRunSnapshots(): number {
+  return db.select({ n: sql<number>`count(*)` }).from(runSnapshots).get()?.n ?? 0;
 }
 
 /** Distinct loop ids with a LIVE (non-deleted) file row pointing at this hash.

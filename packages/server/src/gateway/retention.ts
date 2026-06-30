@@ -61,7 +61,12 @@ export function pruneSnapshots(keep: number = snapshotRetention()): number {
  *   3. For each garbage hash, in order:
  *      a. Pre-delete guard: if a sync re-referenced it since the keep-set was
  *         computed, skip it — leaving both its bytes AND metadata row intact
- *         (a consistent live blob, nothing to heal).
+ *         (a consistent live blob, nothing to heal). The guard is two O(1) checks:
+ *         an indexed artifact_files point query (always fresh) plus membership in a
+ *         snapshot-hash Set deserialized ONCE per pass and rebuilt only when the
+ *         snapshot row count changes (a report() raced us) — never the old
+ *         per-candidate full snapshot scan (which was O(garbage × snapshots), since
+ *         genuine garbage always misses the file check and fell through to it).
  *      b. Otherwise delete the BYTES (the await), then drop the metadata row
  *         UNCONDITIONALLY. Bytes-before-metadata is the data-loss fix: if a sync
  *         raced the byte delete (re-referencing the hash + recreating the blobs
@@ -75,10 +80,22 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGrac
   const candidates = store.blobHashesOlderThan(cutoff);
   const garbage = candidates.filter((h) => !refs.has(h));
 
+  // Precompute the snapshot-referenced hash set ONCE (one full scan), refreshed only
+  // when the snapshot row count changes — so a snapshot a concurrent report() writes
+  // mid-pass is still caught while genuine garbage costs an O(1) Set lookup, not a
+  // per-candidate full snapshot scan.
+  let snapCount = store.countRunSnapshots();
+  let snapRefs = store.snapshotBlobRefs();
+
   let reclaimed = 0;
   for (const hash of garbage) {
     // Pre-delete guard: re-referenced before we touched it → keep bytes + metadata.
-    if (store.blobIsReferenced(hash)) continue;
+    const count = store.countRunSnapshots();
+    if (count !== snapCount) {
+      snapCount = count;
+      snapRefs = store.snapshotBlobRefs();
+    }
+    if (store.artifactFileReferencesHash(hash) || snapRefs.has(hash)) continue;
     try {
       // Bytes first…
       await blobStore.delete(hash);
