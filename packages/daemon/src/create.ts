@@ -155,9 +155,9 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   const timezone = (typeof config.timezone === "string" && config.timezone) || flag(args, "tz") || detectTimezone();
   const connectKey = flag(args, "connect-key");
   // Record which coding agent this loop is bound to: measure our host from the env
-  // first (honest), else fall back to what was declared via --agent or the config's
-  // `agent:` line (the dialog's selection, carried through the skill). Undefined ⇒
-  // let the server default it to claude-code.
+  // first (honest), else fall back to what was declared via --agent or a hand-written
+  // config `agent:` line (the New-loop dialog no longer emits one — self-detection
+  // drives it). Undefined ⇒ let the server default it to claude-code.
   const agent = resolveAgent(process.env, flag(args, "agent") ?? config.agent);
   const body: Record<string, unknown> = { ...config, timezone };
   // Send only a coerced agent (or none) — never a raw config.agent that skipped

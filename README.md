@@ -16,9 +16,9 @@ You need two things: an account on a LoopAny server (the web app) and a machine
 you control to run the loops on.
 
 1. **Sign in** to the LoopAny web app.
-2. **Create a loop.** Use the *New loop* dialog — describe what the loop should do
-   and how often it should run. The dialog hands you a short **connect snippet**
-   containing a server URL and a one-time connect-key.
+2. **Create a loop.** Open the *New loop* dialog. It hands you a short **connect
+   snippet** containing a server URL and a one-time connect-key (the agent you paste
+   it into asks what the loop should do and how often).
 3. **Connect your machine.** On the machine that should run the loop, start the
    daemon with the values from the snippet:
 

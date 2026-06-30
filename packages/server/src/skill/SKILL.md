@@ -1,6 +1,6 @@
 ---
 name: loopany
-description: Create, update, and evolve scheduled LoopAny agent loops from a coding session. Use when the user wants to turn a task they just did into a recurring/scheduled loop, edit an existing loop's schedule or instructions, or pastes a LoopAny capture snippet ("Follow .../api/skill and build a loop …").
+description: Create, update, and evolve scheduled LoopAny agent loops from a coding session. Use when the user wants to turn a task they just did into a recurring/scheduled loop, edit an existing loop's schedule or instructions, or pastes a LoopAny capture snippet ("Fetch .../api/skill and help me build a loop.").
 ---
 
 # LoopAny — build and maintain scheduled loops

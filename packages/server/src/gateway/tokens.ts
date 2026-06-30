@@ -6,7 +6,7 @@
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
-import type { RunRole } from "../db/schema.js";
+import type { CodingAgent, RunRole } from "../db/schema.js";
 
 export function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
@@ -128,6 +128,10 @@ export interface ClaimResult {
   loopId: string;
   name: string;
   machineId: string;
+  // The coding agent the daemon MEASURED on the host (env fingerprint) and the
+  // server recorded on the loop — surfaced so the New-loop confirmation shows
+  // the agent that actually ran `loopany new`, not a stale dialog pre-selection.
+  agent: CodingAgent;
 }
 
 const claimResults = new Map<string, ClaimResult>();
