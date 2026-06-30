@@ -1,0 +1,37 @@
+# Deploy the LoopAny server to Fly.io (app: loopany-testing).
+# Remote build → no Docker needed on the runner. Migration runs on container
+# boot via `pnpm start` (drizzle-kit migrate && node ...), so deploy = migrate.
+name: Deploy (Fly)
+
+on:
+  push:
+    branches: [main]
+    # Don't redeploy for changes that can't affect the server image.
+    # (Adjust to taste — fly.toml / Dockerfile / lockfile DO affect the build.)
+    paths-ignore:
+      - 'packages/daemon/**'
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch: {}        # manual button in the Actions tab
+
+# One deploy at a time; cancel an in-flight deploy if a newer commit lands.
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: flyctl deploy --remote-only
+    runs-on: ubuntu-latest
+    # If you later add an Environment with required reviewers, set it here:
+    # environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        # To pin the flyctl binary for reproducible deploys, add:
+        #   with:
+        #     version: <flyctl version, e.g. 0.3.x>
+      - name: Deploy
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

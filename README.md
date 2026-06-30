@@ -57,6 +57,11 @@ One always-on machine (the scheduler owns the cron loop — never scale past 1),
 SQLite on a volume. See `fly.toml` for the setup commands. Build = nitro
 (`.output/server/index.mjs`); `pnpm start` applies migrations then listens.
 
+A push to `main` auto-deploys the server to Fly via GitHub Actions
+(`.github/workflows/deploy.yml`, `flyctl deploy --remote-only`; needs the
+`FLY_API_TOKEN` repo secret). The daemon (`@crewlet/loopany`) publishes to npm on
+a `vX.Y.Z` tag (`.github/workflows/publish-daemon.yml`; needs `NPM_TOKEN`).
+
 ## Auth & notifications (optional)
 
 - **Auth** is off by default (open). Set `GITHUB_CLIENT_ID/SECRET` +

@@ -1,0 +1,53 @@
+# Publish @crewlet/loopany (packages/daemon) to npm.
+# Fires on a version tag (vX.Y.Z) or manual dispatch. Publishes ONLY the daemon.
+name: Publish daemon (npm)
+
+on:
+  push:
+    tags: ['v*']             # e.g. v0.3.0  (also matches v0.3.0-rc.1)
+  workflow_dispatch: {}      # manual re-publish button
+
+jobs:
+  publish:
+    name: npm publish @crewlet/loopany
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # id-token: write      # <-- enable when the repo is public (provenance requires a public source repo)
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm 8 to match the lockfileVersion 6.0 / packageManager pnpm@8.15.0.
+      # action-setup reads the version from package.json "packageManager", so no
+      # explicit version needed — but pinning is harmless and clear.
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 8
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22                      # matches engines.node ">=22"
+          registry-url: 'https://registry.npmjs.org'  # writes .npmrc with auth
+          cache: pnpm
+
+      - name: Install (workspace, frozen)
+        run: pnpm install --frozen-lockfile
+
+      # Guard: when triggered by a tag, ensure the tag matches the daemon version
+      # so a stray tag can't publish the wrong version. (Skipped on manual runs.)
+      - name: Verify tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PKG=$(node -p "require('./packages/daemon/package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          test "$PKG" = "$TAG" || { echo "tag $TAG != package.json $PKG"; exit 1; }
+
+      - name: Build daemon
+        run: pnpm --filter @crewlet/loopany build
+
+      - name: Publish
+        working-directory: packages/daemon       # <-- ONLY the daemon, never the server
+        # Add `--provenance` when the repo is public (provenance requires a public source repo).
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

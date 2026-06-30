@@ -95,6 +95,22 @@ LLM and executes no user code**.
   truly means Claude (run-now, edit-via-Claude-Code in `JobDetailView`) stays "Claude"
   on purpose — that IS what runs. Daemon now has vitest (`create.test.ts`) for the
   detector/precedence; server tests cover createLoop persistence + adapter mapping.
+- **CI/CD (`.github/workflows/`).** Two GitHub Actions workflows, deliberately split by
+  trigger/cadence/blast-radius (they share nothing but the repo). **`deploy.yml`** — server
+  → Fly (`loopany-testing`): fires on **push to `main`** (with `paths-ignore` for
+  `packages/daemon/**`, `**/*.md`, `docs/**`) **plus `workflow_dispatch`**; a `fly-deploy`
+  `concurrency` group (`cancel-in-progress`); `superfly/flyctl-actions/setup-flyctl@master`
+  → `flyctl deploy --remote-only` (remote build, no Docker on runner). Note: `pnpm start`
+  runs `drizzle-kit migrate` on container boot, so **every deploy applies pending
+  migrations** (single machine, forward-only, no auto-rollback). **`publish-daemon.yml`** —
+  daemon → npm: fires on **`push: tags: ['v*']`** plus `workflow_dispatch`; pnpm 8 +
+  node 22; a **tag↔`packages/daemon/package.json` version guard** (a stray/mismatched tag
+  can't publish); `npm publish` with `working-directory: packages/daemon` — **publishes ONLY
+  the daemon, never the private `@loopany/server`**. Required repo secrets (captain adds
+  them, never in the files): **`FLY_API_TOKEN`** (deploy) and **`NPM_TOKEN`** (publish).
+  **Provenance is wired but OFF** (commented `id-token: write` + a note on the publish line):
+  the repo is private now and provenance requires a public source repo — flip both when it
+  goes public. These workflows only run on GitHub (push/tag), not in the local pipeline.
 
 ## Commands
 
