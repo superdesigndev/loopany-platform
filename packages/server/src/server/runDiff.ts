@@ -67,7 +67,7 @@ export async function computeRunDiff(runId: string): Promise<RunDiffResult> {
       files.push(file);
     } else if (c && p) {
       // Present in both — unchanged content ⇒ skip.
-      if (c.hash === p.hash && c.oversize === p.oversize) continue;
+      if (c.hash === p.hash && c.oversize === p.oversize && c.size === p.size) continue;
       const sizeDelta = c.size != null && p.size != null ? c.size - p.size : null;
       const bothText = isText(c) && isText(p);
       const file: RunDiffFile = { path, status: "modified", binary: !bothText, sizeDelta };

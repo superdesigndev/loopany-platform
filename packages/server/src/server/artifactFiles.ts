@@ -31,10 +31,13 @@ export async function readLoopArtifact(loopId: string, rawPath: string): Promise
   if (!rel) return { error: "invalid path" };
   const row = store.getArtifactFile(loopId, rel);
   if (!row || row.deleted) return { error: "file not found" };
-  // Binary, oversize (no bytes), or no blob recorded → download-only marker.
-  if (row.binary || row.oversize || !row.hash) {
+  // Genuinely binary or oversize → download-only marker (the UI offers the route).
+  if (row.binary || row.oversize) {
     return { binary: true, size: row.size ?? null, oversize: row.oversize };
   }
+  // A text file whose bytes haven't been recorded yet (transient mid-sync): a
+  // distinct pending marker, not a binary dead-end with no download link.
+  if (!row.hash) return { error: "file not synced yet" };
   const bytes = await getGateway().readBlob(row.hash);
   if (!bytes) return { error: "file not found" }; // blob bytes not (yet) stored
   return { text: bytes.toString("utf8") };
