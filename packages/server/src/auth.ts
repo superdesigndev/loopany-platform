@@ -37,7 +37,7 @@ const allowlist = (process.env.LOOPANY_ALLOWED_LOGINS || "")
  */
 
 /** A user's personal-team display name from their email's local part:
- *  "shitianxin@gmail.com" → "shitianxin's Team". Falls back when no email. */
+ *  "you@example.com" → "you's Team". Falls back when no email. */
 export function teamNameForEmail(email: string | null | undefined): string {
   const local = (email || "").split("@")[0]?.trim();
   return local ? `${local}'s Team` : "Personal Team";

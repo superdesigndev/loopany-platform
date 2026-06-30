@@ -11,7 +11,6 @@ on:
     paths-ignore:
       - 'packages/daemon/**'
       - '**/*.md'
-      - 'docs/**'
   workflow_dispatch: {}        # manual button in the Actions tab
 
 # One deploy at a time; cancel an in-flight deploy if a newer commit lands.

@@ -7,9 +7,9 @@ schedules/stores/authenticates/notifies; execution is **BYOA** — claude-code r
 on each user's own machine via the `@crewlet/loopany` daemon. The server runs **no
 LLM and executes no user code**.
 
-> This was carved out of [c0](../c0). The single source of truth for architecture
-> and every design decision (with the deviation/lessons log) is
-> **`docs/loopany-mvp-design.md`** — read it first. Run instructions: `README.md`.
+> Architecture and the key design decisions (with the deviation/lessons log) are
+> captured in this file — see **Key facts / gotchas** below. Run instructions:
+> `README.md`.
 
 ## Layout (pnpm monorepo)
 
@@ -33,7 +33,7 @@ LLM and executes no user code**.
   `typecheck` runs `tsr generate` first (`@tanstack/router-cli`, pinned to the same
   `router-generator` the Start plugin uses) — a fresh checkout typechecks with **no
   prior build**. Run `routes:generate` standalone if you need the file otherwise.
-- Machine transport is **HTTP short-poll** (not WS) — see design doc §11 D1.
+- Machine transport is **HTTP short-poll** (not WS).
 - **Failure visibility / alerting (`gateway/notify.ts` + `gateway/index.ts`).** Notifications
   fire on **failure**, not only success — silent failure is the BYOA default failure mode
   (the daemon lives on a laptop that sleeps/disconnects). Two server-side paths, both reusing
@@ -159,7 +159,7 @@ LLM and executes no user code**.
 - **CI/CD (`.github/workflows/`).** Two GitHub Actions workflows, deliberately split by
   trigger/cadence/blast-radius (they share nothing but the repo). **`deploy.yml`** — server
   → Fly (`loopany-testing`): fires on **push to `main`** (with `paths-ignore` for
-  `packages/daemon/**`, `**/*.md`, `docs/**`) **plus `workflow_dispatch`**; a `fly-deploy`
+  `packages/daemon/**`, `**/*.md`) **plus `workflow_dispatch`**; a `fly-deploy`
   `concurrency` group (`cancel-in-progress`); `superfly/flyctl-actions/setup-flyctl@master`
   → `flyctl deploy --remote-only` (remote build, no Docker on runner). Note: `pnpm start`
   runs `drizzle-kit migrate` on container boot, so **every deploy applies pending
@@ -267,7 +267,7 @@ LLM and executes no user code**.
   page), refetches the `getTranscript` trace when the run settles (keyed on
   `run.running`), and renders the Phase-3 `getRunDiff` "Changes". Run rows in the
   loop page's Runs list + the `Timeline` strip `onPickRun` both `<Link>`/navigate
-  here. Screenshots of the four states live in `docs/screenshots/loop-detail-page/`.
+  here.
 
 ## Commands
 

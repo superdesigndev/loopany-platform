@@ -3,7 +3,7 @@
  *
  * Bytes are keyed by their sha256 hash (content-addressed ⇒ deduped across every
  * loop/run). The store ONLY writes/reads bytes — it never executes or interprets
- * them — preserving the server's zero-exec invariant (docs/loopany-mvp-design.md).
+ * them — preserving the server's zero-exec invariant.
  *
  * Two implementations behind one small interface:
  *   • R2BlobStore   — Cloudflare R2 (S3-compatible) for prod; creds via env.
