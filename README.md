@@ -72,6 +72,11 @@ trusted publishing — no `NPM_TOKEN` secret needed).
   routes its results to one of them (or to the dashboard only). Slack is also a
   supported delivery transport but has no UI add-form yet. Channel secrets are
   stored server-side per team, never in environment variables.
+- **Failure alerts** fire on the same channel, not just on success: a failed run,
+  a run that times out, or a prolonged machine-offline pushes a "run failed /
+  reconnect your machine" alert. A persistently broken loop is anti-spam'd - it
+  alerts on the first failure, then only every 5th consecutive one. Setting a
+  loop's notify policy to `never` silences failure alerts too.
 
 See [`.env.example`](.env.example) for all variables.
 

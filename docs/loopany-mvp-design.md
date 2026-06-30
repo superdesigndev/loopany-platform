@@ -178,10 +178,10 @@ cron/nextRunAt tick
                  ├─ direct message → loopany report (→ Slack)
                  └─ escalate → claude does the work → loopany report --state/--message
             └─ machine POST /machine/report
-                 └─ server writes the done/error run (with report+controls) → push Slack per notify
+                 └─ server writes the done/error run (with report+controls) → push per notify (on success content, AND on failure - see D16)
                  └─ after a normal run: flagEvolveIfDue (every N rounds → set evolveDue + a near-future nextRunAt)
 
-Reclaim: machine took the delivery but no report within timeoutMs+grace (default 20min), or WS disconnected and the run is not terminated → server marks error
+Reclaim: machine took the delivery but no report within timeoutMs+grace (default 20min), or WS disconnected and the run is not terminated → server marks error → failure alert per notify (see D16)
 ```
 
 ---
@@ -405,6 +405,15 @@ Reclaim: machine took the delivery but no report within timeoutMs+grace (default
 - **Unified Files panel (`components/LoopFilesPanel.tsx`)**: merges the former separate task-file box + `FilesView.tsx` (both **DELETED**) into ONE master-detail - a file list (task file pinned first with a `TASK` chip, then synced artifacts path-sorted) drives a content viewer; the **task file is selected by default**. Markdown (task file + `*.md`) renders via `TaskFileView` (gained a `bare` prop = no own inset/scroll, host owns the surface), other text in a mono `<pre>`, binary/oversize → the existing `/api/artifact/$loopId/$` download route. An artifact whose path equals the task file is de-duped.
 - **Run page (`/loops/$loopId/runs/$runId`)**: `RunView.tsx` now exports a page-oriented **`RunDetailView`** (the old modal `RunView` is gone). The route file `loops.$loopId_.runs.$runId.tsx` uses the trailing-`_` on `$loopId` to **un-nest** it from the loop layout - a standalone, deep-linkable + browser-back full page, not an `<Outlet/>` panel. It resolves the run from `getJobDetail(loopId).runs` (latest ~100); a run older than that window is located by paging backward with the existing `loadOlderRuns` cursor fn (bounded by `MAX_OLDER_PAGES`, `try/finally` so `searchDone` always settles) so a run clickable in the `Timeline` strip never dead-ends - **still NO new backend**. Only when the backward walk is exhausted does it show the calm "no longer available" fallback. It self-polls while running (a **SILENT** poll, split from the err-setting initial load + `err` cleared on success, so a transient `getJobDetail` blip can't brick the page on the error guard - the initial-load error path also gained a **Retry** affordance), refetches the `getTranscript` trace when the run settles (keyed on `run.running`), and renders the Phase-3 `getRunDiff` "Changes".
 - **Verification**: browser-verified (chrome-devtools-axi), four states screenshotted under `docs/screenshots/loop-detail-page/`; `pnpm -r typecheck` green (both packages); 58 server tests green (frontend-only change, no test delta).
+
+### D16 - Failure visibility / alerting (landed, behavioral change · `gateway/notify.ts` + `gateway/index.ts`)
+
+- **Motivation**: notifications previously fired **only on success** (`report()` gated on `ok`), so a failed run, a timeout, or a prolonged machine-offline was **silent** - the default failure mode for BYOA, where the daemon lives on a laptop that sleeps/disconnects. Goal: a failing run AND a prolonged machine-offline both produce a user-facing alert through the **existing** channels (`dispatchNotification` - deliberately **no** new provider), with a sane anti-spam policy, success-path notifications unchanged.
+- **Two server-side paths** (both reuse `dispatchNotification`): (1) `report()` - when a run finalizes `!ok`, alerts via `notifyRunFailure(loopId, role, reason)`; (2) `sweep()` - when a stale pending/running run is reclaimed (`machine offline` / `run never claimed` / `machine timed out / disconnected`), the same call. `failureMessage(reason)` maps machine-availability reasons (offline/disconnect/never-claimed) to a distinct "reconnect your machine" phrasing; anything else reads as a plain run failure with the reason appended.
+- **Anti-spam derived from persisted run rows, NOT an in-memory counter** (deploy-safe): `store.execFailureStreak(loopId)` counts consecutive trailing `error` **exec** runs (newest-first, stop at the first non-error; evolve/edit/canceled/still-open ignored). `shouldNotifyFailure(notify, streak)` notifies on streak `1` (the success→failure transition) and then every `FAILURE_NOTIFY_EVERY` (=5) - so a loop that fails every tick pushes at 1, 5, 10…, not every run; a success between failures resets the streak so the next failure re-alerts. `notify:"never"` suppresses failure alerts too.
+- **Role gating**: only `exec` failures notify - evolve/edit are internal (config change / self-shaping) and never produce user-facing noise, success OR failure (mirrors the success path's existing exclusion).
+- **Injectable notifier**: the gateway gained a 3rd constructor arg (the push dispatcher, defaulting to `dispatchNotification`, mirroring the injectable `blobStore`) purely so tests can observe pushes without a network call. **No UI change** - runs already persist `phase:"error"` + `error`, which `JobDetailView`/run lists already render. The **zero-exec invariant holds**: the server only reads its own run rows to decide.
+- **Verification**: 8 tests added; both packages typecheck.
 
 ### Verified (local e2e)
 
