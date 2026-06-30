@@ -113,8 +113,16 @@ LLM and executes no user code**.
   NOT a token** — the job has `permissions: id-token: write` (+ `contents: read`) so the
   runner mints a short-lived OIDC token npm verifies against the Trusted Publisher configured
   on npmjs.com (publisher GitHub Actions, repo `superdesigndev/loopany-platform`, workflow
-  `publish-daemon.yml`, no environment). The publish step has **no `NODE_AUTH_TOKEN`**;
-  `setup-node`'s `registry-url` is kept only to target the public registry. Trusted publishing
+  `publish-daemon.yml`, no environment). The publish step has **no `NODE_AUTH_TOKEN`**,
+  and the `setup-node` step **deliberately omits `registry-url`**: `registry-url` makes
+  `setup-node` write an `.npmrc` (via `NPM_CONFIG_USERCONFIG`) carrying
+  `_authToken=${NODE_AUTH_TOKEN}` AND export `NODE_AUTH_TOKEN` as a dummy value when none is
+  given, so `npm publish` then authenticates with that dummy/empty token **instead of OIDC**
+  and 404s ("no permission" - the actual `v0.3.1` failure). Without `registry-url` no
+  token-based `.npmrc` is written, so npm falls back to the default registry
+  (`registry.npmjs.org`) and the OIDC path; the public registry + access come from
+  `packages/daemon/package.json` `publishConfig.access: public` and the
+  `npm publish --access public` flag. Trusted publishing
   needs **npm CLI >= 11.5.1** (and Node >= 22.14.0); Node 22 bundles npm 10.x, so a
   `npm install -g npm@11` step runs after `setup-node` (pinned to npm@11, not `@latest`, for
   reproducibility — bump if npm ever requires 12+ for OIDC). **Provenance is automatic under
