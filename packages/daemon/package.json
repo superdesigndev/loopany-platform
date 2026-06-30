@@ -7,7 +7,8 @@
     "loopany": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "skill"
   ],
   "publishConfig": {
     "access": "public"
@@ -16,11 +17,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/sync-skill.mjs && tsc",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "tsc"
+    "prepublishOnly": "node scripts/sync-skill.mjs && tsc"
   },
   "dependencies": {
     "chokidar": "^4.0.3",

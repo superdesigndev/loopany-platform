@@ -7,6 +7,8 @@
  *                                machine (idempotent) — folds SKILL.md §1.
  *   loopany new --config […]   → setup mode: create a loop from a config file,
  *                                filling timezone/claim/auth — folds SKILL.md §3–4.
+ *   loopany skill [status|install] → install the loopany agent skill locally via
+ *                                `npx skills` (best-effort; also run by `loopany up`).
  *   loopany loops|edit […]     → interactive mode: the owner edits a loop from
  *                                their own Claude Code, reusing the persisted
  *                                device token (→ /api/machine/loop).
@@ -30,6 +32,9 @@ async function main(): Promise<number> {
   }
   if (argv[0] === "new") {
     return (await import("./create.js")).runCreate(argv.slice(1));
+  }
+  if (argv[0] === "skill") {
+    return (await import("./skill-cli.js")).runSkill(argv.slice(1));
   }
   // Owner editing outside a run — no run token, an explicit interactive verb.
   if (argv.length > 0 && INTERACTIVE_VERBS.has(argv[0]!)) {

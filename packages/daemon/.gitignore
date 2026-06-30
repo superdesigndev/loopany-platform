@@ -1,0 +1,7 @@
+# Build output.
+dist/
+
+# The loopany skill bundled into the npm tarball, generated from
+# packages/server/src/skill/ by scripts/sync-skill.mjs on build/prepublish.
+# Generated, not committed — so it can never drift from the single source of truth.
+skill/
