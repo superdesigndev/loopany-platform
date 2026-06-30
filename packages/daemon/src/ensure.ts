@@ -13,26 +13,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { DEVICE_FILE, LOOPANY_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
-import { installSkill } from "./skill-install.js";
 
 type Status = { online: boolean; name: string | null };
-
-/**
- * Best-effort, announced install of the loopany agent skill into the project's
- * ./.claude/skills/loopany/ via `npx skills` (see skill-install.ts). Prints one
- * line and swallows everything — `loopany up` (and therefore loop creation) must
- * never fail because the skill couldn't be installed. Opt out with `--no-skill`;
- * `--skill-global` targets ~/.claude instead of the project.
- */
-async function announceSkillInstall(args: string[]): Promise<void> {
-  if (args.includes("--no-skill")) return;
-  try {
-    const r = await installSkill({ global: args.includes("--skill-global") });
-    process.stdout.write(r.line + "\n");
-  } catch {
-    /* truly never block up */
-  }
-}
 
 async function fetchStatus(server: string, token: string): Promise<Status | undefined> {
   try {
@@ -73,7 +55,7 @@ export async function runEnsure(args: string[]): Promise<number> {
   // runs); only adopt the connect-key the first time, when nothing is stored yet.
   const token = readStored(DEVICE_FILE) || flag(args, "connect-key") || process.env.LOOPANY_TOKEN;
   if (!server || !token) {
-    process.stderr.write("loopany: usage: loopany up --server-url <url> --connect-key <dk_…> [--no-skill] [--skill-global]\n");
+    process.stderr.write("loopany: usage: loopany up --server-url <url> --connect-key <dk_…>\n");
     return 2;
   }
 
@@ -87,7 +69,6 @@ export async function runEnsure(args: string[]): Promise<number> {
   const before = await fetchStatus(server, token);
   if (before?.online) {
     process.stdout.write(`daemon already running for this machine${before.name ? ` (${before.name})` : ""}\n`);
-    await announceSkillInstall(args);
     return 0;
   }
 
@@ -100,7 +81,6 @@ export async function runEnsure(args: string[]): Promise<number> {
     const st = await fetchStatus(server, token);
     if (st?.online) {
       process.stdout.write(`daemon online — this machine is connected${st.name ? ` (${st.name})` : ""}\n`);
-      await announceSkillInstall(args);
       return 0;
     }
   }

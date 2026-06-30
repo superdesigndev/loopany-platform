@@ -49,19 +49,30 @@ LLM and executes no user code**.
   `files` lists `skill`, generated from the server's `src/skill/` by
   `packages/daemon/scripts/sync-skill.mjs` on `build`/`prepublishOnly` (so it never
   drifts); `packages/daemon/skill/` is **gitignored** (generated, like `routeTree.gen.ts`).
-- **Loopany skill auto-install (`loopany up` → `npx skills`).** During `loopany up`, after
-  the daemon is online, the daemon **best-effort installs the bundled skill** into the
-  project's `./.claude/skills/loopany/` via the `skills` CLI (vercel-labs/skills) —
-  `packages/daemon/src/skill-install.ts`, exact verified invocation `npx --yes skills add
-  <bundled-dir> -a claude-code -y --copy` (project scope is the default; `-y` is
-  non-interactive + idempotent-overwrite; `--copy` makes a self-contained copy, no symlink
+- **Loopany skill auto-install (`loopany new` → `npx skills`, into the loop workdir).**
+  The install fires at **loop creation**, NOT `loopany up` (corrected in 0.4.0 — `up`
+  may run from anywhere just to start the daemon, so it must not drop a skill into an
+  arbitrary cwd; `src/ensure.ts` no longer touches skills and the old
+  `--no-skill`/`--skill-global` flags are gone). After `loopany new` confirms the gateway
+  create succeeded, the daemon **best-effort installs the bundled skill** into that loop's
+  resolved **workdir** (`<workdir>/.claude/skills/loopany/`) via the `skills` CLI
+  (vercel-labs/skills) — `packages/daemon/src/skill-install.ts`, exact verified invocation
+  `npx --yes skills add <bundled-dir> -a claude-code -y --copy` run with the child `cwd`
+  set to the workdir (so a project-level install lands there, not in `process.cwd()`;
+  `installSkill({cwd})`). `src/create.ts` `resolveLoopWorkdir(config.workdir, loopId)`
+  mirrors the daemon's own resolution (explicit `workdir` tilde-expanded+absolute, else
+  `~/.loopany/work/<loopId>` scratch — never cwd). project scope is the `skills` CLI
+  default; `-y` non-interactive + idempotent-overwrite; `--copy` self-contained, no symlink
   into the package's temp dir; LOCAL path source ⇒ end users never need the private
-  platform repo). It is **announced** (one status line) and **never blocks** `up`/loop
-  creation — any failure (no network/npx, no write perm, bundled skill absent) degrades
-  silently to the always-working `/api/skill` path. `installSkill()` takes an injectable
-  `Runner` so tests need no network (`skill-install.test.ts`). Opt out with `loopany up
-  --no-skill`; target `~/.claude` with `--skill-global`. Thin verb `loopany skill
-  {status,install}` (`skill-cli.ts`, `-g`/`--global`) wraps the same path on demand.
+  platform repo. It is **announced** (one status line) and **never blocks** loop creation —
+  it runs only after a confirmed create, and any failure (no network/npx, no write perm,
+  bundled skill absent) degrades silently to the always-working `/api/skill` path.
+  `installSkill()` takes an injectable `Runner` (carrying `cwd`) and `runCreate` takes
+  injectable fetch/installer seams, so tests need no network/npx (`skill-install.test.ts`,
+  `create.test.ts`). **Web-created loops** (New-loop dialog, no local `loopany new`) are
+  intentionally NOT covered (deferred lazy-at-run-time idea). Thin verb `loopany skill
+  {status,install}` (`skill-cli.ts`, `-g`/`--global`) is the **manual escape hatch** —
+  install into cwd, or `-g` for `~/.claude`.
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.
@@ -211,4 +222,4 @@ LLM and executes no user code**.
 
 The **Cookie Daily Breakfast Report** loop runs end-to-end: scheduler → daemon poll → claude →
 `loopany report` → run `done` (real breakfast report). Dashboard renders real data
-(browser-verified, Geist style). 64 server tests + 18 daemon tests green; both packages typecheck.
+(browser-verified, Geist style). 64 server tests + 26 daemon tests green; both packages typecheck.

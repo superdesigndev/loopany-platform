@@ -1,10 +1,12 @@
 /**
  * Best-effort local install of the loopany agent skill via the `npx skills` CLI
- * (vercel-labs/skills). Called from `loopany up` once the daemon is online so the
- * user's coding agent discovers the create/update/evolve references natively for
- * this and every future loop — but it NEVER blocks loop creation: any failure (no
- * network, no npx, no write permission, bundled skill absent) degrades silently to
- * the always-working /api/skill inline path. It just prints one status line.
+ * (vercel-labs/skills). Called from `loopany new` once a loop is successfully
+ * created, targeting that loop's own workdir (the dir its agent runs in), so the
+ * user's coding agent discovers the create/update/evolve references natively there
+ * — but it NEVER blocks loop creation: any failure (no network, no npx, no write
+ * permission, bundled skill absent) degrades silently to the always-working
+ * /api/skill inline path. It just prints one status line. `loopany skill install`
+ * is the manual escape hatch for installing it by hand anywhere.
  *
  * We install from the skill BUNDLED INTO THIS PACKAGE (synced from
  * packages/server/src/skill/ by scripts/sync-skill.mjs at build/prepublish) — a
@@ -56,17 +58,18 @@ export interface RunResult {
   stdout: string;
   stderr: string;
 }
-export type Runner = (cmd: string, args: string[]) => Promise<RunResult>;
+export type Runner = (cmd: string, args: string[], opts?: { cwd?: string }) => Promise<RunResult>;
 
 /** Spawn `npx skills …`, capture output, bounded by INSTALL_TIMEOUT_MS. Resolves
- *  (never rejects) with code -1 when the binary can't be spawned or times out. */
-const defaultRunner: Runner = (cmd, args) =>
+ *  (never rejects) with code -1 when the binary can't be spawned or times out. The
+ *  child's `cwd` decides where a project-level install lands (`<cwd>/.claude/…`). */
+const defaultRunner: Runner = (cmd, args, opts) =>
   new Promise<RunResult>((resolve) => {
     let stdout = "";
     let stderr = "";
     let child;
     try {
-      child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], cwd: opts?.cwd });
     } catch (err) {
       resolve({ code: -1, stdout: "", stderr: err instanceof Error ? err.message : String(err) });
       return;
@@ -94,6 +97,10 @@ const defaultRunner: Runner = (cmd, args) =>
 export interface InstallOpts {
   /** Install to the user dir (`~/.claude/skills`) instead of the project default. */
   global?: boolean;
+  /** Project-level install target: the dir to run `npx skills` in, so the skill
+   *  lands in `<cwd>/.claude/skills/loopany`. Defaults to the process cwd. Ignored
+   *  when `global` is set (that always targets `~/.claude/skills`). */
+  cwd?: string;
   /** Override the bundled skill dir (tests). */
   dir?: string;
   /** Override the command runner (tests) so nothing spawns npx / hits the network. */
@@ -121,14 +128,20 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
     };
   }
   const runner = opts.runner ?? defaultRunner;
+  // A project install runs in `cwd` (so it lands there); a global one ignores it.
+  const cwd = opts.global ? undefined : opts.cwd;
   let res: RunResult;
   try {
-    res = await runner("npx", installArgs(dir, opts.global));
+    res = await runner("npx", installArgs(dir, opts.global), { cwd });
   } catch (err) {
     return { ok: false, line: `loopany skill: skipped (${err instanceof Error ? err.message : String(err)})` };
   }
   if (res.code === 0) {
-    const where = opts.global ? "~/.claude/skills/loopany" : "./.claude/skills/loopany";
+    const where = opts.global
+      ? "~/.claude/skills/loopany"
+      : opts.cwd
+        ? path.join(opts.cwd, ".claude", "skills", "loopany")
+        : "./.claude/skills/loopany";
     return { ok: true, line: `loopany skill: installed → ${where}` };
   }
   const why = firstLine(res.stderr) || firstLine(res.stdout) || `exit ${res.code}`;

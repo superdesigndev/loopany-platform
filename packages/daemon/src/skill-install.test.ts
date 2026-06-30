@@ -57,6 +57,30 @@ describe("installSkill", () => {
     expect(seen).toContain("-g");
   });
 
+  test("cwd → threaded into the runner + reflected in the install location line", async () => {
+    let seenCwd: string | undefined = "UNSET";
+    const runner: Runner = async (_cmd, _args, opts) => {
+      seenCwd = opts?.cwd;
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const r = await installSkill({ dir: fixtureDir, cwd: "/loops/cookie", runner });
+    expect(r.ok).toBe(true);
+    expect(seenCwd).toBe("/loops/cookie"); // the project install runs IN the loop workdir
+    expect(r.line).toContain(path.join("/loops/cookie", ".claude/skills/loopany"));
+  });
+
+  test("global ignores cwd — targets ~/.claude and runs with no cwd", async () => {
+    let seenCwd: string | undefined = "UNSET";
+    const runner: Runner = async (_cmd, _args, opts) => {
+      seenCwd = opts?.cwd;
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const r = await installSkill({ dir: fixtureDir, cwd: "/loops/cookie", global: true, runner });
+    expect(r.ok).toBe(true);
+    expect(r.line).toContain("~/.claude/skills/loopany");
+    expect(seenCwd).toBeUndefined();
+  });
+
   test("bundled skill absent → skipped, never runs the command", async () => {
     let ran = false;
     const runner: Runner = async () => {

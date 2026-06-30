@@ -8,7 +8,8 @@
  *   loopany new --config […]   → setup mode: create a loop from a config file,
  *                                filling timezone/claim/auth — folds SKILL.md §3–4.
  *   loopany skill [status|install] → install the loopany agent skill locally via
- *                                `npx skills` (best-effort; also run by `loopany up`).
+ *                                `npx skills` (best-effort; the manual escape hatch —
+ *                                `loopany new` also installs it into the loop workdir).
  *   loopany loops|edit […]     → interactive mode: the owner edits a loop from
  *                                their own Claude Code, reusing the persisted
  *                                device token (→ /api/machine/loop).
