@@ -37,8 +37,11 @@ jobs:
 
       # Trusted publishing requires npm CLI >= 11.5.1; Node 22 bundles npm 10.x, so
       # upgrade the global npm before publishing. (pnpm install/build below are unaffected.)
+      # Pinned to npm@11 (not @latest) for reproducibility — satisfies the >= 11.5.1
+      # minimum while shielding the publish from a future npm 12 changing behavior. Bump
+      # this pin if npm ever requires 12+ for OIDC trusted publishing.
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - name: Install (workspace, frozen)
         run: pnpm install --frozen-lockfile
