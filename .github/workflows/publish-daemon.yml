@@ -27,10 +27,18 @@ jobs:
       # a `version:` input AND "packageManager" specify pnpm, so we set neither here.
       - uses: pnpm/action-setup@v6
 
+      # NO `registry-url:` here, deliberately. setup-node's registry-url writes an
+      # .npmrc (via NPM_CONFIG_USERCONFIG) with `_authToken=${NODE_AUTH_TOKEN}` AND
+      # exports NODE_AUTH_TOKEN with a dummy value when none is given. At publish time
+      # npm then authenticates with that dummy/empty token instead of OIDC trusted
+      # publishing - which is exactly the E404 "404 Not Found / no permission" we hit
+      # on v0.3.1. Omitting registry-url means no token-based .npmrc is written, so
+      # `npm publish` falls back to the default registry (registry.npmjs.org) and the
+      # OIDC path. The public registry + access is set via packages/daemon/package.json
+      # "publishConfig.access: public" plus `--access public` below.
       - uses: actions/setup-node@v6
         with:
           node-version: 22                      # matches engines.node ">=22" (>= 22.14.0)
-          registry-url: 'https://registry.npmjs.org'  # target the public registry (no token written/used)
           cache: pnpm
 
       # Trusted publishing requires npm CLI >= 11.5.1; Node 22 bundles npm 10.x, so
@@ -58,6 +66,7 @@ jobs:
 
       - name: Publish
         working-directory: packages/daemon       # <-- ONLY the daemon, never the server
-        # OIDC trusted publishing: no NODE_AUTH_TOKEN. npm authenticates via the
-        # id-token minted above and emits provenance automatically (when repo is public).
+        # OIDC trusted publishing: no NODE_AUTH_TOKEN and no token-based .npmrc (see the
+        # setup-node note above). npm authenticates via the id-token minted above and
+        # emits provenance automatically (when repo is public).
         run: npm publish --access public
