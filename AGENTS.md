@@ -34,6 +34,34 @@ LLM and executes no user code**.
   `router-generator` the Start plugin uses) — a fresh checkout typechecks with **no
   prior build**. Run `routes:generate` standalone if you need the file otherwise.
 - Machine transport is **HTTP short-poll** (not WS) — see design doc §11 D1.
+- **The loopany agent skill (`packages/server/src/skill/`).** The loop-builder
+  knowledge is a real, installable agent skill — NOT one inline doc. Single source of
+  truth: `packages/server/src/skill/{SKILL.md,references/{create,update,evolve}.md}`.
+  `SKILL.md` is the **overview** (frontmatter `name: loopany` + a strong `description`
+  so Claude auto-triggers it) that routes to the three references: `create.md` (up →
+  task file → config → `new`), `update.md` (`loopany edit` envelope vs. task file), and
+  `evolve.md` (task-file-as-running-memory model). **`/api/skill` serves the overview**
+  (`routes/api.skill.ts`, Vite `?raw`) — the bootstrap an agent follows on first capture;
+  **`/api/skill/references/<file>`** (`routes/api.skill.references.$.ts`, static map,
+  path-safe — only the 3 exact names resolve) serves the references over HTTP as a
+  **fallback** when the local install was skipped. Do NOT fork the content; edit the four
+  files. The skill is **bundled into the `@crewlet/loopany` npm package**: `package.json`
+  `files` lists `skill`, generated from the server's `src/skill/` by
+  `packages/daemon/scripts/sync-skill.mjs` on `build`/`prepublishOnly` (so it never
+  drifts); `packages/daemon/skill/` is **gitignored** (generated, like `routeTree.gen.ts`).
+- **Loopany skill auto-install (`loopany up` → `npx skills`).** During `loopany up`, after
+  the daemon is online, the daemon **best-effort installs the bundled skill** into the
+  project's `./.claude/skills/loopany/` via the `skills` CLI (vercel-labs/skills) —
+  `packages/daemon/src/skill-install.ts`, exact verified invocation `npx --yes skills add
+  <bundled-dir> -a claude-code -y --copy` (project scope is the default; `-y` is
+  non-interactive + idempotent-overwrite; `--copy` makes a self-contained copy, no symlink
+  into the package's temp dir; LOCAL path source ⇒ end users never need the private
+  platform repo). It is **announced** (one status line) and **never blocks** `up`/loop
+  creation — any failure (no network/npx, no write perm, bundled skill absent) degrades
+  silently to the always-working `/api/skill` path. `installSkill()` takes an injectable
+  `Runner` so tests need no network (`skill-install.test.ts`). Opt out with `loopany up
+  --no-skill`; target `~/.claude` with `--skill-global`. Thin verb `loopany skill
+  {status,install}` (`skill-cli.ts`, `-g`/`--global`) wraps the same path on demand.
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.
