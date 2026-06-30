@@ -22,6 +22,9 @@ Setup
 Management
   status                  Is this machine's daemon running? Show pid + connection.
   down                    Stop the detached daemon this machine started with up.
+  log [<loop>]            Show a loop's recent run history (status + transcript).
+                          Defaults to the loop for the current directory (--json,
+                          --limit N).
 
 Interactive (edit loops from your own Claude Code, using the stored device token)
   loops                   List your loops.

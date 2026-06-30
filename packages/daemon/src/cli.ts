@@ -13,6 +13,8 @@
  *   loopany status             → setup mode: report whether THIS machine's daemon
  *                                is running (local pid) + its connection state.
  *   loopany down               → setup mode: stop the detached daemon `up` started.
+ *   loopany log [<loop>]       → read mode: print a loop's recent run history
+ *                                (status + transcript) for the loop in this workdir.
  *   loopany --help | -h | help → print usage and exit (NEVER start the daemon).
  *   loopany loops|edit […]     → interactive mode: the owner edits a loop from
  *                                their own Claude Code, reusing the persisted
@@ -58,6 +60,9 @@ async function main(): Promise<number> {
   }
   if (argv[0] === "down") {
     return (await import("./control.js")).runDown(argv.slice(1));
+  }
+  if (argv[0] === "log") {
+    return (await import("./log.js")).runLog(argv.slice(1));
   }
   // Owner editing outside a run — no run token, an explicit interactive verb.
   if (argv.length > 0 && INTERACTIVE_VERBS.has(argv[0]!)) {
