@@ -26,6 +26,7 @@ import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256B
 import {
   machineIdFromToken,
   getDeviceOwner,
+  readClaimIntent,
   registerRunToken,
   resolveRunToken,
   revokeRunToken,
@@ -35,6 +36,7 @@ import {
   type ClaimResult,
   type RunSlot,
 } from "./tokens.js";
+import { isSuperAdmin } from "../superadmin.js";
 
 const log = logger.child({ mod: "gateway" });
 
@@ -157,8 +159,19 @@ export class MachineGateway {
       // Owner remembered at mint time (AI-First claim) when the gate is on;
       // "shared" otherwise (open mode, or a token minted out-of-band).
       const owner = getDeviceOwner(machineId) ?? "shared";
-      const teamId = store.teamIdForUser(owner);
-      store.ensureTeam(teamId, owner === "shared" ? "Shared Workspace" : "Personal Team", owner === "shared" ? null : owner);
+      // Home/default team for this machine (the no-claim fallback for loops created
+      // on it later). A brand-new machine whose FIRST connect-key was minted under a
+      // specific team adopts that team as its home; otherwise the owner's personal
+      // team. The minted team already exists (created in the web session) — guard on
+      // getTeam so we never resurrect/rename it; only the personal team needs ensuring.
+      const intent = readClaimIntent(deviceToken);
+      let teamId: string;
+      if (intent && intent.userId === owner && store.getTeam(intent.teamId)) {
+        teamId = intent.teamId;
+      } else {
+        teamId = store.teamIdForUser(owner);
+        store.ensureTeam(teamId, owner === "shared" ? "Shared Workspace" : "Personal Team", owner === "shared" ? null : owner);
+      }
       machine = store.createMachine({
         id: machineId,
         userId: owner,
@@ -308,9 +321,37 @@ export class MachineGateway {
     // agent, else default to claude-code (older daemons omit it; an unrecognized /
     // "unknown" value also degrades to the default rather than rejecting the loop).
     const agent: CodingAgent = body.agent === "codex" ? "codex" : "claude-code";
-    const teamId = machine.teamId ?? store.teamIdForUser(machine.userId);
+
+    // Resolve the loop's TEAM. The connect-key/claim was minted under a specific
+    // team's dashboard session; that bound team — not the machine's single home
+    // team — decides where the loop lands. This is what lets ONE machine/daemon
+    // serve MANY teams (report §2.1). With no claim intent (older daemon, CLI
+    // direct path) we fall back to the machine's home team, exactly as before.
+    const homeTeam = machine.teamId ?? store.teamIdForUser(machine.userId);
+    let teamId = homeTeam;
+    const intent = readClaimIntent(str(body.claim));
+    if (intent && intent.teamId !== homeTeam) {
+      // CROSS-TEAM create. SECURITY (report §4) — fail CLOSED, never silently
+      // mis-file into the home team (the original bug):
+      //  - bind the claim to its minter: the same human who minted it under a
+      //    validated team session must be the one creating the loop;
+      //  - RE-VALIDATE authorization NOW (membership can change after mint),
+      //    mirroring requestScope: a current team member, or a superadmin on an
+      //    existing team. The team value itself is server-minted, never client input.
+      if (machine.userId !== intent.userId) {
+        return { status: 403, body: { error: "connect-key was minted by a different user" } };
+      }
+      const authorized =
+        store.isTeamMember(intent.teamId, machine.userId) ||
+        (!!store.getTeam(intent.teamId) && isSuperAdmin(store.userEmail(machine.userId)));
+      if (!authorized) {
+        return { status: 403, body: { error: "not authorized to create loops in that team" } };
+      }
+      teamId = intent.teamId;
+    }
     // Default to the team's most recently configured channel (listChannels is
-    // newest-first) so a freshly-added Feishu/Telegram channel auto-applies to new loops.
+    // newest-first) so a freshly-added Feishu/Telegram channel auto-applies to new
+    // loops — computed against the RESOLVED team so it routes to that team's channel.
     const channelId = store.defaultChannelId(teamId);
     const loop = store.createLoop({
       userId: machine.userId ?? "shared",

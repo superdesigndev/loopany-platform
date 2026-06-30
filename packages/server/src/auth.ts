@@ -13,6 +13,11 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 import { db } from "./db/index.js";
 import * as store from "./db/store.js";
+import { isSuperAdmin } from "./superadmin.js";
+
+// Re-export so callers keep importing the superadmin check from `auth` while the
+// pure predicate lives in a standalone module the gateway can use too.
+export { isSuperAdmin };
 
 const clientId = process.env.GITHUB_CLIENT_ID?.trim();
 const clientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
@@ -26,20 +31,10 @@ const allowlist = (process.env.LOOPANY_ALLOWED_LOGINS || "")
   .filter(Boolean);
 
 /**
- * Superadmins see every team and every team's loops. The set is driven entirely
- * by LOOPANY_SUPERADMINS (comma-separated emails) — set it in your host / Fly
- * secrets. Empty ⇒ no superadmins.
+ * Superadmins see every team and every team's loops — the predicate lives in
+ * `./superadmin.js` (env-driven, LOOPANY_SUPERADMINS) and is re-exported above so
+ * the gateway can reuse it without importing this Better-Auth-initializing module.
  */
-const superAdmins = new Set(
-  (process.env.LOOPANY_SUPERADMINS || "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean),
-);
-
-export function isSuperAdmin(email: string | null | undefined): boolean {
-  return !!email && superAdmins.has(email.toLowerCase());
-}
 
 /** A user's personal-team display name from their email's local part:
  *  "shitianxin@gmail.com" → "shitianxin's Team". Falls back when no email. */

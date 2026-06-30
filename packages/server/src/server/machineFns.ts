@@ -39,10 +39,11 @@ export const listMachines = createServerFn({ method: 'GET' }).handler(async () =
   ensureServer()
   const { enforce, userId, teamId, allTeams } = await requestScope()
   if (enforce && !userId) return []
-  return store
-    .listMachines(enforce && !allTeams ? teamId : undefined)
-    .filter((m) => m.name.trim())
-    .map(toSummary)
+  // Membership-scoped: a machine shows in every team its owner belongs to (one
+  // machine serves many teams, report §2.3). The admin "All teams" view + open
+  // mode list everything.
+  const list = enforce && !allTeams ? store.listMachinesForTeam(teamId) : store.listMachines()
+  return list.filter((m) => m.name.trim()).map(toSummary)
 })
 
 /** Act 1 — create a pending machine + token, owned by the signed-in user's team. */

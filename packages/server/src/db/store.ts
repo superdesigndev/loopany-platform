@@ -35,6 +35,7 @@ import {
   type StateField,
   type Team,
 } from "./schema.js";
+import { user } from "./auth-schema.js";
 
 // ---- coercion helpers (carried from c0 store.ts) ----
 
@@ -206,6 +207,23 @@ export function listMachines(teamId?: string): Machine[] {
   return (teamId ? q.where(eq(machines.teamId, teamId)) : q).all();
 }
 
+/**
+ * Machines usable/visible in a team, MEMBERSHIP-scoped: every machine whose owner
+ * belongs to the team (join `machines.userId` → a `team_members` row for this
+ * team). One machine therefore appears in every team its owner is a member of —
+ * the decoupling that lets a single daemon serve multiple teams (report §2.3).
+ * A user has at most one membership row per team, so no machine is duplicated.
+ */
+export function listMachinesForTeam(teamId: string): Machine[] {
+  return db
+    .select({ m: machines })
+    .from(machines)
+    .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
+    .where(eq(teamMembers.teamId, teamId))
+    .all()
+    .map((r) => r.m);
+}
+
 export function getMachine(id: string): Machine | undefined {
   return db.select().from(machines).where(eq(machines.id, id)).get();
 }
@@ -277,6 +295,12 @@ export function listTeamsForUser(userId: string): Team[] {
 /** Every team — superadmin-only cross-team visibility. */
 export function listAllTeams(): Team[] {
   return db.select().from(teams).orderBy(desc(teams.createdAt)).all();
+}
+
+/** A user's email (Better Auth `user` row), or null. Used by the gateway to
+ *  re-check superadmin authorization at loop-create time without an auth import. */
+export function userEmail(userId: string): string | null {
+  return db.select({ email: user.email }).from(user).where(eq(user.id, userId)).get()?.email ?? null;
 }
 
 /** Whether the user is a member of the team (authorizes a team-switch request). */

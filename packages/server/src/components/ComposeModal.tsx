@@ -194,7 +194,9 @@ export function ComposeModal({
   useEffect(() => {
     if (!open || host !== 'local') return
     void getConfig().then(setConfig)
-    void mintClaim().then((r) => setToken(r.token)).catch(() => setError('could not mint a connect key'))
+    void mintClaim()
+      .then((r) => ('token' in r ? setToken(r.token) : setError(r.error)))
+      .catch(() => setError('could not mint a connect key'))
   }, [open, host])
 
   // Wait on the claim: Claude Code POSTs the loop with this token as `claim`.

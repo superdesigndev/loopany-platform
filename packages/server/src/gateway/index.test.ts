@@ -14,6 +14,9 @@ beforeAll(async () => {
   process.env.LOOPANY_DATA_DIR = tmp;
   process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
   process.env.LOOPANY_LOG_LEVEL = "silent";
+  // Must be set BEFORE importing the gateway (which loads superadmin.ts, read once
+  // at module load) so the cross-team superadmin-authorization test below works.
+  process.env.LOOPANY_SUPERADMINS = "admin@example.com";
   db = await import("../db/index.js");
   db.runMigrations();
   store = await import("../db/store.js");
@@ -38,6 +41,18 @@ function gateway(): InstanceType<typeof gatewayMod.MachineGateway> {
     removeLoop(): void {},
     runNow(): void {},
   } as any);
+}
+
+/** Insert a team (+ optional member rows) directly, bypassing store.ensureTeam's
+ *  memo/rename side effects so each test controls membership precisely. */
+function makeTeam(id: string, memberUserIds: string[] = []): void {
+  const ts = new Date().toISOString();
+  db.sqlite.exec(`INSERT OR IGNORE INTO teams (id, name, owner_user_id, created_at) VALUES ('${id}', '${id}', NULL, '${ts}')`);
+  for (const u of memberUserIds) {
+    db.sqlite.exec(
+      `INSERT OR IGNORE INTO team_members (id, team_id, user_id, role, created_at) VALUES ('${id}:${u}', '${id}', '${u}', 'member', '${ts}')`,
+    );
+  }
 }
 
 function seededLoop() {
@@ -351,6 +366,96 @@ test("an edit run's report routes to finishEdit (the pending edit marker is clea
   expect(res.status).toBe(200);
   expect(finished).toBe(loop.id);
   expect(store.getLoop(loop.id)!.editRequest).toBeNull();
+});
+
+// ---- per-team connect-key: createLoop resolves the team from the claim intent ----
+
+test("createLoop lands the loop in the connect-key's team, not the machine's home team (existing-machine reuse)", () => {
+  makeTeam("team-reuse", ["u1"]);
+  // The machine's durable identity (home team = its personal team).
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  // Team B's fresh connect-key (a different token than the device identity), minted
+  // under team B — this is the realistic "one machine, second team" capture path.
+  const connectKey = tokens.mintDeviceToken();
+  tokens.rememberClaimIntent(connectKey, { userId: "u1", teamId: "team-reuse" });
+
+  const res = gateway().createLoop(deviceToken, { name: "B loop", cron: "0 8 * * *", task: "x", claim: connectKey });
+  expect(res.status).toBe(200);
+  expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-reuse");
+});
+
+test("createLoop rejects (403) a claim minted by a different user — fail closed, nothing created", () => {
+  makeTeam("team-x", ["u2"]);
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  tokens.rememberClaimIntent(token, { userId: "u2", teamId: "team-x" }); // minted by someone else
+
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x", claim: token });
+  expect(res.status).toBe(403);
+  expect(store.listLoops().length).toBe(0); // never mis-filed
+});
+
+test("createLoop rejects (403) when the minter is no longer a member of the claim team", () => {
+  makeTeam("team-y", []); // team exists, u1 is NOT a member (and not an admin)
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  tokens.rememberClaimIntent(token, { userId: "u1", teamId: "team-y" });
+
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x", claim: token });
+  expect(res.status).toBe(403);
+  expect(store.listLoops().length).toBe(0);
+});
+
+test("createLoop authorizes a superadmin for any existing team even without a membership row", () => {
+  makeTeam("team-admin", []); // exists; admin is not a member
+  db.sqlite.exec(`INSERT OR IGNORE INTO user (id, name, email) VALUES ('admin1', 'Admin', 'admin@example.com')`);
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "admin1", teamId: "team-admin1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  tokens.rememberClaimIntent(token, { userId: "admin1", teamId: "team-admin" });
+
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x", claim: token });
+  expect(res.status).toBe(200);
+  expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-admin");
+});
+
+test("createLoop with no claim falls back to the machine's home team (back-compat)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", teamId: "team-home", name: "M", tokenHash: tokens.sha256(token), online: true });
+
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x" });
+  expect(res.status).toBe(200);
+  expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-home");
+});
+
+test("createLoop with a claim for the machine's OWN home team needs no membership re-check (open-mode path)", () => {
+  // Mirrors open mode: intent team === home team, so the cross-team gate is skipped
+  // and no team_members row is required (there is none for the shared user).
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "shared", teamId: "team-shared", name: "M", tokenHash: tokens.sha256(token), online: true });
+  tokens.rememberClaimIntent(token, { userId: "shared", teamId: "team-shared" });
+
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x", claim: token });
+  expect(res.status).toBe(200);
+  expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-shared");
+});
+
+test("listMachinesForTeam is membership-scoped — a machine shows in its owner's team regardless of its home team", () => {
+  makeTeam("team-lm", ["u1"]); // only u1 is a member
+  const t1 = tokens.mintDeviceToken();
+  const m1 = tokens.machineIdFromToken(t1);
+  store.createMachine({ id: m1, userId: "u1", teamId: "team-u1", name: "Mine", tokenHash: tokens.sha256(t1), online: true });
+  const t2 = tokens.mintDeviceToken();
+  store.createMachine({ id: tokens.machineIdFromToken(t2), userId: "u2", teamId: "team-u2", name: "Other", tokenHash: tokens.sha256(t2), online: true });
+
+  // u1's machine (home team-u1) appears under team-lm via membership; u2's doesn't.
+  expect(store.listMachinesForTeam("team-lm").map((m) => m.id)).toEqual([m1]);
 });
 
 test("set-workflow updates only through an evolution token", () => {

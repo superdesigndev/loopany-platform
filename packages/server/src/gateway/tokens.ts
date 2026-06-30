@@ -40,6 +40,57 @@ export function getDeviceOwner(machineId: string): string | undefined {
   return deviceOwners.get(machineId);
 }
 
+// ---- claim intent (per-team connect-key → the team it was minted under) ----
+// A connect-key/claim is minted from a SPECIFIC team's dashboard session; we bind
+// the VALIDATED active team (+ minter) to the key here so `createLoop` can land the
+// loop in that team — this is what lets ONE machine/daemon serve MANY teams. The
+// teamId is captured server-side from the authenticated session (never from client
+// input); the gateway re-validates membership at create time (report §4).
+//
+// In-memory (Phase 1 / decision Option A) — matches `deviceOwners`/`claimResults`.
+// A server restart drops pending intents (a snippet pasted afterward falls back to
+// the machine's home team, exactly like a timed-out claim today). The intended
+// Phase-3 upgrade is a durable `connect_keys` table (Option C). Not single-read:
+// one paste may create several loops, and the self-register seed reads it too.
+
+export interface ClaimIntent {
+  /** The user who minted the key (the authenticated dashboard session). */
+  userId: string;
+  /** The validated active team the key was minted under. */
+  teamId: string;
+  /** Mint time (ms) — drives the TTL prune so the map stays bounded. */
+  at: number;
+}
+
+const claimIntents = new Map<string, ClaimIntent>();
+/** Keep intents long enough for a leisurely paste, then drop (bounded memory). */
+const CLAIM_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function pruneClaimIntents(now: number): void {
+  for (const [key, intent] of claimIntents) {
+    if (now - intent.at > CLAIM_INTENT_TTL_MS) claimIntents.delete(key);
+  }
+}
+
+/** Bind a freshly-minted connect-key to the team (+ minter) it was minted under. */
+export function rememberClaimIntent(connectKey: string, intent: { userId: string; teamId: string }): void {
+  const now = Date.now();
+  pruneClaimIntents(now);
+  claimIntents.set(connectKey, { userId: intent.userId, teamId: intent.teamId, at: now });
+}
+
+/** Peek (NON-evicting) the team/minter a connect-key was minted under, if still live. */
+export function readClaimIntent(connectKey: string | null | undefined): ClaimIntent | undefined {
+  if (!connectKey) return undefined;
+  const intent = claimIntents.get(connectKey);
+  if (!intent) return undefined;
+  if (Date.now() - intent.at > CLAIM_INTENT_TTL_MS) {
+    claimIntents.delete(connectKey);
+    return undefined;
+  }
+  return intent;
+}
+
 export interface RunSlot {
   runId: string;
   loopId: string;

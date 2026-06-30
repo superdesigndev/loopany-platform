@@ -183,11 +183,16 @@ export const createJob = createServerFn({ method: 'POST' })
     const { enforce, userId, teamId } = await requestScope()
     if (enforce && !userId) return { error: 'not signed in' }
     const owner = userId ?? 'shared'
-    const machineId = data.machineId ?? store.listMachines(enforce ? teamId : undefined)[0]?.id
+    // Membership-scoped machine pick: any machine whose owner belongs to the active
+    // team (one machine serves all of its owner's teams, report §2.3). Open mode has
+    // no membership rows, so use the full shared list there.
+    const machineId = data.machineId ?? (enforce ? store.listMachinesForTeam(teamId) : store.listMachines())[0]?.id
     if (!machineId) return { error: 'no machine registered — connect a daemon first' }
-    // A loop may only run on a machine in your team (the daemon there executes it).
+    // A loop may run on your own machine, or any machine whose owner is a member of
+    // the active team — NOT keyed to the machine's single home team anymore.
     const machine = store.getMachine(machineId)
-    if (!machine || (enforce && machine.teamId !== teamId)) return { error: 'machine not found' }
+    const usable = !!machine && (!enforce || machine.userId === owner || store.isTeamMember(teamId, machine.userId))
+    if (!usable) return { error: 'machine not found' }
     if (!data.cron) return { error: 'cron required' }
     // A chosen channel must belong to this team; default to the team's latest
     // channel (newest-first) when none was picked, so new loops auto-route.
@@ -316,16 +321,29 @@ export const cancelRun = createServerFn({ method: 'POST' })
  * machine is new, and (b) the loop's `claim` so the dialog can correlate the
  * created loop. No machine row is created here — the daemon self-registers.
  */
-export const mintClaim = createServerFn({ method: 'POST' }).handler(async (): Promise<{ token: string }> => {
-  backend()
-  const { mintDeviceToken, machineIdFromToken, setDeviceOwner } = await import('../gateway/tokens.js')
-  const { userId } = await requestScope()
-  const token = mintDeviceToken()
-  // Remember the owner so the machine that self-registers with this token (and
-  // the loop Claude Code creates on it) belong to the signed-in user.
-  setDeviceOwner(machineIdFromToken(token), userId ?? 'shared')
-  return { token }
-})
+export const mintClaim = createServerFn({ method: 'POST' }).handler(
+  async (): Promise<{ token: string } | { error: string }> => {
+    backend()
+    const { mintDeviceToken, machineIdFromToken, setDeviceOwner, rememberClaimIntent } = await import(
+      '../gateway/tokens.js'
+    )
+    const { userId, teamId, allTeams } = await requestScope()
+    // Fail SAFE: in the admin "All teams" aggregate view there is no concrete team
+    // to bind the key to — minting one would silently fall back to the personal team
+    // (the very bug we're fixing). Require a concrete team selection first.
+    if (allTeams) return { error: 'pick a specific team before creating a loop' }
+    const owner = userId ?? 'shared'
+    const token = mintDeviceToken()
+    // Remember the owner so the machine that self-registers with this token (and
+    // the loop Claude Code creates on it) belong to the signed-in user.
+    setDeviceOwner(machineIdFromToken(token), owner)
+    // Bind the VALIDATED active team to this connect-key so a loop captured from
+    // team B's dashboard lands in team B — one machine can then serve many teams.
+    // The team is taken server-side from the authenticated session, never the client.
+    rememberClaimIntent(token, { userId: owner, teamId })
+    return { token }
+  },
+)
 
 /** Poll a claim while the New-loop dialog waits for Claude Code to create the loop. */
 export const claimStatus = createServerFn({ method: 'GET' })
