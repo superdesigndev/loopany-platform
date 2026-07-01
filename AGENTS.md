@@ -427,7 +427,7 @@ LLM and executes no user code**.
   view on first click (`loopDetailEdit.regression.test.ts` guards this). **Layout: the
   content viewer is the star** — the main grid is `lg:grid-cols-[minmax(0,1fr)_minmax(
   300px,360px)]` (files panel bulk, runs a capped rail) inside a `max-w-[1360px]` shell
-  (run page `max-w-[1040px]`). The hard rule against page-level horizontal scroll:
+  (run page also `max-w-[1360px]`). The hard rule against page-level horizontal scroll:
   `min-w-0` on every grid/flex child + contain wide content in its own pane — the
   agent-authored dashboard (`LoopView`) is wrapped in `overflow-x-auto` (a too-wide
   card row scrolls inside the dashboard box, a responsive auto-fit grid wraps), and
