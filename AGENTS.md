@@ -73,15 +73,21 @@ LLM and executes no user code**.
   **`skill/run/`** and are imported the same way (`import execLoop from "../skill/run/exec-loop.md?raw"`,
   `import edit from "../skill/run/edit.md?raw"`). The `?raw` import bundles the text into the
   nitro `.output` identically from `skill/run/` as it did from `scheduler/prompts/` (no runtime
-  `fs`/ENOENT). **The two control variants are MERGED into one source folded into `exec-loop.md`:**
-  a single delimited block `<!-- control:on -->…on text…<!-- control:off -->…off text…<!-- /control -->`
-  at the `## 4` slot; `prompt.ts` `resolveControl(text, allowControl)` keeps the applicable
-  variant (trimmed, verbatim) and drops the markers + the other variant, so the assembled
-  output is **byte-equivalent** to the former `{{controlSection}}` ← `control-on.md`/`control-off.md`
-  substitution. **Off-path terseness is preserved**: an `allowControl=false` loop's assembled
-  system prompt contains ONLY the terse "may not change your schedule" line — never the
-  `reschedule`/`set-cron`/`pause`/`resume`/`notify` verbs (the entire on-variant is dropped).
-  `exec-loop`/`edit` are run-only (no authoring twin), and `edit` is **kept separate from
+  `fs`/ENOENT). **§4 of `exec-loop.md` is ONE static section for every loop — the standing prompt
+  does NOT branch on `allowControl`** (the old `control-on`/`control-off` variants and the
+  `resolveControl()`/`CONTROL_BLOCK` folding are gone). §4 is a uniform judge → `show` → adjust
+  block: the run first decides whether what it found warrants a cadence change, runs `loopany show`
+  to learn whether it may self-schedule, and if so uses ONLY the two cadence levers **`reschedule`
+  + `set-cron`** — a run is deliberately NOT offered `pause`/`resume`/`notify` anymore (those stay
+  owner/edit surfaces). `buildLoopSystemPrompt` fills just `{name, taskFile, stateLine}`. **`loopany
+  show` reports the effective self-schedule capability**: `describe(loopId, allowControl?)` in
+  `gateway/index.ts` appends `self-schedule: allowed|off` from the run slot's EFFECTIVE
+  `allowControl` (`structural || loop.allowControl`, so an evolve/edit pass reads `allowed` while a
+  normal exec run reflects the loop flag); the `show` handler passes `slot.allowControl` in
+  (undefined ⇒ line omitted for non-run callers). §3's old "if you may control the schedule,
+  `loopany pause` until they act" clause was removed — a blocked run makes one bounded report and
+  exits, it does not pause itself. (This §4 is a DELIBERATE behavior change, NOT byte-equivalent to
+  the prior on/off design.) `exec-loop`/`edit` are run-only (no authoring twin), and `edit` is **kept separate from
   `update.md` on purpose** — the edit RUN uses run-token verbs on the current loop (`loopany
   set-cron`/`set-tz`/`set-ui`…, no id, via `/agent-api/loop`) while `update.md` is the AUTHORING
   CLI (`loopany edit <id> --cron`, local daemon); the two command surfaces serve different

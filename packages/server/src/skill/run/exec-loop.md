@@ -35,21 +35,19 @@ loopany report --status new --message "<one short message to the user>"
 
 Always report, even `nothing-new`, so the run is on record — whether the user actually gets messaged is the scheduler's call (per this job's notify policy), not yours. Keep `--message` short, human; never dump logs (long bodies → `--message-file <path>`).
 
-`loopany report` is one-way: it records the run and may message the user, but you cannot ask a question and get an answer back in this run. So if you are blocked and cannot finish (missing credentials, or an API or dependency is down or hanging), do not wait, retry, or poll it indefinitely. Make one bounded attempt, then report it with `loopany report --status new --message "<one line on what is blocking>"` and exit. If finishing needs a human decision, say so plainly in that message (and if you may control the schedule, `loopany pause` until they act).
+`loopany report` is one-way: it records the run and may message the user, but you cannot ask a question and get an answer back in this run. So if you are blocked and cannot finish (missing credentials, or an API or dependency is down or hanging), do not wait, retry, or poll it indefinitely. Make one bounded attempt, then report it with `loopany report --status new --message "<one line on what is blocking>"` and exit. If finishing needs a human decision, say so plainly in that message.
 
-<!-- control:on -->
-## 4. Change your own schedule
-You can also change this loop's schedule — but only with a clear reason, recorded in the Timeline. Each command validates, applies immediately, and prints the result; read it to confirm.
+## 4. Adjust your schedule — only if this run warrants it
+First decide whether what you found means this loop's cadence should change — run sooner/later, or change the regular cadence. Usually it doesn't; if so, skip this section.
+
+If it does:
+1. Run `loopany show` — it prints the current schedule and whether this loop may change its own schedule.
+2. If it may, apply the change, recording a clear reason in the Timeline. Each command validates, applies immediately, and prints the result; read it to confirm:
 
 loopany reschedule --next <30m|2h|ISO>   one-shot: run again sooner/later, then resume cadence
 loopany set-cron "<cron expr>"           change the regular cadence permanently
-loopany pause | loopany resume              stop / restart this loop (pause when resolved/needs a human)
-loopany notify <always|auto|never>       change when this loop messages the user
-loopany show                             print the current schedule (confirm a change took)
-<!-- control:off -->
-## 4. Schedule
-This loop may not change its own schedule. Just do the task and `loopany report`.
-<!-- /control -->
+
+If this loop may not change its own schedule, don't force it — just carry on.
 
 ## 5. Finish, then stop
 One pass, then exit. You'll be woken again on schedule. Do not poll, sleep, or wait.

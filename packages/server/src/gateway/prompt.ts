@@ -10,9 +10,10 @@
  * with the installable agent skill (skill/references/evolve.md) — run-dispatch and
  * the skill read the same file, so the evolution guidance can't drift. `edit` is a
  * run-token verb prompt with no authoring twin (see skill/references/update.md for
- * the authoring CLI). The on/off self-schedule variants are folded into exec-loop
- * as one delimited block; `resolveControl()` keeps the applicable variant and drops
- * the other, so an allowControl=false loop never sees the schedule verbs.
+ * the authoring CLI). §4 of exec-loop is ONE static section for every loop — the
+ * prompt does NOT branch on `allowControl`; it tells the run to consult `loopany
+ * show` (which reports the effective self-schedule capability) before nudging the
+ * cadence, and the run's self-schedule surface is just reschedule + set-cron.
  */
 import type { Loop, Run, StateField } from "../db/schema.js";
 
@@ -36,19 +37,6 @@ function loadPrompt(name: string): string {
   return v.trim();
 }
 
-// The exec-loop prompt folds BOTH self-schedule variants into one delimited block:
-//   <!-- control:on -->…on text…<!-- control:off -->…off text…<!-- /control -->
-// Keep the applicable variant (trimmed, verbatim) and drop the markers + the other
-// variant. This preserves the off-path terseness: an allowControl=false loop's
-// assembled prompt contains ONLY the "may not change your schedule" line — never the
-// reschedule/set-cron/pause/resume/notify verbs. Byte-equivalent to the former
-// `{{controlSection}}` ← control-on.md / control-off.md substitution.
-const CONTROL_BLOCK = /<!-- control:on -->\n([\s\S]*?)\n<!-- control:off -->\n([\s\S]*?)\n<!-- \/control -->/;
-
-function resolveControl(text: string, allowControl: boolean): string {
-  return text.replace(CONTROL_BLOCK, (_m, on: string, off: string) => (allowControl ? on : off).trim());
-}
-
 function fillVars(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 }
@@ -69,8 +57,7 @@ export function buildLoopSystemPrompt(loop: Loop): string {
   #   ${formatSchemaFields(schema)}
   # report a subset if you only observed some; big payloads: --state-file <path>.`
     : `loopany report --status new --sample <number>     # optional single metric for charts`;
-  const execText = resolveControl(loadPrompt("exec-loop"), !!loop.allowControl);
-  return fillVars(execText, { name, taskFile, stateLine });
+  return fillVars(loadPrompt("exec-loop"), { name, taskFile, stateLine });
 }
 
 /** The per-run user turn (the standing prompt carries the discipline). */

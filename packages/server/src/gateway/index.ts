@@ -982,7 +982,7 @@ export class MachineGateway {
         return { code: 200, text: "reported" };
       }
       case "show":
-        return { code: 200, text: this.describe(slot.loopId) };
+        return { code: 200, text: this.describe(slot.loopId, slot.allowControl) };
       case "set-ui": {
         if (!slot.canSetUi) return { code: 403, text: "loopany: only the evolution or edit pass may set the UI" };
         const html = str("body") ?? str("file-content");
@@ -1136,7 +1136,12 @@ export class MachineGateway {
     return { ok: true, detail: `schema set (${schema.map((f) => f.key).join(", ")})` };
   }
 
-  private describe(loopId: string): string {
+  // `allowControl` is the EFFECTIVE self-schedule capability of the run calling
+  // `show` (the run slot's `structural || loop.allowControl`), not just the loop
+  // flag — so an evolve/edit pass reads as allowed while a normal exec run reflects
+  // the loop's flag. The standing exec prompt's §4 tells the run to consult this line
+  // before attempting reschedule/set-cron. Undefined ⇒ omit the line (non-run callers).
+  private describe(loopId: string, allowControl?: boolean): string {
     const loop = store.getLoop(loopId);
     if (!loop) return "loop not found";
     let next = "?";
@@ -1147,12 +1152,14 @@ export class MachineGateway {
     } catch {
       next = "(invalid cron)";
     }
-    return [
+    const lines = [
       `cron: ${loop.cron} (next ${next})`,
       `nextRunAt: ${loop.nextRunAt ?? "—"}`,
       `enabled: ${loop.enabled}`,
       `notify: ${loop.notify}`,
-    ].join("\n");
+    ];
+    if (allowControl !== undefined) lines.push(`self-schedule: ${allowControl ? "allowed" : "off"}`);
+    return lines.join("\n");
   }
 
   private audit(slot: RunSlot, command: string, args: Record<string, string>, r: Applied): void {

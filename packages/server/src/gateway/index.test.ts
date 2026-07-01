@@ -133,6 +133,23 @@ test("set-ui is only allowed for an evolution run token and is audited", () => {
   expect(store.getRun(run.id)!.control?.[0]?.result).toBe("ok");
 });
 
+test("show reports the run's effective self-schedule capability", () => {
+  const { loop, machine, run } = seededLoop();
+  const gw = gateway();
+  const showText = (allowControl: boolean, role: "exec" | "evolve" = "exec") => {
+    const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId: machine.id, role, allowControl });
+    return (gw.agentApi(rt, ["show"]).body as { text: string }).text;
+  };
+  // A run that MAY self-schedule reads `allowed`; one that may not reads `off`.
+  const allowed = showText(true);
+  expect(allowed).toContain("self-schedule: allowed");
+  expect(allowed).toContain(`cron: ${loop.cron}`);
+  const off = showText(false);
+  expect(off).toContain("self-schedule: off");
+  // An evolve/edit pass carries the effective (structural) capability, so it reads allowed.
+  expect(showText(true, "evolve")).toContain("self-schedule: allowed");
+});
+
 test("help (and a bare/unknown-flag invocation) returns role-aware usage", () => {
   const { loop, machine, run } = seededLoop();
   const execToken = tokens.registerRunToken({
