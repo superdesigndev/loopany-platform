@@ -474,7 +474,41 @@ LLM and executes no user code**.
   page), refetches the `getTranscript` trace when the run settles (keyed on
   `run.running`), and renders the Phase-3 `getRunDiff` "Changes". Run rows in the
   loop page's Runs list + the `Timeline` strip `onPickRun` both `<Link>`/navigate
-  here.
+  here. **The page mirrors the loop detail page's design language** (the modal-era
+  chrome — `ModalSection`, raw `<pre>` blobs, `[ Loading ]`/`[ ERROR ]` brackets,
+  the 1040px single column — was retired): the route shell is now `max-w-[1360px]`
+  (was 1040) and the body is a header card (`rounded-2xl border-wire bg-surface`
+  with name/timestamp + `StatusPill` + wire-outline mono chips + an action toolbar
+  in a `border-t border-hairline` footer) over the same **two-column grid the loop
+  page uses** (`lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]`): the meaty
+  content (Report → Changes → Control → Execution) fills the wide `minmax(0,1fr)`
+  column, run metadata sits in a capped right rail (`Card label="details"` stacked
+  `Field`s). Sections are the loop page's `Card`/label style (local `Card` helper,
+  NOT `ModalSection`). The no-page-scroll rule is enforced structurally: `min-w-0`
+  on every grid/flex child and every `Card`, wide inner content scrolls inside its
+  own pane (`runDetailWidth.regression.test.ts` guards the shell width + grid +
+  card `min-w-0` + diff-pane containment + the absence of the bracket placeholders).
+  **Two headline pieces are extracted as reusable presentational components fed by
+  pure, unit-tested helpers:** (1) **`components/DiffView.tsx`** renders
+  `RunDiffFile[]` as a COLORED diff — `lib/diff.ts` `parseUnifiedDiff()` classifies
+  each physical line (add/del/hunk/meta/context; `+++`/`---` headers are NOT
+  mis-read as add/del) and the view tints each line (add=green, del=red via the new
+  `--color-diff-{add,del}-bg` + `--color-diff-hunk-bg` tokens in `app.css`,
+  light/dark alphas) with a `+`/`-`/` ` gutter and a `+N −M` per-file stat; files
+  are collapsible (`<details>`, small diffs `open` by default, `AUTO_OPEN_LINES=40`),
+  and long lines DON'T wrap — the capped-height pane (`max-h-[420px] overflow-auto`,
+  `whitespace-pre` inside a `min-w-max` track) scrolls them horizontally. Binary/
+  oversize/too-large files render just the header row (reusing `STATUS_LABEL`/
+  `STATUS_CLS`). NO external diff library. (2) **`components/TranscriptView.tsx`**
+  renders `TranscriptStep[]` as a STRUCTURED timeline (left `border-l` rail +
+  per-item markers): text steps as prose, tool steps as a labeled chip (`name`) +
+  a collapsible monospace `input`, and `result` steps attached under their owning
+  step. `lib/transcript.ts` `groupTranscript()` (pure, tested) folds the flat
+  `result`-follows-owner stream into `{kind,text|name+input,results[]}` items
+  (a leading orphan result is surfaced, never dropped); payloads over
+  `COLLAPSE_OVER` chars collapse behind a `<details>`. `formatTranscript` (the old
+  flat-text renderer in `lib/format.ts`) is retained — still used by
+  `LoopDetailView`'s edit-watch panel — but the run page no longer calls it.
 
 ## Commands
 

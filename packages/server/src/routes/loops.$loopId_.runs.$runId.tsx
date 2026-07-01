@@ -32,7 +32,7 @@ function RunDetailPage() {
   const { auth } = Route.useLoaderData() ?? { auth: { enabled: false } }
   const { data: session, isPending } = useSession()
   return (
-    <main className="mx-auto max-w-[1040px] px-8 pb-24 pt-10">
+    <main className="mx-auto max-w-[1360px] px-8 pb-24 pt-10">
       <div className="mb-5">
         <Link
           to="/loops/$loopId"

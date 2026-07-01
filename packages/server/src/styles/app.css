@@ -48,6 +48,16 @@
   --color-run-resolved: var(--color-success);     /* Resolved — good */
   --color-run-error: var(--color-accent);         /* Error — the red signal */
   --color-run-silent: var(--color-disabled);      /* Silent — faintest */
+
+  /*
+   * Diff line tints for the run-detail Changes view. Siblings of the run/success/
+   * accent ramp — green = added, red = removed — kept as low-alpha line
+   * backgrounds so a diff reads as tinted rows, not solid blocks; the gutter glyph
+   * uses the full-strength success/accent ink. Light-mode alphas.
+   */
+  --color-diff-add-bg: rgba(74, 158, 92, 0.12);
+  --color-diff-del-bg: rgba(215, 25, 33, 0.10);
+  --color-diff-hunk-bg: var(--color-raised);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -61,6 +71,10 @@
     --color-secondary: #999999;
     --color-primary: #e8e8e8;
     --color-display: #ffffff;
+
+    /* Slightly stronger alphas so the tint survives on the dark surface. */
+    --color-diff-add-bg: rgba(74, 158, 92, 0.18);
+    --color-diff-del-bg: rgba(215, 25, 33, 0.16);
   }
 }
 
