@@ -467,8 +467,9 @@ export class MachineGateway {
    * to a loop bound to THAT machine (`loop.machineId === machineId`, exactly like
    * `editLoop`/`sync`) — a token can never read another loop's or another device's
    * runs. Read-only. Returns the most recent N runs newest-first with each run's
-   * outcome + a clipped transcript so the create/update/evolve flows can see how
-   * past runs actually went before reshaping the loop.
+   * outcome, its claude-code `sessionId`, its reported metrics (`state`/`sample`),
+   * and a clipped transcript so the create/update/evolve flows can see how past runs
+   * actually went before reshaping the loop.
    */
   loopLog(deviceToken: string, loopId: unknown, limit?: unknown): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
