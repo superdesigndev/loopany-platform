@@ -23,7 +23,8 @@ this loop — no id needed.
   - `loopany set-schema --file <path>` — JSON array of `{key, label?, unit?}`.
     Additive: pass the full intended schema; don't drop a key the UI still binds.
   - `loopany set-workflow --file <path>` — the deterministic pre-stage JS (`prev`,
-    `fetch`, `agent(message?, data?)`; returns `{ message?, state? }`).
+    `fetch`, `tools.call(name, args)` for configured MCP servers,
+    `agent(message?, data?)`; returns `{ message?, state? }`).
   Leave any of these untouched unless the change explicitly asks for it.
 
 Do not run the loop's task. Do not message the user out of band. When the change
