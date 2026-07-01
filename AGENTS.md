@@ -282,7 +282,8 @@ LLM and executes no user code**.
   needs the user to change perms/env/auth the agent writes `workflow-setup-<YYYY-MM-DD>.md` in the
   workdir and surfaces a one-line copy-paste prompt (`fix workflow issue in loopany/<loop>/
   workflow-setup-<date>.md`). The cursor is NOT advanced on failure. **Read-like only in phase 1
-  is a PROMPT posture** (`create.md` §"MCP tools in a workflow", `evolve.md` §2b with the
+  is a PROMPT posture** (create.md's one-line `tools.call` workflow-bullet mention, plus
+  `evolve.md` §2b — the self-contained home for the surface + caps — with the
   worth/not-suitable/principles criteria + a worked PostHog example) — NOT a code blocklist. Tests
   (no network): `mcp-bridge.test.ts` (caps/shaping/clear-errors via injected fake runtime),
   `workflow.test.ts` (`tools.call` wiring via a fixture bridge pointed at by `LOOPANY_MCP_BRIDGE`),

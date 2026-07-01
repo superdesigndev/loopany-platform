@@ -9,10 +9,11 @@ judgment / summary / decision for the LLM agent.
 ## Surface (what a workflow author writes)
 
 ```js
-// Inside a loop's workflow body (see references/create.md for the full contract):
+// Inside a loop's workflow body (see references/evolve.md §2b for the full contract):
 const res = await tools.call("posthog.query-run", { query: { kind: "HogQLQuery", query: "..." } });
 // res = { text: string, data: <structured | null>, truncated?: true }
-return { message: summarize(res.data ?? res.text), state: { cursor: res.data?.last } };
+const rows = res.data?.results ?? [];
+return { message: `${rows.length} rows`, state: { cursor: res.data?.last } };
 // or hand prepared data to the agent for the judgment part:
 agent("write the digest from these rows", res.data);
 ```
