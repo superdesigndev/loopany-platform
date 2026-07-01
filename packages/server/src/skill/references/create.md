@@ -80,7 +80,8 @@ Keep the absolute path to `README.md` — it goes in the config as `taskFile`.
 A loop fires on a cron schedule. Each run is **either**:
 
 - **workflow** *(preferred — zero-LLM, cheap)*: a JS **function body** run in Node
-  with global `fetch` and a `prev` cursor (the last run's returned `state`).
+  with global `fetch`, a `prev` cursor (the last run's returned `state`), and
+  `tools.call(...)` (the machine's configured MCP servers; see `evolve.md`).
   Contract: `return { message?: string, state?: any }`. `message` is sent to the
   user verbatim (no LLM). `state` is persisted and handed back as `prev` next run
   (use it to diff / avoid repeating). To escalate to the coding agent instead,

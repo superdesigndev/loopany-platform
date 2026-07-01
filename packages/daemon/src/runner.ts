@@ -111,33 +111,41 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[]):
   // Internal evolution passes always run Claude and may update ui/schema/workflow.
   let cursor: unknown;
   let escalation = "";
+  let workflowFailure: { error: string; source: string } | undefined;
   if (d.role === "exec" && d.loop.workflow) {
     const wf = await runWorkflow(d.loop.workflow, d.prevState, workdir);
     if (!wf.ok) {
-      const tail = wf.stderr.trim().slice(-400);
-      return reportRun({
-        runId: d.runId, ok: false, durationMs: Date.now() - start,
-        error: tail ? `${wf.error} — ${tail}` : wf.error,
-      });
+      // A failed workflow (thrown JS, a failed tools.call, a timeout) no longer just
+      // reports a failed run. Instead we FALL BACK to the agent: it first completes
+      // this run's original task (the loop still delivers this tick), then diagnoses
+      // the workflow failure. Don't advance the cursor — the workflow produced none.
+      const tail = wf.stderr.trim().slice(-1200);
+      const err = wf.error ?? "workflow failed";
+      workflowFailure = {
+        error: tail ? `${err}\n${tail}` : err,
+        source: d.loop.workflow,
+      };
+      // fall through to the claude section below (task is augmented for the fallback).
+    } else {
+      cursor = wf.result!.state;
+      if (wf.result!.agentCalls.length === 0) {
+        // Pure workflow: direct message (or silent). No claude — but still sync
+        // the task file if the loop maintains one (the workflow may write it).
+        return reportRun({
+          runId: d.runId, ok: true, durationMs: Date.now() - start,
+          outcome: wf.result!.message ? "direct" : "silent",
+          message: wf.result!.message, cursor,
+          taskFileContent: readTaskFile(workdir, d.loop.taskFile),
+        });
+      }
+      // Escalation: fold the workflow's signals into claude's task.
+      escalation = wf.result!.agentCalls
+        .map((c) => [c.message, c.data !== undefined ? "data:\n```json\n" + JSON.stringify(c.data, null, 2) + "\n```" : ""].filter(Boolean).join("\n"))
+        .join("\n\n");
     }
-    cursor = wf.result!.state;
-    if (wf.result!.agentCalls.length === 0) {
-      // Pure workflow: direct message (or silent). No claude — but still sync
-      // the task file if the loop maintains one (the workflow may write it).
-      return reportRun({
-        runId: d.runId, ok: true, durationMs: Date.now() - start,
-        outcome: wf.result!.message ? "direct" : "silent",
-        message: wf.result!.message, cursor,
-        taskFileContent: readTaskFile(workdir, d.loop.taskFile),
-      });
-    }
-    // Escalation: fold the workflow's signals into claude's task.
-    escalation = wf.result!.agentCalls
-      .map((c) => [c.message, c.data !== undefined ? "data:\n```json\n" + JSON.stringify(c.data, null, 2) + "\n```" : ""].filter(Boolean).join("\n"))
-      .join("\n\n");
   }
 
-  // 2. Exec: run claude (no workflow, or the workflow escalated).
+  // 2. Exec: run claude (no workflow, the workflow escalated, or it FAILED → fallback).
   let ok = false;
   let sessionId: string | undefined;
   let error: string | undefined;
@@ -157,7 +165,11 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[]):
       LOOPANY_RUN_TOKEN: d.runToken,
       LOOPANY_SERVER_URL: serverUrl,
     };
-    const task = escalation ? `${d.task}\n\nworkflow signal:\n${escalation}` : d.task;
+    const task = workflowFailure
+      ? buildWorkflowFallbackTask(d.task, workflowFailure, dateStamp(), d.loop.name)
+      : escalation
+        ? `${d.task}\n\nworkflow signal:\n${escalation}`
+        : d.task;
     // stream-json (JSONL) so we can derive a live progress signal as claude works;
     // the terminal `result` event carries the same fields the single-JSON mode did.
     const args = [
@@ -220,6 +232,68 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[]):
     finalText: d.role === "evolve" ? undefined : finalText,
     cursor,
   });
+}
+
+/** UTC date stamp (YYYY-MM-DD) for the dated workflow-setup file name. */
+export function dateStamp(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Build the fallback task handed to claude when a loop's deterministic workflow FAILS.
+ * The agent must (1) still complete this run's original task so the loop delivers this
+ * tick, then (2) diagnose the workflow failure. If the fix needs the USER to change
+ * permissions / env / MCP auth, the agent writes a dated `workflow-setup-<date>.md` in
+ * the loop's workdir and surfaces a one-line copy-paste fix prompt in its report.
+ *
+ * Pure + exported so it's unit-testable: the fallback task must carry the original task,
+ * the workflow error, and the workflow source.
+ */
+export function buildWorkflowFallbackTask(
+  originalTask: string,
+  failure: { error: string; source: string },
+  dateStr: string,
+  loopName: string,
+): string {
+  const slug = loopName || "this-loop";
+  const setupFile = `workflow-setup-${dateStr}.md`;
+  return [
+    originalTask,
+    "",
+    "---",
+    "IMPORTANT — workflow fallback. This loop has a cheap deterministic pre-stage (its",
+    "workflow) that runs before you. This tick the workflow FAILED, so it fell back to you.",
+    "Do TWO things, in order:",
+    "",
+    "1. First, complete THIS run's original task above, exactly as you normally would, so",
+    "   the loop still delivers its result this tick. Do not let the workflow failure stop",
+    "   you from doing the real work.",
+    "",
+    "2. Then diagnose why the workflow failed, using the error and source below.",
+    "",
+    "Workflow error:",
+    "```",
+    failure.error,
+    "```",
+    "",
+    "Workflow source:",
+    "```js",
+    failure.source,
+    "```",
+    "",
+    `If fixing the workflow needs the USER to change something you cannot (authorize an MCP`,
+    `server, set an env var / credential, grant a permission, install a runtime), do NOT try`,
+    `to do it yourself. Instead write a dated setup file \`${setupFile}\` in this loop's`,
+    `working directory that explains, concretely, exactly what the user must do to fix it.`,
+    `Then, in your report to the user, include ONE short copy-paste prompt they can paste`,
+    `into Claude Code or Codex to resolve it, e.g.:`,
+    "",
+    `    fix workflow issue in loopany/${slug}/${setupFile}`,
+    "",
+    "If instead the workflow just has a plain bug you could fix deterministically (a wrong",
+    "tool name, a bad filter), note it briefly for the next evolve pass — don't bother the",
+    "user with a fix that doesn't need them.",
+  ].join("\n");
 }
 
 /** Best-effort read of the loop's task file for sync to the server. The path may

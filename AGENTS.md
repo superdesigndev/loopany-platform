@@ -249,6 +249,47 @@ LLM and executes no user code**.
   rejects unknown keys, schema-as-string parity), `daemon/interactive.test.ts` (buildPatch flag→patch
   mapping + precedence). `references/update.md` documents repointing the task file and pushing
   workflow/ui/schema via `loopany edit`.
+- **MCP tool calls inside loop workflows (`tools.call`, phase 1).** A loop's deterministic
+  JS workflow can call the machine's OWN configured MCP servers via
+  `await tools.call("server.tool", args)` — folding the mechanical fetch/list/dedup/filter/sort
+  the agent used to re-invoke every run into cheap deterministic JS, leaving only judgment for
+  the LLM. Backed by **`mcporter`** (pinned `0.12.3`, a daemon dependency) whose JS API is
+  driven fully headless: `createRuntime().callTool(server, tool, { args, disableOAuth: true,
+  timeoutMs })` — `disableOAuth: true` uses cached bearer tokens and NEVER launches an
+  interactive OAuth/browser flow (verified early-gate against the real PostHog MCP: read-like
+  call returns data ~3s; missing auth fails fast ~290ms with a 401 SseError, no hang; missing
+  server throws `Unknown MCP server`; a missing/failed tool comes back as `{isError:true}`, NOT
+  thrown). **`packages/daemon/src/mcp-bridge.mjs`** is the JS API behind `tools.call` — authored
+  as PLAIN ESM (`.mjs`, no TS) ON PURPOSE because the workflow subprocess is spawned with a bare
+  `node` (never tsx), so it must import a file bare-node runs in BOTH dev (`src/`) and prod
+  (`dist/`); `scripts/copy-runtime-assets.mjs` copies the `.mjs` into `dist/` (chained ahead of
+  `tsc` in build/prepublishOnly, since tsc neither compiles nor copies `.mjs`). `import("mcporter")`
+  in the bridge resolves relative to the bridge's own location → the daemon package's
+  node_modules in either tree. The bridge returns `{ text, data, truncated? }` (`data` =
+  structuredContent, or JSON parsed from text, else null; dropped to null if it alone exceeds the
+  cap), caps args (`LOOPANY_WORKFLOW_TOOL_ARGS_CAP`, 16KB) + results
+  (`LOOPANY_WORKFLOW_TOOL_RESULT_CAP`, 256KB) + per-call timeout
+  (`LOOPANY_WORKFLOW_TOOL_TIMEOUT_SECONDS`, 30s), and turns every failure (missing
+  server/tool/auth/runtime, `isError:true`) into a clear THROWN error naming the server/tool.
+  **`workflow.ts`** injects `tools.call` into the sandbox and passes the bridge file URL via
+  `LOOPANY_MCP_BRIDGE` (read at call time via `mcpBridgeUrl()` so a test/override applies; the
+  bridge is lazily imported on first `tools.call`, so a workflow that never uses it pays no MCP
+  cost). **Fallback behavior change in `runner.ts`:** a failed workflow (thrown JS, a failed
+  `tools.call`, a timeout) NO LONGER just reports a failed run — it FALLS BACK to the agent via
+  `buildWorkflowFallbackTask(originalTask, {error, source}, dateStamp(), loopName)`: the agent
+  first completes THIS run's original task (loop still delivers the tick), then diagnoses the
+  workflow failure (task carries the original task + workflow error + workflow source); if fixing
+  needs the user to change perms/env/auth the agent writes `workflow-setup-<YYYY-MM-DD>.md` in the
+  workdir and surfaces a one-line copy-paste prompt (`fix workflow issue in loopany/<loop>/
+  workflow-setup-<date>.md`). The cursor is NOT advanced on failure. **Read-like only in phase 1
+  is a PROMPT posture** (create.md's one-line `tools.call` workflow-bullet mention, plus
+  `evolve.md` §2b — the self-contained home for the surface + caps — with the
+  worth/not-suitable/principles criteria + a worked PostHog example) — NOT a code blocklist. Tests
+  (no network): `mcp-bridge.test.ts` (caps/shaping/clear-errors via injected fake runtime),
+  `workflow.test.ts` (`tools.call` wiring via a fixture bridge pointed at by `LOOPANY_MCP_BRIDGE`),
+  `runner.test.ts` (fallback path via a fake `claude` bin + failing bridge fixture). Live PostHog
+  manual-acceptance steps: `packages/daemon/docs/mcp-workflow-tools.md`. Do NOT scope-creep into
+  write-tool support / a tool registry UI / CLI unification (later phases).
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.
