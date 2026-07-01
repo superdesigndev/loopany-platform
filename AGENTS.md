@@ -249,7 +249,7 @@ LLM and executes no user code**.
   rejects unknown keys, schema-as-string parity), `daemon/interactive.test.ts` (buildPatch flag→patch
   mapping + precedence). `references/update.md` documents repointing the task file and pushing
   workflow/ui/schema via `loopany edit`.
-- **MCP tool calls inside loop workflows (`tools.call`, phase 1).** A loop's deterministic
+- **MCP tool calls inside loop workflows (`tools.call`, phase 1; daemon 0.7.0).** A loop's deterministic
   JS workflow can call the machine's OWN configured MCP servers via
   `await tools.call("server.tool", args)` — folding the mechanical fetch/list/dedup/filter/sort
   the agent used to re-invoke every run into cheap deterministic JS, leaving only judgment for
