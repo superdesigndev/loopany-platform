@@ -16,11 +16,13 @@ const AGENT_LABEL: Record<CodingAgent, string> = {
   codex: 'Codex',
 }
 
-// The one human-readable instruction the snippet carries. The skill (served at
-// `<origin>/api/skill`) owns ALL loop-building intelligence — it asks the user for
-// the task, the cadence, and the per-run output format — so the snippet is just a
-// bootstrap: fetch the skill and ask to build a loop. No pre-filled task/schedule
-// fields to take literally; an empty-context paste is handled entirely by the skill.
+// The one human-readable instruction the snippet carries. `/api/skill` serves the
+// BOOTSTRAP doc (skill/bootstrap.md) — it owns ALL first-capture intelligence: it
+// interprets the pasted values, connects the machine, reads the session to decide
+// what loop to build (turn a just-done task into a loop, else brainstorm loops for
+// this project), and routes into the create/update/evolve references. So the snippet
+// is just a bootstrap: fetch it and ask to build a loop. No pre-filled task/schedule
+// fields to take literally; an empty-context paste is handled entirely by the doc.
 const instructionFor = (origin: string) => `Fetch ${origin}/api/skill and help me build a loop.`
 
 /**

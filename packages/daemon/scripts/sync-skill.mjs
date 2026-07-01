@@ -4,11 +4,13 @@
  * `skill`). Run on `build` and `prepublishOnly` so the bundled copy can never
  * drift from the single source of truth at packages/server/src/skill/.
  *
- * SELECTIVE COPY — only the PUBLIC skill surface ships: SKILL.md (overview) + the
- * references/ authoring trio (create/update/evolve). The INTERNAL run prompts under
- * skill/run/ (exec-loop, edit) are server-side run-dispatch ONLY and must NEVER reach
- * the public npm tarball or a user's installed ./.claude/skills/loopany/. A naive
- * `cpSync(src, dst, {recursive})` would copy run/ too — so we whitelist instead.
+ * SELECTIVE COPY — only the PUBLIC skill surface ships: SKILL.md (installable skill
+ * root) + the references/ authoring trio (create/update/evolve). The INTERNAL run
+ * prompts under skill/run/ (exec-loop, edit) are server-side run-dispatch ONLY, and
+ * bootstrap.md is the SERVER-ONLY first-capture onboarding doc served at /api/skill
+ * (not an installable skill file) — none of these may reach the public npm tarball or
+ * a user's installed ./.claude/skills/loopany/. A naive `cpSync(src, dst, {recursive})`
+ * would copy run/ AND bootstrap.md too — so we whitelist instead.
  *
  * The daemon installs this bundled dir locally via `npx skills` during `loopany new`
  * (see src/skill-install.ts) — a LOCAL path source, so end users never need the
@@ -29,7 +31,7 @@ if (!fs.existsSync(path.join(src, "SKILL.md"))) {
   process.exit(0);
 }
 
-// The exact public surface — nothing else (notably NOT skill/run/) is bundled.
+// The exact public surface — nothing else (notably NOT skill/run/ or bootstrap.md) is bundled.
 const PUBLIC = ["SKILL.md", path.join("references", "create.md"), path.join("references", "update.md"), path.join("references", "evolve.md")];
 
 fs.rmSync(dst, { recursive: true, force: true });

@@ -39,4 +39,7 @@ test("sync-skill bundles ONLY the public surface (no internal run prompts)", () 
   expect(files).not.toContain("run/exec-loop.md");
   expect(files).not.toContain("run/edit.md");
   expect(files.some((f) => f.startsWith("run/"))).toBe(false);
+  // And the server-only first-capture onboarding doc (served at /api/skill) is NOT
+  // an installable skill file, so it must never ship in the bundle either.
+  expect(files).not.toContain("bootstrap.md");
 });

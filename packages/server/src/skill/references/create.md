@@ -1,9 +1,9 @@
 # Create a loop
 
-You've already connected this machine with `loopany up` (see the skill overview,
-step 1). Now author the loop and create it. Use the **loopany-cli** prefix the user
-pasted (default `npx @crewlet/loopany@latest`) and the **connect-key** from the
-capture snippet.
+This machine is already connected — `loopany up` on first capture (see `bootstrap.md`)
+or the running daemon from when the loop was installed. Now author the loop and create
+it. Use the **loopany-cli** prefix the user pasted (default `npx @crewlet/loopany@latest`)
+and the **connect-key** from the capture snippet (present on the first-capture path).
 
 ## 0 · Make sure there's a real task to loop
 

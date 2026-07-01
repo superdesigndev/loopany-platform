@@ -57,13 +57,26 @@ LLM and executes no user code**.
   already persist `phase:"error"` + `error`, which `JobDetailView`/run lists already render.
 - **The loopany agent skill (`packages/server/src/skill/`).** The loop-builder
   knowledge is a real, installable agent skill — NOT one inline doc. **ALL prompt prose
-  now lives under `src/skill/`** (the unify that retired `scheduler/prompts/` entirely):
-  the PUBLIC authoring trio + overview in `skill/{SKILL.md,references/{create,update,evolve}.md}`,
-  and the INTERNAL run prompts in **`skill/run/{exec-loop.md,edit.md}`** (server-side
+  now lives under `src/skill/`** (the unify that retired `scheduler/prompts/` entirely).
+  The surfaces, split by audience (the **bootstrap-skill-split**): (1) **`bootstrap.md`**
+  — the SERVER-ONLY first-capture onboarding doc served at `/api/skill` (**NO frontmatter**
+  — it's fetched-and-followed, not installed; NOT bundled, NOT installed — like the run
+  prompts); (2) the PUBLIC installable **`SKILL.md`** + authoring trio
+  `references/{create,update,evolve}.md` (bundled + installed into `.claude/skills/loopany/`);
+  (3) the INTERNAL run prompts in **`skill/run/{exec-loop.md,edit.md}`** (server-side
   run-dispatch only — never served, never bundled; see the public-surface guardrail below).
-  `SKILL.md` is the **overview** (frontmatter `name: loopany` + a strong `description`
-  so Claude auto-triggers it) that routes to the three references: `create.md` (up →
-  task file → config → `new`), `update.md` (`loopany edit` envelope vs. task file), and
+  **`bootstrap.md` owns first-contact onboarding** (the double-duty SKILL.md used to carry):
+  interpret the pasted `server-url`/`connect-key`/`loopany-cli`, connect the machine
+  (`loopany up`), fetch the references over HTTP because the skill isn't on disk yet, then
+  build the loop. It carries the **session-situation division** (the captain's split):
+  if the user already did a clear task this session → guide THAT into a loop; if there's
+  no task yet → look at what THIS project is and brainstorm a few concrete loops FOR IT and
+  let the user pick (create.md §0/§0.5 remain the shared task-real + propose→confirm guards).
+  **`SKILL.md` is now the CLEAN installable root** (frontmatter `name: loopany` + a strong
+  `description` so Claude auto-triggers it) with the bootstrap noise stripped (no connect-key /
+  `loopany up` / "not on disk yet, fetch over HTTP") — it just routes to the on-disk references,
+  which a later in-loop session reads from disk. It routes to the three references: `create.md`
+  (task file → config → `new`), `update.md` (`loopany edit` envelope vs. task file), and
   `evolve.md` (the evolution pass that **improves the loop from its own run history**,
   reoriented to optimize the loop's TASK and WORKFLOW ahead of the dashboard). Its levers,
   in priority order: **§1 the task** — refactor the loop's own brief (`## Spec` /
@@ -103,20 +116,21 @@ LLM and executes no user code**.
   set-cron`/`set-tz`/`set-ui`…, no id, via `/agent-api/loop`) while `update.md` is the AUTHORING
   CLI (`loopany edit <id> --cron`, local daemon); the two command surfaces serve different
   actors and can't merge into one doc without making one audience wrong or breaking the run.
-  **`/api/skill` serves the overview** (`routes/api.skill.ts`, Vite `?raw`) — the bootstrap an
-  agent follows on first capture; **`/api/skill/references/<file>`**
+  **`/api/skill` serves `bootstrap.md`** (`routes/api.skill.ts`, `import bootstrap from
+  "../skill/bootstrap.md?raw"`) — the first-capture onboarding doc; **`/api/skill/references/<file>`**
   (`routes/api.skill.references.$.ts`, static map, path-safe — only the 3 exact names
-  `create`/`update`/`evolve` resolve; `exec-loop`/`edit` 404) serves the references over HTTP as
-  a **fallback** when the local install was skipped. **HARD GUARDRAIL — the internal run prompts
-  must NEVER reach the public surface:** the skill is **bundled into the `@crewlet/loopany` npm
-  package** (`package.json` `files` lists `skill`), but `packages/daemon/scripts/sync-skill.mjs`
-  is a **SELECTIVE copy** — it whitelists ONLY `SKILL.md` + `references/{create,update,evolve}.md`
-  (NOT a naive `cpSync(src, dst, {recursive})`, which would ship `skill/run/` into the public
-  tarball and into every user's installed `./.claude/skills/loopany/`). The bundle
-  (`packages/daemon/skill/`, **gitignored**, generated like `routeTree.gen.ts`) therefore ends up
-  with exactly `SKILL.md` + the references trio and nothing else (guarded by
-  `packages/daemon/src/sync-skill.test.ts`). Do NOT fork the content; edit the five files
-  (`SKILL.md`, the three references, and the two `run/` prompts).
+  `create`/`update`/`evolve` resolve; `exec-loop`/`edit`/`bootstrap` 404) serves the references over
+  HTTP as a **fallback** when the local install was skipped. **HARD GUARDRAIL — the internal run
+  prompts AND `bootstrap.md` must NEVER reach the public surface:** the skill is **bundled into the
+  `@crewlet/loopany` npm package** (`package.json` `files` lists `skill`), but
+  `packages/daemon/scripts/sync-skill.mjs` is a **SELECTIVE copy** — it whitelists ONLY `SKILL.md` +
+  `references/{create,update,evolve}.md` (NOT a naive `cpSync(src, dst, {recursive})`, which would
+  ship `skill/run/` AND `bootstrap.md` into the public tarball and into every user's installed
+  `./.claude/skills/loopany/`). The bundle (`packages/daemon/skill/`, **gitignored**, generated like
+  `routeTree.gen.ts`) therefore ends up with exactly `SKILL.md` + the references trio and nothing
+  else (guarded by `packages/daemon/src/sync-skill.test.ts`, which asserts the exact 4-file set and
+  explicitly that `bootstrap.md`/`run/` are absent). Do NOT fork the content; edit the six source
+  files (`bootstrap.md`, `SKILL.md`, the three references, and the two `run/` prompts).
 - **Loopany skill auto-install (`loopany new` → `npx skills`, into the loop workdir).**
   The install fires at **loop creation**, NOT `loopany up` (corrected in 0.4.0 — `up`
   may run from anywhere just to start the daemon, so it must not drop a skill into an
@@ -340,7 +354,8 @@ LLM and executes no user code**.
   upfront picker + its `agent:` snippet line were removed because the daemon's
   `resolveAgent` already measures the real host (env fingerprint > declared > default),
   making a dialog declaration a rarely-hit fallback that could only go stale. The snippet
-  no longer emits `agent:`; `SKILL.md` tells the agent to self-declare via `--agent`. The
+  no longer emits `agent:`; `bootstrap.md` (the first-capture doc, formerly `SKILL.md`'s
+  pasted-values section) tells the agent to self-declare via `--agent`. The
   recorded agent is now driven purely by daemon self-detection, and the "Loop created"
   confirmation shows the **measured** `loops.agent` (threaded back via `ClaimResult.agent`
   → `claimStatus`), never a pre-selected value. **The paste snippet is one line** —

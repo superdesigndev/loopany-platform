@@ -5,20 +5,25 @@ import { createFileRoute } from '@tanstack/react-router'
 // non-extension path (/api/skill) is used because Vite's dev static layer would
 // otherwise swallow a `.md` path before the route runs.
 //
-// This serves the skill's OVERVIEW (skill/SKILL.md) — the bootstrap an agent
-// follows on the very first capture before the loopany skill is installed locally.
-// The overview routes to the focused references (create/update/evolve), which the
-// agent reads from the local install (`loopany up` installs the skill via `npx
-// skills`) or, as a fallback, fetches over HTTP from /api/skill/references/<file>
-// (see api.skill.references.$.ts). Single source of truth: packages/server/src/skill/.
-import skill from '../skill/SKILL.md?raw'
+// This serves the BOOTSTRAP doc (skill/bootstrap.md) — the onboarding an agent
+// follows on the very first capture, before the loopany skill is installed locally.
+// bootstrap.md carries the first-contact-only content (interpret the pasted
+// server-url/connect-key, `loopany up`, read the session to decide what loop to build,
+// fetch references over HTTP because the skill isn't on disk yet) and has NO
+// frontmatter — it's fetched-and-followed, not installed. It is server-only: the
+// daemon bundles/installs the clean SKILL.md instead (see sync-skill.mjs), so the
+// on-disk skill never carries "I'm probably not installed yet" noise. bootstrap.md
+// routes to the focused references (create/update/evolve), which the agent fetches
+// over HTTP from /api/skill/references/<file> (see api.skill.references.$.ts) until
+// the local install lands. Single source of truth: packages/server/src/skill/.
+import bootstrap from '../skill/bootstrap.md?raw'
 
-/** GET /api/skill — the loop-builder skill overview Claude Code follows (see ComposeModal). */
+/** GET /api/skill — the first-capture bootstrap doc Claude Code follows (see ComposeModal). */
 export const Route = createFileRoute('/api/skill')({
   server: {
     handlers: {
       GET: () =>
-        new Response(skill, {
+        new Response(bootstrap, {
           headers: { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'no-cache' },
         }),
     },
