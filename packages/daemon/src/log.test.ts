@@ -65,7 +65,7 @@ describe("runLog", () => {
           ok: true,
           name: "Here",
           runs: [
-            { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", transcript: "$ Bash echo hi", transcriptTruncated: false },
+            { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, sample: null, transcript: "$ Bash echo hi", transcriptTruncated: false },
           ],
         },
       },
@@ -79,6 +79,8 @@ describe("runLog", () => {
     expect(cap.stdout()).toContain("$ Bash");
     // The compact human render surfaces the session id so the reader can find the JSONL.
     expect(cap.stdout()).toContain("session: sess-r1");
+    // …and the metrics the run reported, as a compact k=v line.
+    expect(cap.stdout()).toContain("metrics: mrr=42");
   });
 
   test("a subdirectory of the loop workdir still resolves to that loop", async () => {
@@ -113,7 +115,7 @@ describe("runLog", () => {
   });
 
   test("--limit and --json are forwarded / honored", async () => {
-    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: null, error: null, message: null, sessionId: "sess-r1", transcript: "", transcriptTruncated: false }];
+    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: null, error: null, message: null, sessionId: "sess-r1", state: { mrr: 42 }, sample: null, transcript: "", transcriptTruncated: false }];
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
       "/api/machine/log": { body: { ok: true, name: "X", runs } },
@@ -124,6 +126,8 @@ describe("runLog", () => {
     // --json prints raw JSON, not the human header — including the session id.
     expect(cap.stdout()).toContain('"id": "r1"');
     expect(cap.stdout()).toContain('"sessionId": "sess-r1"');
+    // Metrics flow through verbatim in --json output too.
+    expect(cap.stdout()).toContain('"mrr": 42');
     expect(cap.stdout()).not.toContain("recent run");
   });
 

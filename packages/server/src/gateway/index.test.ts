@@ -678,7 +678,7 @@ function seededLoopWithRuns(machineId: string, count: number) {
       ts: `2026-06-01T00:00:${String(i + 1).padStart(2, "0")}Z`,
       outcome: i % 2 === 0 ? "exec" : "error",
       sessionId: `sess-${i}`,
-      ...(i % 2 === 0 ? {} : { error: `boom ${i}` }),
+      ...(i % 2 === 0 ? { state: { mrr: 42 + i }, sample: i } : { error: `boom ${i}` }),
       transcript: [
         { kind: "text", text: `run ${i} thinking` },
         { kind: "tool", name: "Bash", input: `{"cmd":"echo ${i}"}` },
@@ -708,6 +708,10 @@ test("loopLog returns the loop's recent runs newest-first with transcript text",
   // on-disk `<session>.jsonl` for a deep dive (newest-first → run index 2's id).
   expect(body.runs[0].sessionId).toBe("sess-2");
   expect(body.runs.every((r) => "sessionId" in r)).toBe(true);
+  // Each run also carries the metrics it reported (state object + single sample).
+  expect(body.runs[0].state).toEqual({ mrr: 44 });
+  expect(body.runs[0].sample).toBe(2);
+  expect(body.runs.every((r) => "state" in r && "sample" in r)).toBe(true);
 });
 
 test("loopLog honors and caps the run limit", () => {

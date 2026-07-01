@@ -499,6 +499,11 @@ export class MachineGateway {
         // The claude-code session id lets the agent jump from this survey straight
         // to the run's on-disk `<session>.jsonl` for a deep dive (see evolve.md).
         sessionId: r.sessionId ?? null,
+        // The metrics the run reported: the metric object (`state`) plus the
+        // single-metric `sample`, so `loopany log` surfaces them alongside the
+        // transcript (matches what buildEvolveTask feeds the evolve agent).
+        state: r.state ?? null,
+        sample: r.sample ?? null,
         transcript: text,
         transcriptTruncated: truncated,
       };

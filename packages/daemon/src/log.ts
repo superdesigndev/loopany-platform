@@ -38,6 +38,9 @@ interface RunRow {
   // The claude-code session id behind this run — lets the reader jump to its
   // on-disk `<session>.jsonl` for the full, unclipped record (see evolve.md).
   sessionId: string | null;
+  // The metrics the run reported: the metric object plus the single-metric sample.
+  state: Record<string, unknown> | null;
+  sample: number | null;
   transcript: string;
   transcriptTruncated: boolean;
 }
@@ -130,6 +133,10 @@ function formatRun(r: RunRow): string {
   const head = `● ${r.ts}  ${r.role}  ${outcome}${dur}`;
   const lines = [head];
   if (r.sessionId) lines.push(`  session: ${r.sessionId}`);
+  const metrics: string[] = [];
+  if (r.sample != null) metrics.push(`sample=${r.sample}`);
+  if (r.state) for (const [k, v] of Object.entries(r.state)) metrics.push(`${k}=${v}`);
+  if (metrics.length) lines.push(`  metrics: ${metrics.join(", ")}`);
   if (r.error) lines.push(`  error: ${r.error}`);
   if (r.message) lines.push(`  ${r.message}`);
   if (r.transcript) {
