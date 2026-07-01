@@ -1,8 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-/** GET /api/machine/log?loopId=<id>&limit=<n> — recent run transcripts for a loop
- *  bound to this machine (Bearer device token). The device-facing twin of the
- *  web-only getTranscript; strictly scoped to the token's own loop. */
+/** GET /api/machine/log?loopId=<id>&limit=<n> — recent run history (status, session
+ *  ids, reported metrics, and transcripts) for a loop bound to this machine (Bearer
+ *  device token). The device-facing twin of the web-only getTranscript; strictly
+ *  scoped to the token's own loop. */
 export const Route = createFileRoute('/api/machine/log')({
   server: {
     handlers: {

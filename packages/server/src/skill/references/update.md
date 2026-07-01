@@ -13,10 +13,11 @@ or other auth is needed.
   `## Timeline` structure. It syncs back to the server on the loop's next run;
   nothing else to do. (For how a run reads and maintains that file, see `evolve.md`.)
 - **Dashboard / metric schema / workflow gate** — you don't hand-author these from
-  here. A loop refits its own dashboard and gate to the data it produces during its
-  **evolution pass** (see `evolve.md`); leave them to it unless the user explicitly
-  asks to reshape the dashboard, in which case describe the change in the task file's
-  Spec so the next evolution pass picks it up.
+  here. A loop improves itself from its own run history during its **evolution pass**
+  (see `evolve.md`) — sharpening its task and workflow ahead of fitting its dashboard
+  and gate to the data; leave them to it unless the user explicitly asks to reshape the
+  dashboard, in which case describe the change in the task file's Spec so the next
+  evolution pass picks it up.
 
 First find the loop id (only loops bound to THIS machine are listed):
 
@@ -26,10 +27,11 @@ First find the loop id (only loops bound to THIS machine are listed):
 #    loop-yyyy  paused  0 * * * *                 Hourly metrics
 ```
 
-Before reshaping a loop, see how its recent runs actually went — their status and
-execution transcript — with `<loopany-cli> log` (the loop for the current
-directory) or `<loopany-cli> log <loop-id>` (`--limit N`, `--json`). Read it first
-so an edit is grounded in what the runs really did, not a guess.
+Before reshaping a loop, see how its recent runs actually went — a concise survey
+of their status, metrics, and session ids — with `<loopany-cli> log` (the loop for
+the current directory) or `<loopany-cli> log <loop-id>` (`--limit N`, `--json`; add
+`--transcript` for the full transcript). Read it first so an edit is grounded in
+what the runs really did, not a guess.
 
 Then change the envelope — pass only the fields that change:
 

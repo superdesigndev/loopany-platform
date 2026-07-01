@@ -44,6 +44,23 @@ test("evolve run prompt keeps every lever + smoke-test discipline", () => {
   expect(p).not.toMatch(/\{\{(?!latest\.)\w+\}\}/);
 });
 
+test("evolve run prompt carries the task-first + workflow + dashboard guidance", () => {
+  const p = buildEvolvePrompt();
+  // The task lever: sharpen the brief by editing the task file on disk (no set-task).
+  expect(p).toContain("## 1. The task");
+  expect(p).toMatch(/edit the task file/i);
+  expect(p).toContain("## Spec");
+  expect(p).toContain("## Current understanding");
+  expect(p).toContain("## Timeline");
+  // Workflow elevated to §2, dashboard demoted to §3.
+  expect(p).toContain("## 2. Workflow");
+  expect(p).toContain("## 3. Dashboard");
+  // The two-lens log reading: quick survey (loopany log, with session id) + deep dive (session JSONL).
+  expect(p).toContain("loopany log");
+  expect(p).toMatch(/session/i);
+  expect(p).toMatch(/\.jsonl/i);
+});
+
 test("edit run prompt keeps the schedule/envelope verbs (run-token surface)", () => {
   const p = buildEditPrompt();
   for (const verb of ["set-cron", "set-tz", "set-name", "notify", "set-model", "pause", "reschedule"]) {

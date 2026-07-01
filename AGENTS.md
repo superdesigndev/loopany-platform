@@ -64,12 +64,23 @@ LLM and executes no user code**.
   `SKILL.md` is the **overview** (frontmatter `name: loopany` + a strong `description`
   so Claude auto-triggers it) that routes to the three references: `create.md` (up →
   task file → config → `new`), `update.md` (`loopany edit` envelope vs. task file), and
-  `evolve.md` (task file as running memory + the evolution pass that refits a loop's
-  dashboard/gate to real data). **`evolve.md` is ALSO the single source for the evolve
-  RUN prompt** — `gateway/prompt.ts` `import evolve from "../skill/references/evolve.md?raw"`
-  (`buildEvolvePrompt()`), so the skill and run-dispatch read the SAME file and the
-  evolution guidance can't drift (the unify that retired the old near-duplicate
-  `scheduler/prompts/evolve.md`). The OTHER run prompts (`exec-loop`, `edit`) live under
+  `evolve.md` (the evolution pass that **improves the loop from its own run history**,
+  reoriented to optimize the loop's TASK and WORKFLOW ahead of the dashboard). Its levers,
+  in priority order: **§1 the task** — refactor the loop's own brief (`## Spec` /
+  `## Current understanding`) from the log, **editing the task-file README directly on disk**
+  (there is NO `loopany set-task`; task content is edited on disk, consistent with a normal
+  run maintaining its own file); **§2 workflow** — precipitate repeated deterministic work
+  into the cheap pre-stage (`set-workflow`); **§3 dashboard** — the lighter schema+UI lever
+  (`set-schema`/`set-ui`, `{{latest.<key>}}` binding, series primitives). It opens with a
+  **two-lens log reading** guide: `loopany log` (quick survey, now includes each run's
+  `session` id — see the log bullet) vs. the session JSONL (deep dive, located via that
+  session id — the primary input for the task/workflow levers). **`evolve.md` is ALSO the
+  single source for the evolve RUN prompt** — `gateway/prompt.ts`
+  `import evolve from "../skill/references/evolve.md?raw"` (`buildEvolvePrompt()`), so the
+  skill and run-dispatch read the SAME file and the evolution guidance can't drift (the unify
+  that retired the old near-duplicate `scheduler/prompts/evolve.md`). `buildEvolveTask`'s
+  one-line instruction leads with reviewing the log to **sharpen the task + distil/refine the
+  workflow**, dashboard as the lighter lever, still "Do not message the user." The OTHER run prompts (`exec-loop`, `edit`) live under
   **`skill/run/`** and are imported the same way (`import execLoop from "../skill/run/exec-loop.md?raw"`,
   `import edit from "../skill/run/edit.md?raw"`). The `?raw` import bundles the text into the
   nitro `.output` identically from `skill/run/` as it did from `scheduler/prompts/` (no runtime
@@ -171,18 +182,33 @@ LLM and executes no user code**.
   (`loop.machineId === machineId`, exactly like `editLoop`/`sync`; a cross-loop or
   cross-device token gets a flat 404, existence never leaks). Read-only. Returns the
   newest N runs (default 8, max 20) newest-first with id/ts/role/phase/outcome/status/
-  durationMs/error/message + the transcript flattened to text (`renderTranscript`,
+  durationMs/error/message + **`sessionId`** (`r.sessionId ?? null` — the claude-code
+  session id, so the evolve agent or a user can jump from the survey straight to the run's
+  on-disk `<session>.jsonl` deep dive; already stored on the run row, just now returned) +
+  the run's **reported metrics** (`state` = the metric object, `sample` = the single-metric
+  sample, both `?? null`) so the survey surfaces the numbers a run reported alongside its
+  transcript (matches what `buildEvolveTask` feeds the evolve agent) +
+  the transcript flattened to text (`renderTranscript`,
   clipped to 8000 chars/run → `transcriptTruncated`). Mounted at `GET /api/machine/log?
   loopId&limit` (`routes/api.machine.log.ts`, Bearer device token). NO new auth scheme.
-  **Daemon:** `loopany log [<loop>] [--limit N] [--json]` (`log.ts`, wired in `cli.ts`
+  **Daemon:** `loopany log [<loop>] [--limit N] [--transcript] [--json]` (`log.ts`, wired in `cli.ts`
   after `down`) — an owner-outside-a-run command like `loops`/`edit` reusing the stored
   device token. It resolves which loop via the **shared `resolveLoopDir`** (extracted
   from the watcher into `loopdir.ts`, no chokidar): an explicit `<loop>` id/name wins,
   else the current cwd is matched against each loop's resolved folder (most-specific
   wins; a subdir of the workdir still matches). `listLoops` now also returns
-  `workdir`/`taskFile` so the daemon can do that match. Every external touch (cwd/fetch/
+  `workdir`/`taskFile` so the daemon can do that match. The daemon's `RunRow` carries
+  `sessionId` plus the reported metrics (`state`/`sample`). **The default human render is a
+  CONCISE survey** — per run just the header + `session: <id>` line + (when present) a
+  `metrics: sample=…, <k>=<v>` line + error + one-line message, but **NOT** the verbose
+  transcript (up to 8KB × N runs buries the useful bits; the session id is the pointer to the
+  full session JSONL). `--transcript` (alias `--full`, both in `BOOL_FLAGS` so a positional
+  loop id isn't swallowed) inlines the clipped transcript; `--json` always returns the full
+  structured runs (transcript + sessionId + metrics) for machine consumers. Every external touch (cwd/fetch/
   out/err/server/token) is an injectable seam (`log.test.ts`, no network). The skill's
-  `references/update.md` tells the agent to run `loopany log` before reshaping a loop.
+  `references/update.md` tells the agent to run `loopany log` before reshaping a loop, and
+  `references/evolve.md`'s two-lens log-reading uses the returned `session` id to locate the
+  session JSONL. (The `sessionId` return was folded into the unpublished 0.6.0 — no bump.)
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.

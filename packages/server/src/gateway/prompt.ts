@@ -125,6 +125,6 @@ export function buildEvolveTask(loop: Loop, runs: Run[]): string {
     "Current ui:\n" + (loop.ui ? "```html\n" + loop.ui + "\n```" : "(none yet — author one if the data warrants it)"),
     "Current workflow:\n" + (loop.workflow ? "```js\n" + loop.workflow + "\n```" : "(none)"),
     "Recent runs (oldest first):\n```json\n" + JSON.stringify(recent, null, 2) + "\n```",
-    "Evolve this loop per your instructions: refine the UI to fit the real data, and improve the workflow only if the runs justify it. Do not message the user.",
+    "Evolve this loop per your instructions: review the recent runs' log to sharpen the task (its brief) and distil/refine the workflow, fitting the dashboard as the lighter lever. Do not message the user.",
   ].join("\n\n");
 }

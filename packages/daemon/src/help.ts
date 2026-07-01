@@ -22,7 +22,8 @@ Setup
 Management
   status                  Is this machine's daemon running? Show pid + connection.
   down                    Stop the detached daemon this machine started with up.
-  log [<loop>]            Show a loop's recent run history (status + transcript).
+  log [<loop>]            Show a loop's recent runs (concise: status + metrics +
+    [--transcript]        session id; --transcript/--full adds the transcript).
                           Defaults to the loop for the current directory (--json,
                           --limit N).
 

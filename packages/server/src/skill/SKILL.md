@@ -21,9 +21,9 @@ This skill routes to focused references — read the one for the job:
   **`references/create.md`**.
 - **Editing an existing loop** (reschedule, rename, pause, or change what it does):
   **`references/update.md`**.
-- **How a loop stays coherent and improves over time** (the task file as running
-  memory, plus the evolution pass that refits a loop's dashboard and gate to the data
-  its runs actually produce): **`references/evolve.md`**.
+- **How a loop stays coherent and improves over time** (the evolution pass that
+  improves the loop from its own run history — sharpening its **task** and **workflow**
+  ahead of fitting its dashboard to the data its runs produce): **`references/evolve.md`**.
 
 > **Where to read the references.** On first capture this skill usually isn't on
 > disk yet, so fetch the references over HTTP from the **server-url** the user
@@ -78,5 +78,5 @@ loop's folder and task file, author the throwaway config, and run `loopany new`.
 tell the user it's created (name + cadence).
 
 To edit a loop later, see **`references/update.md`**. For how a loop refines itself
-over time — the task file as running memory and the evolution pass over its
-dashboard/gate — see **`references/evolve.md`**.
+over time — the evolution pass that improves the loop from its own run history (task
+and workflow ahead of the dashboard) — see **`references/evolve.md`**.
