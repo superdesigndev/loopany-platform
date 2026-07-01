@@ -336,6 +336,68 @@ test("editLoop changes a loop's envelope from its machine's device token", () =>
   expect(store.getLoop(id)!.cron).toBe("0 9 * * *");
 });
 
+test("editLoop repoints the task file and pushes workflow/ui/schema without a run", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const created = gateway().createLoop(token, { name: "Migrate", cron: "0 8 * * *", task: "x" });
+  const id = (created.body as any).id as string;
+
+  const res = gateway().editLoop(token, id, {
+    taskFile: "/home/u/newproj/README.md",
+    workflow: "export default async () => ({ ok: true })",
+    ui: "<div id='dash'>hi</div>",
+    stateSchema: [{ key: "mrr", label: "MRR", unit: "$" }],
+  });
+  expect(res.status).toBe(200);
+  expect((res.body as any).applied).toEqual(expect.arrayContaining(["taskFile", "workflow", "ui", "stateSchema"]));
+  const loop = store.getLoop(id)!;
+  expect(loop.taskFile).toBe("/home/u/newproj/README.md");
+  expect(loop.workflow).toContain("export default");
+  expect(loop.ui).toContain("dash");
+  expect(loop.stateSchema).toEqual([{ key: "mrr", label: "MRR", unit: "$" }]);
+});
+
+test("editLoop accepts stateSchema as a JSON string too (run-token parity)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", task: "x" });
+  const id = (created.body as any).id as string;
+
+  const res = gateway().editLoop(token, id, { stateSchema: '[{"key":"visits","label":"Visits"}]' } as any);
+  expect(res.status).toBe(200);
+  expect(store.getLoop(id)!.stateSchema).toEqual([{ key: "visits", label: "Visits" }]);
+});
+
+test("editLoop validates content fields (bad schema → 400, loop untouched)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", task: "x" });
+  const id = (created.body as any).id as string;
+
+  const bad = gateway().editLoop(token, id, { stateSchema: [{ notKey: 1 }] } as any);
+  expect(bad.status).toBe(400);
+  expect(store.getLoop(id)!.stateSchema).toBeNull();
+});
+
+test("editLoop rejects an unknown patch key with a clear 400 (never silent no-op)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", task: "x" });
+  const id = (created.body as any).id as string;
+
+  // A typo (or an attempt to patch an identity column) fails loudly.
+  const res = gateway().editLoop(token, id, { teamId: "other", croon: "0 9 * * *" } as any);
+  expect(res.status).toBe(400);
+  expect((res.body as any).error).toMatch(/unknown field/);
+  expect((res.body as any).error).toMatch(/teamId/);
+  // Nothing changed.
+  expect(store.getLoop(id)!.cron).toBe("0 8 * * *");
+});
+
 test("editLoop refuses a loop bound to a different machine (404, no change)", () => {
   const tokenA = tokens.mintDeviceToken();
   const machineA = tokens.machineIdFromToken(tokenA);

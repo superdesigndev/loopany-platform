@@ -5,6 +5,7 @@
  * loop channel (/api/machine/loop). No run token, no re-auth, no claim — the
  * machine is already connected, so editing an existing loop needs none of that.
  */
+import { readFileSync } from "node:fs";
 import { DEVICE_FILE, SERVER_FILE, readStored } from "./config.js";
 
 type Flags = Record<string, string | boolean>;
@@ -20,7 +21,7 @@ type LoopRow = {
 };
 
 /** `--k v` pairs, bare `--flag` → true; everything else is positional. */
-function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
+export function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
   const flags: Flags = {};
   for (let i = 0; i < args.length; i++) {
@@ -53,7 +54,20 @@ const PATCH_FIELDS: Record<string, string> = {
   "task-file": "taskFile",
 };
 
-function buildPatch(flags: Flags): Record<string, unknown> {
+/** Read a flag's file path into raw string content (for `--workflow-file` etc). */
+function readFileFlag(flags: Flags, flag: string): string | undefined {
+  const path = flags[flag];
+  if (typeof path !== "string") return undefined;
+  return readFileSync(path, "utf8");
+}
+
+/**
+ * Assemble the patch body. Precedence, lowest → highest: envelope flags, then
+ * the convenience `--*-file` content flags, then an explicit `--json` /
+ * `--json-file` object (its keys win). The server is the sole validator — the
+ * daemon only shapes the body. Throws on unreadable/invalid file or JSON.
+ */
+export function buildPatch(flags: Flags): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   for (const [flag, key] of Object.entries(PATCH_FIELDS)) {
     if (typeof flags[flag] === "string") patch[key] = flags[flag];
@@ -61,6 +75,28 @@ function buildPatch(flags: Flags): Record<string, unknown> {
   if (flags["pause"]) patch.enabled = false;
   if (flags["resume"]) patch.enabled = true;
   if (flags["allow-control"] !== undefined) patch.allowControl = flags["allow-control"] === true || flags["allow-control"] === "true";
+
+  // Convenience file flags — multi-line workflow/ui/schema content is awkward to
+  // embed in JSON on a CLI, so read the file's raw content into the patch field
+  // (schema parsed as JSON, mirroring the run-token `set-schema --file` shape).
+  const workflowFile = readFileFlag(flags, "workflow-file");
+  if (workflowFile !== undefined) patch.workflow = workflowFile;
+  const uiFile = readFileFlag(flags, "ui-file");
+  if (uiFile !== undefined) patch.ui = uiFile;
+  const schemaFile = readFileFlag(flags, "schema-file");
+  if (schemaFile !== undefined) patch.stateSchema = JSON.parse(schemaFile);
+
+  // Explicit --json / --json-file object wins over everything above.
+  let jsonRaw: string | undefined;
+  if (typeof flags["json"] === "string") jsonRaw = flags["json"];
+  else if (typeof flags["json-file"] === "string") jsonRaw = readFileSync(flags["json-file"], "utf8");
+  if (jsonRaw !== undefined) {
+    const parsed = JSON.parse(jsonRaw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("--json must be a JSON object of loop fields");
+    }
+    Object.assign(patch, parsed);
+  }
   return patch;
 }
 
@@ -77,7 +113,12 @@ function printLoops(loops: LoopRow[]): void {
 }
 
 const USAGE =
-  'loopany: usage: loopany edit <loop-id> [--cron "…"] [--name …] [--tz …] [--notify always|auto|never] [--model …] [--pause|--resume] [--run-at 2h]\n';
+  "loopany: usage: loopany edit <loop-id> [options]\n" +
+  "  envelope:  --cron \"…\"  --name …  --tz …  --notify always|auto|never  --model …\n" +
+  "             --pause | --resume  --allow-control true|false  --run-at 2h  --task-file <path>\n" +
+  "  content:   --workflow-file <path>  --ui-file <path>  --schema-file <path.json>\n" +
+  "  partial:   --json '<json-object>' | --json-file <path>   (explicit JSON keys win)\n" +
+  "  the server validates every field; unknown keys are rejected.\n";
 
 export async function runInteractive(argv: string[]): Promise<number> {
   const token = readStored(DEVICE_FILE);
@@ -118,7 +159,7 @@ export async function runInteractive(argv: string[]): Promise<number> {
       }
       const patch = buildPatch(flags);
       if (Object.keys(patch).length === 0) {
-        process.stderr.write("loopany: nothing to change — pass at least one of --cron/--name/--tz/--notify/--model/--pause/--resume/--run-at\n");
+        process.stderr.write(USAGE);
         return 2;
       }
       const res = await fetch(base, { method: "PATCH", headers, body: JSON.stringify({ id, patch }) });

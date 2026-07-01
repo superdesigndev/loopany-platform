@@ -223,6 +223,32 @@ LLM and executes no user code**.
   `references/update.md` tells the agent to run `loopany log` before reshaping a loop, and
   `references/evolve.md`'s two-lens log-reading uses the returned `session` id to locate the
   session JSONL. (The `sessionId` return was folded into the unpublished 0.6.0 — no bump.)
+- **`loopany edit` partial-JSON + content fields (daemon 0.6.0, folded in — NO bump).**
+  The owner can reshape/migrate an existing loop WITHOUT a run. **Server
+  (`gateway/index.ts` `editLoop`):** the accepted patch now also carries the content
+  fields — `workflow`, `ui`, `stateSchema` — on top of the envelope set
+  (name/cron/timezone/notify/model/allowControl/taskFile/enabled/runAt). They reuse the
+  **exact same validators the run-token `set-*` path uses**: the old `applySet{Ui,Workflow,Schema}`
+  were refactored so their validation/normalization lives in pure `validate{Ui,Workflow,Schema}`
+  helpers (return a normalized value or `{ok:false,detail}`); `applySet*` and `editLoop` both call
+  them, so the two surfaces can't drift (schema stays **additive** — a key still bound by the UI or
+  reported by recent runs can't be dropped; run-token `set-*` behavior is unchanged).
+  `validateSchema` accepts EITHER a JSON string (run-token path) OR an already-parsed array (an
+  `editLoop` JSON patch may carry `stateSchema` inline). **No `allowControl` gating** on this owner
+  device-token path (consistent with the existing editLoop contract — the owner already controls
+  their loops). **Whitelist:** `editLoop` rejects any patch key outside `EDITABLE_LOOP_FIELDS` (the
+  12 allowed keys) with a 400 listing the allowed set — a `--json` typo fails loudly instead of a
+  silent no-op, and identity/ownership columns (id/teamId/userId/machineId/createdAt/updatedAt) can
+  never be patched. **Daemon (`interactive.ts` `buildPatch`, now exported for tests):** `loopany edit`
+  gains `--json '<obj>'` / `--json-file <path>` (parse an object → merge into the patch; **explicit
+  JSON keys win** over flag-derived values) plus convenience file flags `--workflow-file` /
+  `--ui-file` / `--schema-file` that read a file's raw content into the patch field (schema parsed as
+  JSON, mirroring the run-token `set-ui --file` shape). `--task-file` already worked (the discoverability
+  bug was only that `USAGE` omitted it); the multi-line `USAGE` now documents the full set. The server
+  is the sole validator. Tests: `gateway/index.test.ts` (editLoop accepts+validates workflow/ui/schema,
+  rejects unknown keys, schema-as-string parity), `daemon/interactive.test.ts` (buildPatch flag→patch
+  mapping + precedence). `references/update.md` documents repointing the task file and pushing
+  workflow/ui/schema via `loopany edit`.
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.

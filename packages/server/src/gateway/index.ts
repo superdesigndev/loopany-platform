@@ -48,6 +48,24 @@ const PENDING_GRACE_MS = 60_000;
 /** A claimed run that never reports within this window is reclaimed as timed out. */
 const RUN_TIMEOUT_MS = Number(process.env.LOOPANY_RUN_TIMEOUT_MS || 20 * 60_000);
 const MAX_NEXT_MS = 30 * 86_400_000;
+/** The ONLY keys an owner `editLoop` patch may touch. A key outside this set is
+ *  rejected (400) rather than silently ignored, so a `--json` typo fails loudly
+ *  and identity/ownership columns (id/teamId/userId/machineId/timestamps) can
+ *  never be patched over the device-token edit surface. */
+const EDITABLE_LOOP_FIELDS = new Set([
+  "name",
+  "cron",
+  "timezone",
+  "notify",
+  "model",
+  "allowControl",
+  "taskFile",
+  "enabled",
+  "runAt",
+  "workflow",
+  "ui",
+  "stateSchema",
+]);
 const MIN_INTERVAL_MS = 60_000;
 const MAX_ARTIFACTS = 200;
 const MAX_TRANSCRIPT_STEPS = 200;
@@ -532,6 +550,9 @@ export class MachineGateway {
       taskFile?: unknown;
       enabled?: unknown;
       runAt?: unknown;
+      workflow?: unknown;
+      ui?: unknown;
+      stateSchema?: unknown;
     },
   ): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
@@ -540,7 +561,16 @@ export class MachineGateway {
     const loop = store.getLoop(id);
     if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
 
-    const p = patch ?? {};
+    const p = (patch ?? {}) as Record<string, unknown>;
+    // Whitelist: a typo in `--json` must fail loudly, never silently no-op, and
+    // no non-listed field (id/teamId/userId/machineId/timestamps/…) may be touched.
+    const unknownKeys = Object.keys(p).filter((k) => !EDITABLE_LOOP_FIELDS.has(k));
+    if (unknownKeys.length) {
+      return {
+        status: 400,
+        body: { error: `unknown field(s): ${unknownKeys.join(", ")} — allowed: ${[...EDITABLE_LOOP_FIELDS].join(", ")}` },
+      };
+    }
     const update: Partial<NewLoop> = {};
 
     if (p.cron !== undefined) {
@@ -570,6 +600,21 @@ export class MachineGateway {
       if (!when) return { status: 400, body: { error: "run-at must be 30m|2h|1d or a future ISO time" } };
       if (Date.parse(when) > Date.now() + MAX_NEXT_MS) return { status: 400, body: { error: "run-at too far in the future (>30d)" } };
       update.nextRunAt = when;
+    }
+    // Content fields reuse the SAME validators the run-token set-* path uses, so
+    // the owner edit surface can't drift from the evolve/edit run behavior.
+    if (p.workflow !== undefined) {
+      if (typeof p.workflow !== "string") return { status: 400, body: { error: "workflow must be a string (the pre-stage JS)" } };
+      update.workflow = this.validateWorkflow(p.workflow).value;
+    }
+    if (p.ui !== undefined) {
+      if (typeof p.ui !== "string") return { status: 400, body: { error: "ui must be a string (the dashboard HTML)" } };
+      update.ui = this.validateUi(p.ui).value;
+    }
+    if (p.stateSchema !== undefined) {
+      const v = this.validateSchema(id, p.stateSchema);
+      if (!v.ok) return { status: 400, body: { error: v.detail } };
+      update.stateSchema = v.value;
     }
 
     if (Object.keys(update).length === 0) return { status: 400, body: { error: "nothing to change" } };
@@ -1109,27 +1154,34 @@ export class MachineGateway {
     }
   }
 
-  private applySetUi(loopId: string, html: string): Applied {
-    const ui = store.coerceUi(html) ?? null;
-    const loop = store.updateLoop(loopId, { ui });
-    if (!loop) return { ok: false, detail: "loop not found" };
-    return { ok: true, detail: ui ? `ui updated (${ui.length} bytes)` : "ui cleared" };
+  // ---- content-field validators/normalizers (shared by the run-token set-*
+  // path AND the owner device-token `editLoop` path, so both surfaces validate
+  // identically and can't drift). Each returns a normalized value ready to feed
+  // `store.updateLoop`, or a `{ ok:false, detail }` the caller maps to a 400. ----
+
+  /** Sanitize/normalize dashboard HTML → the stored value (or null to clear). */
+  private validateUi(html: string): { ok: true; value: string | null } {
+    return { ok: true, value: store.coerceUi(html) ?? null };
   }
 
-  private applySetWorkflow(loopId: string, body: string): Applied {
-    const loop = store.updateLoop(loopId, { workflow: body.trim() || null });
-    if (!loop) return { ok: false, detail: "loop not found" };
-    return { ok: true, detail: loop.workflow ? `workflow updated (${loop.workflow.length} bytes)` : "workflow cleared" };
+  /** Normalize the deterministic pre-stage JS → the stored value (or null). */
+  private validateWorkflow(body: string): { ok: true; value: string | null } {
+    return { ok: true, value: body.trim() || null };
   }
 
-  private applySetSchema(loopId: string, json: string): Applied {
-    const loop = store.getLoop(loopId);
-    if (!loop) return { ok: false, detail: "loop not found" };
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(json);
-    } catch {
-      return { ok: false, detail: 'schema must be JSON, e.g. [{"key":"mrr","label":"MRR","unit":"$"}]' };
+  /** Validate a state schema. Accepts a JSON string (run-token path) or an
+   *  already-parsed value (an `editLoop` JSON patch may carry the array inline).
+   *  Enforces the additive rule: keys still bound by the UI or reported by
+   *  recent runs may not be dropped. */
+  private validateSchema(loopId: string, input: unknown): { ok: true; value: StateField[] } | { ok: false; detail: string } {
+    if (!store.getLoop(loopId)) return { ok: false, detail: "loop not found" };
+    let parsed: unknown = input;
+    if (typeof input === "string") {
+      try {
+        parsed = JSON.parse(input);
+      } catch {
+        return { ok: false, detail: 'schema must be JSON, e.g. [{"key":"mrr","label":"MRR","unit":"$"}]' };
+      }
     }
     const schema = store.coerceStateSchema(parsed);
     if (!schema) return { ok: false, detail: "schema must be a non-empty array of {key, label?, unit?}" };
@@ -1141,8 +1193,28 @@ export class MachineGateway {
         detail: `schema changes are additive — keep keys still in use: ${dropped.join(", ")} (bound by the UI or reported by recent runs).`,
       };
     }
-    store.updateLoop(loopId, { stateSchema: schema });
-    return { ok: true, detail: `schema set (${schema.map((f) => f.key).join(", ")})` };
+    return { ok: true, value: schema };
+  }
+
+  private applySetUi(loopId: string, html: string): Applied {
+    const { value: ui } = this.validateUi(html);
+    const loop = store.updateLoop(loopId, { ui });
+    if (!loop) return { ok: false, detail: "loop not found" };
+    return { ok: true, detail: ui ? `ui updated (${ui.length} bytes)` : "ui cleared" };
+  }
+
+  private applySetWorkflow(loopId: string, body: string): Applied {
+    const { value: workflow } = this.validateWorkflow(body);
+    const loop = store.updateLoop(loopId, { workflow });
+    if (!loop) return { ok: false, detail: "loop not found" };
+    return { ok: true, detail: loop.workflow ? `workflow updated (${loop.workflow.length} bytes)` : "workflow cleared" };
+  }
+
+  private applySetSchema(loopId: string, json: string): Applied {
+    const v = this.validateSchema(loopId, json);
+    if (!v.ok) return { ok: false, detail: v.detail };
+    store.updateLoop(loopId, { stateSchema: v.value });
+    return { ok: true, detail: `schema set (${v.value.map((f) => f.key).join(", ")})` };
   }
 
   // `allowControl` is the EFFECTIVE self-schedule capability of the run calling
