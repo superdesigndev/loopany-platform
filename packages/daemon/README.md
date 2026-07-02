@@ -40,7 +40,8 @@ loopany                 Run the daemon in the foreground. Ctrl-C to stop.
 
 Setup
   up                      Connect this machine / ensure its daemon is running.
-  new --config <file>     Create a loop from a config file.
+  new --json '<config>'   Create a loop from an inline JSON config (--json - reads
+                          stdin). --dry-run validates + previews, creates nothing.
   skill [status|install]  Manage the loopany agent skill install (-g for global).
 
 Management
@@ -51,7 +52,8 @@ Management
 
 Interactive
   loops                   List your loops.
-  edit                    Edit a loop.
+  edit <id> --json '<obj>'  Edit a loop (JSON-only + --workflow-file/--ui-file/
+                          --schema-file; --dry-run previews before/after).
 ```
 
 Run `loopany --help` for the full usage text.
