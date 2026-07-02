@@ -1,7 +1,7 @@
 # LoopAny — first capture: connect this machine and build a loop
 
 You're reading this because the user pasted a LoopAny capture snippet (`Fetch
-<server-url>/api/skill and help me build a loop.`) into your session. LoopAny turns
+<server-url>/api/bootstrap and help me build a loop.`) into your session. LoopAny turns
 a task into a **scheduled agent loop** that runs automatically on this machine. Your
 job now: connect this machine, decide *what* loop to build, then build it — end to
 end. The user's LoopAny web tab is open and waiting for the loop to appear, so keep
