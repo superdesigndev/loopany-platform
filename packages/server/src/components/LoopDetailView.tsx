@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary, TranscriptStep } from '../types'
@@ -7,7 +7,6 @@ import { mergeRuns } from '../lib/runs'
 import { deleteJob, evolveJob, getJobDetail, getTranscript, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { ModalSection } from './Modal'
-import { LoopView } from './LoopView'
 import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { MachinesModal } from './MachinesModal'
@@ -16,6 +15,11 @@ import { ArtifactList, btn, btnCost, btnKey, btnKeyPrimary, btnPrimary, ErrorBan
 import { ConfirmBar, FlashLine, LoadErrorCard, useDeferredDelete, useFlash } from './actionUi'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+
+// The agent-authored dashboard rides in its own lazy chunk (it pulls in
+// recharts via LoopChart) - a loop without a `ui` template never loads it.
+const LoopView = lazy(() => import('./LoopView').then((m) => ({ default: m.LoopView })))
+
 
 /**
  * Loop detail PAGE body (`/loops/$loopId`) — the redesign of the former modal.
@@ -595,7 +599,9 @@ export function LoopDetailView({ id }: { id: string }) {
               scrolls inside the dashboard box rather than widening the whole page;
               a responsive (auto-fit) card grid then wraps within this bounded width. */}
           <div className="min-w-0 overflow-x-auto">
-            <LoopView html={job.ui!} runs={runs} />
+            <Suspense fallback={<div className="py-4 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>}>
+              <LoopView html={job.ui!} runs={runs} loopId={id} taskFile={job.taskFile} />
+            </Suspense>
           </div>
         </section>
       )}

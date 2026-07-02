@@ -133,6 +133,9 @@ Rules:
   file**; keep `task` a short pointer to it (avoid duplicating content).
 - Make the `workflow` self-contained and defensive (handle fetch failures).
 - `stateSchema` is optional — declare numeric per-run metrics to get a chart.
+  (The dashboard itself is usually left to a later evolve pass - see
+  `evolve.md` §3 for the UI primitives, including embedding the loop's
+  produced files with `<loop-embed>` / `<loop-calendar>`.)
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
 - **Don't add `timezone`, `claim`, or any auth** — `loopany new` injects the
   timezone, the connect-key claim, and this machine's device token for you.

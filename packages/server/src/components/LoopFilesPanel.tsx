@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ArtifactContent, ArtifactSummary } from '../types'
+import type { ArtifactSummary } from '../types'
 import { fmt, humanBytes } from '../lib/format'
 import { buildFileEntries, isTaskEntry } from '../lib/fileEntries'
-import { getArtifact, getArtifacts } from '../server/loopApi'
-import { downloadHref } from './ArtifactFileRow'
+import { getArtifacts } from '../server/loopApi'
+import { ArtifactBody, ViewerHead } from './artifactView'
 import { TaskFileView } from './TaskFileView'
 
 /**
@@ -16,7 +16,6 @@ import { TaskFileView } from './TaskFileView'
  * loopId and self-polls so files appear as the loop writes them (Phase 1-2 reuse).
  */
 
-const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path)
 const basename = (path: string) => path.split('/').pop() || path
 
 /** Faint type tag shown after a file's size. */
@@ -89,7 +88,9 @@ export function LoopFilesPanel({
   const activeIsTask = isTaskEntry(active)
 
   return (
-    <section className="min-w-0">
+    // `id="files"` - the anchor the dashboard's `<loop-embed>` "open in files →"
+    // link targets (same page, the panel sits below the dashboard box).
+    <section id="files" className="min-w-0">
       <div className="mb-2.5 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">
         <h2 className="font-mono text-[11px] tracking-[0.08em] text-secondary">
           files{artifacts ? ` (${entries.length})` : ''}
@@ -163,16 +164,6 @@ export function LoopFilesPanel({
   )
 }
 
-/** A small monospace caption strip above a file's content (path · meta). */
-function ViewerHead({ path, meta }: { path: string; meta?: string }) {
-  return (
-    <div className="sticky top-0 z-10 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-hairline bg-surface px-5 py-2.5">
-      <span className="break-all font-mono text-[12px] text-primary">{path}</span>
-      {meta && <span className="font-mono text-[10.5px] tracking-[0.04em] text-disabled">· {meta}</span>}
-    </div>
-  )
-}
-
 /** The task file pane — the loop's spec, rendered as formatted markdown. */
 function TaskEntryView({ path, content, syncedAt }: { path: string; content: string | null; syncedAt: string | null }) {
   return (
@@ -187,29 +178,8 @@ function TaskEntryView({ path, content, syncedAt }: { path: string; content: str
   )
 }
 
-type Loaded = ArtifactContent | { loading: true }
-
-/** The artifact pane — text inline (markdown formatted, else mono), or a
- *  download affordance for binary / oversize files. Fetches lazily per path. */
+/** The artifact pane — the shared caption strip over the shared content body. */
 function ArtifactEntryView({ loopId, file }: { loopId: string; file: ArtifactSummary }) {
-  const [loaded, setLoaded] = useState<Loaded>({ loading: true })
-  const downloadable = file.binary && !file.oversize
-
-  useEffect(() => {
-    let alive = true
-    if (file.binary || file.oversize) {
-      setLoaded({ binary: true, size: file.size, oversize: file.oversize })
-      return
-    }
-    setLoaded({ loading: true })
-    getArtifact({ data: { loopId, path: file.path } })
-      .then((c) => alive && setLoaded(c))
-      .catch((e) => alive && setLoaded({ error: String(e) }))
-    return () => {
-      alive = false
-    }
-  }, [loopId, file.path, file.binary, file.oversize, file.size, file.updatedAt])
-
   const meta = [file.size != null ? humanBytes(file.size) : '', `synced ${fmt(file.updatedAt)}`]
     .filter(Boolean)
     .join(' · ')
@@ -217,38 +187,7 @@ function ArtifactEntryView({ loopId, file }: { loopId: string; file: ArtifactSum
   return (
     <>
       <ViewerHead path={file.path} meta={meta} />
-      {'loading' in loaded ? (
-        <div className="px-5 py-6 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>
-      ) : 'text' in loaded ? (
-        isMarkdown(file.path) ? (
-          <TaskFileView content={loaded.text || '(empty file)'} />
-        ) : (
-          <pre className="m-0 overflow-x-auto whitespace-pre-wrap px-5 py-4 font-mono text-[12px] leading-relaxed text-secondary">
-            {loaded.text || '(empty file)'}
-          </pre>
-        )
-      ) : 'binary' in loaded ? (
-        <div className="px-5 py-8 text-[13px] text-secondary">
-          {loaded.oversize ? (
-            <span className="text-disabled">Too large to preview — stored as metadata only.</span>
-          ) : (
-            <>
-              Binary file — not previewable.{' '}
-              {downloadable && (
-                <a
-                  href={downloadHref(loopId, file.path)}
-                  download
-                  className="text-interactive underline underline-offset-2 transition-colors hover:text-display"
-                >
-                  Download
-                </a>
-              )}
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="px-5 py-6 font-mono text-[12px] text-accent">[ ERROR ] {loaded.error}</div>
-      )}
+      <ArtifactBody loopId={loopId} file={file} />
     </>
   )
 }

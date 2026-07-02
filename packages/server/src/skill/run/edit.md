@@ -19,7 +19,10 @@ this loop — no id needed.
   - `loopany set-ui --file <path>` — the panel as small plain HTML (h3/p/b/ul/table/
     div + inline style; no `<script>`/handlers/`<svg>`). Bind live values with
     `{{latest.<key>}}`; series via `<loop-chart series="k:Label:unit">` /
-    `<loop-sparkline key="k">`.
+    `<loop-sparkline key="k">`; the loop's produced files via
+    `<loop-embed match="reports/digest-*.md">` (newest matching synced file,
+    embedded) / `<loop-calendar match="reports/*.md">` (month calendar of
+    products; days parse from `YYYY-MM-DD`-style filenames, else sync time).
   - `loopany set-schema --file <path>` — JSON array of `{key, label?, unit?}`.
     Additive: pass the full intended schema; don't drop a key the UI still binds.
   - `loopany set-workflow --file <path>` — the deterministic pre-stage JS (`prev`,

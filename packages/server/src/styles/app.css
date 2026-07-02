@@ -58,6 +58,18 @@
   --color-diff-add-bg: rgba(74, 158, 92, 0.12);
   --color-diff-del-bg: rgba(215, 25, 33, 0.10);
   --color-diff-hunk-bg: var(--color-raised);
+
+  /*
+   * Chart series ramp (shadcn-style --chart-N naming), aliasing the Nothing
+   * semantic palette - display ink first (the old LoopChart STROKES order),
+   * color stays reserved for meaning. Consumed by the Recharts-backed
+   * LoopChart; tracks light/dark automatically via the base tokens.
+   */
+  --color-chart-1: var(--color-display);
+  --color-chart-2: var(--color-interactive);
+  --color-chart-3: var(--color-success);
+  --color-chart-4: var(--color-accent);
+  --color-chart-5: var(--color-secondary);
 }
 
 @media (prefers-color-scheme: dark) {
