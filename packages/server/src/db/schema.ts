@@ -147,8 +147,23 @@ export const loops = sqliteTable(
     /** Per-run metric schema. */
     stateSchema: text("state_schema", { mode: "json" }).$type<StateField[]>(),
     notify: text("notify", { enum: ["always", "auto", "never"] }).notNull().default("auto"),
-    /** May a run change its own schedule (reschedule/set-cron/pause/notify)? */
-    allowControl: integer("allow_control", { mode: "boolean" }).notNull().default(false),
+    /** May a run change its own schedule (reschedule/set-cron)? Default TRUE — a
+     *  loop self-adjusts unless the owner PINS the schedule (allowControl=false =
+     *  "don't self-adjust"). Run-path self-schedule is floor-guarded (see the
+     *  cadence floors in gateway); the owner's edit path is unlimited. */
+    allowControl: integer("allow_control", { mode: "boolean" }).notNull().default(true),
+    /** CLOSED-loop setpoint: a one-line, checkable goal. Null ⇒ OPEN loop
+     *  (monitor/digest — never self-terminates; "finish" is not a concept for it).
+     *  Non-null ⇒ CLOSED loop: each exec run is the comparator (judges state vs the
+     *  goal) and calls `loopany finish` when it's met. Open↔closed conversion = set/
+     *  clear this. */
+    goal: text("goal"),
+    /** Terminal stamp: when the loop's goal was declared met (ISO). Null ⇒ still
+     *  running / never completed. Completing forces enabled=false (the scheduler
+     *  skips it for free). Structural invariant: non-null implies goal != null. */
+    completedAt: text("completed_at"),
+    /** One-line reason recorded at completion (the finishing run's summary). */
+    completionReason: text("completion_reason"),
     model: text("model"),
     /** Coding agent this loop is BOUND TO / was created by (the harness recorded
      *  as its host). Recording-only today: the daemon still executes every loop via

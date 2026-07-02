@@ -89,6 +89,13 @@ export interface JobSummary {
   running?: boolean
   lastRunTs: string | null
   graduation: string | null
+  /** CLOSED-loop setpoint (one-line goal). Null ⇒ OPEN loop (monitor/digest). */
+  goal?: string | null
+  /** Terminal stamp: when the goal was declared met (ISO). Non-null ⇒ Completed
+   *  (drives the dashboard split + the "Completed" badge / Reopen action). */
+  completedAt?: string | null
+  /** One-line reason recorded at completion. */
+  completionReason?: string | null
   /** The newest page of runs (chronological, capped) — the card seeds its
    *  timeline from this and lazy-loads older pages via loadOlderRuns. */
   runs: RunSummary[]
@@ -111,6 +118,11 @@ export interface JobFull {
   cron: string
   enabled: boolean
   notify: 'auto' | 'always' | 'never' | string
+  /** CLOSED-loop setpoint (one-line goal); null/absent ⇒ OPEN loop. */
+  goal?: string | null
+  /** Terminal stamps (set when the loop's goal is declared met). */
+  completedAt?: string | null
+  completionReason?: string | null
   task?: string
   taskFile?: string
   workflow?: string
@@ -236,6 +248,9 @@ export interface JobPayload {
   cron?: string
   taskFile?: string
   notify?: 'auto' | 'always' | 'never' | string
+  /** Set (non-empty) / clear (null|'') the closed-loop goal. Clearing also drops
+   *  the completion stamps; the server enforces the lifecycle invariant. */
+  goal?: string | null
   task?: string
   workflow?: string
   stateSchema?: StateField[]

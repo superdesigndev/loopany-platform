@@ -95,3 +95,19 @@ export function blobGcGraceMs(): number {
 export function gcIntervalMs(): number {
   return posIntEnv("LOOPANY_GC_INTERVAL_MS", 15 * 60 * 1000);
 }
+
+/**
+ * Self-schedule cadence floors — enforced ONLY on the RUN self-schedule path (a
+ * run using `set-cron` / `reschedule` on itself). The owner's `editLoop` path is
+ * unlimited. A run may not set a cron whose adjacent fires are closer than
+ * `LOOPANY_SELF_CRON_FLOOR_MINUTES` (default 15), nor reschedule sooner than
+ * `LOOPANY_SELF_RESCHEDULE_FLOOR_MINUTES` (default 5). Lazy env reads like the
+ * other knobs, so tests set them per-case.
+ */
+export function selfCronFloorMinutes(): number {
+  return posIntEnv("LOOPANY_SELF_CRON_FLOOR_MINUTES", 15);
+}
+
+export function selfRescheduleFloorMinutes(): number {
+  return posIntEnv("LOOPANY_SELF_RESCHEDULE_FLOOR_MINUTES", 5);
+}

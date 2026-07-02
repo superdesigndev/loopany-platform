@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { JobSummary, RunSummary } from '../types'
-import { cronText, dotLabel, isDone, lastRunOf, rel } from '../lib/format'
+import { cronText, dotLabel, fmt, isClosed, isCompleted, lastRunOf, rel } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { loadOlderRuns } from '../server/loopApi'
 import { Timeline, WINDOW } from './Timeline'
@@ -17,7 +17,10 @@ export function LoopCard({
 }) {
   const en = job.enabled
   const last = lastRunOf(job)
-  const done = isDone(job)
+  const completed = isCompleted(job)
+  // A closed loop still working toward its goal (not yet completed) → the quiet
+  // "Goal" chip. Completed closed loops read via the Completed badge instead.
+  const closedActive = isClosed(job) && !completed
   const hydrated = useHydrated()
 
   // The loader seeds `job.runs` with the newest page; we lazily fetch OLDER
@@ -73,12 +76,20 @@ export function LoopCard({
             {job.graduation}
           </span>
         )}
-        {done && (
-          <span className="inline-flex h-5 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-display">
-            Done
+        {completed && (
+          <span className="inline-flex h-5 items-center rounded border border-[color:var(--color-success)]/40 px-2 font-mono text-[10.5px] tracking-[0.06em] text-success">
+            Completed
           </span>
         )}
-        {!done && !en && (
+        {!completed && closedActive && (
+          <span
+            className="inline-flex h-5 items-center rounded border border-hairline px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary"
+            title={job.goal ?? undefined}
+          >
+            Goal
+          </span>
+        )}
+        {!completed && !en && (
           <span className="inline-flex h-5 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary">
             Paused
           </span>
@@ -109,6 +120,13 @@ export function LoopCard({
           </span>
         )}
       </div>
+
+      {completed && (
+        <div className="mt-1.5 font-mono text-[11.5px] tracking-[0.04em] text-success">
+          Completed{job.completedAt ? ` · ${fmt(job.completedAt)}` : ''}
+          {job.completionReason && <span className="text-secondary"> — {job.completionReason}</span>}
+        </div>
+      )}
     </div>
   )
 }

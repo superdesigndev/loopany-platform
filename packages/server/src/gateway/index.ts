@@ -20,11 +20,11 @@ import * as store from "../db/store.js";
 import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, Run, RunArtifact, RunRole, RunStatus, StateField, TranscriptStep } from "../db/schema.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
-import { dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
+import { completionMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
-import { loopBytesCap, snapshotRetention } from "../env.js";
+import { loopBytesCap, selfCronFloorMinutes, selfRescheduleFloorMinutes, snapshotRetention } from "../env.js";
 import {
   machineIdFromToken,
   getDeviceOwner,
@@ -66,6 +66,7 @@ const EDITABLE_LOOP_FIELDS = new Set([
   "workflow",
   "ui",
   "stateSchema",
+  "goal",
 ]);
 const MIN_INTERVAL_MS = 60_000;
 const MAX_ARTIFACTS = 200;
@@ -82,6 +83,9 @@ const CURSOR_CAP = 256 * 1024;
 const MESSAGE_CAP = 2000;
 /** A claude-code session id is a UUID-ish token — anything longer is garbage. */
 const SESSION_ID_CAP = 200;
+/** A loop's goal (setpoint) is a one-line, checkable statement — clip generously
+ *  but keep it a single line's worth (not a document). Shared by createLoop/editLoop. */
+const GOAL_CAP = 2000;
 /** A poll heartbeat legitimately carries one progress entry per in-flight run on the
  *  machine; anything past a generous cap is garbage — process at most this many. */
 const MAX_PROGRESS_ENTRIES = 32;
@@ -356,6 +360,9 @@ export class MachineGateway {
         canSetUi: structural,
         canSetSchema: structural,
         canSetWorkflow: structural,
+        // Only an EXEC run on a CLOSED loop (goal set) may finish it — independent
+        // of allowControl (like the structural caps). Evolve/edit never finish.
+        canFinish: run.role === "exec" && loop.goal != null,
       });
       store.updateRun(run.id, { phase: "running", ts: nowIso() });
       deliveries.push(buildDelivery(loop, run.id, token, machine.roots ?? []));
@@ -412,6 +419,9 @@ export class MachineGateway {
       taskFile?: unknown;
       stateSchema?: unknown;
       notify?: unknown;
+      /** Optional closed-loop setpoint. Non-null ⇒ the loop is CLOSED (self-finishes
+       *  when met); null/absent ⇒ OPEN (monitor/digest). */
+      goal?: unknown;
       /** Coding agent the daemon recorded as this loop's host (claude-code | codex).
        *  Absent for older daemons → defaults to claude-code. Recording-only: a codex
        *  loop is still executed via Claude for now. */
@@ -440,6 +450,8 @@ export class MachineGateway {
     const task = str(body.task)?.slice(0, WIRE_TEXT_CAP) ?? null;
     const workflow = str(body.workflow)?.slice(0, WIRE_TEXT_CAP) ?? null;
     if (!task && !workflow) return { status: 400, body: { error: "provide a workflow (JS) or a task (instruction)" } };
+    // Optional setpoint (clipped one-liner); absent/blank ⇒ open loop.
+    const goal = str(body.goal)?.slice(0, GOAL_CAP) ?? null;
 
     const notify = body.notify === "always" || body.notify === "never" ? body.notify : "auto";
     // Recorded coding agent: trust the daemon's resolved value when it's a known
@@ -492,6 +504,7 @@ export class MachineGateway {
       taskFile: str(body.taskFile),
       stateSchema: store.coerceStateSchema(body.stateSchema) ?? null,
       notify,
+      goal,
       agent,
       enabled: true,
     });
@@ -604,6 +617,7 @@ export class MachineGateway {
       workflow?: unknown;
       ui?: unknown;
       stateSchema?: unknown;
+      goal?: unknown;
     },
   ): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
@@ -648,6 +662,10 @@ export class MachineGateway {
     }
     if (p.allowControl !== undefined) update.allowControl = !!p.allowControl;
     if (p.enabled !== undefined) update.enabled = !!p.enabled;
+    // Goal set (non-empty) / clear (null|blank). store.updateLoop enforces the
+    // lifecycle invariant: clearing the goal also clears the completion stamps,
+    // and enabling a completed loop reopens it (drops the stamps).
+    if (p.goal !== undefined) update.goal = str(p.goal)?.slice(0, GOAL_CAP) ?? null;
     if (p.runAt !== undefined) {
       const when = parseWhen(String(p.runAt));
       if (!when) return { status: 400, body: { error: "run-at must be 30m|2h|1d or a future ISO time" } };
@@ -843,6 +861,51 @@ export class MachineGateway {
     }
     log.info({ runId: slot.runId, ok }, "report: finalized");
     return { status: 200, body: { ok: true } };
+  }
+
+  /**
+   * The `loopany finish` verb's effect (closed-loop self-termination): record THIS
+   * run as an ordinary success (phase=done, outcome=exec, status=resolved) with the
+   * run's summary/metrics, then stamp the loop terminal (completedAt=now,
+   * completionReason, enabled=false), remove it from the scheduler, capture the end-
+   * state snapshot, and fire a completion notification unless notify=never. The run
+   * token is revoked so the daemon's later /machine/report is ignored — finish is
+   * self-contained (no double-finalize, no double-notify). Gated upstream by
+   * slot.canFinish (exec-on-closed-loop only).
+   */
+  private finishLoop(
+    slot: RunSlot,
+    { message, reason, state }: { message?: string; reason: string | null; state?: Record<string, number | string> },
+  ): Applied {
+    const ts = nowIso();
+    store.updateRun(slot.runId, {
+      phase: "done",
+      outcome: "exec",
+      status: "resolved",
+      ...(message !== undefined ? { message } : {}),
+      ...(state !== undefined ? { state } : {}),
+      progress: null,
+      ts,
+    });
+    const loop = store.updateLoop(slot.loopId, { completedAt: ts, completionReason: reason, enabled: false });
+    this.scheduler.removeLoop(slot.loopId);
+    // Snapshot the loop's end-state (Phase 3 diff baseline), best-effort like report().
+    try {
+      store.putRunSnapshot(slot.runId, slot.loopId, store.buildLoopManifest(slot.loopId));
+      store.pruneRunSnapshots(slot.loopId, snapshotRetention());
+    } catch (err) {
+      log.warn({ runId: slot.runId, err: err instanceof Error ? err.message : String(err) }, "finish: snapshot capture failed");
+    }
+    // Terminal, self-contained: kill the run token so the daemon's subsequent
+    // /machine/report can't re-finalize the run or double-fire the notification.
+    revokeRunTokensForRun(slot.runId);
+    // Completion is a distinct terminal event — notify unless the user opted out
+    // of all pushes (notify: "never"). Best-effort (void), like the report path.
+    if (loop && loop.notify !== "never") {
+      void this.notify(loop, completionMessage(reason, message));
+    }
+    log.info({ runId: slot.runId, loopId: slot.loopId }, "finish: loop completed");
+    return { ok: true, detail: "loop finished — goal met, loop completed" };
   }
 
   // ---- POST /api/machine/sync ----
@@ -1130,7 +1193,32 @@ export class MachineGateway {
         return { code: 200, text: "reported" };
       }
       case "show":
-        return { code: 200, text: this.describe(slot.loopId, slot.allowControl) };
+        return { code: 200, text: this.describe(slot.loopId, slot.allowControl, slot.canFinish) };
+      case "finish":
+      case "complete": {
+        if (!slot.canFinish) {
+          // canFinish is false both for OPEN loops (no goal) and for evolve/edit
+          // runs — give the right message for each. The open-loop case is primary.
+          const loop = store.getLoop(slot.loopId);
+          if (!loop || loop.goal == null) {
+            return { code: 403, text: "loopany: this loop has no goal to finish (it's an open/monitor loop)" };
+          }
+          return { code: 403, text: "loopany: only an exec run may finish a loop" };
+        }
+        // Optional --state, validated exactly like the report verb.
+        const rawState = str("state") ?? str("state-content");
+        let state: Record<string, number | string> | undefined;
+        if (rawState !== undefined) {
+          const loop = store.getLoop(slot.loopId);
+          const v = validateState(rawState, loop?.stateSchema ?? undefined);
+          if (!v.ok) return { code: 400, text: `loopany: ${v.error}` };
+          state = v.value;
+        }
+        const message = str("message")?.slice(0, MESSAGE_CAP);
+        const reason = str("reason")?.slice(0, MESSAGE_CAP) ?? null;
+        const r = this.finishLoop(slot, { message, reason, state });
+        return r.ok ? { code: 200, text: r.detail ?? "finished" } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
+      }
       case "set-ui": {
         if (!slot.canSetUi) return { code: 403, text: "loopany: only the evolution or edit pass may set the UI" };
         const html = str("body") ?? str("file-content");
@@ -1179,6 +1267,9 @@ export class MachineGateway {
       "  report [--status new|resolved|nothing-new] [--message <s>] [--sample <n>] [--state '{\"k\":n}' | --state-file <p>]",
       "          record this run's outcome + metrics (keys must match the loop's schema)",
       "  show    print this loop's current config + recent state",
+      ...(slot.canFinish
+        ? ['  finish  --message "<achieved>" [--reason "<one line>"]  declare the goal met — completes this loop']
+        : []),
       "",
       `dashboard / gate (${structural}):`,
       "  set-ui --file <path>        replace the dashboard HTML",
@@ -1200,6 +1291,12 @@ export class MachineGateway {
         const when = next ? parseWhen(next) : undefined;
         if (!when) return { ok: false, detail: `reschedule needs --next <30m|2h|ISO>` };
         if (Date.parse(when) > Date.now() + MAX_NEXT_MS) return { ok: false, detail: "too far in the future (>30d)" };
+        // Self-schedule floor (RUN path only; the owner's edit path is unlimited): a
+        // run may not schedule itself sooner than the reschedule floor.
+        const floorMin = selfRescheduleFloorMinutes();
+        if (Date.parse(when) - Date.now() < floorMin * 60_000) {
+          return { ok: false, detail: `a run can't reschedule sooner than ${floorMin} min out — the owner can set any time via edit` };
+        }
         const loop = store.updateLoop(loopId, { nextRunAt: when });
         if (loop) this.scheduler.addLoop(loop);
         return { ok: true, detail: `next run at ${new Date(when).toLocaleString()}` };
@@ -1207,8 +1304,20 @@ export class MachineGateway {
       case "set-cron": {
         const cron = str("_") ?? str("cron");
         if (!cron) return { ok: false, detail: 'set-cron needs the expression, e.g. set-cron "*/30 * * * *"' };
-        const c = validCadence(cron, store.getLoop(loopId)?.timezone);
+        const tz = store.getLoop(loopId)?.timezone;
+        const c = validCadence(cron, tz);
         if (!c.ok) return c;
+        // Self-schedule floor (RUN path only; owner's edit path is unlimited): a run
+        // may not set a cron whose adjacent fires (probed in the loop's tz, like
+        // validCadence) are closer than the cron floor.
+        const floorMin = selfCronFloorMinutes();
+        const interval = cronIntervalMs(cron, tz);
+        if (interval !== null && interval < floorMin * 60_000) {
+          return {
+            ok: false,
+            detail: `a run can't schedule more often than every ${floorMin} min (that cron fires every ~${Math.round(interval / 60_000)} min) — the owner can set any cadence via edit`,
+          };
+        }
         const loop = store.updateLoop(loopId, { cron });
         if (loop) this.scheduler.addLoop(loop);
         return { ok: true, detail: `cron set to "${cron}"` };
@@ -1316,7 +1425,7 @@ export class MachineGateway {
   // flag — so an evolve/edit pass reads as allowed while a normal exec run reflects
   // the loop's flag. The standing exec prompt's §4 tells the run to consult this line
   // before attempting reschedule/set-cron. Undefined ⇒ omit the line (non-run callers).
-  private describe(loopId: string, allowControl?: boolean): string {
+  private describe(loopId: string, allowControl?: boolean, canFinish?: boolean): string {
     const loop = store.getLoop(loopId);
     if (!loop) return "loop not found";
     let next = "?";
@@ -1334,8 +1443,13 @@ export class MachineGateway {
       `nextRunAt: ${loop.nextRunAt ?? "—"}`,
       `enabled: ${loop.enabled}`,
       `notify: ${loop.notify}`,
+      // The setpoint: a value ⇒ CLOSED loop (finishable); "—" ⇒ OPEN (monitor).
+      `goal: ${loop.goal ?? "—"}`,
     ];
     if (allowControl !== undefined) lines.push(`self-schedule: ${allowControl ? "allowed" : "off"}`);
+    // Whether THIS run may declare the goal met (exec-on-closed-loop). Mirrors the
+    // self-schedule line's run-gating (omitted for non-run callers).
+    if (canFinish !== undefined) lines.push(`self-finish: ${canFinish ? "allowed" : "off"}`);
     return lines.join("\n");
   }
 
@@ -1461,6 +1575,23 @@ function validCadence(cron: string, timezone?: string | null): Applied {
     return { ok: true };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Milliseconds between a cron's next two fires, probed IN the loop's timezone
+ *  (fire times shift with it) — the self-schedule cron floor's adjacent-interval
+ *  check. Null when the expression can't fire twice / is invalid (the caller has
+ *  already run validCadence, so null here just skips the floor). */
+function cronIntervalMs(cron: string, timezone?: string | null): number | null {
+  try {
+    const c = new Cron(cron, { paused: true, ...(timezone ? { timezone } : {}) });
+    const a = c.nextRun();
+    const b = a ? c.nextRun(a) : null;
+    c.stop();
+    if (!a || !b) return null;
+    return b.getTime() - a.getTime();
+  } catch {
+    return null;
   }
 }
 

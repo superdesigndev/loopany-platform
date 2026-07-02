@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
 import type { JobSummary, RunSummary } from '../types'
-import { dotColor, dotLabel, dur, fmt, isDone, until } from '../lib/format'
+import { dotColor, dotLabel, dur, fmt, isCompleted, until } from '../lib/format'
 import { runPulseAnim, useHydrated } from './ui'
 
 /*
@@ -112,7 +112,7 @@ export function Timeline({
 }) {
   const all = runs
   const en = job.enabled
-  const done = isDone(job)
+  const done = isCompleted(job)
   const L = all.length
   // Older runs that exist server-side but aren't fetched yet (never negative —
   // total can briefly lag the seeded page mid-poll).

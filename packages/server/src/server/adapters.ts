@@ -73,6 +73,9 @@ export function toJobSummary(loop: Loop): JobSummary {
     running: store.hasOpenRun(loop.id),
     lastRunTs: runs.length ? runs[runs.length - 1]!.ts : null,
     graduation: null, // shadow/graduation is post-v1
+    goal: loop.goal ?? null,
+    completedAt: loop.completedAt ?? null,
+    completionReason: loop.completionReason ?? null,
     runs,
     runCount: store.countRuns(loop.id),
   };
@@ -85,6 +88,9 @@ function toJobFull(loop: Loop): JobFull {
     cron: loop.cron,
     enabled: loop.enabled,
     notify: loop.notify,
+    goal: loop.goal ?? null,
+    completedAt: loop.completedAt ?? null,
+    completionReason: loop.completionReason ?? null,
     task: loop.task ?? undefined,
     taskFile: loop.taskFile ?? undefined,
     workflow: loop.workflow ?? undefined,

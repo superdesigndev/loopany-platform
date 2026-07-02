@@ -6,7 +6,7 @@ import { getAuthState, listJobs, listMyTeams, listTemplates } from '../server/lo
 import { listMachines } from '../server/machineFns'
 import { authClient, useSession } from '../lib/auth-client'
 import type { RunSummary, TemplateInfo } from '../types'
-import { isDone } from '../lib/format'
+import { isCompleted } from '../lib/format'
 import { LoopCard } from '../components/LoopCard'
 import { TeamSwitcher } from '../components/TeamSwitcher'
 import { MachinesModal } from '../components/MachinesModal'
@@ -120,8 +120,8 @@ function Dashboard() {
   }, [refetch, anyRunning])
 
   const refresh = () => void refetch()
-  const done = jobs.filter(isDone)
-  const active = jobs.filter((j) => !isDone(j))
+  const completed = jobs.filter(isCompleted)
+  const active = jobs.filter((j) => !isCompleted(j))
   const activeOn = active.filter((j) => j.enabled).length
 
   const cardProps = () => ({
@@ -212,17 +212,17 @@ function Dashboard() {
           </div>
         )}
 
-        {done.length > 0 && (
+        {completed.length > 0 && (
           <>
             <div className="mb-5 mt-11 flex items-baseline gap-3">
               <span className="font-mono text-[12px] tracking-[0.12em] text-display">
-                Done
+                Completed
               </span>
               <span className="font-mono text-[11px] tracking-[0.04em] text-secondary">
-                {done.length} COMPLETED
+                {completed.length} COMPLETED
               </span>
             </div>
-            {done.map((j) => (
+            {completed.map((j) => (
               <LoopCard key={j.id} job={j} {...cardProps()} />
             ))}
           </>

@@ -84,6 +84,40 @@ LLM and executes no user code**.
   messages and a report's `error` clip at `MESSAGE_CAP` (2000), `sessionId` at `SESSION_ID_CAP`
   (200); a report's claimed `outcome` is whitelisted against `RUN_OUTCOMES`, anything else falls
   back to the role default.
+- **Open/closed loops + goal self-termination (batch 1 of the loop redesign; migration
+  `0015`).** Closed-ness DERIVES from goal presence — NO `kind` column: `loops.goal == null`
+  ⇒ OPEN (monitor/digest, never self-terminates); `!= null` ⇒ CLOSED (each exec run is the
+  comparator and may call `loopany finish` when the setpoint is met). Terminal state lives on
+  the loop: `loops.completedAt` + `loops.completionReason` (both nullable); completing forces
+  `enabled=false` (scheduler skips for free). **Structural invariant `completedAt != null implies
+  goal != null` is enforced at the single write chokepoint `store.updateLoop`**, which also runs
+  the lifecycle side effects for EVERY caller (editLoop/patchJob/finish/reopen): `goal:null` also
+  clears the completion stamps; `enabled:true` on a completed loop is a REOPEN (drops stamps, goal
+  survives); `enabled:false` is a plain pause (stamps untouched); an explicit `completedAt` in the
+  same patch (finish) wins over the reopen clear. `allowControl` **default flipped to TRUE** (0015
+  flips existing rows too) — `false` now means "owner PINS the schedule". **The `finish`/`complete`
+  verb** (gateway dispatch) is gated by `slot.canFinish`, minted at poll as `run.role === "exec" &&
+  loop.goal != null` (independent of allowControl, like the structural caps — evolve/edit NEVER get
+  it). It records the run as an ordinary success (phase=done/outcome=exec/status=resolved, accepts
+  `--message`/`--reason`/`--state`), stamps the loop terminal + disabled, `scheduler.removeLoop`,
+  captures the end-state snapshot, **revokes the run token so the daemon's later `/machine/report`
+  is a no-op (self-contained: no double-finalize/double-notify)**, and fires `completionMessage`
+  via the injectable notifier unless `notify:"never"`. Open-loop finish ⇒ 403 "no goal to finish";
+  non-exec ⇒ 403 "only an exec run". `describe()`/`loopany show` gained `goal:` + `self-finish:
+  allowed|off` lines (run-gated like `self-schedule:`). **Cadence floors apply to the RUN
+  self-schedule path ONLY** (owner `editLoop` unlimited): run-token `set-cron` rejected when
+  adjacent fires (probed in the loop tz via `cronIntervalMs`, like `validCadence`) are under
+  `LOOPANY_SELF_CRON_FLOOR_MINUTES` (15); run-token `reschedule --next` rejected under
+  `LOOPANY_SELF_RESCHEDULE_FLOOR_MINUTES` (5) — both lazy env reads in `env.ts`. UI: `lib/format`
+  `isDone` (the old disabled+resolved heuristic) is REPLACED by `isCompleted(j)=j.completedAt!=null`
+  (+ `isClosed(j)=!!j.goal`); the dashboard split is completed-vs-not (section renamed "Completed";
+  paused loops stay active). Closed active loops get a quiet "Goal" chip + a "Working toward:
+  <goal>" line; completed loops get a green "Completed" badge + reason/date meta, the menu's
+  pause item becomes "Reopen" (patch `enabled:true`), and "Run once" is disabled until reopened.
+  NO progress bar / goalMetric / goalTarget (out of scope). Deferred to batch 2/3: the `task`
+  column removal + static trigger, CLI/skill changes. Goal/completedAt/completionReason surface on
+  `JobSummary`/`JobFull` via `adapters.ts`; `goal` accepted by createLoop/editLoop (clip
+  `GOAL_CAP`=2000) + web `patchJob`.
 - **The loopany agent skill (`packages/server/src/skill/`).** The loop-builder
   knowledge is a real, installable agent skill — NOT one inline doc. **ALL prompt prose
   now lives under `src/skill/`** (the unify that retired `scheduler/prompts/` entirely).

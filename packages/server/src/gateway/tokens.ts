@@ -100,6 +100,10 @@ export interface RunSlot {
   canSetUi?: boolean;
   canSetSchema?: boolean;
   canSetWorkflow?: boolean;
+  /** May THIS run declare the loop's goal met via `loopany finish`? Minted true
+   *  only for an EXEC run on a CLOSED loop (loop.goal != null) — independent of
+   *  allowControl (like the structural caps). Evolve/edit runs never get it. */
+  canFinish?: boolean;
 }
 
 const slots = new Map<string, RunSlot>();

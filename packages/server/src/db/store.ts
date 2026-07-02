@@ -106,10 +106,31 @@ export function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "updatedAt"
   return db.insert(loops).values(row).returning().get();
 }
 
-/** Partial update; stamps updatedAt. Returns the fresh row (or undefined if gone). */
+/**
+ * Partial update; stamps updatedAt. Returns the fresh row (or undefined if gone).
+ *
+ * Also enforces the goal / completion lifecycle invariants at the single write
+ * chokepoint (so every caller — editLoop, patchJob, the finish verb, reopen —
+ * behaves identically):
+ *  - clearing the goal (`goal: null`) also clears the completion stamps, keeping
+ *    the structural invariant "completedAt != null implies goal != null";
+ *  - re-enabling a COMPLETED loop (`enabled: true`) is a REOPEN — drop the terminal
+ *    stamps so it resumes as an ordinary active loop. A plain pause (`enabled:
+ *    false`) leaves the stamps untouched. An explicit `completedAt` in the same
+ *    patch (the finish verb) wins over the reopen clear.
+ */
 export function updateLoop(id: string, patch: Partial<NewLoop>): Loop | undefined {
+  const extra: Partial<NewLoop> = {};
+  if (patch.goal === null) {
+    extra.completedAt = null;
+    extra.completionReason = null;
+  }
+  if (patch.enabled === true && patch.completedAt === undefined && getLoop(id)?.completedAt) {
+    extra.completedAt = null;
+    extra.completionReason = null;
+  }
   db.update(loops)
-    .set({ ...patch, updatedAt: nowIso() })
+    .set({ ...patch, ...extra, updatedAt: nowIso() })
     .where(eq(loops.id, id))
     .run();
   return getLoop(id);

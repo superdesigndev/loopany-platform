@@ -254,6 +254,9 @@ export const patchJob = createServerFn({ method: 'POST' })
       ...(p.notify !== undefined ? { notify: p.notify as 'auto' | 'always' | 'never' } : {}),
       ...(p.channelId !== undefined ? { channelId: p.channelId || null } : {}),
       ...(p.enabled !== undefined ? { enabled: !!p.enabled } : {}),
+      // Goal set/clear (store.updateLoop enforces the completion-stamp lifecycle:
+      // clearing goal or reopening via enabled:true drops the terminal stamps).
+      ...(p.goal !== undefined ? { goal: p.goal?.trim() || null } : {}),
       ...(p.task !== undefined ? { task: p.task.trim() || null } : {}),
       ...(p.taskFile !== undefined ? { taskFile: p.taskFile.trim() || null } : {}),
       ...(p.workflow !== undefined ? { workflow: p.workflow.trim() || null } : {}),

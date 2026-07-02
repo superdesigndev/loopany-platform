@@ -82,6 +82,16 @@ export function failureMessage(reason?: string | null): string {
   return r ? `⚠️ Run failed — ${r}` : "⚠️ Run failed.";
 }
 
+/**
+ * The user-facing message for a CLOSED loop that reached its goal (`loopany
+ * finish`). A distinct, positive terminal event — surfaced unless notify=never
+ * (the caller gates that). Prefers the finishing run's reason, then its message.
+ */
+export function completionMessage(reason?: string | null, message?: string | null): string {
+  const detail = (reason ?? "").trim() || (message ?? "").trim();
+  return detail ? `✅ Goal reached — ${detail}` : "✅ Goal reached — this loop has completed.";
+}
+
 /** fetch + parse JSON + map to a SendResult, never throwing. `fault` returns an
  *  error string when the parsed body signals failure, or null on success. */
 async function postJson(

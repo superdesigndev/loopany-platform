@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary, TranscriptStep } from '../types'
-import { cronText, dotColor, dotLabel, dur, fmt, formatTranscript, isDone, tsShort, until } from '../lib/format'
+import { cronText, dotColor, dotLabel, dur, fmt, formatTranscript, isClosed, isCompleted, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { deleteJob, evolveJob, getJobDetail, getTranscript, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
@@ -249,7 +249,9 @@ export function LoopDetailView({ id }: { id: string }) {
   const showEvolve = true
   const online = detail.machine.online
   const offlineHint = !online ? 'Machine offline — reconnect first' : undefined
-  const done = isDone(s)
+  const completed = isCompleted(s)
+  // A closed loop still working toward its goal (not yet completed).
+  const closedActive = isClosed(s) && !completed
 
   const CONFIRM = {
     run: { q: 'Run one real cycle now?', note: 'Spawns the coding agent (claude).', cta: 'Run once', danger: false },
@@ -319,9 +321,9 @@ export function LoopDetailView({ id }: { id: string }) {
     <div className="flex flex-wrap items-center gap-2">
       <button
         className={btnKeyPrimary}
-        disabled={busy || !online}
+        disabled={busy || !online || completed}
         onClick={onRun}
-        title={offlineHint ?? (job.exec ? 'Spends credits' : undefined)}
+        title={completed ? 'Loop completed — reopen it to run again' : offlineHint ?? (job.exec ? 'Spends credits' : undefined)}
         aria-label={job.exec ? 'Run once — spends credits' : 'Run once'}
       >
         {pending === 'run' ? 'Running…' : 'Run once'}
@@ -349,7 +351,7 @@ export function LoopDetailView({ id }: { id: string }) {
                 Push…
               </Menu.Item>
               <Menu.Item className={menuItem} onClick={() => void onToggle(!s.enabled)}>
-                {s.enabled ? 'Pause' : 'Enable'}
+                {completed ? 'Reopen' : s.enabled ? 'Pause' : 'Enable'}
               </Menu.Item>
               <Menu.Separator className="my-1.5 h-px bg-hairline" />
               <Menu.Item className={menuItemDanger} onClick={() => setConfirming('delete')}>
@@ -547,15 +549,25 @@ export function LoopDetailView({ id }: { id: string }) {
                   Running
                 </span>
               )}
-              {done ? (
-                <span className="inline-flex h-5 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-display">
-                  Done
+              {completed ? (
+                <span className="inline-flex h-5 items-center rounded border border-[color:var(--color-success)]/40 px-2 font-mono text-[10.5px] tracking-[0.06em] text-success">
+                  Completed
                 </span>
               ) : !s.enabled ? (
                 <span className="inline-flex h-5 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary">
                   Paused
                 </span>
               ) : null}
+              {/* Closed loop still working toward its goal → the quiet "Goal" chip
+                  (same understated style as the agent chip, not a status pill). */}
+              {closedActive && (
+                <span
+                  className="inline-flex h-5 items-center rounded border border-hairline px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary"
+                  title={s.goal ?? undefined}
+                >
+                  Goal
+                </span>
+              )}
               {/* Which coding agent this loop is recorded against (loops.agent) —
                   a quiet, unobtrusive chip, not a status pill. */}
               <span
@@ -571,7 +583,7 @@ export function LoopDetailView({ id }: { id: string }) {
               </span>
               {metaDot}
               <span>next {fmt(s.nextRun)}</span>
-              {s.nextRun && s.enabled && !done && <span className="text-disabled">({until(s.nextRun)})</span>}
+              {s.nextRun && s.enabled && !completed && <span className="text-disabled">({until(s.nextRun)})</span>}
               {metaDot}
               <span className="inline-flex items-center gap-1.5" title={online ? 'Machine online' : 'Machine offline'}>
                 <span className={`size-1.5 rounded-full ${online ? 'bg-[color:var(--color-ok,#16a34a)]' : 'bg-disabled'}`} />
@@ -580,6 +592,19 @@ export function LoopDetailView({ id }: { id: string }) {
               {metaDot}
               <code className="font-mono text-disabled">{s.id}</code>
             </div>
+            {/* Closed active loop: the setpoint it's driving toward, in prose. */}
+            {closedActive && s.goal && (
+              <div className="mt-2 text-[13px] leading-snug text-secondary">
+                Working toward: <span className="text-primary">{s.goal}</span>
+              </div>
+            )}
+            {/* Completed: the recorded reason + when. */}
+            {completed && (
+              <div className="mt-2 text-[13px] leading-snug text-success">
+                Completed{s.completedAt ? ` · ${fmt(s.completedAt)}` : ''}
+                {s.completionReason && <span className="text-secondary"> — {s.completionReason}</span>}
+              </div>
+            )}
           </div>
         </div>
 
