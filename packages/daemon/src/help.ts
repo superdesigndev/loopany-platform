@@ -16,7 +16,8 @@ Usage: loopany [command] [options]
 Setup
   up                      Connect this machine / ensure its daemon is running
                           (idempotent; spawns a detached daemon if none is live).
-  new --config <file>     Create a loop from a config file.
+  new --json '<config>'   Create a loop from an inline JSON config (--json - reads
+    [--dry-run]           stdin). --dry-run validates + previews, creates nothing.
   skill [status|install]  Manage the loopany agent skill install (-g for global).
 
 Management
@@ -29,7 +30,8 @@ Management
 
 Interactive (edit loops from your own Claude Code, using the stored device token)
   loops                   List your loops.
-  edit                    Edit a loop.
+  edit <id> --json '<obj>'  Edit a loop (JSON-only + --workflow-file/--ui-file/
+    [--dry-run]           --schema-file; --dry-run previews before/after).
 
   -h, --help              Show this help.
 `;

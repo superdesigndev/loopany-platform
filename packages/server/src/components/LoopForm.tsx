@@ -17,7 +17,6 @@ export interface LoopFormSeed {
   taskFile?: string
   notify?: string
   channelId?: string | null
-  task?: string
   workflow?: string
   stateSchema?: StateField[]
   ui?: string
@@ -30,7 +29,6 @@ interface FormState {
   taskFile: string
   notify: string
   channelId: string
-  task: string
   workflow: string
   stateSchema: string
   ui: string
@@ -47,7 +45,6 @@ function initState(initial?: LoopFormSeed): FormState {
     taskFile: initial?.taskFile ?? '',
     notify: initial?.notify ?? 'auto',
     channelId: initial?.channelId ?? '',
-    task: initial?.task ?? '',
     workflow: initial?.workflow ?? '',
     stateSchema: initial?.stateSchema ? JSON.stringify(initial.stateSchema) : '',
     ui: initial?.ui ?? '',
@@ -127,7 +124,6 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           taskFile: f.taskFile.trim(),
           notify: f.notify,
           channelId: f.channelId || null,
-          task: f.task.trim(),
           workflow: f.workflow.trim(),
           ui: f.ui.trim() || undefined,
           exec,
@@ -198,9 +194,6 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           />
           allowControl (allow self-rescheduling)
         </label>
-
-        <label className={labelCls}>task (the instruction claude runs, or the brief for workflow agent() escalation, optional)</label>
-        <textarea className={areaCls} value={f.task} onChange={(e) => set('task', e.target.value)} />
 
         <label className={labelCls}>workflow (JS function body — zero-LLM; optional)</label>
         <textarea className={areaCls} value={f.workflow} onChange={(e) => set('workflow', e.target.value)} />

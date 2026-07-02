@@ -413,7 +413,6 @@ export class MachineGateway {
       name?: unknown;
       cron?: unknown;
       timezone?: unknown;
-      task?: unknown;
       workflow?: unknown;
       workdir?: unknown;
       taskFile?: unknown;
@@ -428,6 +427,9 @@ export class MachineGateway {
       agent?: unknown;
       /** Web's New-loop claim token — correlates this loop back to the dialog. */
       claim?: unknown;
+      /** Validate-only (`loopany new --dry-run`): run every check, persist NOTHING,
+       *  and return the normalized config + fire preview. Zero-exec preserved. */
+      dryRun?: unknown;
     },
   ): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
@@ -446,10 +448,13 @@ export class MachineGateway {
     if (!cadence.ok) return { status: 400, body: { error: `invalid cron: ${cadence.detail}` } };
 
     // Untrusted wire input — clip the free-text fields defensively (same
-    // discipline as taskFileContent on report).
-    const task = str(body.task)?.slice(0, WIRE_TEXT_CAP) ?? null;
+    // discipline as taskFileContent on report). The `task` column is GONE (batch 2):
+    // a loop's standing brief lives in its task file's Spec, and the run message is a
+    // server-composed static trigger (see buildExecTask). So a loop needs either a
+    // deterministic workflow OR a task file to work from.
     const workflow = str(body.workflow)?.slice(0, WIRE_TEXT_CAP) ?? null;
-    if (!task && !workflow) return { status: 400, body: { error: "provide a workflow (JS) or a task (instruction)" } };
+    const taskFile = str(body.taskFile);
+    if (!workflow && !taskFile) return { status: 400, body: { error: "provide a workflow (JS) or a taskFile (path to the loop's Spec)" } };
     // Optional setpoint (clipped one-liner); absent/blank ⇒ open loop.
     const goal = str(body.goal)?.slice(0, GOAL_CAP) ?? null;
 
@@ -458,6 +463,41 @@ export class MachineGateway {
     // agent, else default to claude-code (older daemons omit it; an unrecognized /
     // "unknown" value also degrades to the default rather than rejecting the loop).
     const agent: CodingAgent = body.agent === "codex" ? "codex" : "claude-code";
+
+    const stateSchema = store.coerceStateSchema(body.stateSchema) ?? null;
+
+    // Validate-only (`loopany new --dry-run`): every check above has passed, so
+    // return the normalized config + fire preview + open/closed classification and
+    // persist NOTHING (no store write, no scheduler, no team-auth side effects).
+    if (body.dryRun === true) {
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          dryRun: true,
+          config: {
+            name: str(body.name),
+            cron,
+            timezone: timezone ?? null,
+            taskFile: taskFile ?? null,
+            workdir: str(body.workdir) ?? null,
+            // The workflow JS body can be large — report presence, not the source.
+            workflow: workflow != null,
+            goal,
+            notify,
+            agent,
+            stateSchema,
+          },
+          timezone: timezone ?? null,
+          nextRuns: nextFires(cron, timezone, 3),
+          classification: goal != null ? "closed" : "open",
+          classificationText:
+            goal != null
+              ? "closed (has goal): will self-finish when the goal is met"
+              : "open: runs until paused",
+        },
+      };
+    }
 
     // Resolve the loop's TEAM. The connect-key/claim was minted under a specific
     // team's dashboard session; that bound team — not the machine's single home
@@ -498,11 +538,10 @@ export class MachineGateway {
       name: str(body.name),
       cron,
       timezone,
-      task,
       workflow,
       workdir: str(body.workdir),
-      taskFile: str(body.taskFile),
-      stateSchema: store.coerceStateSchema(body.stateSchema) ?? null,
+      taskFile,
+      stateSchema,
       notify,
       goal,
       agent,
@@ -619,6 +658,9 @@ export class MachineGateway {
       stateSchema?: unknown;
       goal?: unknown;
     },
+    /** Validate-only (`loopany edit --dry-run`): compute the per-key before→after
+     *  preview + rejections, persist NOTHING. */
+    dryRun = false,
   ): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
     if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
@@ -630,65 +672,47 @@ export class MachineGateway {
     // Whitelist: a typo in `--json` must fail loudly, never silently no-op, and
     // no non-listed field (id/teamId/userId/machineId/timestamps/…) may be touched.
     const unknownKeys = Object.keys(p).filter((k) => !EDITABLE_LOOP_FIELDS.has(k));
-    if (unknownKeys.length) {
+    // The real path rejects any unknown key up front (unchanged behavior). Dry-run
+    // reports them as per-key rejections instead, alongside the valid preview.
+    if (!dryRun && unknownKeys.length) {
       return {
         status: 400,
         body: { error: `unknown field(s): ${unknownKeys.join(", ")} — allowed: ${[...EDITABLE_LOOP_FIELDS].join(", ")}` },
       };
     }
-    const update: Partial<NewLoop> = {};
 
-    // Timezone before cron: the cadence probe runs in the loop's EFFECTIVE
-    // timezone (the patched one when the patch carries it, else the stored one).
-    if (p.timezone !== undefined) {
-      const tz = str(p.timezone);
-      if (tz && !validTimezone(tz)) return { status: 400, body: { error: invalidTimezoneError(tz) } };
-      update.timezone = tz;
-    }
-    if (p.cron !== undefined) {
-      const cron = str(p.cron);
-      if (!cron) return { status: 400, body: { error: "cron cannot be empty" } };
-      const c = validCadence(cron, p.timezone !== undefined ? update.timezone : loop.timezone);
-      if (!c.ok) return { status: 400, body: { error: `invalid cron: ${c.detail}` } };
-      update.cron = cron;
-    }
-    if (p.name !== undefined) update.name = str(p.name);
-    if (p.model !== undefined) update.model = str(p.model);
-    if (p.taskFile !== undefined) update.taskFile = str(p.taskFile);
-    if (p.notify !== undefined) {
-      const v = p.notify;
-      if (v !== "always" && v !== "auto" && v !== "never") return { status: 400, body: { error: "notify must be always|auto|never" } };
-      update.notify = v;
-    }
-    if (p.allowControl !== undefined) update.allowControl = !!p.allowControl;
-    if (p.enabled !== undefined) update.enabled = !!p.enabled;
-    // Goal set (non-empty) / clear (null|blank). store.updateLoop enforces the
-    // lifecycle invariant: clearing the goal also clears the completion stamps,
-    // and enabling a completed loop reopens it (drops the stamps).
-    if (p.goal !== undefined) update.goal = str(p.goal)?.slice(0, GOAL_CAP) ?? null;
-    if (p.runAt !== undefined) {
-      const when = parseWhen(String(p.runAt));
-      if (!when) return { status: 400, body: { error: "run-at must be 30m|2h|1d or a future ISO time" } };
-      if (Date.parse(when) > Date.now() + MAX_NEXT_MS) return { status: 400, body: { error: "run-at too far in the future (>30d)" } };
-      update.nextRunAt = when;
-    }
-    // Content fields reuse the SAME validators the run-token set-* path uses, so
-    // the owner edit surface can't drift from the evolve/edit run behavior. They
-    // also get the same wire clip discipline as createLoop's task/workflow.
-    if (p.workflow !== undefined) {
-      if (typeof p.workflow !== "string") return { status: 400, body: { error: "workflow must be a string (the pre-stage JS)" } };
-      update.workflow = this.validateWorkflow(p.workflow.slice(0, WIRE_TEXT_CAP)).value;
-    }
-    if (p.ui !== undefined) {
-      if (typeof p.ui !== "string") return { status: 400, body: { error: "ui must be a string (the dashboard HTML)" } };
-      update.ui = this.validateUi(p.ui.slice(0, WIRE_TEXT_CAP)).value;
-    }
-    if (p.stateSchema !== undefined) {
-      const v = this.validateSchema(id, p.stateSchema);
-      if (!v.ok) return { status: 400, body: { error: v.detail } };
-      update.stateSchema = v.value;
+    const { update, changes, rejections } = this.buildEditUpdate(loop, p);
+
+    if (dryRun) {
+      const allRejections = [
+        ...unknownKeys.map((k) => ({ key: k, reason: `unknown field — allowed: ${[...EDITABLE_LOOP_FIELDS].join(", ")}` })),
+        ...rejections,
+      ];
+      // Reflect store.updateLoop's derived lifecycle side effects in the preview so
+      // the owner sees the FULL consequence: clearing the goal (goal:null) or
+      // reopening a completed loop (enabled:true) also drops the terminal stamps.
+      const clearsStamps =
+        (update.goal === null || (update.enabled === true && update.completedAt === undefined)) && loop.completedAt != null;
+      if (clearsStamps) {
+        changes.push({ key: "completedAt", from: loop.completedAt, to: null });
+        changes.push({ key: "completionReason", from: loop.completionReason, to: null });
+      }
+      return {
+        status: 200,
+        body: {
+          ok: allRejections.length === 0,
+          dryRun: true,
+          id: loop.id,
+          name: loop.name ?? loop.id,
+          changes,
+          rejections: allRejections,
+        },
+      };
     }
 
+    // Real path: a validation rejection fails loudly (first one, preserving the
+    // per-field message + order the checks run in).
+    if (rejections.length) return { status: 400, body: { error: rejections[0]!.reason } };
     if (Object.keys(update).length === 0) return { status: 400, body: { error: "nothing to change" } };
 
     const updated = store.updateLoop(id, update);
@@ -698,6 +722,80 @@ export class MachineGateway {
     else this.scheduler.removeLoop(updated.id);
     log.info({ machineId, loopId: id, fields: Object.keys(update) }, "editLoop: applied");
     return { status: 200, body: { ok: true, id: updated.id, name: updated.name ?? updated.id, applied: Object.keys(update) } };
+  }
+
+  /**
+   * Validate + normalize an editLoop patch against the current loop, WITHOUT
+   * persisting. Returns the `update` to feed `store.updateLoop`, a per-key
+   * `changes` (before→after) preview, and any `rejections` (invalid values).
+   * Assumes unknown keys were already filtered by the caller. Field order mirrors
+   * the old inline checks so the real path's first-rejection message is stable.
+   */
+  private buildEditUpdate(
+    loop: Loop,
+    p: Record<string, unknown>,
+  ): { update: Partial<NewLoop>; changes: Array<{ key: string; from: unknown; to: unknown }>; rejections: Array<{ key: string; reason: string }> } {
+    const update: Partial<NewLoop> = {};
+    const changes: Array<{ key: string; from: unknown; to: unknown }> = [];
+    const rejections: Array<{ key: string; reason: string }> = [];
+    const set = (key: string, to: unknown, from: unknown): void => {
+      (update as Record<string, unknown>)[key] = to;
+      changes.push({ key, from: clipPreview(from), to: clipPreview(to) });
+    };
+
+    // Timezone before cron: the cadence probe runs in the loop's EFFECTIVE
+    // timezone (the patched one when the patch carries it, else the stored one).
+    if (p.timezone !== undefined) {
+      const tz = str(p.timezone);
+      if (tz && !validTimezone(tz)) rejections.push({ key: "timezone", reason: invalidTimezoneError(tz) });
+      else set("timezone", tz, loop.timezone);
+    }
+    if (p.cron !== undefined) {
+      const cron = str(p.cron);
+      if (!cron) rejections.push({ key: "cron", reason: "cron cannot be empty" });
+      else {
+        const c = validCadence(cron, p.timezone !== undefined ? update.timezone : loop.timezone);
+        if (!c.ok) rejections.push({ key: "cron", reason: `invalid cron: ${c.detail}` });
+        else set("cron", cron, loop.cron);
+      }
+    }
+    if (p.name !== undefined) set("name", str(p.name), loop.name);
+    if (p.model !== undefined) set("model", str(p.model), loop.model);
+    if (p.taskFile !== undefined) set("taskFile", str(p.taskFile), loop.taskFile);
+    if (p.notify !== undefined) {
+      const v = p.notify;
+      if (v !== "always" && v !== "auto" && v !== "never") rejections.push({ key: "notify", reason: "notify must be always|auto|never" });
+      else set("notify", v, loop.notify);
+    }
+    if (p.allowControl !== undefined) set("allowControl", !!p.allowControl, loop.allowControl);
+    if (p.enabled !== undefined) set("enabled", !!p.enabled, loop.enabled);
+    // Goal set (non-empty) / clear (null|blank). store.updateLoop enforces the
+    // lifecycle invariant: clearing the goal also clears the completion stamps,
+    // and enabling a completed loop reopens it (drops the stamps).
+    if (p.goal !== undefined) set("goal", str(p.goal)?.slice(0, GOAL_CAP) ?? null, loop.goal);
+    if (p.runAt !== undefined) {
+      const when = parseWhen(String(p.runAt));
+      if (!when) rejections.push({ key: "runAt", reason: "run-at must be 30m|2h|1d or a future ISO time" });
+      else if (Date.parse(when) > Date.now() + MAX_NEXT_MS) rejections.push({ key: "runAt", reason: "run-at too far in the future (>30d)" });
+      else set("nextRunAt", when, loop.nextRunAt);
+    }
+    // Content fields reuse the SAME validators the run-token set-* path uses, so
+    // the owner edit surface can't drift from the evolve/edit run behavior. They
+    // also get the same wire clip discipline as createLoop's workflow.
+    if (p.workflow !== undefined) {
+      if (typeof p.workflow !== "string") rejections.push({ key: "workflow", reason: "workflow must be a string (the pre-stage JS)" });
+      else set("workflow", this.validateWorkflow(p.workflow.slice(0, WIRE_TEXT_CAP)).value, loop.workflow);
+    }
+    if (p.ui !== undefined) {
+      if (typeof p.ui !== "string") rejections.push({ key: "ui", reason: "ui must be a string (the dashboard HTML)" });
+      else set("ui", this.validateUi(p.ui.slice(0, WIRE_TEXT_CAP)).value, loop.ui);
+    }
+    if (p.stateSchema !== undefined) {
+      const v = this.validateSchema(loop.id, p.stateSchema);
+      if (!v.ok) rejections.push({ key: "stateSchema", reason: v.detail });
+      else set("stateSchema", v.value, loop.stateSchema);
+    }
+    return { update, changes, rejections };
   }
 
   /** Read a New-loop claim's result (the web dialog polls this while waiting). */
@@ -755,6 +853,33 @@ export class MachineGateway {
       if (slot.role === "edit") this.scheduler.finishEdit(slot.loopId);
       if (slot.role === "evolve") this.scheduler.finishEvolution(slot.loopId);
       log.info({ runId: slot.runId }, "report: ignored (run was canceled)");
+      return { status: 200, body: { ok: true } };
+    }
+
+    // The run already finalized itself via `loopany finish` (phase "done"): the
+    // daemon's normal post-run report still arrives with the precise durationMs +
+    // sessionId (+ transcript/artifacts), which finish couldn't know mid-run. ENRICH
+    // the already-completed run with those so a finished run's log matches a reported
+    // one — but do NOT re-stamp the loop, re-notify, advance the cursor, or re-
+    // snapshot (finish did all of that). Then revoke the token: finish deliberately
+    // left it live for exactly this one enriching report.
+    if (run?.phase === "done") {
+      const enrichArtifacts = coerceArtifacts(body.artifacts);
+      const enrichTranscript = coerceTranscript(body.transcript);
+      store.updateRun(slot.runId, {
+        ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
+        ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
+        ...(enrichArtifacts ? { artifacts: enrichArtifacts } : {}),
+        ...(enrichTranscript ? { transcript: enrichTranscript } : {}),
+      });
+      if (typeof body.taskFileContent === "string") {
+        store.updateLoop(slot.loopId, {
+          taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
+          taskFileSyncedAt: nowIso(),
+        });
+      }
+      revokeRunToken(runToken);
+      log.info({ runId: slot.runId }, "report: enriched a finished run (durationMs/sessionId)");
       return { status: 200, body: { ok: true } };
     }
 
@@ -868,22 +993,50 @@ export class MachineGateway {
    * run as an ordinary success (phase=done, outcome=exec, status=resolved) with the
    * run's summary/metrics, then stamp the loop terminal (completedAt=now,
    * completionReason, enabled=false), remove it from the scheduler, capture the end-
-   * state snapshot, and fire a completion notification unless notify=never. The run
-   * token is revoked so the daemon's later /machine/report is ignored — finish is
-   * self-contained (no double-finalize, no double-notify). Gated upstream by
-   * slot.canFinish (exec-on-closed-loop only).
+   * state snapshot, and fire a completion notification unless notify=never. Gated
+   * upstream by slot.canFinish (exec-on-closed-loop only).
+   *
+   * TOCTOU guard: canFinish was minted at poll; the owner may have CLEARED the goal
+   * since (editLoop {goal:null}) — completing then would violate the invariant
+   * "completedAt != null implies goal != null". So re-read the loop and refuse with
+   * a clear error when it's no longer a closed loop. Nothing is stamped.
+   *
+   * The run token is NOT revoked here: finish can't know the run's precise durationMs
+   * / sessionId mid-run, so it leaves the token live for exactly ONE enriching
+   * post-run report (see report()'s phase==="done" branch), which records those and
+   * revokes. Because the token stays live, a second `finish` on the same run is
+   * possible — so this ALSO refuses when the loop is already completed
+   * (completedAt != null), keeping finish single-shot (no re-stamp, no re-snapshot,
+   * no re-notify). Double-notify/double-finalize stay impossible — both this guard
+   * and report()'s phase==="done" branch never re-stamp or re-notify.
    */
   private finishLoop(
     slot: RunSlot,
     { message, reason, state }: { message?: string; reason: string | null; state?: Record<string, number | string> },
   ): Applied {
+    // TOCTOU: refuse if the loop is no longer closed (goal cleared since poll).
+    const current = store.getLoop(slot.loopId);
+    if (!current || current.goal == null) {
+      return { ok: false, detail: "this loop no longer has a goal to finish — its goal was cleared since this run started" };
+    }
+    // Idempotency: the run token stays live for the enriching report, so a second
+    // `finish` on the same run is possible — refuse it so completion stays single-shot.
+    if (current.completedAt != null) {
+      return { ok: false, detail: "this loop is already finished" };
+    }
     const ts = nowIso();
+    // Record durationMs server-side from the run's claim/running timestamp so a
+    // finished run always carries a duration even if the daemon's enriching report
+    // is lost; the enriching report overrides it with the precise value.
+    const run = store.getRun(slot.runId);
+    const durationMs = run ? Date.now() - Date.parse(run.ts) : NaN;
     store.updateRun(slot.runId, {
       phase: "done",
       outcome: "exec",
       status: "resolved",
       ...(message !== undefined ? { message } : {}),
       ...(state !== undefined ? { state } : {}),
+      ...(Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs } : {}),
       progress: null,
       ts,
     });
@@ -896,9 +1049,6 @@ export class MachineGateway {
     } catch (err) {
       log.warn({ runId: slot.runId, err: err instanceof Error ? err.message : String(err) }, "finish: snapshot capture failed");
     }
-    // Terminal, self-contained: kill the run token so the daemon's subsequent
-    // /machine/report can't re-finalize the run or double-fire the notification.
-    revokeRunTokensForRun(slot.runId);
     // Completion is a distinct terminal event — notify unless the user opted out
     // of all pushes (notify: "never"). Best-effort (void), like the report path.
     if (loop && loop.notify !== "never") {
@@ -1547,6 +1697,15 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
+/** Bound a value for the dry-run before→after preview: a long content string
+ *  (workflow JS / dashboard HTML) is clipped so the response stays small; other
+ *  scalars/arrays pass through as-is (they're already small). */
+function clipPreview(v: unknown): unknown {
+  const CAP = 200;
+  if (typeof v === "string" && v.length > CAP) return v.slice(0, CAP) + `… (+${v.length - CAP} chars)`;
+  return v;
+}
+
 function validTimezone(tz: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: tz });
@@ -1592,6 +1751,28 @@ function cronIntervalMs(cron: string, timezone?: string | null): number | null {
     return b.getTime() - a.getTime();
   } catch {
     return null;
+  }
+}
+
+/** The next N fire times of a cron, probed IN the loop's timezone (fire times shift
+ *  with it — matching how the scheduler arms the loop), as ISO strings. Empty when
+ *  the expression is invalid (the caller has already run validCadence). Powers the
+ *  `--dry-run` fire preview. */
+export function nextFires(cron: string, timezone: string | null | undefined, n: number): string[] {
+  try {
+    const c = new Cron(cron, { paused: true, ...(timezone ? { timezone } : {}) });
+    const out: string[] = [];
+    let prev: Date | undefined;
+    for (let i = 0; i < n; i++) {
+      const next = prev ? c.nextRun(prev) : c.nextRun();
+      if (!next) break;
+      out.push(next.toISOString());
+      prev = next;
+    }
+    c.stop();
+    return out;
+  } catch {
+    return [];
   }
 }
 

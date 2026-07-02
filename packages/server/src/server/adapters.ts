@@ -91,7 +91,6 @@ function toJobFull(loop: Loop): JobFull {
     goal: loop.goal ?? null,
     completedAt: loop.completedAt ?? null,
     completionReason: loop.completionReason ?? null,
-    task: loop.task ?? undefined,
     taskFile: loop.taskFile ?? undefined,
     workflow: loop.workflow ?? undefined,
     stateSchema: loop.stateSchema ?? undefined,

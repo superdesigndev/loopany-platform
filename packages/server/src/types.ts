@@ -123,7 +123,6 @@ export interface JobFull {
   /** Terminal stamps (set when the loop's goal is declared met). */
   completedAt?: string | null
   completionReason?: string | null
-  task?: string
   taskFile?: string
   workflow?: string
   stateSchema?: StateField[]
@@ -251,7 +250,6 @@ export interface JobPayload {
   /** Set (non-empty) / clear (null|'') the closed-loop goal. Clearing also drops
    *  the completion stamps; the server enforces the lifecycle invariant. */
   goal?: string | null
-  task?: string
   workflow?: string
   stateSchema?: StateField[]
   ui?: string

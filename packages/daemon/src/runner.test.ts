@@ -49,6 +49,18 @@ describe("buildWorkflowFallbackTask", () => {
     expect(task).toContain("ALLOWLISTED env");
     expect(task).toContain("LOOPANY_WORKFLOW_ENV");
   });
+
+  test("composes with the server-sent STATIC trigger verbatim (task column removed → d.task IS the trigger)", () => {
+    // The fallback embeds the delivery's `task` — which the server now composes as a
+    // static trigger (read the task file, report-or-finish, + a Goal line for a closed
+    // loop). So the trigger, including any Goal (finish line), survives into the fallback.
+    const trigger =
+      "[loop run · MRR loop]\n\nRun now. Read your task file at loopany/mrr/README.md, follow its `## Spec`.\nGoal (finish line): reach 100 paying users\nEnd the run with `loopany report` — or `loopany finish`.";
+    const t = buildWorkflowFallbackTask(trigger, failure, "2026-07-01", "mrr");
+    expect(t).toContain("loopany/mrr/README.md");
+    expect(t).toContain("Goal (finish line): reach 100 paying users");
+    expect(t).toContain("loopany finish");
+  });
 });
 
 describe("foldEscalation", () => {

@@ -281,7 +281,7 @@ test("createLoop persists a valid IANA timezone and rejects a bogus one", () => 
     name: "Morning report",
     cron: "0 8 * * *",
     timezone: "Asia/Shanghai",
-    task: "do the thing",
+    taskFile: "loopany/x/README.md",
   });
   expect(ok.status).toBe(200);
   expect(store.getLoop((ok.body as any).id)!.timezone).toBe("Asia/Shanghai");
@@ -290,7 +290,7 @@ test("createLoop persists a valid IANA timezone and rejects a bogus one", () => 
     name: "Bad tz",
     cron: "0 8 * * *",
     timezone: "Mars/Phobos",
-    task: "do the thing",
+    taskFile: "loopany/x/README.md",
   });
   expect(bad.status).toBe(400);
   expect((bad.body as any).error).toMatch(/invalid timezone/);
@@ -302,17 +302,17 @@ test("createLoop records the coding agent: codex when declared, claude-code by d
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
 
   // Explicit codex (the daemon's measured env / --agent codex) is persisted verbatim.
-  const codex = gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", task: "x", agent: "codex" });
+  const codex = gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "codex" });
   expect(codex.status).toBe(200);
   expect(store.getLoop((codex.body as any).id)!.agent).toBe("codex");
 
   // Absent agent (older daemon) back-fills to claude-code via the column default.
-  const legacy = gateway().createLoop(token, { name: "Legacy loop", cron: "0 8 * * *", task: "x" });
+  const legacy = gateway().createLoop(token, { name: "Legacy loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   expect(legacy.status).toBe(200);
   expect(store.getLoop((legacy.body as any).id)!.agent).toBe("claude-code");
 
   // An unrecognized / "unknown" value degrades to the default rather than rejecting.
-  const weird = gateway().createLoop(token, { name: "Weird loop", cron: "0 8 * * *", task: "x", agent: "unknown" });
+  const weird = gateway().createLoop(token, { name: "Weird loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "unknown" });
   expect(weird.status).toBe(200);
   expect(store.getLoop((weird.body as any).id)!.agent).toBe("claude-code");
 });
@@ -321,7 +321,7 @@ test("editLoop changes a loop's envelope from its machine's device token", () =>
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "Daily", cron: "0 8 * * *", task: "x" });
+  const created = gateway().createLoop(token, { name: "Daily", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   const id = (created.body as any).id as string;
 
   const res = gateway().editLoop(token, id, { cron: "0 9 * * *", notify: "always", enabled: false });
@@ -342,7 +342,7 @@ test("editLoop repoints the task file and pushes workflow/ui/schema without a ru
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "Migrate", cron: "0 8 * * *", task: "x" });
+  const created = gateway().createLoop(token, { name: "Migrate", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   const id = (created.body as any).id as string;
 
   const res = gateway().editLoop(token, id, {
@@ -364,7 +364,7 @@ test("editLoop accepts stateSchema as a JSON string too (run-token parity)", () 
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", task: "x" });
+  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   const id = (created.body as any).id as string;
 
   const res = gateway().editLoop(token, id, { stateSchema: '[{"key":"visits","label":"Visits"}]' } as any);
@@ -376,7 +376,7 @@ test("editLoop validates content fields (bad schema → 400, loop untouched)", (
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", task: "x" });
+  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   const id = (created.body as any).id as string;
 
   const bad = gateway().editLoop(token, id, { stateSchema: [{ notKey: 1 }] } as any);
@@ -388,7 +388,7 @@ test("editLoop clips an oversized workflow to the wire cap (same discipline as c
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", task: "x" });
+  const created = gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   const id = (created.body as any).id as string;
 
   const res = gateway().editLoop(token, id, { workflow: "x".repeat(600 * 1024), ui: "<div>ok</div>" });
@@ -402,7 +402,7 @@ test("editLoop rejects an unknown patch key with a clear 400 (never silent no-op
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", task: "x" });
+  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   const id = (created.body as any).id as string;
 
   // A typo (or an attempt to patch an identity column) fails loudly.
@@ -418,7 +418,7 @@ test("editLoop refuses a loop bound to a different machine (404, no change)", ()
   const tokenA = tokens.mintDeviceToken();
   const machineA = tokens.machineIdFromToken(tokenA);
   store.createMachine({ id: machineA, userId: "u1", name: "A", tokenHash: tokens.sha256(tokenA), online: true });
-  const created = gateway().createLoop(tokenA, { name: "Owned", cron: "0 8 * * *", task: "x" });
+  const created = gateway().createLoop(tokenA, { name: "Owned", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   const id = (created.body as any).id as string;
 
   const tokenB = tokens.mintDeviceToken();
@@ -506,7 +506,7 @@ test("createLoop lands the loop in the connect-key's team, not the machine's hom
   const connectKey = tokens.mintDeviceToken();
   tokens.rememberClaimIntent(connectKey, { userId: "u1", teamId: "team-reuse" });
 
-  const res = gateway().createLoop(deviceToken, { name: "B loop", cron: "0 8 * * *", task: "x", claim: connectKey });
+  const res = gateway().createLoop(deviceToken, { name: "B loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: connectKey });
   expect(res.status).toBe(200);
   expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-reuse");
 });
@@ -518,7 +518,7 @@ test("createLoop rejects (403) a claim minted by a different user — fail close
   store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   tokens.rememberClaimIntent(token, { userId: "u2", teamId: "team-x" }); // minted by someone else
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x", claim: token });
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token });
   expect(res.status).toBe(403);
   expect(store.listLoops().length).toBe(0); // never mis-filed
 });
@@ -530,7 +530,7 @@ test("createLoop rejects (403) when the minter is no longer a member of the clai
   store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   tokens.rememberClaimIntent(token, { userId: "u1", teamId: "team-y" });
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x", claim: token });
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token });
   expect(res.status).toBe(403);
   expect(store.listLoops().length).toBe(0);
 });
@@ -543,7 +543,7 @@ test("createLoop authorizes a superadmin for any existing team even without a me
   store.createMachine({ id: machineId, userId: "admin1", teamId: "team-admin1", name: "M", tokenHash: tokens.sha256(token), online: true });
   tokens.rememberClaimIntent(token, { userId: "admin1", teamId: "team-admin" });
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x", claim: token });
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token });
   expect(res.status).toBe(200);
   expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-admin");
 });
@@ -553,7 +553,7 @@ test("createLoop with no claim falls back to the machine's home team (back-compa
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", teamId: "team-home", name: "M", tokenHash: tokens.sha256(token), online: true });
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x" });
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   expect(res.status).toBe(200);
   expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-home");
 });
@@ -566,7 +566,7 @@ test("createLoop with a claim for the machine's OWN home team needs no membershi
   store.createMachine({ id: machineId, userId: "shared", teamId: "team-shared", name: "M", tokenHash: tokens.sha256(token), online: true });
   tokens.rememberClaimIntent(token, { userId: "shared", teamId: "team-shared" });
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", task: "x", claim: token });
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token });
   expect(res.status).toBe(200);
   expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-shared");
 });
@@ -579,7 +579,7 @@ test("claimStatus surfaces the MEASURED agent so the New-loop confirmation shows
 
   // The daemon measured Codex on the host and sent it on the create; the claim
   // result must carry that recorded value (not a removed dialog pre-selection).
-  const res = gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", task: "x", agent: "codex", claim });
+  const res = gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "codex", claim });
   expect(res.status).toBe(200);
   expect(gateway().claimStatus(claim)?.agent).toBe("codex");
 });
@@ -652,8 +652,68 @@ test("finish completes a closed loop: run resolved, loop stamped terminal + disa
   expect(sent[0]!.loopId).toBe(loop.id);
   expect(sent[0]!.message).toContain("Goal reached");
 
-  // Self-contained: the run token is revoked so the daemon's later report is a no-op.
-  expect(gateway().agentApi(rt, ["show"]).status).toBe(401);
+  // finish records a server-computed durationMs even before the daemon's report.
+  expect(typeof r.durationMs).toBe("number");
+
+  // The run token stays live for exactly ONE enriching post-run report (which then
+  // revokes it) — so the daemon's report can add the precise durationMs/sessionId.
+  expect(gateway().agentApi(rt, ["show"]).status).toBe(200);
+});
+
+test("finish leaves the token live for the daemon's enriching report (durationMs + sessionId), which then revokes it", () => {
+  const { loop, run, rt } = seededClosedRun();
+  const gw = gateway();
+  expect(gw.agentApi(rt, ["finish", "--message", "done"]).status).toBe(200);
+
+  // The daemon's normal post-run report arrives with the precise durationMs + sessionId.
+  const rep = gw.report(rt, { ok: true, durationMs: 4321, sessionId: "sess-xyz" });
+  expect(rep.status).toBe(200);
+
+  const r = store.getRun(run.id)!;
+  expect(r.durationMs).toBe(4321);
+  expect(r.sessionId).toBe("sess-xyz");
+  // The loop stays completed (the enriching report never re-stamps).
+  expect(store.getLoop(loop.id)!.completedAt).toBeTruthy();
+  // Enrichment revoked the token — a second report is now a no-op (401).
+  expect(gw.report(rt, { ok: true, durationMs: 9 }).status).toBe(401);
+});
+
+test("finish TOCTOU: refuses (loop untouched) when the goal was cleared after the run started", () => {
+  const { token, loop, run, rt } = seededClosedRun();
+  // Owner clears the goal mid-run (editLoop {goal:null}) — the run's canFinish was
+  // minted at poll, so it's stale.
+  expect(gateway().editLoop(token, loop.id, { goal: null } as any).status).toBe(200);
+
+  const res = gateway().agentApi(rt, ["finish", "--message", "x"]);
+  expect(res.status).toBe(400);
+  expect((res.body as { text: string }).text).toMatch(/no longer has a goal/i);
+  const l = store.getLoop(loop.id)!;
+  expect(l.completedAt).toBeNull();
+  expect(l.enabled).toBe(true);
+  expect(store.getRun(run.id)!.phase).toBe("running"); // untouched
+});
+
+test("finish is single-shot: a second finish on the same still-live run refuses, no re-stamp/re-notify", () => {
+  const { loop, run, rt } = seededClosedRun();
+  const { sent, fn } = recordingNotify();
+  const gw = gateway(fn);
+
+  expect(gw.agentApi(rt, ["finish", "--message", "first", "--reason", "target met"]).status).toBe(200);
+  const first = store.getLoop(loop.id)!;
+  expect(first.completedAt).toBeTruthy();
+  expect(sent).toHaveLength(1);
+
+  // The token is still live (for the enriching report), so a second finish is attempted.
+  const res = gw.agentApi(rt, ["finish", "--message", "second", "--reason", "again"]);
+  expect(res.status).toBe(400);
+  expect((res.body as { text: string }).text).toMatch(/already finished/i);
+
+  // Loop stamps unchanged (no re-stamp), run message unchanged, no second notification.
+  const l = store.getLoop(loop.id)!;
+  expect(l.completedAt).toBe(first.completedAt);
+  expect(l.completionReason).toBe("target met");
+  expect(store.getRun(run.id)!.message).toBe("first");
+  expect(sent).toHaveLength(1);
 });
 
 test("finish alias `complete` works the same", () => {
@@ -745,10 +805,10 @@ test("createLoop accepts a goal (closed loop); absent goal ⇒ open loop", () =>
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
 
-  const closed = gateway().createLoop(token, { name: "C", cron: "0 8 * * *", task: "x", goal: "reach 100 users" });
+  const closed = gateway().createLoop(token, { name: "C", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "reach 100 users" });
   expect(store.getLoop((closed.body as any).id)!.goal).toBe("reach 100 users");
 
-  const open = gateway().createLoop(token, { name: "O", cron: "0 8 * * *", task: "x" });
+  const open = gateway().createLoop(token, { name: "O", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   expect(store.getLoop((open.body as any).id)!.goal).toBeNull();
 });
 
@@ -756,7 +816,7 @@ test("editLoop sets a goal, and clearing it (goal:null) also clears the completi
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "G", cron: "0 8 * * *", task: "x" });
+  const created = gateway().createLoop(token, { name: "G", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   const id = (created.body as any).id as string;
 
   expect(gateway().editLoop(token, id, { goal: "ship v1" }).status).toBe(200);
@@ -775,7 +835,7 @@ test("reopen: editLoop enabled:true on a completed loop clears the stamps; a pla
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "R", cron: "0 8 * * *", task: "x", goal: "g" });
+  const created = gateway().createLoop(token, { name: "R", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "g" });
   const id = (created.body as any).id as string;
   store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "met", enabled: false });
 
@@ -791,6 +851,105 @@ test("reopen: editLoop enabled:true on a completed loop clears the stamps; a pla
   store.updateLoop(id, { completedAt: "2026-07-02T00:00:00Z", completionReason: "met2", enabled: false });
   expect(gateway().editLoop(token, id, { enabled: false }).status).toBe(200);
   expect(store.getLoop(id)!.completedAt).toBe("2026-07-02T00:00:00Z");
+});
+
+// ---- --dry-run: validate-only preview for new + edit (no persistence) ----
+
+/** A connected machine + its device token, for the dry-run tests. */
+function seededMachine() {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  return { token, machineId };
+}
+
+test("createLoop --dry-run returns the normalized config + 3 fire times + closed classification, persists nothing", () => {
+  const { token, machineId } = seededMachine();
+  const before = store.loopsForMachine(machineId).length;
+  const res = gateway().createLoop(token, {
+    name: "DryClosed", cron: "0 8 * * *", timezone: "America/New_York",
+    taskFile: "loopany/x/README.md", goal: "ship v1", dryRun: true,
+  });
+  expect(res.status).toBe(200);
+  const b = res.body as any;
+  expect(b.dryRun).toBe(true);
+  expect(b.ok).toBe(true);
+  expect(b.classification).toBe("closed");
+  expect(b.classificationText).toMatch(/self-finish/i);
+  expect(b.nextRuns).toHaveLength(3);
+  expect(b.timezone).toBe("America/New_York");
+  expect(b.config.taskFile).toBe("loopany/x/README.md");
+  expect(b.config.goal).toBe("ship v1");
+  expect(b.config.workflow).toBe(false); // presence flag, not the source
+  // Nothing was persisted (no loop row created).
+  expect(store.loopsForMachine(machineId).length).toBe(before);
+});
+
+test("createLoop --dry-run classifies a goal-less loop as open", () => {
+  const { token } = seededMachine();
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "x", dryRun: true });
+  expect((res.body as any).classification).toBe("open");
+  expect((res.body as any).classificationText).toMatch(/runs until paused/i);
+});
+
+test("createLoop --dry-run still validates (bad cron → 400, nothing created)", () => {
+  const { token, machineId } = seededMachine();
+  const res = gateway().createLoop(token, { cron: "not a cron", taskFile: "x", dryRun: true });
+  expect(res.status).toBe(400);
+  expect(store.loopsForMachine(machineId)).toHaveLength(0);
+});
+
+test("createLoop --dry-run rejects a config with neither workflow nor taskFile", () => {
+  const { token } = seededMachine();
+  const res = gateway().createLoop(token, { cron: "0 8 * * *", dryRun: true });
+  expect(res.status).toBe(400);
+  expect((res.body as any).error).toMatch(/workflow.*taskFile/i);
+});
+
+test("editLoop --dry-run previews per-key before→after and persists nothing", () => {
+  const { token } = seededMachine();
+  const created = gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x" });
+  const id = (created.body as any).id as string;
+  const res = gateway().editLoop(token, id, { cron: "0 9 * * *", notify: "always" }, true);
+  expect(res.status).toBe(200);
+  const b = res.body as any;
+  expect(b.dryRun).toBe(true);
+  expect(b.ok).toBe(true);
+  const changes = b.changes as Array<{ key: string; from: unknown; to: unknown }>;
+  expect(changes.find((c) => c.key === "cron")).toEqual({ key: "cron", from: "0 8 * * *", to: "0 9 * * *" });
+  expect(changes.find((c) => c.key === "notify")?.to).toBe("always");
+  // Not persisted.
+  expect(store.getLoop(id)!.cron).toBe("0 8 * * *");
+  expect(store.getLoop(id)!.notify).toBe("auto");
+});
+
+test("editLoop --dry-run reports whitelist + invalid-value rejections (ok:false), changes nothing", () => {
+  const { token } = seededMachine();
+  const created = gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x" });
+  const id = (created.body as any).id as string;
+  const res = gateway().editLoop(token, id, { croon: "x", cron: "not a cron" } as any, true);
+  expect(res.status).toBe(200);
+  const b = res.body as any;
+  expect(b.dryRun).toBe(true);
+  expect(b.ok).toBe(false);
+  const keys = (b.rejections as Array<{ key: string }>).map((r) => r.key);
+  expect(keys).toContain("croon"); // whitelist rejection
+  expect(keys).toContain("cron"); // invalid-value rejection
+  expect(store.getLoop(id)!.cron).toBe("0 8 * * *");
+});
+
+test("editLoop --dry-run reflects the reopen stamp-clear in the preview", () => {
+  const { token } = seededMachine();
+  const created = gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x", goal: "g" });
+  const id = (created.body as any).id as string;
+  store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "met", enabled: false });
+  const res = gateway().editLoop(token, id, { enabled: true }, true);
+  const keys = ((res.body as any).changes as Array<{ key: string }>).map((c) => c.key);
+  expect(keys).toContain("enabled");
+  expect(keys).toContain("completedAt");
+  expect(keys).toContain("completionReason");
+  // Dry-run persisted nothing → the loop is still completed.
+  expect(store.getLoop(id)!.completedAt).toBe("2026-07-01T00:00:00Z");
 });
 
 // ---- self-schedule cadence floors (RUN path only; the owner's edit path is unlimited) ----
@@ -813,7 +972,7 @@ test("set-cron floor: a run can't schedule more often than 15 min; the owner's e
   const deviceToken = tokens.mintDeviceToken();
   const dm = tokens.machineIdFromToken(deviceToken);
   store.createMachine({ id: dm, userId: "u2", name: "D", tokenHash: tokens.sha256(deviceToken), online: true });
-  const owned = gateway().createLoop(deviceToken, { name: "Owned", cron: "0 8 * * *", task: "x" });
+  const owned = gateway().createLoop(deviceToken, { name: "Owned", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
   const oid = (owned.body as any).id as string;
   expect(gateway().editLoop(deviceToken, oid, { cron: "*/5 * * * *" }).status).toBe(200);
   expect(store.getLoop(oid)!.cron).toBe("*/5 * * * *");
@@ -1235,14 +1394,14 @@ test("poll processes at most 32 progress entries (excess is dropped)", () => {
   expect(store.getRun(run.id)!.progress).toMatchObject({ step: 5, label: "in the cap" });
 });
 
-test("createLoop clips an oversized task to the 512KB wire cap", () => {
+test("createLoop clips an oversized workflow to the 512KB wire cap", () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
 
-  const res = gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", task: "x".repeat(512 * 1024 + 100) });
+  const res = gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", workflow: "x".repeat(512 * 1024 + 100) });
   expect(res.status).toBe(200);
-  expect(store.getLoop((res.body as any).id)!.task!.length).toBe(512 * 1024);
+  expect(store.getLoop((res.body as any).id)!.workflow!.length).toBe(512 * 1024);
 });
 
 test("report ignores an over-cap workflow cursor but still finalizes the run", () => {

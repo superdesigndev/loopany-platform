@@ -110,7 +110,6 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
       machineId: b.machineId,
       name: b.name ?? null,
       cron: b.cron,
-      task: b.task ?? null,
       workdir: b.workdir ?? null,
       taskFile: b.taskFile ?? null,
       workflow: b.workflow ?? null,

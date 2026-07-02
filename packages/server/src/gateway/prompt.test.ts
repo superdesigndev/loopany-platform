@@ -19,7 +19,6 @@ const loop = (over: Partial<Loop> = {}): Loop =>
     name: "Test Loop",
     cron: "0 8 * * *",
     timezone: "America/New_York",
-    task: "Check the thing and report.",
     taskFile: "/work/loopany/test/README.md",
     stateSchema: null,
     allowControl: false,
@@ -110,9 +109,22 @@ test("exec system prompt lists declared metrics in the report line", () => {
   expect(p).toContain("mrr");
 });
 
-test("exec task points the agent at its standing instructions + report", () => {
+// The per-run task is a STATIC trigger (the `task` column is gone): it points the
+// run at its task file's Spec and states how the run ends (report or finish), with
+// NO per-loop instruction embedded.
+test("exec task is a static trigger pointing at the task file + report/finish (open loop, no goal line)", () => {
   const t = buildExecTask(loop());
   expect(t).toContain("[loop run · Test Loop]");
-  expect(t).toContain("Check the thing and report.");
+  expect(t).toContain("/work/loopany/test/README.md");
+  expect(t).toContain("## Spec");
   expect(t).toContain("loopany report");
+  expect(t).toContain("loopany finish");
+  // Open loop → no injected goal line.
+  expect(t).not.toContain("Goal (finish line):");
+  expect(t).not.toMatch(/\{\{\w+\}\}/);
+});
+
+test("exec task injects the setpoint as a Goal (finish line) for a closed loop", () => {
+  const t = buildExecTask(loop({ goal: "reach 100 paying users" }));
+  expect(t).toContain("Goal (finish line): reach 100 paying users");
 });

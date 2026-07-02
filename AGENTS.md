@@ -100,9 +100,11 @@ LLM and executes no user code**.
   loop.goal != null` (independent of allowControl, like the structural caps — evolve/edit NEVER get
   it). It records the run as an ordinary success (phase=done/outcome=exec/status=resolved, accepts
   `--message`/`--reason`/`--state`), stamps the loop terminal + disabled, `scheduler.removeLoop`,
-  captures the end-state snapshot, **revokes the run token so the daemon's later `/machine/report`
-  is a no-op (self-contained: no double-finalize/double-notify)**, and fires `completionMessage`
-  via the injectable notifier unless `notify:"never"`. Open-loop finish ⇒ 403 "no goal to finish";
+  captures the end-state snapshot, and fires `completionMessage`
+  via the injectable notifier unless `notify:"never"`. (**Batch 2 superseded the token-revoke
+  detail:** finish now records a server-computed `durationMs` and leaves the token live for ONE
+  enriching `report()` — see the batch-2 bullet's finish carry-overs; no double-finalize/notify
+  still holds.) Open-loop finish ⇒ 403 "no goal to finish";
   non-exec ⇒ 403 "only an exec run". `describe()`/`loopany show` gained `goal:` + `self-finish:
   allowed|off` lines (run-gated like `self-schedule:`). **Cadence floors apply to the RUN
   self-schedule path ONLY** (owner `editLoop` unlimited): run-token `set-cron` rejected when
@@ -118,11 +120,50 @@ LLM and executes no user code**.
   column removal + static trigger, CLI/skill changes. Goal/completedAt/completionReason surface on
   `JobSummary`/`JobFull` via `adapters.ts`; `goal` accepted by createLoop/editLoop (clip
   `GOAL_CAP`=2000) + web `patchJob`.
+- **CLI/JSON surface + `task`-column removal (batch 2 of the loop redesign; migration
+  `0016` = `ALTER TABLE loops DROP COLUMN task`).** The **`task` column is GONE end to end** —
+  schema, createLoop/editLoop/patchJob/`main.ts`, `adapters.ts` (`JobFull.task` dropped),
+  `types.ts` (`JobFull.task`/`JobPayload.task`), and the manual `LoopForm` fallback. A loop's
+  standing brief lives ONLY in its task file's `## Spec`. **`createLoop` now requires
+  `workflow || taskFile`** (was `workflow || task`). **The per-run message is a server-composed
+  STATIC trigger** (`gateway/prompt.ts` `buildExecTask`): a fixed template
+  `skill/run/exec-trigger.md` (imported `?raw` alongside `exec-loop`/`edit`; run-only, NOT
+  bundled/served — it's under `skill/run/` so the selective `sync-skill.mjs` whitelist already
+  excludes it) filled with `{{name}}`, `{{taskFile}}`, and a `{{goalLine}}` that becomes
+  `Goal (finish line): <goal>` for a closed loop (prompt-injected so it wins over the file). The
+  daemon needs NO change to compose it: `delivery.task` IS the trigger, so the workflow escalation
+  (`${d.task}\n\nworkflow signal:…`) and `buildWorkflowFallbackTask(d.task,…)` already embed it.
+  **`exec-trigger.md` is minimal + neutral ON PURPOSE — batch 3 owns the polished prose there.**
+  **Daemon CLI (breaking, next version — no users):** `loopany new --json '<inline>'` (or `--json -`
+  reads stdin) REPLACES `--config <file>`; `loopany edit` slims to **JSON-only + the content trio**
+  (`--json '<obj>'`, `--workflow-file`, `--ui-file`, `--schema-file`) — every scalar envelope flag
+  (`--cron/--tz/--name/--notify/--model/--pause/--resume/--run-at/--task-file`) AND `--json-file`
+  are DELETED; `buildPatch` now REJECTS an unknown/removed flag with `unknown flag --x — try
+  --help` (was: silently ignored). **`--dry-run` on BOTH verbs** (server validate-only; zero-exec,
+  no persistence): create returns `{config, timezone, nextRuns:[3 in-tz ISO], classification:
+  open|closed, classificationText}`; edit returns `{changes:[{key,from,to}], rejections:[{key,
+  reason}], ok}` (ok=false ⇒ CLI exits 1; the dry-run reflects the `store.updateLoop` reopen/
+  goal-clear stamp side effects). New body field `dryRun:true` (POST) / `editLoop(…, dryRun)` (PATCH,
+  4th arg via `body.dryRun`); `nextFires()` helper probes the cron in the loop tz. **Route rename:**
+  `/api/bootstrap` serves `bootstrap.md` (`routes/api.bootstrap.ts`); the old `/api/skill` root route
+  is DELETED; `ComposeModal` snippet is now `Fetch <origin>/api/bootstrap and help me build a loop.`
+  References STAY at `/api/skill/references/<file>` (untouched; in DEV that `.md` path 404s via
+  vite's static layer — the handler works in prod, guarded by its unit test). **finish carry-overs
+  (batch-1 review deferrals, now due — this CHANGES batch-1 behavior):** (a) TOCTOU — `finishLoop`
+  re-reads the loop and REFUSES (400, clear error) when `goal` is now null (owner cleared it since
+  poll), so it never stamps a state violating `completedAt⇒goal`; (b) finish records durationMs +
+  sessionId. `finishLoop` NO LONGER revokes the run token immediately — it records a server-computed
+  `durationMs` (from the run's claim ts) and leaves the token live for exactly ONE enriching post-run
+  `report()`: report()'s new `run.phase === "done"` branch records the precise durationMs/sessionId
+  (+transcript/artifacts/taskFileContent) and THEN revokes, WITHOUT re-stamping/re-notifying/
+  advancing the cursor (double-notify stays impossible). Deferred to batch 3: the six skill markdown
+  files (SKILL/bootstrap/create/update/evolve + `exec-loop.md`, which polishes the trigger prose).
 - **The loopany agent skill (`packages/server/src/skill/`).** The loop-builder
   knowledge is a real, installable agent skill — NOT one inline doc. **ALL prompt prose
   now lives under `src/skill/`** (the unify that retired `scheduler/prompts/` entirely).
   The surfaces, split by audience (the **bootstrap-skill-split**): (1) **`bootstrap.md`**
-  — the SERVER-ONLY first-capture onboarding doc served at `/api/skill` (**NO frontmatter**
+  — the SERVER-ONLY first-capture onboarding doc served at `/api/bootstrap` (renamed from
+  `/api/skill` in batch 2) (**NO frontmatter**
   — it's fetched-and-followed, not installed; NOT bundled, NOT installed — like the run
   prompts); (2) the PUBLIC installable **`SKILL.md`** + authoring trio
   `references/{create,update,evolve}.md` (bundled + installed into `.claude/skills/loopany/`);
@@ -177,9 +218,10 @@ LLM and executes no user code**.
   the prior on/off design.) `exec-loop`/`edit` are run-only (no authoring twin), and `edit` is **kept separate from
   `update.md` on purpose** — the edit RUN uses run-token verbs on the current loop (`loopany
   set-cron`/`set-tz`/`set-ui`…, no id, via `/agent-api/loop`) while `update.md` is the AUTHORING
-  CLI (`loopany edit <id> --cron`, local daemon); the two command surfaces serve different
+  CLI (`loopany edit <id> --json '{"cron":…}'`, local daemon — batch 2 slimmed this to JSON-only);
+  the two command surfaces serve different
   actors and can't merge into one doc without making one audience wrong or breaking the run.
-  **`/api/skill` serves `bootstrap.md`** (`routes/api.skill.ts`, `import bootstrap from
+  **`/api/bootstrap` serves `bootstrap.md`** (`routes/api.bootstrap.ts`, `import bootstrap from
   "../skill/bootstrap.md?raw"`) — the first-capture onboarding doc; **`/api/skill/references/<file>`**
   (`routes/api.skill.references.$.ts`, static map, path-safe — only the 3 exact names
   `create`/`update`/`evolve` resolve; `exec-loop`/`edit`/`bootstrap` 404) serves the references over

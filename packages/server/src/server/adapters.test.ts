@@ -39,7 +39,7 @@ function seed(agent: "claude-code" | "codex") {
     machineId: "m-a",
     name: "L",
     cron: "0 8 * * *",
-    task: "x",
+    taskFile: "loopany/x/README.md",
     workdir: "/tmp/p",
     agent,
     enabled: true,
@@ -68,7 +68,7 @@ test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted 
   store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
 
   // Open loop (no goal): not closed, not completed.
-  const open = store.createLoop({ userId: "u1", machineId: "m-a", name: "Open", cron: "0 8 * * *", task: "x", enabled: true, notify: "auto" });
+  const open = store.createLoop({ userId: "u1", machineId: "m-a", name: "Open", cron: "0 8 * * *", taskFile: "loopany/x/README.md", enabled: true, notify: "auto" });
   const openSum = adapters.toJobSummary(open);
   expect(openSum.goal).toBeNull();
   expect(openSum.completedAt).toBeNull();
@@ -76,7 +76,7 @@ test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted 
   expect(isCompleted(openSum)).toBe(false);
 
   // Closed active loop (goal, no completion): closed, not completed.
-  const closed = store.createLoop({ userId: "u1", machineId: "m-a", name: "Closed", cron: "0 8 * * *", task: "x", goal: "reach 100 signups", enabled: true, notify: "auto" });
+  const closed = store.createLoop({ userId: "u1", machineId: "m-a", name: "Closed", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "reach 100 signups", enabled: true, notify: "auto" });
   const closedSum = adapters.toJobSummary(closed);
   expect(closedSum.goal).toBe("reach 100 signups");
   expect(isClosed(closedSum)).toBe(true);
@@ -85,7 +85,7 @@ test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted 
 
   // Completed loop: completedAt set → isCompleted true (regardless of last run status).
   const doneLoop = store.createLoop({
-    userId: "u1", machineId: "m-a", name: "Done", cron: "0 8 * * *", task: "x",
+    userId: "u1", machineId: "m-a", name: "Done", cron: "0 8 * * *", taskFile: "loopany/x/README.md",
     goal: "ship v1", completedAt: "2026-07-01T00:00:00Z", completionReason: "v1 shipped", enabled: false, notify: "auto",
   });
   const doneSum = adapters.toJobSummary(doneLoop);

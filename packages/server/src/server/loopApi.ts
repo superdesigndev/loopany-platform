@@ -214,7 +214,6 @@ export const createJob = createServerFn({ method: 'POST' })
       machineId,
       name: data.name?.trim() || null,
       cron: data.cron,
-      task: data.task?.trim() || null,
       workdir: data.exec?.workdir?.trim() || null,
       taskFile: data.taskFile?.trim() || null,
       workflow: data.workflow?.trim() || null,
@@ -257,7 +256,6 @@ export const patchJob = createServerFn({ method: 'POST' })
       // Goal set/clear (store.updateLoop enforces the completion-stamp lifecycle:
       // clearing goal or reopening via enabled:true drops the terminal stamps).
       ...(p.goal !== undefined ? { goal: p.goal?.trim() || null } : {}),
-      ...(p.task !== undefined ? { task: p.task.trim() || null } : {}),
       ...(p.taskFile !== undefined ? { taskFile: p.taskFile.trim() || null } : {}),
       ...(p.workflow !== undefined ? { workflow: p.workflow.trim() || null } : {}),
       ...(p.stateSchema !== undefined ? { stateSchema: store.coerceStateSchema(p.stateSchema) ?? null } : {}),

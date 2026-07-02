@@ -22,11 +22,13 @@ import type { Loop, Run, StateField } from "../db/schema.js";
 // so the `*.md` source files don't exist under .output and poll() threw ENOENT.
 // `?raw` resolves identically from skill/run/ as it did from scheduler/prompts/.
 import execLoop from "../skill/run/exec-loop.md?raw";
+import execTrigger from "../skill/run/exec-trigger.md?raw";
 import evolve from "../skill/references/evolve.md?raw";
 import edit from "../skill/run/edit.md?raw";
 
 const PROMPTS: Record<string, string> = {
   "exec-loop": execLoop,
+  "exec-trigger": execTrigger,
   evolve,
   edit,
 };
@@ -60,14 +62,20 @@ export function buildLoopSystemPrompt(loop: Loop): string {
   return fillVars(loadPrompt("exec-loop"), { name, taskFile, stateLine });
 }
 
-/** The per-run user turn (the standing prompt carries the discipline). */
+/**
+ * The per-run user turn — a fixed STATIC trigger (no more per-loop `task` column,
+ * removed in batch 2). The whole standing brief lives in the loop's task file's
+ * `## Spec`; this trigger just points the run at it and states how the run ends
+ * (report, or `finish` for a closed loop). A closed loop injects its setpoint as a
+ * `Goal (finish line): <goal>` line — prompt-injected so it wins over the file per
+ * the trust hierarchy. Minimal + neutral on purpose: batch 3 owns the polished
+ * prose in skill/run/exec-trigger.md; edit the template there, not this filler.
+ */
 export function buildExecTask(loop: Loop): string {
-  const parts = [`[loop run · ${loop.name || loop.id}]`];
-  if (loop.task) parts.push(loop.task);
-  parts.push(
-    "Run now: follow your standing instructions — read your task file (create it if missing), do the work, maintain the file, and `loopany report`.",
-  );
-  return parts.join("\n\n");
+  const name = loop.name || loop.id;
+  const taskFile = loop.taskFile ?? "(none — this loop has no task file yet; create one to hold its Spec)";
+  const goalLine = loop.goal ? `Goal (finish line): ${loop.goal}` : "";
+  return fillVars(loadPrompt("exec-trigger"), { name, taskFile, goalLine });
 }
 
 /** Fixed internal prompt for the data-grounded evolution pass. */

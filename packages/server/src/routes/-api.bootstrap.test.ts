@@ -1,15 +1,17 @@
 /**
- * The /api/skill route now serves the BOOTSTRAP doc (skill/bootstrap.md), not the
- * installable SKILL.md. Exercises the GET handler directly (vitest resolves the
- * `?raw` bootstrap import the same way the nitro build does) — the first-capture
- * onboarding an agent follows before the loopany skill is on disk. Asserts the
- * bootstrap-only content: no frontmatter, the connect step, fetch-references-over-HTTP,
- * and the captain's session-situation division (task-done → guide that into a loop;
- * empty session → brainstorm loops FOR THIS project and let the user pick).
+ * The /api/bootstrap route serves the BOOTSTRAP doc (skill/bootstrap.md), not the
+ * installable SKILL.md. (Renamed from /api/skill in batch 2 — that path never served
+ * the installable skill; the references stay at /api/skill/references/*.) Exercises
+ * the GET handler directly (vitest resolves the `?raw` bootstrap import the same way
+ * the nitro build does) — the first-capture onboarding an agent follows before the
+ * loopany skill is on disk. Asserts the bootstrap-only content: no frontmatter, the
+ * connect step, fetch-references-over-HTTP, and the captain's session-situation
+ * division (task-done → guide that into a loop; empty session → brainstorm loops FOR
+ * THIS project and let the user pick).
  */
 import { describe, expect, test } from 'vitest'
 
-import { Route } from './api.skill'
+import { Route } from './api.bootstrap'
 
 const GET = (Route as any).options.server.handlers.GET as () => Response | Promise<Response>
 
@@ -17,7 +19,7 @@ const GET = (Route as any).options.server.handlers.GET as () => Response | Promi
 // Collapse all whitespace runs to a single space before substring-matching prose.
 const flat = (s: string) => s.replace(/\s+/g, ' ')
 
-describe('/api/skill', () => {
+describe('/api/bootstrap', () => {
   test('serves the bootstrap doc as markdown', async () => {
     const res = await GET()
     expect(res.status).toBe(200)

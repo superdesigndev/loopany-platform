@@ -22,12 +22,9 @@ const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () =
 const errResponse = (status: number, body: unknown) =>
   ({ ok: false, status, json: async () => body }) as unknown as Response;
 
-/** Write a throwaway config file and return its path. */
-function tmpConfig(cfg: object): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-create-"));
-  const f = path.join(dir, "loop.json");
-  fs.writeFileSync(f, JSON.stringify(cfg));
-  return f;
+/** The inline `--json '<config>'` string (batch 2 replaced the `--config <file>` ritual). */
+function cfgJson(cfg: object): string {
+  return JSON.stringify(cfg);
 }
 
 /** An absolute path under a fresh temp dir that does NOT yet exist — so a test can
@@ -142,13 +139,13 @@ describe("runCreate — skill install fires only after a confirmed create, never
 
   test("a successful create creates the (not-yet-existing) workdir and installs there (project-level)", async () => {
     const workdir = tmpWorkdir(); // nested + absent → proves the dir is created before install
-    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir });
     const installed: InstallOpts[] = [];
     const installer = async (opts: InstallOpts): Promise<InstallOutcome> => {
       installed.push(opts);
       return { ok: true, line: "loopany skill: installed" };
     };
-    const code = await runCreate(["--config", cfg, "--server-url", "http://test"], {
+    const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
       fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie" }),
       installer,
       stdout: () => {},
@@ -161,13 +158,13 @@ describe("runCreate — skill install fires only after a confirmed create, never
   });
 
   test("a successful create with no workdir + no returned id does NOT install (no shared-parent fallback)", async () => {
-    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report" }); // no workdir
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" }); // no workdir
     let called = false;
     const installer = async (): Promise<InstallOutcome> => {
       called = true;
       return { ok: true, line: "" };
     };
-    const code = await runCreate(["--config", cfg, "--server-url", "http://test"], {
+    const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
       fetchImpl: async () => okResponse({ ok: true, name: "Cookie" }), // no id
       installer,
       stdout: () => {},
@@ -178,13 +175,13 @@ describe("runCreate — skill install fires only after a confirmed create, never
 
   test("a failed create does NOT install the skill", async () => {
     const workdir = tmpWorkdir();
-    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir });
     let called = false;
     const installer = async (): Promise<InstallOutcome> => {
       called = true;
       return { ok: true, line: "" };
     };
-    const code = await runCreate(["--config", cfg, "--server-url", "http://test"], {
+    const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
       fetchImpl: async () => errResponse(400, { error: "bad cron" }),
       installer,
       stdout: () => {},
@@ -196,17 +193,75 @@ describe("runCreate — skill install fires only after a confirmed create, never
 
   test("an install failure does NOT fail the create (best-effort, swallowed)", async () => {
     const workdir = tmpWorkdir();
-    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir });
     const installer = async (): Promise<InstallOutcome> => {
       throw new Error("npx ENOENT");
     };
     const out: string[] = [];
-    const code = await runCreate(["--config", cfg, "--server-url", "http://test"], {
+    const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
       fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie" }),
       installer,
       stdout: (s) => out.push(s),
     });
     expect(code).toBe(0);
     expect(out.join("")).toContain("created loop Cookie");
+  });
+
+  test("--dry-run renders the preview (config + fire times + classification) and does NOT create/install", async () => {
+    const workdir = tmpWorkdir();
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir, goal: "ship v1" });
+    let installed = false;
+    const out: string[] = [];
+    const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
+      fetchImpl: async () =>
+        okResponse({
+          ok: true,
+          dryRun: true,
+          config: { name: null, cron: "0 8 * * *", taskFile: "loopany/x/README.md", workflow: false, goal: "ship v1" },
+          timezone: "UTC",
+          nextRuns: ["2026-07-03T08:00:00.000Z", "2026-07-04T08:00:00.000Z", "2026-07-05T08:00:00.000Z"],
+          classification: "closed",
+          classificationText: "closed (has goal): will self-finish when the goal is met",
+        }),
+      installer: async () => {
+        installed = true;
+        return { ok: true, line: "" };
+      },
+      stdout: (s) => out.push(s),
+    });
+    expect(code).toBe(0);
+    expect(installed).toBe(false); // dry-run never creates → never installs
+    expect(fs.existsSync(workdir)).toBe(false); // touches nothing
+    const text = out.join("");
+    expect(text).toContain("dry-run");
+    expect(text).toContain("self-finish"); // the classification line
+    expect(text).toContain("2026-07-03T08:00:00.000Z"); // first of the 3 fire times
+  });
+
+  test("`new` without --json prints usage (exit 2), makes no request", async () => {
+    let called = false;
+    const code = await runCreate(["--server-url", "http://test"], {
+      fetchImpl: async () => {
+        called = true;
+        return okResponse({});
+      },
+      stdout: () => {},
+    });
+    expect(code).toBe(2);
+    expect(called).toBe(false);
+  });
+
+  test("`new` with a config missing both workflow and taskFile is rejected locally (exit 2)", async () => {
+    const cfg = cfgJson({ cron: "0 8 * * *" }); // no workflow, no taskFile
+    let called = false;
+    const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
+      fetchImpl: async () => {
+        called = true;
+        return okResponse({});
+      },
+      stdout: () => {},
+    });
+    expect(code).toBe(2);
+    expect(called).toBe(false);
   });
 });

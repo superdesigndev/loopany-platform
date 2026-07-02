@@ -38,9 +38,9 @@ export const Route = createFileRoute('/api/machine/loop')({
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const parsed = await readJsonBody(request, MACHINE_BODY_CAP)
         if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
-        const body = (parsed.kind === 'ok' ? parsed.body : {}) as { id?: unknown; patch?: Record<string, unknown> }
+        const body = (parsed.kind === 'ok' ? parsed.body : {}) as { id?: unknown; patch?: Record<string, unknown>; dryRun?: unknown }
         const { getGateway } = await import('../server/boot.js')
-        const r = getGateway().editLoop(token, body.id, body.patch ?? {})
+        const r = getGateway().editLoop(token, body.id, body.patch ?? {}, body.dryRun === true)
         return Response.json(r.body, { status: r.status })
       },
     },

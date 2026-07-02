@@ -1,9 +1,10 @@
 /**
- * `buildPatch` / `parseFlags` — the `loopany edit` patch assembly. Proves the
- * envelope flags, the convenience `--*-file` content flags, and an explicit
- * `--json` / `--json-file` object all fold into one body with the documented
- * precedence (explicit JSON keys win). The server is the sole validator, so
- * these tests only assert the SHAPE the daemon sends.
+ * `buildPatch` / `parseFlags` — the `loopany edit` patch assembly (batch-2 slim
+ * surface: JSON-only + the content trio). Proves the whole envelope travels via a
+ * single `--json '<obj>'`, the convenience `--*-file` content flags read a file's
+ * raw content, and a REMOVED scalar flag (--cron/--tz/--pause/…) or any other
+ * unknown flag now fails LOUDLY with "unknown flag … try --help". The server is the
+ * sole validator, so these tests only assert the SHAPE the daemon sends.
  */
 import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -15,16 +16,13 @@ import { buildPatch, parseFlags } from "./interactive.js";
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), "loopany-edit-"));
 
 describe("buildPatch", () => {
-  test("maps envelope flags to server patch keys", () => {
-    const { flags } = parseFlags(["--cron", "0 9 * * *", "--tz", "UTC", "--task-file", "/x/README.md"]);
-    expect(buildPatch(flags)).toEqual({ cron: "0 9 * * *", timezone: "UTC", taskFile: "/x/README.md" });
+  test("the whole patch travels via a single --json object", () => {
+    const { flags } = parseFlags(["--json", '{"cron":"0 9 * * *","goal":"ship v1","enabled":true}']);
+    expect(buildPatch(flags)).toEqual({ cron: "0 9 * * *", goal: "ship v1", enabled: true });
   });
 
-  test("--pause/--resume/--allow-control shape the enabled/allowControl fields", () => {
-    expect(buildPatch(parseFlags(["--pause"]).flags)).toEqual({ enabled: false });
-    expect(buildPatch(parseFlags(["--resume"]).flags)).toEqual({ enabled: true });
-    expect(buildPatch(parseFlags(["--allow-control", "true"]).flags)).toEqual({ allowControl: true });
-    expect(buildPatch(parseFlags(["--allow-control", "false"]).flags)).toEqual({ allowControl: false });
+  test("--json passes through a null (goal:null clears the goal server-side)", () => {
+    expect(buildPatch(parseFlags(["--json", '{"goal":null}']).flags)).toEqual({ goal: null });
   });
 
   test("--workflow-file / --ui-file read raw content into the patch", () => {
@@ -45,17 +43,23 @@ describe("buildPatch", () => {
     expect(buildPatch(flags)).toEqual({ stateSchema: [{ key: "mrr", label: "MRR", unit: "$" }] });
   });
 
-  test("--json object merges and its keys win over flag-derived values", () => {
-    const { flags } = parseFlags(["--cron", "0 9 * * *", "--json", '{"cron":"*/5 * * * *","name":"nightly"}']);
-    expect(buildPatch(flags)).toEqual({ cron: "*/5 * * * *", name: "nightly" });
+  test("explicit --json keys win over the file flags", () => {
+    const dir = tmp();
+    const wf = path.join(dir, "wf.js");
+    writeFileSync(wf, "// from file\n");
+    const { flags } = parseFlags(["--workflow-file", wf, "--json", '{"workflow":"// from json"}']);
+    expect(buildPatch(flags)).toEqual({ workflow: "// from json" });
   });
 
-  test("--json-file reads and merges an object", () => {
-    const dir = tmp();
-    const jf = path.join(dir, "patch.json");
-    writeFileSync(jf, '{"model":"opus","notify":"always"}');
-    const { flags } = parseFlags(["--json-file", jf]);
-    expect(buildPatch(flags)).toEqual({ model: "opus", notify: "always" });
+  test("--dry-run is a mode, not a patch key (ignored by buildPatch)", () => {
+    expect(buildPatch(parseFlags(["--dry-run", "--json", '{"name":"x"}']).flags)).toEqual({ name: "x" });
+  });
+
+  test("a REMOVED scalar flag fails loudly with unknown-flag guidance", () => {
+    for (const removed of ["--cron", "--tz", "--name", "--notify", "--model", "--pause", "--resume", "--run-at", "--task-file", "--json-file"]) {
+      const argv = removed === "--pause" || removed === "--resume" ? [removed] : [removed, "x"];
+      expect(() => buildPatch(parseFlags(argv).flags)).toThrow(/unknown flag/);
+    }
   });
 
   test("--json rejects a non-object (array/scalar)", () => {

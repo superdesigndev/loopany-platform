@@ -42,18 +42,6 @@ export function parseFlags(args: string[]): { positional: string[]; flags: Flags
   return { positional, flags };
 }
 
-/** CLI flag → server patch key (the server is the sole validator). */
-const PATCH_FIELDS: Record<string, string> = {
-  cron: "cron",
-  name: "name",
-  tz: "timezone",
-  timezone: "timezone",
-  notify: "notify",
-  model: "model",
-  "run-at": "runAt",
-  "task-file": "taskFile",
-};
-
 /** Read a flag's file path into raw string content (for `--workflow-file` etc). */
 function readFileFlag(flags: Flags, flag: string): string | undefined {
   const path = flags[flag];
@@ -61,20 +49,29 @@ function readFileFlag(flags: Flags, flag: string): string | undefined {
   return readFileSync(path, "utf8");
 }
 
+/** The ONLY flags `loopany edit` accepts (batch 2 slim-down to JSON-only + the
+ *  content trio). The scalar envelope flags (--cron/--tz/--name/--notify/--model/
+ *  --pause/--resume/--run-at/--task-file) and --json-file are GONE: reshape a loop
+ *  with a single `--json '<obj>'` patch, and push development-artifact content
+ *  (workflow JS / UI HTML / schema JSON) via the file flags. `dry-run` is a mode,
+ *  `server-url`/`api-key` are global daemon flags — allowed here, not patch keys. */
+const EDIT_FLAGS = new Set(["json", "workflow-file", "ui-file", "schema-file", "dry-run", "server-url", "api-key"]);
+
 /**
- * Assemble the patch body. Precedence, lowest → highest: envelope flags, then
- * the convenience `--*-file` content flags, then an explicit `--json` /
- * `--json-file` object (its keys win). The server is the sole validator — the
- * daemon only shapes the body. Throws on unreadable/invalid file or JSON.
+ * Assemble the `loopany edit` patch body from the surviving flags. `--json '<obj>'`
+ * carries the envelope + goal/enabled/allowControl etc; the `--*-file` flags read a
+ * development-artifact file's raw content into workflow/ui/stateSchema (schema parsed
+ * as JSON). Explicit `--json` keys win over the file flags. The server is the sole
+ * validator — the daemon only shapes the body. Throws on an UNKNOWN flag (a removed
+ * scalar like --cron fails loudly, not silently) or unreadable/invalid file/JSON.
  */
 export function buildPatch(flags: Flags): Record<string, unknown> {
-  const patch: Record<string, unknown> = {};
-  for (const [flag, key] of Object.entries(PATCH_FIELDS)) {
-    if (typeof flags[flag] === "string") patch[key] = flags[flag];
+  const unknown = Object.keys(flags).filter((k) => !EDIT_FLAGS.has(k));
+  if (unknown.length) {
+    throw new Error(`unknown flag --${unknown[0]} — try \`loopany --help\` (edit takes --json '<obj>', --workflow-file, --ui-file, --schema-file)`);
   }
-  if (flags["pause"]) patch.enabled = false;
-  if (flags["resume"]) patch.enabled = true;
-  if (flags["allow-control"] !== undefined) patch.allowControl = flags["allow-control"] === true || flags["allow-control"] === "true";
+
+  const patch: Record<string, unknown> = {};
 
   // Convenience file flags — multi-line workflow/ui/schema content is awkward to
   // embed in JSON on a CLI, so read the file's raw content into the patch field
@@ -86,18 +83,52 @@ export function buildPatch(flags: Flags): Record<string, unknown> {
   const schemaFile = readFileFlag(flags, "schema-file");
   if (schemaFile !== undefined) patch.stateSchema = JSON.parse(schemaFile);
 
-  // Explicit --json / --json-file object wins over everything above.
-  let jsonRaw: string | undefined;
-  if (typeof flags["json"] === "string") jsonRaw = flags["json"];
-  else if (typeof flags["json-file"] === "string") jsonRaw = readFileSync(flags["json-file"], "utf8");
-  if (jsonRaw !== undefined) {
-    const parsed = JSON.parse(jsonRaw);
+  // Explicit --json object wins over the file flags above.
+  if (typeof flags["json"] === "string") {
+    const parsed = JSON.parse(flags["json"]);
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("--json must be a JSON object of loop fields");
     }
     Object.assign(patch, parsed);
   }
   return patch;
+}
+
+/** The PATCH /api/machine/loop response (real edit or `--dry-run` preview). */
+interface EditResponse {
+  ok?: boolean;
+  dryRun?: boolean;
+  applied?: string[];
+  name?: string;
+  error?: string;
+  changes?: Array<{ key: string; from: unknown; to: unknown }>;
+  rejections?: Array<{ key: string; reason: string }>;
+}
+
+/** Render a value for the before→after preview (null/undefined → em-dash). */
+function fmtPreview(v: unknown): string {
+  if (v === null || v === undefined) return "—";
+  return typeof v === "string" ? v : JSON.stringify(v);
+}
+
+/** Print the `--dry-run` edit preview (per-key before→after + rejections). Exit 0
+ *  when valid, 1 when the server flagged rejections (a removed field / bad value). */
+function printEditDryRun(data: EditResponse): number {
+  const out = (s: string) => void process.stdout.write(s);
+  out(`dry-run · ${data.name ?? "loop"} — nothing changed\n`);
+  const changes = data.changes ?? [];
+  if (changes.length) {
+    out("changes:\n");
+    for (const c of changes) out(`  ${c.key}: ${fmtPreview(c.from)} -> ${fmtPreview(c.to)}\n`);
+  } else {
+    out("changes: (none)\n");
+  }
+  const rejections = data.rejections ?? [];
+  if (rejections.length) {
+    out("rejected:\n");
+    for (const r of rejections) out(`  ${r.key}: ${r.reason}\n`);
+  }
+  return data.ok === false || rejections.length > 0 ? 1 : 0;
 }
 
 function printLoops(loops: LoopRow[]): void {
@@ -114,10 +145,14 @@ function printLoops(loops: LoopRow[]): void {
 
 const USAGE =
   "loopany: usage: loopany edit <loop-id> [options]\n" +
-  "  envelope:  --cron \"…\"  --name …  --tz …  --notify always|auto|never  --model …\n" +
-  "             --pause | --resume  --allow-control true|false  --run-at 2h  --task-file <path>\n" +
-  "  content:   --workflow-file <path>  --ui-file <path>  --schema-file <path.json>\n" +
-  "  partial:   --json '<json-object>' | --json-file <path>   (explicit JSON keys win)\n" +
+  "  --json '<json-object>'      the whole patch — e.g. '{\"cron\":\"0 9 * * *\",\"goal\":\"ship v1\"}'\n" +
+  "                              (envelope: name/cron/timezone/notify/model/allowControl/taskFile/\n" +
+  "                               enabled/runAt/goal · {\"goal\":null} clears it, {\"enabled\":true}\n" +
+  "                               reopens a completed loop)\n" +
+  "  --workflow-file <path>      set the deterministic pre-stage JS from a file\n" +
+  "  --ui-file <path>            set the dashboard HTML from a file\n" +
+  "  --schema-file <path.json>   set the metric schema (JSON array) from a file\n" +
+  "  --dry-run                   validate + preview before/after, change nothing\n" +
   "  the server validates every field; unknown keys are rejected.\n";
 
 export async function runInteractive(argv: string[]): Promise<number> {
@@ -157,13 +192,22 @@ export async function runInteractive(argv: string[]): Promise<number> {
         process.stderr.write(USAGE);
         return 2;
       }
-      const patch = buildPatch(flags);
+      const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true";
+      let patch: Record<string, unknown>;
+      try {
+        patch = buildPatch(flags);
+      } catch (err) {
+        // A removed/unknown flag or an unreadable file/JSON — fail loudly with guidance.
+        process.stderr.write(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);
+        return 2;
+      }
       if (Object.keys(patch).length === 0) {
         process.stderr.write(USAGE);
         return 2;
       }
-      const res = await fetch(base, { method: "PATCH", headers, body: JSON.stringify({ id, patch }) });
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; applied?: string[]; name?: string; error?: string };
+      const res = await fetch(base, { method: "PATCH", headers, body: JSON.stringify({ id, patch, dryRun }) });
+      const data = (await res.json().catch(() => ({}))) as EditResponse;
+      if (dryRun && data.dryRun) return printEditDryRun(data);
       if (!res.ok || !data.ok) {
         process.stderr.write(`loopany: ${data.error || `edit failed (${res.status})`}\n`);
         return 1;

@@ -129,8 +129,6 @@ export const loops = sqliteTable(
     cron: text("cron").notNull(),
     /** IANA tz the cron is interpreted in (e.g. "Asia/Shanghai"). Null ⇒ server local (UTC in prod). */
     timezone: text("timezone"),
-    /** Legacy/standing instruction handed to the exec agent. */
-    task: text("task"),
     /** Absolute project dir ON THE MACHINE the agent runs in (cwd). Null ⇒ daemon scratch dir. */
     workdir: text("workdir"),
     /** Path ON THE MACHINE to the loop's durable context+log doc. */

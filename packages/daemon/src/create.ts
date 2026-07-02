@@ -126,9 +126,13 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   const fetchImpl = deps.fetchImpl ?? fetch;
   const installer = deps.installer ?? installSkill;
   const write = deps.stdout ?? ((s: string) => void process.stdout.write(s));
-  const configPath = flag(args, "config");
-  if (!configPath) {
-    process.stderr.write("loopany: usage: loopany new --config <loop.json> [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex]\n");
+  // The config is passed INLINE as `--json '<obj>'` (or `--json -` to read stdin),
+  // replacing the old `--config <file>` temp-file ritual (batch 2). `--dry-run`
+  // validates + previews without creating anything.
+  const jsonArg = flag(args, "json");
+  const dryRun = args.includes("--dry-run");
+  if (jsonArg === undefined) {
+    process.stderr.write("loopany: usage: loopany new --json '<config>' [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex]\n");
     return 2;
   }
 
@@ -139,11 +143,27 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     return 2;
   }
 
+  let raw: string;
+  try {
+    // `--json -` reads the config from stdin (fd 0) — handy for a large inline object.
+    raw = jsonArg === "-" ? fs.readFileSync(0, "utf8") : jsonArg;
+  } catch (err) {
+    process.stderr.write(`loopany: cannot read config from stdin: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+  if (!raw.trim()) {
+    process.stderr.write("loopany: --json needs the config object (e.g. --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"loopany/x/README.md\"}')\n");
+    return 2;
+  }
   let config: Record<string, unknown>;
   try {
-    config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("config must be a JSON object");
+    }
+    config = parsed as Record<string, unknown>;
   } catch (err) {
-    process.stderr.write(`loopany: cannot read config ${configPath}: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`loopany: cannot parse --json config: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
 
@@ -151,8 +171,10 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     process.stderr.write('loopany: config needs a "cron" expression (e.g. "0 8 * * *")\n');
     return 2;
   }
-  if (!config.workflow && !config.task) {
-    process.stderr.write('loopany: config needs a "workflow" (JS) or a "task" (instruction)\n');
+  // The `task` column is gone (batch 2): a loop's brief lives in its task file, so a
+  // loop needs a "workflow" (JS) OR a "taskFile" (path to the Spec) to work from.
+  if (!config.workflow && !config.taskFile) {
+    process.stderr.write('loopany: config needs a "workflow" (JS) or a "taskFile" (path to the loop\'s Spec)\n');
     return 2;
   }
 
@@ -171,6 +193,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   if (agent) body.agent = agent;
   else delete body.agent;
   if (connectKey) body.claim = connectKey;
+  if (dryRun) body.dryRun = true;
 
   try {
     const res = await fetchImpl(`${server}/api/machine/loop`, {
@@ -178,22 +201,59 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; id?: string; name?: string; error?: string };
+    const data = (await res.json().catch(() => ({}))) as CreateResponse;
     if (!res.ok || !data.ok) {
       process.stderr.write(`loopany: ${data.error || `create failed (${res.status})`}\n`);
       return 1;
+    }
+    if (dryRun) {
+      printCreateDryRun(write, data, timezone);
+      return 0;
     }
     write(`created loop ${data.name ?? data.id} — ${config.cron} ${timezone}\n`);
     // Best-effort: now that the loop exists, install/refresh the loopany skill into
     // the dir its agent will run in (project-level), so the coding agent discovers
     // the references there. Announced, never blocks — any failure degrades to the
-    // always-working /api/skill path, exactly like before. Only runs after a
-    // confirmed create.
+    // always-working /api/skill/references path, exactly like before. Only runs after
+    // a confirmed create.
     await announceSkillInstall(installer, resolveLoopWorkdir(config.workdir, data.id ?? ""), write);
     return 0;
   } catch (err) {
     process.stderr.write(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
+  }
+}
+
+/** POST /api/machine/loop response (real create or `--dry-run` preview). */
+interface CreateResponse {
+  ok?: boolean;
+  id?: string;
+  name?: string;
+  error?: string;
+  dryRun?: boolean;
+  config?: Record<string, unknown>;
+  timezone?: string | null;
+  nextRuns?: string[];
+  classification?: string;
+  classificationText?: string;
+}
+
+/** Render the `--dry-run` create preview: the normalized config, detected tz, the
+ *  next 3 fire times in that tz, and the open/closed classification. */
+function printCreateDryRun(write: (s: string) => void, data: CreateResponse, timezone: string): void {
+  const c = data.config ?? {};
+  const tz = (typeof data.timezone === "string" && data.timezone) || timezone || "(server-local)";
+  write("dry-run — nothing created; config is valid\n");
+  write(`  name: ${c.name ?? "(unnamed)"}\n`);
+  write(`  cron: ${String(c.cron ?? "")} ${tz}\n`);
+  if (c.taskFile) write(`  taskFile: ${String(c.taskFile)}\n`);
+  write(`  workflow: ${c.workflow ? "yes" : "no"}\n`);
+  write(`  goal: ${c.goal != null ? String(c.goal) : "—"}\n`);
+  if (data.classificationText) write(`  ${data.classificationText}\n`);
+  const runs = data.nextRuns ?? [];
+  if (runs.length) {
+    write(`  next ${runs.length} runs:\n`);
+    for (const t of runs) write(`    ${t}\n`);
   }
 }
 
