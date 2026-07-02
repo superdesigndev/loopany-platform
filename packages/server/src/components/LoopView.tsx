@@ -35,6 +35,9 @@ const LOOP_TAGS = ['loop-chart', 'loop-sparkline', 'loop-embed', 'loop-calendar'
 /** Data-bearing attributes on the loop-* primitives (all parsed by us, never markup). */
 const LOOP_ATTRS = ['series', 'key', 'file', 'match', 'full']
 
+const ARTIFACT_RETRY_MAX = 3
+const ARTIFACT_RETRY_MS = 4000
+
 const SANITIZE_CONFIG: Config = {
   ALLOWED_TAGS: [
     'h1', 'h2', 'h3', 'h4', 'h5', 'p', 'b', 'strong', 'i', 'em', 'u', 's', 'span', 'div',
@@ -45,8 +48,8 @@ const SANITIZE_CONFIG: Config = {
   ALLOWED_ATTR: ['style', 'class', 'href', 'title', 'target', 'rel', ...LOOP_ATTRS],
   ADD_TAGS: LOOP_TAGS,
   CUSTOM_ELEMENT_HANDLING: {
-    tagNameCheck: /^loop-(chart|sparkline|embed|calendar)$/,
-    attributeNameCheck: /^(series|key|file|match|full)$/,
+    tagNameCheck: new RegExp(`^(?:${LOOP_TAGS.join('|')})$`),
+    attributeNameCheck: new RegExp(`^(?:${LOOP_ATTRS.join('|')})$`),
     allowCustomizedBuiltInElements: false,
   },
 }
@@ -72,7 +75,7 @@ export function LoopView({
   html: string
   runs: RunSummary[]
   loopId: string
-  /** The loop's task-file path - lets <loop-calendar> exclude the spec from its default product set. */
+  /** The loop's task-file path - lets <loop-embed>/<loop-calendar> exclude the spec from match results / the default product set. */
   taskFile?: string
 }) {
   const clean = useMemo(() => {
@@ -90,6 +93,9 @@ export function LoopView({
   // keying on the id alone would show run N's output only once run N+1 starts).
   // Detected on the SANITIZED html: DOMPurify lowercases tag names, so this
   // also catches uppercase-authored tags and tags materialized by bindings.
+  // A failed fetch keeps the current state (null ⇒ still loading) and retries
+  // a bounded few times - the deps don't move between runs, so latching an
+  // empty list here would show "no file matches" until the next run settles.
   const wantsArtifacts = /<loop-(embed|calendar)\b/.test(clean)
   const [artifacts, setArtifacts] = useState<ArtifactSummary[] | null>(null)
   const newestRunId = runs[0]?.id
@@ -97,11 +103,19 @@ export function LoopView({
   useEffect(() => {
     if (!wantsArtifacts) return
     let alive = true
-    getArtifacts({ data: { loopId } })
-      .then((list) => alive && setArtifacts(list))
-      .catch(() => alive && setArtifacts((prev) => prev ?? []))
+    let retries = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const load = () => {
+      getArtifacts({ data: { loopId } })
+        .then((list) => alive && setArtifacts(list))
+        .catch(() => {
+          if (alive && retries < ARTIFACT_RETRY_MAX) timer = setTimeout(load, ARTIFACT_RETRY_MS * ++retries)
+        })
+    }
+    load()
     return () => {
       alive = false
+      clearTimeout(timer)
     }
   }, [wantsArtifacts, loopId, newestRunId, newestRunLive])
 
@@ -114,7 +128,14 @@ export function LoopView({
         if (node.name === 'loop-sparkline') return <LoopSparkline series={data} field={a.key} />
         if (node.name === 'loop-embed')
           return (
-            <LoopEmbed loopId={loopId} artifacts={artifacts} file={a.file} match={a.match} full={'full' in a} />
+            <LoopEmbed
+              loopId={loopId}
+              artifacts={artifacts}
+              file={a.file}
+              match={a.match}
+              full={'full' in a}
+              taskFile={taskFile}
+            />
           )
         if (node.name === 'loop-calendar')
           return <LoopCalendar loopId={loopId} artifacts={artifacts} match={a.match} taskFile={taskFile} />

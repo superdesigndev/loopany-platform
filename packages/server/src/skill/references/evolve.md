@@ -56,7 +56,7 @@ The lighter lever: make the loop's dashboard reflect the numbers its runs actual
   `<loop-sparkline key="mrr"></loop-sparkline>`
 
 **Artifact panels** - when the loop's real product is a FILE it writes each run (a digest, a brief, a report), surface the files themselves, not just numbers:
-  `<loop-embed match="reports/digest-*.md"></loop-embed>`     (embed the newest matching synced file, collapsed preview; `file="<exact path>"` for one specific file, add `full` to disable the collapse)
+  `<loop-embed match="reports/digest-*.md"></loop-embed>`     (embed the newest matching synced file, collapsed preview; `match` never selects the task file - `file="<exact path>"` for one specific file, including the task file; add `full` to disable the collapse)
   `<loop-calendar match="reports/*.md"></loop-calendar>`      (month calendar of the loop's produced files; `match` optional - default is every synced file except the task file)
 `match` globs the loop-relative synced paths (`*` never crosses `/`; a pattern with no `/` matches basenames). Each file's calendar day parses from its FILENAME (`YYYY-MM-DD`, `YYYY_MM_DD`, or `YYYYMMDD`), falling back to sync time - so these panels only shine when runs write date-stamped files (e.g. `reports/digest-2026-07-01.md`); if the log shows the loop overwrites one undated file every run, either leave the calendar out or have the task start dating filenames.
 

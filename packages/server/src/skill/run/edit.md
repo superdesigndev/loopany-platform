@@ -20,8 +20,8 @@ this loop — no id needed.
     div + inline style; no `<script>`/handlers/`<svg>`). Bind live values with
     `{{latest.<key>}}`; series via `<loop-chart series="k:Label:unit">` /
     `<loop-sparkline key="k">`; the loop's produced files via
-    `<loop-embed match="reports/digest-*.md">` (newest matching synced file,
-    embedded) / `<loop-calendar match="reports/*.md">` (month calendar of
+    `<loop-embed match="reports/digest-*.md">` (newest matching synced file
+    except the task file, embedded) / `<loop-calendar match="reports/*.md">` (month calendar of
     products; days parse from `YYYY-MM-DD`-style filenames, else sync time).
   - `loopany set-schema --file <path>` — JSON array of `{key, label?, unit?}`.
     Additive: pass the full intended schema; don't drop a key the UI still binds.

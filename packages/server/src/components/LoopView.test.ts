@@ -11,7 +11,7 @@ import type { RunSummary } from '../types'
 // observe the post-fetch state without a server.
 vi.mock('../server/loopApi', () => ({
   getArtifacts: vi.fn(async () => []),
-  getArtifact: vi.fn(async () => null),
+  getArtifact: vi.fn(async () => ({ text: 'digest body' })),
 }))
 
 // jsdom has no ResizeObserver and no layout, so Recharts' ResponsiveContainer
@@ -121,6 +121,66 @@ describe('LoopView artifact primitives', () => {
     const out = await mount('<LOOP-EMBED match="reports/*.md"></LOOP-EMBED>')
     expect(out).not.toContain('[ loading ]')
     expect(out).toContain('No synced file matches yet')
+  })
+
+  it('retries a failed artifact fetch instead of latching an empty list', async () => {
+    // One transient network blip on mount used to pin "No synced file matches
+    // yet" until the next run settled (the effect deps don't move in between).
+    vi.useFakeTimers()
+    try {
+      const file = { path: 'reports/digest-2026-07-01.md', size: 10, updatedAt: '2026-07-01T08:00:00.000Z', binary: false, oversize: false }
+      vi.mocked(getArtifacts).mockClear()
+      vi.mocked(getArtifacts).mockRejectedValueOnce(new Error('blip')).mockResolvedValueOnce([file])
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      const root = createRoot(host)
+      await act(async () => {
+        root.render(createElement(LoopView, { html: '<loop-embed match="reports/*.md"></loop-embed>', runs: RUNS, loopId: 'loop-1' }))
+      })
+      // Failure keeps the loading state - never the misleading calm empty.
+      expect(host.innerHTML).toContain('[ loading ]')
+      expect(host.innerHTML).not.toContain('No synced file matches yet')
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000)
+      })
+      expect(vi.mocked(getArtifacts)).toHaveBeenCalledTimes(2)
+      expect(host.innerHTML).toContain('digest-2026-07-01.md')
+      await act(async () => root.unmount())
+      host.remove()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('excludes the task file from <loop-embed match=> results', async () => {
+    // The spec README syncs on every edit, so under a broad glob its sync-day
+    // date would outrank yesterday's date-stamped digest. Same rule as the
+    // calendar's default set; an exact file= path may still target it.
+    const mkFile = (path: string, updatedAt: string) => ({ path, size: 10, updatedAt, binary: false, oversize: false })
+    vi.mocked(getArtifacts).mockClear()
+    vi.mocked(getArtifacts).mockResolvedValue([
+      mkFile('README.md', '2026-07-02T09:00:00.000Z'),
+      mkFile('digest-2026-07-01.md', '2026-07-01T08:00:00.000Z'),
+    ])
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(
+        createElement(LoopView, {
+          html: '<loop-embed match="*.md"></loop-embed>',
+          runs: RUNS,
+          loopId: 'loop-1',
+          taskFile: '/Users/me/work/loop/README.md',
+        }),
+      )
+    })
+    expect(host.innerHTML).toContain('digest-2026-07-01.md')
+    expect(host.innerHTML).toContain('newest of 1 matching')
+    await act(async () => root.unmount())
+    host.remove()
+    vi.mocked(getArtifacts).mockReset()
+    vi.mocked(getArtifacts).mockResolvedValue([])
   })
 
   it('re-fetches artifacts when the newest run settles (not only when a new run id appears)', async () => {

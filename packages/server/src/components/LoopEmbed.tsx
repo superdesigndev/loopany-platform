@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { ArtifactSummary } from '../types'
+import { isTaskPath } from '../lib/fileEntries'
 import { fmt } from '../lib/format'
 import { matchArtifacts, newestMatch } from '../lib/productDate'
 import { ArtifactBody, ViewerHead } from './artifactView'
@@ -10,10 +11,13 @@ import { ArtifactBody, ViewerHead } from './artifactView'
  * embedded in its dashboard. `file` targets one exact path; `match` resolves to
  * the NEWEST matching artifact (filename date first, sync time as tiebreak), so
  * "embed the latest digest" keeps working without the agent editing the
- * template every run. Content renders through the shared artifact viewer
- * (markdown via .taskmd, mono pre for other text, download notice for binary),
- * collapsed at 300px with a fade + "show all" toggle; the `full` attribute
- * opts out of the collapse.
+ * template every run. `match` never selects the loop's task file - the spec is
+ * not a product (same rule as the calendar's default set), and its frequent
+ * edit-syncs would pin it as "newest" under a broad glob like `*.md`; an exact
+ * `file=` path may still target it. Content renders through the shared
+ * artifact viewer (markdown via .taskmd, mono pre for other text, download
+ * notice for binary), collapsed at 300px with a fade + "show all" toggle; the
+ * `full` attribute opts out of the collapse.
  */
 
 /** Collapsed preview height. A pixel cap, not a line clamp - markdown blocks
@@ -28,6 +32,7 @@ export function LoopEmbed({
   file,
   match,
   full,
+  taskFile,
 }: {
   loopId: string
   /** The loop's synced artifact list (null while loading). */
@@ -35,6 +40,8 @@ export function LoopEmbed({
   file?: string
   match?: string
   full?: boolean
+  /** The loop's task-file path - excluded from `match` results (exact `file=` may still target it). */
+  taskFile?: string
 }) {
   const requested = file ?? match
   const shell = 'min-w-0 overflow-hidden rounded-[10px] border border-hairline bg-surface'
@@ -57,9 +64,10 @@ export function LoopEmbed({
       </div>
     )
 
+  const matchable = file ? artifacts : artifacts.filter((a) => !isTaskPath(taskFile, a.path))
   const target = file
     ? artifacts.find((a) => norm(a.path) === norm(file))
-    : newestMatch(artifacts, match)
+    : newestMatch(matchable, match)
 
   // Calm pre-first-sync degrade, same voice as the Files panel. Never an error
   // banner: a missing artifact is a normal state for a young loop.
@@ -73,7 +81,7 @@ export function LoopEmbed({
       </div>
     )
 
-  const resolution = match ? `newest of ${matchArtifacts(artifacts, match).length} matching ${match} · ` : ''
+  const resolution = match ? `newest of ${matchArtifacts(matchable, match).length} matching ${match} · ` : ''
   const meta = `${resolution}synced ${fmt(target.updatedAt)}`
 
   return (
@@ -111,8 +119,10 @@ export function CollapsibleBody({ collapse, children }: { collapse: boolean; chi
 
   // No dep array on purpose: the body's height changes when ArtifactBody's
   // lazy fetch lands, which is invisible to props. The setState is guarded, so
-  // this settles instead of looping.
-  useEffect(() => {
+  // this settles instead of looping. A LAYOUT effect: the measurement must
+  // happen before paint, or a long document flashes at full height for a frame
+  // before collapsing.
+  useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
     const over = el.scrollHeight > COLLAPSE_PX + 1
