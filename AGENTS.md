@@ -766,14 +766,28 @@ LLM and executes no user code**.
   oversize/too-large files render just the header row (reusing `STATUS_LABEL`/
   `STATUS_CLS`). NO external diff library. (2) **`components/TranscriptView.tsx`**
   renders `TranscriptStep[]` as a STRUCTURED timeline (left `border-l` rail +
-  per-item markers): text steps as prose, tool steps as a labeled chip (`name`) +
-  a collapsible monospace `input`, and `result` steps attached under their owning
-  step. `lib/transcript.ts` `groupTranscript()` (pure, tested) folds the flat
-  `result`-follows-owner stream into `{kind,text|name+input,results[]}` items
-  (a leading orphan result is surfaced, never dropped); payloads over
-  `COLLAPSE_OVER` chars collapse behind a `<details>`. `formatTranscript` (the old
-  flat-text renderer in `lib/format.ts`) is retained — still used by
-  `LoopDetailView`'s edit-watch panel — but the run page no longer calls it.
+  per-turn markers): **assistant text renders as markdown** (via the shared
+  `lib/markdown.ts` `renderMarkdown` = the marked-GFM→DOMPurify pipeline +
+  `MD_SANITIZE` allowlist EXTRACTED from `TaskFileView` so the two markdown
+  surfaces can't drift; output styled with `.taskmd`), tool steps collapse to a
+  **one-line summary** (name chip + the key argument surfaced by the pure, tested
+  `summarizeTool(input)` — Read→`file_path`, Bash→`command`, … via `SUMMARY_KEYS`;
+  the raw `input` JSON is `forceCollapse`d behind a `<details>` so trivial calls
+  stay one line), and `result` steps attach under their owner (no redundant
+  "RESULT" label; short/informative outputs inline, long ones collapse). Each
+  turn's marker cycles the `--color-chart-1..5` ramp (the SAME `TURN_COLORS` as
+  `LoopChart`'s STROKES) — color as a small icon accent for rhythm/scannability,
+  never a filled block, and the run's error state still reads via the StatusPill,
+  not these decorative markers. `lib/transcript.ts` `groupTranscript()` (pure,
+  tested) folds the flat `result`-follows-owner stream into
+  `{kind,text|name+input,results[]}` items (a leading orphan result is surfaced,
+  never dropped); payloads over `COLLAPSE_OVER` chars collapse behind a
+  `<details>`. Long tool args/paths truncate (`truncate`, full value in `title`)
+  so there's no horizontal overflow at any width. Tests: `lib/transcript.test.ts`
+  (summarizeTool), `lib/markdown.test.ts` (sanitize), `components/TranscriptView.test.ts`
+  (markdown render + compact summary + no RESULT label + color ramp).
+  `formatTranscript` (the old flat-text renderer in `lib/format.ts`) is retained —
+  still used by `LoopDetailView`'s edit-watch panel — but the run page no longer calls it.
 
 ## Commands
 

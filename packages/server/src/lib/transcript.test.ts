@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupTranscript } from './transcript'
+import { groupTranscript, summarizeTool } from './transcript'
 import type { TranscriptStep } from '../types'
 
 describe('groupTranscript', () => {
@@ -25,5 +25,27 @@ describe('groupTranscript', () => {
 
   it('returns an empty list for no steps', () => {
     expect(groupTranscript([])).toEqual([])
+  })
+})
+
+describe('summarizeTool', () => {
+  it('surfaces the identifying arg (file path for a read, command for bash)', () => {
+    expect(summarizeTool('{"file_path":"/a/b.md"}')).toBe('/a/b.md')
+    expect(summarizeTool('{"command":"ls -la"}')).toBe('ls -la')
+    expect(summarizeTool('{"pattern":"foo","path":"src"}')).toBe('src') // path outranks pattern
+  })
+
+  it('reads a short scalar/string payload as the summary itself', () => {
+    expect(summarizeTool('"just a string"')).toBe('just a string')
+    expect(summarizeTool('42')).toBe('42')
+    expect(summarizeTool('plain text arg')).toBe('plain text arg')
+  })
+
+  it('returns null when there is nothing useful to show inline', () => {
+    expect(summarizeTool('')).toBeNull()
+    expect(summarizeTool(undefined)).toBeNull()
+    expect(summarizeTool('{"weird":"key"}')).toBeNull() // no recognized key
+    expect(summarizeTool('{}')).toBeNull()
+    expect(summarizeTool('x'.repeat(200))).toBeNull() // long non-JSON blob
   })
 })
