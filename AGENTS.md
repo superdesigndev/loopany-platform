@@ -359,6 +359,44 @@ LLM and executes no user code**.
   `runner.test.ts` (fallback path via a fake `claude` bin + failing bridge fixture). Live PostHog
   manual-acceptance steps: `packages/daemon/docs/mcp-workflow-tools.md`. Do NOT scope-creep into
   write-tool support / a tool registry UI / CLI unification (later phases).
+- **Dashboard artifact primitives (`loop-embed`/`loop-calendar`) + Recharts charts.**
+  The generative-UI primitive registry lives in `LoopView.tsx`, and registering a
+  primitive means moving THREE things together: (1) `LOOP_TAGS`/`LOOP_ATTRS` + the
+  DOMPurify config INCLUDING the `uponSanitizeAttribute` force-keep hook (data-bearing
+  attrs like `series`/`match` carry colons/commas/globs DOMPurify otherwise strips,
+  silently blanking the element); (2) the html-react-parser `replace` swap; (3) the
+  skill authoring docs (`skill/references/evolve.md` §3 + `skill/run/edit.md`) - a tag
+  in the sanitizer but not the skill is never authored, the reverse renders nothing.
+  `<loop-embed file="…"|match="…" [full]>` embeds the NEWEST matching synced artifact
+  (resolution + dating in the pure, tested `lib/productDate.ts`: filename date first -
+  `YYYY-MM-DD`/`YYYY_MM_DD`/`YYYYMMDD` in the BASENAME, consistent separator, not
+  embedded in longer digit runs - else sync time, and the UI marks the fallback
+  visibly); collapse is 300px via a WRAPPER (`overflow-hidden`+max-height), never
+  clipped text nodes. `<loop-calendar match="…">` is the Monday-start month grid of
+  the loop's products (task file excluded from the default set via `isTaskPath`;
+  chips collapse to dots under 620px of CONTAINER width, measured by ResizeObserver,
+  not a viewport media query). Both primitives share ONE lazy `getArtifacts` fetch
+  made only when the template mentions them, and render file content through the
+  SHARED `components/artifactView.tsx` (ViewerHead/ArtifactBody/BinaryNotice - the
+  same code the Files panel viewer uses, so copy and behavior can't drift).
+  **Charts are Recharts v3 in the shadcn/ui-charts grammar** (`LoopChart.tsx`),
+  themed only by the `--color-chart-1..5` ramp (app.css `@theme`, aliases of the
+  semantic palette): fixed `HEIGHT=190` + `ResponsiveContainer` (container-driven
+  width, constant height - the old fixed-viewBox SVG scaled like an image: ~4px
+  strokes and a ~340px-tall chart at full dashboard width), single series = gradient
+  area, multi-series = plain lines (translucent fills go muddy in monochrome), a
+  single-point series = labeled dot (never a blank chart), `isAnimationActive` off.
+  Testing gotchas: Recharts v3 mounts its SVG via effects, so `renderToStaticMarkup`
+  yields an EMPTY wrapper - chart assertions need a client render under `act`, plus
+  a jsdom ResizeObserver stub that FIRES a real contentRect on `observe` (jsdom
+  measures 0×0 and Recharts then renders nothing; `initialDimension` only covers the
+  pre-measure render). Bundle: recharts must stay OUT of the base client bundle -
+  `LoopDetailView` lazy-loads the whole `LoopView` chunk (`React.lazy` + Suspense;
+  verified in `.output/public/assets`: recharts appears only in `LoopView-*.js`).
+  Width containment is guarded by `dashboardArtifacts.regression.test.ts`
+  (calendar `grid-cols-7` = minmax(0,1fr) tracks + `min-w-0` cells + truncating
+  chips; embed wrapper-clipping; chart fixed-height ResponsiveContainer, no
+  `viewBox=`).
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.
