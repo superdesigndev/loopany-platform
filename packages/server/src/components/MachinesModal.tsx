@@ -73,8 +73,10 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
     if (!pending) return
     let active = true
     const tick = async () => {
-      const s = await machineStatus({ data: pending.id })
-      if (!active) return
+      // A transient server hiccup during the connect-wait must not surface as an
+      // unhandled rejection (or wipe the connected state) — skip that tick.
+      const s = await machineStatus({ data: pending.id }).catch(() => undefined)
+      if (!active || s === undefined) return
       setStatus(s)
       if (s?.online && s.hostname) setName((n) => n || s.hostname || '')
     }
@@ -88,8 +90,13 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
 
   async function startConnect() {
     setBusy(true)
+    setDelErr(null)
     try {
       const r = await createMachine()
+      if ('error' in r) {
+        setDelErr(r.error)
+        return
+      }
       setStatus(null)
       setName('')
       setPending(r)
@@ -210,7 +217,12 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
                 Delete
               </button>
             </div>
-            {/* Offline → offer the exact command to bring this machine back (same token). */}
+            {/* Offline → offer the exact command to bring this machine back (same token).
+                The token is serialized only to the machine's OWNER (never a teammate),
+                so a null token quietly notes where the command lives instead. */}
+            {!m.online && !m.token && (
+              <div className="font-mono text-[11px] text-secondary">Reconnect command available from the machine owner's account.</div>
+            )}
             {!m.online && m.token && (
               <details>
                 <summary className="cursor-pointer select-none font-mono text-[11px] tracking-[0.06em] text-secondary marker:content-[''] hover:text-display">

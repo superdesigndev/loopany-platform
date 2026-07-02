@@ -7,19 +7,53 @@
  *      (prefilled with the hostname). finalizeMachine({id,name}) names it →
  *      it appears in the list. cancelMachine(id) drops a pending row.
  *
- * Shared workspace (v1): everyone sees/manages all machines. No workdir jail
- * (fully open) for now.
+ * Scoping: when the auth gate is on, every fn requires a signed-in user, and a
+ * machine is visible/actionable only when the requester owns it, its owner is a
+ * member of the active team, or the scope is the admin "All teams" view (the
+ * same rule listMachines filters by). The PLAINTEXT device token is serialized
+ * ONLY to the machine's owner — it fully impersonates the machine (poll /
+ * create-loop / log), so a teammate who can see the row must never exfiltrate
+ * it. Open mode (gate off) keeps the shared workspace: everyone sees/manages
+ * all machines, tokens included. No workdir jail (fully open) for now.
  */
 import { createServerFn } from '@tanstack/react-start'
 
 import * as store from '../db/store.js'
 import type { Machine } from '../db/schema.js'
-import { requestScope } from '../auth.js'
+import { requestScope, type RequestScope } from '../auth.js'
 import { machineIdFromToken, mintDeviceToken, setDeviceOwner, sha256 } from '../gateway/tokens.js'
+import { machineInScope, tokenVisibleTo } from './machineScope.js'
 import { ensureServer } from './boot.js'
 import type { MachineSummary } from '../types'
 
-function toSummary(m: Machine): MachineSummary {
+// The pure scoping decisions live in machineScope.ts (framework/DB-free, unit-
+// tested there); re-export for existing importers.
+export { machineInScope, tokenVisibleTo }
+
+/** Ids of the machines membership-visible in the scope's active team (the same
+ *  set listMachines serves). Empty when the scope needs no team check (open
+ *  mode, signed-out, or the admin "All teams" view — machineInScope settles
+ *  those before ever invoking its team-set thunk). */
+function teamMachineIds(scope: RequestScope): ReadonlySet<string> {
+  if (!scope.enforce || !scope.userId || (scope.isAdmin && scope.allTeams)) return new Set()
+  return new Set(store.listMachinesForTeam(scope.teamId).map((m) => m.id))
+}
+
+/**
+ * Resolve a machine and authorize it against the request scope (the machine-fn
+ * twin of loopApi's `ownedLoop`). `machine` is undefined when it's missing OR
+ * out of scope — callers treat both as "not found" so existence never leaks.
+ * The scope rides along so callers don't re-run requestScope (a second session
+ * decrypt); the team-set thunk keeps the owner fast path query-free.
+ */
+async function scopedMachine(id: string): Promise<{ scope: RequestScope; machine?: Machine }> {
+  const scope = await requestScope()
+  const m = store.getMachine(id)
+  const machine = m && machineInScope(m, scope, () => teamMachineIds(scope)) ? m : undefined
+  return { scope, machine }
+}
+
+function toSummary(m: Machine, scope: RequestScope): MachineSummary {
   return {
     id: m.id,
     name: m.name,
@@ -28,7 +62,7 @@ function toSummary(m: Machine): MachineSummary {
     hostname: m.hostname ?? null,
     platform: m.platform ?? null,
     arch: m.arch ?? null,
-    token: m.token ?? null,
+    token: tokenVisibleTo(m, scope) ? (m.token ?? null) : null,
     loopCount: store.loopsForMachine(m.id).length,
   }
 }
@@ -37,43 +71,50 @@ function toSummary(m: Machine): MachineSummary {
  *  signed-in owner when the gate is on; the full shared list in open mode. */
 export const listMachines = createServerFn({ method: 'GET' }).handler(async () => {
   ensureServer()
-  const { enforce, userId, teamId, allTeams } = await requestScope()
+  const scope = await requestScope()
+  const { enforce, userId, teamId, allTeams } = scope
   if (enforce && !userId) return []
   // Membership-scoped: a machine shows in every team its owner belongs to (one
   // machine serves many teams, report §2.3). The admin "All teams" view + open
   // mode list everything.
   const list = enforce && !allTeams ? store.listMachinesForTeam(teamId) : store.listMachines()
-  return list.filter((m) => m.name.trim()).map(toSummary)
+  return list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope))
 })
 
 /** Act 1 — create a pending machine + token, owned by the signed-in user's team. */
-export const createMachine = createServerFn({ method: 'POST' }).handler(async (): Promise<{ id: string; token: string }> => {
-  ensureServer()
-  const { userId, teamId } = await requestScope()
-  const token = mintDeviceToken()
-  const id = machineIdFromToken(token)
-  const owner = userId ?? 'shared'
-  setDeviceOwner(id, owner)
-  store.createMachine({ id, userId: owner, teamId, name: '', tokenHash: sha256(token), token, online: false })
-  return { id, token }
-})
+export const createMachine = createServerFn({ method: 'POST' }).handler(
+  async (): Promise<{ id: string; token: string } | { error: string }> => {
+    ensureServer()
+    const { enforce, userId, teamId } = await requestScope()
+    if (enforce && !userId) return { error: 'not signed in' }
+    const token = mintDeviceToken()
+    const id = machineIdFromToken(token)
+    const owner = userId ?? 'shared'
+    setDeviceOwner(id, owner)
+    store.createMachine({ id, userId: owner, teamId, name: '', tokenHash: sha256(token), token, online: false })
+    return { id, token }
+  },
+)
 
-/** Poll while the connect dialog is open. */
+/** Poll while the connect dialog is open. Scoped like listMachines; the token
+ *  rides along only for the machine's owner (the connect dialog's minter). */
 export const machineStatus = createServerFn({ method: 'GET' })
   .validator((id: string) => id)
-  .handler(({ data: id }): MachineSummary | null => {
+  .handler(async ({ data: id }): Promise<MachineSummary | null> => {
     ensureServer()
-    const m = store.getMachine(id)
-    return m ? toSummary(m) : null
+    const { scope, machine } = await scopedMachine(id)
+    return machine ? toSummary(machine, scope) : null
   })
 
 /** Act 2 — name the connected machine (it then appears in the list). */
 export const finalizeMachine = createServerFn({ method: 'POST' })
   .validator((d: { id: string; name: string }) => d)
-  .handler(({ data }): { ok: boolean } => {
+  .handler(async ({ data }): Promise<{ ok: boolean }> => {
     ensureServer()
     const name = data.name?.trim()
     if (!name) return { ok: false }
+    const { machine } = await scopedMachine(data.id)
+    if (!machine) return { ok: false }
     return { ok: !!store.updateMachine(data.id, { name }) }
   })
 
@@ -85,8 +126,13 @@ export const finalizeMachine = createServerFn({ method: 'POST' })
  */
 export const deleteMachine = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
-  .handler(({ data: id }): { ok: boolean; error?: string } => {
+  .handler(async ({ data: id }): Promise<{ ok: boolean; error?: string }> => {
     ensureServer()
+    const { scope, machine } = await scopedMachine(id)
+    // Distinct error shapes on purpose: a signed-out caller is "unauthorized",
+    // an out-of-scope/missing machine is "machine not found".
+    if (scope.enforce && !scope.userId) return { ok: false, error: 'unauthorized' }
+    if (!machine) return { ok: false, error: 'machine not found' }
     const loops = store.loopsForMachine(id)
     if (loops.length > 0) {
       return {
