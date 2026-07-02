@@ -693,6 +693,29 @@ test("finish TOCTOU: refuses (loop untouched) when the goal was cleared after th
   expect(store.getRun(run.id)!.phase).toBe("running"); // untouched
 });
 
+test("finish is single-shot: a second finish on the same still-live run refuses, no re-stamp/re-notify", () => {
+  const { loop, run, rt } = seededClosedRun();
+  const { sent, fn } = recordingNotify();
+  const gw = gateway(fn);
+
+  expect(gw.agentApi(rt, ["finish", "--message", "first", "--reason", "target met"]).status).toBe(200);
+  const first = store.getLoop(loop.id)!;
+  expect(first.completedAt).toBeTruthy();
+  expect(sent).toHaveLength(1);
+
+  // The token is still live (for the enriching report), so a second finish is attempted.
+  const res = gw.agentApi(rt, ["finish", "--message", "second", "--reason", "again"]);
+  expect(res.status).toBe(400);
+  expect((res.body as { text: string }).text).toMatch(/already finished/i);
+
+  // Loop stamps unchanged (no re-stamp), run message unchanged, no second notification.
+  const l = store.getLoop(loop.id)!;
+  expect(l.completedAt).toBe(first.completedAt);
+  expect(l.completionReason).toBe("target met");
+  expect(store.getRun(run.id)!.message).toBe("first");
+  expect(sent).toHaveLength(1);
+});
+
 test("finish alias `complete` works the same", () => {
   const { loop, rt } = seededClosedRun();
   const res = gateway().agentApi(rt, ["complete", "--reason", "done"]);

@@ -1004,8 +1004,11 @@ export class MachineGateway {
    * The run token is NOT revoked here: finish can't know the run's precise durationMs
    * / sessionId mid-run, so it leaves the token live for exactly ONE enriching
    * post-run report (see report()'s phase==="done" branch), which records those and
-   * revokes. Double-notify/double-finalize stay impossible — that branch never
-   * re-stamps or re-notifies.
+   * revokes. Because the token stays live, a second `finish` on the same run is
+   * possible — so this ALSO refuses when the loop is already completed
+   * (completedAt != null), keeping finish single-shot (no re-stamp, no re-snapshot,
+   * no re-notify). Double-notify/double-finalize stay impossible — both this guard
+   * and report()'s phase==="done" branch never re-stamp or re-notify.
    */
   private finishLoop(
     slot: RunSlot,
@@ -1015,6 +1018,11 @@ export class MachineGateway {
     const current = store.getLoop(slot.loopId);
     if (!current || current.goal == null) {
       return { ok: false, detail: "this loop no longer has a goal to finish — its goal was cleared since this run started" };
+    }
+    // Idempotency: the run token stays live for the enriching report, so a second
+    // `finish` on the same run is possible — refuse it so completion stays single-shot.
+    if (current.completedAt != null) {
+      return { ok: false, detail: "this loop is already finished" };
     }
     const ts = nowIso();
     // Record durationMs server-side from the run's claim/running timestamp so a
