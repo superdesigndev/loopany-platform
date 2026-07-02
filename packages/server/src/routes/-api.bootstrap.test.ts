@@ -5,9 +5,9 @@
  * the GET handler directly (vitest resolves the `?raw` bootstrap import the same way
  * the nitro build does) — the first-capture onboarding an agent follows before the
  * loopany skill is on disk. Asserts the bootstrap-only content: no frontmatter, the
- * connect step, fetch-references-over-HTTP, and the captain's session-situation
- * division (task-done → guide that into a loop; empty session → brainstorm loops FOR
- * THIS project and let the user pick).
+ * connect step, and fetch-references-over-HTTP. Batch 3 moved the decide-what-to-build
+ * logic (session-has-task vs empty-session brainstorm) OUT of bootstrap and INTO
+ * create.md §0, so bootstrap now just hands off to create.md for that.
  */
 import { describe, expect, test } from 'vitest'
 
@@ -47,13 +47,11 @@ describe('/api/bootstrap', () => {
     expect(body).toContain('keep questions to quick')
   })
 
-  test('reads the session situation: guide a done task, else brainstorm project loops', async () => {
+  test('hands decide-what-to-build off to create.md §0 (logic moved out in batch 3)', async () => {
     const body = flat(await (await GET()).text())
-    // Task already done in this session → turn THAT into the loop.
-    expect(body).toContain('already did a clear task')
-    // No task yet → do not invent; look at what THIS project is and brainstorm.
-    expect(body).toContain('no task yet')
-    expect(body).toContain('FOR THIS project')
-    expect(body).toContain('let the user pick')
+    // Bootstrap points at the create reference for everything from "what should this
+    // loop be?" onward — the session-situation fork now lives in create.md §0.
+    expect(body).toContain('Follow it from its §0')
+    expect(body).toContain('/api/skill/references/create.md')
   })
 })

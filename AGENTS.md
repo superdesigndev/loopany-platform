@@ -156,8 +156,34 @@ LLM and executes no user code**.
   `durationMs` (from the run's claim ts) and leaves the token live for exactly ONE enriching post-run
   `report()`: report()'s new `run.phase === "done"` branch records the precise durationMs/sessionId
   (+transcript/artifacts/taskFileContent) and THEN revokes, WITHOUT re-stamping/re-notifying/
-  advancing the cursor (double-notify stays impossible). Deferred to batch 3: the six skill markdown
-  files (SKILL/bootstrap/create/update/evolve + `exec-loop.md`, which polishes the trigger prose).
+  advancing the cursor (double-notify stays impossible). (Batch 3 rewrote the skill markdown to
+  match — see the next bullet.)
+- **Skill-prose rewrite (batch 3 of the loop redesign; markdown + test-only, no runtime change).**
+  The seven skill/prompt files under `packages/server/src/skill/` were rewritten to teach the
+  batch-1/2 reality (goals, self-finish, JSON-only edit, `task`-column removal). Durable deltas:
+  (a) **`bootstrap.md` shrank to situational-only** — pasted values + `loopany up` + a hand-off to
+  create.md §0; the decide-what-to-build fork (session-has-task vs empty-session brainstorm) MOVED
+  OUT of bootstrap and INTO **create.md §0** (its sole owner now). (b) **`create.md`** teaches an
+  inline `loopany new --json` config (NO `loop.tmp.json`, NO `task` field, optional `goal`) with a
+  `--dry-run`-then-create flow; §0.5 proposes cadence + per-run output + (only for goal-shaped
+  tasks) a finish line; the task-file template has NO `## Goal` section (a closed loop's Spec opens
+  with prose restating mission+finish line; the authoritative setpoint lives in config `goal`).
+  (c) **`exec-loop.md` full rewrite**: §3 is now "End the run: report, or finish" (normal=report;
+  finish only when `loopany show` reports a `goal:` + `self-finish: allowed` AND the setpoint is met
+  per Spec — near-but-not-met reports, never finishes early); old §5 → "One pass, then stop"; the
+  `Goal (finish line): <goal>` injection is documented; still one terminal call per run. (d)
+  **`evolve.md`** gained a closed-loop convergence frame (assess converging/stalled/drifting FIRST,
+  let it steer the three levers; evolve NEVER calls `finish`; completed loops never evolve) and a
+  tighter smoke-test (MCP workflows prefer ONE real read-like `tools.call` hit to confirm the
+  `server.tool` mapping + result shape). (e) **`update.md`** rewritten around JSON-only editing
+  (whitelist TABLE + `--json` one-liners for pin `{"allowControl":false}` / reopen `{"enabled":true}`
+  / goal set-clear `{"goal":"…"|null}` / dry-run; content-file trio unchanged). (f) **`edit.md`**
+  (run prompt) notes there's NO `set-goal` verb — goal/reopen are owner `loopany edit` actions.
+  The public-surface guardrail is intact (bootstrap + run/ never bundled; `sync-skill.test.ts`
+  still green). Two route tests were updated to the new prose (bootstrap test asserts the §0
+  hand-off; references test asserts create.md §0 ownership + inline-`--json`/no-`tmp.json`).
+  E2E-verified: `/api/bootstrap` serves the new doc, and `new`/`edit --json --dry-run` classify
+  open/closed + preview before→after.
 - **The loopany agent skill (`packages/server/src/skill/`).** The loop-builder
   knowledge is a real, installable agent skill — NOT one inline doc. **ALL prompt prose
   now lives under `src/skill/`** (the unify that retired `scheduler/prompts/` entirely).

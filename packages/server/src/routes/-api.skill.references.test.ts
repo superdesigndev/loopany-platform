@@ -17,6 +17,10 @@ const GET = (Route as any).options.server.handlers.GET as (ctx: {
 const call = (pathname: string) =>
   GET({ request: new Request(`http://localhost:3000${pathname}`) })
 
+// Prose in the reference docs is hard-wrapped, so a phrase can straddle a newline +
+// indent. Collapse all whitespace runs to a single space before substring-matching.
+const flat = (s: string) => s.replace(/\s+/g, ' ')
+
 describe('/api/skill/references/$', () => {
   for (const name of ['create.md', 'update.md', 'evolve.md']) {
     test(`serves ${name} as markdown`, async () => {
@@ -34,20 +38,40 @@ describe('/api/skill/references/$', () => {
   })
 
   test('create.md carries the §0.5 propose → confirm → build guidance', async () => {
-    const body = await (await call('/api/skill/references/create.md')).text()
+    const body = flat(await (await call('/api/skill/references/create.md')).text())
     // The new constraint: never silently guess cadence/output — propose, confirm, then build.
-    expect(body).toContain('0.5 · Settle the cadence and output format')
+    expect(body).toContain('0.5 · Settle cadence, output')
     expect(body).toContain('propose → confirm → build')
     expect(body).toContain('never silently guess')
-    // Both parameters the agent must settle before `loopany new`.
+    // The parameters the agent must settle before `loopany new`.
     expect(body).toContain('Cadence.')
     expect(body).toContain('Per-run output.')
+    // Batch 3: a goal-shaped task also proposes a finish line (closed loop); a
+    // monitor-shaped task never mentions a goal.
+    expect(body).toContain('Finish line — only for goal-shaped tasks')
     // Concrete proposed defaults the guidance offers as examples.
     expect(body).toContain('every day at 9am your time')
     expect(body).toContain('every hour')
     expect(body).toContain('a short markdown summary in `report.md`')
-    // The §2 cron step now consumes the cadence settled in §0.5.
-    expect(body).toContain('the cadence you settled in §0.5')
+  })
+
+  test('create.md §0 owns decide-what-to-build (moved from bootstrap in batch 3)', async () => {
+    const body = flat(await (await call('/api/skill/references/create.md')).text())
+    // Session already has a task → turn THAT into the loop; empty session → brainstorm
+    // loops FOR THIS project and let the user pick. This fork used to live in bootstrap.
+    expect(body).toContain('already did a clear task')
+    expect(body).toContain("There's no task yet")
+    expect(body).toContain('useful FOR IT')
+  })
+
+  test('create.md drops the removed `task` field + tmp.json ritual, uses inline --json', async () => {
+    const body = flat(await (await call('/api/skill/references/create.md')).text())
+    // Batch 2 removed the `task` column and the loop.tmp.json config file; create.md
+    // now authors an inline config passed to `loopany new --json` and previews with --dry-run.
+    expect(body).not.toContain('loop.tmp.json')
+    expect(body).not.toContain('--config')
+    expect(body).toContain('loopany new --json')
+    expect(body).toContain('--dry-run')
   })
 
   test('unknown name → 404 json', async () => {
