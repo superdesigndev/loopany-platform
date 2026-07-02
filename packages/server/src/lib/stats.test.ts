@@ -38,8 +38,8 @@ describe('seriesRows', () => {
       run('2026-06-16T00:00:00Z', { mrr: 9300, paid: 40 }),
     ])
     expect(seriesRows(series, ['mrr', 'paid'])).toEqual([
-      { t: '2026-06-16T00:00:00Z', mrr: 9300, paid: 40 },
-      { t: '2026-06-17T00:00:00Z', mrr: 9200, paid: 41 },
+      { __t: '2026-06-16T00:00:00Z', mrr: 9300, paid: 40 },
+      { __t: '2026-06-17T00:00:00Z', mrr: 9200, paid: 41 },
     ])
   })
 
@@ -50,8 +50,13 @@ describe('seriesRows', () => {
     ])
     const rows = seriesRows(series, ['mrr', 'paid'])
     expect(rows).toHaveLength(2)
-    expect(rows[1]).toEqual({ t: '2026-06-17T00:00:00Z', mrr: 9200 })
+    expect(rows[1]).toEqual({ __t: '2026-06-17T00:00:00Z', mrr: 9200 })
     expect('paid' in rows[1]!).toBe(false)
+  })
+
+  it('keeps the timestamp intact when a metric is literally named "t"', () => {
+    const series = numericSeries([run('2026-06-16T00:00:00Z', { t: 21.5 })])
+    expect(seriesRows(series, ['t'])).toEqual([{ __t: '2026-06-16T00:00:00Z', t: 21.5 }])
   })
 
   it('ignores unknown keys and returns no rows when nothing matches', () => {

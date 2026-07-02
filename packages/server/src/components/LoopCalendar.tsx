@@ -32,6 +32,28 @@ interface Product {
 
 const monthOf = (day: string): string => day.slice(0, 7) // YYYY-MM
 
+const monthIndex = (ym: string): number => {
+  const [y, m] = ym.split('-').map(Number)
+  return y! * 12 + m!
+}
+
+/**
+ * The shown month clamped back into the data: an exact hit stays; a month
+ * whose products all vanished (poll refresh) snaps to the nearest remaining
+ * one; no pick defaults to the newest month. `months` must be non-empty.
+ */
+function clampMonth(months: string[], shown: string | null): string {
+  if (shown && months.includes(shown)) return shown
+  let best = months[months.length - 1]!
+  if (shown) {
+    const target = monthIndex(shown)
+    for (const m of months) {
+      if (Math.abs(monthIndex(m) - target) < Math.abs(monthIndex(best) - target)) best = m
+    }
+  }
+  return best
+}
+
 const monthLabel = (ym: string): string => {
   const [y, m] = ym.split('-').map(Number)
   return `${new Date(y!, m! - 1, 1).toLocaleString(undefined, { month: 'long' }).toLowerCase()} ${y}`
@@ -123,7 +145,7 @@ export function LoopCalendar({
       </div>
     )
 
-  const month = shown ?? months[months.length - 1]!
+  const month = clampMonth(months, shown)
   const mi = months.indexOf(month)
   const today = localDay(new Date().toISOString())
   const selectedProduct = products.find((p) => p.file.path === selected)
@@ -153,7 +175,7 @@ export function LoopCalendar({
         <button
           type="button"
           className={navBtn}
-          disabled={mi < 0 || mi >= months.length - 1}
+          disabled={mi >= months.length - 1}
           onClick={() => setShown(months[mi + 1]!)}
           aria-label="next month"
         >

@@ -2,9 +2,16 @@
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { LoopView } from './LoopView'
 import type { RunSummary } from '../types'
+
+// The artifact-list fetch resolves empty so mounted embed/calendar tests can
+// observe the post-fetch state without a server.
+vi.mock('../server/loopApi', () => ({
+  getArtifacts: vi.fn(async () => []),
+  getArtifact: vi.fn(async () => null),
+}))
 
 // jsdom has no ResizeObserver and no layout, so Recharts' ResponsiveContainer
 // would measure 0×0 and render nothing. This stub reports a fixed 640×190 on
@@ -104,5 +111,14 @@ describe('LoopView artifact primitives', () => {
   it('shows the authoring hint when loop-embed has no target attr', () => {
     const out = render('<loop-embed></loop-embed>')
     expect(out).toContain('needs file=')
+  })
+
+  it('fires the artifact fetch for an uppercase-authored tag (detection is on the sanitized html)', async () => {
+    // DOMPurify lowercases tag names, so <LOOP-EMBED> still reaches the parser
+    // swap. The fetch trigger must see the sanitized string too, or the embed
+    // sticks at "[ loading ]" forever.
+    const out = await mount('<LOOP-EMBED match="reports/*.md"></LOOP-EMBED>')
+    expect(out).not.toContain('[ loading ]')
+    expect(out).toContain('No synced file matches yet')
   })
 })

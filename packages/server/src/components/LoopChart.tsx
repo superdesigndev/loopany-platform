@@ -83,7 +83,7 @@ export function LoopChart({
 
   const xAxis = (
     <XAxis
-      dataKey="t"
+      dataKey="__t"
       tickLine={false}
       axisLine={false}
       tickMargin={8}
