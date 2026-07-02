@@ -7,6 +7,7 @@ import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
 import { DiffView } from './DiffView'
 import { TranscriptView } from './TranscriptView'
 import { btn, btnDanger, StatusPill } from './ui'
+import { LoadErrorCard } from './actionUi'
 
 /** A section card — mirrors the loop page's `rounded-2xl border-wire bg-surface`
  *  panels with the mono instrument-panel label. `min-w-0` so wide inner content
@@ -304,20 +305,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
     await load()
   }
 
-  if (err)
-    return (
-      <div className="rounded-2xl border border-wire bg-surface px-6 py-8">
-        <div className="text-[14px] text-accent">Couldn't load this run.</div>
-        <div className="mt-1 text-[12.5px] text-secondary">{err}</div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="mt-3 cursor-pointer border-none bg-transparent p-0 font-mono text-[12px] tracking-[0.08em] text-interactive underline underline-offset-2 hover:text-display"
-        >
-          Retry
-        </button>
-      </div>
-    )
+  if (err) return <LoadErrorCard title="Couldn't load this run." detail={err} onRetry={() => void load()} />
   // Still loading while the loop detail is in flight, or while the backward
   // search for an older run hasn't settled yet.
   if (!detail || (!run && !searchDone)) return <Loading />

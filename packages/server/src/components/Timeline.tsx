@@ -20,7 +20,7 @@ import { runPulseAnim, useHydrated } from './ui'
  */
 export const WINDOW = 16 // max blocks per row — also the lazy-load page size
 const PAGE = WINDOW // a pager click steps a full window left/right
-const RAD = 'rounded-[4px]' // cube-sticker corner (echoes CubeMark RC/CELL ≈ 0.23)
+const RAD = 'rounded-[4px]' // cube-sticker corner (the Rubik's-sticker motif)
 const SEG = `h-5 w-[18px] shrink-0 ${RAD}` // one run block
 
 function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {

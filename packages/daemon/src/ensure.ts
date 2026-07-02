@@ -6,85 +6,143 @@
  * the connect-key), check whether its daemon is already live, and if not spawn a
  * single detached daemon that survives this session, then wait until the server
  * reports the machine online. Safe to call every time — it never starts a second
- * daemon when one is already polling.
+ * daemon when one is already polling: the LOCAL pidfile is consulted FIRST, so an
+ * unreachable server can't make repeated `up`s leak a new daemon per attempt.
+ *
+ * Every external touch (status fetch, spawn, kill, sleep, pidfile check,
+ * persistence, output) is an injectable seam so tests need no process/network.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { DEVICE_FILE, LOOPANY_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
-
-type Status = { online: boolean; name: string | null };
-
-async function fetchStatus(server: string, token: string): Promise<Status | undefined> {
-  try {
-    const res = await fetch(`${server}/api/machine/status`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) return undefined;
-    return (await res.json()) as Status;
-  } catch {
-    return undefined;
-  }
-}
+import { fetchMachineStatus, type MachineStatus } from "./control.js";
+import { verifiedRunningPid } from "./pidfile.js";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
- * Spawn the daemon detached so it outlives this `loopany up` process (and the
- * Claude Code session that called it). Re-execs THIS CLI with no verb — argless
- * ⇒ daemon mode — replaying the exact launcher (execPath + execArgv + entry) the
- * same way callback-bin does, so `npx`, `node dist/cli.js`, and `tsx src/cli.ts`
- * all resolve to runDaemon(). stdio is redirected to ~/.loopany/daemon.log.
+ * The argv/env plan for the detached daemon spawn (pure, exported for tests).
+ * The device token travels via ENV (LOOPANY_TOKEN — runDaemon reads it), NEVER
+ * argv: argv is visible in `ps` for the daemon's whole lifetime while the token
+ * file is carefully 0600. Only `--server-url` stays in argv — it's non-secret,
+ * and cli.ts's DAEMON_FLAGS fallback keys on the LEADING flag, so a
+ * `--server-url …` invocation still routes to daemon mode.
  */
-function spawnDaemon(server: string, token: string, logFile: string): void {
+export function buildDaemonSpawn(server: string, token: string): { args: string[]; env: NodeJS.ProcessEnv } {
+  const args = [...process.execArgv, process.argv[1] ?? "", "--server-url", server];
+  return { args, env: { ...process.env, LOOPANY_TOKEN: token } };
+}
+
+/**
+ * Spawn the daemon detached so it outlives this `loopany up` process (and the
+ * Claude Code session that called it). Re-execs THIS CLI, replaying the exact
+ * launcher (execPath + execArgv + entry) the same way callback-bin does, so
+ * `npx`, `node dist/cli.js`, and `tsx src/cli.ts` all resolve to runDaemon().
+ * stdio is redirected to ~/.loopany/daemon.log. Returns the child pid so a
+ * readiness timeout can kill exactly what it started.
+ */
+function spawnDaemonDefault(server: string, token: string, logFile: string): number | undefined {
   const out = fs.openSync(logFile, "a");
-  const args = [...process.execArgv, process.argv[1] ?? "", "--server-url", server, "--api-key", token];
+  const { args, env } = buildDaemonSpawn(server, token);
   const child = spawn(process.execPath, args, {
     detached: true,
     stdio: ["ignore", out, out],
-    env: process.env,
+    env,
   });
   child.unref();
+  return child.pid;
 }
 
 const READY_TIMEOUT_MS = 45_000;
 const POLL_MS = 1_500;
 
-export async function runEnsure(args: string[]): Promise<number> {
+export type EnsureDeps = {
+  fetchStatus?: (server: string, token: string) => Promise<MachineStatus | undefined>;
+  spawnDaemon?: (server: string, token: string, logFile: string) => number | undefined;
+  kill?: (pid: number, signal: NodeJS.Signals) => void;
+  sleep?: (ms: number) => Promise<void>;
+  /** The local pidfile check (verified alive + start-time match). */
+  localPid?: () => number | undefined;
+  persist?: (file: string, value: string) => void;
+  readToken?: () => string | undefined;
+  out?: (s: string) => void;
+  err?: (s: string) => void;
+};
+
+export async function runEnsure(args: string[], injected: EnsureDeps = {}): Promise<number> {
+  const d = {
+    fetchStatus: injected.fetchStatus ?? fetchMachineStatus,
+    spawnDaemon: injected.spawnDaemon ?? spawnDaemonDefault,
+    kill: injected.kill ?? ((pid: number, sig: NodeJS.Signals) => process.kill(pid, sig)),
+    sleep: injected.sleep ?? sleep,
+    localPid: injected.localPid ?? (() => verifiedRunningPid()),
+    persist: injected.persist ?? persist,
+    readToken: injected.readToken ?? (() => readStored(DEVICE_FILE)),
+    out: injected.out ?? ((s: string) => process.stdout.write(s)),
+    err: injected.err ?? ((s: string) => process.stderr.write(s)),
+  };
+
   const server = resolveServerUrl(flag(args, "server-url"));
   // Reuse this machine's stored identity first (so we stay the SAME machine across
   // runs); only adopt the connect-key the first time, when nothing is stored yet.
-  const token = readStored(DEVICE_FILE) || flag(args, "connect-key") || process.env.LOOPANY_TOKEN;
+  const token = d.readToken() || flag(args, "connect-key") || process.env.LOOPANY_TOKEN;
   if (!server || !token) {
-    process.stderr.write("loopany: usage: loopany up --server-url <url> --connect-key <dk_…>\n");
+    d.err("loopany: usage: loopany up --server-url <url> --connect-key <dk_…>\n");
     return 2;
   }
 
   // Persist both now so `loopany new` and a restart are zero-config (the daemon
   // persists them too on boot; doing it here makes them available immediately).
-  persist(SERVER_FILE, server);
-  persist(DEVICE_FILE, token);
+  d.persist(SERVER_FILE, server);
+  d.persist(DEVICE_FILE, token);
 
   const logFile = path.join(LOOPANY_DIR, "daemon.log");
 
-  const before = await fetchStatus(server, token);
-  if (before?.online) {
-    process.stdout.write(`daemon already running for this machine${before.name ? ` (${before.name})` : ""}\n`);
+  // Local pidfile FIRST: a live verified daemon means never spawn a second one —
+  // deciding purely from the server status endpoint meant an unreachable server
+  // spawned a NEW detached daemon on every retry (leaking daemons).
+  const localPid = d.localPid();
+  if (localPid !== undefined) {
+    const st = await d.fetchStatus(server, token);
+    if (st?.online) {
+      d.out(`daemon already running for this machine${st.name ? ` (${st.name})` : ""}\n`);
+    } else {
+      d.out(`daemon already running locally (pid ${localPid}) — server unreachable or machine still connecting; check ${logFile}\n`);
+    }
     return 0;
   }
 
-  process.stdout.write("starting daemon…\n");
-  spawnDaemon(server, token, logFile);
+  const before = await d.fetchStatus(server, token);
+  if (before?.online) {
+    d.out(`daemon already running for this machine${before.name ? ` (${before.name})` : ""}\n`);
+    return 0;
+  }
 
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(POLL_MS);
-    const st = await fetchStatus(server, token);
+  d.out("starting daemon…\n");
+  const childPid = d.spawnDaemon(server, token, logFile);
+
+  const attempts = Math.ceil(READY_TIMEOUT_MS / POLL_MS);
+  for (let i = 0; i < attempts; i++) {
+    await d.sleep(POLL_MS);
+    const st = await d.fetchStatus(server, token);
     if (st?.online) {
-      process.stdout.write(`daemon online — this machine is connected${st.name ? ` (${st.name})` : ""}\n`);
+      d.out(`daemon online — this machine is connected${st.name ? ` (${st.name})` : ""}\n`);
       return 0;
     }
   }
 
-  process.stderr.write(`loopany: daemon did not come online within ${READY_TIMEOUT_MS / 1000}s — check ${logFile}\n`);
+  // Readiness timeout: don't leave the just-spawned daemon running detached —
+  // we're about to report failure, so tear down exactly what we started (its
+  // SIGTERM handler exits cleanly and clears its own pidfile).
+  if (childPid !== undefined) {
+    try {
+      d.kill(childPid, "SIGTERM");
+    } catch {
+      /* already gone */
+    }
+  }
+  d.err(`loopany: daemon did not come online within ${READY_TIMEOUT_MS / 1000}s — check ${logFile}\n`);
   return 1;
 }

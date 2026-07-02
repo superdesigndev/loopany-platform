@@ -8,6 +8,7 @@ let db: typeof import("../db/index.js");
 let store: typeof import("../db/store.js");
 let gatewayMod: typeof import("./index.js");
 let tokens: typeof import("./tokens.js");
+let notifyMod: typeof import("./notify.js");
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-gateway-"));
@@ -22,6 +23,7 @@ beforeAll(async () => {
   store = await import("../db/store.js");
   gatewayMod = await import("./index.js");
   tokens = await import("./tokens.js");
+  notifyMod = await import("./notify.js");
 });
 
 afterAll(() => {
@@ -382,6 +384,20 @@ test("editLoop validates content fields (bad schema → 400, loop untouched)", (
   expect(store.getLoop(id)!.stateSchema).toBeNull();
 });
 
+test("editLoop clips an oversized workflow to the wire cap (same discipline as createLoop)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const created = gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", task: "x" });
+  const id = (created.body as any).id as string;
+
+  const res = gateway().editLoop(token, id, { workflow: "x".repeat(600 * 1024), ui: "<div>ok</div>" });
+  expect(res.status).toBe(200);
+  const loop = store.getLoop(id)!;
+  expect(loop.workflow!.length).toBe(512 * 1024); // WIRE_TEXT_CAP
+  expect(loop.ui).toBe("<div>ok</div>");
+});
+
 test("editLoop rejects an unknown patch key with a clear 400 (never silent no-op)", () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -422,12 +438,15 @@ test("poll stores live progress on this machine's running run; report clears it"
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
 
   gateway().poll(token, undefined, [{ runId: run.id, step: 3, label: "Editing report.md" }]);
-  expect(store.getRun(run.id)!.progress).toEqual({ step: 3, label: "Editing report.md" });
+  // The signal carries a freshness stamp (`at`) alongside step/label — the sweep's
+  // inactivity clock.
+  expect(store.getRun(run.id)!.progress).toMatchObject({ step: 3, label: "Editing report.md" });
+  expect((store.getRun(run.id)!.progress as { at?: string }).at).toBeTruthy();
 
   // A different machine can't write progress onto a run it doesn't own.
   const other = tokens.mintDeviceToken();
   gateway().poll(other, undefined, [{ runId: run.id, step: 9, label: "hijack" }]);
-  expect(store.getRun(run.id)!.progress).toEqual({ step: 3, label: "Editing report.md" });
+  expect(store.getRun(run.id)!.progress).toMatchObject({ step: 3, label: "Editing report.md" });
 
   // Finalizing the run clears the live signal (the full transcript supersedes it).
   const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
@@ -830,4 +849,203 @@ test("loopLog rejects an unknown loop id and an unregistered token", () => {
   expect(gateway().loopLog(token, "").status).toBe(400);
   // Token for a machine that was never registered → 401.
   expect(gateway().loopLog(tokens.mintDeviceToken(), "loop-x").status).toBe(401);
+});
+
+// ---- run-lifecycle hardening: canceled ordering, sweep inactivity/revocation ----
+
+test("a late report for a CANCELED run never advances the loop (cursor + task file untouched)", () => {
+  const { loop, run, rt } = seededExecRun();
+  store.updateRun(run.id, { phase: "canceled", error: "stopped by user" });
+
+  const res = gateway().report(rt, {
+    ok: true,
+    durationMs: 5,
+    cursor: { seenIds: [1, 2, 3] },
+    taskFileContent: "# advanced past what the user saw",
+  });
+  expect(res.status).toBe(200);
+  // The workflow cursor was NOT advanced and the task file NOT synced — the next
+  // run must re-process the data whose output the user never saw.
+  const stored = store.getLoop(loop.id)!;
+  expect(stored.state).toBeNull();
+  expect(stored.taskFileContent).toBeNull();
+  expect(store.getRun(run.id)!.phase).toBe("canceled");
+  // The token died with the report.
+  expect(gateway().agentApi(rt, ["show"]).status).toBe(401);
+});
+
+test("a canceled EVOLVE run's report clears the evolve marker (finishEvolution), symmetric to edit", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", evolveDue: true });
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "canceled", role: "evolve", ts: new Date().toISOString() });
+  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "evolve", allowControl: true });
+
+  let finished = "";
+  const gw = new gatewayMod.MachineGateway({
+    maybeFlagEvolve(): void {},
+    finishEvolution(id: string): void {
+      finished = id;
+    },
+    finishEdit(): void {},
+    addLoop(): void {},
+    removeLoop(): void {},
+    runNow(): void {},
+  } as any);
+
+  expect(gw.report(rt, { ok: true, durationMs: 5 }).status).toBe(200);
+  // Without this, evolveDue stays set and the canceled evolve re-fires next tick.
+  expect(finished).toBe(loop.id);
+});
+
+test("sweep revokes a reclaimed run's token (the orphaned agent's agent-api goes 401)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
+  // Claimed 30min ago, no progress heard since → past the 20min inactivity window.
+  const staleTs = new Date(Date.now() - 30 * 60_000).toISOString();
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: staleTs });
+  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+
+  const gw = gateway();
+  expect(gw.agentApi(rt, ["show"]).status).toBe(200); // live before the sweep
+  gw.sweep();
+  expect(store.getRun(run.id)!.phase).toBe("error");
+  expect(store.getRun(run.id)!.error).toBe("machine timed out / disconnected");
+  expect(gw.agentApi(rt, ["show"]).status).toBe(401); // dead after
+});
+
+test("sweep is INACTIVITY-based: a >20min run with a fresh progress heartbeat is NOT reclaimed", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
+  const staleTs = new Date(Date.now() - 30 * 60_000).toISOString();
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: staleTs });
+
+  const gw = gateway();
+  // The daemon's heartbeat just refreshed the progress stamp → healthy long run.
+  gw.poll(token, undefined, [{ runId: run.id, step: 7, label: "still working" }]);
+  gw.sweep();
+  expect(store.getRun(run.id)!.phase).toBe("running"); // never falsely failed
+
+  // Once the stamp itself goes stale (nothing heard for the full window) → reclaimed.
+  store.updateRun(run.id, { progress: { step: 7, label: "still working", at: staleTs } as { step: number; label: string } });
+  gw.sweep();
+  expect(store.getRun(run.id)!.phase).toBe("error");
+  expect(store.getRun(run.id)!.error).toBe("machine timed out / disconnected");
+});
+
+test("execFailureStreak is exact past any cap, so the every-Nth reminder keeps firing", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+
+  // A success, then 70 consecutive failures — beyond the old capped scan (64),
+  // which pinned the streak at 64 and silenced reminders forever.
+  addExecRun(loop.id, machineId, "done", "2026-05-31T23:59:59Z");
+  for (let i = 1; i <= 70; i++) {
+    const mm = String(Math.floor(i / 60)).padStart(2, "0");
+    const ss = String(i % 60).padStart(2, "0");
+    addExecRun(loop.id, machineId, "error", `2026-06-01T00:${mm}:${ss}Z`);
+  }
+  expect(store.execFailureStreak(loop.id)).toBe(70);
+  // 70 % FAILURE_NOTIFY_EVERY(5) === 0 → the "still broken" reminder fires.
+  expect(notifyMod.shouldNotifyFailure("auto", 70)).toBe(true);
+});
+
+test("show computes `next` in the loop's timezone", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const gw = gateway();
+  const showNext = (timezone: string) => {
+    const loop = store.createLoop({ userId: "u1", machineId, name: `L-${timezone}`, cron: "0 8 * * *", timezone, enabled: true, notify: "auto" });
+    const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+    const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+    return (gw.agentApi(rt, ["show"]).body as { text: string }).text.split("\n")[0]!;
+  };
+  // Same cron, timezones 25h apart — honoring the loop tz must yield different
+  // next-fire instants (the old tz-less probe rendered both in server time).
+  expect(showNext("Pacific/Kiritimati")).not.toBe(showNext("Pacific/Niue"));
+});
+
+// ---- wire-input bounds ----
+
+test("poll processes at most 32 progress entries (excess is dropped)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+
+  // 32 junk entries pad the front; the real run's entry sits past the cap.
+  const junk = Array.from({ length: 32 }, (_, i) => ({ runId: `nope-${i}`, step: 1, label: "x" }));
+  gateway().poll(token, undefined, [...junk, { runId: run.id, step: 5, label: "past the cap" }]);
+  expect(store.getRun(run.id)!.progress).toBeNull();
+
+  // Within the cap it lands normally.
+  gateway().poll(token, undefined, [{ runId: run.id, step: 5, label: "in the cap" }]);
+  expect(store.getRun(run.id)!.progress).toMatchObject({ step: 5, label: "in the cap" });
+});
+
+test("createLoop clips an oversized task to the 512KB wire cap", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+
+  const res = gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", task: "x".repeat(512 * 1024 + 100) });
+  expect(res.status).toBe(200);
+  expect(store.getLoop((res.body as any).id)!.task!.length).toBe(512 * 1024);
+});
+
+test("report ignores an over-cap workflow cursor but still finalizes the run", () => {
+  const { loop, run, rt } = seededExecRun();
+  const res = gateway().report(rt, { ok: true, durationMs: 5, cursor: { blob: "y".repeat(300 * 1024) } });
+  expect(res.status).toBe(200);
+  expect(store.getRun(run.id)!.phase).toBe("done"); // the run still records
+  expect(store.getLoop(loop.id)!.state).toBeNull(); // the runaway cursor does not
+
+  // A sane cursor persists as before.
+  const again = seededExecRun();
+  gateway().report(again.rt, { ok: true, durationMs: 5, cursor: { seen: 3 } });
+  expect(store.getLoop(again.loop.id)!.state).toEqual({ seen: 3 });
+});
+
+test("report whitelists the claimed outcome (unknown values fall back to the role default)", () => {
+  const bogus = seededExecRun();
+  gateway().report(bogus.rt, { ok: true, durationMs: 5, outcome: "hijack" as any });
+  expect(store.getRun(bogus.run.id)!.outcome).toBe("exec"); // role default, not "hijack"
+
+  const direct = seededExecRun();
+  gateway().report(direct.rt, { ok: true, durationMs: 5, outcome: "direct" });
+  expect(store.getRun(direct.run.id)!.outcome).toBe("direct"); // known value passes
+});
+
+test("agent-api report clips --message to the 2000-char cap", () => {
+  const { run, rt } = seededExecRun();
+  const res = gateway().agentApi(rt, ["report", "--message", "m".repeat(5000)]);
+  expect(res.status).toBe(200);
+  expect(store.getRun(run.id)!.message!.length).toBe(2000);
+});
+
+test("report clips sessionId and error (untrusted wire input, same discipline as message)", () => {
+  const { run, rt } = seededExecRun();
+  const res = gateway().report(rt, {
+    ok: false,
+    durationMs: 1,
+    sessionId: "s".repeat(500),
+    error: "e".repeat(5000),
+  });
+  expect(res.status).toBe(200);
+  const stored = store.getRun(run.id)!;
+  expect(stored.sessionId!.length).toBe(200); // SESSION_ID_CAP
+  expect(stored.error!.length).toBe(2000); // MESSAGE_CAP
+  // A non-string error degrades to the server's default reason.
+  const again = seededExecRun();
+  gateway().report(again.rt, { ok: false, durationMs: 1, error: 42 as never });
+  expect(store.getRun(again.run.id)!.error).toBe("run failed on machine");
 });

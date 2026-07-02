@@ -118,6 +118,16 @@ export function revokeRunToken(token: string): void {
   slots.delete(token);
 }
 
+/** Revoke every run token minted for `runId`. The sweep finalizes stuck runs by
+ *  id (it never held the token string), and a swept run's token must die with it
+ *  or the orphaned agent keeps a valid agent-api credential indefinitely. The
+ *  slots map holds one entry per in-flight run, so a scan is fine. */
+export function revokeRunTokensForRun(runId: string): void {
+  for (const [token, slot] of slots) {
+    if (slot.runId === runId) slots.delete(token);
+  }
+}
+
 // ---- claim tokens (New-loop correlation) ----
 // The web mints a claim token and waits on it; Claude Code passes it as `claim`
 // when it POSTs the loop, so the web learns which loop was created without

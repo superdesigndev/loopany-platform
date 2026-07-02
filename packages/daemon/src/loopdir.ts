@@ -26,7 +26,9 @@ export function expandTilde(p: string): string {
 export function resolveLoopDir(spec: LoopDirSpec): string {
   if (spec.taskFile) {
     const tf = expandTilde(spec.taskFile);
-    if (path.isAbsolute(tf)) return path.dirname(tf);
+    // resolve() even when already absolute: a server-sent path may carry `..`
+    // segments, and the jail checks downstream compare normalized paths.
+    if (path.isAbsolute(tf)) return path.dirname(path.resolve(tf));
     if (spec.workdir) return path.dirname(path.resolve(expandTilde(spec.workdir), tf));
   }
   if (spec.workdir) return path.resolve(expandTilde(spec.workdir));

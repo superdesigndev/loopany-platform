@@ -1,30 +1,19 @@
 import { Dialog } from '@base-ui/react/dialog'
 import type { ReactNode } from 'react'
 
-/** Shared modal shell — Base UI Dialog handles focus trap, Esc, scroll lock. */
+/** Shared modal shell — Base UI Dialog handles focus trap, Esc, scroll lock.
+ *  Content-height, optically centered — sized for the small form/compose dialogs
+ *  (the old `detail`/`wide` variants died with the modal-era job/run views). */
 export function Modal({
   open,
   onClose,
-  variant = 'form',
   children,
 }: {
   open: boolean
   onClose: () => void
-  /** Layout mode (all optically centered):
-   *  - `form` (default): content-height — for small forms.
-   *  - `detail`: a substantial min-height so short content doesn't collapse, plus
-   *    roomier top/bottom margins so it never crowds the top edge (job/run views).
-   *  - `wide`: a `detail` modal widened to a split-screen canvas (custom UI loop). */
-  variant?: 'form' | 'detail' | 'wide'
   children: ReactNode
 }) {
-  const wide = variant === 'wide'
-  const detail = wide || variant === 'detail'
-  const pos = `top-[46%] -translate-y-1/2 ${wide ? 'max-w-[1060px]' : 'max-w-160'} ${
-    detail
-      ? 'min-h-[min(560px,calc(100dvh-8rem))] max-h-[calc(100dvh-8rem)]'
-      : 'max-h-[calc(100dvh-5rem)]'
-  }`
+  const pos = 'top-[46%] -translate-y-1/2 max-w-160 max-h-[calc(100dvh-5rem)]'
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>

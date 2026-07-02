@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
 
 /** Bearer device token from the request (the machine's persisted ~/.loopany token). */
 function deviceToken(request: Request): string {
@@ -18,7 +19,9 @@ export const Route = createFileRoute('/api/machine/loop')({
       POST: async ({ request }: { request: Request }) => {
         const token = deviceToken(request)
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
-        const body = await request.json().catch(() => ({}))
+        const parsed = await readJsonBody(request, MACHINE_BODY_CAP)
+        if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
+        const body = (parsed.kind === 'ok' ? parsed.body : {}) as Record<string, unknown>
         const { getGateway } = await import('../server/boot.js')
         const r = getGateway().createLoop(token, body)
         return Response.json(r.body, { status: r.status })
@@ -33,7 +36,9 @@ export const Route = createFileRoute('/api/machine/loop')({
       PATCH: async ({ request }: { request: Request }) => {
         const token = deviceToken(request)
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
-        const body = (await request.json().catch(() => ({}))) as { id?: unknown; patch?: Record<string, unknown> }
+        const parsed = await readJsonBody(request, MACHINE_BODY_CAP)
+        if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
+        const body = (parsed.kind === 'ok' ? parsed.body : {}) as { id?: unknown; patch?: Record<string, unknown> }
         const { getGateway } = await import('../server/boot.js')
         const r = getGateway().editLoop(token, body.id, body.patch ?? {})
         return Response.json(r.body, { status: r.status })

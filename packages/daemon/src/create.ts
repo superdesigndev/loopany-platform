@@ -13,10 +13,10 @@
  * sole validator; we pre-check the obvious local mistakes for a clear message.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { DEVICE_FILE, LOOPANY_DIR, flag, readStored, resolveServerUrl } from "./config.js";
+import { expandTilde } from "./loopdir.js";
 import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
 
 /**
@@ -44,9 +44,16 @@ function detectTimezone(): string {
   return intlZone || "";
 }
 
-/** A cron must be a 5-field string before we bother the server with it. */
-function cronLooksValid(cron: unknown): cron is string {
-  return typeof cron === "string" && cron.trim().split(/\s+/).length === 5;
+/** Local pre-check only — the server (croner) is the SOLE validator. Croner
+ *  accepts 5- and 6-field expressions plus @-shortcuts (@daily …), so reject
+ *  only the obviously-wrong shapes: a valid config must never fail locally. */
+export function cronLooksValid(cron: unknown): cron is string {
+  if (typeof cron !== "string") return false;
+  const s = cron.trim();
+  if (!s) return false;
+  if (s.startsWith("@")) return true; // @daily/@hourly/… — let the server judge
+  const fields = s.split(/\s+/).length;
+  return fields === 5 || fields === 6;
 }
 
 /** The coding agents LoopAny can record a loop against (TS-only; cheap to widen). */
@@ -102,8 +109,7 @@ export function resolveAgent(env: NodeJS.ProcessEnv, declared: unknown): CodingA
  */
 export function resolveLoopWorkdir(workdir: unknown, loopId: string): string {
   if (typeof workdir === "string" && workdir.trim()) {
-    const expanded = workdir.startsWith("~/") ? path.join(os.homedir(), workdir.slice(2)) : workdir;
-    return path.resolve(expanded);
+    return path.resolve(expandTilde(workdir));
   }
   if (!loopId.trim()) return "";
   return path.join(LOOPANY_DIR, "work", loopId);
@@ -142,7 +148,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   }
 
   if (!cronLooksValid(config.cron)) {
-    process.stderr.write('loopany: config needs a 5-field "cron" (e.g. "0 8 * * *")\n');
+    process.stderr.write('loopany: config needs a "cron" expression (e.g. "0 8 * * *")\n');
     return 2;
   }
   if (!config.workflow && !config.task) {

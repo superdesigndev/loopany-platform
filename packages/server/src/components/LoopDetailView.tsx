@@ -3,6 +3,7 @@ import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary, TranscriptStep } from '../types'
 import { cronText, dotColor, dotLabel, dur, fmt, formatTranscript, isDone, tsShort, until } from '../lib/format'
+import { mergeRuns } from '../lib/runs'
 import { deleteJob, evolveJob, getJobDetail, getTranscript, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { ModalSection } from './Modal'
@@ -12,22 +13,9 @@ import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { MachinesModal } from './MachinesModal'
 import { Timeline, WINDOW } from './Timeline'
 import { ArtifactList, btn, btnCost, btnKey, btnKeyPrimary, btnPrimary, ErrorBanner, Pre, runPulseStyle } from './ui'
-import { ConfirmBar, FlashLine, useDeferredDelete, useFlash } from './actionUi'
+import { ConfirmBar, FlashLine, LoadErrorCard, useDeferredDelete, useFlash } from './actionUi'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
-
-/** Merge two chronological run lists, dedup by id (first wins), re-sort ascending. */
-function mergeRuns(primary: RunSummary[], secondary: RunSummary[]): RunSummary[] {
-  const seen = new Set<string>()
-  const out: RunSummary[] = []
-  for (const r of [...primary, ...secondary]) {
-    if (seen.has(r.id)) continue
-    seen.add(r.id)
-    out.push(r)
-  }
-  out.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
-  return out
-}
 
 /**
  * Loop detail PAGE body (`/loops/$loopId`) — the redesign of the former modal.
@@ -67,23 +55,21 @@ export function LoopDetailView({ id }: { id: string }) {
   // Older run pages (lazy) for the timeline strip, mirroring LoopCard.
   const [older, setOlder] = useState<RunSummary[]>([])
 
-  const load = useCallback(async () => {
-    setErr(null)
-    try {
-      setDetail(await getJobDetail({ data: id }))
-    } catch (e) {
-      setErr(String(e))
-    }
-  }, [id])
-
-  // Silent background refresh — a transient failure keeps the stale data on screen.
-  const poll = useCallback(async () => {
-    try {
-      setDetail(await getJobDetail({ data: id }))
-    } catch {
-      /* keep what we have; the next tick retries */
-    }
-  }, [id])
+  // One fetch for both the initial load and the background poll. Success always
+  // clears a prior transient error (so a blip on the initial load can't brick
+  // the page while the poll keeps succeeding); only the non-silent initial load
+  // surfaces a failure — a silent poll keeps the stale data and the next tick retries.
+  const load = useCallback(
+    async (silent = false) => {
+      try {
+        setDetail(await getJobDetail({ data: id }))
+        setErr(null)
+      } catch (e) {
+        if (!silent) setErr(String(e))
+      }
+    },
+    [id],
+  )
 
   useEffect(() => {
     setDetail(null)
@@ -107,9 +93,9 @@ export function LoopDetailView({ id }: { id: string }) {
   const running = !!detail?.summary.running
   useEffect(() => {
     if (editing || del.armed) return
-    const t = setInterval(() => void poll(), running ? 3_000 : 8_000)
+    const t = setInterval(() => void load(true), running ? 3_000 : 8_000)
     return () => clearInterval(t)
-  }, [editing, del.armed, running, poll])
+  }, [editing, del.armed, running, load])
 
   useEffect(() => {
     if (!pushSaved) return
@@ -214,6 +200,7 @@ export function LoopDetailView({ id }: { id: string }) {
       if (r.error) return setActionErr(`Couldn't queue the edit: ${r.error}`)
       setEditLog([])
       setEditTrace(null)
+      traceFetched.current = false // a fresh dispatch fetches its own settled transcript
       setEditDispatched(true)
       setEditInstruction('')
       await refreshAll()
@@ -242,7 +229,7 @@ export function LoopDetailView({ id }: { id: string }) {
   if (err)
     return (
       <Shell back={backLink}>
-        <div className="font-mono text-[13px] text-accent">[ ERROR ] {err}</div>
+        <LoadErrorCard title="Couldn't load this loop." detail={err} onRetry={() => void load()} />
       </Shell>
     )
   if (!detail)

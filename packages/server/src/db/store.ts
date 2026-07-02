@@ -8,7 +8,7 @@
  * swap, not a rewrite.
  */
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNotNull, lt, ne, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, lt, ne, notInArray, sql } from "drizzle-orm";
 
 import { db } from "./index.js";
 import {
@@ -117,6 +117,16 @@ export function updateLoop(id: string, patch: Partial<NewLoop>): Loop | undefine
 
 export function deleteLoop(id: string): boolean {
   const r = db.delete(loops).where(eq(loops.id, id)).run();
+  if (r.changes > 0) {
+    // Cascade the loop's execution + artifact metadata. Leaving these rows behind
+    // would pin their blob hashes in the GC keep-set FOREVER (liveBlobRefs unions
+    // every artifact_files hash + every retained snapshot manifest), so a deleted
+    // loop's R2 bytes would never be reclaimed. The bytes themselves fall out on
+    // the next periodic GC pass once nothing references them.
+    db.delete(runs).where(eq(runs.loopId, id)).run();
+    db.delete(artifactFiles).where(eq(artifactFiles.loopId, id)).run();
+    db.delete(runSnapshots).where(eq(runSnapshots.loopId, id)).run();
+  }
   return r.changes > 0;
 }
 
@@ -186,27 +196,30 @@ export function countRuns(loopId: string): number {
 
 /**
  * Count consecutive FAILED exec runs ending at the loop's most recent finalized
- * exec run (newest-first; stop at the first non-error). Drives the failure-alert
- * anti-spam cadence (`shouldNotifyFailure`) entirely from persisted state — no
- * in-memory counter to reset on deploy. Only `exec` runs count: evolve/edit are
- * internal and never produce user-facing failure noise. Canceled / still-open
- * runs are ignored (neither success nor failure), so a user-stopped run doesn't
- * break or extend the streak.
+ * exec run. Drives the failure-alert anti-spam cadence (`shouldNotifyFailure`)
+ * entirely from persisted state — no in-memory counter to reset on deploy. Only
+ * `exec` runs count: evolve/edit are internal and never produce user-facing
+ * failure noise. Canceled / still-open runs are ignored (neither success nor
+ * failure), so a user-stopped run doesn't break or extend the streak.
+ *
+ * EXACT, not a capped scan: one indexed query for the newest successful (done)
+ * exec run, then a COUNT of the error exec runs after it. A capped newest-N scan
+ * would pin the streak at the cap once a loop failed past it, and the every-Nth
+ * "still broken" reminder (streak % FAILURE_NOTIFY_EVERY) would then never fire
+ * again — reminders must keep pacing however long the failure streak grows.
  */
 export function execFailureStreak(loopId: string): number {
-  const rows = db
-    .select({ phase: runs.phase })
+  const lastOk = db
+    .select({ ts: runs.ts })
     .from(runs)
-    .where(and(eq(runs.loopId, loopId), eq(runs.role, "exec"), inArray(runs.phase, ["done", "error"])))
+    .where(and(eq(runs.loopId, loopId), eq(runs.role, "exec"), eq(runs.phase, "done")))
     .orderBy(desc(runs.ts))
-    .limit(64)
-    .all();
-  let streak = 0;
-  for (const r of rows) {
-    if (r.phase !== "error") break;
-    streak++;
-  }
-  return streak;
+    .limit(1)
+    .get();
+  const conds = [eq(runs.loopId, loopId), eq(runs.role, "exec"), eq(runs.phase, "error")];
+  if (lastOk) conds.push(gt(runs.ts, lastOk.ts));
+  const r = db.select({ n: sql<number>`count(*)` }).from(runs).where(and(...conds)).get();
+  return r?.n ?? 0;
 }
 
 /** Open runs (pending/running) — used by the timeout-reclaim sweep. */
@@ -384,6 +397,20 @@ export function blobExists(hash: string): boolean {
 /** Record a blob's metadata (idempotent — same hash ⇒ same bytes, so a no-op on conflict). */
 export function recordBlob(hash: string, size: number, binary: boolean): void {
   db.insert(blobs).values({ hash, size, binary, createdAt: nowIso() }).onConflictDoNothing().run();
+}
+
+/** Does any LIVE artifact_files row on a loop bound to `machineId` point at `hash`?
+ *  Gates putBlob: a device may only upload bytes the sync handshake actually asked
+ *  it for (a row a prior sync wrote for one of ITS loops), never arbitrary
+ *  self-hashed blobs — otherwise any device token is an uncapped R2 write channel. */
+export function machineReferencesBlob(machineId: string, hash: string): boolean {
+  return !!db
+    .select({ id: artifactFiles.id })
+    .from(artifactFiles)
+    .innerJoin(loops, eq(artifactFiles.loopId, loops.id))
+    .where(and(eq(loops.machineId, machineId), eq(artifactFiles.hash, hash), eq(artifactFiles.deleted, false)))
+    .limit(1)
+    .get();
 }
 
 // ---- artifact_files (the current file set of each loop) ----
@@ -694,5 +721,27 @@ export function loopStoredBytes(loopId: string): number {
     )
     .get();
   return row?.total ?? 0;
+}
+
+/** The PER-PATH breakdown of loopStoredBytes: each live, byte-backed file row's
+ *  counted size (verified blobs.size, falling back to the client-reported
+ *  artifact_files.size for a pending row — the exact per-row basis
+ *  loopStoredBytes sums). One query per sync so the overwrite "freed" credit
+ *  doesn't cost two point queries per manifest file on the ~1.5s flush path. */
+export function liveArtifactSizes(loopId: string): Map<string, number> {
+  const rows = db
+    .select({ path: artifactFiles.path, size: sql<number | null>`coalesce(${blobs.size}, ${artifactFiles.size})` })
+    .from(artifactFiles)
+    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
+    .where(
+      and(
+        eq(artifactFiles.loopId, loopId),
+        eq(artifactFiles.deleted, false),
+        eq(artifactFiles.oversize, false),
+        isNotNull(artifactFiles.hash),
+      ),
+    )
+    .all();
+  return new Map(rows.map((r) => [r.path, r.size ?? 0]));
 }
 

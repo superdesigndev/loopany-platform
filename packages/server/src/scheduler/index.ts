@@ -96,7 +96,7 @@ export class Scheduler {
 
   /** Clear the edit marker after the edit run ends (mirrors finishEvolution). */
   finishEdit(id: string): void {
-    const updated = store.updateLoop(id, { editRequest: null, nextRunAt: null });
+    const updated = store.updateLoop(id, { editRequest: null, ...spentNextRunAt(id) });
     if (updated) this.addLoop(updated);
   }
 
@@ -131,7 +131,7 @@ export class Scheduler {
     const updated = store.updateLoop(id, {
       evolveDue: null,
       evolvedRunCount: store.countRuns(id),
-      nextRunAt: null,
+      ...spentNextRunAt(id),
     });
     if (updated) this.addLoop(updated);
   }
@@ -243,4 +243,14 @@ export class Scheduler {
 
 function msg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** The `nextRunAt` cleanup patch for finishEdit/finishEvolution: clear it ONLY
+ *  when it's spent (missing / unparsable / in the past — the one-shot that fired
+ *  this very run). A FUTURE value is the edit/evolve run's OWN work — it may have
+ *  applied `reschedule` — and unconditionally nulling it would silently undo the
+ *  change the run just made. */
+function spentNextRunAt(id: string): { nextRunAt: null } | Record<string, never> {
+  const next = store.getLoop(id)?.nextRunAt;
+  return next && Date.parse(next) > Date.now() ? {} : { nextRunAt: null };
 }

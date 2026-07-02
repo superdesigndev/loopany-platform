@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { safeDecode } from '../lib/url'
 
 /**
  * PUT /api/machine/blob/:hash — upload one content-addressed blob's raw bytes
@@ -13,7 +14,9 @@ export const Route = createFileRoute('/api/machine/blob/$hash')({
         const auth = request.headers.get('authorization') ?? ''
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
-        const hash = decodeURIComponent(new URL(request.url).pathname.split('/').pop() ?? '')
+        // Malformed percent-encoding must be a clean 400, never a thrown 500.
+        const hash = safeDecode(new URL(request.url).pathname.split('/').pop() ?? '')
+        if (hash === null) return Response.json({ error: 'bad hash' }, { status: 400 })
         const { BLOB_CAP } = await import('../gateway/artifacts.js')
         const declared = Number(request.headers.get('content-length') ?? '')
         if (Number.isFinite(declared) && declared > BLOB_CAP)

@@ -41,12 +41,13 @@ LLM and executes no user code**.
   run finalizes `!ok`, alerts via `notifyRunFailure(loopId, role, reason)`; (2) `sweep()` —
   when a stale pending/running run is reclaimed (`machine offline` / `run never claimed` /
   `machine timed out / disconnected`), same call. **Anti-spam is derived from persisted run
-  rows, NOT an in-memory counter** (deploy-safe): `store.execFailureStreak(loopId)` counts
-  consecutive trailing `error` **exec** runs (newest-first, stop at first non-error; evolve/
-  edit/canceled/open ignored); `shouldNotifyFailure(notify, streak)` notifies on streak `1`
-  (the success→failure transition) and then every `FAILURE_NOTIFY_EVERY` (=5) — so a loop that
-  fails every tick pushes at 1, 5, 10…, not every run; a success between failures resets the
-  streak so the next failure re-alerts. `notify:"never"` suppresses failure alerts too.
+  rows, NOT an in-memory counter** (deploy-safe): `store.execFailureStreak(loopId)` is EXACT -
+  two indexed queries, no bounded row scan: find the newest `done` **exec** run, then COUNT the
+  `error` exec runs newer than it (evolve/edit/canceled/open rows match neither query, so they
+  never break or inflate the streak); `shouldNotifyFailure(notify, streak)` notifies on streak `1`
+  (the success→failure transition) and then every `FAILURE_NOTIFY_EVERY` (=5) - so a loop that
+  fails every tick pushes at 1, 5, 10... and, with no scan cap, keeps reminding at every 5th
+  failure forever; a success between failures resets the streak so the next failure re-alerts. `notify:"never"` suppresses failure alerts too.
   **Role gating:** only `exec` failures notify — evolve/edit are internal (config change /
   self-shaping) and never produce user-facing noise, success OR failure (mirrors the success
   path's existing exclusion). `failureMessage(reason)` maps machine-availability reasons
@@ -55,6 +56,34 @@ LLM and executes no user code**.
   mirroring the injectable `blobStore`) so tests observe pushes without network. Zero-exec
   invariant holds: the server only reads its own run rows to decide. No UI change needed — runs
   already persist `phase:"error"` + `error`, which `JobDetailView`/run lists already render.
+- **Run lifecycle hardening (`gateway/index.ts` report/sweep + scheduler).** `report()` checks
+  the run's phase FIRST: a **canceled** run's late report is ignored BEFORE any loop-level write -
+  it never advances the workflow cursor or `taskFileContent` (the next run would silently skip
+  data whose output the user never saw) and never flips the phase; the run token is still revoked,
+  a canceled edit clears its `editRequest` marker, and a canceled **evolve clears `evolveDue`**
+  (symmetric with edit - otherwise the canceled pass re-fires on the very next tick). `sweep()`'s
+  `reclaimRun` also **revokes the run's tokens** (`revokeRunTokensForRun` - a swept run's orphaned
+  agent must not keep a live agent-api credential), and the running-run timeout is
+  **INACTIVITY-based, not since-claim**: `poll()` writes an `at` freshness stamp into the run's
+  progress JSON (throttled to once per `PROGRESS_STAMP_REFRESH_MS` = 60s even when the step/label
+  hasn't moved, so the ~3s poll hot path isn't a per-heartbeat UPDATE) and the sweep reclaims only
+  when nothing was heard for the full `RUN_TIMEOUT_MS` window (`max(claim ts, at)`) - a healthy
+  long run is never falsely failed; stampless runs from older daemons degrade to the old
+  since-claim behavior. `finishEdit`/`finishEvolution` clear `nextRunAt` ONLY when it is
+  missing/past (`spentNextRunAt`) - a FUTURE value survives, so a run's own `reschedule` isn't
+  wiped by its own finalization. `describe()` (the `loopany show` payload) probes the next fire
+  IN the loop's timezone, and `validCadence` probes the cron in the loop's timezone too (fire
+  times shift with it). Wire-input bounds (untrusted daemon input): the OUTER boundary is
+  `gateway/http.ts` `readJsonBody(request, MACHINE_BODY_CAP)` (2MB, content-length check +
+  capped read → 413) at every machine-route JSON ingress (poll/report/loop POST+PATCH/agent-api;
+  sync reuses the helper with its own `SYNC_BODY_CAP`), so the per-field caps are row-bloat
+  budgets, not the security boundary. Per-field: poll progress processes at most
+  `MAX_PROGRESS_ENTRIES` (32); task/workflow/`taskFileContent` (and `editLoop`'s `workflow`/`ui`
+  patch fields) clip at `WIRE_TEXT_CAP` (512KB); a workflow cursor over `CURSOR_CAP` (256KB
+  serialized) is dropped rather than persisted onto the loop row (the run still records normally);
+  messages and a report's `error` clip at `MESSAGE_CAP` (2000), `sessionId` at `SESSION_ID_CAP`
+  (200); a report's claimed `outcome` is whitelisted against `RUN_OUTCOMES`, anything else falls
+  back to the role default.
 - **The loopany agent skill (`packages/server/src/skill/`).** The loop-builder
   knowledge is a real, installable agent skill — NOT one inline doc. **ALL prompt prose
   now lives under `src/skill/`** (the unify that retired `scheduler/prompts/` entirely).
@@ -165,7 +194,11 @@ LLM and executes no user code**.
   than silently backgrounding a daemon (the old fall-through bug). All new verbs sit
   AFTER the callback guard, so they never hijack an in-run callback. **Local pidfile**
   (`pidfile.ts`, `~/.loopany/daemon.pid` under the same `LOOPANY_DIR` as the device
-  token): `runDaemon()` writes it on boot, clears it on clean exit. The pidfile records
+  token): `runDaemon()` **refuses to boot when a live VERIFIED daemon already owns the pidfile**
+  (a second daemon would overwrite it, and its exit would delete the file while daemon #1 still
+  runs - invisible to `status`, unkillable by `down`, double-polling the server), writes its own
+  pid on boot, and on exit clears the file **only if it still records ITS pid** (never delete a
+  file a newer daemon has since claimed). The pidfile records
   **two identity fields** — `<pid>:<startTime>` — where `startTime` is the daemon
   process's start time, derived best-effort from `ps -p <pid> -o lstart=` via the ONE
   shared `processStartTime()` helper (same string at write- and check-time; macOS+Linux
@@ -179,14 +212,50 @@ LLM and executes no user code**.
   can't be read at check time it degrades to alive-only (best-effort, never crashes).
   `status` reports running+pid plus server URL, a device-token **fingerprint** (last 6
   chars, never the full token), and a best-effort server `connection` line
-  (`/api/machine/status`, **3s `AbortSignal.timeout`** so a hung server degrades quickly
-  to "unknown — server unreachable" instead of blocking on undici's ~5min default);
+  (`/api/machine/status`, via the shared `fetchMachineStatus` in `control.ts` - also
+  `loopany up`'s readiness probe - with a **3s timeout** so a hung server degrades quickly
+  to "unknown — server unreachable");
   `down` SIGTERMs the verified pid and is a **clean no-op** when none runs (and on the
-  probe→signal ESRCH race). `control.ts` exposes every external touch (pid read, liveness,
+  probe→signal ESRCH race). **`loopany up` (`ensure.ts`) consults the local pidfile FIRST** - a
+  live verified daemon means never spawn a second one, so an unreachable server can't make
+  repeated `up`s leak a new daemon per attempt; the detached spawn passes the device token via
+  child ENV (`LOOPANY_TOKEN`, which `runDaemon` reads) with argv carrying only the non-secret
+  `--server-url` (argv is `ps`-visible for the daemon's whole lifetime, the token file is 0600);
+  and on readiness timeout it SIGTERMs exactly the child it spawned (whose clean exit clears its
+  own pidfile) instead of leaving it running detached. `control.ts` exposes every external touch (pid read, liveness,
   start-time lookup, kill, fetch, server/token, output) as an **injectable seam** so
   `control.test.ts` needs no real process/network; `cli.test.ts` runs the entry as a real
   subprocess to prove help/unknown EXIT (never launch the daemon). Shipped in daemon
   **0.5.0**.
+- **Daemon hardening (`roots.ts` jail + env allowlists + bounded I/O).**
+  **`LOOPANY_ROOTS` is an ALWAYS-APPLIED local jail** (new `src/roots.ts`): when the env roots are
+  set, server-sent `roots` survive only when they sit INSIDE a local root (`effectiveRoots` -
+  narrowing only; disjoint server roots are ignored and the local jail stands), so a
+  hostile/compromised server can never widen the jail and point a run at e.g. `~/.ssh`. The jail
+  confines the run workdir (`resolveWorkdir` throws outside it), the **watcher's watch-dirs**
+  (an outside loop folder is not watched; the daemon-owned `~/.loopany/work` scratch stays
+  allowed), and **task-file reads** (`readTaskFile` refuses a server-sent path outside both the
+  jailed workdir and the local roots). Paths are `path.resolve`-normalized BEFORE the prefix
+  check, so a server-sent `/jail/root/../../…` can't lexically pass while resolving outside
+  (a review-caught bypass). With no local roots, behavior is unchanged (fully open default).
+  **Child env is allowlisted everywhere** (`spawn.ts` `allowlistEnv`, base = PATH/HOME/locale/
+  proxy/CA keys): `execEnv()` for the claude child grew `CLAUDE_CONFIG_DIR` + the `ANTHROPIC_*`
+  prefix (proxy/gateway users; a relocated claude config keeps writing transcripts where
+  `sessionTrace()` reads them), and the **workflow subprocess no longer inherits full
+  `process.env`** - it gets the same base allowlist plus `LOOPANY_WORKFLOW_*` and the exact keys
+  named in **`LOOPANY_WORKFLOW_ENV=KEY1,KEY2`** (the pass-through knob for MCP `${VAR}` credential
+  expansion; documented in `docs/mcp-workflow-tools.md` + `evolve.md` §2b, and the
+  workflow-fallback task text explains the knob so the agent can tell the user which key to name).
+  **Bounded network + clean teardown:** poll/report/sync/blob-PUT fetches all route through the
+  ONE `boundedFetch` helper (`src/http.ts` - per-call timeout budgets stay at the call sites, a
+  caller signal composes via `AbortSignal.any`, and the undici ~5min-default rationale is
+  documented once there; a hung connection can't stall the heartbeat or wedge a report); SIGTERM/
+  `down` plumbs an AbortController into in-flight claude children (`runProcess` spawns detached
+  into its own process group and kills the WHOLE tree, `kill(-pid)`, SIGTERM→SIGKILL, so a killed
+  workflow's mcporter stdio grandchildren die too), with a bounded drain before exit; a timed-out
+  run **keeps its `sessionId`** (parsed from the streamed events before the kill) so the transcript
+  stays locatable. The local cron pre-check in `loopany new` accepts 5- and 6-field expressions
+  plus `@`-shortcuts (`@daily` …) - the server stays the sole judge.
 - **Run-log read endpoint + `loopany log` (daemon 0.6.0).** The on-machine agent can
   pull a loop's recent run **transcripts** so create/update/evolve aren't blind to how
   past runs went. The transcript used to be web-UI-only (`getTranscript` server fn).
@@ -387,15 +456,29 @@ LLM and executes no user code**.
   live, byte-backed row, that row's currently-counted size is subtracted (the upsert frees it)
   before the new bytes are added, so a loop regenerating one large file IN PLACE (the
   running-memory model) never falsely trips the cap — only new paths / genuine size increases
-  count. The cap is enforced in **two places** so a client-reported size can't bypass
+  count. The freed credit uses the **VERIFIED** stored length (`blobs.size`, the same basis
+  `loopStoredBytes` counts; the client-reported size only for a pending row) - an over-reported
+  prior size must not mint free headroom - and an inline file's row records the verified inline
+  byte length over the client-reported size; `sync()` reads those prior sizes from ONE upfront
+  `store.liveArtifactSizes(loopId)` map (the same `artifact_files ⋈ blobs` join), not per-file
+  point queries. The cap is enforced in **two places** so a
+  client-reported size can't bypass
   it: in `sync()` a non-inline file with a missing/invalid size is sized at `BLOB_CAP` (10MB,
   conservative — never `0`, which would slip past the projected-footprint check) instead of
-  trusting the client; and authoritatively at **`putBlob`** (the uncapped-before route), which
+  trusting the client; and authoritatively at **`putBlob`**, which
   re-checks a NEW blob's REAL byte length against every loop that already references the hash
   (`store.loopsReferencingHash` × `store.loopStoredBytesExcludingHash`) and, if storing would
   exceed a loop's cap, refuses the bytes (413 `capExceeded`) and drops that loop's dangling
   rows (`store.dropArtifactFilesForHash`) so nothing points at a blob never stored — a later
-  sync re-reconciles (self-healing). **When GC runs:** a dedicated `boot.ts` interval (`gcIntervalMs`, default
+  sync re-reconciles (self-healing). `putBlob` is also **handshake-gated**
+  (`store.machineReferencesBlob`): it accepts ONLY a hash the sync handshake actually asked THIS
+  machine for - i.e. a hash a live `artifact_files` row on one of its loops points at (the row
+  sync wrote when it returned the hash in `needHashes`); any other PUT gets a flat 403, so a
+  device token can't be used as an uncapped R2 write channel (a re-PUT of a still-referenced hash
+  stays accepted - daemon retries are idempotent). And `store.deleteLoop` **cascades** the loop's
+  `runs`/`artifact_files`/`run_snapshots` rows - leftover rows would pin the loop's blob hashes in
+  the GC keep-set forever; the bytes fall out on the next periodic GC pass once nothing references
+  them. **When GC runs:** a dedicated `boot.ts` interval (`gcIntervalMs`, default
   **15min**, independent of the faster offline-sweep) calls `gateway.maintainStorage()`
   (prune snapshots → GC blobs; best-effort, never throws). `maintainStorage` holds an
   **in-flight latch** (`maintenanceRunning`, released in `finally`) so a first-backlog pass
@@ -441,7 +524,12 @@ LLM and executes no user code**.
 - **CI/CD (`.github/workflows/`).** Two GitHub Actions workflows, deliberately split by
   trigger/cadence/blast-radius (they share nothing but the repo). **`deploy.yml`** — server
   → Fly (`loopany-testing`): fires on **push to `main`** (with `paths-ignore` for
-  `packages/daemon/**`, `**/*.md`) **plus `workflow_dispatch`**; a `fly-deploy`
+  `packages/daemon/**` plus the EXPLICIT doc paths `README.md`/`AGENTS.md`/`CLAUDE.md`/
+  `CONTRIBUTING.md`/`docs/**` - deliberately NOT a wholesale `**/*.md`: the skill/prompt markdown
+  under `packages/server/src/skill/` is compiled INTO the server bundle via `?raw` imports, so a
+  prompt-only md edit MUST deploy; paths-ignore has no negation, hence the explicit list, and
+  entries are OR'd - a push is skipped only when EVERY changed file matches one) **plus
+  `workflow_dispatch`**; a `fly-deploy`
   `concurrency` group (`cancel-in-progress`); `superfly/flyctl-actions/setup-flyctl@master`
   → `flyctl deploy --remote-only` (remote build, no Docker on runner). Note: `pnpm start`
   runs `drizzle-kit migrate` on container boot, so **every deploy applies pending
@@ -514,6 +602,29 @@ LLM and executes no user code**.
   map so a snippet pasted after a server restart still files correctly; and the
   team-member **invitation UI** — without it only superadmins can be multi-team, so
   this path is admin-only in practice today.
+- **Machine-surface + loopApi hardening (`server/machineFns.ts`, `server/loopApi.ts`,
+  `auth.ts`).** The unauthenticated **`/api/admin` route is DELETED** -
+  `scripts/demo-cookie-unified.sh` now seeds through the AUTHENTICATED device-token surface the
+  daemon itself uses (poll self-register → `POST /api/machine/loop` → read back via
+  `GET /api/machine/log`) and sets `LOOPANY_HOME` to a temp dir so the demo daemon never clobbers
+  the real `~/.loopany` identity. Machine server fns are scoped via the pure `machineInScope()`
+  predicate (requester owns the machine, OR its owner shares the active team, OR admin "All
+  teams"; open mode sees everything) - it lives in the framework-free `server/machineScope.ts`
+  (re-exported by `machineFns.ts`; tested with plain imports, no DB) and takes the team-id set as
+  a LAZY thunk, so the owner fast path (the ~2.5s connect-dialog `machineStatus` poll) never pays
+  the `listMachinesForTeam` join. `machineStatus`/`finalizeMachine`/`deleteMachine` share the
+  `scopedMachine(id)` guard (mirrors `ownedLoop`), and `createMachine` refuses a signed-out
+  caller under the gate. The PLAINTEXT
+  device token is serialized **OWNER-ONLY** under the gate (`tokenVisibleTo()`, used by both
+  `listMachines` and `machineStatus`) - the token fully impersonates the machine (poll /
+  create-loop / log), so a teammate/admin who may see or delete the row still gets `token: null`.
+  `auth.ts` **THROWS at boot** when the GitHub gate is on (GITHUB_CLIENT_ID/SECRET present) but
+  `LOOPANY_AUTH_SECRET` is unset - falling back to the public dev secret would let anyone forge
+  sessions. **Deployment precondition: set the `LOOPANY_AUTH_SECRET` Fly secret before deploying
+  with the gate on.** On the loopApi side: `createJob` refuses the admin All-teams view
+  (`pick a specific team`, mirroring `mintClaim`'s fail-safe), `patchJob` validates a `channelId`
+  against the LOOP's own team (`owned.loop.teamId`, not the requester's active team), and
+  `getTranscript` calls `backend()` like every other server fn.
 - **Loop detail is a PAGE, not a modal (`/loops/$loopId`).** The old dashboard
   modal (`JobDetailView` + `RunView` inside `Modal`) was retired for dedicated
   routes. `routes/loops.$loopId.tsx` → `components/LoopDetailView.tsx` (the loop
@@ -521,11 +632,18 @@ LLM and executes no user code**.
   toolbar [Run once / Edit / ··· menu], an optional agent-authored `LoopView`
   dashboard, then a 2-col grid of the **unified Files panel** and the **Runs**
   section). The dashboard (`routes/index.tsx`) + `LoopCard` now **navigate**
-  (`useNavigate`) instead of `setView` — no more `Modal` for detail. The page owns
+  (`useNavigate`) instead of `setView` — no more `Modal` for detail. The dashboard's
+  in-page refresh is **fetch-then-set** (never `router.invalidate`, whose loader re-run
+  throws on a transient blip - stale data is kept instead), with an `errorComponent`
+  catching only the initial loader; `TeamSwitcher` refetches via an `onSwitch` prop
+  instead of `router.invalidate`. The page owns
   its own `getJobDetail` fetch + self-poll (3s while a run is live, else 8s; ssr:false
-  so the session cookie rides along), same cadence as the old modal. The edit paths
+  so the session cookie rides along), same cadence as the old modal; a poll SUCCESS
+  clears a stale `err` and the fatal-error screen carries a **Retry** button, so a
+  transient first-load failure no longer bricks the page. The edit paths
   (hand-to-Claude-Code via `requestEdit`; manual `LoopForm` fallback) survive as
-  in-page mode takeovers. Reconnect opens `MachinesModal` rendered on the page itself.
+  in-page mode takeovers; `traceFetched` resets per edit dispatch, so each fresh
+  hand-to-Claude edit fetches its own settled transcript. Reconnect opens `MachinesModal` rendered on the page itself.
   **`loops.agent` is surfaced as a quiet chip** beside the title status pills (not the
   meta row). **Edit modes use a bare-page `EditHead`, NEVER `ModalHead`:** `ModalHead`
   renders Base UI `Dialog.Title`/`Dialog.Close`, which call `useDialogRootContext()`
@@ -553,8 +671,9 @@ LLM and executes no user code**.
   list (task file pinned first with a `TASK` chip, then synced artifacts path-sorted)
   drives a content viewer; the **task file is selected by default**. Reuses the Phase
   2 server fns — `getArtifacts` (self-polls by loopId) for the list, `getArtifact`
-  for text bodies; markdown (task file + `*.md`) renders via `TaskFileView` (now takes
-  a `bare` prop = no own inset/scroll, host owns the surface), other text in a mono
+  for text bodies; markdown (task file + `*.md`) renders via `TaskFileView` (bare by
+  design - no own inset/scroll, the host owns the surface; the interim `bare` prop is
+  gone, bare is the only render mode), other text in a mono
   `<pre>`, binary/oversize → the existing `/api/artifact/$loopId/$` download route.
   **The task file IS the loop folder's README, so it appears EXACTLY ONCE** — the
   list/dedup logic is the framework-free `lib/fileEntries.ts` (`buildFileEntries` +
@@ -629,4 +748,4 @@ LLM and executes no user code**.
 
 The **Cookie Daily Breakfast Report** loop runs end-to-end: scheduler → daemon poll → claude →
 `loopany report` → run `done` (real breakfast report). Dashboard renders real data
-(browser-verified, Geist style). 113 server tests + 28 daemon tests green; both packages typecheck.
+(browser-verified, Geist style). 192 server tests + 147 daemon tests green; both packages typecheck.

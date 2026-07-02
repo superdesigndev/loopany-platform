@@ -34,6 +34,12 @@ function backend() {
   return ensureServer()
 }
 
+/** Fail-safe error for creation from the admin "All teams" aggregate view: there
+ *  is no concrete team to file a new loop (or bind a connect-key) under, and
+ *  proceeding would silently fall back to the personal team — the very bug the
+ *  per-team claim work fixed. Shared by createJob + mintClaim. */
+const PICK_TEAM_ERROR = 'pick a specific team before creating a loop'
+
 /**
  * Resolve a loop and authorize the request against its owner. Returns the loop,
  * or undefined when it's missing OR (gate on) owned by a different user — callers
@@ -129,6 +135,7 @@ export const loadOlderRuns = createServerFn({ method: 'GET' })
 export const getTranscript = createServerFn({ method: 'GET' })
   .validator((d: { runId: string }) => d)
   .handler(async ({ data }): Promise<TranscriptResult> => {
+    backend()
     const run = store.getRun(data.runId)
     if (!run) return { error: 'run not found' }
     if (!(await ownedLoop(run.loopId))) return { error: 'run not found' }
@@ -181,8 +188,10 @@ export const createJob = createServerFn({ method: 'POST' })
   .validator((d: JobPayload & { machineId?: string }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {
     const { scheduler } = backend()
-    const { enforce, userId, teamId } = await requestScope()
+    const { enforce, userId, teamId, allTeams } = await requestScope()
     if (enforce && !userId) return { error: 'not signed in' }
+    // Fail SAFE in the admin "All teams" aggregate view (mirrors mintClaim).
+    if (allTeams) return { error: PICK_TEAM_ERROR }
     const owner = userId ?? 'shared'
     // Membership-scoped machine pick: any machine whose owner belongs to the active
     // team (one machine serves all of its owner's teams, report §2.3). Open mode has
@@ -233,8 +242,10 @@ export const patchJob = createServerFn({ method: 'POST' })
     if (!owned) return { error: 'not found' }
     const { enforce } = owned
     const p = data.patch
-    // A chosen channel must belong to the loop's team.
-    if (p.channelId && enforce && store.getChannel(p.channelId)?.teamId !== owned.teamId) {
+    // A chosen channel must belong to the LOOP's team — not the requester's active
+    // team (an admin patching from another team's view, or the All-teams aggregate,
+    // would otherwise reject the loop's own valid channels / accept foreign ones).
+    if (p.channelId && enforce && store.getChannel(p.channelId)?.teamId !== owned.loop.teamId) {
       return { error: 'channel not found' }
     }
     const loop = store.updateLoop(data.id, {
@@ -329,10 +340,8 @@ export const mintClaim = createServerFn({ method: 'POST' }).handler(
       '../gateway/tokens.js'
     )
     const { userId, teamId, allTeams } = await requestScope()
-    // Fail SAFE: in the admin "All teams" aggregate view there is no concrete team
-    // to bind the key to — minting one would silently fall back to the personal team
-    // (the very bug we're fixing). Require a concrete team selection first.
-    if (allTeams) return { error: 'pick a specific team before creating a loop' }
+    // Fail SAFE in the admin "All teams" aggregate view (mirrors createJob).
+    if (allTeams) return { error: PICK_TEAM_ERROR }
     const owner = userId ?? 'shared'
     const token = mintDeviceToken()
     // Remember the owner so the machine that self-registers with this token (and

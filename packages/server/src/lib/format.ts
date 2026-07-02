@@ -58,11 +58,6 @@ export const until = (t: string | null | undefined): string => {
   return `in ${Math.round(h / 24)}d`
 }
 
-export const md = (t: string | number): string => {
-  const d = new Date(t)
-  return `${d.getMonth() + 1}/${d.getDate()}`
-}
-
 /** Compact run-log timestamp: "MM/DD HH:mm" (24h, zero-padded, local). */
 export const tsShort = (t: string | null | undefined): string => {
   if (!t) return '—'

@@ -211,8 +211,10 @@ export const runs = sqliteTable(
     transcript: text("transcript", { mode: "json" }).$type<TranscriptStep[]>(),
     /** Live "what's it doing" signal while running — a slim current-activity line
      *  the daemon pushes on its poll heartbeat (NOT the full transcript). Cleared
-     *  when the run finalizes (the complete transcript supersedes it). */
-    progress: text("progress", { mode: "json" }).$type<{ step: number; label: string }>(),
+     *  when the run finalizes (the complete transcript supersedes it). `at` is the
+     *  freshness stamp the sweep reads as last-heard-from (optional: rows written
+     *  by older daemons lack it). TS-only shape; no migration. */
+    progress: text("progress", { mode: "json" }).$type<{ step: number; label: string; at?: string }>(),
   },
   (t) => [
     index("runs_loop_idx").on(t.loopId),

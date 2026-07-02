@@ -11,6 +11,27 @@ import { btn, btnDanger, btnPrimary } from './ui'
 export type Flash = { label: string; tone?: 'ok' | 'gone'; undo?: () => void; hold?: number }
 
 /**
+ * First-load failure card — the calm "couldn't load X" + Retry the dashboard,
+ * loop page, and run page all show instead of a raw error dump. One shared
+ * markup so the three screens can't drift.
+ */
+export function LoadErrorCard({ title, detail, onRetry }: { title: string; detail?: string | null; onRetry: () => void }) {
+  return (
+    <div className="rounded-2xl border border-wire bg-surface px-6 py-8">
+      <div className="text-[14px] text-accent">{title}</div>
+      {detail && <div className="mt-1 text-[12.5px] text-secondary">{detail}</div>}
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-3 cursor-pointer border-none bg-transparent p-0 font-mono text-[12px] tracking-[0.08em] text-interactive underline underline-offset-2 hover:text-display"
+      >
+        Retry
+      </button>
+    </div>
+  )
+}
+
+/**
  * In-panel guard — the Nothing-styled stand-in for native confirm(). Owns its
  * own a11y so the caller just renders it when armed: focus lands on the CTA,
  * Esc cancels, Enter (CTA focused) confirms. Render with `key={kind}` so it

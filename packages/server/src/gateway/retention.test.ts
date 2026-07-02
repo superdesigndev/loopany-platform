@@ -405,9 +405,8 @@ test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size",
   const { token, loop } = seed();
   const { gw, blobs } = gatewayWithStore();
 
-  // Sync 1: an 80B file whose size the daemon UNDER-reports as 10B. Inline bytes are
-  // authoritative, so the blob is recorded at its real 80B while the artifact_files
-  // row keeps the under-reported 10B.
+  // Sync 1: an 80B file whose size the daemon UNDER-reports as 10B. Inline bytes
+  // are authoritative, so the blob (and the artifact_files row) record the real 80B.
   const a = "a".repeat(80);
   const ha = sha256(a);
   await gw.sync(token, {
@@ -441,6 +440,78 @@ test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size",
   expect((p.body as any).capExceeded).toBe(true);
   expect(await blobs.has(hb)).toBe(false);
   expect(store.blobExists(hb)).toBe(false);
+});
+
+test("overwrite 'freed' credit uses the VERIFIED prior size — an over-reported one can't mint cap headroom", async () => {
+  process.env.LOOPANY_LOOP_BYTES_CAP = "100";
+  const { token, loop } = seed();
+  const { gw, blobs } = gatewayWithStore();
+
+  // f.bin first, alone: the daemon OVER-reports 95B (fits an empty loop), but the
+  // PUT stores only 20 REAL bytes — blobs.size records 20 while the artifact_files
+  // row keeps the reported 95.
+  const small = "s".repeat(20);
+  const h1 = sha256(small);
+  const s1 = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "f.bin", hash: h1, size: 95 }] });
+  expect((s1.body as any).needHashes).toContain(h1);
+  expect((await gw.putBlob(token, h1, Buffer.from(small))).status).toBe(200);
+
+  // A second, honest 60B file → verified footprint 60 + 20 = 80.
+  const base = "x".repeat(60);
+  const hbase = sha256(base);
+  await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "f.bin", hash: h1, size: 95 },
+      { path: "x.bin", hash: hbase, size: base.length },
+    ],
+    blobs: [{ hash: hbase, encoding: "utf8", data: base }],
+  });
+  expect(store.loopStoredBytes(loop.id)).toBe(80);
+
+  // Overwrite f.bin in place with 85 real bytes. A REPORTED-size freed credit (95)
+  // would project 80 + 85 - 95 = 70 ≤ 100 and ACCEPT — dodging the cap while the
+  // real footprint lands at 60 + 85 = 145. The VERIFIED credit (blobs.size = 20)
+  // projects 145 > 100 → rejected.
+  const over = "o".repeat(85);
+  const hover = sha256(over);
+  const r = await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "f.bin", hash: hover, size: over.length },
+      { path: "x.bin", hash: hbase, size: base.length },
+    ],
+    blobs: [{ hash: hover, encoding: "utf8", data: over }],
+  });
+  expect((r.body as any).capExceeded).toBe(true);
+  expect((r.body as any).rejected).toEqual(["f.bin"]);
+  expect(await blobs.has(hover)).toBe(false);
+  // The prior version survives (a rejected file keeps its last accepted row).
+  expect(store.getArtifactFile(loop.id, "f.bin")!.hash).toBe(h1);
+});
+
+test("deleting a loop cascades runs/artifact_files/run_snapshots so its blobs become collectable", async () => {
+  const { loop, machineId } = seed();
+  const { blobs } = gatewayWithStore();
+  const hash = await putBlob(blobs, "doomed loop content");
+
+  // The blob is pinned twice: a live file row AND a retained run snapshot.
+  store.upsertArtifactFile({ loopId: loop.id, path: "f.md", hash, size: 19, binary: false, oversize: false, lastRunId: null });
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
+  store.putRunSnapshot(run.id, loop.id, { "f.md": { hash, size: 19, binary: false, oversize: false } });
+  expect(await retention.gcBlobs(blobs, FORCE)).toBe(0); // referenced → kept
+
+  // Delete the loop → its runs / file rows / snapshots go with it (previously they
+  // lived forever, pinning the blob in the keep-set permanently).
+  expect(store.deleteLoop(loop.id)).toBe(true);
+  expect(store.getRun(run.id)).toBeUndefined();
+  expect(store.listAllArtifactFiles(loop.id)).toHaveLength(0);
+  expect(store.getRunSnapshot(run.id)).toBeUndefined();
+
+  // Nothing references the blob anymore → the next GC pass reclaims the bytes.
+  expect(await retention.gcBlobs(blobs, FORCE)).toBe(1);
+  expect(await blobs.has(hash)).toBe(false);
+  expect(store.blobExists(hash)).toBe(false);
 });
 
 test("maintainStorage skips a concurrent pass while one is already running (in-flight guard)", async () => {

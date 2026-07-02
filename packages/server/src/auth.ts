@@ -25,6 +25,17 @@ const clientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
 /** Auth is enforced only when a GitHub OAuth app is configured. */
 export const authEnabled = !!(clientId && clientSecret);
 
+// The session-signing secret. With the gate ON a real secret is REQUIRED —
+// falling back to the public dev constant would let anyone forge sessions, so
+// refuse to boot instead of running insecurely. Open mode (no gate ⇒ no
+// sessions worth forging) keeps the dev fallback for zero-config local runs.
+const authSecret = process.env.LOOPANY_AUTH_SECRET?.trim();
+if (authEnabled && !authSecret) {
+  throw new Error(
+    "LOOPANY_AUTH_SECRET must be set when the GitHub login gate is enabled (GITHUB_CLIENT_ID/SECRET present) — refusing to fall back to the public dev secret.",
+  );
+}
+
 const allowlist = (process.env.LOOPANY_ALLOWED_LOGINS || "")
   .split(",")
   .map((s) => s.trim().toLowerCase())
@@ -136,7 +147,7 @@ export function loopInScope(loopTeamId: string | null, scope: RequestScope): boo
 
 export const auth = betterAuth({
   baseURL: process.env.LOOPANY_BASE_URL || "http://127.0.0.1:3000",
-  secret: process.env.LOOPANY_AUTH_SECRET || "dev-insecure-secret-change-in-prod",
+  secret: authSecret || "dev-insecure-secret-change-in-prod",
   database: drizzleAdapter(db, { provider: "sqlite" }),
   socialProviders: authEnabled
     ? { github: { clientId: clientId!, clientSecret: clientSecret! } }

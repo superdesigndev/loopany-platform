@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
+import type { ErrorComponentProps } from '@tanstack/react-router'
 import { Tooltip } from '@base-ui/react/tooltip'
 import { getAuthState, listJobs, listMyTeams, listTemplates } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
@@ -13,6 +14,20 @@ import { NotificationsModal } from '../components/NotificationsModal'
 import { ComposeModal } from '../components/ComposeModal'
 import { LoopLogo } from '../components/LoopLogo'
 import { SignIn } from '../components/SignIn'
+import { LoadErrorCard } from '../components/actionUi'
+
+/** The dashboard's data fan-out — ONE definition shared by the route loader
+ *  (which throws through it into the errorComponent) and the in-page refetch
+ *  (which catches and keeps stale data). */
+async function fetchDashboardData() {
+  const [jobs, templates, machines, teams] = await Promise.all([
+    listJobs(),
+    listTemplates(),
+    listMachines(),
+    listMyTeams(),
+  ])
+  return { jobs, templates, machines, teams }
+}
 
 export const Route = createFileRoute('/')({
   ssr: false,
@@ -26,16 +41,23 @@ export const Route = createFileRoute('/')({
       const { data: session } = await authClient.getSession()
       if (!session) return { jobs: [], templates: [], machines: [], teams: undefined, auth }
     }
-    const [jobs, templates, machines, teams] = await Promise.all([
-      listJobs(),
-      listTemplates(),
-      listMachines(),
-      listMyTeams(),
-    ])
-    return { jobs, templates, machines, teams, auth }
+    return { ...(await fetchDashboardData()), auth }
   },
   component: Gate,
+  errorComponent: LoadError,
 })
+
+/** First-load failure screen — a calm retry instead of the router's default
+ *  error dump. Only the initial loader can land here; the in-page poll is
+ *  fetch-then-set and keeps stale data on a transient blip. */
+function LoadError({ error }: ErrorComponentProps) {
+  const router = useRouter()
+  return (
+    <main className="mx-auto max-w-[1180px] px-8 pt-12">
+      <LoadErrorCard title="Couldn't load the dashboard." detail={String(error)} onRetry={() => void router.invalidate()} />
+    </main>
+  )
+}
 
 /** Auth gate (only when a GitHub OAuth app is configured; otherwise open). Keeps
  *  Dashboard's hooks isolated so the gate never changes hook order. */
@@ -47,9 +69,18 @@ function Gate() {
 }
 
 function Dashboard() {
-  const { jobs = [], templates = [], machines = [], teams } = Route.useLoaderData() ?? {}
+  const initial = Route.useLoaderData()
+  // Loader data seeds the page; the poll refreshes via fetch-then-set below
+  // (never router.invalidate — see the poll comment), so this state is the
+  // single source the page renders from.
+  const [data, setData] = useState(() => ({
+    jobs: initial?.jobs ?? [],
+    templates: initial?.templates ?? [],
+    machines: initial?.machines ?? [],
+    teams: initial?.teams,
+  }))
+  const { jobs, templates, machines, teams } = data
   const online = machines.filter((m) => m.online).length
-  const router = useRouter()
   const navigate = useNavigate()
   const [compose, setCompose] = useState<{ open: boolean; template: TemplateInfo | null }>({
     open: false,
@@ -58,24 +89,37 @@ function Dashboard() {
   const [machinesOpen, setMachinesOpen] = useState(false)
   const [notifyOpen, setNotifyOpen] = useState(false)
 
-  // Poll the loader, but never while a modal is open (avoid disrupting a
-  // compose in progress). A ref keeps the interval reading current state.
-  // Speed up to 3s while any loop is executing so its run block + Running badge
-  // surface (and settle into a finished block) without a manual refresh.
+  // Silent background refresh — fetch-then-set (like the detail pages), NOT
+  // router.invalidate: invalidate re-runs the loader, whose Promise.all THROWS
+  // on any rejection, swapping the whole dashboard for the error screen and
+  // killing this interval (it never self-heals). A transient blip here just
+  // keeps the stale data on screen; the next tick retries.
+  const refetch = useCallback(async () => {
+    try {
+      setData(await fetchDashboardData())
+    } catch {
+      /* keep what we have; the next tick retries */
+    }
+  }, [])
+
+  // Poll, but never while a modal is open (avoid disrupting a compose in
+  // progress). A ref keeps the interval reading current state. Speed up to 3s
+  // while any loop is executing so its run block + Running badge surface (and
+  // settle into a finished block) without a manual refresh.
   const openRef = useRef(false)
   openRef.current = compose.open || machinesOpen || notifyOpen
   const anyRunning = jobs.some((j) => j.running)
   useEffect(() => {
     const t = setInterval(
       () => {
-        if (!openRef.current) void router.invalidate()
+        if (!openRef.current) void refetch()
       },
       anyRunning ? 3_000 : 10_000,
     )
     return () => clearInterval(t)
-  }, [router, anyRunning])
+  }, [refetch, anyRunning])
 
-  const refresh = () => void router.invalidate()
+  const refresh = () => void refetch()
   const done = jobs.filter(isDone)
   const active = jobs.filter((j) => !isDone(j))
   const activeOn = active.filter((j) => j.enabled).length
@@ -102,7 +146,7 @@ function Dashboard() {
             </div>
           </div>
           <div className="mt-1 flex shrink-0 items-center gap-2">
-            <TeamSwitcher data={teams} />
+            <TeamSwitcher data={teams} onSwitch={refresh} />
             <button
               onClick={() => setNotifyOpen(true)}
               className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-wire bg-surface px-3 py-2 font-mono text-[12px] tracking-[0.08em] text-secondary transition-colors hover:border-display hover:text-display"

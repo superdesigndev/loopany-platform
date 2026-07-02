@@ -1,23 +1,10 @@
 import { useMemo, useState } from 'react'
 import type { JobSummary, RunSummary } from '../types'
 import { cronText, dotLabel, isDone, lastRunOf, rel } from '../lib/format'
+import { mergeRuns } from '../lib/runs'
 import { loadOlderRuns } from '../server/loopApi'
 import { Timeline, WINDOW } from './Timeline'
 import { runPulseStyle, useHydrated } from './ui'
-
-/** Merge two chronological (oldest-first) run lists, dedup by id (the first
- *  occurrence wins, so pass the fresher list first), re-sorted by ts ascending. */
-function mergeRuns(primary: RunSummary[], secondary: RunSummary[]): RunSummary[] {
-  const seen = new Set<string>()
-  const out: RunSummary[] = []
-  for (const r of [...primary, ...secondary]) {
-    if (seen.has(r.id)) continue
-    seen.add(r.id)
-    out.push(r)
-  }
-  out.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
-  return out
-}
 
 export function LoopCard({
   job,

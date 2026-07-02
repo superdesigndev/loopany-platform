@@ -15,19 +15,24 @@
  * or network.
  */
 import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
-import { PID_FILE, readPidFile, clearPidFile, isAlive, processStartTime, type PidRecord } from "./pidfile.js";
+import { boundedFetch } from "./http.js";
+import { PID_FILE, readPidFile, clearPidFile, isAlive, processStartTime, verifiedRunningPid, type PidRecord } from "./pidfile.js";
 
-type Online = { online: boolean; name: string | null };
+export type MachineStatus = { online: boolean; name: string | null };
 
-/** Best-effort server view of this machine (same endpoint `loopany up` waits on). */
-async function fetchOnlineDefault(server: string, token: string): Promise<Online | undefined> {
+/** Best-effort server view of this machine (`/api/machine/status`) — shared by
+ *  `status`'s connection line and `loopany up`'s readiness probe. Bounded (3s)
+ *  and swallow-all: an unreachable/hung server degrades to undefined, never a
+ *  crash or a long stall. */
+export async function fetchMachineStatus(server: string, token: string): Promise<MachineStatus | undefined> {
   try {
-    const res = await fetch(`${server}/api/machine/status`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(3000),
-    });
+    const res = await boundedFetch(
+      `${server}/api/machine/status`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      3000,
+    );
     if (!res.ok) return undefined;
-    return (await res.json()) as Online;
+    return (await res.json()) as MachineStatus;
   } catch {
     return undefined;
   }
@@ -39,7 +44,7 @@ export type ControlDeps = {
   startTime?: (pid: number) => string | undefined;
   clearPid?: () => void;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
-  fetchOnline?: (server: string, token: string) => Promise<Online | undefined>;
+  fetchOnline?: (server: string, token: string) => Promise<MachineStatus | undefined>;
   out?: (s: string) => void;
   err?: (s: string) => void;
   // The local config inputs `status` reports — overridable so tests are isolated
@@ -57,37 +62,10 @@ function deps(d: ControlDeps): Seams {
     startTime: d.startTime ?? processStartTime,
     clearPid: d.clearPid ?? clearPidFile,
     kill: d.kill ?? ((pid, signal) => process.kill(pid, signal)),
-    fetchOnline: d.fetchOnline ?? fetchOnlineDefault,
+    fetchOnline: d.fetchOnline ?? fetchMachineStatus,
     out: d.out ?? ((s) => process.stdout.write(s)),
     err: d.err ?? ((s) => process.stderr.write(s)),
   };
-}
-
-/**
- * The pid of a daemon that is ACTUALLY ours and alive, or undefined. A pid is
- * "our daemon" iff it is alive AND (no recorded start-time, or the live process's
- * start-time still equals the one we recorded) — so a pid REUSED by an unrelated
- * process after an unclean crash (which left the pidfile behind) is NOT mistaken
- * for the daemon and never signaled. A dead pid OR a start-time mismatch is
- * cleared as a side effect so we don't report a ghost and a fresh `up` isn't
- * confused by stale state. When the start-time can't be read at check time we
- * degrade to alive-only (best-effort, never crash).
- */
-function runningPid(d: Seams): number | undefined {
-  const rec = d.readPid();
-  if (rec === undefined) return undefined;
-  if (!d.alive(rec.pid)) {
-    d.clearPid();
-    return undefined;
-  }
-  if (rec.startTime !== undefined) {
-    const live = d.startTime(rec.pid);
-    if (live !== undefined && live !== rec.startTime) {
-      d.clearPid();
-      return undefined;
-    }
-  }
-  return rec.pid;
 }
 
 /** Show a device token as a short non-secret fingerprint, never in full. */
@@ -99,7 +77,8 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
   const d = deps(injected);
   const server = "server" in injected ? (injected.server ?? "") : resolveServerUrl(undefined);
   const token = "token" in injected ? injected.token : readStored(DEVICE_FILE);
-  const pid = runningPid(d);
+  // The shared pidfile.verifiedRunningPid check (reused-pid safe), fed our seams.
+  const pid = verifiedRunningPid(d);
 
   d.out("loopany status:\n");
   d.out(
@@ -126,7 +105,7 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
 
 export async function runDown(args: string[], injected: ControlDeps = {}): Promise<number> {
   const d = deps(injected);
-  const pid = runningPid(d);
+  const pid = verifiedRunningPid(d);
 
   if (pid === undefined) {
     d.out("no daemon running for this machine\n");

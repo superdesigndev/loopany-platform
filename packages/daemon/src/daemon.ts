@@ -10,15 +10,22 @@
  */
 import os from "node:os";
 
+import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { runDelivery, type Delivery } from "./runner.js";
 import { DEVICE_FILE, SERVER_FILE, persist, readStored } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
 import { snapshotProgress } from "./progress.js";
 import { WatchManager, type WatchSpec } from "./watcher.js";
-import { writePidFile, clearPidFile } from "./pidfile.js";
+import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 
 const POLL_MS = Number(process.env.LOOPANY_POLL_MS || 3000);
+/** Per-poll fetch timeout — a hung connection must not stall the heartbeat
+ *  (the machine would look offline and get swept). */
+const POLL_TIMEOUT_MS = 30_000;
+/** On SIGTERM/`down`, wait at most this long for in-flight runs to settle (the
+ *  abort SIGTERMs their claude children; KILL_GRACE is 5s, so 10s covers it). */
+const DRAIN_MS = 10_000;
 
 /** Read a `--flag value` from argv. */
 function flag(name: string): string | undefined {
@@ -57,6 +64,16 @@ export async function runDaemon(): Promise<number> {
   // Machine identity reported on every poll (the server captures it on connect).
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch };
 
+  // Refuse to boot when a live, VERIFIED daemon already owns the pidfile — a
+  // second daemon (e.g. a bare `loopany` in a terminal) would overwrite it, and
+  // its exit would delete the file while daemon #1 still runs: invisible to
+  // `status`, unkillable by `down`, and double-polling the server.
+  const existing = verifiedRunningPid();
+  if (existing !== undefined) {
+    logger.error({ pid: existing }, "daemon already running — use `loopany down` first");
+    return 1;
+  }
+
   // Write the `loopany` callback wrapper once, before any run can fire. Each run
   // prepends CALLBACK_BIN_DIR to claude's PATH (no per-run shim in the workdir).
   ensureCallbackBin();
@@ -72,8 +89,9 @@ export async function runDaemon(): Promise<number> {
 
   // Continuously watch each loop's folder and live-sync artifacts to the server.
   // The watch set is learned from the poll response (server-authoritative), so it
-  // survives restarts and covers idle-time human edits, not just in-run output.
-  const watchManager = new WatchManager(server, token);
+  // survives restarts and covers idle-time human edits, not just in-run output —
+  // but the LOCAL roots jail still confines which folders may ever be watched.
+  const watchManager = new WatchManager(server, token, roots);
 
   logger.info({ server, pollMs: POLL_MS, roots: roots.length ? roots : "(no workdir jail)" }, "polling for deliveries");
 
@@ -89,12 +107,12 @@ export async function runDaemon(): Promise<number> {
       // Heartbeat carries live progress for any in-flight run (slim activity line,
       // not the transcript) so the dashboard shows "what's it doing" without WS.
       const progress = snapshotProgress();
-      const res = await fetch(`${server}/api/machine/poll`, {
+      // ac.signal rides along so SIGTERM/`down` aborts an in-flight poll too.
+      const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(progress.length ? { ...info, progress } : info),
-        signal: ac.signal,
-      });
+      }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
         const data = (await res.json()) as { deliveries?: Delivery[]; watch?: WatchSpec[] };
         // Reconcile the loop-folder watchers against the server's current set.
@@ -104,7 +122,9 @@ export async function runDaemon(): Promise<number> {
           inFlight.add(d.runId);
           logger.info({ runId: d.runId, role: d.role }, "delivery claimed — running");
           // Don't await — let it run in the background while we keep polling.
-          void runDelivery(d, server, roots)
+          // The abort signal rides along so SIGTERM/`down` terminates in-flight
+          // claude children instead of orphaning them.
+          void runDelivery(d, server, roots, ac.signal)
             .then(() => logger.info({ runId: d.runId }, "delivery finished"))
             .catch((err) => logger.error({ runId: d.runId, err: err instanceof Error ? err.message : String(err) }, "delivery failed"))
             .finally(() => inFlight.delete(d.runId));
@@ -119,8 +139,17 @@ export async function runDaemon(): Promise<number> {
     }
     await sleep(POLL_MS, ac.signal);
   }
+  // Brief drain: the abort above already SIGTERMed in-flight claude children
+  // (plumbed through runDelivery → runProcess); give them a bounded window to
+  // settle and report instead of being orphaned mid-write.
+  const drainDeadline = Date.now() + DRAIN_MS;
+  while (inFlight.size > 0 && Date.now() < drainDeadline) {
+    await new Promise((r) => setTimeout(r, 200));
+  }
   await watchManager.closeAll();
-  clearPidFile();
+  // Only clear the pidfile if it still records OUR pid — never delete a file a
+  // newer daemon has since claimed.
+  clearPidFile(process.pid);
   return 0;
 }
 

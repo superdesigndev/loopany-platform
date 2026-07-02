@@ -244,9 +244,12 @@ test("device-token auth: unknown machine 401; a loop on another machine 404", as
 });
 
 test("putBlob rejects a hash that doesn't match the body, and a bad hash format", async () => {
-  const { token } = seed();
+  const { token, loop } = seed();
   const { gw, blobs } = gatewayWithStore();
   const realHash = sha256("real");
+  // The handshake first: sync writes the referencing row + asks for the hash
+  // (an unsolicited PUT is refused outright — see the upload-gate test below).
+  await gw.sync(token, { loopId: loop.id, manifest: [{ path: "real.txt", hash: realHash, size: 4 }] });
 
   const mismatch = await gw.putBlob(token, realHash, Buffer.from("tampered"));
   expect(mismatch.status).toBe(400);
@@ -258,6 +261,42 @@ test("putBlob rejects a hash that doesn't match the body, and a bad hash format"
   const ok = await gw.putBlob(token, realHash, Buffer.from("real"));
   expect(ok.status).toBe(200);
   expect(store.blobExists(realHash)).toBe(true);
+});
+
+test("putBlob refuses a blob the sync handshake never asked this machine for (403, no write amplification)", async () => {
+  const { token } = seed();
+  const { gw, blobs } = gatewayWithStore();
+
+  // A well-formed, self-consistent blob that NO artifact_files row references —
+  // accepting it would make any device token an uncapped R2 write channel.
+  const content = "unsolicited bytes";
+  const hash = sha256(content);
+  const res = await gw.putBlob(token, hash, Buffer.from(content));
+  expect(res.status).toBe(403);
+  expect(await blobs.has(hash)).toBe(false);
+  expect(store.blobExists(hash)).toBe(false);
+});
+
+test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine scoping)", async () => {
+  const { token: tokenA, loop } = seed();
+  const { gw, blobs } = gatewayWithStore();
+  const content = "machine A's file";
+  const hash = sha256(content);
+  // Machine A's sync legitimately requests the hash…
+  await gw.sync(tokenA, { loopId: loop.id, manifest: [{ path: "a.txt", hash, size: content.length }] });
+
+  // …but machine B (registered, unrelated) may not supply the bytes for it.
+  const tokenB = tokens.mintDeviceToken();
+  const machineB = tokens.machineIdFromToken(tokenB);
+  store.createMachine({ id: machineB, userId: "u2", name: "B", tokenHash: tokens.sha256(tokenB), online: true });
+  const denied = await gw.putBlob(tokenB, hash, Buffer.from(content));
+  expect(denied.status).toBe(403);
+  expect(await blobs.has(hash)).toBe(false);
+
+  // Machine A itself still can (the handshake path is unaffected).
+  const ok = await gw.putBlob(tokenA, hash, Buffer.from(content));
+  expect(ok.status).toBe(200);
+  expect(await blobs.has(hash)).toBe(true);
 });
 
 test("poll response carries the watch set for every loop bound to the machine", () => {

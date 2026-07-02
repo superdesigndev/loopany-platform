@@ -23,6 +23,11 @@ agent("write the digest from these rows", res.data);
   structured content, or JSON parsed from `text` when the text is JSON, else `null`.
 - **Read-like only** in phase 1 (fetch/list/query/get). Do not lift write/high-risk tools.
 - **Runs headless** — no interactive OAuth is ever launched. Cached credentials only.
+- **Allowlisted env** — the workflow subprocess never inherits the user's full shell. An
+  MCP server config that resolves a credential from the environment (`${VAR}` / `$env:VAR`
+  placeholders, or a stdio server's env) needs that key opted in via
+  `LOOPANY_WORKFLOW_ENV=KEY1,KEY2` in the daemon's environment, or the call throws
+  `Environment variable X is required`.
 - **Throws a clear error** on a missing/unconfigured server, missing/failed tool, missing
   or expired auth, or an unavailable MCP runtime — naming the server/tool and what's missing.
 - A workflow failure (including a failed `tools.call`) **falls back to the agent**: the run
@@ -37,6 +42,7 @@ agent("write the digest from these rows", res.data);
 | `LOOPANY_WORKFLOW_TOOL_ARGS_CAP`          | 16384   | max bytes of JSON args sent to a tool |
 | `LOOPANY_WORKFLOW_TOOL_RESULT_CAP`        | 262144  | max chars of result text/data returned |
 | `LOOPANY_WORKFLOW_TOOL_TIMEOUT_SECONDS`   | 30      | per-call wall-clock timeout           |
+| `LOOPANY_WORKFLOW_ENV`                    | (empty) | comma-separated env keys passed through to the workflow subprocess (MCP credentials) |
 
 ## How it's wired (implementation)
 

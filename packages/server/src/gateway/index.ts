@@ -17,7 +17,7 @@ import { Cron } from "croner";
 
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
-import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, RunArtifact, RunRole, RunStatus, StateField, TranscriptStep } from "../db/schema.js";
+import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, Run, RunArtifact, RunRole, RunStatus, StateField, TranscriptStep } from "../db/schema.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
 import { dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
@@ -32,6 +32,7 @@ import {
   registerRunToken,
   resolveRunToken,
   revokeRunToken,
+  revokeRunTokensForRun,
   fulfillClaim,
   readClaim,
   sha256,
@@ -70,6 +71,29 @@ const MIN_INTERVAL_MS = 60_000;
 const MAX_ARTIFACTS = 200;
 const MAX_TRANSCRIPT_STEPS = 200;
 const STEP_FIELD_MAX = 4000;
+/** Cap for free-text wire fields (task / workflow / taskFileContent) — one shared
+ *  clipping discipline for every large string the daemon can send. */
+const WIRE_TEXT_CAP = 512 * 1024;
+/** A workflow cursor bigger than this (serialized) is ignored rather than persisted
+ *  onto the loop row — the run itself still records normally. */
+const CURSOR_CAP = 256 * 1024;
+/** Run messages (report --message / workflow direct message / finalText fallback).
+ *  Run errors share the same cap. */
+const MESSAGE_CAP = 2000;
+/** A claude-code session id is a UUID-ish token — anything longer is garbage. */
+const SESSION_ID_CAP = 200;
+/** A poll heartbeat legitimately carries one progress entry per in-flight run on the
+ *  machine; anything past a generous cap is garbage — process at most this many. */
+const MAX_PROGRESS_ENTRIES = 32;
+/** How often the persisted progress freshness stamp (`at`) refreshes while the
+ *  step/label signal itself hasn't moved — throttled so the ~3s poll hot path isn't
+ *  a per-heartbeat UPDATE, but the sweep still sees minute-fresh activity. */
+const PROGRESS_STAMP_REFRESH_MS = 60_000;
+/** The run outcomes a report may claim (untrusted wire input; anything else falls
+ *  back to the role default). Mirrors the runs.outcome enum minus "error", which
+ *  only the server assigns. */
+const RUN_OUTCOMES = new Set(["direct", "silent", "exec", "evolve"]);
+
 /** `loopany log`: how many recent runs to return, and the per-run transcript cap.
  *  The on-machine agent wants recent history before editing/evolving — not an
  *  unbounded dump — so default to a handful of runs and clip each transcript. */
@@ -182,20 +206,36 @@ export class MachineGateway {
         // that's wedged (e.g. never claimable) so it can't linger forever.
         const online = store.getMachine(run.machineId)?.online ?? false;
         if (!online && age > PENDING_GRACE_MS) {
-          store.updateRun(run.id, { phase: "error", outcome: "error", error: "machine offline", ts: nowIso() });
-          if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
-          this.notifyRunFailure(run.loopId, run.role, "machine offline");
+          this.reclaimRun(run, "machine offline");
         } else if (age > RUN_TIMEOUT_MS) {
-          store.updateRun(run.id, { phase: "error", outcome: "error", error: "run never claimed", ts: nowIso() });
-          if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
-          this.notifyRunFailure(run.loopId, run.role, "run never claimed");
+          this.reclaimRun(run, "run never claimed");
         }
-      } else if (run.phase === "running" && age > RUN_TIMEOUT_MS) {
-        store.updateRun(run.id, { phase: "error", outcome: "error", error: "machine timed out / disconnected", ts: nowIso() });
-        if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
-        this.notifyRunFailure(run.loopId, run.role, "machine timed out / disconnected");
+      } else if (run.phase === "running") {
+        // INACTIVITY-based timeout, not since-claim: a healthy run keeps its
+        // progress freshness stamp (`at`) alive via the daemon's poll heartbeat,
+        // so a legitimate >20min run is never falsely failed (then push-alerted,
+        // then flipped back to done by its real report). Only when NOTHING has
+        // been heard for the full window — no progress stamp since the claim —
+        // is the machine considered gone. Runs from older daemons (no stamp)
+        // degrade to the previous claim-age behavior.
+        const at = run.progress?.at;
+        const heardAt = Math.max(Date.parse(run.ts), at ? Date.parse(at) || 0 : 0);
+        if (now - heardAt > RUN_TIMEOUT_MS) {
+          this.reclaimRun(run, "machine timed out / disconnected");
+        }
       }
     }
+  }
+
+  /** Finalize one stuck run as an error (the sweep's reclaim path): persist the
+   *  failure, revoke any run token minted for it (a swept run's orphaned agent
+   *  must not keep a live agent-api credential), clear an evolve marker, and
+   *  surface the failure through the anti-spam'd notify path. */
+  private reclaimRun(run: Run, reason: string): void {
+    store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
+    revokeRunTokensForRun(run.id);
+    if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
+    this.notifyRunFailure(run.loopId, run.role, reason);
   }
 
   /**
@@ -274,17 +314,25 @@ export class MachineGateway {
 
     // Live progress for in-flight runs (slim activity line, not the transcript).
     // Scope to this machine's own running rows; a finalized row is left alone.
+    // Untrusted wire input: one entry per in-flight run is the legitimate shape,
+    // so anything past the cap is garbage — process at most MAX_PROGRESS_ENTRIES.
     if (progress?.length) {
-      for (const p of progress) {
+      for (const p of progress.slice(0, MAX_PROGRESS_ENTRIES)) {
         if (typeof p?.runId !== "string" || typeof p.label !== "string") continue;
         const run = store.getRun(p.runId);
         if (run?.machineId !== machineId || run.phase !== "running") continue;
         const step = Number(p.step) || 0;
         const label = p.label.slice(0, 200);
         // Skip the write when the signal hasn't moved — claude can sit inside one
-        // long tool_use across several 3s heartbeats, so most polls repeat it.
-        const cur = run.progress as { step?: number; label?: string } | null;
-        if (cur?.step !== step || cur?.label !== label) store.updateRun(p.runId, { progress: { step, label } });
+        // long tool_use across several 3s heartbeats, so most polls repeat it. The
+        // freshness stamp (`at`, the sweep's inactivity signal) still refreshes,
+        // throttled to once a minute so the hot path isn't a per-poll UPDATE.
+        const cur = run.progress;
+        const moved = cur?.step !== step || cur?.label !== label;
+        const stampStale = !cur?.at || Date.now() - Date.parse(cur.at) > PROGRESS_STAMP_REFRESH_MS;
+        if (moved || stampStale) {
+          store.updateRun(p.runId, { progress: { step, label, at: nowIso() } });
+        }
       }
     }
 
@@ -378,16 +426,19 @@ export class MachineGateway {
 
     const cron = str(body.cron);
     if (!cron) return { status: 400, body: { error: "cron required (5-field, e.g. \"0 8 * * *\")" } };
-    const cadence = validCadence(cron);
-    if (!cadence.ok) return { status: 400, body: { error: `invalid cron: ${cadence.detail}` } };
-
+    // Timezone first: the cadence is validated IN the loop's timezone (a cron's
+    // fire times shift with it), so the tz must be known-good before the probe.
     const timezone = str(body.timezone);
     if (timezone && !validTimezone(timezone)) {
       return { status: 400, body: { error: invalidTimezoneError(timezone) } };
     }
+    const cadence = validCadence(cron, timezone);
+    if (!cadence.ok) return { status: 400, body: { error: `invalid cron: ${cadence.detail}` } };
 
-    const task = str(body.task);
-    const workflow = str(body.workflow);
+    // Untrusted wire input — clip the free-text fields defensively (same
+    // discipline as taskFileContent on report).
+    const task = str(body.task)?.slice(0, WIRE_TEXT_CAP) ?? null;
+    const workflow = str(body.workflow)?.slice(0, WIRE_TEXT_CAP) ?? null;
     if (!task && !workflow) return { status: 400, body: { error: "provide a workflow (JS) or a task (instruction)" } };
 
     const notify = body.notify === "always" || body.notify === "never" ? body.notify : "auto";
@@ -573,17 +624,19 @@ export class MachineGateway {
     }
     const update: Partial<NewLoop> = {};
 
-    if (p.cron !== undefined) {
-      const cron = str(p.cron);
-      if (!cron) return { status: 400, body: { error: "cron cannot be empty" } };
-      const c = validCadence(cron);
-      if (!c.ok) return { status: 400, body: { error: `invalid cron: ${c.detail}` } };
-      update.cron = cron;
-    }
+    // Timezone before cron: the cadence probe runs in the loop's EFFECTIVE
+    // timezone (the patched one when the patch carries it, else the stored one).
     if (p.timezone !== undefined) {
       const tz = str(p.timezone);
       if (tz && !validTimezone(tz)) return { status: 400, body: { error: invalidTimezoneError(tz) } };
       update.timezone = tz;
+    }
+    if (p.cron !== undefined) {
+      const cron = str(p.cron);
+      if (!cron) return { status: 400, body: { error: "cron cannot be empty" } };
+      const c = validCadence(cron, p.timezone !== undefined ? update.timezone : loop.timezone);
+      if (!c.ok) return { status: 400, body: { error: `invalid cron: ${c.detail}` } };
+      update.cron = cron;
     }
     if (p.name !== undefined) update.name = str(p.name);
     if (p.model !== undefined) update.model = str(p.model);
@@ -602,14 +655,15 @@ export class MachineGateway {
       update.nextRunAt = when;
     }
     // Content fields reuse the SAME validators the run-token set-* path uses, so
-    // the owner edit surface can't drift from the evolve/edit run behavior.
+    // the owner edit surface can't drift from the evolve/edit run behavior. They
+    // also get the same wire clip discipline as createLoop's task/workflow.
     if (p.workflow !== undefined) {
       if (typeof p.workflow !== "string") return { status: 400, body: { error: "workflow must be a string (the pre-stage JS)" } };
-      update.workflow = this.validateWorkflow(p.workflow).value;
+      update.workflow = this.validateWorkflow(p.workflow.slice(0, WIRE_TEXT_CAP)).value;
     }
     if (p.ui !== undefined) {
       if (typeof p.ui !== "string") return { status: 400, body: { error: "ui must be a string (the dashboard HTML)" } };
-      update.ui = this.validateUi(p.ui).value;
+      update.ui = this.validateUi(p.ui.slice(0, WIRE_TEXT_CAP)).value;
     }
     if (p.stateSchema !== undefined) {
       const v = this.validateSchema(id, p.stateSchema);
@@ -670,32 +724,50 @@ export class MachineGateway {
     if (!slot) return { status: 401, body: { error: "invalid or expired token" } };
     const ok = !!body.ok;
 
-    // Persist the workflow cursor (free-form), if any.
-    if (body.cursor !== undefined) store.updateLoop(slot.loopId, { state: body.cursor });
+    const run = store.getRun(slot.runId);
+    // The user stopped this run while the machine was still working — keep it
+    // canceled, and bail BEFORE any loop-level write: a late report must not
+    // advance the workflow cursor / task file (the next run would silently skip
+    // data whose output the user never saw), nor flip the phase to done/error.
+    if (run?.phase === "canceled") {
+      revokeRunToken(runToken);
+      // Clear a pending edit even if its run was canceled, so it doesn't re-fire —
+      // and symmetrically clear an evolve marker (evolveDue), or the canceled
+      // evolve pass re-fires on the very next tick.
+      if (slot.role === "edit") this.scheduler.finishEdit(slot.loopId);
+      if (slot.role === "evolve") this.scheduler.finishEvolution(slot.loopId);
+      log.info({ runId: slot.runId }, "report: ignored (run was canceled)");
+      return { status: 200, body: { ok: true } };
+    }
+
+    // Persist the workflow cursor (free-form), if any — bounded by serialized size
+    // so a runaway cursor can't bloat the loop row; an over-cap cursor is dropped
+    // (the run itself still records normally).
+    let cursor = body.cursor;
+    if (cursor !== undefined) {
+      const serialized = JSON.stringify(cursor);
+      if ((serialized?.length ?? 0) > CURSOR_CAP) {
+        log.warn({ runId: slot.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
+        cursor = undefined;
+      }
+    }
+    if (cursor !== undefined) store.updateLoop(slot.loopId, { state: cursor });
 
     // Sync the machine's task file onto the loop (untrusted wire input — clip
     // defensively even though the daemon already caps it).
     if (typeof body.taskFileContent === "string") {
       store.updateLoop(slot.loopId, {
-        taskFileContent: body.taskFileContent.slice(0, 512 * 1024),
+        taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
         taskFileSyncedAt: nowIso(),
       });
     }
 
     // Message: a workflow reports it here; a claude run already set it via the
     // agent-api `loopany report` — fall back to claude's final text only if blank.
-    const run = store.getRun(slot.runId);
-    // The user stopped this run while the machine was still working — keep it
-    // canceled, don't let a late report flip it back to done/error.
-    if (run?.phase === "canceled") {
-      revokeRunToken(runToken);
-      // Clear a pending edit even if its run was canceled, so it doesn't re-fire.
-      if (slot.role === "edit") this.scheduler.finishEdit(slot.loopId);
-      log.info({ runId: slot.runId }, "report: ignored (run was canceled)");
-      return { status: 200, body: { ok: true } };
-    }
-    const message =
-      body.message !== undefined ? body.message : !run?.message && body.finalText ? body.finalText.slice(0, 2000) : undefined;
+    // Clipped to the same cap the agent-api report verb enforces.
+    const rawMessage =
+      body.message !== undefined ? body.message : !run?.message && body.finalText ? body.finalText : undefined;
+    const message = typeof rawMessage === "string" ? rawMessage.slice(0, MESSAGE_CAP) : rawMessage;
 
     const artifacts = coerceArtifacts(body.artifacts);
     const transcript = coerceTranscript(body.transcript);
@@ -705,18 +777,22 @@ export class MachineGateway {
     // `loopany report --state` call (that's how exec loops set run.state), so its
     // metrics would otherwise live only in the loop cursor and never render. Don't
     // clobber a state the run already reported (e.g. a workflow that escalated).
-    const runState = ok && !run?.state ? scalarState(body.cursor) : undefined;
+    const runState = ok && !run?.state ? scalarState(cursor) : undefined;
 
+    // Whitelist the claimed outcome (untrusted wire input) — anything outside the
+    // known enum falls back to the role default rather than landing in the column.
+    const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
     const finalized = store.updateRun(slot.runId, {
       phase: ok ? "done" : "error",
-      outcome: ok ? body.outcome ?? (slot.role === "evolve" ? "evolve" : "exec") : "error",
+      outcome: ok ? claimedOutcome ?? (slot.role === "evolve" ? "evolve" : "exec") : "error",
       durationMs: body.durationMs ?? null,
-      sessionId: body.sessionId ?? null,
+      // Untrusted wire input — clip like every other free-text field.
+      sessionId: typeof body.sessionId === "string" ? body.sessionId.slice(0, SESSION_ID_CAP) : null,
       ...(artifacts ? { artifacts } : {}),
       ...(transcript ? { transcript } : {}),
       ...(runState ? { state: runState } : {}),
       ...(message !== undefined ? { message } : {}),
-      ...(ok ? {} : { error: body.error ?? "run failed on machine" }),
+      ...(ok ? {} : { error: typeof body.error === "string" ? body.error.slice(0, MESSAGE_CAP) : "run failed on machine" }),
       progress: null, // live signal done — the full transcript supersedes it
       ts: nowIso(),
     });
@@ -842,6 +918,9 @@ export class MachineGateway {
     // signal). Reusing an already-stored hash adds no bytes, so it's always allowed.
     const bytesCap = loopBytesCap();
     let projectedBytes = store.loopStoredBytes(loopId);
+    // Per-path breakdown of that same footprint (one upfront query, not two point
+    // queries per manifest file) — consulted for the overwrite "freed" credit below.
+    const priorSizes = store.liveArtifactSizes(loopId);
     const rejectedPaths: string[] = [];
     let capExceeded = false;
 
@@ -897,8 +976,12 @@ export class MachineGateway {
         // `rel` FREES its currently-counted bytes (the upsert below replaces it), so
         // a loop regenerating one large file in place (the running-memory model)
         // never falsely trips the cap. Only genuinely new paths / size increases count.
-        const prior = store.getArtifactFile(loopId, rel);
-        const freed = prior && !prior.deleted && !prior.oversize && prior.hash ? (prior.size ?? 0) : 0;
+        // The freed credit uses the VERIFIED stored length (blobs.size — the same
+        // basis loopStoredBytes counts), falling back to the reported size only for
+        // a pending row: an OVER-reported prior size must not mint free headroom.
+        // (liveArtifactSizes carries only live, byte-backed rows, so a tombstoned /
+        // oversize / hash-less prior contributes 0 — same rule as before.)
+        const freed = priorSizes.get(rel) ?? 0;
         const projectedAfter = projectedBytes + fileSize - freed;
         if (projectedAfter > bytesCap) {
           // Per-loop storage cap reached → refuse THIS new file's bytes. Skip the row
@@ -918,7 +1001,8 @@ export class MachineGateway {
         loopId,
         path: rel,
         hash,
-        size: sizeOk ? rawSize : (inlined?.length ?? null),
+        // Verified inline byte length beats the client-reported size when in hand.
+        size: inlined ? inlined.length : sizeOk ? rawSize : null,
         binary: binary || (inlined ? looksBinary(inlined) : false),
         oversize: false,
         lastRunId: runId,
@@ -972,6 +1056,15 @@ export class MachineGateway {
     if (!isValidHash(hash)) return { status: 400, body: { error: "invalid hash (expect sha256 hex)" } };
     if (bytes.length > BLOB_CAP) return { status: 413, body: { error: "blob exceeds size cap" } };
     if (sha256Buf(bytes) !== hash) return { status: 400, body: { error: "hash mismatch (sha256(body) !== :hash)" } };
+    // Upload gate: only accept bytes the sync handshake actually asked THIS machine
+    // for — i.e. a hash a live artifact_files row on one of its loops points at
+    // (the row sync wrote when it returned the hash in needHashes). Any other PUT
+    // (an arbitrary self-hashed blob nothing references) is refused, so a device
+    // token can't be used as an uncapped R2 write channel. A re-PUT of a still-
+    // referenced hash stays accepted (idempotent — daemon retries are safe).
+    if (!store.machineReferencesBlob(machineId, hash)) {
+      return { status: 403, body: { error: "hash was not requested for this machine (sync a manifest first)" } };
+    }
 
     // Per-loop storage cap, authoritative re-check (defense in depth). sync() caps
     // from the daemon-reported size; a NEW blob (one the server doesn't already
@@ -1029,7 +1122,8 @@ export class MachineGateway {
         const status = str("status");
         store.updateRun(slot.runId, {
           ...(isStatus(status) ? { status } : {}),
-          ...(str("message") !== undefined ? { message: str("message") } : {}),
+          // Clipped to the same cap the report finalText fallback enforces.
+          ...(str("message") !== undefined ? { message: str("message")!.slice(0, MESSAGE_CAP) } : {}),
           ...(str("sample") !== undefined ? { sample: Number(str("sample")) } : {}),
           ...(state !== undefined ? { state } : {}),
         });
@@ -1113,7 +1207,7 @@ export class MachineGateway {
       case "set-cron": {
         const cron = str("_") ?? str("cron");
         if (!cron) return { ok: false, detail: 'set-cron needs the expression, e.g. set-cron "*/30 * * * *"' };
-        const c = validCadence(cron);
+        const c = validCadence(cron, store.getLoop(loopId)?.timezone);
         if (!c.ok) return c;
         const loop = store.updateLoop(loopId, { cron });
         if (loop) this.scheduler.addLoop(loop);
@@ -1227,7 +1321,9 @@ export class MachineGateway {
     if (!loop) return "loop not found";
     let next = "?";
     try {
-      const probe = new Cron(loop.cron, { paused: true });
+      // In the loop's timezone (matching how the scheduler actually arms it) —
+      // without it, `next` reads wrong for every non-server-tz loop.
+      const probe = new Cron(loop.cron, { paused: true, ...(loop.timezone ? { timezone: loop.timezone } : {}) });
       next = probe.nextRun()?.toLocaleString() ?? "(never)";
       probe.stop();
     } catch {
@@ -1351,9 +1447,12 @@ function invalidTimezoneError(tz: string): string {
   return `invalid timezone: ${tz} (use an IANA name e.g. "Asia/Shanghai")`;
 }
 
-function validCadence(cron: string): Applied {
+/** Probe the cadence IN the loop's timezone (fire times shift with it) — the tz,
+ *  when given, must already be validated (validTimezone) so a croner throw here
+ *  always means a bad expression, not a bad zone. */
+function validCadence(cron: string, timezone?: string | null): Applied {
   try {
-    const c = new Cron(cron, { paused: true });
+    const c = new Cron(cron, { paused: true, ...(timezone ? { timezone } : {}) });
     const a = c.nextRun();
     const b = a ? c.nextRun(a) : null;
     c.stop();

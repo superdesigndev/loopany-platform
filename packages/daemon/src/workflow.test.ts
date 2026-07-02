@@ -57,6 +57,45 @@ describe("existing sandbox contract stays green", () => {
   });
 });
 
+describe("subprocess env allowlist", () => {
+  test("server-supplied workflow JS cannot read shell secrets; LOOPANY_WORKFLOW_* rides along", async () => {
+    process.env.MY_FAKE_SECRET = "leak-me-not";
+    process.env.LOOPANY_WORKFLOW_TOOL_RESULT_CAP = "12345";
+    try {
+      const r = await runWorkflow(
+        `return { message: (process.env.MY_FAKE_SECRET ?? "absent") + "|" + (process.env.LOOPANY_WORKFLOW_TOOL_RESULT_CAP ?? "missing") };`,
+        null,
+        cwd,
+      );
+      expect(r.ok).toBe(true);
+      expect(r.result?.message).toBe("absent|12345");
+    } finally {
+      delete process.env.MY_FAKE_SECRET;
+      delete process.env.LOOPANY_WORKFLOW_TOOL_RESULT_CAP;
+    }
+  });
+
+  test("LOOPANY_WORKFLOW_ENV opts named keys through (MCP configs resolve ${VAR} creds from this env)", async () => {
+    process.env.MY_FAKE_TOKEN = "tok-1";
+    process.env.MY_OTHER_SECRET = "still-hidden";
+    process.env.LOOPANY_WORKFLOW_ENV = " MY_FAKE_TOKEN , MISSING_KEY ";
+    try {
+      const r = await runWorkflow(
+        `return { message: (process.env.MY_FAKE_TOKEN ?? "absent") + "|" + (process.env.MY_OTHER_SECRET ?? "absent") };`,
+        null,
+        cwd,
+      );
+      expect(r.ok).toBe(true);
+      // Only the named key rides along; everything else stays stripped.
+      expect(r.result?.message).toBe("tok-1|absent");
+    } finally {
+      delete process.env.MY_FAKE_TOKEN;
+      delete process.env.MY_OTHER_SECRET;
+      delete process.env.LOOPANY_WORKFLOW_ENV;
+    }
+  });
+});
+
 describe("tools.call wiring (fixture bridge)", () => {
   test("tools.call is injected; args flow in and the result flows out", async () => {
     // Fixture echoes the call back so the workflow can assert both directions.

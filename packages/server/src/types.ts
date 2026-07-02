@@ -67,7 +67,9 @@ export interface MachineSummary {
   hostname: string | null
   platform: string | null
   arch: string | null
-  /** Plaintext device token (so the UI can re-show the connect command). */
+  /** Plaintext device token (so the UI can re-show the connect command). Under
+   *  the auth gate it is serialized ONLY to the machine's owner — null for
+   *  everyone else (the token fully impersonates the machine). */
   token: string | null
   /** Loops bound to this machine — must be 0 before it can be deleted. */
   loopCount: number
@@ -138,7 +140,8 @@ export interface JobFull {
   updatedAt?: string
 }
 
-/** GET /api/job/:id — the daemon's detail() shape. */
+/** One loop's full detail payload — what the getJobDetail server fn returns
+ *  (built by adapters.toJobDetail; the loop + run detail pages render it). */
 export interface JobDetail {
   job: JobFull
   summary: JobSummary

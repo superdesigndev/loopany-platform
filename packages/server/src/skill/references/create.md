@@ -123,8 +123,7 @@ server owns the schedule/envelope and only the task file syncs back, so the
   "workdir": "<absolute project dir>",
   "taskFile": "<absolute path to the task file above>",
   "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
-  "notify": "auto",
-  "summary": "one short sentence describing what this loop does"
+  "notify": "auto"
 }
 ```
 

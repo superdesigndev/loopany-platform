@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { safeDecode } from '../lib/url'
 
 /**
  * GET /api/artifact/:loopId/:path — stream one of a loop's live-synced artifact
@@ -20,19 +21,17 @@ export const Route = createFileRoute('/api/artifact/$loopId/$')({
         const after = pathname.slice(PREFIX.length)
         const slash = after.indexOf('/')
         if (slash < 0) return Response.json({ error: 'missing path' }, { status: 400 })
-        const loopId = decodeURIComponent(after.slice(0, slash))
-        // Decode each segment so a path like `data/raw.json` round-trips intact.
-        const relPath = after
+        // Malformed percent-encoding must be a clean 400, never a thrown 500.
+        const loopId = safeDecode(after.slice(0, slash))
+        if (loopId === null) return Response.json({ error: 'bad loop id' }, { status: 400 })
+        // Decode each segment so a path like `data/raw.json` round-trips intact;
+        // ANY malformed segment is a 400 (same policy as the loop id).
+        const segments = after
           .slice(slash + 1)
           .split('/')
-          .map((s) => {
-            try {
-              return decodeURIComponent(s)
-            } catch {
-              return s
-            }
-          })
-          .join('/')
+          .map((s) => safeDecode(s))
+        if (segments.some((s) => s === null)) return Response.json({ error: 'bad path' }, { status: 400 })
+        const relPath = segments.join('/')
 
         // Session auth + team scope (the same gate as the server fns' ownedLoop).
         const store = await import('../db/store.js')

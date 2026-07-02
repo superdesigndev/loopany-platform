@@ -30,7 +30,7 @@ function RootDocument({ children }: { children: ReactNode }) {
     // outside our control and harmless. This suppresses ONLY the html/body
     // elements' own attributes (it does not propagate to children), so real
     // mismatches deeper in the tree still warn.
-    <html lang="zh" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>

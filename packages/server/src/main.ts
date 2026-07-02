@@ -16,7 +16,6 @@ import http from "node:http";
 import { logger } from "./logger.js";
 import * as store from "./db/store.js";
 import { ensureServer } from "./server/boot.js";
-import { toJobDetail, toJobSummary } from "./server/adapters.js";
 import { machineIdFromToken, sha256 } from "./gateway/tokens.js";
 
 const log = logger.child({ mod: "main" });
@@ -140,81 +139,6 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   if (m === "GET" && runsMatch) {
     const id = decodeURIComponent(runsMatch[1]!);
     return send(res, 200, store.listRuns(id, 50));
-  }
-
-  // ---- UI-facing API (c0-compatible shapes; the TanStack app proxies these) ----
-  if (m === "GET" && p === "/api/jobs") {
-    return send(res, 200, store.listLoops().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)).map(toJobSummary));
-  }
-  if (m === "GET" && p === "/api/templates") return send(res, 200, []);
-  if (m === "GET" && p === "/api/roots") return send(res, 200, store.listMachines().flatMap((mc) => mc.roots ?? []));
-  if (m === "GET" && p === "/api/defaults") return send(res, 200, { owner: null });
-  if (m === "GET" && p === "/api/transcript") {
-    return send(res, 400, { error: "Run transcript view is not available in v1 (the transcript lives on the machine)." });
-  }
-  if (m === "POST" && p === "/api/job") {
-    const b = await json(req);
-    const machineId = b.machineId ?? store.listMachines()[0]?.id;
-    if (!machineId) return send(res, 400, { error: "no machine registered — connect a daemon first" });
-    if (!b.cron) return send(res, 400, { error: "cron required" });
-    const loop = store.createLoop({
-      userId: b.userId ?? DEMO_USER,
-      machineId,
-      name: b.name?.trim() || null,
-      cron: b.cron,
-      task: b.task?.trim() || null,
-      workdir: b.exec?.workdir?.trim() || null,
-      taskFile: b.taskFile?.trim() || null,
-      workflow: b.workflow?.trim() || null,
-      stateSchema: store.coerceStateSchema(b.stateSchema) ?? null,
-      ui: store.coerceUi(b.ui) ?? null,
-      notify: b.notify ?? "auto",
-      allowControl: !!b.exec?.allowControl,
-      model: b.exec?.model?.trim() || null,
-      enabled: b.enabled ?? true,
-    });
-    scheduler.addLoop(loop);
-    return send(res, 200, { ok: true, id: loop.id });
-  }
-  const jobMatch = p.match(/^\/api\/job\/([^/]+)(\/run|\/evolve)?$/);
-  if (jobMatch) {
-    const id = decodeURIComponent(jobMatch[1]!);
-    const sub = jobMatch[2];
-    if (m === "GET" && !sub) {
-      const loop = store.getLoop(id);
-      return loop ? send(res, 200, toJobDetail(loop)) : send(res, 404, { error: "not found" });
-    }
-    if (m === "POST" && sub === "/run") {
-      if (!store.getLoop(id)) return send(res, 404, { error: "not found" });
-      scheduler.runNow(id);
-      return send(res, 200, { ok: true });
-    }
-    if (m === "POST" && sub === "/evolve") return send(res, 400, { error: "evolution is coming — not enabled in v1 yet" });
-    if (m === "DELETE" && !sub) {
-      scheduler.removeLoop(id);
-      return send(res, 200, { ok: store.deleteLoop(id) });
-    }
-    if (m === "PATCH" && !sub) {
-      const loop = store.getLoop(id);
-      if (!loop) return send(res, 404, { error: "not found" });
-      const b = await json(req);
-      const patched = store.updateLoop(id, {
-        ...(b.name !== undefined ? { name: b.name.trim() || null } : {}),
-        ...(b.cron !== undefined ? { cron: b.cron } : {}),
-        ...(b.notify !== undefined ? { notify: b.notify } : {}),
-        ...(b.enabled !== undefined ? { enabled: !!b.enabled } : {}),
-        ...(b.task !== undefined ? { task: b.task.trim() || null } : {}),
-        ...(b.taskFile !== undefined ? { taskFile: b.taskFile.trim() || null } : {}),
-        ...(b.workflow !== undefined ? { workflow: b.workflow.trim() || null } : {}),
-        ...(b.stateSchema !== undefined ? { stateSchema: store.coerceStateSchema(b.stateSchema) ?? null } : {}),
-        ...(b.ui !== undefined ? { ui: store.coerceUi(b.ui) ?? null } : {}),
-        ...(b.exec?.workdir !== undefined ? { workdir: b.exec.workdir.trim() || null } : {}),
-        ...(b.exec?.model !== undefined ? { model: b.exec.model.trim() || null } : {}),
-        ...(b.exec?.allowControl !== undefined ? { allowControl: !!b.exec.allowControl } : {}),
-      });
-      if (patched) scheduler.addLoop(patched);
-      return send(res, 200, { ok: true });
-    }
   }
 
   send(res, 404, { error: "not found" });

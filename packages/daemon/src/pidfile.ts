@@ -72,9 +72,12 @@ export function readPidFile(): PidRecord | undefined {
   }
 }
 
-/** Remove the pidfile (on clean daemon exit, or when found stale). */
-export function clearPidFile(): void {
+/** Remove the pidfile (on clean daemon exit, or when found stale). When
+ *  `onlyIfPid` is given, remove it ONLY if it still records that pid — a daemon
+ *  exiting must never delete a pidfile another daemon has since claimed. */
+export function clearPidFile(onlyIfPid?: number): void {
   try {
+    if (onlyIfPid !== undefined && readPidFile()?.pid !== onlyIfPid) return;
     fs.rmSync(PID_FILE, { force: true });
   } catch {
     /* best-effort */
@@ -93,4 +96,42 @@ export function isAlive(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+/** Injectable seams for verifiedRunningPid (control.ts and tests reuse them). */
+export type PidCheckDeps = {
+  readPid?: () => PidRecord | undefined;
+  alive?: (pid: number) => boolean;
+  startTime?: (pid: number) => string | undefined;
+  clearPid?: () => void;
+};
+
+/**
+ * The pid of a daemon that is ACTUALLY ours and alive, or undefined. A pid is
+ * "our daemon" iff it is alive AND (no recorded start-time, or the live process's
+ * start-time still equals the one we recorded) — so a pid REUSED by an unrelated
+ * process after an unclean crash (which left the pidfile behind) is NOT mistaken
+ * for the daemon and never signaled. A dead pid OR a start-time mismatch is
+ * cleared as a side effect so a stale file doesn't linger. When the start-time
+ * can't be read at check time we degrade to alive-only (best-effort, never crash).
+ */
+export function verifiedRunningPid(deps: PidCheckDeps = {}): number | undefined {
+  const readPid = deps.readPid ?? readPidFile;
+  const alive = deps.alive ?? isAlive;
+  const startTime = deps.startTime ?? processStartTime;
+  const clearPid = deps.clearPid ?? clearPidFile;
+  const rec = readPid();
+  if (rec === undefined) return undefined;
+  if (!alive(rec.pid)) {
+    clearPid();
+    return undefined;
+  }
+  if (rec.startTime !== undefined) {
+    const live = startTime(rec.pid);
+    if (live !== undefined && live !== rec.startTime) {
+      clearPid();
+      return undefined;
+    }
+  }
+  return rec.pid;
 }

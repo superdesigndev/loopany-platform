@@ -20,8 +20,10 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { watch, type FSWatcher } from "chokidar";
 
+import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { resolveLoopDir } from "./loopdir.js";
+import { isScratchDir, isWithinResolvedRoots, resolveRoots } from "./roots.js";
 
 const log = logger.child({ mod: "watcher" });
 
@@ -33,6 +35,10 @@ const INLINE_CAP = 64 * 1024; // 64KB
 const COALESCE_MS = Number(process.env.LOOPANY_SYNC_COALESCE_MS || 1500);
 /** After a transient sync failure, re-arm one flush after this delay (no hot-loop). */
 const RETRY_MS = Number(process.env.LOOPANY_SYNC_RETRY_MS || 5000);
+/** Bounded sync POST — a hung connection must not wedge the flush pipeline. */
+const SYNC_TIMEOUT_MS = 30_000;
+/** Bounded blob PUT — generous (a 10MB blob on a slow uplink), but never ~5min. */
+const BLOB_PUT_TIMEOUT_MS = 120_000;
 
 /** One loop folder the server asked this machine to watch. */
 export interface WatchSpec {
@@ -95,6 +101,16 @@ interface ManifestEntry {
   size: number;
   binary: boolean;
   oversize: boolean;
+}
+
+/** The sync endpoint's reply: outstanding hashes to PUT, plus the per-loop
+ *  byte-cap signal (paths whose NEW bytes the server refused to store). */
+interface SyncResponse {
+  needHashes?: string[];
+  capExceeded?: boolean;
+  bytesUsed?: number;
+  bytesCap?: number;
+  rejected?: string[];
 }
 
 /** Walk a loop folder into a full manifest + the bytes of each in-cap file. */
@@ -244,6 +260,14 @@ class LoopWatcher {
         this.retry = true; // transient failure → re-arm a delayed flush (idle self-heal)
         return;
       }
+      // Surface a byte-cap rejection on the machine — otherwise a rejected file
+      // silently never syncs and the loop owner has no local hint why.
+      if (res.capExceeded) {
+        log.warn(
+          { loopId: this.loopId, bytesUsed: res.bytesUsed, bytesCap: res.bytesCap, rejected: res.rejected ?? [] },
+          "server rejected file(s) over the loop's storage cap — their bytes were not synced",
+        );
+      }
 
       const need = new Set(res.needHashes ?? []);
       const failed = new Set<string>();
@@ -276,18 +300,18 @@ class LoopWatcher {
     }
   }
 
-  private async postSync(body: unknown): Promise<{ needHashes?: string[] } | null> {
+  private async postSync(body: unknown): Promise<SyncResponse | null> {
     try {
-      const res = await fetch(`${this.server}/api/machine/sync`, {
+      const res = await boundedFetch(`${this.server}/api/machine/sync`, {
         method: "POST",
         headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      });
+      }, SYNC_TIMEOUT_MS);
       if (!res.ok) {
         log.warn({ loopId: this.loopId, status: res.status }, "sync non-ok");
         return null;
       }
-      return (await res.json()) as { needHashes?: string[] };
+      return (await res.json()) as SyncResponse;
     } catch (err) {
       log.warn({ loopId: this.loopId, err: msg(err) }, "sync request failed");
       return null;
@@ -296,11 +320,11 @@ class LoopWatcher {
 
   private async putBlob(hash: string, buf: Buffer): Promise<boolean> {
     try {
-      const res = await fetch(`${this.server}/api/machine/blob/${hash}`, {
+      const res = await boundedFetch(`${this.server}/api/machine/blob/${hash}`, {
         method: "PUT",
         headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/octet-stream" },
         body: new Uint8Array(buf),
-      });
+      }, BLOB_PUT_TIMEOUT_MS);
       return res.ok;
     } catch {
       return false;
@@ -330,11 +354,18 @@ class LoopWatcher {
  */
 export class WatchManager {
   private readonly watchers = new Map<string, LoopWatcher>();
+  /** The daemon's LOCAL roots jail (LOOPANY_ROOTS), pre-resolved ONCE — reconcile
+   *  runs on every ~3s poll and must not re-resolve the same fixed list per loop.
+   *  Empty ⇒ unrestricted. */
+  private readonly roots: string[];
 
   constructor(
     private readonly server: string,
     private readonly token: string,
-  ) {}
+    roots: string[] = [],
+  ) {
+    this.roots = resolveRoots(roots);
+  }
 
   reconcile(specs: WatchSpec[]): void {
     const want = new Map(specs.map((s) => [s.loopId, s] as const));
@@ -352,6 +383,14 @@ export class WatchManager {
     // folder never sync and the server's view goes permanently stale).
     for (const [id, spec] of want) {
       const dir = resolveLoopDir(spec);
+      // LOCAL jail: workdir/taskFile are SERVER-SENT, so when LOOPANY_ROOTS is
+      // set we never watch (and therefore never sync out) a folder outside it —
+      // a hostile server must not be able to exfiltrate e.g. ~/.ssh. The
+      // daemon's own scratch dir stays allowed (its location is fixed locally).
+      if (this.roots.length && !isWithinResolvedRoots(dir, this.roots) && !isScratchDir(dir)) {
+        log.warn({ loopId: id, dir }, "loop folder is outside LOOPANY_ROOTS — not watching");
+        continue;
+      }
       const existing = this.watchers.get(id);
       if (existing) {
         if (existing.watchDir === dir) continue; // unchanged → leave alone
@@ -363,6 +402,11 @@ export class WatchManager {
       w.start();
       this.watchers.set(id, w);
     }
+  }
+
+  /** The dirs currently watched, by loopId (introspection/test seam). */
+  watchedDirs(): Map<string, string> {
+    return new Map([...this.watchers].map(([id, w]) => [id, w.watchDir] as const));
   }
 
   async closeAll(): Promise<void> {

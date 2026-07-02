@@ -8,9 +8,18 @@ on:
     branches: [main]
     # Don't redeploy for changes that can't affect the server image.
     # (Adjust to taste — fly.toml / Dockerfile / lockfile DO affect the build.)
+    # NOTE: no broad '**/*.md' ignore - the skill/prompt markdown under
+    # packages/server/src/skill/ is compiled INTO the server bundle via ?raw
+    # imports, so a prompt-only edit MUST deploy. paths-ignore has no negation;
+    # list the doc paths explicitly instead. (Entries are OR'd: a push is
+    # skipped only when EVERY changed file matches an ignore entry.)
     paths-ignore:
       - 'packages/daemon/**'
-      - '**/*.md'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'CONTRIBUTING.md'
+      - 'docs/**'
   workflow_dispatch: {}        # manual button in the Actions tab
 
 # One deploy at a time; cancel an in-flight deploy if a newer commit lands.

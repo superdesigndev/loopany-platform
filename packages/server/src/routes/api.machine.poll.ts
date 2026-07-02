@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
 
 /** POST /api/machine/poll — daemon claims this machine's pending runs (Bearer device token). */
 export const Route = createFileRoute('/api/machine/poll')({
@@ -8,7 +9,9 @@ export const Route = createFileRoute('/api/machine/poll')({
         const auth = request.headers.get('authorization') ?? ''
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
-        const body = (await request.json().catch(() => ({}))) as {
+        const parsed = await readJsonBody(request, MACHINE_BODY_CAP)
+        if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
+        const body = (parsed.kind === 'ok' ? parsed.body : {}) as {
           host?: string
           platform?: string
           arch?: string

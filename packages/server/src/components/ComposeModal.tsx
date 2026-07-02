@@ -109,15 +109,20 @@ export function ComposeModal({
   useEffect(() => {
     if (!open || host !== 'local' || created || !token) return
     if (pollRef.current) clearInterval(pollRef.current)
-    pollRef.current = setInterval(async () => {
-      const s = await claimStatus({ data: token })
-      if (s.done && s.id) {
-        if (pollRef.current) clearInterval(pollRef.current)
-        // The agent is the daemon's measured value; default only guards an older
-        // server that doesn't yet return it on the claim.
-        setCreated({ id: s.id, name: s.name ?? 'loop', agent: s.agent ?? 'claude-code' })
-        onCreatedRef.current()
-      }
+    pollRef.current = setInterval(() => {
+      void claimStatus({ data: token })
+        .then((s) => {
+          if (s.done && s.id) {
+            if (pollRef.current) clearInterval(pollRef.current)
+            // The agent is the daemon's measured value; default only guards an older
+            // server that doesn't yet return it on the claim.
+            setCreated({ id: s.id, name: s.name ?? 'loop', agent: s.agent ?? 'claude-code' })
+            onCreatedRef.current()
+          }
+        })
+        // A transient server blip mustn't surface an unhandled rejection every
+        // tick — swallow it; the next tick retries.
+        .catch(() => {})
     }, 2500)
     const slowTimer = setTimeout(() => setSlow(true), SLOW_WAIT_MS)
     return () => {

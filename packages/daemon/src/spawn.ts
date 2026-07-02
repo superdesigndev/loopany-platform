@@ -30,10 +30,15 @@ export interface SpawnOptions {
 
 export function runProcess(command: string, args: string[], opts: SpawnOptions): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
+    // POSIX: run the child in its OWN process group so the timeout/abort kill can
+    // signal the whole tree — a SIGKILLed workflow's mcporter stdio grandchildren
+    // must not survive the workflow. win32 has no process groups: plain child.kill.
+    const grouped = process.platform !== "win32";
     const child = spawn(command, args, {
       cwd: opts.cwd,
       env: opts.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: grouped,
     });
 
     let stdout = "";
@@ -41,9 +46,22 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
 
+    /** Signal the child's process group (posix), falling back to the child alone. */
+    const signalTree = (sig: NodeJS.Signals) => {
+      if (grouped && child.pid) {
+        try {
+          process.kill(-child.pid, sig);
+          return;
+        } catch {
+          /* group already gone / detach failed — fall through to the direct child */
+        }
+      }
+      child.kill(sig);
+    };
+
     const terminate = () => {
-      child.kill("SIGTERM");
-      killTimer ??= setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+      signalTree("SIGTERM");
+      killTimer ??= setTimeout(() => signalTree("SIGKILL"), KILL_GRACE_MS);
     };
 
     const onAbort = () => terminate();
@@ -97,18 +115,38 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
   });
 }
 
-/** Allowlisted env for the claude subprocess — never inherit unrelated secrets. */
-export function execEnv(): NodeJS.ProcessEnv {
-  const allow = [
-    "PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "TZ",
-    "LANG", "LC_ALL", "LC_CTYPE", "TERM",
-    "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
-    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "ALL_PROXY",
-    "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "XDG_CONFIG_HOME",
-  ];
+/** Base env keys every allowlisted child gets — what a process needs to RUN
+ *  (paths, locale, proxy/CA config), never the rest of the user's shell. */
+const BASE_ALLOW = [
+  "PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "TZ",
+  "LANG", "LC_ALL", "LC_CTYPE", "TERM",
+  "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "ALL_PROXY",
+  "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "XDG_CONFIG_HOME",
+];
+
+/** Build an allowlisted child env: the base set plus extra exact keys and prefix
+ *  families. The shared helper behind execEnv() AND the workflow subprocess env
+ *  (server-supplied workflow JS must never inherit the user's full shell). */
+export function allowlistEnv(extra: { keys?: string[]; prefixes?: string[] } = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const k of allow) {
+  for (const k of [...BASE_ALLOW, ...(extra.keys ?? [])]) {
     if (process.env[k] !== undefined) env[k] = process.env[k];
   }
+  for (const prefix of extra.prefixes ?? []) {
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith(prefix)) env[k] = process.env[k];
+    }
+  }
   return env;
+}
+
+/** Allowlisted env for the claude subprocess — never inherit unrelated secrets.
+ *  The ANTHROPIC_* family covers proxy/gateway users (ANTHROPIC_BASE_URL /
+ *  ANTHROPIC_AUTH_TOKEN …), and CLAUDE_CONFIG_DIR keeps a relocated claude config
+ *  writing transcripts where artifacts.sessionTrace() reads them back. */
+export function execEnv(): NodeJS.ProcessEnv {
+  return allowlistEnv({
+    keys: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"],
+    prefixes: ["ANTHROPIC_"],
+  });
 }

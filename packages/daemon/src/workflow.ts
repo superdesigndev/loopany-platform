@@ -23,13 +23,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { runProcess } from "./spawn.js";
+import { allowlistEnv, runProcess } from "./spawn.js";
 
 /** File URL of the plain-ESM MCP bridge the workflow subprocess imports (see
  *  mcp-bridge.mjs). Overridable via env so tests can point at a fixture bridge;
  *  read at call time so an override set after module load still applies. */
 function mcpBridgeUrl(): string {
   return process.env.LOOPANY_MCP_BRIDGE || new URL("./mcp-bridge.mjs", import.meta.url).href;
+}
+
+/** Extra env keys the user OPTS INTO passing through to the workflow subprocess
+ *  (`LOOPANY_WORKFLOW_ENV=KEY1,KEY2` on the daemon). MCP server configs commonly
+ *  resolve credentials from the shell env — mcporter expands `${VAR}`/`$env:VAR`
+ *  placeholders against the subprocess env, and stdio server children inherit
+ *  it — which the allowlist below would otherwise strip, silently breaking
+ *  every tools.call that needs such a credential. Read at call time so a
+ *  restart-free override/test applies. */
+function passthroughEnvKeys(): string[] {
+  return (process.env.LOOPANY_WORKFLOW_ENV ?? "")
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean);
 }
 
 export interface AgentCall {
@@ -105,7 +119,17 @@ export async function runWorkflow(body: string, prevState: unknown, cwd: string,
   try {
     const res = await runProcess(process.execPath, [scriptPath], {
       cwd,
-      env: { ...process.env, LOOPANY_WORKFLOW_OUT: outPath, LOOPANY_MCP_BRIDGE: mcpBridgeUrl() },
+      // Allowlisted env only — the workflow body is server-supplied JS, so it must
+      // never inherit the user's full shell (mirrors the claude child's execEnv).
+      // The LOOPANY_WORKFLOW_* prefix carries the tool caps mcp-bridge reads
+      // inside the subprocess (ARGS_CAP / RESULT_CAP / TIMEOUT_SECONDS), and
+      // LOOPANY_WORKFLOW_ENV names the exact keys the user passes through for
+      // MCP credentials (see passthroughEnvKeys).
+      env: {
+        ...allowlistEnv({ keys: passthroughEnvKeys(), prefixes: ["LOOPANY_WORKFLOW_"] }),
+        LOOPANY_WORKFLOW_OUT: outPath,
+        LOOPANY_MCP_BRIDGE: mcpBridgeUrl(),
+      },
       signal,
       timeoutMs: TIMEOUT_MS,
     });

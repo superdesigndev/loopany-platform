@@ -200,6 +200,32 @@ test("maybeFlagEvolve caps auto-evolve at once per day (a recent evolve defers i
   expect(store.getLoop(loop.id)!.evolveDue).toBe(true);
 });
 
+test("finishEdit / finishEvolution preserve a FUTURE nextRunAt (the run's own reschedule) but clear a spent one", () => {
+  const loop = metricLoop("finish-keep");
+  const s = new sched.Scheduler({ dispatch(): void {} });
+  const future = new Date(Date.now() + 3_600_000).toISOString();
+
+  // An edit run applied `reschedule` (future nextRunAt) before finishing — the
+  // marker cleanup must NOT wipe the run's own work.
+  store.updateLoop(loop.id, { editRequest: "run at a better time", nextRunAt: future });
+  s.finishEdit(loop.id);
+  expect(store.getLoop(loop.id)!.editRequest).toBeNull();
+  expect(store.getLoop(loop.id)!.nextRunAt).toBe(future);
+
+  // Same for an evolve pass.
+  store.updateLoop(loop.id, { evolveDue: true, nextRunAt: future });
+  s.finishEvolution(loop.id);
+  expect(store.getLoop(loop.id)!.evolveDue).toBeFalsy();
+  expect(store.getLoop(loop.id)!.nextRunAt).toBe(future);
+
+  // A spent (past) one-shot — the very trigger that fired this run — still clears.
+  store.updateLoop(loop.id, { editRequest: "again", nextRunAt: new Date(Date.now() - 1_000).toISOString() });
+  s.finishEdit(loop.id);
+  expect(store.getLoop(loop.id)!.nextRunAt).toBeNull();
+
+  s.removeLoop(loop.id); // stop the cron/timers finishEdit's addLoop armed
+});
+
 test("evolveDue tick creates a dedicated evolve run", async () => {
   const machine = store.createMachine({ id: "m-evolve-tick", userId: "u1", name: "M", tokenHash: "h", online: true });
   const loop = store.createLoop({

@@ -181,7 +181,7 @@ function TaskEntryView({ path, content, syncedAt }: { path: string; content: str
       {content == null ? (
         <div className="px-5 py-6 text-[13px] text-disabled">(syncs from the machine on the next run)</div>
       ) : (
-        <TaskFileView content={content} bare />
+        <TaskFileView content={content} />
       )}
     </>
   )
@@ -221,7 +221,7 @@ function ArtifactEntryView({ loopId, file }: { loopId: string; file: ArtifactSum
         <div className="px-5 py-6 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>
       ) : 'text' in loaded ? (
         isMarkdown(file.path) ? (
-          <TaskFileView content={loaded.text || '(empty file)'} bare />
+          <TaskFileView content={loaded.text || '(empty file)'} />
         ) : (
           <pre className="m-0 overflow-x-auto whitespace-pre-wrap px-5 py-4 font-mono text-[12px] leading-relaxed text-secondary">
             {loaded.text || '(empty file)'}

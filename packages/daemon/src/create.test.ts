@@ -15,7 +15,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { LOOPANY_DIR } from "./config.js";
-import { coerceAgent, detectAgentFromEnv, resolveAgent, resolveLoopWorkdir, runCreate } from "./create.js";
+import { coerceAgent, cronLooksValid, detectAgentFromEnv, resolveAgent, resolveLoopWorkdir, runCreate } from "./create.js";
 import type { InstallOpts, InstallOutcome } from "./skill-install.js";
 
 const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
@@ -36,6 +36,24 @@ function tmpWorkdir(): string {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-workdir-"));
   return path.join(base, "loop", "run");
 }
+
+describe("cronLooksValid (local pre-check only — the server/croner is the sole validator)", () => {
+  test("accepts the 5-field, 6-field (seconds), and @-shortcut forms croner supports", () => {
+    expect(cronLooksValid("0 8 * * *")).toBe(true);
+    expect(cronLooksValid("0 0 8 * * *")).toBe(true);
+    expect(cronLooksValid("@daily")).toBe(true);
+    expect(cronLooksValid("  @hourly  ")).toBe(true);
+  });
+
+  test("rejects only the obviously-wrong shapes", () => {
+    expect(cronLooksValid("")).toBe(false);
+    expect(cronLooksValid("   ")).toBe(false);
+    expect(cronLooksValid("* *")).toBe(false);
+    expect(cronLooksValid("1 2 3 4 5 6 7")).toBe(false);
+    expect(cronLooksValid(42)).toBe(false);
+    expect(cronLooksValid(undefined)).toBe(false);
+  });
+});
 
 describe("detectAgentFromEnv", () => {
   test("fingerprints Claude Code from CLAUDECODE (verified live)", () => {
