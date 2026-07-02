@@ -18,8 +18,8 @@ this loop — no id needed.
   for it. Each writes a file, then passes `--file <path>` (never bare/inline):
   - `loopany set-ui --file <path>` — the panel as small plain HTML (h3/p/b/ul/table/
     div + inline style; no `<script>`/handlers/`<svg>`). Bind live values with
-    `{{latest.<key>}}`; series via `<loop-chart series="k:Label:unit">` /
-    `<loop-sparkline key="k">`; the loop's produced files via
+    `{{latest.<key>}}`; series via `<loop-chart series="k:Label:unit">`; the
+    loop's produced files via
     `<loop-embed match="reports/digest-*.md">` (newest matching synced file
     except the task file, embedded) / `<loop-calendar match="reports/*.md">` (month calendar of
     products; days parse from `YYYY-MM-DD`-style filenames, else sync time).

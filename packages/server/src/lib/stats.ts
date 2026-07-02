@@ -55,31 +55,3 @@ export function seriesRows(data: Record<string, SeriesPoint[]>, keys: string[]):
   for (const k of keys) for (const p of data[k] ?? []) rows[idx.get(p.t)!]![k] = p.v
   return rows
 }
-
-/** Min/max of a value set, with a non-zero span (`hi - lo || 1`) for safe scaling. */
-export function bounds(values: number[]): { lo: number; hi: number; sp: number } {
-  let lo = Infinity,
-    hi = -Infinity
-  for (const v of values) {
-    if (v < lo) lo = v
-    if (v > hi) hi = v
-  }
-  return { lo, hi, sp: hi - lo || 1 }
-}
-
-/**
- * Build an SVG polyline `d` from points on a linear scale shared by the trend
- * renderers (LoopChart, LoopSparkline). `len` is the index span (≥ the longest
- * series so multiple lines align); `padX`/`padY` inset the drawable box.
- */
-export function svgLine(
-  pts: SeriesPoint[],
-  o: { w: number; h: number; lo: number; hi: number; len: number; padX?: number; padY?: number },
-): string {
-  const padX = o.padX ?? 0,
-    padY = o.padY ?? 0
-  const sp = o.hi - o.lo || 1
-  const X = (i: number) => padX + (o.w - 2 * padX) * (o.len > 1 ? i / (o.len - 1) : 0)
-  const Y = (v: number) => padY + (o.h - 2 * padY) * (1 - (v - o.lo) / sp)
-  return pts.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' ')
-}

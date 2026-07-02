@@ -6,7 +6,6 @@ import { buildBindingContext, parseSeries, resolveBindings } from '../lib/bindin
 import { numericSeries } from '../lib/stats'
 import { getArtifacts } from '../server/loopApi'
 import { LoopChart } from './LoopChart'
-import { LoopSparkline } from './LoopSparkline'
 import { LoopEmbed } from './LoopEmbed'
 import { LoopCalendar } from './LoopCalendar'
 
@@ -20,7 +19,6 @@ import { LoopCalendar } from './LoopCalendar'
  * NO opinionated panel components.
  *
  *   <loop-chart series="mrr:MRR:$, paid:Paid"></loop-chart>   multi-series trend chart
- *   <loop-sparkline key="mrr"></loop-sparkline>                inline sparkline
  *   <loop-embed match="reports/digest-*.md"></loop-embed>      newest matching artifact, embedded
  *   <loop-calendar match="reports/*.md"></loop-calendar>       month calendar of produced files
  *
@@ -30,10 +28,10 @@ import { LoopCalendar } from './LoopCalendar'
  * allowlist and the skill prose must never drift apart.
  */
 
-const LOOP_TAGS = ['loop-chart', 'loop-sparkline', 'loop-embed', 'loop-calendar']
+const LOOP_TAGS = ['loop-chart', 'loop-embed', 'loop-calendar']
 
 /** Data-bearing attributes on the loop-* primitives (all parsed by us, never markup). */
-const LOOP_ATTRS = ['series', 'key', 'file', 'match', 'full']
+const LOOP_ATTRS = ['series', 'file', 'match', 'full']
 
 const ARTIFACT_RETRY_MAX = 3
 const ARTIFACT_RETRY_MS = 4000
@@ -83,7 +81,7 @@ export function LoopView({
     return DOMPurify.sanitize(resolveBindings(html, ctx), SANITIZE_CONFIG)
   }, [html, runs])
 
-  // One numeric-series pass shared by every loop-chart/loop-sparkline in the template.
+  // One numeric-series pass shared by every loop-chart in the template.
   const data = useMemo(() => numericSeries(runs), [runs])
 
   // The artifact-backed primitives share ONE lazy artifact-list fetch - made
@@ -125,7 +123,6 @@ export function LoopView({
         if (!(node instanceof Element)) return undefined
         const a = node.attribs ?? {}
         if (node.name === 'loop-chart') return <LoopChart data={data} series={parseSeries(a.series)} />
-        if (node.name === 'loop-sparkline') return <LoopSparkline series={data} field={a.key} />
         if (node.name === 'loop-embed')
           return (
             <LoopEmbed

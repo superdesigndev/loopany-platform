@@ -91,6 +91,18 @@ describe('LoopView <loop-chart>', () => {
     expect(out).toContain('recharts-area') // single series → gradient area chart
     expect(out).toContain('recharts-dot') // the lone point is a visible dot
   })
+
+  it('drops a stale <loop-sparkline> tag without crashing (retired primitive)', () => {
+    // The sparkline primitive was retired in favor of <loop-chart>. Old dashboards
+    // may still contain the tag; the sanitizer strips the now-unallowlisted element
+    // and the surrounding template renders normally — no crash, no error banner.
+    const out = render(
+      '<div><h3>temps</h3><loop-sparkline key="cpu"></loop-sparkline>' +
+        '<loop-chart series="cpu:CPU:℃"></loop-chart></div>',
+    )
+    expect(out).toContain('temps') // surrounding markup survives
+    expect(out).not.toContain('loop-sparkline') // the unknown tag is gone
+  })
 })
 
 describe('LoopView artifact primitives', () => {
