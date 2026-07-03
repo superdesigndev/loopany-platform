@@ -24,7 +24,8 @@ this loop — no id needed.
     `{{latest.<key>}}`; series via `<loop-chart series="k:Label:unit">`; the loop's
     produced files via `<loop-embed match="reports/digest-*.md">` (newest matching
     synced file, embedded) or `<loop-calendar match="reports/*.md">` (month calendar;
-    days parse from `YYYY-MM-DD`-style filenames, else sync time).
+    days come from a product's front-matter `date:`, else a `YYYY-MM-DD`-style
+    filename, else sync time).
   - `loopany set-schema --file <path>` — JSON array of `{key, label?, unit?}`.
     Additive: pass the full intended schema; don't drop a key the UI still binds.
   - `loopany set-workflow --file <path>` — the deterministic pre-stage JS (`prev`,

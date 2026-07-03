@@ -557,7 +557,8 @@ LLM and executes no user code**.
   skill authoring docs (`skill/references/evolve.md` §3 + `skill/run/edit.md`) - a tag
   in the sanitizer but not the skill is never authored, the reverse renders nothing.
   `<loop-embed file="…"|match="…" [full]>` embeds the NEWEST matching synced artifact
-  (resolution + dating in the pure, tested `lib/productDate.ts`: filename date first -
+  (resolution + dating in the pure, tested `lib/productDate.ts`: front-matter `date:`
+  first (authoritative, batch 1 - see the front-matter bullet), else a filename date -
   `YYYY-MM-DD`/`YYYY_MM_DD`/`YYYYMMDD` in the BASENAME, consistent separator, not
   embedded in longer digit runs - else sync time, and the UI marks the fallback
   visibly); collapse is 300px via a WRAPPER (`overflow-hidden`+max-height), never
