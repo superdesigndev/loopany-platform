@@ -32,7 +32,9 @@ to run the loops on.
 
 1. **Sign in** to the Loopany web app.
 2. **Create a loop.** The *New loop* dialog hands you a short **connect snippet**
-   with a server URL and a one-time connect-key.
+   with a server URL and a one-time connect-key. Or start from a **template** - the
+   cards beside *New loop* (like *React Doctor*) hand you the same snippet with the
+   loop's task description filled in.
 3. **Connect your machine.** Paste the whole snippet into your local Claude Code -
    it connects the machine and builds the loop with you. Or start the daemon
    directly:
