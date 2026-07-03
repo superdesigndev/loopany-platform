@@ -113,12 +113,12 @@ describe('LoopView artifact primitives', () => {
     // pattern — proving the attribute survived end-to-end.
     const out = render('<loop-embed match="reports/digest-*.md"></loop-embed>')
     expect(out).toContain('reports/digest-*.md')
-    expect(out).toContain('[ loading ]')
+    expect(out).toContain('Loading…')
   })
 
   it('renders loop-calendar and keeps its match attr', () => {
     const out = render('<loop-calendar match="reports/*.md"></loop-calendar>')
-    expect(out).toContain('[ loading ]')
+    expect(out).toContain('Loading…')
   })
 
   it('keeps the comma-laden columns attr through sanitize (loop-kanban reaches its renderer)', async () => {
@@ -140,9 +140,9 @@ describe('LoopView artifact primitives', () => {
   it('fires the artifact fetch for an uppercase-authored tag (detection is on the sanitized html)', async () => {
     // DOMPurify lowercases tag names, so <LOOP-EMBED> still reaches the parser
     // swap. The fetch trigger must see the sanitized string too, or the embed
-    // sticks at "[ loading ]" forever.
+    // sticks at "Loading…" forever.
     const out = await mount('<LOOP-EMBED match="reports/*.md"></LOOP-EMBED>')
-    expect(out).not.toContain('[ loading ]')
+    expect(out).not.toContain('Loading…')
     expect(out).toContain('No synced file matches yet')
   })
 
@@ -161,7 +161,7 @@ describe('LoopView artifact primitives', () => {
         root.render(createElement(LoopView, { html: '<loop-embed match="reports/*.md"></loop-embed>', runs: RUNS, loopId: 'loop-1' }))
       })
       // Failure keeps the loading state - never the misleading calm empty.
-      expect(host.innerHTML).toContain('[ loading ]')
+      expect(host.innerHTML).toContain('Loading…')
       expect(host.innerHTML).not.toContain('No synced file matches yet')
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000)

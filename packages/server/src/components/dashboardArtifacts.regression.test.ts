@@ -43,7 +43,7 @@ describe('LoopEmbed collapse containment', () => {
   })
 
   it('keeps the shell shrinkable', () => {
-    expect(src).toMatch(/'min-w-0 overflow-hidden rounded-\[10px\]/)
+    expect(src).toMatch(/'min-w-0 overflow-hidden rounded-card/)
   })
 })
 

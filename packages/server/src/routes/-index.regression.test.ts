@@ -50,18 +50,18 @@ describe('dashboard poll resilience', () => {
   })
 })
 
-describe('dashboard toolbar layout', () => {
-  it('template cards wrap and shrink — three cards must never widen the page', () => {
-    // The New Loop + template-card row grows with the registry (three cards in v1).
-    // Per the no-page-level-horizontal-scroll rule the row must wrap at narrow
-    // widths and each card must be allowed to shrink (min-w-0), never overflow.
-    const toolbar = /<div className="flex flex-wrap[^"]*">[\s\S]*?templates\.map/.exec(src)?.[0]
-    expect(toolbar, 'the wrapping toolbar row should contain the template cards').toBeTruthy()
-    const card = /templates\.map\(\(t\) => \([\s\S]*?className="([^"]*)"/.exec(src)?.[1]
+describe('dashboard template fan layout', () => {
+  it('fan cards wrap and stay fixed-width - no template count may widen the page', () => {
+    // The hero template fan grows with the registry. Per the
+    // no-page-level-horizontal-scroll rule the fan row must WRAP at narrow
+    // widths (flex-wrap on the container) and each card is a fixed narrow
+    // width (w-[..px] shrink-0), so no count of templates can overflow the
+    // viewport - extra cards fold into a second row instead.
+    const fan = /<div className="flex flex-wrap[^"]*">[\s\S]*?templates\.map/.exec(src)?.[0]
+    expect(fan, 'the wrapping fan row should contain the template cards').toBeTruthy()
+    const card = /templates\.map\([\s\S]*?className="([^"]*)"/.exec(src)?.[1]
     expect(card, 'the template card should have a className').toBeTruthy()
-    expect(card).toContain('min-w-0')
-    // A flex basis makes narrow viewports WRAP the cards into rows instead of
-    // squeezing all of them into unreadable one-word-per-line columns.
-    expect(card).toMatch(/\bbasis-\d/)
+    expect(card).toMatch(/\bw-\[\d+px\]/)
+    expect(card).toContain('shrink-0')
   })
 })

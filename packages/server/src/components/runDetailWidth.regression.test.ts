@@ -27,8 +27,9 @@ describe('run detail page width containment', () => {
   })
 
   it('makes the section cards shrinkable so wide content contains inside them', () => {
-    // The Card wrapper must carry min-w-0.
-    expect(runView).toMatch(/<section className="min-w-0 rounded-2xl border border-wire bg-surface/)
+    // The Card wrapper must carry min-w-0. Assert ONLY the behavioral class -
+    // the decoration around it is fashion and must be free to change.
+    expect(runView).toMatch(/<section className="min-w-0 /)
   })
 
   it('scrolls the diff body inside its own pane rather than widening the page', () => {

@@ -17,13 +17,13 @@ export type Flash = { label: string; tone?: 'ok' | 'gone'; undo?: () => void; ho
  */
 export function LoadErrorCard({ title, detail, onRetry }: { title: string; detail?: string | null; onRetry: () => void }) {
   return (
-    <div className="rounded-2xl border border-wire bg-surface px-6 py-8">
+    <div className="rounded-card border border-hairline bg-surface px-6 py-8 shadow-card">
       <div className="text-[14px] text-accent">{title}</div>
-      {detail && <div className="mt-1 text-[12.5px] text-secondary">{detail}</div>}
+      {detail && <div className="mt-1 text-meta text-secondary">{detail}</div>}
       <button
         type="button"
         onClick={onRetry}
-        className="mt-3 cursor-pointer border-none bg-transparent p-0 font-mono text-[12px] tracking-[0.08em] text-interactive underline underline-offset-2 hover:text-display"
+        className="mt-3 cursor-pointer border-none bg-transparent p-0 text-label font-medium text-interactive underline underline-offset-2 hover:text-display"
       >
         Retry
       </button>
@@ -65,11 +65,11 @@ export function ConfirmBar({
       onKeyDown={(e) => {
         if (e.key === 'Escape' && !busy) onCancel()
       }}
-      className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-md border border-wire bg-raised px-4 py-3"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-control border border-hairline bg-raised px-4 py-3"
     >
       <div className="min-w-0">
-        <div className="font-mono text-[11px] tracking-[0.08em] text-display">{prompt}</div>
-        {note && <div className="mt-0.5 text-[12.5px] text-secondary">{note}</div>}
+        <div className="text-body font-medium text-display">{prompt}</div>
+        {note && <div className="mt-0.5 text-meta text-secondary">{note}</div>}
       </div>
       <div className="ml-auto flex items-center gap-2.5">
         <button ref={ctaRef} className={danger ? btnDanger : btnPrimary} disabled={busy} onClick={onConfirm}>
@@ -93,10 +93,10 @@ export function FlashLine({ label, tone = 'ok', onUndo }: { label: string; tone?
     <div
       role="status"
       aria-live="polite"
-      className="inline-flex items-center gap-2 font-mono text-[11px] tracking-[0.08em] text-secondary"
+      className="inline-flex items-center gap-2 text-label font-medium text-secondary"
       style={{ animation: 'fadeIn 0.2s ease-out' }}
     >
-      <span aria-hidden className={tone === 'gone' ? 'text-accent' : 'text-display'}>
+      <span aria-hidden className={tone === 'gone' ? 'text-accent' : 'text-success'}>
         {tone === 'gone' ? '✕' : '✓'}
       </span>
       {label}
@@ -104,7 +104,7 @@ export function FlashLine({ label, tone = 'ok', onUndo }: { label: string; tone?
         <button
           type="button"
           onClick={onUndo}
-          className="cursor-pointer border-none bg-transparent p-0 font-mono text-[11px] tracking-[0.08em] text-interactive underline underline-offset-2 transition-colors hover:text-display"
+          className="cursor-pointer border-none bg-transparent p-0 text-label font-medium text-interactive underline underline-offset-2 transition-colors hover:text-display"
         >
           Undo
         </button>

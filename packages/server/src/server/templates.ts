@@ -22,7 +22,19 @@ const metas = import.meta.glob<TemplateInfo>('../skill/templates/*/meta.json', {
   import: 'default',
 })
 
+/**
+ * Optional per-template preview: a `thumb.svg` beside the meta.json, inlined as
+ * a string (`?raw`, same mechanism as the skill markdown). Drawn with the
+ * theme's CSS variables so the preview follows light/dark for free. Still pure
+ * content addition - drop the file and the glob pairs it by folder.
+ */
+const thumbs = import.meta.glob<string>('../skill/templates/*/thumb.svg', {
+  eager: true,
+  query: '?raw',
+  import: 'default',
+})
+
 /** The registry, sorted by name for a stable card order. */
-export const TEMPLATES: TemplateInfo[] = Object.values(metas).sort((a, b) =>
-  a.name.localeCompare(b.name),
-)
+export const TEMPLATES: TemplateInfo[] = Object.entries(metas)
+  .map(([path, meta]) => ({ ...meta, thumb: thumbs[path.replace(/meta\.json$/, 'thumb.svg')] }))
+  .sort((a, b) => a.name.localeCompare(b.name))

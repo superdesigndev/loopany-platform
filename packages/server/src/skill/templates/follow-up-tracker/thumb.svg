@@ -1,0 +1,27 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of a closed loop driving toward its goal: a goal chip, observed
+       checkpoints ticking off, and the finish. Colors ride the app's CSS variables. -->
+  <rect x="10" y="8" width="62" height="11" rx="5.5" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+  <circle cx="18" cy="13.5" r="2" fill="var(--color-rubik-green, #009b48)"/>
+  <rect x="24" y="12.5" width="40" height="2.5" rx="1.25" fill="var(--color-rubik-green, #009b48)" opacity="0.55"/>
+  <g stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="17" cy="31" r="4.5" fill="none"/>
+    <path d="M15 31l1.6 1.6 2.8-3"/>
+    <circle cx="17" cy="46" r="4.5" fill="none"/>
+    <path d="M15 46l1.6 1.6 2.8-3"/>
+  </g>
+  <circle cx="17" cy="61" r="4.5" stroke="var(--color-wire, #cfd3db)" stroke-width="1.5" fill="none"/>
+  <g fill="var(--color-wire, #cfd3db)">
+    <rect x="28" y="29.5" width="52" height="2.5" rx="1.25"/>
+    <rect x="28" y="44.5" width="44" height="2.5" rx="1.25"/>
+  </g>
+  <g fill="var(--color-hairline, #e3e5ea)">
+    <rect x="28" y="35" width="34" height="2.5" rx="1.25"/>
+    <rect x="28" y="50" width="28" height="2.5" rx="1.25"/>
+    <rect x="28" y="59.5" width="48" height="2.5" rx="1.25"/>
+    <rect x="28" y="65" width="20" height="2.5" rx="1.25"/>
+  </g>
+  <path d="M96 40h14" stroke="var(--color-wire, #cfd3db)" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <circle cx="121" cy="40" r="9" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+  <path d="M116.5 40l3 3 5.5-6" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

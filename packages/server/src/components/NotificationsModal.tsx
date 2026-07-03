@@ -117,25 +117,25 @@ export function NotificationsModal({ open, onClose }: { open: boolean; onClose: 
       {err && <ErrorBanner message={err} onDismiss={() => setErr(null)} className="mb-2 mt-3" />}
 
       <ModalSection>Channels</ModalSection>
-      {channels.length === 0 && !adding && <div className="py-3 text-[13px] text-secondary">No channels yet.</div>}
+      {channels.length === 0 && !adding && <div className="py-3 text-body text-secondary">No channels yet.</div>}
       <ul className="flex flex-col gap-2">
         {channels.map((c) => {
           const t = test[c.id]
           return (
-            <li key={c.id} className="flex items-center justify-between gap-3 rounded-lg border border-wire bg-surface px-4 py-3">
+            <li key={c.id} className="flex items-center justify-between gap-3 rounded-control border border-hairline bg-surface px-4 py-3">
               <div className="flex min-w-0 items-center gap-2.5">
                 <span className="text-[15px] font-medium text-display">{c.name}</span>
-                <span className="font-mono text-[11px] text-secondary">
+                <span className="text-label text-secondary">
                   {typeLabel(c.type)} · {c.hint}
                 </span>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {t && t !== 'sending' && (
                   <span
-                    className={`font-mono text-[11px] ${t === 'ok' ? 'text-[color:var(--color-ok,#16a34a)]' : 'text-accent'}`}
+                    className={`inline-flex h-[22px] items-center gap-1.5 rounded-full px-2.5 text-caption font-medium ${t === 'ok' ? 'bg-success-soft text-success' : 'bg-accent-soft text-accent'}`}
                     title={t === 'ok' ? undefined : t}
                   >
-                    {t === 'ok' ? 'sent ✓' : 'failed'}
+                    {t === 'ok' ? 'Sent ✓' : 'Failed'}
                   </span>
                 )}
                 <button className={btn} disabled={t === 'sending'} onClick={() => void runTest(c.id)}>
@@ -151,7 +151,7 @@ export function NotificationsModal({ open, onClose }: { open: boolean; onClose: 
       </ul>
 
       {adding && spec ? (
-        <div className="mt-4 rounded-lg border border-wire bg-raised px-4 py-3">
+        <div className="mt-4 rounded-control border border-hairline bg-raised px-4 py-3">
           <ModalSection>New {spec.label} channel</ModalSection>
           <label className={labelCls}>Name</label>
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. My alerts" />
@@ -166,7 +166,7 @@ export function NotificationsModal({ open, onClose }: { open: boolean; onClose: 
               />
             </div>
           ))}
-          <div className="mt-1 font-mono text-[11px] text-secondary">{spec.help}</div>
+          <div className="mt-1 text-label text-secondary">{spec.help}</div>
           <div className="mt-4 flex justify-end gap-2">
             <button className={btn} onClick={() => setAdding(null)}>
               Cancel

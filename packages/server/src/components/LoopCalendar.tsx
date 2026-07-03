@@ -20,7 +20,7 @@ import { ArtifactBody, ViewerHead } from './artifactView'
  * query - the dashboard box can be narrow on a wide screen).
  */
 
-const DOW = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su']
+const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const DOT_MODE_BELOW = 620
 const CHIPS_PER_DAY = 2
 
@@ -63,7 +63,7 @@ function clampMonth(months: string[], shown: string | null): string {
 
 const monthLabel = (ym: string): string => {
   const [y, m] = ym.split('-').map(Number)
-  return `${new Date(y!, m! - 1, 1).toLocaleString(undefined, { month: 'long' }).toLowerCase()} ${y}`
+  return `${new Date(y!, m! - 1, 1).toLocaleString(undefined, { month: 'long' })} ${y}`
 }
 
 /** Chip text: basename without extension or a trailing date (digest-2026-07-01.md → "digest"). */
@@ -149,14 +149,14 @@ export function LoopCalendar({
   if (artifacts == null)
     return (
       <div ref={rootRef} className="min-w-0">
-        <div className="py-4 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>
+        <div className="py-4 text-label text-secondary">Loading…</div>
       </div>
     )
 
   if (!products.length)
     return (
       <div ref={rootRef} className="min-w-0">
-        <div className="rounded-[10px] border border-hairline px-5 py-8 text-center text-[13px] text-disabled">
+        <div className="rounded-card border border-hairline px-5 py-8 text-center text-body text-disabled">
           No products yet. Files the loop writes appear here after its next run syncs them.
         </div>
       </div>
@@ -174,7 +174,7 @@ export function LoopCalendar({
   const monthCount = products.filter((p) => monthOf(p.date) === month).length
 
   const navBtn =
-    'inline-flex h-6 w-[26px] cursor-pointer items-center justify-center rounded-md border border-wire bg-transparent font-mono text-[12px] text-primary transition-colors hover:border-display hover:text-display disabled:cursor-default disabled:opacity-35'
+    'inline-flex h-6 w-[26px] cursor-pointer items-center justify-center rounded-control border border-wire bg-transparent text-body text-primary transition-colors hover:border-display hover:text-display disabled:cursor-default disabled:opacity-35'
 
   return (
     <div ref={rootRef} className="min-w-0">
@@ -198,8 +198,8 @@ export function LoopCalendar({
         >
           ›
         </button>
-        <span className="font-mono text-[12px] tracking-[0.08em] text-display">{monthLabel(month)}</span>
-        <span className="ml-auto font-mono text-[10.5px] tracking-[0.04em] text-disabled">
+        <span className="text-body font-semibold text-primary">{monthLabel(month)}</span>
+        <span className="ml-auto text-caption font-medium text-disabled">
           {monthCount} product{monthCount === 1 ? '' : 's'}
         </span>
       </div>
@@ -210,7 +210,7 @@ export function LoopCalendar({
         {DOW.map((d) => (
           <div
             key={d}
-            className="border-b border-r border-hairline px-2 py-1 text-right font-mono text-[9.5px] uppercase tracking-[0.1em] text-disabled"
+            className="border-b border-r border-hairline px-2 py-1 text-right text-micro font-medium text-disabled"
           >
             {d}
           </div>
@@ -231,8 +231,8 @@ export function LoopCalendar({
               } ${hasSelected ? 'bg-raised shadow-[inset_0_0_0_1px_var(--color-display)]' : ''}`}
             >
               <span
-                className={`absolute right-1.5 top-1 font-mono text-[10px] ${
-                  isToday ? 'rounded bg-display px-1 text-paper' : 'text-disabled'
+                className={`absolute right-1.5 top-1 font-mono text-micro ${
+                  isToday ? 'rounded-full bg-display px-1 text-paper' : 'text-disabled'
                 }`}
               >
                 {i + 1}
@@ -265,27 +265,27 @@ export function LoopCalendar({
 
       {/* legend */}
       <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5">
-        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-[0.04em] text-secondary">
-          <span className="inline-block h-2.5 w-3.5 rounded-[3px] border border-hairline bg-raised" /> dated by filename
+        <span className="inline-flex items-center gap-1.5 text-caption font-medium text-secondary">
+          <span className="inline-block h-2.5 w-3.5 rounded-[3px] border border-hairline bg-raised" /> Dated by filename
         </span>
-        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-[0.04em] text-secondary">
-          <span className="inline-block h-2.5 w-3.5 rounded-[3px] border border-dashed border-wire bg-raised" /> fallback:
+        <span className="inline-flex items-center gap-1.5 text-caption font-medium text-secondary">
+          <span className="inline-block h-2.5 w-3.5 rounded-[3px] border border-dashed border-wire bg-raised" /> Fallback:
           dated by sync time
         </span>
       </div>
 
       {/* detail - the selected product in the shared artifact viewer */}
       {selectedProduct && (
-        <div className="mt-4 min-w-0 overflow-hidden rounded-[10px] border border-hairline bg-surface">
+        <div className="mt-4 min-w-0 overflow-hidden rounded-card border border-hairline bg-surface shadow-card">
           <ViewerHead
             path={selectedProduct.file.path}
             meta={`${dateSourceLabel(selectedProduct.source)} · synced ${fmt(selectedProduct.file.updatedAt)}`}
             action={
               <a
                 href="#files"
-                className="font-mono text-[10.5px] tracking-[0.04em] text-interactive transition-colors hover:text-display"
+                className="text-caption font-medium text-interactive transition-colors hover:text-display"
               >
-                open in files →
+                Open in files →
               </a>
             }
           />
@@ -319,7 +319,7 @@ function ProductChip({
         onClick={onPick}
         title={title}
         aria-label={product.file.path}
-        className={`mr-1 mt-1 inline-block size-2 cursor-pointer rounded-[2px] border-none p-0 ${
+        className={`mr-1 mt-1 inline-block size-2 cursor-pointer rounded-full border-none p-0 ${
           on ? 'bg-display' : fallback ? 'bg-disabled' : 'bg-secondary'
         }`}
       />
@@ -329,7 +329,7 @@ function ProductChip({
       type="button"
       onClick={onPick}
       title={title}
-      className={`mt-1 block w-full min-w-0 cursor-pointer truncate rounded border px-1.5 py-0.5 text-left font-mono text-[10px] transition-colors hover:border-display ${
+      className={`mt-1 block w-full min-w-0 cursor-pointer truncate rounded-full border px-1.5 py-0.5 text-left font-mono text-micro transition-colors hover:border-display ${
         fallback ? 'border-dashed' : ''
       } ${on ? 'border-display bg-surface text-display' : 'border-hairline bg-raised text-primary'}`}
     >

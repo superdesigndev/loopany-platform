@@ -17,7 +17,7 @@ import { fnum, md, tsShort } from '../lib/format'
 /**
  * `<loop-chart series="mrr:MRR:$, paid:Paid">` - the loop's run-history trend,
  * rendered by Recharts in the shadcn/ui-charts grammar, themed entirely by the
- * Nothing tokens (`--color-chart-1..5` ramp, hairline grid, Space Mono ticks,
+ * theme tokens (`--color-chart-1..5` ramp, hairline grid, mono ticks,
  * flat tooltip - no shadows, no decorative color). One series renders as a
  * gradient area; multiple series render as plain lines (overlapping translucent
  * fills go muddy in a monochrome palette). A single-point series renders a dot
@@ -178,7 +178,7 @@ export function LoopChart({
           )}
         </ResponsiveContainer>
       </div>
-      <figcaption className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[var(--color-secondary)]">
+      <figcaption className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-label text-[var(--color-secondary)]">
         {plotted.map((s, idx) => {
           const last = s.pts[s.pts.length - 1]
           if (!last) return null

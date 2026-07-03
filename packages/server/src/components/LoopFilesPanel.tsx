@@ -92,18 +92,18 @@ export function LoopFilesPanel({
     // link targets (same page, the panel sits below the dashboard box).
     <section id="files" className="min-w-0">
       <div className="mb-2.5 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">
-        <h2 className="font-mono text-[11px] tracking-[0.08em] text-secondary">
-          files{artifacts ? ` (${entries.length})` : ''}
+        <h2 className="text-label font-semibold text-secondary">
+          Files{artifacts ? ` (${entries.length})` : ''}
         </h2>
-        <span className="font-mono text-[10.5px] tracking-[0.04em] text-disabled">spec + synced artifacts</span>
+        <span className="text-caption font-medium text-disabled">Spec + synced artifacts</span>
       </div>
 
       {entries.length === 0 ? (
-        <div className="rounded-xl border border-wire bg-surface px-5 py-10 text-center text-[13px] text-disabled">
-          {artifacts == null ? '[ loading ]' : 'No files yet — the task file and synced artifacts appear here.'}
+        <div className="rounded-card border border-hairline bg-surface px-5 py-10 text-center text-body text-disabled shadow-card">
+          {artifacts == null ? 'Loading…' : 'No files yet - the task file and synced artifacts appear here.'}
         </div>
       ) : (
-        <div className="grid h-[min(600px,68vh)] grid-cols-1 overflow-hidden rounded-xl border border-wire bg-surface sm:grid-cols-[210px_1fr]">
+        <div className="grid h-[min(600px,68vh)] grid-cols-1 overflow-hidden rounded-card border border-hairline bg-surface shadow-card sm:grid-cols-[210px_1fr]">
           {/* file list */}
           <nav className="max-h-44 overflow-y-auto border-b border-hairline sm:max-h-none sm:border-b-0 sm:border-r">
             <ul className="py-1.5">
@@ -131,30 +131,30 @@ export function LoopFilesPanel({
                     >
                       <span className="min-w-0 flex-1">
                         <span
-                          className={`block truncate font-mono text-[12px] ${on ? 'text-display' : 'text-primary'}`}
+                          className={`block truncate font-mono text-label ${on ? 'text-display' : 'text-primary'}`}
                           title={e.path}
                         >
                           {display}
                         </span>
                         {showPath && (
-                          <span className="block truncate font-mono text-[10px] text-disabled" title={e.path}>
+                          <span className="block truncate font-mono text-micro text-disabled" title={e.path}>
                             {e.path}
                           </span>
                         )}
                       </span>
                       {isTask ? (
-                        <span className="shrink-0 rounded-sm border border-wire px-1 font-mono text-[9px] tracking-[0.06em] text-secondary">
-                          TASK
+                        <span className="shrink-0 rounded-full bg-interactive-soft px-2 text-caption font-medium text-interactive">
+                          Task
                         </span>
                       ) : meta?.type ? (
                         <span
-                          className="shrink-0 truncate rounded-sm border border-wire px-1 font-mono text-[9px] tracking-[0.06em] text-secondary"
+                          className="shrink-0 truncate rounded-full bg-raised px-2 text-caption font-medium text-secondary"
                           title={`type: ${meta.type}`}
                         >
                           {meta.type}
                         </span>
                       ) : (
-                        <span className="shrink-0 font-mono text-[9px] tracking-[0.04em] text-disabled">
+                        <span className="shrink-0 font-mono text-micro text-disabled">
                           {typeTag(e.path)}
                         </span>
                       )}
@@ -183,9 +183,9 @@ export function LoopFilesPanel({
 function TaskEntryView({ path, content, syncedAt }: { path: string; content: string | null; syncedAt: string | null }) {
   return (
     <>
-      <ViewerHead path={path} meta={syncedAt ? `task file · synced ${fmt(syncedAt)}` : 'task file'} />
+      <ViewerHead path={path} meta={syncedAt ? `Task file · synced ${fmt(syncedAt)}` : 'Task file'} />
       {content == null ? (
-        <div className="px-5 py-6 text-[13px] text-disabled">(syncs from the machine on the next run)</div>
+        <div className="px-5 py-6 text-body text-disabled">(syncs from the machine on the next run)</div>
       ) : (
         <TaskFileView content={content} />
       )}

@@ -25,8 +25,8 @@ export function ViewerHead({
 }) {
   return (
     <div className="sticky top-0 z-10 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-hairline bg-surface px-5 py-2.5">
-      <span className="break-all font-mono text-[12px] text-primary">{path}</span>
-      {meta && <span className="font-mono text-[10.5px] tracking-[0.04em] text-disabled">· {meta}</span>}
+      <span className="break-all font-mono text-label text-primary">{path}</span>
+      {meta && <span className="font-mono text-caption text-disabled">· {meta}</span>}
       {action && <span className="ml-auto shrink-0">{action}</span>}
     </div>
   )
@@ -43,12 +43,12 @@ export function BinaryNotice({
   oversize: boolean
 }) {
   return (
-    <div className="px-5 py-8 text-[13px] text-secondary">
+    <div className="px-5 py-8 text-body text-secondary">
       {oversize ? (
-        <span className="text-disabled">Too large to preview — stored as metadata only.</span>
+        <span className="text-disabled">Too large to preview - stored as metadata only.</span>
       ) : (
         <>
-          Binary file — not previewable.{' '}
+          Binary file - not previewable.{' '}
           <a
             href={downloadHref(loopId, path)}
             download
@@ -88,15 +88,15 @@ export function ArtifactBody({ loopId, file }: { loopId: string; file: ArtifactS
   }, [loopId, file.path, file.binary, file.oversize, file.size, file.updatedAt])
 
   if ('loading' in loaded)
-    return <div className="px-5 py-6 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>
+    return <div className="px-5 py-6 text-body text-disabled">Loading…</div>
   if ('text' in loaded)
     return isMarkdown(file.path) ? (
       <TaskFileView content={loaded.text || '(empty file)'} />
     ) : (
-      <pre className="m-0 overflow-x-auto whitespace-pre-wrap px-5 py-4 font-mono text-[12px] leading-relaxed text-secondary">
+      <pre className="m-0 overflow-x-auto whitespace-pre-wrap px-5 py-4 font-mono text-label leading-relaxed text-secondary">
         {loaded.text || '(empty file)'}
       </pre>
     )
   if ('binary' in loaded) return <BinaryNotice loopId={loopId} path={file.path} oversize={loaded.oversize} />
-  return <div className="px-5 py-6 font-mono text-[12px] text-accent">[ ERROR ] {loaded.error}</div>
+  return <div className="px-5 py-6 text-body text-accent">Couldn't load this file - {loaded.error}</div>
 }

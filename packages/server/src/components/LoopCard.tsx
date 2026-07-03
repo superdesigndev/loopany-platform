@@ -4,7 +4,7 @@ import { cronText, dotLabel, fmt, isClosed, isCompleted, lastRunOf, rel } from '
 import { mergeRuns } from '../lib/runs'
 import { loadOlderRuns } from '../server/loopApi'
 import { Timeline, WINDOW } from './Timeline'
-import { runPulseStyle, useHydrated } from './ui'
+import { Pill, useHydrated } from './ui'
 
 export function LoopCard({
   job,
@@ -49,7 +49,7 @@ export function LoopCard({
   return (
     <div
       onClick={() => onOpen(job.id)}
-      className={`mb-[18px] cursor-pointer rounded-2xl border border-wire bg-surface px-[26px] pb-5 pt-[22px] transition-colors hover:border-display ${
+      className={`mb-[18px] cursor-pointer rounded-card border border-hairline bg-surface px-[26px] pb-5 pt-[22px] shadow-card transition-colors hover:border-wire ${
         en ? '' : 'opacity-60'
       }`}
       style={{ animation: 'fadeIn .25s cubic-bezier(0.25,0.1,0.25,1) both' }}
@@ -61,40 +61,28 @@ export function LoopCard({
             e.stopPropagation()
             onOpen(job.id)
           }}
-          className="cursor-pointer rounded-sm text-left text-[19px] font-medium tracking-tight text-display outline-none focus-visible:ring-2 focus-visible:ring-display focus-visible:ring-offset-4 focus-visible:ring-offset-surface"
+          className="cursor-pointer rounded-sm text-left text-[17px] font-semibold tracking-[-0.01em] text-display outline-none focus-visible:ring-2 focus-visible:ring-interactive focus-visible:ring-offset-4 focus-visible:ring-offset-surface"
         >
           {job.name}
         </button>
         {job.running && (
-          <span className="inline-flex h-5 items-center gap-1.5 rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-display">
-            <span className="size-1.5 rounded-full" style={runPulseStyle} />
+          <Pill tone="running" dot="pulse">
             Running
-          </span>
+          </Pill>
         )}
-        {job.graduation && (
-          <span className="inline-flex h-5 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary">
-            {job.graduation}
-          </span>
-        )}
+        {job.graduation && <Pill>{job.graduation}</Pill>}
         {completed && (
-          <span className="inline-flex h-5 items-center rounded border border-[color:var(--color-success)]/40 px-2 font-mono text-[10.5px] tracking-[0.06em] text-success">
+          <Pill tone="success" dot="green">
             Completed
-          </span>
+          </Pill>
         )}
         {!completed && closedActive && (
-          <span
-            className="inline-flex h-5 items-center rounded border border-hairline px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary"
-            title={job.goal ?? undefined}
-          >
+          <Pill tone="success" title={job.goal ?? undefined}>
             Goal
-          </span>
+          </Pill>
         )}
-        {!completed && !en && (
-          <span className="inline-flex h-5 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary">
-            Paused
-          </span>
-        )}
-        <div className="ml-auto whitespace-nowrap font-mono text-[12.5px] tracking-[0.04em] text-secondary">
+        {!completed && !en && <Pill>Paused</Pill>}
+        <div className="ml-auto whitespace-nowrap text-meta text-secondary">
           <span className="text-primary" title={job.cron}>
             {cronText(job.cron)}
           </span>
@@ -111,7 +99,7 @@ export function LoopCard({
         onPickRun={(run) => onPickRun(job.id, run)}
       />
 
-      <div className="mt-[18px] flex items-center gap-2 font-mono text-[11.5px] tracking-[0.04em] text-secondary">
+      <div className="mt-[18px] flex items-center gap-2 text-label text-secondary">
         <span>{job.runCount} runs</span>
         {last && (
           <span>
@@ -122,9 +110,9 @@ export function LoopCard({
       </div>
 
       {completed && (
-        <div className="mt-1.5 font-mono text-[11.5px] tracking-[0.04em] text-success">
+        <div className="mt-1.5 text-label text-success">
           Completed{job.completedAt ? ` · ${fmt(job.completedAt)}` : ''}
-          {job.completionReason && <span className="text-secondary"> — {job.completionReason}</span>}
+          {job.completionReason && <span className="text-secondary"> - {job.completionReason}</span>}
         </div>
       )}
     </div>

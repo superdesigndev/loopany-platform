@@ -84,8 +84,8 @@ export function LoopKanban({
   // Authoring hint - an agent iterating on its template sees why nothing shows.
   if (!cols.length)
     return (
-      <div className={`${shell} rounded-[10px] border border-hairline bg-surface`}>
-        <div className="px-5 py-5 font-mono text-[12px] text-disabled">
+      <div className={`${shell} rounded-card border border-hairline bg-surface shadow-card`}>
+        <div className="px-5 py-5 font-mono text-label text-disabled">
           &lt;loop-kanban&gt; needs columns="&lt;a,b,c&gt;"
         </div>
       </div>
@@ -94,7 +94,7 @@ export function LoopKanban({
   if (artifacts == null)
     return (
       <div className={shell}>
-        <div className="py-4 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>
+        <div className="py-4 text-label text-secondary">Loading…</div>
       </div>
     )
 
@@ -128,18 +128,18 @@ export function LoopKanban({
         <div key={col.overflow ? OVERFLOW_REACT_KEY : col.name} className="flex w-[248px] shrink-0 flex-col">
           <div className="mb-2 flex items-center gap-2 border-b border-hairline pb-1.5">
             <span
-              className={`font-mono text-[11px] tracking-[0.06em] ${
-                col.overflow ? 'text-disabled' : 'text-display'
+              className={`text-label font-semibold ${
+                col.overflow ? 'text-disabled' : 'text-primary'
               }`}
             >
               {col.name}
             </span>
-            <span className="font-mono text-[10px] text-disabled">{col.cards.length}</span>
+            <span className="text-caption text-disabled">{col.cards.length}</span>
           </div>
           <div className="flex flex-col gap-2">
             {col.cards.length === 0 ? (
-              <div className="rounded-[8px] border border-dashed border-hairline px-2.5 py-3 text-center font-mono text-[10px] text-disabled">
-                empty
+              <div className="rounded-control border border-dashed border-hairline px-2.5 py-3 text-center text-caption text-disabled">
+                Empty
               </div>
             ) : (
               col.cards.map((card) => (
@@ -174,7 +174,7 @@ function KanbanCard({
   const dated = card.date.source !== 'sync'
   return (
     <div
-      className={`min-w-0 overflow-hidden rounded-[8px] border bg-surface transition-colors ${
+      className={`min-w-0 overflow-hidden rounded-control border bg-surface shadow-card transition-colors ${
         open ? 'border-display' : 'border-hairline hover:border-wire'
       }`}
     >
@@ -183,11 +183,11 @@ function KanbanCard({
         onClick={onToggle}
         className="flex w-full min-w-0 cursor-pointer flex-col items-start gap-1 border-none bg-transparent px-2.5 py-2 text-left"
       >
-        <span className="w-full min-w-0 truncate text-[12.5px] text-primary" title={card.file.path}>
+        <span className="w-full min-w-0 truncate text-meta text-primary" title={card.file.path}>
           {card.title}
         </span>
         {dated && (
-          <span className="font-mono text-[9.5px] tracking-[0.04em] text-disabled">{card.date.date}</span>
+          <span className="font-mono text-micro text-disabled">{card.date.date}</span>
         )}
       </button>
       {open && (

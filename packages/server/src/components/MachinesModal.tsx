@@ -148,36 +148,36 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
         <ModalHead title={connected ? 'Computer connected' : 'Connect computer'} />
         {!connected ? (
           <>
-            <div className="mt-5 flex items-center gap-2 font-mono text-[13px] text-display">
-              <span className="text-secondary">&gt;_</span> Run this command on your computer to connect:
+            <div className="mt-5 text-body font-medium text-display">
+              Run this command on your computer to connect:
             </div>
             <div className="mt-2 flex items-start gap-2">
-              <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-display p-4 font-mono text-[12px] leading-relaxed text-paper">
+              <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-4 font-mono text-label leading-relaxed text-paper">
                 {connectCmd(pending.token, cliCmd)}
               </pre>
               <CopyButton text={connectCmd(pending.token, cliCmd)} />
             </div>
-            <div className="mt-4 flex items-center gap-2.5 rounded-lg border border-[color:var(--color-warn,#eab308)] bg-[color:var(--color-warn,#eab308)]/10 px-4 py-3">
-              <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-[color:var(--color-warn,#eab308)]" />
-              <span className="text-[14px] font-medium text-display">Waiting for computer to connect…</span>
+            <div className="mt-4 flex items-center gap-2.5 rounded-control border border-hairline bg-warn-soft px-4 py-3">
+              <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-rubik-orange" />
+              <span className="text-[14px] font-medium text-warn">Waiting for computer to connect…</span>
             </div>
           </>
         ) : (
           <>
-            <div className="mt-5 flex items-center gap-3 rounded-lg border border-[color:var(--color-ok,#16a34a)] bg-[color:var(--color-ok,#16a34a)]/10 px-4 py-3">
-              <span className="font-display text-xl text-[color:var(--color-ok,#16a34a)]">✓</span>
+            <div className="mt-5 flex items-center gap-3 rounded-control border border-hairline bg-success-soft px-4 py-3">
+              <span className="text-xl text-success">✓</span>
               <div>
                 <div className="text-[15px] font-medium text-display">Computer connected successfully!</div>
-                <div className="font-mono text-[12px] text-secondary">
+                <div className="text-label text-secondary">
                   {status?.hostname ?? 'unknown'}
-                  {status?.platform ? ` — ${status.platform} ${status.arch ?? ''}` : ''}
+                  {status?.platform ? ` - ${status.platform} ${status.arch ?? ''}` : ''}
                 </div>
               </div>
             </div>
             <div className="mt-5">
               <label className={labelCls}>Computer name</label>
               <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder={status?.hostname ?? 'My computer'} />
-              <div className="mt-1 font-mono text-[11px] text-secondary">A friendly name for this computer.</div>
+              <div className="mt-1 text-label text-secondary">A friendly name for this computer.</div>
             </div>
           </>
         )}
@@ -200,18 +200,18 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
 
       <ModalSection>Connected machines</ModalSection>
       {delErr && <ErrorBanner message={delErr} onDismiss={() => setDelErr(null)} />}
-      {machines.length === 0 && <div className="py-3 text-[13px] text-secondary">No machines yet.</div>}
+      {machines.length === 0 && <div className="py-3 text-body text-secondary">No machines yet.</div>}
       <ul className="flex flex-col gap-2">
         {machines.map((m) => (
-          <li key={m.id} className="flex flex-col gap-2 rounded-lg border border-wire bg-surface px-4 py-3">
+          <li key={m.id} className="flex flex-col gap-2 rounded-control border border-hairline bg-surface px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <span
-                  className={`inline-block h-2 w-2 rounded-full ${m.online ? 'bg-[color:var(--color-ok,#16a34a)]' : 'bg-disabled'}`}
+                  className={`inline-block h-2 w-2 rounded-full ${m.online ? 'bg-rubik-green' : 'bg-disabled'}`}
                   title={m.online ? 'online' : 'offline'}
                 />
                 <span className="text-[15px] font-medium text-display">{m.name}</span>
-                <span className="font-mono text-[11px] text-secondary">
+                <span className="text-label text-secondary">
                   {m.online ? 'online' : m.lastSeen ? `seen ${rel(m.lastSeen)}` : 'offline'}
                   {m.platform ? ` · ${m.platform} ${m.arch ?? ''}` : ''}
                   {m.loopCount > 0 ? ` · ${m.loopCount} loop${m.loopCount === 1 ? '' : 's'}` : ''}
@@ -230,15 +230,15 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
                 The token is serialized only to the machine's OWNER (never a teammate),
                 so a null token quietly notes where the command lives instead. */}
             {!m.online && !m.token && (
-              <div className="font-mono text-[11px] text-secondary">Reconnect command available from the machine owner's account.</div>
+              <div className="text-label text-secondary">Reconnect command available from the machine owner's account.</div>
             )}
             {!m.online && m.token && (
               <details>
-                <summary className="cursor-pointer select-none font-mono text-[11px] tracking-[0.06em] text-secondary marker:content-[''] hover:text-display">
-                  &gt;_ Reconnect command
+                <summary className="cursor-pointer select-none text-label font-medium text-secondary marker:content-[''] hover:text-display">
+                  Reconnect command
                 </summary>
                 <div className="mt-2 flex items-start gap-2">
-                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-display p-3 font-mono text-[11px] leading-relaxed text-paper">
+                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">
                     {connectCmd(m.token, cliCmd)}
                   </pre>
                   <CopyButton text={connectCmd(m.token, cliCmd)} />
@@ -249,11 +249,11 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
                 daemon is genuinely behind (never on unknown/equal/newer). */}
             {isOutdated(m.daemonVersion, m.latestDaemonVersion) && (
               <div className="flex flex-col gap-1.5">
-                <div className="font-mono text-[11px] text-secondary">
+                <div className="text-label text-secondary">
                   daemon v{m.daemonVersion} · update available (v{m.latestDaemonVersion})
                 </div>
                 <div className="flex items-start gap-2">
-                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-display p-3 font-mono text-[11px] leading-relaxed text-paper">
+                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">
                     {UPDATE_CMD}
                   </pre>
                   <CopyButton text={UPDATE_CMD} />

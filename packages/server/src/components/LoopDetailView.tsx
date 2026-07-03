@@ -11,7 +11,7 @@ import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { MachinesModal } from './MachinesModal'
 import { Timeline, WINDOW } from './Timeline'
-import { ArtifactList, btn, btnCost, btnKey, btnKeyPrimary, btnPrimary, ErrorBanner, Pre, runPulseStyle } from './ui'
+import { ArtifactList, btn, btnCost, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, Pre, runPulseStyle, sectionHeadCls } from './ui'
 import { ConfirmBar, FlashLine, LoadErrorCard, useDeferredDelete, useFlash } from './actionUi'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
@@ -34,9 +34,9 @@ export function LoopDetailView({ id }: { id: string }) {
   const navigate = useNavigate()
   const [detail, setDetail] = useState<JobDetail | null>(null)
   const [channels, setChannels] = useState<ChannelSummary[]>([]) // team push channels for the inline picker
-  const [err, setErr] = useState<string | null>(null) // fatal load error — replaces the whole view
-  const [actionErr, setActionErr] = useState<string | null>(null) // inline action error — never nukes the view
-  const [editing, setEditing] = useState(false) // manual field form (LoopForm) — the demoted fallback
+  const [err, setErr] = useState<string | null>(null) // fatal load error - replaces the whole view
+  const [actionErr, setActionErr] = useState<string | null>(null) // inline action error - never nukes the view
+  const [editing, setEditing] = useState(false) // manual field form (LoopForm) - the demoted fallback
   const [editVia, setEditVia] = useState(false) // primary: hand the edit to Claude Code on the machine
   const [editInstruction, setEditInstruction] = useState('')
   const [editDispatched, setEditDispatched] = useState(false) // dispatched → watch the edit run stream in
@@ -224,7 +224,7 @@ export function LoopDetailView({ id }: { id: string }) {
   const backLink = (
     <Link
       to="/"
-      className="inline-flex items-center gap-1.5 font-mono text-[11px] tracking-[0.08em] text-secondary transition-colors hover:text-display"
+      className="inline-flex items-center gap-1.5 text-meta font-medium text-secondary transition-colors hover:text-display"
     >
       <span aria-hidden>←</span> Loops
     </Link>
@@ -239,7 +239,7 @@ export function LoopDetailView({ id }: { id: string }) {
   if (!detail)
     return (
       <Shell back={backLink}>
-        <div className="font-mono text-[12px] tracking-[0.08em] text-secondary">[ Loading ]</div>
+        <Loading />
       </Shell>
     )
 
@@ -248,7 +248,7 @@ export function LoopDetailView({ id }: { id: string }) {
   const busy = !!pending
   const showEvolve = true
   const online = detail.machine.online
-  const offlineHint = !online ? 'Machine offline — reconnect first' : undefined
+  const offlineHint = !online ? 'Machine offline - reconnect first' : undefined
   const completed = isCompleted(s)
   // A closed loop still working toward its goal (not yet completed).
   const closedActive = isClosed(s) && !completed
@@ -273,11 +273,11 @@ export function LoopDetailView({ id }: { id: string }) {
   const c = confirming && CONFIRM[confirming]
   const confirmLocked = busy || (confirming !== 'delete' && !online)
   const pushSelectCls =
-    'lp-select cursor-pointer rounded-md border border-wire bg-surface py-1.5 pl-2.5 font-mono text-[12px] text-primary outline-none transition-colors hover:border-display focus:border-display disabled:cursor-default disabled:opacity-40'
+    'lp-select cursor-pointer rounded-control border border-wire bg-surface py-1.5 pl-2.5 text-meta text-primary outline-none transition-colors hover:border-display focus:border-display disabled:cursor-default disabled:opacity-40'
   const menuItem =
-    'flex w-full cursor-pointer select-none items-center px-3.5 py-2 text-[13px] text-primary outline-none transition-colors data-[highlighted]:bg-raised data-[disabled]:cursor-default data-[disabled]:opacity-40'
+    'flex w-full cursor-pointer select-none items-center px-3.5 py-2 text-body text-primary outline-none transition-colors data-[highlighted]:bg-raised data-[disabled]:cursor-default data-[disabled]:opacity-40'
   const menuItemDanger =
-    'flex w-full cursor-pointer select-none items-center px-3.5 py-2 text-[13px] text-accent outline-none transition-colors data-[highlighted]:bg-[color:var(--color-accent)]/10 data-[disabled]:cursor-default data-[disabled]:opacity-40'
+    'flex w-full cursor-pointer select-none items-center px-3.5 py-2 text-body text-accent outline-none transition-colors data-[highlighted]:bg-accent-soft data-[disabled]:cursor-default data-[disabled]:opacity-40'
 
   const actionBar = c ? (
     <ConfirmBar key={confirming} prompt={c.q} note={c.note} cta={c.cta} danger={c.danger} busy={confirmLocked} onConfirm={onConfirm} onCancel={() => setConfirming(null)} />
@@ -287,7 +287,7 @@ export function LoopDetailView({ id }: { id: string }) {
     </div>
   ) : pushOpen ? (
     <div className="flex flex-wrap items-center gap-2.5">
-      <span className="font-mono text-[11px] tracking-[0.08em] text-secondary">Push</span>
+      <span className="text-label font-medium text-secondary">Push</span>
       <select className={pushSelectCls} value={job.notify} disabled={busy} onChange={(e) => void setPush({ notify: e.target.value })}>
         {['auto', 'always', 'never'].map((n) => (
           <option key={n} value={n}>
@@ -311,7 +311,7 @@ export function LoopDetailView({ id }: { id: string }) {
         <button
           type="button"
           onClick={() => setPushOpen(false)}
-          className="cursor-pointer border-none bg-transparent p-0 font-mono text-[11px] tracking-[0.08em] text-secondary transition-colors hover:text-display"
+          className={btnQuiet}
         >
           Done
         </button>
@@ -320,19 +320,19 @@ export function LoopDetailView({ id }: { id: string }) {
   ) : (
     <div className="flex flex-wrap items-center gap-2">
       <button
-        className={btnKeyPrimary}
+        className={btnPrimary}
         disabled={busy || !online || completed}
         onClick={onRun}
-        title={completed ? 'Loop completed — reopen it to run again' : offlineHint ?? (job.exec ? 'Spends credits' : undefined)}
-        aria-label={job.exec ? 'Run once — spends credits' : 'Run once'}
+        title={completed ? 'Loop completed - reopen it to run again' : offlineHint ?? (job.exec ? 'Spends credits' : undefined)}
+        aria-label={job.exec ? 'Run once - spends credits' : 'Run once'}
       >
         {pending === 'run' ? 'Running…' : 'Run once'}
       </button>
-      <button className={btnKey} disabled={busy} onClick={() => setEditVia(true)}>
+      <button className={btn} disabled={busy} onClick={() => setEditVia(true)}>
         Edit
       </button>
       <Menu.Root>
-        <Menu.Trigger className={`${btnKey} px-2.5`} disabled={busy} aria-label="More actions">
+        <Menu.Trigger className={`${btn} px-2.5`} disabled={busy} aria-label="More actions">
           <svg aria-hidden width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
             <circle cx="3" cy="8" r="1.4" />
             <circle cx="8" cy="8" r="1.4" />
@@ -341,7 +341,7 @@ export function LoopDetailView({ id }: { id: string }) {
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-[950]">
-            <Menu.Popup className="min-w-[176px] origin-[var(--transform-origin)] rounded-lg border border-wire bg-surface py-1.5 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.4)] outline-none transition-[opacity,transform] duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
+            <Menu.Popup className="glass-strong min-w-[176px] origin-[var(--transform-origin)] rounded-control py-1.5 outline-none transition-[opacity,transform] duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
               {showEvolve && (
                 <Menu.Item className={menuItem} disabled={busy || !online} onClick={() => setConfirming('evolve')} title={offlineHint ?? 'Spends credits'}>
                   {pending === 'evolve' ? 'Evolving…' : 'Evolve now'}
@@ -367,16 +367,16 @@ export function LoopDetailView({ id }: { id: string }) {
   const actionErrEl = actionErr && <ErrorBanner message={actionErr} onDismiss={() => setActionErr(null)} className="mb-2.5" />
 
   const offlineEl = !online && (
-    <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-wire bg-raised px-4 py-2.5">
-      <span className="inline-flex items-center gap-2 font-mono text-[11px] tracking-[0.08em] text-secondary">
+    <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border border-hairline bg-raised px-4 py-2.5">
+      <span className="inline-flex items-center gap-2 text-meta font-medium text-secondary">
         <span aria-hidden className="size-2 rounded-full bg-disabled" />
         Machine {detail.machine.name ? `“${detail.machine.name}” ` : ''}offline
       </span>
-      <span className="text-[12.5px] text-secondary">— run &amp; evolve are paused until it reconnects.</span>
+      <span className="text-meta text-secondary">- run &amp; evolve are paused until it reconnects.</span>
       <button
         type="button"
         onClick={() => setMachinesOpen(true)}
-        className="ml-auto cursor-pointer font-mono text-[11px] tracking-[0.08em] text-interactive underline underline-offset-2 transition-colors hover:text-display"
+        className="ml-auto cursor-pointer text-meta font-medium text-interactive underline underline-offset-2 transition-colors hover:text-display"
       >
         Reconnect
       </button>
@@ -399,29 +399,29 @@ export function LoopDetailView({ id }: { id: string }) {
         <button
           type="button"
           onClick={exitEdit}
-          className="mt-1.5 inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 font-mono text-[11px] tracking-[0.08em] text-secondary transition-colors hover:text-display"
+          className={`mt-1.5 ${btnQuiet}`}
         >
           <span aria-hidden>←</span> Back
         </button>
 
         {editDispatched ? (
           <div className="mt-4">
-            <div className="text-[13px] leading-snug text-secondary">
+            <div className="text-body leading-snug text-secondary">
               Dispatched to Claude Code on {onMachine}. Watching it apply the change:
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1">
               {!editRun ? (
-                <span className="inline-flex items-center gap-2.5 font-mono text-[12px] text-secondary">
-                  <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-[color:var(--color-display)]" />
-                  Queued — waiting for the machine to pick it up…
+                <span className="inline-flex items-center gap-2.5 text-body text-secondary">
+                  <span aria-hidden className="size-1.5 rounded-full" style={runPulseStyle} />
+                  Queued - waiting for the machine to pick it up…
                 </span>
               ) : editRun.running ? (
-                <span className="inline-flex items-center gap-2.5 font-mono text-[12px] text-secondary">
-                  <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-[color:var(--color-display)]" />
+                <span className="inline-flex items-center gap-2.5 text-body text-secondary">
+                  <span aria-hidden className="size-1.5 rounded-full" style={runPulseStyle} />
                   Applying the change…
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-2 text-[13px]">
+                <span className="inline-flex items-center gap-2 text-body">
                   <span aria-hidden className="size-2.5 rounded-[2px]" style={{ background: dotColor(editRun) }} />
                   <span className="font-medium" style={{ color: dotColor(editRun) }}>
                     {dotLabel(editRun)}
@@ -432,11 +432,11 @@ export function LoopDetailView({ id }: { id: string }) {
             </div>
             {(traceText || editLog.length > 0) && (
               <>
-                <ModalSection>activity</ModalSection>
+                <ModalSection>Activity</ModalSection>
                 {traceText ? (
                   <Pre>{traceText}</Pre>
                 ) : (
-                  <ul className="max-h-[300px] space-y-1.5 overflow-y-auto rounded-md border border-hairline bg-raised px-4 py-3.5 font-mono text-[11.5px] leading-relaxed text-secondary">
+                  <ul className="max-h-[300px] space-y-1.5 overflow-y-auto rounded-control border border-hairline bg-raised px-4 py-3.5 font-mono text-label leading-relaxed text-secondary">
                     {editLog.map((e, i) => (
                       <li key={i} className="flex gap-2">
                         <span className="shrink-0 text-disabled">{e.step}</span>
@@ -449,13 +449,13 @@ export function LoopDetailView({ id }: { id: string }) {
             )}
             {editSettled && editRun.message && (
               <>
-                <ModalSection>report</ModalSection>
+                <ModalSection>Report</ModalSection>
                 <Pre>{editRun.message}</Pre>
               </>
             )}
             {editSettled && editRun.artifacts?.length ? (
               <>
-                <ModalSection>files ({editRun.artifacts.length})</ModalSection>
+                <ModalSection>Files ({editRun.artifacts.length})</ModalSection>
                 <ArtifactList artifacts={editRun.artifacts} />
               </>
             ) : null}
@@ -467,8 +467,8 @@ export function LoopDetailView({ id }: { id: string }) {
           </div>
         ) : (
           <>
-            <div className="mt-4 text-[13px] leading-snug text-secondary">
-              Describe the change — Claude Code on {onMachine} applies it (schedule, cadence, or what the loop does).
+            <div className="mt-4 text-body leading-snug text-secondary">
+              Describe the change - Claude Code on {onMachine} applies it (schedule, cadence, or what the loop does).
               It runs as one agent pass, so it spends credits and needs the machine online.
             </div>
             <textarea
@@ -476,7 +476,7 @@ export function LoopDetailView({ id }: { id: string }) {
               onChange={(e) => setEditInstruction(e.target.value)}
               rows={4}
               placeholder="e.g. run at 9am on weekdays instead, and also check coffee stock"
-              className="mt-3 w-full resize-y rounded-lg border border-wire bg-raised p-3 font-mono text-[12px] leading-relaxed text-primary outline-none transition-colors placeholder:text-disabled focus:border-display"
+              className="mt-3 w-full resize-y rounded-lg border border-wire bg-raised p-3 font-mono text-label leading-relaxed text-primary outline-none transition-colors placeholder:text-disabled focus:border-display"
             />
             {actionErrEl}
             <div className="mt-4 flex flex-wrap items-center gap-2.5">
@@ -492,7 +492,7 @@ export function LoopDetailView({ id }: { id: string }) {
                   setEditVia(false)
                   setEditing(true)
                 }}
-                className="ml-auto cursor-pointer border-none bg-transparent p-0 text-[12px] text-secondary underline underline-offset-2 transition-colors hover:text-display"
+                className="ml-auto cursor-pointer border-none bg-transparent p-0 text-label text-secondary underline underline-offset-2 transition-colors hover:text-display"
               >
                 Edit fields manually →
               </button>
@@ -511,7 +511,7 @@ export function LoopDetailView({ id }: { id: string }) {
         <button
           type="button"
           onClick={() => setEditing(false)}
-          className="mt-1.5 inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 font-mono text-[11px] tracking-[0.08em] text-secondary transition-colors hover:text-display"
+          className={`mt-1.5 ${btnQuiet}`}
         >
           <span aria-hidden>←</span> Back
         </button>
@@ -538,46 +538,37 @@ export function LoopDetailView({ id }: { id: string }) {
   return (
     <Shell back={backLink}>
       {/* header */}
-      <header className="rounded-2xl border border-wire bg-surface px-6 pb-5 pt-[22px]">
+      <header className="rounded-card border border-hairline bg-surface px-6 pb-5 pt-[22px] shadow-card">
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-[30px] font-medium leading-tight tracking-tight text-display">{s.name}</h1>
+              <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.015em] text-display">{s.name}</h1>
               {s.running && (
-                <span className="inline-flex h-5 items-center gap-1.5 rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-display">
-                  <span className="size-1.5 rounded-full" style={runPulseStyle} />
+                <Pill tone="running" dot="pulse">
                   Running
-                </span>
+                </Pill>
               )}
               {completed ? (
-                <span className="inline-flex h-5 items-center rounded border border-[color:var(--color-success)]/40 px-2 font-mono text-[10.5px] tracking-[0.06em] text-success">
+                <Pill tone="success" dot="green">
                   Completed
-                </span>
+                </Pill>
               ) : !s.enabled ? (
-                <span className="inline-flex h-5 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary">
-                  Paused
-                </span>
+                <Pill>Paused</Pill>
               ) : null}
               {/* Closed loop still working toward its goal → the quiet "Goal" chip
                   (same understated style as the agent chip, not a status pill). */}
               {closedActive && (
-                <span
-                  className="inline-flex h-5 items-center rounded border border-hairline px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary"
-                  title={s.goal ?? undefined}
-                >
+                <Pill tone="success" title={s.goal ?? undefined}>
                   Goal
-                </span>
+                </Pill>
               )}
               {/* Which coding agent this loop is recorded against (loops.agent) —
                   a quiet, unobtrusive chip, not a status pill. */}
-              <span
-                className="inline-flex h-5 items-center rounded border border-hairline px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary"
-                title="Recorded coding agent"
-              >
+              <Pill tone="outline" title="Recorded coding agent">
                 {agentLabel}
-              </span>
+              </Pill>
             </div>
-            <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[12.5px] tracking-[0.02em] text-secondary">
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-meta text-secondary">
               <span className="text-primary" title={job.cron}>
                 {cronText(job.cron)}
               </span>
@@ -586,23 +577,23 @@ export function LoopDetailView({ id }: { id: string }) {
               {s.nextRun && s.enabled && !completed && <span className="text-disabled">({until(s.nextRun)})</span>}
               {metaDot}
               <span className="inline-flex items-center gap-1.5" title={online ? 'Machine online' : 'Machine offline'}>
-                <span className={`size-1.5 rounded-full ${online ? 'bg-[color:var(--color-ok,#16a34a)]' : 'bg-disabled'}`} />
+                <span className={`size-1.5 rounded-full ${online ? 'bg-rubik-green' : 'bg-disabled'}`} />
                 {detail.machine.name || 'machine'}
               </span>
               {metaDot}
-              <code className="font-mono text-disabled">{s.id}</code>
+              <code className="font-mono text-label text-disabled">{s.id}</code>
             </div>
             {/* Closed active loop: the setpoint it's driving toward, in prose. */}
             {closedActive && s.goal && (
-              <div className="mt-2 text-[13px] leading-snug text-secondary">
+              <div className="mt-2 text-body leading-snug text-secondary">
                 Working toward: <span className="text-primary">{s.goal}</span>
               </div>
             )}
             {/* Completed: the recorded reason + when. */}
             {completed && (
-              <div className="mt-2 text-[13px] leading-snug text-success">
+              <div className="mt-2 text-body leading-snug text-success">
                 Completed{s.completedAt ? ` · ${fmt(s.completedAt)}` : ''}
-                {s.completionReason && <span className="text-secondary"> — {s.completionReason}</span>}
+                {s.completionReason && <span className="text-secondary"> - {s.completionReason}</span>}
               </div>
             )}
           </div>
@@ -618,20 +609,20 @@ export function LoopDetailView({ id }: { id: string }) {
 
       {/* agent-authored dashboard (when present) */}
       {hasUi && (
-        <section className="mt-6 min-w-0 rounded-2xl border border-wire bg-surface px-6 py-5">
-          <div className="mb-3.5 border-b border-hairline pb-1.5 font-mono text-[11px] tracking-[0.08em] text-secondary">dashboard</div>
-          {/* Agent-authored HTML — contain it so an over-wide card row / chart
+        <section className="mt-6 min-w-0 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card">
+          <div className={`mb-3.5 border-b border-hairline pb-1.5 ${sectionHeadCls}`}>Dashboard</div>
+          {/* Agent-authored HTML - contain it so an over-wide card row / chart
               scrolls inside the dashboard box rather than widening the whole page;
               a responsive (auto-fit) card grid then wraps within this bounded width. */}
           <div className="min-w-0 overflow-x-auto">
-            <Suspense fallback={<div className="py-4 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>}>
+            <Suspense fallback={<Loading className="py-4" />}>
               <LoopView html={job.ui!} runs={runs} loopId={id} taskFile={job.taskFile} />
             </Suspense>
           </div>
         </section>
       )}
 
-      {/* files (unified) + runs — the files panel (its content viewer is the star)
+      {/* files (unified) + runs - the files panel (its content viewer is the star)
           takes the bulk of the width via a shrinkable minmax(0,1fr) track; runs is
           a capped medium rail that's always visible. `minmax(0,…)` + each child's
           own `min-w-0` keep a wide artifact (or table) from forcing PAGE scroll —
@@ -713,13 +704,13 @@ function RunsSection({
   return (
     <section className="min-w-0">
       <div className="mb-2.5 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">
-        <h2 className="font-mono text-[11px] tracking-[0.08em] text-secondary">runs ({summary.runCount})</h2>
+        <h2 className={sectionHeadCls}>Runs ({summary.runCount})</h2>
       </div>
 
       {summary.runCount === 0 ? (
-        <div className="rounded-xl border border-wire bg-surface px-5 py-10 text-center text-[13px] text-disabled">never run</div>
+        <div className="rounded-card border border-hairline bg-surface px-5 py-10 text-center text-body text-disabled">Never run</div>
       ) : (
-        <div className="rounded-2xl border border-wire bg-surface px-5 pb-4 pt-5">
+        <div className="rounded-card border border-hairline bg-surface px-5 pb-4 pt-5 shadow-card">
           <Timeline job={summary} runs={stripRuns} total={summary.runCount} onLoadMore={onMore} onPickRun={onPickRun} />
 
           <ul className="mt-5 max-h-[clamp(280px,46vh,520px)] divide-y divide-hairline overflow-y-auto border-t border-hairline">
@@ -738,20 +729,20 @@ function RunsSection({
                   />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline justify-between gap-2">
-                      <span className="font-mono text-[12px] text-secondary">{tsShort(x.ts)}</span>
-                      <span className="shrink-0 font-mono text-[11px] text-disabled">{dur(x.durationMs)}</span>
+                      <span className="font-mono text-label text-secondary">{tsShort(x.ts)}</span>
+                      <span className="shrink-0 font-mono text-caption text-disabled">{dur(x.durationMs)}</span>
                     </span>
                     <span className="mt-0.5 block">
                       {x.running && x.progress ? (
-                        <span className="inline-flex items-center gap-2 font-mono text-[12px] text-secondary">
-                          <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-[color:var(--color-display)]" />
+                        <span className="inline-flex items-center gap-2 text-meta text-secondary">
+                          <span aria-hidden className="size-1.5 rounded-full" style={runPulseStyle} />
                           <span className="text-disabled">{x.progress.step}</span>
                           <span className="truncate">{x.progress.label}</span>
                         </span>
                       ) : x.error ? (
-                        <span className="line-clamp-2 text-[12.5px] text-secondary">{x.error}</span>
+                        <span className="line-clamp-2 text-meta text-secondary">{x.error}</span>
                       ) : (
-                        <span className="line-clamp-2 text-[12.5px] text-primary">{x.message || dotLabel(x)}</span>
+                        <span className="line-clamp-2 text-meta text-primary">{x.message || dotLabel(x)}</span>
                       )}
                     </span>
                   </span>

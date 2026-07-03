@@ -16,17 +16,12 @@ import { LoopLogo } from '../components/LoopLogo'
 import { SignIn } from '../components/SignIn'
 import { LoadErrorCard } from '../components/actionUi'
 
-/** The dashboard's data fan-out — ONE definition shared by the route loader
- *  (which throws through it into the errorComponent) and the in-page refetch
- *  (which catches and keeps stale data). */
-async function fetchDashboardData() {
-  const [jobs, templates, machines, teams] = await Promise.all([
-    listJobs(),
-    listTemplates(),
-    listMachines(),
-    listMyTeams(),
-  ])
-  return { jobs, templates, machines, teams }
+/** The LIVE data fan-out - jobs/machines/teams change between polls. Templates
+ *  are static per deploy (a compile-time registry), so only the route loader
+ *  fetches them; the poll must not re-ship the thumb SVGs every 3-10s. */
+async function fetchLiveData() {
+  const [jobs, machines, teams] = await Promise.all([listJobs(), listMachines(), listMyTeams()])
+  return { jobs, machines, teams }
 }
 
 export const Route = createFileRoute('/')({
@@ -41,7 +36,7 @@ export const Route = createFileRoute('/')({
       const { data: session } = await authClient.getSession()
       if (!session) return { jobs: [], templates: [], machines: [], teams: undefined, auth }
     }
-    return { ...(await fetchDashboardData()), auth }
+    return { ...(await fetchLiveData()), templates: await listTemplates(), auth }
   },
   component: Gate,
   errorComponent: LoadError,
@@ -98,7 +93,9 @@ function Dashboard() {
   // keeps the stale data on screen; the next tick retries.
   const refetch = useCallback(async () => {
     try {
-      setData(await fetchDashboardData())
+      const live = await fetchLiveData()
+      // Keep the loader's templates - static per deploy, never re-polled.
+      setData((prev) => ({ ...prev, ...live }))
     } catch {
       /* keep what we have; the next tick retries */
     }
@@ -134,69 +131,58 @@ function Dashboard() {
 
   return (
     <Tooltip.Provider delay={120}>
-      <main className="mx-auto max-w-[1180px] px-8 pb-24 pt-12">
-        <header className="mb-9 flex items-start justify-between gap-4">
-          <div className="flex items-center gap-8">
-            <LoopLogo size={52} />
-            <div>
-              <div className="mb-2 font-mono text-[11px] tracking-[0.28em] text-secondary">
-                Scheduled Agent Loops
-              </div>
-              <h1 className="font-display text-[52px] font-medium leading-none tracking-tight text-display">
-                Loopany
-              </h1>
-            </div>
-          </div>
-          <div className="mt-1 flex shrink-0 items-center gap-2">
-            <TeamSwitcher data={teams} onSwitch={refresh} />
-            <button
-              onClick={() => setNotifyOpen(true)}
-              className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-wire bg-surface px-3 py-2 font-mono text-[12px] tracking-[0.08em] text-secondary transition-colors hover:border-display hover:text-display"
-            >
-              Notifications
-            </button>
-            <button
-              onClick={() => setMachinesOpen(true)}
-              className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-wire bg-surface px-3 py-2 font-mono text-[12px] tracking-[0.08em] text-secondary transition-colors hover:border-display hover:text-display"
-            >
-              <span
-                className={`inline-block h-1.5 w-1.5 rounded-full ${online ? 'bg-[color:var(--color-ok,#16a34a)]' : 'bg-disabled'}`}
-              />
-              {online} {online === 1 ? 'Machine' : 'Machines'} Online
-            </button>
-          </div>
-        </header>
-
-        {/* toolbar: New Loop + template cases (canned intents) rendered beside it —
-            one click on a card goes straight to its snippet. */}
-        <div className="flex flex-wrap items-stretch gap-3">
+      {/* Sticky glass top bar - the ONE always-glass surface; content scrolls
+          beneath it so the material actually refracts something. */}
+      <header className="glass glass-bar sticky top-0 z-50">
+        <div className="mx-auto flex max-w-[1180px] items-center gap-3 px-8 py-2.5">
+          <LoopLogo size={30} />
+          <span className="text-[18px] font-semibold tracking-[-0.015em] text-display">Loopany</span>
+          <TeamSwitcher data={teams} onSwitch={refresh} />
+          <div className="flex-1" />
+          <button onClick={() => setNotifyOpen(true)} className={headerBtn}>
+            Notifications
+          </button>
+          <button onClick={() => setMachinesOpen(true)} className={`${headerBtn} gap-1.5`}>
+            <span className={`inline-block size-1.5 rounded-full ${online ? 'bg-rubik-green' : 'bg-disabled'}`} />
+            {online} {online === 1 ? 'machine' : 'machines'} online
+          </button>
           <button
             onClick={() => setCompose({ open: true, template: null })}
-            className="flex w-40 cursor-pointer flex-col justify-center gap-1.5 rounded-lg bg-display px-5 py-4 text-paper transition-opacity hover:opacity-80"
+            className="inline-flex shrink-0 cursor-pointer items-center rounded-full bg-display px-3.5 py-1.5 text-meta font-medium text-paper transition-opacity hover:opacity-85"
           >
-            <span className="font-display text-2xl leading-none">+</span>
-            <span className="font-mono text-[12px] tracking-[0.08em]">New Loop</span>
+            New Loop
           </button>
-          {templates.map((t) => (
-            <button
-              key={t.name}
-              onClick={() => setCompose({ open: true, template: t })}
-              className="flex min-w-0 max-w-72 flex-1 basis-52 cursor-pointer flex-col justify-center gap-1 rounded-lg border border-wire bg-surface px-5 py-4 text-left transition-colors hover:border-display"
-            >
-              <span className="text-[14px] font-medium text-display">{t.label}</span>
-              <span className="text-[12.5px] leading-snug text-secondary">{t.desc}</span>
-            </button>
-          ))}
         </div>
+      </header>
 
-        <div className="my-8 h-px bg-hairline" />
+      <main className="mx-auto max-w-[1180px] px-8 pb-24">
+        {/* Hero - invite creation first (serif = the one editorial moment),
+            then the template fan, then a prominent blank-loop entry. */}
+        <section className="pb-2 pt-14 text-center">
+          <h1 className="font-display text-[38px] font-semibold tracking-[-0.01em] text-display">
+            What should happen while you sleep?
+          </h1>
+          {templates.length > 0 && (
+            <>
+              <div className="mb-5 mt-2 text-body text-secondary">Start with a template…</div>
+              <TemplateFan templates={templates} onPick={(t) => setCompose({ open: true, template: t })} />
+            </>
+          )}
+          <div className="mt-7">
+            <button
+              onClick={() => setCompose({ open: true, template: null })}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-display px-6 py-2.5 text-body font-medium text-paper transition-opacity hover:opacity-85"
+            >
+              {templates.length ? 'Start a blank loop' : 'Start your first loop'}
+              <span aria-hidden>→</span>
+            </button>
+          </div>
+        </section>
 
-        <div className="mb-5 flex items-baseline gap-3">
-          <span className="font-mono text-[12px] tracking-[0.12em] text-display">
-            Active Loops
-          </span>
-          <span className="font-mono text-[11px] tracking-[0.04em] text-secondary">
-            {active.length ? `${activeOn} SCHEDULED · ${active.length} TOTAL` : ''}
+        <div className="mb-5 mt-12 flex items-baseline gap-2.5">
+          <h2 className="text-body font-semibold text-display">Active loops</h2>
+          <span className="text-label text-secondary">
+            {active.length ? `${activeOn} scheduled · ${active.length} total` : ''}
           </span>
         </div>
 
@@ -208,8 +194,8 @@ function Dashboard() {
               {jobs.length ? 'No active loops' : 'No loops yet'}
             </div>
             {!jobs.length && (
-              <div className="mt-1.5 text-[13px] text-disabled">
-                Click New Loop or a template to start.
+              <div className="mt-1.5 text-body text-disabled">
+                Pick a template above, or start a blank loop.
               </div>
             )}
           </div>
@@ -217,13 +203,9 @@ function Dashboard() {
 
         {completed.length > 0 && (
           <>
-            <div className="mb-5 mt-11 flex items-baseline gap-3">
-              <span className="font-mono text-[12px] tracking-[0.12em] text-display">
-                Completed
-              </span>
-              <span className="font-mono text-[11px] tracking-[0.04em] text-secondary">
-                {completed.length} COMPLETED
-              </span>
+            <div className="mb-5 mt-11 flex items-baseline gap-2.5">
+              <h2 className="text-body font-semibold text-display">Completed</h2>
+              <span className="text-label text-secondary">{completed.length} total</span>
             </div>
             {completed.map((j) => (
               <LoopCard key={j.id} job={j} {...cardProps()} />
@@ -243,5 +225,92 @@ function Dashboard() {
 
       <NotificationsModal open={notifyOpen} onClose={() => setNotifyOpen(false)} />
     </Tooltip.Provider>
+  )
+}
+
+/* The top bar's quiet pill button (Notifications / Machines share it). */
+const headerBtn =
+  'inline-flex shrink-0 cursor-pointer items-center rounded-full px-3 py-1.5 text-meta font-medium text-secondary transition-colors hover:bg-raised hover:text-display' 
+
+/**
+ * The template fan - a hand of tilted cards (tilt/lift computed from each
+ * card's offset from the center, so any count from 1 to ~7 lays out well).
+ * Hover/focus straightens a card via the `.fan-card` rules in app.css.
+ * One click carries the template into ComposeModal, same as the old flat cards.
+ */
+function TemplateFan({
+  templates,
+  onPick,
+}: {
+  templates: TemplateInfo[]
+  onPick: (t: TemplateInfo) => void
+}) {
+  const center = (templates.length - 1) / 2
+  return (
+    <div className="flex flex-wrap items-start justify-center pb-3 pt-1">
+      {templates.map((t, i) => {
+        const off = i - center
+        return (
+          <button
+            key={t.name}
+            type="button"
+            onClick={() => onPick(t)}
+            title={t.desc}
+            className="fan-card relative w-[196px] shrink-0 cursor-pointer rounded-card border border-hairline bg-surface p-3 text-left shadow-[0_12px_28px_-16px_rgba(0,0,0,0.25)] outline-none focus-visible:ring-2 focus-visible:ring-interactive"
+            style={
+              {
+                '--tilt': `${off * 3.5}deg`,
+                '--lift': `${Math.abs(off) * 7}px`,
+                marginInline: templates.length > 1 ? '-5px' : undefined,
+              } as React.CSSProperties
+            }
+          >
+            {t.thumb ? (
+              // The preview is a repo-authored thumb.svg inlined by the registry
+              // (trusted content, same trust boundary as the skill markdown);
+              // inline so it inherits the theme's CSS variables.
+              <span
+                className="block overflow-hidden rounded-control bg-raised [&_svg]:block [&_svg]:h-auto [&_svg]:w-full"
+                dangerouslySetInnerHTML={{ __html: t.thumb }}
+              />
+            ) : (
+              // Fallback for a template folder that ships no thumb.svg yet.
+              <span className="flex h-[76px] items-center justify-center rounded-control bg-raised text-secondary">
+                <LoopGlyph />
+              </span>
+            )}
+            <span className="mt-2.5 block truncate text-center text-meta font-semibold text-primary">{t.label}</span>
+            {/* Fixed three-line well (clamp + min-h) so every card in the fan is
+                the same height regardless of how chatty a template's desc is -
+                the full text lives in the hover title + the compose modal.
+                NOTE: no `block` here - display:block would override the
+                -webkit-box that line-clamp needs. */}
+            <span className="mt-0.5 line-clamp-3 min-h-[45px] text-center text-caption leading-snug text-secondary">
+              {t.desc}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** A circular-arrow "loop" mark - one glyph for every template, tinted per card. */
+function LoopGlyph() {
+  return (
+    <svg
+      aria-hidden
+      width="30"
+      height="30"
+      viewBox="0 0 30 30"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M25.5 15a10.5 10.5 0 1 1-3.1-7.4" />
+      <path d="M25.5 3.5v5.2h-5.2" />
+    </svg>
   )
 }

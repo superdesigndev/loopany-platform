@@ -37,7 +37,7 @@ function RunDetailPage() {
         <Link
           to="/loops/$loopId"
           params={{ loopId }}
-          className="inline-flex items-center gap-1.5 font-mono text-[11px] tracking-[0.08em] text-secondary transition-colors hover:text-display"
+          className="inline-flex items-center gap-1.5 text-label font-medium text-secondary transition-colors hover:text-display"
         >
           <span aria-hidden>←</span> Back to loop
         </Link>

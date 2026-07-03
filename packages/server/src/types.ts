@@ -294,6 +294,10 @@ export interface TemplateInfo {
   desc: string
   /** The canned task description (English) appended to the bootstrap snippet. */
   description: string
+  /** Optional inline-SVG preview (the template folder's thumb.svg, repo-authored
+   *  and trusted) - a mock screenshot of what the loop produces, drawn with the
+   *  theme's CSS variables so it follows light/dark for free. */
+  thumb?: string
 }
 
 /** The team switcher's data: the teams this user may view + the active selection. */

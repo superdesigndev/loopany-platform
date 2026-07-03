@@ -12,23 +12,34 @@ function selectTeam(id: string, refresh: () => void) {
 }
 
 /**
- * Header team switcher. Renders only when the user can reach more than one team
- * (a superadmin sees every team; a regular user usually has just their own, so
- * nothing shows). Admins also get an "All teams" aggregate option.
+ * Header team entry. Always visible when team data exists: a single-team user
+ * sees a quiet pill naming the active team (so the workspace context is never
+ * invisible); anyone who can reach more than one team (or an admin, who also
+ * gets the "All teams" aggregate) gets the select.
  *
  * `onSwitch` is the host page's own refetch — NOT router.invalidate: the
  * dashboard renders from its fetch-then-set poll state (seeded once from the
  * loader), so a loader re-run alone would leave the visible data stale.
  */
 export function TeamSwitcher({ data, onSwitch }: { data?: TeamsView; onSwitch: () => void }) {
-  if (!data || data.teams.length <= 1) return null
+  if (!data || data.teams.length === 0) return null
+
+  if (data.teams.length === 1 && !data.isAdmin)
+    return (
+      <span
+        title="Active team"
+        className="inline-flex items-center rounded-full bg-raised px-3 py-1 text-label font-medium text-secondary"
+      >
+        {data.teams[0]!.name}
+      </span>
+    )
 
   return (
     <select
       aria-label="Active team"
       value={data.activeTeamId}
       onChange={(e) => selectTeam(e.target.value, onSwitch)}
-      className="lp-select cursor-pointer rounded-md border border-wire bg-surface py-2 pl-3 font-mono text-[12px] tracking-[0.08em] text-secondary outline-none transition-colors hover:border-display hover:text-display focus:border-display"
+      className="lp-select cursor-pointer rounded-full bg-raised py-1 pl-3 text-label font-medium text-secondary outline-none transition-colors hover:text-display"
     >
       {data.isAdmin && <option value={ALL_TEAMS}>All teams</option>}
       {data.teams.map((t) => (

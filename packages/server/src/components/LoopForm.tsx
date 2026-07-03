@@ -143,7 +143,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
               title={f.cron}
             >
               <span className="text-primary">{cronText(f.cron)}</span>
-              <span className="font-mono text-[11px] text-secondary">{f.cron}</span>
+              <span className="font-mono text-caption text-secondary">{f.cron}</span>
             </div>
           </div>
         </div>
@@ -178,7 +178,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
 
         <ModalSection>exec (bind claude on the machine as executor)</ModalSection>
         <TextField
-          label="workdir (project root on the machine — empty ⇒ workflow-only / agent() escalation)"
+          label="workdir (project root on the machine - empty ⇒ workflow-only / agent() escalation)"
           value={f.workdir}
           onChange={(v) => set('workdir', v)}
           mono
@@ -195,7 +195,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           allowControl (allow self-rescheduling)
         </label>
 
-        <label className={labelCls}>workflow (JS function body — zero-LLM; optional)</label>
+        <label className={labelCls}>workflow (JS function body - zero-LLM; optional)</label>
         <textarea className={areaCls} value={f.workflow} onChange={(e) => set('workflow', e.target.value)} />
 
         <label className={labelCls}>stateSchema (per-run metrics, JSON array)</label>

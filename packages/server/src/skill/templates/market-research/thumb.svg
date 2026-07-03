@@ -1,0 +1,25 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of the loop's dashboard: a calendar of dated reports beside the
+       newest report. Colors ride the app's CSS variables. -->
+  <rect x="10" y="10" width="16" height="3" rx="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <g stroke="var(--color-hairline, #e3e5ea)" fill="var(--color-surface, #fff)">
+    <rect x="10.5" y="18.5" width="15" height="13" rx="3"/><rect x="29.5" y="18.5" width="15" height="13" rx="3"/><rect x="48.5" y="18.5" width="15" height="13" rx="3"/>
+    <rect x="10.5" y="35.5" width="15" height="13" rx="3"/><rect x="29.5" y="35.5" width="15" height="13" rx="3"/><rect x="48.5" y="35.5" width="15" height="13" rx="3"/>
+    <rect x="10.5" y="52.5" width="15" height="13" rx="3"/><rect x="29.5" y="52.5" width="15" height="13" rx="3"/><rect x="48.5" y="52.5" width="15" height="13" rx="3"/>
+  </g>
+  <g fill="var(--color-rubik-blue, #0046ad)">
+    <circle cx="18" cy="25" r="2"/><circle cx="37" cy="25" r="2"/><circle cx="56" cy="25" r="2"/>
+    <circle cx="18" cy="42" r="2"/><circle cx="37" cy="42" r="2"/>
+  </g>
+  <rect x="72.5" y="10.5" width="61" height="59" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="79" y="18" width="28" height="3" rx="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="112" y="17" width="16" height="5" rx="2.5" fill="var(--color-interactive-soft, rgba(0,70,173,0.08))"/>
+  <g fill="var(--color-hairline, #e3e5ea)">
+    <rect x="79" y="28" width="48" height="2.5" rx="1.25"/>
+    <rect x="79" y="34" width="42" height="2.5" rx="1.25"/>
+    <rect x="79" y="40" width="48" height="2.5" rx="1.25"/>
+    <rect x="79" y="46" width="34" height="2.5" rx="1.25"/>
+    <rect x="79" y="56" width="44" height="2.5" rx="1.25"/>
+    <rect x="79" y="62" width="26" height="2.5" rx="1.25"/>
+  </g>
+</svg>

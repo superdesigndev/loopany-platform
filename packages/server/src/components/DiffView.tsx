@@ -3,7 +3,7 @@ import { diffStat, parseUnifiedDiff, type DiffLine } from '../lib/diff'
 import type { RunDiffFile } from '../types'
 
 /** Per-file status word + its ink (reused from the old Changes list). */
-const STATUS_LABEL: Record<RunDiffFile['status'], string> = { added: 'added', modified: 'changed', removed: 'removed' }
+const STATUS_LABEL: Record<RunDiffFile['status'], string> = { added: 'Added', modified: 'Changed', removed: 'Removed' }
 const STATUS_CLS: Record<RunDiffFile['status'], string> = {
   added: 'text-success',
   modified: 'text-secondary',
@@ -41,7 +41,7 @@ const GUTTER_CLS: Record<DiffLine['kind'], string> = {
  */
 function DiffBody({ lines }: { lines: DiffLine[] }) {
   return (
-    <div className="min-w-0 max-h-[420px] overflow-auto border-t border-hairline bg-raised font-mono text-[12px] leading-[1.55]">
+    <div className="min-w-0 max-h-[420px] overflow-auto border-t border-hairline bg-raised font-mono text-label leading-[1.55]">
       <div className="min-w-max">
         {lines.map((l, i) => (
           <div key={i} className={`flex ${LINE_CLS[l.kind]}`}>
@@ -61,19 +61,19 @@ function FileHead({ f, lines }: { f: RunDiffFile; lines: DiffLine[] | null }) {
   const delta = fmtDelta(f.sizeDelta)
   const stat = lines ? diffStat(lines) : null
   return (
-    <span className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 font-mono text-[12.5px]">
-      <span className={`shrink-0 text-[10px] uppercase tracking-[0.08em] ${STATUS_CLS[f.status]}`}>{STATUS_LABEL[f.status]}</span>
-      <span className="min-w-0 break-all text-primary">{f.path}</span>
+    <span className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 text-meta">
+      <span className={`shrink-0 text-caption font-medium ${STATUS_CLS[f.status]}`}>{STATUS_LABEL[f.status]}</span>
+      <span className="min-w-0 break-all font-mono text-primary">{f.path}</span>
       {stat && (stat.added > 0 || stat.removed > 0) && (
-        <span className="shrink-0 font-mono text-[10.5px] tracking-[0.04em]">
+        <span className="shrink-0 font-mono text-caption">
           {stat.added > 0 && <span className="text-success">+{stat.added}</span>}
           {stat.added > 0 && stat.removed > 0 && ' '}
           {stat.removed > 0 && <span className="text-accent">−{stat.removed}</span>}
         </span>
       )}
-      {delta && <span className="shrink-0 text-[10.5px] tracking-[0.04em] text-disabled">{delta}</span>}
-      {f.binary && <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-secondary">binary</span>}
-      {f.tooLarge && <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-secondary">too large to diff</span>}
+      {delta && <span className="shrink-0 font-mono text-caption text-disabled">{delta}</span>}
+      {f.binary && <span className="shrink-0 text-caption text-secondary">Binary</span>}
+      {f.tooLarge && <span className="shrink-0 text-caption text-secondary">Too large to diff</span>}
     </span>
   )
 }
@@ -94,16 +94,16 @@ export function DiffView({ files }: { files: RunDiffFile[] }) {
       {files.map((f) => {
         if (!f.diff)
           return (
-            <div key={f.path} className="rounded-md border border-hairline bg-surface px-3.5 py-2">
+            <div key={f.path} className="rounded-control border border-hairline bg-surface px-3.5 py-2">
               <FileHead f={f} lines={null} />
             </div>
           )
         const lines = parseUnifiedDiff(f.diff)
         const open = lines.length <= AUTO_OPEN_LINES
         return (
-          <details key={f.path} open={open} className="group min-w-0 overflow-hidden rounded-md border border-hairline bg-surface">
+          <details key={f.path} open={open} className="group min-w-0 overflow-hidden rounded-control border border-hairline bg-surface">
             <summary className="flex cursor-pointer select-none items-center gap-2 px-3.5 py-2 marker:content-['']">
-              <span aria-hidden className="shrink-0 text-[10px] text-disabled transition-transform group-open:rotate-90">
+              <span aria-hidden className="shrink-0 text-micro text-disabled transition-transform group-open:rotate-90">
                 ▸
               </span>
               <FileHead f={f} lines={lines} />

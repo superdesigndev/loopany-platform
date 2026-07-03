@@ -44,13 +44,13 @@ export function LoopEmbed({
   taskFile?: string
 }) {
   const requested = file ?? match
-  const shell = 'min-w-0 overflow-hidden rounded-[10px] border border-hairline bg-surface'
+  const shell = 'min-w-0 overflow-hidden rounded-card border border-hairline bg-surface shadow-card'
 
   // Authoring hint (an agent iterating on its template sees why nothing shows).
   if (!requested)
     return (
       <div className={shell}>
-        <div className="px-5 py-5 font-mono text-[12px] text-disabled">
+        <div className="px-5 py-5 font-mono text-label text-disabled">
           &lt;loop-embed&gt; needs file="&lt;path&gt;" or match="&lt;glob&gt;"
         </div>
       </div>
@@ -60,7 +60,7 @@ export function LoopEmbed({
     return (
       <div className={shell}>
         <ViewerHead path={requested} />
-        <div className="px-5 py-6 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>
+        <div className="px-5 py-6 text-label text-secondary">Loading…</div>
       </div>
     )
 
@@ -75,7 +75,7 @@ export function LoopEmbed({
     return (
       <div className={shell}>
         <ViewerHead path={requested} />
-        <div className="px-5 py-6 text-[13px] text-disabled">
+        <div className="px-5 py-6 text-body text-disabled">
           No synced file matches yet. It appears here after the loop's next run syncs it.
         </div>
       </div>
@@ -92,9 +92,9 @@ export function LoopEmbed({
         action={
           <a
             href="#files"
-            className="font-mono text-[10.5px] tracking-[0.04em] text-interactive transition-colors hover:text-display"
+            className="text-caption font-medium text-interactive transition-colors hover:text-display"
           >
-            open in files →
+            Open in files →
           </a>
         }
       />
@@ -155,9 +155,9 @@ export function CollapsibleBody({ collapse, children }: { collapse: boolean; chi
           <button
             type="button"
             onClick={() => setExpanded(!expanded)}
-            className="cursor-pointer border-none bg-transparent p-0 font-mono text-[10.5px] tracking-[0.06em] text-secondary transition-colors hover:text-display"
+            className="cursor-pointer border-none bg-transparent p-0 text-caption font-medium text-secondary transition-colors hover:text-display"
           >
-            {expanded ? 'collapse ▴' : 'show all ▾'}
+            {expanded ? 'Collapse ▴' : 'Show all ▾'}
           </button>
         </div>
       )}

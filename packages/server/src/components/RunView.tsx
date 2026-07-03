@@ -6,16 +6,16 @@ import { cancelRun, getArtifacts, getJobDetail, getRunDiff, getTranscript, loadO
 import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
 import { DiffView } from './DiffView'
 import { TranscriptView } from './TranscriptView'
-import { btn, btnDanger, StatusPill } from './ui'
+import { btn, btnDanger, Loading, Pill, sectionHeadCls, StatusPill } from './ui'
 import { LoadErrorCard } from './actionUi'
 
-/** A section card — mirrors the loop page's `rounded-2xl border-wire bg-surface`
- *  panels with the mono instrument-panel label. `min-w-0` so wide inner content
- *  (a diff / transcript line) scrolls inside the card, never widens the page. */
+/** A section card - mirrors the loop page's surface panels with a sentence-case
+ *  section heading. `min-w-0` so wide inner content (a diff / transcript line)
+ *  scrolls inside the card, never widens the page. */
 function Card({ label, count, children }: { label: string; count?: number; children: React.ReactNode }) {
   return (
-    <section className="min-w-0 rounded-2xl border border-wire bg-surface px-6 py-5">
-      <div className="mb-3.5 border-b border-hairline pb-1.5 font-mono text-[11px] tracking-[0.08em] text-secondary">
+    <section className="min-w-0 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card">
+      <div className={`mb-3.5 border-b border-hairline pb-1.5 ${sectionHeadCls}`}>
         {label}
         {count != null && <span className="text-disabled"> ({count})</span>}
       </div>
@@ -24,31 +24,26 @@ function Card({ label, count, children }: { label: string; count?: number; child
   )
 }
 
-/** A stacked key/value field for the metadata rail — a mono label over its value. */
+/** A stacked key/value field for the metadata rail - a small label over its value. */
 function Field({ k, children }: { k: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <div className="mb-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-disabled">{k}</div>
-      <div className="min-w-0 text-[13px] text-primary">{children}</div>
+      <div className="mb-0.5 text-label font-medium text-secondary">{k}</div>
+      <div className="min-w-0 text-body text-primary">{children}</div>
     </div>
   )
-}
-
-/** A calm, non-bracket loading line (retires the old modal-era bracket placeholder). */
-function Loading() {
-  return <div className="text-[13px] text-disabled">Loading…</div>
 }
 
 /** A friendly, expand-on-click payload block (system prompt / user query). */
 function Fold({ title, sub, body }: { title: string; sub?: string; body: string }) {
   return (
-    <details className="group mb-2 min-w-0 overflow-hidden rounded-md border border-hairline bg-surface">
-      <summary className="flex cursor-pointer select-none items-center gap-2 px-3.5 py-2.5 font-mono text-[12px] tracking-[0.04em] text-primary marker:content-['']">
-        <span aria-hidden className="shrink-0 text-[10px] text-disabled transition-transform group-open:rotate-90">▸</span>
+    <details className="group mb-2 min-w-0 overflow-hidden rounded-control border border-hairline bg-surface">
+      <summary className="flex cursor-pointer select-none items-center gap-2 px-3.5 py-2.5 text-label font-medium text-primary marker:content-['']">
+        <span aria-hidden className="shrink-0 text-micro text-disabled transition-transform group-open:rotate-90">▸</span>
         {title}
-        {sub && <span className="tracking-normal text-secondary">{sub}</span>}
+        {sub && <span className="font-normal text-secondary">{sub}</span>}
       </summary>
-      <pre className="m-0 max-h-[360px] min-w-0 overflow-auto whitespace-pre-wrap break-words border-t border-hairline bg-raised px-4 py-3.5 font-mono text-[12.5px] leading-relaxed text-secondary">
+      <pre className="m-0 max-h-[360px] min-w-0 overflow-auto whitespace-pre-wrap break-words border-t border-hairline bg-raised px-4 py-3.5 font-mono text-meta leading-relaxed text-secondary">
         {body}
       </pre>
     </details>
@@ -105,13 +100,13 @@ function Changes({ run }: { run: RunSummary }) {
 
   if (run.running)
     return (
-      <Card label="changes">
-        <div className="text-[13px] text-disabled">File changes appear once the run finishes.</div>
+      <Card label="Changes">
+        <div className="text-body text-disabled">File changes appear once the run finishes.</div>
       </Card>
     )
   if (!data)
     return (
-      <Card label="changes">
+      <Card label="Changes">
         <Loading />
       </Card>
     )
@@ -120,22 +115,22 @@ function Changes({ run }: { run: RunSummary }) {
     // recorded produced-file list so the file surface isn't lost.
     if ((run.artifacts?.length ?? 0) > 0)
       return (
-        <Card label="files" count={run.artifacts?.length ?? 0}>
+        <Card label="Files" count={run.artifacts?.length ?? 0}>
           <RecordedFiles run={run} />
         </Card>
       )
     return (
-      <Card label="changes">
-        <div className="text-[13px] text-disabled">
+      <Card label="Changes">
+        <div className="text-body text-disabled">
           No recorded file changes for this run (an earlier run); runs from now on track what changed.
         </div>
       </Card>
     )
   }
   return (
-    <Card label="changes" count={data.files.length}>
+    <Card label="Changes" count={data.files.length}>
       {data.files.length === 0 ? (
-        <div className="text-[13px] text-disabled">No files changed since the previous run.</div>
+        <div className="text-body text-disabled">No files changed since the previous run.</div>
       ) : (
         <DiffView files={data.files} />
       )}
@@ -159,11 +154,11 @@ function Transcript({ runId, running }: { runId: string; running?: boolean }) {
 
   if (!data) return <Loading />
   if ('error' in data)
-    return <div className="text-[13px] text-accent">Couldn't load the execution trace — {data.error}</div>
+    return <div className="text-body text-accent">Couldn't load the execution trace - {data.error}</div>
   return (
     <div className="min-w-0">
-      {data.system && <Fold title="system prompt" sub="standing instructions · current version" body={data.system} />}
-      {data.query && <Fold title="user query" sub="actual payload sent" body={data.query} />}
+      {data.system && <Fold title="System prompt" sub="standing instructions · current version" body={data.system} />}
+      {data.query && <Fold title="User query" sub="actual payload sent" body={data.query} />}
       <div className="mt-3">
         <TranscriptView steps={data.steps} />
       </div>
@@ -185,23 +180,13 @@ function SessionId({ id }: { id: string }) {
         setTimeout(() => setCopied(false), 1200)
       }}
       title="Copy session id"
-      className="inline-flex max-w-full cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 text-left font-mono text-[12px] text-secondary transition-colors hover:text-display"
+      className="inline-flex max-w-full cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 text-left font-mono text-label text-secondary transition-colors hover:text-display"
     >
       <span className="truncate">{id}</span>
-      <span aria-hidden className="shrink-0 text-[10px] tracking-[0.08em] text-disabled">
+      <span aria-hidden className="shrink-0 text-micro text-disabled">
         {copied ? '✓ copied' : 'copy'}
       </span>
     </button>
-  )
-}
-
-/** A header chip — mirrors the loop page's wire-outline mono chip. */
-function Chip({ children, tone = 'wire' }: { children: React.ReactNode; tone?: 'wire' | 'hairline' }) {
-  const border = tone === 'hairline' ? 'border-hairline text-secondary' : 'border-wire text-display'
-  return (
-    <span className={`inline-flex h-5 items-center rounded border px-2 font-mono text-[10.5px] tracking-[0.06em] ${border}`}>
-      {children}
-    </span>
   )
 }
 
@@ -311,14 +296,14 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   if (!detail || (!run && !searchDone)) return <Loading />
   if (!run)
     return (
-      <div className="rounded-2xl border border-wire bg-surface px-6 py-10 text-center">
+      <div className="rounded-card border border-hairline bg-surface px-6 py-10 text-center shadow-card">
         <div className="text-[14px] text-secondary">This run is no longer available.</div>
         <Link
           to="/loops/$loopId"
           params={{ loopId }}
-          className="mt-3 inline-block font-mono text-[12px] tracking-[0.08em] text-interactive underline underline-offset-2 hover:text-display"
+          className="mt-3 inline-block text-label font-medium text-interactive underline underline-offset-2 hover:text-display"
         >
-          ← back to the loop
+          ← Back to the loop
         </Link>
       </div>
     )
@@ -327,19 +312,19 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   const roleChip = run.role || null
   return (
     <>
-      {/* header card — mirrors the loop detail page */}
-      <header className="rounded-2xl border border-wire bg-surface px-6 pb-5 pt-[22px]">
+      {/* header card - mirrors the loop detail page */}
+      <header className="rounded-card border border-hairline bg-surface px-6 pb-5 pt-[22px] shadow-card">
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-[26px] font-medium leading-tight tracking-tight text-display">Run · {jobName}</h1>
               <StatusPill run={run} colorText />
             </div>
-            <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 font-mono text-[12.5px] tracking-[0.02em] text-secondary">
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-meta text-secondary">
               <span className="text-primary">{fmt(run.ts)}</span>
               <span className="text-wire">·</span>
-              {roleChip && <Chip tone="hairline">{roleChip}</Chip>}
-              {run.durationMs != null && <Chip>{dur(run.durationMs)}</Chip>}
+              {roleChip && <Pill>{roleChip}</Pill>}
+              {run.durationMs != null && <Pill tone="ink">{dur(run.durationMs)}</Pill>}
               <code className="font-mono text-disabled">{run.id}</code>
             </div>
           </div>
@@ -361,8 +346,8 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
         <div className="flex min-w-0 flex-col gap-6">
           {run.message && (
-            <Card label="report">
-              <div className="whitespace-pre-wrap break-words rounded-md border border-hairline bg-raised px-4 py-3.5 text-[13px] leading-relaxed text-primary">
+            <Card label="Report">
+              <div className="whitespace-pre-wrap break-words rounded-control border border-hairline bg-raised px-4 py-3.5 text-body leading-relaxed text-primary">
                 {run.message}
               </div>
             </Card>
@@ -371,10 +356,10 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
           <Changes run={run} />
 
           {run.control && run.control.length > 0 && (
-            <Card label="control actions" count={run.control.length}>
+            <Card label="Control actions" count={run.control.length}>
               <ul className="space-y-1.5">
                 {run.control.map((c, i) => (
-                  <li key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[12px]">
+                  <li key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-label">
                     <span className="text-display">{c.command}</span>
                     <span className="min-w-0 break-all text-secondary">{JSON.stringify(c.args)}</span>
                     <span aria-hidden className="text-wire">→</span>
@@ -386,11 +371,11 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             </Card>
           )}
 
-          <Card label="execution">
+          <Card label="Execution">
             {run.sessionId ? (
               <Transcript runId={run.id} running={run.running} />
             ) : (
-              <div className="text-[13px] text-disabled">
+              <div className="text-body text-disabled">
                 This run has no recorded session (an earlier run); runs from now on include the execution trace.
               </div>
             )}
@@ -399,28 +384,28 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
 
         {/* metadata rail */}
         <div className="flex min-w-0 flex-col gap-6">
-          <Card label="details">
+          <Card label="Details">
             <div className="space-y-3.5">
-              <Field k="state">
+              <Field k="State">
                 <StatusPill run={run} colorText />
               </Field>
-              {run.status && <Field k="status">{run.status}</Field>}
-              {run.durationMs != null && <Field k="duration">{dur(run.durationMs)}</Field>}
-              {run.sample != null && <Field k="sample">{String(run.sample)}</Field>}
+              {run.status && <Field k="Status">{run.status}</Field>}
+              {run.durationMs != null && <Field k="Duration">{dur(run.durationMs)}</Field>}
+              {run.sample != null && <Field k="Sample">{String(run.sample)}</Field>}
               {run.state != null && (
-                <Field k="run state">
-                  <code className="block break-all font-mono text-[12px] text-secondary">{JSON.stringify(run.state)}</code>
+                <Field k="Run state">
+                  <code className="block break-all font-mono text-label text-secondary">{JSON.stringify(run.state)}</code>
                 </Field>
               )}
               {run.error && (
-                <Field k="error">
+                <Field k="Error">
                   <span className="break-words" style={{ color: 'var(--color-run-error)' }}>
                     {run.error}
                   </span>
                 </Field>
               )}
               {run.sessionId && (
-                <Field k="session">
+                <Field k="Session">
                   <SessionId id={run.sessionId} />
                 </Field>
               )}

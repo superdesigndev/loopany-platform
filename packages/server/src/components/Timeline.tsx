@@ -18,7 +18,7 @@ import { runPulseAnim, useHydrated } from './ui'
  * runs, fetches the next older page via onLoadMore before sliding. The "+N"
  * counts reflect the loop's TRUE total (`total`), not just what's loaded.
  */
-export const WINDOW = 16 // max blocks per row — also the lazy-load page size
+export const WINDOW = 16 // max blocks per row - also the lazy-load page size
 const PAGE = WINDOW // a pager click steps a full window left/right
 const RAD = 'rounded-[4px]' // cube-sticker corner (the Rubik's-sticker motif)
 const SEG = `h-5 w-[18px] shrink-0 ${RAD}` // one run block
@@ -44,12 +44,12 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
       />
       <Tooltip.Portal>
         <Tooltip.Positioner sideOffset={8}>
-          <Tooltip.Popup className="pointer-events-none max-w-[340px] rounded-lg border border-wire bg-raised px-3.5 py-2.5 text-[12.5px] leading-snug text-primary">
+          <Tooltip.Popup className="glass-strong pointer-events-none max-w-[340px] rounded-control px-3.5 py-2.5 text-meta leading-snug text-primary">
             <div className="flex items-center gap-1.5 font-medium">
-              {/* swatch — matches the run blocks (circle is reserved for the next-dot) */}
+              {/* swatch - matches the run blocks (circle is reserved for the next-dot) */}
               <span className="size-2 shrink-0 rounded-[2px]" style={{ background: dotColor(run) }} />
               {dotLabel(run)}
-              <span className="ml-auto whitespace-nowrap pl-3 font-mono text-[11px] font-normal text-secondary">
+              <span className="ml-auto whitespace-nowrap pl-3 font-mono text-caption font-normal text-secondary">
                 {fmt(run.ts)}
                 {meta}
               </span>
@@ -83,10 +83,10 @@ function Pager({ count, onClick, loading }: { count: number; onClick: () => void
         e.stopPropagation()
         onClick()
       }}
-      className={`flex h-5 w-[18px] shrink-0 items-center justify-center overflow-hidden border border-wire px-0 font-mono text-[9px] leading-none tracking-[-0.04em] text-disabled transition-colors hover:border-display hover:text-primary ${RAD} ${
+      className={`flex h-5 w-[18px] shrink-0 items-center justify-center overflow-hidden border border-wire px-0 font-mono text-[9px] leading-none text-disabled transition-colors hover:border-display hover:text-primary ${RAD} ${
         loading ? 'animate-pulse' : 'cursor-pointer'
       }`}
-      title={`${count} more — click to reveal`}
+      title={`${count} more - click to reveal`}
     >
       {loading ? '…' : count}
     </button>
@@ -180,9 +180,7 @@ export function Timeline({
             className="size-[11px] shrink-0 rounded-full border border-wire"
             title={hydrated ? `Next scheduled run · ${fmt(job.nextRun)}` : undefined}
           />
-          <span className="font-mono text-[10px] tracking-[0.04em] text-disabled">
-            {hydrated ? until(job.nextRun) : ''}
-          </span>
+          <span className="text-caption text-disabled">{hydrated ? until(job.nextRun) : ''}</span>
         </div>
       ) : (
         !atLatest && <Pager count={newerHidden} onClick={pageFwd} />

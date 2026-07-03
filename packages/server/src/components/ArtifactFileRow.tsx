@@ -46,46 +46,46 @@ export function ArtifactFileRow({ loopId, file }: { loopId: string; file: Artifa
   }
 
   return (
-    <li className="font-mono text-[12.5px]">
+    <li className="text-meta">
       <div className="flex items-baseline gap-2">
         {downloadable ? (
           <a
             href={downloadHref(loopId, file.path)}
             download
-            className="break-all text-interactive underline underline-offset-2 transition-colors hover:text-display"
+            className="break-all font-mono text-interactive underline underline-offset-2 transition-colors hover:text-display"
           >
             {file.path}
           </a>
         ) : file.oversize ? (
-          <span className="break-all text-primary">{file.path}</span>
+          <span className="break-all font-mono text-primary">{file.path}</span>
         ) : (
           <button
             type="button"
             onClick={() => void toggle()}
-            className="cursor-pointer break-all border-none bg-transparent p-0 text-left text-primary underline-offset-2 transition-colors hover:text-display hover:underline"
+            className="cursor-pointer break-all border-none bg-transparent p-0 text-left font-mono text-primary underline-offset-2 transition-colors hover:text-display hover:underline"
           >
             {file.path}
           </button>
         )}
-        <span className="shrink-0 text-[10px] tracking-[0.06em] text-disabled">{fmtBytes(file.size)}</span>
+        <span className="shrink-0 font-mono text-micro text-disabled">{fmtBytes(file.size)}</span>
         {file.oversize && (
-          <span className="shrink-0 text-[10px] tracking-[0.06em] text-secondary">too large · metadata only</span>
+          <span className="shrink-0 text-micro font-medium text-secondary">too large · metadata only</span>
         )}
-        {downloadable && <span className="shrink-0 text-[10px] tracking-[0.06em] text-secondary">download</span>}
-        <span className="ml-auto shrink-0 text-[10px] tracking-[0.06em] text-disabled">{fmt(file.updatedAt)}</span>
+        {downloadable && <span className="shrink-0 text-micro font-medium text-secondary">download</span>}
+        <span className="ml-auto shrink-0 font-mono text-micro text-disabled">{fmt(file.updatedAt)}</span>
       </div>
       {loaded && (
         <div className="mt-1.5">
           {'loading' in loaded ? (
-            <div className="font-mono text-[11px] tracking-[0.08em] text-secondary">[ Loading ]</div>
+            <div className="text-label text-disabled">Loading…</div>
           ) : 'text' in loaded ? (
-            <pre className="m-0 max-h-[360px] overflow-auto whitespace-pre-wrap rounded-md border border-hairline bg-raised px-4 py-3 text-[12px] leading-relaxed text-secondary">
+            <pre className="m-0 max-h-[360px] overflow-auto whitespace-pre-wrap rounded-control border border-hairline bg-raised px-4 py-3 text-label leading-relaxed text-secondary">
               {loaded.text || '(empty file)'}
             </pre>
           ) : 'error' in loaded ? (
-            <div className="font-mono text-[12px] text-accent">[ ERROR ] {loaded.error}</div>
+            <div className="text-label text-accent">Couldn't load this file - {loaded.error}</div>
           ) : (
-            <div className="text-[12px] text-disabled">(binary — use the download link)</div>
+            <div className="text-label text-disabled">(binary - use the download link)</div>
           )}
         </div>
       )}
@@ -97,10 +97,10 @@ export function ArtifactFileRow({ loopId, file }: { loopId: string; file: Artifa
  *  subtle hint rather than a dead link. */
 export function UnavailableFileRow({ path }: { path: string }) {
   return (
-    <li className="font-mono text-[12.5px]">
+    <li className="text-meta">
       <div className="flex items-baseline gap-2">
-        <span className="break-all text-disabled">{path}</span>
-        <span className="shrink-0 text-[10px] tracking-[0.06em] text-disabled">not available</span>
+        <span className="break-all font-mono text-disabled">{path}</span>
+        <span className="shrink-0 text-micro font-medium text-disabled">not available</span>
       </div>
     </li>
   )

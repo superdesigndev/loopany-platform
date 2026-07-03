@@ -1,0 +1,17 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of the loop's dashboard: a PR kanban (open -> merged) over the
+       health-score trend. Colors ride the app's CSS variables. -->
+  <rect x="10" y="8" width="58" height="3" rx="1.5" fill="var(--color-rubik-yellow, #ffd500)"/>
+  <rect x="10.5" y="16.5" width="57" height="15" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="16" y="21" width="30" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="16" y="26" width="20" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <rect x="10.5" y="36.5" width="57" height="15" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="16" y="41" width="36" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="16" y="46" width="24" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <rect x="76" y="8" width="58" height="3" rx="1.5" fill="var(--color-rubik-green, #009b48)"/>
+  <rect x="76.5" y="16.5" width="57" height="15" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="82" y="21" width="28" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <path d="M122 23.5l2.5 2.5 4.5-5" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M12 70 38 68 64 61 90 63 116 55 132 51" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="12" y="59" width="22" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+</svg>

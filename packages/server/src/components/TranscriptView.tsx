@@ -24,7 +24,7 @@ const TURN_COLORS = [
 /** A monospace payload block — scrolls inside its own pane, never widens the page. */
 function Payload({ text }: { text: string }) {
   return (
-    <pre className="m-0 mt-1.5 max-h-[280px] min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline bg-raised px-3 py-2 font-mono text-[11.5px] leading-relaxed text-secondary">
+    <pre className="m-0 mt-1.5 max-h-[280px] min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-control border border-hairline bg-raised px-3 py-2 font-mono text-label leading-relaxed text-secondary">
       {text}
     </pre>
   )
@@ -37,7 +37,7 @@ function Collapsible({ label, text, forceCollapse }: { label: string; text: stri
   if (!forceCollapse && text.length <= COLLAPSE_OVER) return <Payload text={text} />
   return (
     <details className="group mt-1.5">
-      <summary className="inline-flex cursor-pointer select-none items-center gap-1.5 font-mono text-[10.5px] tracking-[0.06em] text-disabled marker:content-[''] hover:text-display">
+      <summary className="inline-flex cursor-pointer select-none items-center gap-1.5 text-caption font-medium text-disabled marker:content-[''] hover:text-display">
         <span aria-hidden className="text-[9px] transition-transform group-open:rotate-90">▸</span>
         {label} · {text.length.toLocaleString()} chars
       </summary>
@@ -74,25 +74,25 @@ function Item({ item, color }: { item: TranscriptItem; color: string }) {
       {isTool ? (
         <div className="min-w-0">
           <div className="flex min-w-0 items-baseline gap-2">
-            <span className="inline-flex h-5 shrink-0 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-display">
+            <span className="inline-flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2.5 font-mono text-caption font-medium text-primary">
               {item.name || 'tool'}
             </span>
             {summary && (
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-secondary" title={summary}>
+              <span className="min-w-0 flex-1 truncate font-mono text-caption text-secondary" title={summary}>
                 {summary}
               </span>
             )}
           </div>
-          {hasInputDetail && <Collapsible label="input" text={item.input!} forceCollapse />}
+          {hasInputDetail && <Collapsible label="Input" text={item.input!} forceCollapse />}
           {item.results.map((r, i) => (
-            <Collapsible key={i} label="output" text={r} />
+            <Collapsible key={i} label="Output" text={r} />
           ))}
         </div>
       ) : (
         <div className="min-w-0">
           {item.text && <Prose text={item.text} />}
           {item.results.map((r, i) => (
-            <Collapsible key={i} label="output" text={r} />
+            <Collapsible key={i} label="Output" text={r} />
           ))}
         </div>
       )}
@@ -110,7 +110,7 @@ function Item({ item, color }: { item: TranscriptItem; color: string }) {
  */
 export function TranscriptView({ steps }: { steps: TranscriptStep[] }) {
   const items = groupTranscript(steps)
-  if (!items.length) return <div className="text-[13px] text-disabled">(no execution trace)</div>
+  if (!items.length) return <div className="text-body text-disabled">(no execution trace)</div>
   return (
     <ul className="ml-1.5 space-y-4 border-l border-hairline pl-4">
       {items.map((it, i) => (

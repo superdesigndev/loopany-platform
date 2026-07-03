@@ -76,7 +76,7 @@ describe('LoopFilesPanel type/title chips', () => {
       taskFile: 'README.md',
       taskFileContent: '# spec',
     })
-    expect(html).toContain('TASK')
+    expect(html).toContain('>Task<') // the task chip, not the "Task file" viewer caption
     expect(html).not.toContain('Should Not Show')
   })
 })

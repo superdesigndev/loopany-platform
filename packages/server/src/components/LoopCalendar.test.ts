@@ -55,7 +55,7 @@ async function mountThroughLoading(width: number): Promise<string> {
   await act(async () => {
     root.render(createElement(LoopCalendar, { ...props, artifacts: null }))
   })
-  expect(host.innerHTML).toContain('[ loading ]')
+  expect(host.innerHTML).toContain('Loading…')
   await act(async () => {
     root.render(createElement(LoopCalendar, { ...props, artifacts: ARTIFACTS }))
   })
@@ -69,12 +69,12 @@ describe('LoopCalendar dot mode', () => {
   it('collapses chips to dots when the container measures under 620px', async () => {
     const out = await mountThroughLoading(500)
     expect(out).toContain('size-2') // the dot button
-    expect(out).not.toContain('truncate rounded border') // no named chips
+    expect(out).not.toContain('truncate rounded-full border') // no named chips
   })
 
   it('renders named chips at wide container widths', async () => {
     const out = await mountThroughLoading(800)
-    expect(out).toContain('truncate rounded border')
+    expect(out).toContain('truncate rounded-full border')
     expect(out).not.toContain('size-2')
   })
 })
@@ -96,7 +96,7 @@ describe('LoopCalendar front-matter dating', () => {
     host.remove()
     // The selected product's viewer caption reflects the authoritative source…
     expect(out).toContain('· dated by front matter ·')
-    // …and the calendar shows july 2026 (the front-matter month, not june).
-    expect(out).toContain('july 2026')
+    // …and the calendar shows July 2026 (the front-matter month, not June).
+    expect(out).toContain('July 2026')
   })
 })

@@ -149,7 +149,7 @@ export function ComposeModal({
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
-      setError('could not copy — select the text and copy manually')
+      setError('could not copy - select the text and copy manually')
     }
   }
 
@@ -159,18 +159,18 @@ export function ComposeModal({
   const snippetBox = (
     <div className="min-w-0 flex-1">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="font-mono text-[11px] tracking-[0.08em] text-display">PASTE TO CAPTURE IT</h3>
+        <h3 className="text-label font-semibold text-display">Paste to capture it</h3>
         {snippet && (
           <button className={btnSm} onClick={() => void copy()}>
             {copied ? '✓ Copied' : 'Copy'}
           </button>
         )}
       </div>
-      <div className="mt-2 overflow-hidden rounded-lg border border-wire bg-raised p-3 font-mono text-[12px] text-primary">
-        {/* Instruction line — a single fixed bootstrap line; the skill (not the
+      <div className="mt-2 overflow-hidden rounded-control border border-hairline bg-raised p-3 font-mono text-label text-primary">
+        {/* Instruction line - a single fixed bootstrap line; the skill (not the
             snippet) collects the task, cadence, and output format. */}
         <p className="leading-relaxed">{instruction}</p>
-        {/* Machine config — fixed, read-only. */}
+        {/* Machine config - fixed, read-only. */}
         {configLines ? (
           <pre className="mt-3 overflow-x-auto whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-secondary">
             {configLines}
@@ -180,15 +180,15 @@ export function ComposeModal({
             minting a connect key…
           </div>
         )}
-        {/* Template intent — the canned task description, appended below the config. */}
+        {/* Template intent - the canned task description, appended below the config. */}
         {description && configLines && (
           <p className="mt-3 whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-primary">
             {description}
           </p>
         )}
       </div>
-      <p className="mt-2 text-[13px] leading-snug text-secondary">
-        Paste it in that same session — reuses this machine automatically. Your agent will{' '}
+      <p className="mt-2 text-body leading-snug text-secondary">
+        Paste it in that same session - reuses this machine automatically. Your agent will{' '}
         {template ? 'set the loop up from here.' : 'ask what the loop should do.'}
       </p>
     </div>
@@ -196,18 +196,18 @@ export function ComposeModal({
 
   const wait = slow
     ? {
-        dot: 'bg-[color:var(--color-secondary)]',
-        text: 'Still waiting — check your coding agent is running in the right project, then paste again.',
+        dot: 'bg-secondary',
+        text: 'Still waiting - check your coding agent is running in the right project, then paste again.',
       }
-    : { dot: 'animate-pulse bg-[color:var(--color-display)]', text: 'Waiting for your coding agent…' }
+    : { dot: 'animate-pulse bg-rubik-orange', text: 'Waiting for your coding agent…' }
 
   if (created) {
     return (
       <Modal open={open} onClose={onClose}>
         <ModalHead title="Loop created" sub={`${AGENT_LABEL[created.agent]} built and registered it.`} />
-        <div className="mt-5 rounded-xl border border-wire bg-surface p-5">
+        <div className="mt-5 rounded-card border border-hairline bg-surface p-5 shadow-card">
           <div className="text-[17px] font-medium text-display">✓ {created.name}</div>
-          <div className="mt-1 text-[13px] text-secondary">It’s scheduled now and will run on the machine.</div>
+          <div className="mt-1 text-body text-secondary">It’s scheduled now and will run on the machine.</div>
         </div>
         <div className="mt-4">
           <button className={btnPrimary} onClick={onClose}>
@@ -225,11 +225,11 @@ export function ComposeModal({
         <ModalHead title={template.label} sub="Paste this into your coding agent, in the project you want the loop for." />
         <div className="mt-6">{snippetBox}</div>
 
-        {error && <div className="mt-3 font-mono text-[13px] text-accent">[ ERROR ] {error}</div>}
+        {error && <div className="mt-3 text-body text-accent">Error: {error}</div>}
 
         <div className="mt-6 flex items-start gap-3">
           <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${wait.dot}`} />
-          <span className="font-mono text-[12px] leading-relaxed tracking-[0.02em] text-secondary">
+          <span className="text-label leading-relaxed text-secondary">
             {wait.text}
           </span>
           <button className={`${btn} ml-auto shrink-0`} onClick={onClose}>
@@ -249,19 +249,19 @@ export function ComposeModal({
           <button
             onClick={() => setPicked('local')}
             aria-pressed={picked === 'local'}
-            className={`group relative flex cursor-pointer flex-col rounded-xl border bg-surface p-4 text-left transition-colors hover:bg-raised ${
-              picked === 'local' ? 'border-display' : 'border-wire'
+            className={`group relative flex cursor-pointer flex-col rounded-card border bg-surface p-4 text-left shadow-card transition-colors hover:bg-raised ${
+              picked === 'local' ? 'border-display' : 'border-hairline'
             }`}
           >
-            <span className="absolute right-3 top-3 rounded-full bg-display px-2 py-0.5 font-mono text-[10px] tracking-[0.08em] text-paper">
+            <span className="absolute right-3 top-3 rounded-full bg-display px-2 py-0.5 text-micro font-medium text-paper">
               Recommended
             </span>
             <div className="text-[15px] font-medium text-display">Your local agent</div>
-            <div className="mt-1.5 text-[13px] leading-snug text-secondary">
+            <div className="mt-1.5 text-body leading-snug text-secondary">
               Runs on your own machine via your coding agent. Your keys, your code,
-              your compute — the server never runs an LLM.
+              your compute - the server never runs an LLM.
             </div>
-            <div className="mt-3 inline-flex items-center gap-1.5 font-mono text-[11px] tracking-[0.08em] text-secondary">
+            <div className="mt-3 inline-flex items-center gap-1.5 text-caption font-medium text-secondary">
               {picked === 'local' && <span aria-hidden className="text-[color:var(--color-display)]">✓</span>}
               Auto-detects your coding agent
             </div>
@@ -269,14 +269,14 @@ export function ComposeModal({
 
           <div
             aria-disabled
-            className="relative flex cursor-not-allowed flex-col rounded-xl border border-wire bg-surface p-4 text-left opacity-55"
+            className="relative flex cursor-not-allowed flex-col rounded-card border border-hairline bg-surface p-4 text-left opacity-55 shadow-card"
           >
-            <span className="absolute right-3 top-3 rounded-full border border-wire px-2 py-0.5 font-mono text-[10px] tracking-[0.08em] text-disabled">
+            <span className="absolute right-3 top-3 rounded-full bg-raised px-2 py-0.5 text-micro font-medium text-disabled">
               Coming soon
             </span>
             <div className="text-[15px] font-medium text-disabled">Hosted on Loopany</div>
-            <div className="mt-1.5 text-[13px] leading-snug text-disabled">
-              We run the agent for you in the cloud. No machine to keep online — not
+            <div className="mt-1.5 text-body leading-snug text-disabled">
+              We run the agent for you in the cloud. No machine to keep online - not
               available yet.
             </div>
           </div>
@@ -299,44 +299,44 @@ export function ComposeModal({
       <ModalHead title="New loop" />
 
       {/* Two ordered steps. The snippet just bootstraps the skill ("fetch … and
-          help me build a loop") — the skill asks for the task, cadence, and output
+          help me build a loop") - the skill asks for the task, cadence, and output
           format, so it handles both a real task done above AND an empty session.
           Doing the task once first is recommended (better loop), not required. A
           numbered rail (echoing the Timeline's connector motif) keeps do-then-
           capture explicit; step 2 carries the snippet as the visual anchor. */}
       <div className="mt-6">
-        {/* Step 1 — do the task. No box; the rail carries the weight. */}
+        {/* Step 1 - do the task. No box; the rail carries the weight. */}
         <div className="flex gap-3.5">
           <div className="flex flex-col items-center">
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-display font-mono text-[10px] leading-none text-display">
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-display text-micro font-medium leading-none text-display">
               1
             </span>
-            <span className="mt-1 w-px flex-1 bg-wire" />
+            <span className="mt-1 w-px flex-1 bg-hairline" />
           </div>
           <div className="pb-6">
-            <h3 className="font-mono text-[11px] tracking-[0.08em] text-display">
-              DO IT ONCE IN YOUR CODING AGENT
+            <h3 className="text-label font-semibold text-display">
+              Do it once in your coding agent
             </h3>
-            <p className="mt-1.5 text-[13px] leading-snug text-secondary">
+            <p className="mt-1.5 text-body leading-snug text-secondary">
               Run the task yourself first, to a real result you’re happy with.
             </p>
           </div>
         </div>
 
-        {/* Step 2 — paste to capture it. The snippet + Copy is the anchor. */}
+        {/* Step 2 - paste to capture it. The snippet + Copy is the anchor. */}
         <div className="flex gap-3.5">
-          <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-display font-mono text-[10px] leading-none text-display">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-display text-micro font-medium leading-none text-display">
             2
           </span>
           {snippetBox}
         </div>
       </div>
 
-      {error && <div className="mt-3 font-mono text-[13px] text-accent">[ ERROR ] {error}</div>}
+      {error && <div className="mt-3 text-body text-accent">Error: {error}</div>}
 
       <div className="mt-6 flex items-start gap-3">
         <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${wait.dot}`} />
-        <span className="font-mono text-[12px] leading-relaxed tracking-[0.02em] text-secondary">
+        <span className="text-label leading-relaxed text-secondary">
           {wait.text}
         </span>
         <button className={`${btn} ml-auto shrink-0`} onClick={() => setHost(null)}>
