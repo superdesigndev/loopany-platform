@@ -92,6 +92,40 @@ computes pure functions. Run instructions: `README.md`.
   prompt-only `.md` edit MUST deploy (`deploy.yml` paths-ignore lists explicit doc
   paths, deliberately not a wholesale `**/*.md`).
 
+## Template market (`packages/server/src/skill/templates/`)
+
+- The "template market" is pre-baked loops (a recipe + defaults) minted from the
+  dashboard instead of a blank loop. Each template is a **folder** under
+  `skill/templates/<name>/` with exactly two static files (zero-exec, file-based):
+  `meta.json` (the `TemplateInfo` - name/label/desc/tags/slots shown on the card and
+  returned by `listTemplates`) and `template.md` (the agent-facing setup doc: verify
+  preconditions, author the config, `loopany new`, pre-bake the ui).
+- **Adding a template is pure content addition - no code change.** The registry
+  (`server/templates.ts`) builds `TEMPLATES`/`TEMPLATE_NAMES` from an
+  `import.meta.glob` over `meta.json`; the serving route (`api.template.$.ts`) builds
+  its doc map from an `import.meta.glob` over `template.md`. Drop a new folder and both
+  pick it up. Registry/endpoint tests then cover it automatically.
+- **Split by client-reachability**, mirroring bootstrap: `meta.json` (tiny) is imported
+  in `server/templates.ts` (client-reachable via `listTemplates`); `template.md` (the
+  full doc) is imported ONLY in the `api.template.$.ts` route (server-only, code-split
+  out of the client bundle - like `bootstrap.md` in `api.bootstrap.ts`). Never import
+  the doc bytes into `templates.ts`.
+- **PUBLIC surface, NOT bundled.** `/api/template/<name>` serves the doc over HTTP
+  (path-safe static map, non-`.md` path so dev vite doesn't swallow it, `charset=utf-8`),
+  so template docs are public like `bootstrap.md` - but `sync-skill.mjs`'s whitelist
+  stays selective (`skill/templates/` never ships in the daemon npm tarball; guarded by
+  `sync-skill.test.ts`).
+- **Dashboard entry**: a "Templates" button beside "New Loop" (`routes/index.tsx`) opens
+  `TemplateModal` (cards -> optional-slot fill -> mint claim + copyable snippet). It
+  reuses ComposeModal's connect-key machinery (`mintClaim`/`getConfig`/`claimStatus`)
+  but is a SEPARATE component - ComposeModal (blank loops) stays untouched. Snippet form:
+  `Fetch <origin>/api/template/<name> and help me set it up.` + `server-url`/`connect-key`
+  (+ chosen slot values as plain `name: value` lines). All slots optional/defaulted.
+- v1 ships one template (React Doctor: open monitor, daily `npx react-doctor@latest`,
+  fix worst issue -> PR via gh, no-stacking when a prior PR is unmerged, PR board via
+  `type: open|merged` front-matter artifacts + pre-baked `<loop-kanban columns="open,merged">`
+  and a `score` loop-chart). English only in all template product text.
+
 ## Workflows (deterministic pre-stage)
 
 - A loop's workflow is an **async function body, NOT an ES module**: top-level

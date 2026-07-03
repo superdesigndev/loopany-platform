@@ -5,13 +5,14 @@ import { Tooltip } from '@base-ui/react/tooltip'
 import { getAuthState, listJobs, listMyTeams, listTemplates } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
 import { authClient, useSession } from '../lib/auth-client'
-import type { RunSummary, TemplateInfo } from '../types'
+import type { RunSummary } from '../types'
 import { isCompleted } from '../lib/format'
 import { LoopCard } from '../components/LoopCard'
 import { TeamSwitcher } from '../components/TeamSwitcher'
 import { MachinesModal } from '../components/MachinesModal'
 import { NotificationsModal } from '../components/NotificationsModal'
 import { ComposeModal } from '../components/ComposeModal'
+import { TemplateModal } from '../components/TemplateModal'
 import { LoopLogo } from '../components/LoopLogo'
 import { SignIn } from '../components/SignIn'
 import { LoadErrorCard } from '../components/actionUi'
@@ -82,10 +83,8 @@ function Dashboard() {
   const { jobs, templates, machines, teams } = data
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
-  const [compose, setCompose] = useState<{ open: boolean; template: TemplateInfo | null }>({
-    open: false,
-    template: null,
-  })
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [templatesOpen, setTemplatesOpen] = useState(false)
   const [machinesOpen, setMachinesOpen] = useState(false)
   const [notifyOpen, setNotifyOpen] = useState(false)
 
@@ -107,7 +106,7 @@ function Dashboard() {
   // while any loop is executing so its run block + Running badge surface (and
   // settle into a finished block) without a manual refresh.
   const openRef = useRef(false)
-  openRef.current = compose.open || machinesOpen || notifyOpen
+  openRef.current = composeOpen || templatesOpen || machinesOpen || notifyOpen
   const anyRunning = jobs.some((j) => j.running)
   useEffect(() => {
     const t = setInterval(
@@ -165,25 +164,24 @@ function Dashboard() {
           </div>
         </header>
 
-        {/* toolbar: New Loop + template tiles */}
+        {/* toolbar: New Loop + Templates (the template-market entry, beside it) */}
         <div className="flex flex-wrap items-stretch gap-3">
           <button
-            onClick={() => setCompose({ open: true, template: null })}
+            onClick={() => setComposeOpen(true)}
             className="flex w-40 cursor-pointer flex-col justify-center gap-1.5 rounded-lg bg-display px-5 py-4 text-paper transition-opacity hover:opacity-80"
           >
             <span className="font-display text-2xl leading-none">+</span>
             <span className="font-mono text-[12px] tracking-[0.08em]">New Loop</span>
           </button>
-          {templates.map((t) => (
+          {templates.length > 0 && (
             <button
-              key={t.name}
-              onClick={() => setCompose({ open: true, template: t })}
-              className="min-w-[200px] flex-1 cursor-pointer rounded-lg border border-wire bg-surface px-5 py-4 text-left transition-colors hover:border-display"
+              onClick={() => setTemplatesOpen(true)}
+              className="flex w-40 cursor-pointer flex-col justify-center gap-1.5 rounded-lg border border-wire bg-surface px-5 py-4 text-left text-secondary transition-colors hover:border-display hover:text-display"
             >
-              <div className="mb-1.5 text-[15px] font-medium text-display">{t.label}</div>
-              <div className="text-[13px] leading-snug text-secondary">{t.desc}</div>
+              <span className="font-display text-2xl leading-none">⧉</span>
+              <span className="font-mono text-[12px] tracking-[0.08em]">Templates</span>
             </button>
-          ))}
+          )}
         </div>
 
         <div className="my-8 h-px bg-hairline" />
@@ -229,9 +227,12 @@ function Dashboard() {
         )}
       </main>
 
-      <ComposeModal
-        open={compose.open}
-        onClose={() => setCompose({ open: false, template: null })}
+      <ComposeModal open={composeOpen} onClose={() => setComposeOpen(false)} onCreated={refresh} />
+
+      <TemplateModal
+        open={templatesOpen}
+        templates={templates}
+        onClose={() => setTemplatesOpen(false)}
         onCreated={refresh}
       />
 

@@ -1,0 +1,15 @@
+{
+  "name": "react-doctor",
+  "label": "React Doctor",
+  "desc": "A daily guardian for a React app: scans with react-doctor, fixes the single most severe issue, opens a PR, and tracks the health-score trend plus a merged/open PR board.",
+  "tags": ["React", "Code health", "Daily", "Opens PRs"],
+  "slots": [
+    {
+      "name": "run-at",
+      "prompt": "Run each day at (your machine's local time)",
+      "kind": "cron",
+      "required": false,
+      "default": "05:00"
+    }
+  ]
+}

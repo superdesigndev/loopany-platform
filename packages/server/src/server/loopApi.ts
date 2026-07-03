@@ -29,6 +29,7 @@ import * as store from '../db/store.js'
 import { ALL_TEAMS, loopInScope, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
+import { TEMPLATES } from './templates.js'
 
 function backend() {
   return ensureServer()
@@ -180,7 +181,11 @@ export const getRunDiff = createServerFn({ method: 'GET' })
 
 // ---- catalog ----
 
-export const listTemplates = createServerFn({ method: 'GET' }).handler(() => [] as TemplateInfo[])
+export const listTemplates = createServerFn({ method: 'GET' }).handler((): TemplateInfo[] => {
+  // The file-based template registry (server/templates.ts). Static metadata only —
+  // the agent-facing docs are served separately at /api/template/<name>.
+  return TEMPLATES
+})
 
 // ---- writes (apply via the live in-process Scheduler) ----
 
