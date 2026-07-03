@@ -181,7 +181,7 @@ function Dashboard() {
             <button
               key={t.name}
               onClick={() => setCompose({ open: true, template: t })}
-              className="flex min-w-0 max-w-72 flex-1 cursor-pointer flex-col justify-center gap-1 rounded-lg border border-wire bg-surface px-5 py-4 text-left transition-colors hover:border-display"
+              className="flex min-w-0 max-w-72 flex-1 basis-52 cursor-pointer flex-col justify-center gap-1 rounded-lg border border-wire bg-surface px-5 py-4 text-left transition-colors hover:border-display"
             >
               <span className="text-[14px] font-medium text-display">{t.label}</span>
               <span className="text-[12.5px] leading-snug text-secondary">{t.desc}</span>

@@ -1,0 +1,6 @@
+{
+  "name": "follow-up-tracker",
+  "label": "Follow-up Tracker",
+  "desc": "A closed loop that watches what happens after something you just shipped and finishes itself once the outcome is confirmed. Works best pasted right after finishing the task you want tracked.",
+  "description": "Look at what was just built or shipped in this session and set up a loop that tracks its aftermath. Before creating anything, verify a concrete way to observe the outcome exists on this machine - logs, metrics or MCP tools, a URL to check, or gh - and run it once as a smoke test; if nothing can actually be observed, say so and do not create a blind loop. Define a concrete finish condition and create the loop closed, with that condition as its goal. Propose a cadence that fits the thing being tracked (a few runs per day is a common default) and confirm it with me. On each run, observe through the verified path, report what you find (and a metric when one is natural), and finish the loop only when the condition is genuinely met; if things regress, report that plainly. Set up a modest dashboard at creation: an embed of the latest report, plus a metric chart when a metric was defined."
+}

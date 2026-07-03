@@ -1,0 +1,6 @@
+{
+  "name": "market-research",
+  "label": "Market Research",
+  "desc": "A daily monitor that researches your project's market and delivers one dated report every morning.",
+  "description": "Set up a daily market-research loop for this project. First look at the project to figure out what product it is and what market space it lives in, propose a research focus, and confirm it with me before creating the loop. Every morning around 5am my local time, research that day's relevant market developments - competitors, launches, pricing changes, ecosystem news - using whatever web capabilities this machine's agent has. Write exactly one dated markdown report per day, opening with front matter `type: report`, a `title`, and `date` set to today, so the reports ride the calendar view. Set up the loop's dashboard at creation: a calendar of the reports plus an embed of the newest one. Over time, sharpen the research focus around what keeps turning out to matter."
+}

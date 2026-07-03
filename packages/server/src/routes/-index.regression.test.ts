@@ -49,3 +49,19 @@ describe('dashboard poll resilience', () => {
     expect(switcher).not.toContain('invalidate()')
   })
 })
+
+describe('dashboard toolbar layout', () => {
+  it('template cards wrap and shrink — three cards must never widen the page', () => {
+    // The New Loop + template-card row grows with the registry (three cards in v1).
+    // Per the no-page-level-horizontal-scroll rule the row must wrap at narrow
+    // widths and each card must be allowed to shrink (min-w-0), never overflow.
+    const toolbar = /<div className="flex flex-wrap[^"]*">[\s\S]*?templates\.map/.exec(src)?.[0]
+    expect(toolbar, 'the wrapping toolbar row should contain the template cards').toBeTruthy()
+    const card = /templates\.map\(\(t\) => \([\s\S]*?className="([^"]*)"/.exec(src)?.[1]
+    expect(card, 'the template card should have a className').toBeTruthy()
+    expect(card).toContain('min-w-0')
+    // A flex basis makes narrow viewports WRAP the cards into rows instead of
+    // squeezing all of them into unreadable one-word-per-line columns.
+    expect(card).toMatch(/\bbasis-\d/)
+  })
+})

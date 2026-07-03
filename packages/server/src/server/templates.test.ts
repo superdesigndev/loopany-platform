@@ -2,9 +2,9 @@
  * The file-based template registry (server/templates.ts). It's built from a Vite glob
  * over skill/templates/*​/meta.json, so this asserts the registry is populated, every
  * entry satisfies the slimmed TemplateInfo shape (name/label/desc + a non-empty canned
- * `description` that rides the bootstrap snippet), and the React Doctor entry is present
- * and expresses its guardrails. Adding a template in a later batch is pure content (a
- * new folder); this test then covers it automatically.
+ * `description` that rides the bootstrap snippet), and each of the three default
+ * templates is present and expresses its guardrails. Adding a template is pure content
+ * (a new folder); the shape tests then cover it automatically.
  */
 import { describe, expect, test } from 'vitest'
 
@@ -34,6 +34,14 @@ describe('template registry', () => {
     expect(new Set(names).size).toBe(names.length)
   })
 
+  test('ships exactly the three default templates', () => {
+    expect(TEMPLATES.map((t) => t.name)).toEqual([
+      'follow-up-tracker',
+      'market-research',
+      'react-doctor',
+    ])
+  })
+
   test('ships the React Doctor template (v1) with its guardrails in the description', () => {
     const rd = TEMPLATES.find((t) => t.name === 'react-doctor') as TemplateInfo
     expect(rd).toBeTruthy()
@@ -46,5 +54,29 @@ describe('template registry', () => {
     expect(d.toLowerCase()).toContain('unmerged') // no-stacking rule
     expect(d.toLowerCase()).toContain('kanban') // open/merged board
     expect(d.toLowerCase()).toContain('score') // daily health score
+  })
+
+  test('ships the Market Research template with its defining behaviors in the description', () => {
+    const mr = TEMPLATES.find((t) => t.name === 'market-research') as TemplateInfo
+    expect(mr).toBeTruthy()
+    expect(mr.label).toBe('Market Research')
+    const d = mr.description.toLowerCase()
+    expect(d).toContain('confirm') // propose a focus, confirm before creating
+    expect(d).toContain('type: report') // front-matter convention for the calendar view
+    expect(d).toContain('calendar') // reports ride the calendar; dashboard shows one
+    expect(d).toContain('one dated markdown report') // exactly one report per day
+  })
+
+  test('ships the Follow-up Tracker template with its defining behaviors in the description', () => {
+    const ft = TEMPLATES.find((t) => t.name === 'follow-up-tracker') as TemplateInfo
+    expect(ft).toBeTruthy()
+    expect(ft.label).toBe('Follow-up Tracker')
+    const d = ft.description.toLowerCase()
+    expect(d).toContain('smoke test') // verify a real observation path before creating
+    expect(d).toContain('blind loop') // refuse when nothing can be observed
+    expect(d).toContain('closed') // created closed, with a goal
+    expect(d).toContain('finish condition') // the goal is a concrete finish line
+    // The paste-right-after-shipping invocation is the card's job, not the snippet's.
+    expect(ft.desc.toLowerCase()).toContain('after finishing the task')
   })
 })

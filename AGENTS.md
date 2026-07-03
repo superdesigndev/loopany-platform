@@ -117,13 +117,27 @@ computes pure functions. Run instructions: `README.md`.
 - **PUBLIC but NOT bundled.** `meta.json` rides to the client via `listTemplates`, and
   `sync-skill.mjs`'s whitelist stays selective (`skill/templates/` never ships in the
   daemon npm tarball; guarded by `sync-skill.test.ts`).
-- v1 ships one template (React Doctor). Its `description` is a short English paragraph:
-  daily ~6am `npx react-doctor@latest`, fix the single worst issue in a fresh worktree
-  off `main` (never dirty the checkout), PR via gh, no-stacking while a prior PR is
-  unmerged (still refresh status + score), one `type: open|merged` markdown card per PR
-  for the kanban, daily health score, and a **day-one dashboard set up at creation**
-  (kanban + score chart, via the create-`ui` support - see "Server gotchas"). Keep it
-  tight - no react-doctor flags beyond the npx one-liner. English only.
+- v1 ships three templates, each `description` a short English paragraph at the same
+  granularity (intent + defining disciplines, no tool flags, no machinery the create
+  flow already handles). Keep them tight. English only.
+  - **React Doctor** (open): daily ~6am `npx react-doctor@latest`, fix the single worst
+    issue in a fresh worktree off `main` (never dirty the checkout), PR via gh,
+    no-stacking while a prior PR is unmerged (still refresh status + score), one
+    `type: open|merged` markdown card per PR for the kanban, daily health score, and a
+    **day-one dashboard set up at creation** (kanban + score chart, via the create-`ui`
+    support - see "Server gotchas"). No react-doctor flags beyond the npx one-liner.
+  - **Market Research** (open): infer the project's product/space, propose a research
+    focus and confirm before creating; every morning ~5am research the day's market
+    developments; exactly ONE dated report per day with `type: report` front matter so
+    reports ride the calendar; dashboard at create = calendar + newest-report embed;
+    sharpen the focus over time.
+  - **Follow-up Tracker** (closed): paste right after shipping something - the session
+    context IS the invocation (no extra discovery machinery; skill-side template
+    fetching is deliberately deferred). Verify a CONCRETE observation path exists
+    (logs/MCP/URL/gh) and smoke-test it once - never create a blind loop; define a
+    concrete finish condition and create the loop CLOSED with it as the goal; confirm
+    cadence; finish only when genuinely met, report regressions plainly; modest
+    dashboard at create (latest-report embed + metric chart when one was defined).
 
 ## Workflows (deterministic pre-stage)
 
