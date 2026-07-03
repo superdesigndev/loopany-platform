@@ -37,12 +37,12 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('loopany new')
   })
 
-  test('create.md carries the §0.5 propose → confirm → build guidance', async () => {
+  test('create.md carries the §2 propose → confirm → build guidance', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // The new constraint: never silently guess cadence/output — propose, confirm, then build.
-    expect(body).toContain('0.5 · Settle cadence, output')
+    expect(body).toContain('2 · Settle cadence, output')
     expect(body).toContain('propose → confirm → build')
-    expect(body).toContain('never silently guess')
+    expect(body).toContain('Never silently guess')
     // The parameters the agent must settle before `loopany new`.
     expect(body).toContain('Cadence.')
     expect(body).toContain('Per-run output.')
@@ -55,7 +55,7 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('a short markdown summary in `report.md`')
   })
 
-  test('create.md §0 owns decide-what-to-build (moved from bootstrap in batch 3)', async () => {
+  test('create.md §1 owns decide-what-to-build (moved from bootstrap in batch 3)', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // Session already has a task → turn THAT into the loop; empty session → brainstorm
     // loops FOR THIS project and let the user pick. This fork used to live in bootstrap.

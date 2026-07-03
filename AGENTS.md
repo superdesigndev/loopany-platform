@@ -72,7 +72,12 @@ computes pure functions. Run instructions: `README.md`.
      (`~/.claude/skills/loopany`, via `npx skills add ... -g` on `loopany up`/`new`;
      best-effort, never blocks).
   3. `skill/run/{exec-loop,edit,exec-trigger}.md` - INTERNAL run prompts, imported
-     `?raw` by `gateway/prompt.ts`; never served, never bundled.
+     `?raw` by `gateway/prompt.ts`; never served, never bundled. `run/edit.md`
+     stays SEPARATE from `references/update.md` on purpose: the edit RUN uses
+     run-token verbs on the current loop (`loopany set-cron`/`set-ui` ..., no id)
+     and must be self-contained (skill install is best-effort), while update.md is
+     the OWNER authoring CLI (`loopany edit <id> --json`) - a merge would ship
+     run-token instructions in the public bundle.
 - `references/evolve.md` doubles as the evolve RUN prompt (same `?raw` import), so
   skill and run-dispatch cannot drift.
 - **HARD GUARDRAIL**: `packages/daemon/scripts/sync-skill.mjs` is a SELECTIVE
@@ -230,7 +235,7 @@ computes pure functions. Run instructions: `README.md`.
   things together: (1) `LOOP_TAGS`/`LOOP_ATTRS` + the DOMPurify `uponSanitizeAttribute`
   force-keep hook (data-bearing attrs like `columns`/`match` are otherwise stripped,
   silently blanking the element); (2) the html-react-parser `replace` swap; (3) the
-  skill authoring docs (`evolve.md` §3 + `skill/run/edit.md`, plus `create.md` §0.5
+  skill authoring docs (`evolve.md` §3 + `skill/run/edit.md`, plus `create.md` §2
   for the `type` vocabulary). Board row is the ONLY horizontal-scroll container
   (`min-w-0 overflow-x-auto`, columns `shrink-0` fixed-width) - a wide board scrolls
   inside its pane, never widening the page. Skill markdown + UI copy is ENGLISH ONLY.

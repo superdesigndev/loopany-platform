@@ -6,12 +6,12 @@ turns a task into a **scheduled agent loop** that runs automatically on this mac
 Their Loopany web tab is open and waiting for the loop to appear, so work end to end
 and keep questions to quick check-ins — don't run a full interview.
 
-This is the **bootstrap** doc, served over HTTP on first contact before the loopany
-skill is installed on disk. Do the two situational things below, then hand off to the
-create reference, which owns everything from "what should this loop be?" onward.
-(`loopany up` installs the skill at USER scope — `~/.claude/skills/loopany/` — and
-`loopany new` refreshes it, so a later session in ANY folder on this machine
-auto-triggers the installed skill and reads the same references from disk.)
+This bootstrap doc is served over HTTP on first contact, before the loopany skill is
+installed on disk. Do the two steps below, then hand off to the create reference,
+which owns everything from "what should this loop be?" onward. (`loopany up`
+installs the skill at USER scope — `~/.claude/skills/loopany/` — and `loopany new`
+refreshes it, so a later session in ANY folder on this machine auto-triggers the
+installed skill and reads the same references from disk.)
 
 ## The pasted values
 
@@ -20,49 +20,45 @@ The user pasted these along with the capture link — use them verbatim:
 - **server-url** — the Loopany server base URL (e.g. `http://localhost:3000`).
 - **connect-key** — a one-time token (starts with `dk_`). It both authorizes a NEW
   machine and tags the loop back to the web dialog (its `claim`).
-- **loopany-cli** *(optional)* — the command that runs the loopany CLI, used as the
-  prefix for every `loopany` invocation. **If it's not pasted, use
-  `npx @crewlet/loopany@latest`.** (A dev server may paste a local command instead.)
+- **loopany-cli** *(optional)* — the command prefix for every `loopany` invocation.
+  **If it's not pasted, use `npx @crewlet/loopany@latest`.** (A dev server may paste
+  a local command instead.)
 
 ## 1 · Connect this machine
 
 One idempotent command does the whole thing — run it verbatim (substitute
-**loopany-cli**, defaulting to `npx @crewlet/loopany@latest`):
+**loopany-cli**):
 
 ```bash
 <loopany-cli> up --server-url <server-url> --connect-key <connect-key>
 ```
 
 `loopany up` resolves this machine's stable identity (reuses the stored device
-token, else adopts the connect-key), checks whether a daemon is already live, starts
-a single detached one if not — surviving this session — and waits until the server
-reports the machine online. It never starts a second daemon. Once connected it also
-best-effort refreshes the loopany skill at USER scope (`~/.claude/skills/loopany/`),
-version-locked to the daemon it just launched — announced in one line, never blocking.
+token, else adopts the connect-key), starts a single detached daemon if none is live
+— it survives this session and never doubles up — and waits until the server reports
+the machine online. Once connected it also best-effort refreshes the loopany skill
+at USER scope (`~/.claude/skills/loopany/`), announced in one line, never blocking.
 
-It exits `0` once connected (printing `daemon online …` or `daemon already running …`);
-then continue. If it can't come online, it says where the log is. **Declare which
-coding agent you are** by passing `--agent claude-code` (or `--agent codex`) on
-`loopany new` later — Loopany also sniffs its own env to confirm the host, so this is
-an honest fallback, not load-bearing.
+It exits `0` once connected (printing `daemon online …` or `daemon already running
+…`); then continue. If it can't come online, it says where the log is.
 
 ## 2 · Build the loop
 
-With the machine connected, fetch and follow the **create** reference end to end. On
-first capture the skill isn't on disk yet, so fetch it over HTTP from the
-**server-url** the user pasted:
+With the machine connected, fetch and follow the **create** reference end to end.
+The skill isn't on disk yet, so fetch it over HTTP from the **server-url**:
 
 ```
 <server-url>/api/skill/references/create.md
 ```
 
-Follow it from its §0: it decides *what* loop to build (turning the task already in
-this session into a loop, or — if the session is empty — brainstorming loops for
-this project and letting the user pick), settles the cadence and per-run output,
-authors the loop's task file and config, and runs `loopany new`. Pass the
-**connect-key** as `--connect-key` so the created loop resolves back to the web
-dialog. create.md carries the flow through to telling the user it's live — you don't
-need to add anything here.
+Follow it from its §1: it decides *what* loop to build (the task already in this
+session, or — if the session is empty — brainstorming loops for this project and
+letting the user pick), settles the cadence and per-run output, authors the loop's
+task file and config, and runs `loopany new`. Pass the **connect-key** as
+`--connect-key` so the created loop resolves back to the web dialog, and declare
+which coding agent you are with `--agent claude-code` (or `--agent codex`).
+create.md carries the flow through to telling the user it's live — you don't need
+to add anything here.
 
 ## Editing and evolving, later
 
@@ -71,5 +67,5 @@ the same way if needed:
 
 - **Editing an existing loop** (reschedule, rename, pause, set/clear a goal, or
   change what it does): `<server-url>/api/skill/references/update.md`.
-- **How a loop refines itself over time** — the evolution pass that improves the loop
-  from its own run history: `<server-url>/api/skill/references/evolve.md`.
+- **How a loop refines itself over time** — the evolution pass that improves the
+  loop from its own run history: `<server-url>/api/skill/references/evolve.md`.

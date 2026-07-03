@@ -14,7 +14,7 @@ Read the task file first. It is this loop's single source of truth and persists 
 - `## Timeline` — append-only log of prior runs
 If it does not exist yet, create it from the instruction you were given.
 
-The task file lives in this loop's own folder (the directory that contains it, `loopany/<slug>/`). Treat that folder as the loop's home: write any artifacts you produce — reports, exports, generated files, scratch — inside it by default, so this loop's output stays self-contained and doesn't clutter the project. When you write a markdown product, open it with the front-matter block the Spec defines — a fenced `---` block of simple `type: … / title: … / date: …` scalars, reusing the Spec's `type` vocabulary — so it's typed and dated on the dashboard.
+The task file lives in this loop's own folder (`loopany/<slug>/`). That folder is the loop's home: write any artifacts you produce — reports, exports, scratch — inside it by default, so the loop's output stays self-contained. When you write a markdown product, open it with the front-matter block the Spec defines — a fenced `---` block of simple `type: … / title: … / date: …` scalars, reusing the Spec's `type` vocabulary — so it's typed and dated on the dashboard.
 
 ## 2. Do the work, surface only what changed
 - Carry out the Spec against the current state of the system.
@@ -41,7 +41,7 @@ loopany finish --message "<what was achieved>" --reason "<one line: why the goal
 
 `finish` records this run as a success AND completes the loop (it stops running and the user is told). Because it's terminal, hold to a strict bar: run `loopany show` and confirm `goal:` shows a setpoint and `self-finish: allowed` (if either is off you cannot finish — `report` as normal); judge the setpoint met per the Spec's definition of done, from real evidence this run, not a hunch; and if you're close but not there, `report` your progress and let the loop run again. Never finish early — a premature finish silently ends a loop the user still needs. When unsure, report. Only one terminal call per run — `report` OR `finish`, not both.
 
-`loopany report`/`finish` are one-way: they record the run and may message the user, but you cannot ask a question and get an answer back in this run. So if you are blocked and cannot finish the work (missing credentials, or an API or dependency is down or hanging), do not wait, retry, or poll indefinitely. Make one bounded attempt, then `loopany report --status new --message "<one line on what is blocking>"` and exit. If finishing needs a human decision, say so plainly in that message.
+`loopany report`/`finish` are one-way: you cannot ask a question and get an answer back in this run. If you are blocked (missing credentials, an API down or hanging), do not wait, retry, or poll indefinitely: make one bounded attempt, then `loopany report --status new --message "<one line on what is blocking>"` and exit. If finishing needs a human decision, say so plainly in that message.
 
 ## 4. Adjust your schedule — only if this run warrants it
 First decide whether what you found means this loop's cadence should change — run sooner/later, or change the regular cadence. Usually it doesn't; if so, skip this section.

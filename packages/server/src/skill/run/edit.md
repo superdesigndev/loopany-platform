@@ -1,22 +1,21 @@
 You are applying ONE owner-requested change to THIS loop, then stopping. You are
-NOT running the loop's normal task, and you do NOT finish the loop.
+NOT running the loop's normal task, and you do NOT finish the loop. Apply the
+change faithfully and minimally. The `loopany` commands below all act on this loop
+— no id needed. (Owner-side authoring uses a different surface, `loopany edit <id>
+--json`; you have run-token verbs only.)
 
-Apply the change faithfully and minimally. The `loopany` commands below all act on
-this loop — no id needed.
-
-- **Schedule / envelope** — use `loopany`:
-  - `loopany set-cron "0 9 * * *"` — change the cadence (5-field cron).
-  - `loopany set-tz "America/New_York"` — change the timezone (IANA name).
+- **Schedule / envelope**:
+  - `loopany set-cron "0 9 * * *"` — cadence (5-field cron)
+  - `loopany set-tz "America/New_York"` — timezone (IANA name)
   - `loopany set-name "New name"`
   - `loopany notify always|auto|never`
   - `loopany set-model <model>`
   - `loopany pause` / `loopany resume`
-  - `loopany reschedule --next 2h` — one extra run soon, then resume the cadence.
+  - `loopany reschedule --next 2h` — one extra run soon, then resume the cadence
 - **What the loop does** (its instructions, context, log) — edit the loop's task
   file directly in the repo. Keep its `## Spec` / `## Current understanding` /
   `## Timeline` structure; change only what was asked. For a goal-driven (closed)
-  loop, its Spec's opening prose should still restate the mission and finish line
-  the loop is working toward.
+  loop, the Spec's opening prose should still restate the mission and finish line.
 - **Dashboard UI / metric schema / workflow** — only if the requested change calls
   for it. Each writes a file, then passes `--file <path>` (never bare/inline):
   - `loopany set-ui --file <path>` — the panel as small plain HTML (h3/p/b/ul/table/
@@ -31,12 +30,11 @@ this loop — no id needed.
   - `loopany set-schema --file <path>` — JSON array of `{key, label?, unit?}`.
     Additive: pass the full intended schema; don't drop a key the UI still binds.
   - `loopany set-workflow --file <path>` — the deterministic pre-stage JS (`prev`,
-    `fetch`, `tools.call(name, args)` for configured MCP servers,
-    `agent(message?, data?)`; returns `{ message?, state? }`). Syntax: a plain
-    statement sequence run inside an async function — **not an ES module, not the
-    Claude Code `Workflow` tool**; no top-level `export`/`import` (never
-    `export const meta = {…}`). The server parse-checks it and rejects a bad body
-    (see `create.md` §2 for the full contract).
+    `fetch`, `tools.call(name, args)`, `agent(message?, data?)`; returns
+    `{ message?, state? }`). Syntax: a plain statement sequence run inside an async
+    function — **not an ES module, not the Claude Code `Workflow` tool**; no
+    top-level `export`/`import` (never `export const meta = {…}`). The server
+    parse-checks it and rejects a bad body (full contract: `create.md` §4).
   Leave any of these untouched unless the change explicitly asks for it.
 
 Changing the loop's goal or reopening a completed loop is an owner action — there's

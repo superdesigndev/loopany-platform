@@ -8,19 +8,18 @@ or other auth is needed.
 - **Schedule / delivery envelope + goal** (cadence, name, timezone, notify, model,
   pause, goal, …) — the server owns it. Change it with `loopany edit` (below), which
   is **JSON-only**: one `--json '<patch>'` of just the fields that change.
-- **What the loop does** (its instructions, context, log) — that's the loop's **task
-  file (`loopany/<slug>/README.md`) on this machine**. Edit that file directly in the
-  repo, keeping its `## Spec` / `## Current understanding` / `## Timeline` structure.
-  It syncs back to the server on the loop's next run; nothing else to do. (For how a
-  run reads and maintains that file, see `evolve.md`.) To point the loop at a
-  *different* task file, put the new path in the patch: `--json '{"taskFile":"…"}'`
-  (the server just records the path; move/create the file yourself).
-- **Dashboard / metric schema / workflow** — normally a loop shapes these itself from
-  its own run history during its **evolution pass** (see `evolve.md`), so leave them
-  to it unless the user explicitly asks. When they do, push them from here with the
-  content-file flags (below); the server validates each with the exact same rules the
-  run-time `set-*` verbs use (schema changes stay additive — you can't drop a key
-  still bound by the UI or reported by recent runs).
+- **What the loop does** (its instructions, context, log) — the loop's **task file
+  (`loopany/<slug>/README.md`) on this machine**. Edit it directly in the repo,
+  keeping its `## Spec` / `## Current understanding` / `## Timeline` structure; it
+  syncs back to the server on the loop's next run. (How a run maintains it:
+  `evolve.md`.) To point the loop at a *different* task file, patch the path:
+  `--json '{"taskFile":"…"}'` (the server records the path only; move/create the
+  file yourself).
+- **Dashboard / metric schema / workflow** — the loop normally shapes these itself
+  during its **evolution pass** (see `evolve.md`); leave them to it unless the user
+  explicitly asks. Then push them with the content-file flags (below); the server
+  validates with the same rules as the run-time `set-*` verbs (schema stays
+  additive — never drop a key still bound by the UI or reported by recent runs).
 
 First find the loop id (only loops bound to THIS machine are listed):
 
@@ -30,11 +29,11 @@ First find the loop id (only loops bound to THIS machine are listed):
 #    loop-yyyy  paused  0 * * * *                 Hourly metrics
 ```
 
-Before reshaping a loop, see how its recent runs actually went — a concise survey of
-their status, metrics, and session ids — with `<loopany-cli> log` (the loop for the
-current directory) or `<loopany-cli> log <loop-id>` (`--limit N`, `--json`; add
-`--transcript` for the full transcript). Read it first so an edit is grounded in what
-the runs really did, not a guess.
+Before reshaping a loop, see how its recent runs actually went with
+`<loopany-cli> log` (the loop for the current directory) or
+`<loopany-cli> log <loop-id>` (`--limit N`, `--json`; `--transcript` for the full
+transcript) — a concise survey of status, metrics, and session ids. Read it first so
+an edit is grounded in what the runs really did, not a guess.
 
 ## Edit the envelope — one JSON patch
 
@@ -88,8 +87,9 @@ run-time `set-*` verbs — because multi-line JS/HTML/JSON is awkward to embed i
 
 A `--workflow-file` body must obey the workflow syntax contract — a plain statement
 sequence run inside an async function, **not an ES module and not the Claude Code
-`Workflow` tool** (no top-level `export`/`import`, never `export const meta = {…}`; see
-`create.md` §2). The server parse-checks it and rejects a bad body (surfaced by `--dry-run`).
+`Workflow` tool** (no top-level `export`/`import`, never `export const meta = {…}`;
+see `create.md` §4). The server parse-checks it and rejects a bad body (surfaced by
+`--dry-run`).
 
 Explicit `--json` keys win over any file flag. `loopany edit` prints
 `updated <name> — <fields>` on success, or `loopany: <error>` to fix. You can only
