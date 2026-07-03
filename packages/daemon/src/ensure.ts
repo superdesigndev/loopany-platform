@@ -84,7 +84,17 @@ export type EnsureDeps = {
   err?: (s: string) => void;
 };
 
-export async function runEnsure(args: string[], injected: EnsureDeps = {}): Promise<number> {
+export type EnsureOpts = {
+  /** Skip the "already running" short-circuits and start a fresh daemon
+   *  unconditionally. `loopany update` sets this: it has just stopped the old
+   *  daemon, but the server still reports the machine online for up to
+   *  ONLINE_TTL (30s), which would otherwise make `up` decline to start the
+   *  replacement. The local pidfile was cleared by `down`, so the new daemon
+   *  boots cleanly. */
+  force?: boolean;
+};
+
+export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts: EnsureOpts = {}): Promise<number> {
   const d = {
     fetchStatus: injected.fetchStatus ?? fetchMachineStatus,
     spawnDaemon: injected.spawnDaemon ?? spawnDaemonDefault,
@@ -128,24 +138,27 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}): Prom
 
   // Local pidfile FIRST: a live verified daemon means never spawn a second one —
   // deciding purely from the server status endpoint meant an unreachable server
-  // spawned a NEW detached daemon on every retry (leaking daemons).
-  const localPid = d.localPid();
-  if (localPid !== undefined) {
-    const st = await d.fetchStatus(server, token);
-    if (st?.online) {
-      d.out(`daemon already running for this machine${st.name ? ` (${st.name})` : ""}\n`);
-    } else {
-      d.out(`daemon already running locally (pid ${localPid}) — server unreachable or machine still connecting; check ${logFile}\n`);
+  // spawned a NEW detached daemon on every retry (leaking daemons). `force` skips
+  // these guards (update just stopped the daemon and always replaces it).
+  if (!opts.force) {
+    const localPid = d.localPid();
+    if (localPid !== undefined) {
+      const st = await d.fetchStatus(server, token);
+      if (st?.online) {
+        d.out(`daemon already running for this machine${st.name ? ` (${st.name})` : ""}\n`);
+      } else {
+        d.out(`daemon already running locally (pid ${localPid}) — server unreachable or machine still connecting; check ${logFile}\n`);
+      }
+      await refreshSkill();
+      return 0;
     }
-    await refreshSkill();
-    return 0;
-  }
 
-  const before = await d.fetchStatus(server, token);
-  if (before?.online) {
-    d.out(`daemon already running for this machine${before.name ? ` (${before.name})` : ""}\n`);
-    await refreshSkill();
-    return 0;
+    const before = await d.fetchStatus(server, token);
+    if (before?.online) {
+      d.out(`daemon already running for this machine${before.name ? ` (${before.name})` : ""}\n`);
+      await refreshSkill();
+      return 0;
+    }
   }
 
   d.out("starting daemon…\n");

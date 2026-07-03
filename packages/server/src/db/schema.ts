@@ -90,6 +90,10 @@ export const machines = sqliteTable(
     hostname: text("hostname"),
     platform: text("platform"),
     arch: text("arch"),
+    /** Daemon package version reported on poll (e.g. "0.8.0"). Null for older
+     *  daemons that don't report it (and until the first poll). Drives the web's
+     *  "update available" hint against the cached npm latest. */
+    daemonVersion: text("daemon_version"),
     /** Hash of the device token (machine identity derives from the token). */
     tokenHash: text("token_hash").notNull(),
     /**

@@ -18,6 +18,7 @@ import { ensureCallbackBin } from "./callback-bin.js";
 import { snapshotProgress } from "./progress.js";
 import { WatchManager, type WatchSpec } from "./watcher.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
+import { daemonVersion, writeRunningVersion } from "./version.js";
 
 const POLL_MS = Number(process.env.LOOPANY_POLL_MS || 3000);
 /** Per-poll fetch timeout — a hung connection must not stall the heartbeat
@@ -62,7 +63,9 @@ export async function runDaemon(): Promise<number> {
     .map((s) => s.trim())
     .filter(Boolean);
   // Machine identity reported on every poll (the server captures it on connect).
-  const info = { host: os.hostname(), platform: process.platform, arch: process.arch };
+  // `version` is this daemon's own package version, so the web can flag an
+  // outdated daemon and show the exact update command.
+  const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
 
   // Refuse to boot when a live, VERIFIED daemon already owns the pidfile — a
   // second daemon (e.g. a bare `loopany` in a terminal) would overwrite it, and
@@ -81,6 +84,9 @@ export async function runDaemon(): Promise<number> {
   // Record our pid so `loopany status`/`loopany down` can find this detached
   // daemon locally (the server only knows online-ness, not the local process).
   writePidFile();
+  // Record our version beside the pidfile so `loopany update` can report the
+  // old→new version when it hands the running daemon over (best-effort).
+  writeRunningVersion();
 
   const ac = new AbortController();
   for (const sig of ["SIGINT", "SIGTERM"] as const) {

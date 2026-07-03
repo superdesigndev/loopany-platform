@@ -36,6 +36,7 @@ describe("loopany CLI dispatch", () => {
     expect(r.stdout).toContain("Usage: loopany");
     expect(r.stdout).toContain("status");
     expect(r.stdout).toContain("down");
+    expect(r.stdout).toContain("update");
   });
 
   test("-h prints usage and exits 0", async () => {
@@ -61,5 +62,13 @@ describe("loopany CLI dispatch", () => {
     const r = await runCli(["bogus"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("unknown command");
+  });
+
+  test("update with no connection → exits (never launches daemon)", async () => {
+    // Isolated LOOPANY_HOME has no stored server/token, so update returns 2 with a
+    // clear message instead of hanging on a poll loop.
+    const r = await runCli(["update"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("not connected");
   });
 });

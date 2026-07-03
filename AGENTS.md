@@ -293,6 +293,42 @@ LLM and executes no user code**.
   hatch** — install defaults to user scope (`-g`/`--global` accepted but redundant); `--project`
   (alias `--local`) installs into the cwd; `status` reports the user install + flags a shadowing
   project copy. **The refresh is a callable seam a future `loopany update` verb can reuse.**
+- **Daemon version visibility + guided update (`loopany update`).** The daemon reports its
+  own package version so the web can flag an outdated daemon and hand the exact fix.
+  **Daemon:** `src/version.ts` `daemonVersion()` resolves THIS package's `../package.json`
+  version robustly from BOTH `src/` (tsx dev) and `dist/` (built) — the same `../skill` trick
+  `bundledSkillDir` uses; `daemon.ts`'s poll `info` gained `version` (untrusted → server clips
+  to 64 chars). The running daemon also writes a **version file** (`~/.loopany/daemon.version`,
+  beside the pidfile; `writeRunningVersion()` on boot) so `loopany update` can print `v<old> →
+  v<new>` — a SEPARATE file, not a new pidfile field, so it's trivially backward-compatible with
+  old pidfiles (absent ⇒ old version "unknown"). **`loopany update`** (`src/update.ts`, wired in
+  `cli.ts` AFTER the callback guard, in `help.ts`): the invoking CLI IS already the new version
+  (`npx @crewlet/loopany@latest update`), so the verb just hands the RUNNING daemon over — no
+  daemon → behaves like `up`; daemon running → warns honestly (run-state isn't knowable locally
+  from another process; the daemon drains in-flight runs on stop) then `runDown` → `runEnsure(...,
+  { force: true })` → skill refresh → old→new summary line. **`runEnsure` gained an `EnsureOpts.
+  force`** that skips the already-running short-circuits: `down` clears the local pidfile but the
+  server still reports the machine online for up to `ONLINE_TTL` (30s), which would otherwise make
+  the replacement `up` decline to start. Every external touch is an injectable seam
+  (`update.test.ts`/`version.test.ts`/`cli.test.ts` — no process/network). **Server:** migration
+  `0017` adds `machines.daemon_version` (nullable text); `poll()` updates it only when the reported
+  value changes (hot-path discipline, like hostname/platform/arch). `server/daemonVersion.ts`
+  `LatestDaemonVersion` caches the npm dist-tag `latest` for `@crewlet/loopany` (`fetchNpmLatest`,
+  ~1h TTL, bounded timeout, **FAIL-SILENT** — no npm reachability ⇒ null ⇒ no hint, never an error;
+  injectable fetch/clock like the gateway's notifier/blobStore; a failed refresh keeps the last
+  good value AND advances the stamp so a flapping registry isn't hammered). Zero-exec invariant
+  holds: a plain HTTP GET. `MachineSummary` gained `daemonVersion` + `latestDaemonVersion`
+  (the same cached value on every row); `machineFns.toSummary` reads `m.daemonVersion` +
+  `latestDaemonVersion.get()` (non-blocking). **Web:** `lib/semver.ts` `isOutdated(current,
+  latest)` (numeric-core `x.y.z` compare + pre-release-behind-release; false on any unknown/equal/
+  newer/garbage — the hint is opt-in). `MachinesModal` shows `daemon v<x> · update available
+  (v<y>)` + a copyable `npx @crewlet/loopany@latest update` ONLY when `isOutdated` is true (nothing
+  on unknown/equal/newer/offline-unknown). **Connect command switched to the managed `up` form:**
+  `connectCmd` now emits `<cli> up --server-url <origin> --connect-key <token>` (was the foreground
+  bare-flags `--server-url … --api-key …` that died with the terminal). The modal mints a DEVICE
+  token via `createMachine`; `up` reads `flag("connect-key")`, stores it as the device token, and
+  the daemon self-registers on first poll — the readiness probe + detached spawn make it strictly
+  better UX. E2E-verified: a poll with `version` persists `daemon_version` and updates on change.
 - **Daemon CLI ergonomics (`loopany --help` / `status` / `down`).** `cli.ts`
   `main()` dispatch order: in-run callback (`LOOPANY_RUN_TOKEN`+args) → `--help`/`-h`/
   `help` (`help.ts`, prints usage, exit 0, NEVER starts the daemon) → `up` → `new` →
@@ -934,4 +970,4 @@ LLM and executes no user code**.
 
 The **Cookie Daily Breakfast Report** loop runs end-to-end: scheduler → daemon poll → claude →
 `loopany report` → run `done` (real breakfast report). Dashboard renders real data
-(browser-verified, Geist style). 192 server tests + 147 daemon tests green; both packages typecheck.
+(browser-verified, Geist style). 282 server tests + 167 daemon tests green; both packages typecheck.

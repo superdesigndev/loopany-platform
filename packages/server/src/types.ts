@@ -67,6 +67,13 @@ export interface MachineSummary {
   hostname: string | null
   platform: string | null
   arch: string | null
+  /** Daemon package version reported on poll (e.g. "0.8.0"); null for older
+   *  daemons / before the first poll. */
+  daemonVersion: string | null
+  /** Latest published daemon version (cached npm dist-tag `latest`); null when
+   *  npm is unreachable. Same for every machine — the web compares it against
+   *  `daemonVersion` to show an "update available" hint. */
+  latestDaemonVersion: string | null
   /** Plaintext device token (so the UI can re-show the connect command). Under
    *  the auth gate it is serialized ONLY to the machine's owner — null for
    *  everyone else (the token fully impersonates the machine). */

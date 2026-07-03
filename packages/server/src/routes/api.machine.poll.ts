@@ -15,6 +15,7 @@ export const Route = createFileRoute('/api/machine/poll')({
           host?: string
           platform?: string
           arch?: string
+          version?: string
           progress?: Array<{ runId: string; step: number; label: string }>
         }
         const { getGateway } = await import('../server/boot.js')

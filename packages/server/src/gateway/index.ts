@@ -270,7 +270,7 @@ export class MachineGateway {
 
   poll(
     deviceToken: string,
-    info?: { host?: string; platform?: string; arch?: string },
+    info?: { host?: string; platform?: string; arch?: string; version?: string },
     progress?: Array<{ runId: string; step: number; label: string }>,
   ): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
@@ -307,10 +307,13 @@ export class MachineGateway {
     // Identity rarely changes after the first poll — only write it when a field
     // actually differs, so the hot path (every ~3s/machine) isn't a 2nd UPDATE.
     if (info) {
+      // Untrusted wire input: a version is a short semver, so clip defensively.
+      const version = typeof info.version === "string" ? info.version.slice(0, 64) : undefined;
       const patch = {
         ...(info.host && info.host !== machine.hostname ? { hostname: info.host } : {}),
         ...(info.platform && info.platform !== machine.platform ? { platform: info.platform } : {}),
         ...(info.arch && info.arch !== machine.arch ? { arch: info.arch } : {}),
+        ...(version && version !== machine.daemonVersion ? { daemonVersion: version } : {}),
         ...(info.host && !machine.name?.trim() ? { name: info.host } : {}),
       };
       if (Object.keys(patch).length) store.updateMachine(machineId, patch);

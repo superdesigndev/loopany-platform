@@ -94,6 +94,24 @@ describe("runEnsure — readiness", () => {
   });
 });
 
+describe("runEnsure — force (update's replace path)", () => {
+  test("force skips the already-running short-circuits and spawns anyway", async () => {
+    // A live local daemon AND the server reporting online would normally short-
+    // circuit; force starts a fresh daemon regardless (update just stopped the old
+    // one, but the server still reports online within the TTL).
+    let calls = 0;
+    const cap = seams({
+      localPid: () => 4242,
+      fetchStatus: async () => (++calls >= 1 ? { online: true, name: "Mac" } : undefined),
+    });
+    const code = await runEnsure([], cap, { force: true });
+    expect(code).toBe(0);
+    expect(cap.spawned()).toBe(1);
+    expect(cap.stdout()).toContain("starting daemon");
+    expect(cap.skillInstalls()).toEqual([{ global: true }]);
+  });
+});
+
 describe("runEnsure — user-scope skill refresh on every success path", () => {
   test("live local daemon + server online → refreshes the skill (global), announced", async () => {
     const cap = seams({ localPid: () => 4242, fetchStatus: async () => ({ online: true, name: "Mac" }) });

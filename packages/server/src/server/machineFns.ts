@@ -23,6 +23,7 @@ import type { Machine } from '../db/schema.js'
 import { requestScope, type RequestScope } from '../auth.js'
 import { machineIdFromToken, mintDeviceToken, setDeviceOwner, sha256 } from '../gateway/tokens.js'
 import { machineInScope, tokenVisibleTo } from './machineScope.js'
+import { latestDaemonVersion } from './daemonVersion.js'
 import { ensureServer } from './boot.js'
 import type { MachineSummary } from '../types'
 
@@ -62,6 +63,9 @@ function toSummary(m: Machine, scope: RequestScope): MachineSummary {
     hostname: m.hostname ?? null,
     platform: m.platform ?? null,
     arch: m.arch ?? null,
+    daemonVersion: m.daemonVersion ?? null,
+    // Same for every machine (cached npm latest); non-blocking + fail-silent.
+    latestDaemonVersion: latestDaemonVersion.get(),
     token: tokenVisibleTo(m, scope) ? (m.token ?? null) : null,
     loopCount: store.loopsForMachine(m.id).length,
   }

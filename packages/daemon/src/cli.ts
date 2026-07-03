@@ -10,6 +10,9 @@
  *   loopany skill [status|install] → install the loopany agent skill at USER scope
  *                                via `npx skills` (best-effort; the manual escape hatch
  *                                — `loopany up`/`new` also refresh ~/.claude/skills).
+ *   loopany update             → setup mode: hand the running daemon over to this
+ *                                (newer) CLI — stop the old daemon, start this one,
+ *                                refresh the skill (this CLI is already the new version).
  *   loopany status             → setup mode: report whether THIS machine's daemon
  *                                is running (local pid) + its connection state.
  *   loopany down               → setup mode: stop the detached daemon `up` started.
@@ -54,6 +57,9 @@ async function main(): Promise<number> {
   }
   if (argv[0] === "skill") {
     return (await import("./skill-cli.js")).runSkill(argv.slice(1));
+  }
+  if (argv[0] === "update") {
+    return (await import("./update.js")).runUpdate(argv.slice(1));
   }
   if (argv[0] === "status") {
     return (await import("./control.js")).runStatus(argv.slice(1));

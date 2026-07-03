@@ -10,13 +10,22 @@ import {
   deleteMachine,
 } from '../server/machineFns'
 import { getConfig } from '../server/loopApi'
+import { isOutdated } from '../lib/semver'
 import type { MachineSummary } from '../types'
 
-/** The daemon connect command (origin known client-side; CLI prefix from server config). */
+/** The daemon connect command (origin known client-side; CLI prefix from server
+ *  config). Uses the MANAGED `up` form: it spawns a detached daemon that survives
+ *  the terminal (the old bare-flags foreground form died with the shell) and
+ *  waits for a readiness probe. The device token rides as `--connect-key` — `up`
+ *  adopts it as this machine's stored identity on first run. */
 function connectCmd(token: string, cli: string): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3000'
-  return `${cli} --server-url ${origin} --api-key ${token}`
+  return `${cli} up --server-url ${origin} --connect-key ${token}`
 }
+
+/** The one-liner that updates an outdated daemon (the invoked CLI is the new
+ *  version; `update` hands the running daemon over). Same for every machine. */
+const UPDATE_CMD = 'npx @crewlet/loopany@latest update'
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false)
@@ -235,6 +244,21 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
                   <CopyButton text={connectCmd(m.token, cliCmd)} />
                 </div>
               </details>
+            )}
+            {/* Outdated-daemon hint: only when both versions are known and the
+                daemon is genuinely behind (never on unknown/equal/newer). */}
+            {isOutdated(m.daemonVersion, m.latestDaemonVersion) && (
+              <div className="flex flex-col gap-1.5">
+                <div className="font-mono text-[11px] text-secondary">
+                  daemon v{m.daemonVersion} · update available (v{m.latestDaemonVersion})
+                </div>
+                <div className="flex items-start gap-2">
+                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-display p-3 font-mono text-[11px] leading-relaxed text-paper">
+                    {UPDATE_CMD}
+                  </pre>
+                  <CopyButton text={UPDATE_CMD} />
+                </div>
+              </div>
             )}
           </li>
         ))}

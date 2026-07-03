@@ -1451,3 +1451,20 @@ test("report clips sessionId and error (untrusted wire input, same discipline as
   gateway().report(again.rt, { ok: false, durationMs: 1, error: 42 as never });
   expect(store.getRun(again.run.id)!.error).toBe("run failed on machine");
 });
+
+test("poll persists the daemon version, updating only when it changes", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  // First poll self-registers and records the reported version.
+  gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" });
+  expect(store.getMachine(machineId)!.daemonVersion).toBe("0.8.0");
+  // A newer version on the next poll updates it.
+  gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" });
+  expect(store.getMachine(machineId)!.daemonVersion).toBe("0.9.0");
+  // A poll with no version leaves it as-is (older daemons don't report it).
+  gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64" });
+  expect(store.getMachine(machineId)!.daemonVersion).toBe("0.9.0");
+  // An over-long version is clipped defensively (untrusted wire input).
+  gateway().poll(token, { host: "mac", version: "9".repeat(200) });
+  expect(store.getMachine(machineId)!.daemonVersion!.length).toBe(64);
+});
