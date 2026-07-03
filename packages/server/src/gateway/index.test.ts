@@ -347,7 +347,7 @@ test("editLoop repoints the task file and pushes workflow/ui/schema without a ru
 
   const res = gateway().editLoop(token, id, {
     taskFile: "/home/u/newproj/README.md",
-    workflow: "export default async () => ({ ok: true })",
+    workflow: "return { state: prev };",
     ui: "<div id='dash'>hi</div>",
     stateSchema: [{ key: "mrr", label: "MRR", unit: "$" }],
   });
@@ -355,7 +355,7 @@ test("editLoop repoints the task file and pushes workflow/ui/schema without a ru
   expect((res.body as any).applied).toEqual(expect.arrayContaining(["taskFile", "workflow", "ui", "stateSchema"]));
   const loop = store.getLoop(id)!;
   expect(loop.taskFile).toBe("/home/u/newproj/README.md");
-  expect(loop.workflow).toContain("export default");
+  expect(loop.workflow).toContain("return { state: prev }");
   expect(loop.ui).toContain("dash");
   expect(loop.stateSchema).toEqual([{ key: "mrr", label: "MRR", unit: "$" }]);
 });
@@ -611,6 +611,115 @@ test("set-workflow updates only through an evolution token", () => {
   expect(res.status).toBe(200);
   expect(store.getLoop(loop.id)!.workflow).toBe("return { state: prev }");
   expect(store.getRun(run.id)!.control?.[0]?.command).toBe("set-workflow");
+});
+
+// ---- workflow syntax validation (write-time, zero-exec) across all three paths ----
+// The daemon runner wraps the body in an async arrow inside a generated ES module,
+// so top-level export/import (the Claude Code Workflow tool's `export const meta`
+// header) is a parse error that kills every run. The server rejects it at write time.
+
+const EXPORT_META = 'export const meta = { name: "x" };\nreturn { state: prev };';
+const STATIC_IMPORT = 'import fs from "node:fs";\nreturn { state: prev };';
+const GOOD_WORKFLOW = 'const res = await tools.call("posthog.exec", { q: 1 });\nreturn { message: `${res.data?.length ?? 0} rows`, state: prev };';
+
+test("set-workflow rejects an `export const meta` body with a fix-teaching message; loop untouched", () => {
+  const { loop, machine, run } = seededLoop();
+  const token = tokens.registerRunToken({
+    runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
+  });
+  const res = gateway().agentApi(token, ["set-workflow", "--file-content", EXPORT_META]);
+  expect(res.status).toBe(400);
+  const text = (res.body as { text: string }).text;
+  expect(text).toMatch(/syntax error/i);
+  expect(text).toMatch(/export const meta/);
+  expect(text).toMatch(/NOT an ES module/);
+  expect(text).toMatch(/Claude Code Workflow tool/);
+  // Nothing stored — the loop had no workflow and still has none.
+  expect(store.getLoop(loop.id)!.workflow ?? null).toBeNull();
+});
+
+test("set-workflow rejects a static import body", () => {
+  const { loop, machine, run } = seededLoop();
+  const token = tokens.registerRunToken({
+    runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
+  });
+  const res = gateway().agentApi(token, ["set-workflow", "--file-content", STATIC_IMPORT]);
+  expect(res.status).toBe(400);
+  expect((res.body as { text: string }).text).toMatch(/import/i);
+});
+
+test("set-workflow accepts a real `await tools.call(...)` body unchanged", () => {
+  const { loop, machine, run } = seededLoop();
+  const token = tokens.registerRunToken({
+    runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
+  });
+  const res = gateway().agentApi(token, ["set-workflow", "--file-content", GOOD_WORKFLOW]);
+  expect(res.status).toBe(200);
+  expect(store.getLoop(loop.id)!.workflow).toBe(GOOD_WORKFLOW);
+});
+
+test("set-workflow accepts a body containing the literal word `export` inside a string (no false positive)", () => {
+  const { loop, machine, run } = seededLoop();
+  const token = tokens.registerRunToken({
+    runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
+  });
+  const body = 'return { message: "export const meta = not real" };';
+  const res = gateway().agentApi(token, ["set-workflow", "--file-content", body]);
+  expect(res.status).toBe(200);
+  expect(store.getLoop(loop.id)!.workflow).toBe(body);
+});
+
+test("editLoop rejects an `export const meta` workflow with a rejection entry; loop untouched", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const created = gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  const id = (created.body as any).id as string;
+
+  // Non-dry-run editLoop surfaces the first rejection as body.error (400).
+  const res = gateway().editLoop(token, id, { workflow: EXPORT_META });
+  expect(res.status).toBe(400);
+  expect((res.body as any).error).toMatch(/export const meta/);
+  expect(store.getLoop(id)!.workflow ?? null).toBeNull();
+
+  // The dry-run path reports it as a per-key rejection entry instead.
+  const dry = gateway().editLoop(token, id, { workflow: EXPORT_META }, true);
+  expect(dry.status).toBe(200);
+  const reject = ((dry.body as any).rejections as Array<{ key: string; reason: string }>).find((r) => r.key === "workflow");
+  expect(reject).toBeTruthy();
+  expect(reject!.reason).toMatch(/NOT an ES module/);
+  expect((dry.body as any).ok).toBe(false);
+});
+
+test("createLoop rejects an `export const meta` workflow before persisting (400, nothing created)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const before = store.loopsForMachine(machineId).length;
+  const res = gateway().createLoop(token, { name: "C", cron: "0 8 * * *", workflow: EXPORT_META });
+  expect(res.status).toBe(400);
+  expect((res.body as any).error).toMatch(/export const meta/);
+  expect(store.loopsForMachine(machineId).length).toBe(before);
+});
+
+test("createLoop --dry-run surfaces the workflow syntax error before persistence", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const res = gateway().createLoop(token, { name: "C", cron: "0 8 * * *", workflow: EXPORT_META, dryRun: true });
+  expect(res.status).toBe(400);
+  expect((res.body as any).error).toMatch(/NOT an ES module/);
+  expect(store.loopsForMachine(machineId).length).toBe(0);
+});
+
+test("createLoop accepts a legal `tools.call` workflow (no taskFile needed)", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const res = gateway().createLoop(token, { name: "C", cron: "0 8 * * *", workflow: GOOD_WORKFLOW });
+  expect(res.status).toBe(200);
+  const loop = store.getLoop((res.body as any).id)!;
+  expect(loop.workflow).toBe(GOOD_WORKFLOW);
 });
 
 // ---- closed-loop goal: finish verb, gating, completion side effects, reopen ----

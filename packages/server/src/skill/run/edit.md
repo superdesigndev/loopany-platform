@@ -29,7 +29,11 @@ this loop — no id needed.
     Additive: pass the full intended schema; don't drop a key the UI still binds.
   - `loopany set-workflow --file <path>` — the deterministic pre-stage JS (`prev`,
     `fetch`, `tools.call(name, args)` for configured MCP servers,
-    `agent(message?, data?)`; returns `{ message?, state? }`).
+    `agent(message?, data?)`; returns `{ message?, state? }`). Syntax: a plain
+    statement sequence run inside an async function — **not an ES module, not the
+    Claude Code `Workflow` tool**; no top-level `export`/`import` (never
+    `export const meta = {…}`). The server parse-checks it and rejects a bad body
+    (see `create.md` §2 for the full contract).
   Leave any of these untouched unless the change explicitly asks for it.
 
 Changing the loop's goal or reopening a completed loop is an owner action — there's

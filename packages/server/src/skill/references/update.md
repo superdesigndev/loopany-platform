@@ -86,6 +86,11 @@ run-time `set-*` verbs — because multi-line JS/HTML/JSON is awkward to embed i
 <loopany-cli> edit <loop-id> --schema-file schema.json  # replace the metric schema (JSON array)
 ```
 
+A `--workflow-file` body must obey the workflow syntax contract — a plain statement
+sequence run inside an async function, **not an ES module and not the Claude Code
+`Workflow` tool** (no top-level `export`/`import`, never `export const meta = {…}`; see
+`create.md` §2). The server parse-checks it and rejects a bad body (surfaced by `--dry-run`).
+
 Explicit `--json` keys win over any file flag. `loopany edit` prints
 `updated <name> — <fields>` on success, or `loopany: <error>` to fix. You can only
 edit loops bound to this machine; if `<loopany-cli> loops` doesn't list it, the user

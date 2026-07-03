@@ -514,6 +514,40 @@ LLM and executes no user code**.
   `runner.test.ts` (fallback path via a fake `claude` bin + failing bridge fixture). Live PostHog
   manual-acceptance steps: `packages/daemon/docs/mcp-workflow-tools.md`. Do NOT scope-creep into
   write-tool support / a tool registry UI / CLI unification (later phases).
+- **Workflow syntax is an async-FUNCTION-BODY, not an ES module — enforced at write time.**
+  The daemon runner (`packages/daemon/src/workflow.ts` `buildWrapper`) interpolates a loop's
+  workflow body into an async arrow (`const __run = async (prev) => { <BODY> }`) inside a
+  generated ESM file run by bare node. So the body legally uses top-level `await` +
+  `return {message?, state?}` but a top-level `export`/`import` (e.g. the Claude Code Workflow
+  tool's `export const meta = {…}` header — which the authoring agent IS claude-code, so its own
+  harness teaches it) is a PARSE error that kills EVERY run before any line executes. The trap is
+  now closed in three layers: **(A) write-time validation** — `gateway/index.ts` `validateWorkflow`
+  is a zero-exec parse check (`new (Object.getPrototypeOf(async function(){}).constructor)("prev",
+  "agent","tools","fetch", '"use strict";\n'+body)` — the AsyncFunction constructor COMPILES but
+  never RUNS the body; strict-prefix mirrors the ESM wrapper). It returns a discriminated union
+  `{ok:true,value}|{ok:false,detail}` (like `validateSchema`) with a fix-teaching hint when the
+  error mentions export/import, and is wired into ALL THREE write paths: `applySetWorkflow`
+  (run-token → 400), `editLoop` (→ `rejections` entry, surfaced as `body.error` on the non-dry-run
+  400 and as a per-key `rejections[]` on `--dry-run`), and `createLoop` (which previously skipped
+  validation entirely — now 400s before persistence, so `loopany new --dry-run` catches it too).
+  Empty/cleared workflow stays valid (value null). It does NOT catch `require` (a runtime error,
+  out of scope). **(B) authoring docs** teach the contract: the canonical block lives in
+  `skill/references/create.md` §2 (what a workflow IS/IS NOT + a minimal `tools.call` example),
+  cross-referenced from `evolve.md` §2 and `skill/run/edit.md`; `evolve.md`'s smoke-test was fixed
+  to wrap the body in an async arrow before running (a standalone `.mjs` with a top-level `export
+  const meta` PARSES FINE and gives a false pass); `packages/daemon/docs/mcp-workflow-tools.md`
+  labels its example as the whole surface. **(C.1) fallback prompt** — `runner.ts`
+  `buildWorkflowFallbackTask` now branches on `/SyntaxError/` in the failure text: a deterministic
+  parse failure is a user-fix case (the exec run has NO `set-workflow` verb — it's evolve/edit-only
+  — so it recurs every tick), so the agent writes the `workflow-setup-<date>.md` file and surfaces
+  a one-line owner prompt (`loopany edit <id> --workflow-file …` or clear via `--json
+  '{"workflow":""}'`); non-syntax failures keep the old "note it for the next evolve pass" branch.
+  An already-deployed broken loop heals via its next evolve pass (the evolve prompt is a
+  server-side `?raw` import) — no data migration. **Explicitly out of scope (captain): NO dialect
+  tolerance (never strip/transform `export`), NO module-contract redesign, NO daemon pre-run
+  compile check, NO `set-workflow` for exec runs.** Tests: `gateway/index.test.ts` (reject export/
+  import across all 3 paths incl. dry-run, accept `tools.call`, no false positive on "export" in a
+  string), `runner.test.ts` (SyntaxError branch).
 - **Dashboard artifact primitives (`loop-embed`/`loop-calendar`) + Recharts charts.**
   The generative-UI primitive registry lives in `LoopView.tsx`, and registering a
   primitive means moving THREE things together: (1) `LOOP_TAGS`/`LOOP_ATTRS` + the

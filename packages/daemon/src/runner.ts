@@ -174,7 +174,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       LOOPANY_SERVER_URL: serverUrl,
     };
     const task = workflowFailure
-      ? buildWorkflowFallbackTask(d.task, workflowFailure, dateStamp(), d.loop.name)
+      ? buildWorkflowFallbackTask(d.task, workflowFailure, dateStamp(), d.loop.name, d.loop.id)
       : escalation
         ? `${d.task}\n\nworkflow signal:\n${escalation}`
         : d.task;
@@ -266,9 +266,41 @@ export function buildWorkflowFallbackTask(
   failure: { error: string; source: string },
   dateStr: string,
   loopName: string,
+  loopId = "",
 ): string {
   const slug = loopName || "this-loop";
   const setupFile = `workflow-setup-${dateStr}.md`;
+  // A SyntaxError is a DETERMINISTIC parse failure: the workflow never runs, fails
+  // identically every tick, and an exec run has NO verb to fix it (set-workflow is
+  // evolve/edit-only). So it must escalate to the owner, not quietly wait for evolve.
+  const isSyntaxError = /SyntaxError/.test(failure.error);
+  const editCmd = loopId
+    ? `loopany edit ${loopId} --workflow-file <corrected.js>`
+    : `loopany edit <loop-id> --workflow-file <corrected.js>`;
+  const closing = isSyntaxError
+    ? [
+        "This is a SYNTAX ERROR: the workflow fails to parse, so it never runs and will",
+        "fail IDENTICALLY on every future tick until the workflow is rewritten or cleared.",
+        "You (an exec run) have NO command to change the workflow — `set-workflow` is an",
+        "evolve/edit-only verb — so do NOT try to fix it yourself and do NOT just note it",
+        "for the next evolve pass (the loop would keep failing every tick until then).",
+        "Treat it as a user-fix case: write the setup file above with the concrete syntax",
+        "problem and a corrected workflow body (remember: a workflow is a plain script body",
+        "run inside an async function — NOT an ES module, NOT the Claude Code Workflow tool;",
+        "no top-level `export`/`import`, e.g. no `export const meta = {…}`). Then surface ONE",
+        "copy-paste owner prompt to apply it from their machine, e.g.:",
+        "",
+        `    ${editCmd}`,
+        "",
+        "or, if the workflow isn't worth keeping, clear it (`loopany edit <loop-id> --json",
+        `'{"workflow":""}'`,
+        ").",
+      ]
+    : [
+        "If instead the workflow just has a plain bug you could fix deterministically (a wrong",
+        "tool name, a bad filter), note it briefly for the next evolve pass — don't bother the",
+        "user with a fix that doesn't need them.",
+      ];
   return [
     originalTask,
     "",
@@ -309,9 +341,7 @@ export function buildWorkflowFallbackTask(
     "passed through to the workflow) in the daemon's environment and restart the daemon —",
     "say so concretely in the setup file.",
     "",
-    "If instead the workflow just has a plain bug you could fix deterministically (a wrong",
-    "tool name, a bad filter), note it briefly for the next evolve pass — don't bother the",
-    "user with a fix that doesn't need them.",
+    ...closing,
   ].join("\n");
 }
 

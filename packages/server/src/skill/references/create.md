@@ -106,6 +106,32 @@ A loop fires on a cron schedule. Each run is **either**:
   it at your **task file** — so there's no per-run instruction to write; the brief
   lives entirely in the task file's `## Spec`.
 
+### Workflow syntax contract — read this before writing one
+
+**What a workflow IS:** a plain **JavaScript statement sequence** that LoopAny runs
+*inside* an async function — so top-level `await` is fine and you end with
+`return { message?, state? }`. The injected globals `prev`, `agent(message?, data?)`,
+`tools.call(name, args)`, and `fetch` are already in scope — use them directly.
+
+**What a workflow is NOT:** it is **not an ES module** and **not the Claude Code
+`Workflow` tool**. Do **not** start it with `export const meta = {…}`, and do **not**
+use any top-level `export`/`import` — those are a parse error that fails the whole run
+before any line executes. (If you know the Claude Code `Workflow` tool, forget its
+`export const meta` header here — this is a different, smaller thing: no header, no
+imports.) Need a module? Use dynamic `await import('node:os')`. There is no `require`.
+The server parse-checks the body at write time and rejects a bad one with this same
+guidance, so a rejected `loopany new`/`edit`/`set-workflow` means fix the syntax.
+
+**Canonical example** (the whole surface — no header, no imports):
+
+```js
+const res = await tools.call("posthog.exec", { query: "select 1" });
+const rows = res.data?.results ?? [];
+if (rows.length === (prev?.count ?? -1)) return { state: prev };   // nothing new → silent tick
+agent("summarize what changed", rows);                            // escalate to the agent
+return { message: `${rows.length} rows`, state: { count: rows.length } };
+```
+
 Author the config **inline** and pass it to `loopany new --json` (§3) — no config
 file to write. Only the loop's real intent goes in it; the CLI fills the envelope:
 

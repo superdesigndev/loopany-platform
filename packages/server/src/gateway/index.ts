@@ -455,7 +455,15 @@ export class MachineGateway {
     // a loop's standing brief lives in its task file's Spec, and the run message is a
     // server-composed static trigger (see buildExecTask). So a loop needs either a
     // deterministic workflow OR a task file to work from.
-    const workflow = str(body.workflow)?.slice(0, WIRE_TEXT_CAP) ?? null;
+    // Parse-check the workflow at write time (zero-exec) so a syntactically
+    // broken body — most often the Claude Code Workflow tool's `export const
+    // meta = {…}` header, which is an ES-module construct illegal in the
+    // runner's async-arrow wrapper — is rejected here with a fix-teaching
+    // message instead of failing every run. This also surfaces via `--dry-run`
+    // (the branch below runs only after this check passes).
+    const wf = this.validateWorkflow(str(body.workflow)?.slice(0, WIRE_TEXT_CAP) ?? "");
+    if (!wf.ok) return { status: 400, body: { error: wf.detail } };
+    const workflow = wf.value;
     const taskFile = str(body.taskFile);
     if (!workflow && !taskFile) return { status: 400, body: { error: "provide a workflow (JS) or a taskFile (path to the loop's Spec)" } };
     // Optional setpoint (clipped one-liner); absent/blank ⇒ open loop.
@@ -787,7 +795,11 @@ export class MachineGateway {
     // also get the same wire clip discipline as createLoop's workflow.
     if (p.workflow !== undefined) {
       if (typeof p.workflow !== "string") rejections.push({ key: "workflow", reason: "workflow must be a string (the pre-stage JS)" });
-      else set("workflow", this.validateWorkflow(p.workflow.slice(0, WIRE_TEXT_CAP)).value, loop.workflow);
+      else {
+        const v = this.validateWorkflow(p.workflow.slice(0, WIRE_TEXT_CAP));
+        if (!v.ok) rejections.push({ key: "workflow", reason: v.detail });
+        else set("workflow", v.value, loop.workflow);
+      }
     }
     if (p.ui !== undefined) {
       if (typeof p.ui !== "string") rejections.push({ key: "ui", reason: "ui must be a string (the dashboard HTML)" });
@@ -1520,9 +1532,31 @@ export class MachineGateway {
     return { ok: true, value: store.coerceUi(html) ?? null };
   }
 
-  /** Normalize the deterministic pre-stage JS → the stored value (or null). */
-  private validateWorkflow(body: string): { ok: true; value: string | null } {
-    return { ok: true, value: body.trim() || null };
+  /** Validate + normalize the deterministic pre-stage JS → the stored value (or
+   *  null to clear). A workflow body is NOT an ES module: the daemon runner
+   *  (`workflow.ts` buildWrapper) interpolates it into an async arrow inside a
+   *  generated ESM file, so top-level `export`/`import` (e.g. the Claude Code
+   *  Workflow tool's `export const meta = {…}` header) is a PARSE error that
+   *  kills the whole run before any line executes. We catch that at write time
+   *  with a zero-exec parse check: the AsyncFunction constructor COMPILES the
+   *  body (as the async-function body the runner will wrap it in, strict-mode
+   *  matched to the ESM wrapper) but never RUNS it. Mirrors validateSchema's
+   *  discriminated-union shape so the call sites map ok:false to a 400/rejection. */
+  private validateWorkflow(body: string): { ok: true; value: string | null } | { ok: false; detail: string } {
+    const src = body.trim();
+    if (!src) return { ok: true, value: null }; // clearing the workflow is fine
+    try {
+      // Zero-exec: the constructor compiles but does not execute the body.
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as FunctionConstructor;
+      new AsyncFunction("prev", "agent", "tools", "fetch", '"use strict";\n' + src);
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      const hint = /export|import/.test(raw)
+        ? " — a LoopAny workflow is a plain script body (statements + `return {message?, state?}`), NOT an ES module and NOT the Claude Code Workflow tool format: remove any top-level `export`/`import` (e.g. `export const meta = {...}`). Use the injected globals `prev`/`agent`/`tools`/`fetch` directly."
+        : "";
+      return { ok: false, detail: `workflow has a syntax error: ${raw}${hint}` };
+    }
+    return { ok: true, value: src };
   }
 
   /** Validate a state schema. Accepts a JSON string (run-token path) or an
@@ -1560,8 +1594,9 @@ export class MachineGateway {
   }
 
   private applySetWorkflow(loopId: string, body: string): Applied {
-    const { value: workflow } = this.validateWorkflow(body);
-    const loop = store.updateLoop(loopId, { workflow });
+    const v = this.validateWorkflow(body);
+    if (!v.ok) return { ok: false, detail: v.detail };
+    const loop = store.updateLoop(loopId, { workflow: v.value });
     if (!loop) return { ok: false, detail: "loop not found" };
     return { ok: true, detail: loop.workflow ? `workflow updated (${loop.workflow.length} bytes)` : "workflow cleared" };
   }

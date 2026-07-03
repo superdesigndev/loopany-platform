@@ -63,6 +63,41 @@ describe("buildWorkflowFallbackTask", () => {
   });
 });
 
+describe("buildWorkflowFallbackTask — SyntaxError (deterministic parse failure) branch", () => {
+  // The incident: the workflow was authored in Claude Code Workflow tool syntax
+  // (`export const meta`), which is illegal in the runner's async-arrow wrapper.
+  const failure = {
+    error: "workflow exited with code 1\nSyntaxError: Unexpected token 'export'",
+    source: "export const meta = { name: 'x' };\nreturn { state: prev };",
+  };
+  const task = buildWorkflowFallbackTask("ORIGINAL TASK", failure, "2026-07-01", "cookie", "loop-abc");
+
+  test("still tells the agent to complete the original task first", () => {
+    expect(task).toContain("ORIGINAL TASK");
+    expect(task).toMatch(/complete THIS run's original task/i);
+  });
+  test("treats it as a user-fix case, not a note-for-evolve case", () => {
+    expect(task).toMatch(/SYNTAX ERROR/);
+    expect(task).toMatch(/every future tick/i);
+    expect(task).toMatch(/NO command to change the workflow/i);
+    // The non-syntax "note it for evolve" closing must NOT appear.
+    expect(task).not.toMatch(/note it briefly for the next evolve pass/i);
+  });
+  test("surfaces an owner prompt carrying the loop id to edit or clear the workflow", () => {
+    expect(task).toContain("loopany edit loop-abc --workflow-file");
+    expect(task).toMatch(/clear it/i);
+    expect(task).toContain('{"workflow":""}');
+  });
+  test("names the export/module trap in the corrected-body guidance", () => {
+    expect(task).toMatch(/NOT an ES module/);
+    expect(task).toMatch(/export const meta/);
+  });
+  test("falls back to a placeholder loop id when none is passed", () => {
+    const t = buildWorkflowFallbackTask("T", failure, "2026-07-01", "cookie");
+    expect(t).toContain("loopany edit <loop-id> --workflow-file");
+  });
+});
+
 describe("foldEscalation", () => {
   test("folds message + pretty-printed data into the task text", () => {
     const s = foldEscalation([{ message: "look at this", data: { a: 1 } }]);

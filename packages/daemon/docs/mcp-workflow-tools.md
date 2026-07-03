@@ -8,6 +8,11 @@ judgment / summary / decision for the LLM agent.
 
 ## Surface (what a workflow author writes)
 
+The workflow body is the **whole surface** — a plain statement sequence run inside an
+async function, ending in `return { message?, state? }`. There is **no `export const
+meta` header and no top-level `import`**: the body is NOT an ES module and NOT the
+Claude Code `Workflow` tool. The example below is complete as written.
+
 ```js
 // Inside a loop's workflow body (see references/evolve.md §2b for the full contract):
 const res = await tools.call("posthog.query-run", { query: { kind: "HogQLQuery", query: "..." } });
