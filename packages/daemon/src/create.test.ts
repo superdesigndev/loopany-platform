@@ -4,9 +4,9 @@
  * Pure functions, no network — they decide the `agent` field the create POST
  * carries (or omits, letting the server default it to claude-code).
  *
- * Plus the skill-install trigger at create: where the workdir resolves and that
- * the install fires only after a confirmed create, never blocking it (both with
- * the fetch + installer seams injected, so nothing hits the network or spawns npx).
+ * Plus the skill-install trigger at create: that the USER-scope install fires only
+ * after a confirmed create, never blocking it (both with the fetch + installer seams
+ * injected, so nothing hits the network or spawns npx).
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -14,8 +14,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { LOOPANY_DIR } from "./config.js";
-import { coerceAgent, cronLooksValid, detectAgentFromEnv, resolveAgent, resolveLoopWorkdir, runCreate } from "./create.js";
+import { coerceAgent, cronLooksValid, detectAgentFromEnv, resolveAgent, runCreate } from "./create.js";
 import type { InstallOpts, InstallOutcome } from "./skill-install.js";
 
 const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
@@ -104,29 +103,6 @@ describe("resolveAgent (precedence: measured > declared > undefined)", () => {
   });
 });
 
-describe("resolveLoopWorkdir (where the skill installs at create)", () => {
-  test("an explicit workdir is used verbatim (made absolute)", () => {
-    expect(resolveLoopWorkdir("/srv/loops/cookie", "loop-1")).toBe(path.resolve("/srv/loops/cookie"));
-  });
-
-  test("a ~/ workdir expands to the home dir", () => {
-    expect(resolveLoopWorkdir("~/loops/cookie", "loop-1")).toBe(path.join(os.homedir(), "loops/cookie"));
-  });
-
-  test("no workdir → the per-loop daemon scratch dir, never process.cwd()", () => {
-    const expected = path.join(LOOPANY_DIR, "work", "loop-xyz");
-    expect(resolveLoopWorkdir(undefined, "loop-xyz")).toBe(expected);
-    expect(resolveLoopWorkdir("   ", "loop-xyz")).toBe(expected);
-    expect(resolveLoopWorkdir(undefined, "loop-xyz")).not.toBe(process.cwd());
-  });
-
-  test("no workdir AND no loopId → \"\" (never collapses to the shared scratch parent)", () => {
-    expect(resolveLoopWorkdir(undefined, "")).toBe("");
-    expect(resolveLoopWorkdir("   ", "  ")).toBe("");
-    expect(resolveLoopWorkdir(undefined, "")).not.toBe(path.join(LOOPANY_DIR, "work"));
-  });
-});
-
 describe("runCreate — skill install fires only after a confirmed create, never blocks it", () => {
   const prevToken = process.env.LOOPANY_TOKEN;
   beforeEach(() => {
@@ -137,13 +113,12 @@ describe("runCreate — skill install fires only after a confirmed create, never
     else process.env.LOOPANY_TOKEN = prevToken;
   });
 
-  test("a successful create creates the (not-yet-existing) workdir and installs there (project-level)", async () => {
-    const workdir = tmpWorkdir(); // nested + absent → proves the dir is created before install
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir });
+  test("a successful create installs the skill at USER scope (global), independent of workdir", async () => {
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir: tmpWorkdir() });
     const installed: InstallOpts[] = [];
     const installer = async (opts: InstallOpts): Promise<InstallOutcome> => {
       installed.push(opts);
-      return { ok: true, line: "loopany skill: installed" };
+      return { ok: true, line: "loopany skill: installed → ~/.claude/skills/loopany" };
     };
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
       fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie" }),
@@ -151,17 +126,15 @@ describe("runCreate — skill install fires only after a confirmed create, never
       stdout: () => {},
     });
     expect(code).toBe(0);
-    // The missing workdir was created (no ENOENT on npx's cwd) ...
-    expect(fs.existsSync(workdir)).toBe(true);
-    // ... and the install targets it (NOT global, NOT cwd) so it lands in <workdir>/.claude/skills.
-    expect(installed).toEqual([{ cwd: path.resolve(workdir) }]);
+    // The install targets the user dir (global) — never the loop workdir/cwd.
+    expect(installed).toEqual([{ global: true }]);
   });
 
-  test("a successful create with no workdir + no returned id does NOT install (no shared-parent fallback)", async () => {
+  test("a successful create with no workdir + no returned id STILL installs (user scope needs neither)", async () => {
     const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" }); // no workdir
-    let called = false;
-    const installer = async (): Promise<InstallOutcome> => {
-      called = true;
+    const installed: InstallOpts[] = [];
+    const installer = async (opts: InstallOpts): Promise<InstallOutcome> => {
+      installed.push(opts);
       return { ok: true, line: "" };
     };
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
@@ -170,12 +143,11 @@ describe("runCreate — skill install fires only after a confirmed create, never
       stdout: () => {},
     });
     expect(code).toBe(0);
-    expect(called).toBe(false); // resolveLoopWorkdir → "" → install skipped
+    expect(installed).toEqual([{ global: true }]);
   });
 
   test("a failed create does NOT install the skill", async () => {
-    const workdir = tmpWorkdir();
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
     let called = false;
     const installer = async (): Promise<InstallOutcome> => {
       called = true;
@@ -188,12 +160,10 @@ describe("runCreate — skill install fires only after a confirmed create, never
     });
     expect(code).toBe(1);
     expect(called).toBe(false);
-    expect(fs.existsSync(workdir)).toBe(false); // a failed create touches nothing
   });
 
   test("an install failure does NOT fail the create (best-effort, swallowed)", async () => {
-    const workdir = tmpWorkdir();
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
     const installer = async (): Promise<InstallOutcome> => {
       throw new Error("npx ENOENT");
     };

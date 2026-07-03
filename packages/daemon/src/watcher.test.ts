@@ -88,3 +88,44 @@ describe("WatchManager.reconcile — local roots jail", () => {
     }
   });
 });
+
+describe("WatchManager.reconcile — stale per-workdir skill cleanup (skill moved to user scope)", () => {
+  /** Plant `<dir>/.claude/skills/loopany/SKILL.md` with our frontmatter. */
+  function plantSkill(dir: string): string {
+    const skill = path.join(dir, ".claude", "skills", "loopany");
+    fs.mkdirSync(skill, { recursive: true });
+    fs.writeFileSync(path.join(skill, "SKILL.md"), "---\nname: loopany\n---\n# x\n");
+    return skill;
+  }
+
+  test("removes a stale loopany skill copy in a watched loop folder", () => {
+    const loop = path.join(root, "loop");
+    fs.mkdirSync(loop, { recursive: true });
+    const skill = plantSkill(loop);
+    mgr = new WatchManager("http://127.0.0.1:1", "dk_x");
+    mgr.reconcile([{ loopId: "l1", workdir: loop, taskFile: null }]);
+    expect(fs.existsSync(skill)).toBe(false); // shadowing copy gone
+    expect(mgr.watchedDirs().get("l1")).toBe(loop); // still watched
+  });
+
+  test("respects the LOOPANY_ROOTS jail — a copy outside it is left untouched", () => {
+    const jail = path.join(root, "jail");
+    const outside = path.join(root, "outside");
+    fs.mkdirSync(jail, { recursive: true });
+    fs.mkdirSync(outside, { recursive: true });
+    const skill = plantSkill(outside);
+    mgr = new WatchManager("http://127.0.0.1:1", "dk_x", [jail]);
+    mgr.reconcile([{ loopId: "out", workdir: outside, taskFile: null }]);
+    expect(fs.existsSync(skill)).toBe(true); // outside the jail → never touched
+  });
+
+  test("a foreign .claude/skills/loopany (not ours) is not deleted", () => {
+    const loop = path.join(root, "loop2");
+    const skill = path.join(loop, ".claude", "skills", "loopany");
+    fs.mkdirSync(skill, { recursive: true });
+    fs.writeFileSync(path.join(skill, "SKILL.md"), "---\nname: not-ours\n---\n# x\n");
+    mgr = new WatchManager("http://127.0.0.1:1", "dk_x");
+    mgr.reconcile([{ loopId: "l2", workdir: loop, taskFile: null }]);
+    expect(fs.existsSync(skill)).toBe(true); // guard holds
+  });
+});

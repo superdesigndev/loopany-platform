@@ -9,8 +9,16 @@
  * daemon when one is already polling: the LOCAL pidfile is consulted FIRST, so an
  * unreachable server can't make repeated `up`s leak a new daemon per attempt.
  *
- * Every external touch (status fetch, spawn, kill, sleep, pidfile check,
- * persistence, output) is an injectable seam so tests need no process/network.
+ * On a successful up (daemon confirmed live or already running) it also best-effort
+ * REFRESHES the loopany agent skill at USER scope (`~/.claude/skills/loopany`), so
+ * the on-disk skill stays version-locked to the daemon `up` just launched. This is a
+ * deliberate reintroduction of skill logic into `up`: 0.4.0 removed it because the
+ * old PROJECT-scope install would pollute an arbitrary cwd `up` might run from; user
+ * scope has no such hazard (it targets the home dir regardless of cwd), so `up` is
+ * the natural refresh point. It's announced in one line and NEVER blocks/fails up.
+ *
+ * Every external touch (status fetch, spawn, kill, sleep, pidfile check, skill
+ * refresh, persistence, output) is an injectable seam so tests need no process/network.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -19,6 +27,7 @@ import path from "node:path";
 import { DEVICE_FILE, LOOPANY_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
 import { fetchMachineStatus, type MachineStatus } from "./control.js";
 import { verifiedRunningPid } from "./pidfile.js";
+import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -67,6 +76,8 @@ export type EnsureDeps = {
   localPid?: () => number | undefined;
   persist?: (file: string, value: string) => void;
   readToken?: () => string | undefined;
+  /** Refresh the user-scope skill (best-effort, announced). Injected in tests. */
+  installSkill?: (opts: InstallOpts) => Promise<InstallOutcome>;
   out?: (s: string) => void;
   err?: (s: string) => void;
 };
@@ -80,8 +91,20 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}): Prom
     localPid: injected.localPid ?? (() => verifiedRunningPid()),
     persist: injected.persist ?? persist,
     readToken: injected.readToken ?? (() => readStored(DEVICE_FILE)),
+    installSkill: injected.installSkill ?? installSkill,
     out: injected.out ?? ((s: string) => process.stdout.write(s)),
     err: injected.err ?? ((s: string) => process.stderr.write(s)),
+  };
+
+  /** Best-effort user-scope skill refresh — announced in one line, never throws,
+   *  never changes the up outcome. Called on every success path. */
+  const refreshSkill = async (): Promise<void> => {
+    try {
+      const r = await d.installSkill({ global: true });
+      d.out(r.line + "\n");
+    } catch {
+      /* never let a skill refresh fail `up` */
+    }
   };
 
   const server = resolveServerUrl(flag(args, "server-url"));
@@ -111,12 +134,14 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}): Prom
     } else {
       d.out(`daemon already running locally (pid ${localPid}) — server unreachable or machine still connecting; check ${logFile}\n`);
     }
+    await refreshSkill();
     return 0;
   }
 
   const before = await d.fetchStatus(server, token);
   if (before?.online) {
     d.out(`daemon already running for this machine${before.name ? ` (${before.name})` : ""}\n`);
+    await refreshSkill();
     return 0;
   }
 
@@ -129,6 +154,7 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}): Prom
     const st = await d.fetchStatus(server, token);
     if (st?.online) {
       d.out(`daemon online — this machine is connected${st.name ? ` (${st.name})` : ""}\n`);
+      await refreshSkill();
       return 0;
     }
   }

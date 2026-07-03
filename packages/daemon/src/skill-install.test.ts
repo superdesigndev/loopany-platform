@@ -10,7 +10,15 @@ import path from "node:path";
 
 import { afterAll, describe, expect, test } from "vitest";
 
-import { installArgs, installSkill, bundledSkillAvailable, type Runner } from "./skill-install.js";
+import {
+  installArgs,
+  installSkill,
+  bundledSkillAvailable,
+  isOurSkillDir,
+  projectSkillDir,
+  removeStaleProjectSkill,
+  type Runner,
+} from "./skill-install.js";
 
 // A throwaway bundled-skill dir so the presence check passes without a real build.
 const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-skill-"));
@@ -119,5 +127,56 @@ describe("installSkill", () => {
   test("ok runner success", async () => {
     const r = await installSkill({ dir: fixtureDir, runner: ok });
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("stale per-workdir skill cleanup (skill moved to user scope)", () => {
+  test("projectSkillDir points at <loopDir>/.claude/skills/loopany", () => {
+    expect(projectSkillDir("/loops/cookie")).toBe(path.join("/loops/cookie", ".claude", "skills", "loopany"));
+  });
+
+  test("isOurSkillDir only trusts a SKILL.md with `name: loopany` frontmatter", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-stale-"));
+    const ours = path.join(base, "ours");
+    const theirs = path.join(base, "theirs");
+    const noFrontmatter = path.join(base, "nofm");
+    fs.mkdirSync(ours, { recursive: true });
+    fs.mkdirSync(theirs, { recursive: true });
+    fs.mkdirSync(noFrontmatter, { recursive: true });
+    fs.writeFileSync(path.join(ours, "SKILL.md"), "---\nname: loopany\ndescription: x\n---\n# loopany\n");
+    fs.writeFileSync(path.join(theirs, "SKILL.md"), "---\nname: something-else\n---\n# other\n");
+    fs.writeFileSync(path.join(noFrontmatter, "SKILL.md"), "# just a heading, no frontmatter\n");
+
+    expect(isOurSkillDir(ours)).toBe(true);
+    expect(isOurSkillDir(theirs)).toBe(false);
+    expect(isOurSkillDir(noFrontmatter)).toBe(false);
+    expect(isOurSkillDir(path.join(base, "absent"))).toBe(false); // ENOENT → false, never throws
+
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  test("removeStaleProjectSkill deletes OUR copy, leaves a foreign one, never throws on absent", () => {
+    const loopDir = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-loop-"));
+    const skillDir = projectSkillDir(loopDir);
+
+    // Nothing there yet → no-op, returns false.
+    expect(removeStaleProjectSkill(loopDir)).toBe(false);
+
+    // Plant OUR copy → removed.
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), "---\nname: loopany\n---\n# x\n");
+    fs.writeFileSync(path.join(skillDir, "references.md"), "stuff");
+    expect(removeStaleProjectSkill(loopDir)).toBe(true);
+    expect(fs.existsSync(skillDir)).toBe(false);
+    // The rest of the loop folder is untouched.
+    expect(fs.existsSync(loopDir)).toBe(true);
+
+    // A foreign skill at that exact path is NOT deleted (guard holds).
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), "---\nname: not-ours\n---\n# x\n");
+    expect(removeStaleProjectSkill(loopDir)).toBe(false);
+    expect(fs.existsSync(skillDir)).toBe(true);
+
+    fs.rmSync(loopDir, { recursive: true, force: true });
   });
 });

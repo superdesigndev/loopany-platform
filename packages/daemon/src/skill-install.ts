@@ -1,21 +1,29 @@
 /**
  * Best-effort local install of the loopany agent skill via the `npx skills` CLI
- * (vercel-labs/skills). Called from `loopany new` once a loop is successfully
- * created, targeting that loop's own workdir (the dir its agent runs in), so the
- * user's coding agent discovers the create/update/evolve references natively there
- * — but it NEVER blocks loop creation: any failure (no network, no npx, no write
- * permission, bundled skill absent) degrades silently to the always-working
+ * (vercel-labs/skills). Installed at USER scope (`~/.claude/skills/loopany/`) to
+ * match the daemon's per-machine scope: Claude Code discovers user-level skills
+ * globally, so a loop agent in ANY workdir still triggers the create/update/evolve
+ * references — no more per-workdir copies scattering. It's fired at `loopany up`
+ * (refreshing the install to whatever daemon version just launched) and again after
+ * a successful `loopany new`, and it NEVER blocks: any failure (no network, no npx,
+ * no write permission, bundled skill absent) degrades silently to the always-working
  * /api/skill inline path. It just prints one status line. `loopany skill install`
- * is the manual escape hatch for installing it by hand anywhere.
+ * is the manual escape hatch (`--project` installs into the cwd instead).
+ *
+ * (History: 0.4.0 deliberately kept skill logic OUT of `up` because project scope
+ * would pollute an arbitrary cwd; the flip to user scope removes that hazard, so
+ * `up` is now the natural refresh point — version-locked to the daemon it launches.)
  *
  * We install from the skill BUNDLED INTO THIS PACKAGE (synced from
  * packages/server/src/skill/ by scripts/sync-skill.mjs at build/prepublish) — a
  * LOCAL path source, so end users never need the private platform repo and the
  * install works offline once `skills` itself is cached. The exact invocation
- *   npx --yes skills add <dir> -a claude-code -y --copy
- * was verified against the current `skills` CLI (project scope is the default →
- * ./.claude/skills/loopany/; `-y` is non-interactive + idempotent-overwrite;
+ *   npx --yes skills add <dir> -a claude-code -y --copy -g
+ * was verified against the current `skills` CLI (`-g` targets the user dir →
+ * ~/.claude/skills/loopany/; `-y` is non-interactive + idempotent-overwrite;
  * `--copy` makes a self-contained copy, no symlink into this package's temp dir).
+ * Dropping `-g` (the `--project` escape hatch) installs into the runner's cwd →
+ * <cwd>/.claude/skills/loopany/.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -150,4 +158,53 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
 
 function firstLine(s: string): string {
   return (s || "").trim().split("\n")[0]?.trim() ?? "";
+}
+
+/**
+ * The exact path our OLD (pre-user-scope) project installer created inside a loop
+ * folder. Now that the skill lives at USER scope, any leftover copy here would
+ * SHADOW it (project scope wins in Claude Code discovery) and go stale — so the
+ * daemon best-effort removes it (see removeStaleProjectSkill).
+ */
+export function projectSkillDir(loopDir: string): string {
+  return path.join(loopDir, ".claude", "skills", "loopany");
+}
+
+/** Read the `name:` from a SKILL.md's leading YAML frontmatter (`--- … ---`), or
+ *  undefined when there's no frontmatter / no name. */
+function skillFrontmatterName(md: string): string | undefined {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(md);
+  if (!block) return undefined;
+  return /^\s*name:\s*(.+?)\s*$/m.exec(block[1])?.[1];
+}
+
+/**
+ * True iff `dir` looks like a loopany skill install WE created — a SKILL.md whose
+ * frontmatter declares `name: loopany`. The guard keeps the stale-copy cleanup from
+ * ever deleting a dir that isn't ours (even though only our installer ever produces
+ * this exact `.claude/skills/loopany` path). Never throws.
+ */
+export function isOurSkillDir(dir: string): boolean {
+  try {
+    return skillFrontmatterName(fs.readFileSync(path.join(dir, "SKILL.md"), "utf8")) === "loopany";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Best-effort removal of a stale per-workdir loopany skill copy that would now
+ * SHADOW the user-level install. Quiet + never throws; only deletes when the dir is
+ * confirmed OURS (isOurSkillDir). Returns true iff a copy was actually removed.
+ * Callers must have already applied the LOOPANY_ROOTS jail to `loopDir`.
+ */
+export function removeStaleProjectSkill(loopDir: string): boolean {
+  const dir = projectSkillDir(loopDir);
+  if (!isOurSkillDir(dir)) return false;
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
 }

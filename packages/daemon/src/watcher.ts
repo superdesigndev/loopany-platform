@@ -24,6 +24,7 @@ import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { resolveLoopDir } from "./loopdir.js";
 import { isScratchDir, isWithinResolvedRoots, resolveRoots } from "./roots.js";
+import { removeStaleProjectSkill } from "./skill-install.js";
 
 const log = logger.child({ mod: "watcher" });
 
@@ -358,6 +359,11 @@ export class WatchManager {
    *  runs on every ~3s poll and must not re-resolve the same fixed list per loop.
    *  Empty ⇒ unrestricted. */
   private readonly roots: string[];
+  /** Loops whose stale per-workdir skill copy we've already tried to clean this
+   *  daemon lifetime — the skill moved to USER scope, and any leftover project copy
+   *  would SHADOW it. Attempt is idempotent + best-effort; the Set just avoids a
+   *  redundant fs probe on every ~3s poll. */
+  private readonly staleSkillCleaned = new Set<string>();
 
   constructor(
     private readonly server: string,
@@ -390,6 +396,16 @@ export class WatchManager {
       if (this.roots.length && !isWithinResolvedRoots(dir, this.roots) && !isScratchDir(dir)) {
         log.warn({ loopId: id, dir }, "loop folder is outside LOOPANY_ROOTS — not watching");
         continue;
+      }
+      // Best-effort, once per loop: remove a stale `<dir>/.claude/skills/loopany`
+      // copy from the old PROJECT-scope installer (it would shadow the user-scope
+      // skill and go stale). Guarded to only delete a dir confirmed OURS, past the
+      // jail check above, and never fails the poll.
+      if (!this.staleSkillCleaned.has(id)) {
+        this.staleSkillCleaned.add(id);
+        if (removeStaleProjectSkill(dir)) {
+          log.info({ loopId: id, dir }, "removed stale per-workdir loopany skill (now user-scoped)");
+        }
       }
       const existing = this.watchers.get(id);
       if (existing) {

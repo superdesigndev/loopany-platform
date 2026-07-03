@@ -13,10 +13,8 @@
  * sole validator; we pre-check the obvious local mistakes for a clear message.
  */
 import fs from "node:fs";
-import path from "node:path";
 
-import { DEVICE_FILE, LOOPANY_DIR, flag, readStored, resolveServerUrl } from "./config.js";
-import { expandTilde } from "./loopdir.js";
+import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
 import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
 
 /**
@@ -94,25 +92,6 @@ export function detectAgentFromEnv(env: NodeJS.ProcessEnv): CodingAgent | null {
  */
 export function resolveAgent(env: NodeJS.ProcessEnv, declared: unknown): CodingAgent | undefined {
   return detectAgentFromEnv(env) ?? coerceAgent(declared) ?? undefined;
-}
-
-/**
- * Resolve the absolute directory this loop's agent will run in — the place the
- * skill should be installed at creation. Mirrors the daemon's own resolution
- * (runner.resolveWorkdir / watcher.resolveWatchDir): an explicit `workdir`
- * (tilde-expanded, made absolute) when set, else the per-loop daemon scratch dir
- * `~/.loopany/work/<loopId>`. Never `process.cwd()` — `loopany new` may be invoked
- * from anywhere, and we want the loop's real workdir. Returns "" when there's no
- * explicit workdir AND no loopId, so the scratch path can't collapse to the shared
- * `~/.loopany/work` parent (the caller then skips the install). The dir is NOT
- * created here — announceSkillInstall ensures it exists before installing.
- */
-export function resolveLoopWorkdir(workdir: unknown, loopId: string): string {
-  if (typeof workdir === "string" && workdir.trim()) {
-    return path.resolve(expandTilde(workdir));
-  }
-  if (!loopId.trim()) return "";
-  return path.join(LOOPANY_DIR, "work", loopId);
 }
 
 /** Tests inject these to assert the post-create skill install without network/npx. */
@@ -211,12 +190,13 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
       return 0;
     }
     write(`created loop ${data.name ?? data.id} — ${config.cron} ${timezone}\n`);
-    // Best-effort: now that the loop exists, install/refresh the loopany skill into
-    // the dir its agent will run in (project-level), so the coding agent discovers
-    // the references there. Announced, never blocks — any failure degrades to the
-    // always-working /api/skill/references path, exactly like before. Only runs after
-    // a confirmed create.
-    await announceSkillInstall(installer, resolveLoopWorkdir(config.workdir, data.id ?? ""), write);
+    // Best-effort: now that the loop exists, install/refresh the loopany skill at
+    // USER scope (`~/.claude/skills/loopany`), so the coding agent discovers the
+    // references from ANY loop workdir. Announced, never blocks — any failure
+    // degrades to the always-working /api/skill/references path. Only runs after a
+    // confirmed create. (`loopany up` also refreshes it; this keeps a create made
+    // without a fresh `up` current too.)
+    await announceSkillInstall(installer, write);
     return 0;
   } catch (err) {
     process.stderr.write(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -257,21 +237,14 @@ function printCreateDryRun(write: (s: string) => void, data: CreateResponse, tim
   }
 }
 
-/** Best-effort, announced project-level install into `workdir`. Ensures the dir
- *  exists first (the scratch dir is created lazily by the runner only at first run,
- *  and an explicit workdir may not exist yet — npx ENOENTs on a missing cwd, which
- *  would silently no-op the install). Swallows every error and prints one line —
- *  loop creation must never fail on the skill. An empty workdir (no explicit dir +
- *  no loopId) skips the install rather than targeting the shared scratch parent. */
+/** Best-effort, announced USER-scope install (`~/.claude/skills/loopany`). Swallows
+ *  every error and prints one line — loop creation must never fail on the skill. */
 async function announceSkillInstall(
   installer: (opts: InstallOpts) => Promise<InstallOutcome>,
-  workdir: string,
   write: (s: string) => void,
 ): Promise<void> {
-  if (!workdir.trim()) return;
   try {
-    fs.mkdirSync(workdir, { recursive: true });
-    const r = await installer({ cwd: workdir });
+    const r = await installer({ global: true });
     write(r.line + "\n");
   } catch {
     /* truly never block create */
