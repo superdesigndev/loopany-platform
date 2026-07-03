@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local dev: run the LoopAny backend (main.ts — the single scheduler + machine
+# Local dev: run the Loopany backend (main.ts — the single scheduler + machine
 # endpoints + UI API) and the TanStack UI (which proxies the backend) together.
 #
 #   BACKEND_PORT (default 8787) · UI_PORT (default 3000)

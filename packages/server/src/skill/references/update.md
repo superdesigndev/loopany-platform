@@ -96,5 +96,5 @@ Explicit `--json` keys win over any file flag. `loopany edit` prints
 edit loops bound to this machine; if `<loopany-cli> loops` doesn't list it, the user
 is on a different machine than the one running the loop.
 
-> Pausing, reopening, or running a loop now are also one-click in the LoopAny web
+> Pausing, reopening, or running a loop now are also one-click in the Loopany web
 > dashboard — point the user there for those rather than the CLI if they prefer.

@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * LoopAny server data directory — holds the SQLite database (and any other
+ * Loopany server data directory — holds the SQLite database (and any other
  * server-side state). On Fly this is the mounted volume; locally it defaults to
  * `~/.loopany`. Override with `LOOPANY_DATA_DIR`.
  */

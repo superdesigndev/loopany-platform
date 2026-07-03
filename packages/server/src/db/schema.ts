@@ -1,5 +1,5 @@
 /**
- * LoopAny business schema (Drizzle, SQLite dialect).
+ * Loopany business schema (Drizzle, SQLite dialect).
  *
  * Three tables — machines / loops / runs — keyed off the Better Auth `user`
  * table (added in the auth step; `userId` here is the owning user's id). We use

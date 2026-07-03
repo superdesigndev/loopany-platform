@@ -1,9 +1,9 @@
 # @crewlet/loopany
 
-The **LoopAny daemon** - runs on your machine, connects to a LoopAny server, and
+The **Loopany daemon** - runs on your machine, connects to a Loopany server, and
 executes your scheduled agent loops locally via your own claude-code.
 
-LoopAny is **BYOA** (bring your own agent): the server schedules, stores, and
+Loopany is **BYOA** (bring your own agent): the server schedules, stores, and
 notifies, but never runs an LLM or executes your code. This daemon is the
 execution half - it polls the server for due runs, spawns Claude Code in the
 loop's working directory, and reports the results back.
@@ -12,7 +12,7 @@ loop's working directory, and reports the results back.
 
 - Node.js >= 22
 - [Claude Code](https://claude.com/claude-code) installed (`claude` on your PATH)
-- A LoopAny server - its dashboard gives you the `server-url` and one-time
+- A Loopany server - its dashboard gives you the `server-url` and one-time
   `connect-key` used below
 
 ## Install

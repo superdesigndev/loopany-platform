@@ -2,7 +2,7 @@
   "name": "loopany-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "LoopAny — multi-user scheduled-loop manager. Server schedules/stores/auths; execution is BYOA (claude-code on the user's own machine).",
+  "description": "Loopany — multi-user scheduled-loop manager. Server schedules/stores/auths; execution is BYOA (claude-code on the user's own machine).",
   "type": "module",
   "packageManager": "pnpm@8.15.0",
   "engines": {

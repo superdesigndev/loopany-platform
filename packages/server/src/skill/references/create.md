@@ -131,7 +131,7 @@ A loop fires on a cron schedule. Each run is **either**:
 
 ### Workflow syntax contract — read this before writing one
 
-**What a workflow IS:** a plain **JavaScript statement sequence** that LoopAny runs
+**What a workflow IS:** a plain **JavaScript statement sequence** that Loopany runs
 *inside* an async function — so top-level `await` is fine and you end with
 `return { message?, state? }`. The injected globals `prev`, `agent(message?, data?)`,
 `tools.call(name, args)`, and `fetch` are already in scope — use them directly.
@@ -216,5 +216,5 @@ env), authenticates, validates, and POSTs it. On success it prints `created loop
 fix the config and re-run.
 
 Finally, tell the user it's created (name + cadence) and that it will run
-automatically for the first time shortly — point them at the LoopAny web UI to watch
+automatically for the first time shortly — point them at the Loopany web UI to watch
 for the first result.

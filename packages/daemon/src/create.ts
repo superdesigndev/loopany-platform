@@ -54,7 +54,7 @@ export function cronLooksValid(cron: unknown): cron is string {
   return fields === 5 || fields === 6;
 }
 
-/** The coding agents LoopAny can record a loop against (TS-only; cheap to widen). */
+/** The coding agents Loopany can record a loop against (TS-only; cheap to widen). */
 export type CodingAgent = "claude-code" | "codex";
 
 /** Coerce an arbitrary declared value (--agent flag / config.agent) to a known

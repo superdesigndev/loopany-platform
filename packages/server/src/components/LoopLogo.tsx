@@ -56,7 +56,7 @@ export function LoopLogo({ size = 56 }: { size?: number }) {
       className="loop-logo"
       style={{ ['--loop-s' as string]: `${size}px` } as CSSProperties}
       role="img"
-      aria-label="LoopAny"
+      aria-label="Loopany"
     >
       <div className="loop-cube" aria-hidden>
         {SIDES.map((s, i) => (
