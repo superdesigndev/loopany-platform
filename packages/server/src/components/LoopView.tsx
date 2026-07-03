@@ -75,7 +75,7 @@ export function LoopView({
   html: string
   runs: RunSummary[]
   loopId: string
-  /** The loop's task-file path - lets <loop-embed>/<loop-calendar> exclude the spec from match results / the default product set. */
+  /** The loop's task-file path - lets <loop-embed>/<loop-calendar>/<loop-kanban> exclude the spec from match results / the default product set. */
   taskFile?: string
 }) {
   const clean = useMemo(() => {

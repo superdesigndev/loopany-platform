@@ -7,8 +7,8 @@ import { TaskFileView } from './TaskFileView'
 /**
  * Shared pieces of the artifact content viewer - one source for the Files
  * panel's detail pane AND the dashboard artifact primitives (`<loop-embed>`,
- * `<loop-calendar>`'s detail), so the caption strip, the binary/oversize copy,
- * and the text/markdown render can't drift between surfaces.
+ * `<loop-calendar>`'s and `<loop-kanban>`'s detail), so the caption strip, the
+ * binary/oversize copy, and the text/markdown render can't drift between surfaces.
  */
 
 export const isMarkdown = (path: string): boolean => /\.(md|markdown)$/i.test(path)

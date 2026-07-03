@@ -1,6 +1,6 @@
 /**
  * Pure helpers for the dashboard artifact primitives (`<loop-embed>`,
- * `<loop-calendar>`): dating a loop's produced files and resolving the
+ * `<loop-calendar>`, `<loop-kanban>`): dating a loop's produced files and resolving the
  * `match="…"` glob against the synced artifact list. Framework-free and
  * unit-tested (productDate.test.ts), like fileEntries.ts.
  *
