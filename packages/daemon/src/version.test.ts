@@ -65,8 +65,11 @@ describe("running-version file", () => {
     mod.writeRunningVersion("0.8.0");
     expect(mod.readRunningVersion()).toBe("0.8.0");
 
-    // Undefined version is a no-op (nothing to record).
-    mod.writeRunningVersion(undefined);
+    // A falsy version is a no-op (nothing to record). Passing `undefined`
+    // re-triggers the `= daemonVersion()` default parameter, so use `""` to
+    // exercise the `if (!version) return` guard without coupling to this
+    // package's real version.
+    mod.writeRunningVersion("");
     expect(mod.readRunningVersion()).toBe("0.8.0");
   });
 });
