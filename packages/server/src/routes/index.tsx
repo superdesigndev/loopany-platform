@@ -5,14 +5,13 @@ import { Tooltip } from '@base-ui/react/tooltip'
 import { getAuthState, listJobs, listMyTeams, listTemplates } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
 import { authClient, useSession } from '../lib/auth-client'
-import type { RunSummary } from '../types'
+import type { RunSummary, TemplateInfo } from '../types'
 import { isCompleted } from '../lib/format'
 import { LoopCard } from '../components/LoopCard'
 import { TeamSwitcher } from '../components/TeamSwitcher'
 import { MachinesModal } from '../components/MachinesModal'
 import { NotificationsModal } from '../components/NotificationsModal'
 import { ComposeModal } from '../components/ComposeModal'
-import { TemplateModal } from '../components/TemplateModal'
 import { LoopLogo } from '../components/LoopLogo'
 import { SignIn } from '../components/SignIn'
 import { LoadErrorCard } from '../components/actionUi'
@@ -83,8 +82,12 @@ function Dashboard() {
   const { jobs, templates, machines, teams } = data
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
-  const [composeOpen, setComposeOpen] = useState(false)
-  const [templatesOpen, setTemplatesOpen] = useState(false)
+  // Compose carries an optional template: null = blank New Loop; a TemplateInfo =
+  // a canned intent picked from the cards (ComposeModal appends its description).
+  const [compose, setCompose] = useState<{ open: boolean; template: TemplateInfo | null }>({
+    open: false,
+    template: null,
+  })
   const [machinesOpen, setMachinesOpen] = useState(false)
   const [notifyOpen, setNotifyOpen] = useState(false)
 
@@ -106,7 +109,7 @@ function Dashboard() {
   // while any loop is executing so its run block + Running badge surface (and
   // settle into a finished block) without a manual refresh.
   const openRef = useRef(false)
-  openRef.current = composeOpen || templatesOpen || machinesOpen || notifyOpen
+  openRef.current = compose.open || machinesOpen || notifyOpen
   const anyRunning = jobs.some((j) => j.running)
   useEffect(() => {
     const t = setInterval(
@@ -164,24 +167,26 @@ function Dashboard() {
           </div>
         </header>
 
-        {/* toolbar: New Loop + Templates (the template-market entry, beside it) */}
+        {/* toolbar: New Loop + template cases (canned intents) rendered beside it —
+            one click on a card goes straight to its snippet. */}
         <div className="flex flex-wrap items-stretch gap-3">
           <button
-            onClick={() => setComposeOpen(true)}
+            onClick={() => setCompose({ open: true, template: null })}
             className="flex w-40 cursor-pointer flex-col justify-center gap-1.5 rounded-lg bg-display px-5 py-4 text-paper transition-opacity hover:opacity-80"
           >
             <span className="font-display text-2xl leading-none">+</span>
             <span className="font-mono text-[12px] tracking-[0.08em]">New Loop</span>
           </button>
-          {templates.length > 0 && (
+          {templates.map((t) => (
             <button
-              onClick={() => setTemplatesOpen(true)}
-              className="flex w-40 cursor-pointer flex-col justify-center gap-1.5 rounded-lg border border-wire bg-surface px-5 py-4 text-left text-secondary transition-colors hover:border-display hover:text-display"
+              key={t.name}
+              onClick={() => setCompose({ open: true, template: t })}
+              className="flex min-w-0 max-w-72 flex-1 cursor-pointer flex-col justify-center gap-1 rounded-lg border border-wire bg-surface px-5 py-4 text-left transition-colors hover:border-display"
             >
-              <span className="font-display text-2xl leading-none">⧉</span>
-              <span className="font-mono text-[12px] tracking-[0.08em]">Templates</span>
+              <span className="text-[14px] font-medium text-display">{t.label}</span>
+              <span className="text-[12.5px] leading-snug text-secondary">{t.desc}</span>
             </button>
-          )}
+          ))}
         </div>
 
         <div className="my-8 h-px bg-hairline" />
@@ -227,12 +232,10 @@ function Dashboard() {
         )}
       </main>
 
-      <ComposeModal open={composeOpen} onClose={() => setComposeOpen(false)} onCreated={refresh} />
-
-      <TemplateModal
-        open={templatesOpen}
-        templates={templates}
-        onClose={() => setTemplatesOpen(false)}
+      <ComposeModal
+        open={compose.open}
+        template={compose.template}
+        onClose={() => setCompose({ open: false, template: null })}
         onCreated={refresh}
       />
 

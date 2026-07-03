@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CodingAgent } from '../types'
+import type { CodingAgent, TemplateInfo } from '../types'
 import { claimStatus, getConfig, mintClaim } from '../server/loopApi'
 import { Modal, ModalHead } from './Modal'
 import { btn, btnPrimary, btnSm } from './ui'
@@ -21,8 +21,8 @@ const AGENT_LABEL: Record<CodingAgent, string> = {
 // interprets the pasted values, connects the machine, reads the session to decide
 // what loop to build (turn a just-done task into a loop, else brainstorm loops for
 // this project), and routes into the create/update/evolve references. So the snippet
-// is just a bootstrap: fetch it and ask to build a loop. No pre-filled task/schedule
-// fields to take literally; an empty-context paste is handled entirely by the doc.
+// is just a bootstrap: fetch it and ask to build a loop. A template appends its canned
+// task description below (the INTENT); the create flow still confirms cadence/config.
 const instructionFor = (origin: string) => `Fetch ${origin}/api/bootstrap and help me build a loop.`
 
 /**
@@ -34,19 +34,26 @@ const instructionFor = (origin: string) => `Fetch ${origin}/api/bootstrap and he
  * loop to /api/machine/loop with this token as `claim`. We poll the claim until
  * the loop lands, then close. No machine selection: the binding is decided on the
  * machine, the claim just correlates the result back to this dialog.
+ *
+ * A `template` (a canned loop intent picked from the dashboard cards) reuses this exact
+ * machinery: it skips the host chooser, goes straight to the snippet, and appends the
+ * template's `description` under the config lines — bootstrap.md + create.md then handle
+ * cadence/config the same way. The blank-loop flow is unchanged when `template` is null.
  */
 export function ComposeModal({
   open,
   onClose,
   onCreated,
+  template = null,
 }: {
   open: boolean
   onClose: () => void
   onCreated: () => void
+  template?: TemplateInfo | null
 }) {
   // Step 1 picks where the loop runs. null = chooser screen; 'local' advances to
-  // the capture-from-Claude-Code paste flow. 'hosted' (run on Loopany) is not yet
-  // available — the tile is disabled, so the value never lands here.
+  // the capture-from-Claude-Code paste flow. A template skips the chooser (host is
+  // pre-set to 'local'). 'hosted' (run on Loopany) is not yet available.
   const [host, setHost] = useState<'local' | null>(null)
   const [picked, setPicked] = useState<'local'>('local') // step-1 selection (local pre-selected; hosted is disabled)
   const [token, setToken] = useState<string | null>(null)
@@ -80,19 +87,24 @@ export function ComposeModal({
       ].join('\n')
     : ''
 
-  const snippet = token ? [instruction, '', configLines].join('\n') : ''
+  // A template appends its canned task description under the config (the INTENT).
+  const description = template?.description?.trim() ?? ''
+  const snippet = token
+    ? [instruction, '', configLines, ...(description ? ['', description] : [])].join('\n')
+    : ''
 
-  // Reset to the chooser screen each time the dialog opens.
+  // Reset each time the dialog opens. A template goes straight to the local paste
+  // flow (skip the chooser); a blank loop starts at the chooser.
   useEffect(() => {
     if (!open) return
-    setHost(null)
+    setHost(template ? 'local' : null)
     setPicked('local')
     setToken(null)
     setCreated(null)
     setError(null)
     setCopied(false)
     setSlow(false)
-  }, [open])
+  }, [open, template])
 
   // Mint a claim + load config once the user picks the local agent.
   useEffect(() => {
@@ -141,6 +153,54 @@ export function ComposeModal({
     }
   }
 
+  // The snippet box — shared by the blank-loop step 2 and the template screen. Copy
+  // takes the full `snippet` string (instruction + config + any description), so the
+  // rendered pieces below can't desync from the clipboard.
+  const snippetBox = (
+    <div className="min-w-0 flex-1">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="font-mono text-[11px] tracking-[0.08em] text-display">PASTE TO CAPTURE IT</h3>
+        {snippet && (
+          <button className={btnSm} onClick={() => void copy()}>
+            {copied ? '✓ Copied' : 'Copy'}
+          </button>
+        )}
+      </div>
+      <div className="mt-2 overflow-hidden rounded-lg border border-wire bg-raised p-3 font-mono text-[12px] text-primary">
+        {/* Instruction line — a single fixed bootstrap line; the skill (not the
+            snippet) collects the task, cadence, and output format. */}
+        <p className="leading-relaxed">{instruction}</p>
+        {/* Machine config — fixed, read-only. */}
+        {configLines ? (
+          <pre className="mt-3 overflow-x-auto whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-secondary">
+            {configLines}
+          </pre>
+        ) : (
+          <div className="mt-3 border-t border-hairline pt-3 leading-relaxed text-secondary">
+            minting a connect key…
+          </div>
+        )}
+        {/* Template intent — the canned task description, appended below the config. */}
+        {description && configLines && (
+          <p className="mt-3 whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-primary">
+            {description}
+          </p>
+        )}
+      </div>
+      <p className="mt-2 text-[13px] leading-snug text-secondary">
+        Paste it in that same session — reuses this machine automatically. Your agent will{' '}
+        {template ? 'set the loop up from here.' : 'ask what the loop should do.'}
+      </p>
+    </div>
+  )
+
+  const wait = slow
+    ? {
+        dot: 'bg-[color:var(--color-secondary)]',
+        text: 'Still waiting — check your coding agent is running in the right project, then paste again.',
+      }
+    : { dot: 'animate-pulse bg-[color:var(--color-display)]', text: 'Waiting for your coding agent…' }
+
   if (created) {
     return (
       <Modal open={open} onClose={onClose}>
@@ -152,6 +212,28 @@ export function ComposeModal({
         <div className="mt-4">
           <button className={btnPrimary} onClick={onClose}>
             Done
+          </button>
+        </div>
+      </Modal>
+    )
+  }
+
+  // Template screen — straight to the snippet (no host chooser, no two-step rail).
+  if (template) {
+    return (
+      <Modal open={open} onClose={onClose}>
+        <ModalHead title={template.label} sub="Paste this into your coding agent, in the project you want the loop for." />
+        <div className="mt-6">{snippetBox}</div>
+
+        {error && <div className="mt-3 font-mono text-[13px] text-accent">[ ERROR ] {error}</div>}
+
+        <div className="mt-6 flex items-start gap-3">
+          <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${wait.dot}`} />
+          <span className="font-mono text-[12px] leading-relaxed tracking-[0.02em] text-secondary">
+            {wait.text}
+          </span>
+          <button className={`${btn} ml-auto shrink-0`} onClick={onClose}>
+            Close
           </button>
         </div>
       </Modal>
@@ -212,13 +294,6 @@ export function ComposeModal({
     )
   }
 
-  const wait = slow
-    ? {
-        dot: 'bg-[color:var(--color-secondary)]',
-        text: 'Still waiting — check your coding agent is running in the right project, then paste again.',
-      }
-    : { dot: 'animate-pulse bg-[color:var(--color-display)]', text: 'Waiting for your coding agent…' }
-
   return (
     <Modal open={open} onClose={onClose}>
       <ModalHead title="New loop" />
@@ -253,35 +328,7 @@ export function ComposeModal({
           <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-display font-mono text-[10px] leading-none text-display">
             2
           </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="font-mono text-[11px] tracking-[0.08em] text-display">PASTE TO CAPTURE IT</h3>
-              {snippet && (
-                <button className={btnSm} onClick={() => void copy()}>
-                  {copied ? '✓ Copied' : 'Copy'}
-                </button>
-              )}
-            </div>
-            <div className="mt-2 overflow-hidden rounded-lg border border-wire bg-raised p-3 font-mono text-[12px] text-primary">
-              {/* Instruction line — a single fixed bootstrap line; the skill (not
-                  the snippet) collects the task, cadence, and output format. */}
-              <p className="leading-relaxed">{instruction}</p>
-              {/* Machine config — fixed, read-only. */}
-              {configLines ? (
-                <pre className="mt-3 overflow-x-auto whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-secondary">
-                  {configLines}
-                </pre>
-              ) : (
-                <div className="mt-3 border-t border-hairline pt-3 leading-relaxed text-secondary">
-                  minting a connect key…
-                </div>
-              )}
-            </div>
-            <p className="mt-2 text-[13px] leading-snug text-secondary">
-              Paste it in that same session — reuses this machine automatically. Your agent will ask
-              what the loop should do.
-            </p>
-          </div>
+          {snippetBox}
         </div>
       </div>
 

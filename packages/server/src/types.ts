@@ -281,20 +281,19 @@ export interface MutationResult {
   error?: string
 }
 
-export interface TemplateSlot {
-  name: string
-  prompt: string
-  required?: boolean
-  kind?: 'cron' | 'workdir' | string
-  default?: string
-}
-
+/**
+ * A template is a canned loop INTENT, not a flow: metadata only. Clicking its card
+ * on the dashboard mints a connect-key and appends `description` to the standard
+ * bootstrap snippet — bootstrap.md + create.md then handle cadence, config, and
+ * dashboard authoring the same way they do for a blank loop.
+ */
 export interface TemplateInfo {
   name: string
   label: string
+  /** One-line blurb shown on the dashboard card. */
   desc: string
-  tags: string[]
-  slots: TemplateSlot[]
+  /** The canned task description (English) appended to the bootstrap snippet. */
+  description: string
 }
 
 /** The team switcher's data: the teams this user may view + the active selection. */

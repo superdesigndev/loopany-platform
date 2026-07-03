@@ -182,8 +182,8 @@ export const getRunDiff = createServerFn({ method: 'GET' })
 // ---- catalog ----
 
 export const listTemplates = createServerFn({ method: 'GET' }).handler((): TemplateInfo[] => {
-  // The file-based template registry (server/templates.ts). Static metadata only —
-  // the agent-facing docs are served separately at /api/template/<name>.
+  // The file-based template registry (server/templates.ts): canned loop intents shown
+  // as cards beside "New Loop". Metadata only — the description rides the snippet.
   return TEMPLATES
 })
 

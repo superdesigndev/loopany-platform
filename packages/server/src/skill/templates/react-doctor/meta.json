@@ -1,15 +1,6 @@
 {
   "name": "react-doctor",
   "label": "React Doctor",
-  "desc": "A daily guardian for a React app: scans with react-doctor, fixes the single most severe issue, opens a PR, and tracks the health-score trend plus a merged/open PR board.",
-  "tags": ["React", "Code health", "Daily", "Opens PRs"],
-  "slots": [
-    {
-      "name": "run-at",
-      "prompt": "Run each day at (your machine's local time)",
-      "kind": "cron",
-      "required": false,
-      "default": "05:00"
-    }
-  ]
+  "desc": "A daily guardian that scans your React app, fixes the worst issue, and opens a PR.",
+  "description": "Every morning around 6am my local time, scan this project with `npx react-doctor@latest`, pick the single most severe issue it reports, fix it, verify the fix, and open a PR. Make the changes in a fresh git worktree created off the main branch so my working checkout is never touched. If a previous React Doctor PR is still open (unmerged), don't open another one that day - just refresh its status and still report the score. Track the open and merged PRs on the loop's kanban board, and report react-doctor's health score every day."
 }
