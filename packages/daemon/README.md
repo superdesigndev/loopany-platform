@@ -45,6 +45,9 @@ Setup
                           stdin). --dry-run validates + previews, creates nothing.
   skill [status|install]  Manage the loopany agent skill install (user scope by
                           default; --project installs into the current directory).
+  update                  Update this machine's daemon to the version you invoked
+                          (run via npx @crewlet/loopany@latest update): stops the
+                          running daemon, starts the new one, refreshes the skill.
 
 Management
   status                  Is the daemon running? Show pid + server connection.
