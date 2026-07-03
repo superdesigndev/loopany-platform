@@ -29,6 +29,6 @@ next to this file, under `references/`):
   improves the loop from its own run history — sharpening its **task** and **workflow**
   ahead of fitting its dashboard to the data its runs produce): **`references/evolve.md`**.
 
-The machine is already connected (the daemon is running — this skill was installed
-when the loop was created). Just author the loop and run the `loopany` CLI; the
-references cover the exact commands.
+The machine is already connected (the daemon is running — this skill was installed at
+user scope, `~/.claude/skills/loopany/`, when this machine connected via `loopany up`).
+Just author the loop and run the `loopany` CLI; the references cover the exact commands.

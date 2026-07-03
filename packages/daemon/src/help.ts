@@ -15,10 +15,12 @@ Usage: loopany [command] [options]
 
 Setup
   up                      Connect this machine / ensure its daemon is running
-                          (idempotent; spawns a detached daemon if none is live).
+                          (idempotent; spawns a detached daemon if none is live;
+                          refreshes the user-scope loopany skill).
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
     [--dry-run]           stdin). --dry-run validates + previews, creates nothing.
-  skill [status|install]  Manage the loopany agent skill install (-g for global).
+  skill [status|install]  Manage the loopany agent skill install (user scope by
+    [--project]           default; --project installs into the current directory).
 
 Management
   status                  Is this machine's daemon running? Show pid + connection.

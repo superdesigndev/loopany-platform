@@ -10,7 +10,12 @@ import path from "node:path";
 
 import { afterAll, describe, expect, test } from "vitest";
 
-import { installArgs, installSkill, bundledSkillAvailable, type Runner } from "./skill-install.js";
+import {
+  installArgs,
+  installSkill,
+  bundledSkillAvailable,
+  type Runner,
+} from "./skill-install.js";
 
 // A throwaway bundled-skill dir so the presence check passes without a real build.
 const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-skill-"));

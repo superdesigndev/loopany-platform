@@ -39,10 +39,12 @@ running. After that, `loopany up` alone reconnects.
 loopany                 Run the daemon in the foreground. Ctrl-C to stop.
 
 Setup
-  up                      Connect this machine / ensure its daemon is running.
+  up                      Connect this machine / ensure its daemon is running;
+                          refreshes the user-scope loopany skill.
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
                           stdin). --dry-run validates + previews, creates nothing.
-  skill [status|install]  Manage the loopany agent skill install (-g for global).
+  skill [status|install]  Manage the loopany agent skill install (user scope by
+                          default; --project installs into the current directory).
 
 Management
   status                  Is the daemon running? Show pid + server connection.
@@ -67,5 +69,6 @@ that folder's files back to the server (secrets and junk like `.env*`,
 credentials stay on your machine.
 
 The package also bundles the **loopany agent skill**, which teaches a coding
-agent how to author and evolve loops; `loopany new` installs it into the loop's
-working directory automatically.
+agent how to author and evolve loops; `loopany up` (and `loopany new`) install
+it at user scope (`~/.claude/skills/loopany/`) automatically, so any loop on this
+machine can discover it.

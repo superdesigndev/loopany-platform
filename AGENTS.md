@@ -257,35 +257,42 @@ LLM and executes no user code**.
   `packages/daemon/scripts/sync-skill.mjs` is a **SELECTIVE copy** — it whitelists ONLY `SKILL.md` +
   `references/{create,update,evolve}.md` (NOT a naive `cpSync(src, dst, {recursive})`, which would
   ship `skill/run/` AND `bootstrap.md` into the public tarball and into every user's installed
-  `./.claude/skills/loopany/`). The bundle (`packages/daemon/skill/`, **gitignored**, generated like
+  `~/.claude/skills/loopany/`). The bundle (`packages/daemon/skill/`, **gitignored**, generated like
   `routeTree.gen.ts`) therefore ends up with exactly `SKILL.md` + the references trio and nothing
   else (guarded by `packages/daemon/src/sync-skill.test.ts`, which asserts the exact 4-file set and
   explicitly that `bootstrap.md`/`run/` are absent). Do NOT fork the content; edit the six source
   files (`bootstrap.md`, `SKILL.md`, the three references, and the two `run/` prompts).
-- **Loopany skill auto-install (`loopany new` → `npx skills`, into the loop workdir).**
-  The install fires at **loop creation**, NOT `loopany up` (corrected in 0.4.0 — `up`
-  may run from anywhere just to start the daemon, so it must not drop a skill into an
-  arbitrary cwd; `src/ensure.ts` no longer touches skills and the old
-  `--no-skill`/`--skill-global` flags are gone). After `loopany new` confirms the gateway
-  create succeeded, the daemon **best-effort installs the bundled skill** into that loop's
-  resolved **workdir** (`<workdir>/.claude/skills/loopany/`) via the `skills` CLI
-  (vercel-labs/skills) — `packages/daemon/src/skill-install.ts`, exact verified invocation
-  `npx --yes skills add <bundled-dir> -a claude-code -y --copy` run with the child `cwd`
-  set to the workdir (so a project-level install lands there, not in `process.cwd()`;
-  `installSkill({cwd})`). `src/create.ts` `resolveLoopWorkdir(config.workdir, loopId)`
-  mirrors the daemon's own resolution (explicit `workdir` tilde-expanded+absolute, else
-  `~/.loopany/work/<loopId>` scratch — never cwd). project scope is the `skills` CLI
-  default; `-y` non-interactive + idempotent-overwrite; `--copy` self-contained, no symlink
-  into the package's temp dir; LOCAL path source ⇒ end users never need the private
-  platform repo. It is **announced** (one status line) and **never blocks** loop creation —
-  it runs only after a confirmed create, and any failure (no network/npx, no write perm,
-  bundled skill absent) degrades silently to the always-working `/api/skill` path.
-  `installSkill()` takes an injectable `Runner` (carrying `cwd`) and `runCreate` takes
-  injectable fetch/installer seams, so tests need no network/npx (`skill-install.test.ts`,
-  `create.test.ts`). **Web-created loops** (New-loop dialog, no local `loopany new`) are
-  intentionally NOT covered (deferred lazy-at-run-time idea). Thin verb `loopany skill
-  {status,install}` (`skill-cli.ts`, `-g`/`--global`) is the **manual escape hatch** —
-  install into cwd, or `-g` for `~/.claude`.
+- **Loopany skill auto-install at USER scope (`loopany up`/`new` → `npx skills -g`, into
+  `~/.claude/skills/loopany`).** The skill installs at **USER scope**, matching the daemon's
+  per-machine scope: Claude Code discovers user-level skills globally, so a loop agent in ANY
+  workdir triggers the create/update/evolve references and no per-workdir copies scatter.
+  **`loopany up` is the refresh point** (`src/ensure.ts`): on every SUCCESS path (live-local
+  +online, live-local +server-unreachable, already-online, freshly-spawned-then-online) it
+  best-effort installs/refreshes the user-scope skill via `refreshSkill()` → `installSkill({
+  global:true})`, so the on-disk skill is version-locked to the daemon `up` just launched. The
+  readiness-timeout FAILURE path does NOT refresh. This is a **deliberate reintroduction** of
+  skill logic into `up` that 0.4.0 removed: 0.4.0 pulled it out because the old PROJECT-scope
+  install would pollute an arbitrary cwd `up` might run from; user scope targets the home dir
+  regardless of cwd, so that hazard is gone. `loopany new` ALSO refreshes it after a confirmed
+  create (`create.ts` `announceSkillInstall(installer, write)` → `installSkill({global:true})`,
+  no workdir needed — the old `resolveLoopWorkdir` + workdir-`mkdirSync` + `{cwd}` install are
+  GONE). Exact verified invocation `npx --yes skills add <bundled-dir> -a claude-code -y --copy
+  -g` (`packages/daemon/src/skill-install.ts`); `-g` targets `~/.claude/skills/loopany`, `-y`
+  non-interactive + idempotent-overwrite, `--copy` self-contained (no symlink into the package
+  temp dir); LOCAL path source ⇒ end users never need the private platform repo. Both paths are
+  **announced** (one status line) and **never block/fail** their command; any failure (no
+  network/npx, no write perm, bundled skill absent) degrades silently to the always-working
+  `/api/skill` path. **Caveat — no auto-cleanup of stale per-workdir copies:** a PRE-EXISTING
+  `<workdir>/.claude/skills/loopany` copy left by the old project-scope installer is NOT
+  auto-removed and must be deleted by hand, or it shadows the user-scope skill (project scope
+  wins in Claude Code discovery). `installSkill()` takes an injectable `Runner` and
+  `runCreate`/`runEnsure` take injectable installer seams, so tests need no network/npx
+  (`skill-install.test.ts`, `create.test.ts`, `ensure.test.ts`). **Web-created loops** (New-loop dialog,
+  no local `loopany new`) still rely on `loopany up`'s refresh (or the always-working `/api/skill`
+  path). Thin verb `loopany skill {status,install}` (`skill-cli.ts`) is the **manual escape
+  hatch** — install defaults to user scope (`-g`/`--global` accepted but redundant); `--project`
+  (alias `--local`) installs into the cwd; `status` reports the user install + flags a shadowing
+  project copy. **The refresh is a callable seam a future `loopany update` verb can reuse.**
 - **Daemon CLI ergonomics (`loopany --help` / `status` / `down`).** `cli.ts`
   `main()` dispatch order: in-run callback (`LOOPANY_RUN_TOKEN`+args) → `--help`/`-h`/
   `help` (`help.ts`, prints usage, exit 0, NEVER starts the daemon) → `up` → `new` →

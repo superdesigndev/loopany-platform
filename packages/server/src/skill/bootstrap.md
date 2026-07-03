@@ -9,9 +9,9 @@ and keep questions to quick check-ins — don't run a full interview.
 This is the **bootstrap** doc, served over HTTP on first contact before the loopany
 skill is installed on disk. Do the two situational things below, then hand off to the
 create reference, which owns everything from "what should this loop be?" onward.
-(Once you run `loopany new`, the skill installs into the loop's workdir at
-`<workdir>/.claude/skills/loopany/`, so a later session in that folder auto-triggers
-the installed skill and reads the same references from disk.)
+(`loopany up` installs the skill at USER scope — `~/.claude/skills/loopany/` — and
+`loopany new` refreshes it, so a later session in ANY folder on this machine
+auto-triggers the installed skill and reads the same references from disk.)
 
 ## The pasted values
 
@@ -36,9 +36,9 @@ One idempotent command does the whole thing — run it verbatim (substitute
 `loopany up` resolves this machine's stable identity (reuses the stored device
 token, else adopts the connect-key), checks whether a daemon is already live, starts
 a single detached one if not — surviving this session — and waits until the server
-reports the machine online. It never starts a second daemon, and it only stands up
-the daemon: it does **not** install any skill (it may be run from anywhere, e.g. your
-home dir, purely to start the daemon).
+reports the machine online. It never starts a second daemon. Once connected it also
+best-effort refreshes the loopany skill at USER scope (`~/.claude/skills/loopany/`),
+version-locked to the daemon it just launched — announced in one line, never blocking.
 
 It exits `0` once connected (printing `daemon online …` or `daemon already running …`);
 then continue. If it can't come online, it says where the log is. **Declare which

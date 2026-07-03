@@ -1,21 +1,34 @@
 /**
  * Best-effort local install of the loopany agent skill via the `npx skills` CLI
- * (vercel-labs/skills). Called from `loopany new` once a loop is successfully
- * created, targeting that loop's own workdir (the dir its agent runs in), so the
- * user's coding agent discovers the create/update/evolve references natively there
- * — but it NEVER blocks loop creation: any failure (no network, no npx, no write
- * permission, bundled skill absent) degrades silently to the always-working
+ * (vercel-labs/skills). Installed at USER scope (`~/.claude/skills/loopany/`) to
+ * match the daemon's per-machine scope: Claude Code discovers user-level skills
+ * globally, so a loop agent in ANY workdir still triggers the create/update/evolve
+ * references — no more per-workdir copies scattering. It's fired at `loopany up`
+ * (refreshing the install to whatever daemon version just launched) and again after
+ * a successful `loopany new`, and it NEVER blocks: any failure (no network, no npx,
+ * no write permission, bundled skill absent) degrades silently to the always-working
  * /api/skill inline path. It just prints one status line. `loopany skill install`
- * is the manual escape hatch for installing it by hand anywhere.
+ * is the manual escape hatch (`--project` installs into the cwd instead).
+ *
+ * (History: 0.4.0 deliberately kept skill logic OUT of `up` because project scope
+ * would pollute an arbitrary cwd; the flip to user scope removes that hazard, so
+ * `up` is now the natural refresh point — version-locked to the daemon it launches.)
  *
  * We install from the skill BUNDLED INTO THIS PACKAGE (synced from
  * packages/server/src/skill/ by scripts/sync-skill.mjs at build/prepublish) — a
  * LOCAL path source, so end users never need the private platform repo and the
  * install works offline once `skills` itself is cached. The exact invocation
- *   npx --yes skills add <dir> -a claude-code -y --copy
- * was verified against the current `skills` CLI (project scope is the default →
- * ./.claude/skills/loopany/; `-y` is non-interactive + idempotent-overwrite;
+ *   npx --yes skills add <dir> -a claude-code -y --copy -g
+ * was verified against the current `skills` CLI (`-g` targets the user dir →
+ * ~/.claude/skills/loopany/; `-y` is non-interactive + idempotent-overwrite;
  * `--copy` makes a self-contained copy, no symlink into this package's temp dir).
+ * Dropping `-g` (the `--project` escape hatch) installs into the runner's cwd →
+ * <cwd>/.claude/skills/loopany/.
+ *
+ * CAVEAT: a PRE-EXISTING per-workdir `<workdir>/.claude/skills/loopany` copy left
+ * behind by the old project-scope installer is NOT auto-removed — it must be deleted
+ * BY HAND, or it shadows the user-level skill (project scope wins in Claude Code
+ * discovery).
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
