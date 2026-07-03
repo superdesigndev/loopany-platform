@@ -1,4 +1,4 @@
-# Deploy the LoopAny server to Fly.io (app: loopany-testing).
+# Deploy the Loopany server to Fly.io (app: loopany-testing).
 # Remote build → no Docker needed on the runner. Migration runs on container
 # boot via `pnpm start` (drizzle-kit migrate && node ...), so deploy = migrate.
 name: Deploy (Fly)

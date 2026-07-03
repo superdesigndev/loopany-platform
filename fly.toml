@@ -1,4 +1,4 @@
-# LoopAny on Fly.io — ONE always-on machine (the scheduler owns the cron loop;
+# Loopany on Fly.io — ONE always-on machine (the scheduler owns the cron loop;
 # never scale to >1 or you'd double-fire). SQLite on a mounted volume.
 #
 # Setup:

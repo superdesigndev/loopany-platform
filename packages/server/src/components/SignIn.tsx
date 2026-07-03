@@ -11,7 +11,7 @@ export function SignIn({ callbackURL = '/' }: { callbackURL?: string }) {
   return (
     <div className="mx-auto mt-32 max-w-sm text-center">
       <LoopLogo size={52} />
-      <h1 className="mt-4 font-mono text-2xl tracking-tight">LoopAny</h1>
+      <h1 className="mt-4 font-mono text-2xl tracking-tight">Loopany</h1>
       <p className="mt-2 text-sm text-secondary">Sign in to manage your scheduled agent loops.</p>
       <button
         className="mt-6 rounded-md bg-primary px-4 py-2 text-sm text-paper"

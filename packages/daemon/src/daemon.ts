@@ -1,5 +1,5 @@
 /**
- * Daemon mode — connect to a LoopAny server and short-poll for deliveries. On
+ * Daemon mode — connect to a Loopany server and short-poll for deliveries. On
  * each poll the server claims this machine's pending runs and returns them; we
  * run each locally (workflow gate + claude) and report back. Foreground, no
  * keep-alive (BYOA §6); Ctrl-C stops cleanly.

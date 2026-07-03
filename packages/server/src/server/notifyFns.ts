@@ -77,5 +77,5 @@ export const testChannel = createServerFn({ method: 'POST' })
     ensureServer()
     const ch = await ownedChannel(id)
     if (!ch) return { ok: false, error: 'channel not found' }
-    return CHANNELS[ch.type].send(ch.config, ch.name, 'LoopAny test message — this channel is wired up. ✓')
+    return CHANNELS[ch.type].send(ch.config, ch.name, 'Loopany test message — this channel is wired up. ✓')
   })

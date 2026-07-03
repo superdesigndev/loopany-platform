@@ -1,9 +1,9 @@
-# LoopAny — first capture: connect this machine, then build a loop
+# Loopany — first capture: connect this machine, then build a loop
 
-You're reading this because the user pasted a LoopAny capture snippet (`Fetch
-<server-url>/api/bootstrap and help me build a loop.`) into your session. LoopAny
+You're reading this because the user pasted a Loopany capture snippet (`Fetch
+<server-url>/api/bootstrap and help me build a loop.`) into your session. Loopany
 turns a task into a **scheduled agent loop** that runs automatically on this machine.
-Their LoopAny web tab is open and waiting for the loop to appear, so work end to end
+Their Loopany web tab is open and waiting for the loop to appear, so work end to end
 and keep questions to quick check-ins — don't run a full interview.
 
 This is the **bootstrap** doc, served over HTTP on first contact before the loopany
@@ -17,7 +17,7 @@ auto-triggers the installed skill and reads the same references from disk.)
 
 The user pasted these along with the capture link — use them verbatim:
 
-- **server-url** — the LoopAny server base URL (e.g. `http://localhost:3000`).
+- **server-url** — the Loopany server base URL (e.g. `http://localhost:3000`).
 - **connect-key** — a one-time token (starts with `dk_`). It both authorizes a NEW
   machine and tags the loop back to the web dialog (its `claim`).
 - **loopany-cli** *(optional)* — the command that runs the loopany CLI, used as the
@@ -43,7 +43,7 @@ version-locked to the daemon it just launched — announced in one line, never b
 It exits `0` once connected (printing `daemon online …` or `daemon already running …`);
 then continue. If it can't come online, it says where the log is. **Declare which
 coding agent you are** by passing `--agent claude-code` (or `--agent codex`) on
-`loopany new` later — LoopAny also sniffs its own env to confirm the host, so this is
+`loopany new` later — Loopany also sniffs its own env to confirm the host, so this is
 an honest fallback, not load-bearing.
 
 ## 2 · Build the loop

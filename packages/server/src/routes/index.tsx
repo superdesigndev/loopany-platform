@@ -141,7 +141,7 @@ function Dashboard() {
                 Scheduled Agent Loops
               </div>
               <h1 className="font-display text-[52px] font-medium leading-none tracking-tight text-display">
-                LoopAny
+                Loopany
               </h1>
             </div>
           </div>

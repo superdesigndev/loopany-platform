@@ -1,11 +1,11 @@
-# Contributing to LoopAny
+# Contributing to Loopany
 
 Thanks for your interest in contributing! This guide covers the basics for
 getting set up and landing a change.
 
 ## Repo layout
 
-LoopAny is a pnpm monorepo with two packages:
+Loopany is a pnpm monorepo with two packages:
 
 - **`packages/server`** (`@loopany/server`, private) — the TanStack Start web app:
   UI + server functions + the in-process scheduler + machine/agent routes + Better

@@ -161,7 +161,7 @@ export const auth = betterAuth({
           if (allowlist.length) {
             const email = (user.email || "").toLowerCase();
             if (!allowlist.includes(email)) {
-              throw new APIError("FORBIDDEN", { message: `${email} is not on the LoopAny allowlist` });
+              throw new APIError("FORBIDDEN", { message: `${email} is not on the Loopany allowlist` });
             }
           }
           return { data: user };

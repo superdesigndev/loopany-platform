@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * LoopAny daemon — one binary, two roles (BYOA MINIMAL_DAEMON §1):
+ * Loopany daemon — one binary, two roles (BYOA MINIMAL_DAEMON §1):
  *
  *   loopany                    → daemon mode: poll the server, run deliveries.
  *   loopany up […]             → setup mode: ensure a daemon is running for this

@@ -1,4 +1,4 @@
-# LoopAny server (TanStack Start + in-process scheduler + machine gateway).
+# Loopany server (TanStack Start + in-process scheduler + machine gateway).
 # Single always-on container on Fly; SQLite lives on a mounted volume at /data.
 FROM node:22-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \

@@ -5,8 +5,8 @@
  * (`loopany report …`, which the agent invokes via the PATH wrapper) are NOT user
  * commands and are deliberately omitted.
  */
-const HELP = `loopany — the LoopAny daemon: runs on your machine and executes your
-scheduled agent loops locally via claude-code (BYOA — bring your own agent).
+const HELP = `loopany - the Loopany daemon: connects this machine to a Loopany
+server and runs your scheduled agent loops locally with your own coding agent.
 
 Usage: loopany [command] [options]
 
@@ -33,7 +33,7 @@ Management
                           Defaults to the loop for the current directory (--json,
                           --limit N).
 
-Interactive (edit loops from your own Claude Code, using the stored device token)
+Interactive (edit loops from your own agent session, using the stored device token)
   loops                   List your loops.
   edit <id> --json '<obj>'  Edit a loop (JSON-only + --workflow-file/--ui-file/
     [--dry-run]           --schema-file; --dry-run previews before/after).

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "LoopAny server — TanStack Start UI + in-process scheduler + machine WS gateway + agent-api + Better Auth. Zero code-exec, zero LLM (execution is BYOA on user machines).",
+  "description": "Loopany server — TanStack Start UI + in-process scheduler + machine WS gateway + agent-api + Better Auth. Zero code-exec, zero LLM (execution is BYOA on user machines).",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
