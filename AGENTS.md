@@ -117,11 +117,13 @@ computes pure functions. Run instructions: `README.md`.
 - **PUBLIC but NOT bundled.** `meta.json` rides to the client via `listTemplates`, and
   `sync-skill.mjs`'s whitelist stays selective (`skill/templates/` never ships in the
   daemon npm tarball; guarded by `sync-skill.test.ts`).
-- v1 ships one template (React Doctor). Its `description` is a few English sentences:
+- v1 ships one template (React Doctor). Its `description` is a short English paragraph:
   daily ~6am `npx react-doctor@latest`, fix the single worst issue in a fresh worktree
   off `main` (never dirty the checkout), PR via gh, no-stacking while a prior PR is
-  unmerged (still refresh status + score), open/merged kanban + daily health score. Keep
-  it tight - no react-doctor flags beyond the npx one-liner. English only.
+  unmerged (still refresh status + score), one `type: open|merged` markdown card per PR
+  for the kanban, daily health score, and a **day-one dashboard set up at creation**
+  (kanban + score chart, via the new create-`ui` support above). Keep it tight - no
+  react-doctor flags beyond the npx one-liner. English only.
 
 ## Workflows (deterministic pre-stage)
 
@@ -220,6 +222,13 @@ computes pure functions. Run instructions: `README.md`.
   `EDITABLE_LOOP_FIELDS` are rejected with a 400 listing the allowed set. Both
   `loopany new` and `loopany edit` support `--dry-run` (server validate-only, zero
   persistence).
+- **`createLoop` also accepts an optional `ui`** (gateway `createLoop`, same
+  `validateUi` + `WIRE_TEXT_CAP` clip as `set-ui`/`editLoop`), so a template-driven
+  loop ships a **day-one dashboard** instead of waiting for an evolve pass. The daemon
+  `loopany new` spreads the whole `--json` config, so `ui` passes through with no
+  whitelist change; `--dry-run` reports `ui` as a presence flag (like `workflow`), not
+  the markup. `create.md`'s "Dashboard at create" step tells the agent to author the
+  initial `ui` when the product shape is already known (cross-refs `evolve.md` §3).
 - `describe()`/`validCadence` probe crons in the LOOP's timezone (fire times shift
   with it).
 

@@ -74,6 +74,18 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('--dry-run')
   })
 
+  test('create.md carries the optional Dashboard-at-create step (author ui now when the shape is known)', async () => {
+    const body = flat(await (await call('/api/skill/references/create.md')).text())
+    // The follow-up round: when the product shape is already known (template-driven
+    // loops), author the initial `ui` in the create config instead of deferring to an
+    // evolve pass — and cross-reference evolve.md §3 rather than duplicating it.
+    expect(body).toContain('Dashboard at create')
+    expect(body).toContain('day-one dashboard')
+    expect(body).toContain('evolve.md` §3')
+    // `ui` is now a documented (optional) config field.
+    expect(body).toContain('`ui` is optional')
+  })
+
   test('unknown name → 404 json', async () => {
     const res = await call('/api/skill/references/nope.md')
     expect(res.status).toBe(404)

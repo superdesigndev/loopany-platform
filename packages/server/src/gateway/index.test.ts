@@ -317,6 +317,33 @@ test("createLoop records the coding agent: codex when declared, claude-code by d
   expect(store.getLoop((weird.body as any).id)!.agent).toBe("claude-code");
 });
 
+test("createLoop accepts an initial ui (day-one dashboard) — validated, persisted, presence-flagged in dry-run", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+
+  const ui = '<h3>React Doctor</h3><loop-chart series="score:Red Dot Score"></loop-chart><loop-kanban columns="open,merged"></loop-kanban>';
+
+  // Real create — the ui persists on the loop row (same surface as set-ui/editLoop).
+  const created = gateway().createLoop(token, {
+    name: "React Doctor", cron: "0 5 * * *", taskFile: "loopany/react-doctor/README.md",
+    stateSchema: [{ key: "score", label: "Red Dot Score" }], ui,
+  });
+  expect(created.status).toBe(200);
+  const loop = store.getLoop((created.body as any).id)!;
+  expect(loop.ui).toBe(ui);
+  expect(loop.stateSchema).toEqual([{ key: "score", label: "Red Dot Score" }]);
+
+  // Dry-run reports ui as a presence flag (like workflow), never the markup, and persists nothing.
+  const before = store.loopsForMachine(machineId).length;
+  const dry = gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", ui, dryRun: true });
+  expect(dry.status).toBe(200);
+  expect((dry.body as any).config.ui).toBe(true);
+  const withoutUi = gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", dryRun: true });
+  expect((withoutUi.body as any).config.ui).toBe(false);
+  expect(store.loopsForMachine(machineId).length).toBe(before);
+});
+
 test("editLoop changes a loop's envelope from its machine's device token", () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);

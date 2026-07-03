@@ -208,6 +208,44 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(text).toContain("2026-07-03T08:00:00.000Z"); // first of the 3 fire times
   });
 
+  test("passes an initial `ui` through to the server unchanged (day-one dashboard)", async () => {
+    const ui = '<h3>React Doctor</h3><loop-chart series="score:Red Dot Score"></loop-chart><loop-kanban columns="open,merged"></loop-kanban>';
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/react-doctor/README.md", ui });
+    let sentBody: any = null;
+    const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
+      fetchImpl: async (_url: any, init: any) => {
+        sentBody = JSON.parse(init.body as string);
+        return okResponse({ ok: true, id: "loop-1", name: "React Doctor" });
+      },
+      installer: async () => ({ ok: true, line: "" }),
+      stdout: () => {},
+    });
+    expect(code).toBe(0);
+    // The whole config (including ui) is spread into the POST body — no whitelist drops it.
+    expect(sentBody.ui).toBe(ui);
+  });
+
+  test("--dry-run preview shows the ui presence line (yes when present, no when absent)", async () => {
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md" });
+    const out: string[] = [];
+    const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
+      fetchImpl: async () =>
+        okResponse({
+          ok: true,
+          dryRun: true,
+          config: { name: null, cron: "0 5 * * *", taskFile: "loopany/x/README.md", workflow: false, ui: true, goal: null },
+          timezone: "UTC",
+          nextRuns: [],
+          classification: "open",
+          classificationText: "open: runs until paused",
+        }),
+      installer: async () => ({ ok: true, line: "" }),
+      stdout: (s) => out.push(s),
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).toContain("ui: yes");
+  });
+
   test("`new` without --json prints usage (exit 2), makes no request", async () => {
     let called = false;
     const code = await runCreate(["--server-url", "http://test"], {

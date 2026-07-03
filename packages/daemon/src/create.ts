@@ -228,6 +228,7 @@ function printCreateDryRun(write: (s: string) => void, data: CreateResponse, tim
   write(`  cron: ${String(c.cron ?? "")} ${tz}\n`);
   if (c.taskFile) write(`  taskFile: ${String(c.taskFile)}\n`);
   write(`  workflow: ${c.workflow ? "yes" : "no"}\n`);
+  write(`  ui: ${c.ui ? "yes" : "no"}\n`);
   write(`  goal: ${c.goal != null ? String(c.goal) : "—"}\n`);
   if (data.classificationText) write(`  ${data.classificationText}\n`);
   const runs = data.nextRuns ?? [];

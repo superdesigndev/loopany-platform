@@ -162,6 +162,7 @@ file to write. Only the loop's real intent goes in it; the CLI fills the envelop
   "workdir": "<absolute project dir>",
   "taskFile": "<absolute path to the task file above>",
   "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
+  "ui": "<small dashboard HTML — optional; see 'Dashboard at create' below>",
   "notify": "auto"
 }
 ```
@@ -174,12 +175,26 @@ Rules:
 - **`goal` makes the loop closed**: with a goal set, each run judges it and calls
   `loopany finish` when met, ending the loop. Omit `goal` for a monitor/digest loop
   that runs indefinitely (§2).
-- `stateSchema` is optional — declare numeric per-run metrics to get a chart. (The
-  dashboard itself is usually left to a later evolve pass — see `evolve.md` §3.)
+- `stateSchema` is optional — declare numeric per-run metrics to get a chart.
+- `ui` is optional — the loop's dashboard panel as small HTML (see **Dashboard at
+  create** below).
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
 - **Don't add `timezone`, `claim`, or any auth** — `loopany new` injects the
   timezone, the connect-key claim, and this machine's device token. (If the user
   states a different zone, pass `--tz <IANA>` in §5.)
+
+### Dashboard at create — when the product shape is already known
+
+The dashboard is usually left to a later evolve pass, but when you ALREADY know the
+loop's product shape at create time — a template-driven loop, or any loop whose Spec
+fixes the artifacts/metrics up front — author the initial `ui` NOW and include it in
+the config, so the loop has a day-one dashboard instead of a blank one until it
+evolves. Use the same panel primitives and `{{latest.<key>}}` bindings documented in
+`evolve.md` §3 (`<loop-chart>` for a metric trend, `<loop-kanban>`/`<loop-embed>`/
+`<loop-calendar>` for the loop's typed products) — don't duplicate that guidance here;
+just bind only keys your `stateSchema` declares and columns your Spec's `type`
+vocabulary uses. Keep it small. Skip it when the product shape isn't settled yet — a
+speculative dashboard is worse than none.
 
 ## 5 · Validate, then create
 

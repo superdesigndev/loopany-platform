@@ -421,6 +421,10 @@ export class MachineGateway {
       workdir?: unknown;
       taskFile?: unknown;
       stateSchema?: unknown;
+      /** Optional initial dashboard UI (small HTML, same surface as `set-ui`). Lets a
+       *  template-driven loop ship a day-one dashboard instead of waiting for an
+       *  evolve pass. Validated by the same `validateUi` editLoop uses. */
+      ui?: unknown;
       notify?: unknown;
       /** Optional closed-loop setpoint. Non-null ⇒ the loop is CLOSED (self-finishes
        *  when met); null/absent ⇒ OPEN (monitor/digest). */
@@ -477,6 +481,9 @@ export class MachineGateway {
     const agent: CodingAgent = body.agent === "codex" ? "codex" : "claude-code";
 
     const stateSchema = store.coerceStateSchema(body.stateSchema) ?? null;
+    // Optional day-one dashboard — same validate/clip surface as `set-ui` (editLoop).
+    // Sanitized to the allowed tags/attrs; an unusable value coerces to null.
+    const ui = this.validateUi(str(body.ui)?.slice(0, WIRE_TEXT_CAP) ?? "").value;
 
     // Validate-only (`loopany new --dry-run`): every check above has passed, so
     // return the normalized config + fire preview + open/closed classification and
@@ -495,6 +502,8 @@ export class MachineGateway {
             workdir: str(body.workdir) ?? null,
             // The workflow JS body can be large — report presence, not the source.
             workflow: workflow != null,
+            // Ditto for the dashboard HTML — presence flag, not the markup.
+            ui: ui != null,
             goal,
             notify,
             agent,
@@ -554,6 +563,7 @@ export class MachineGateway {
       workdir: str(body.workdir),
       taskFile,
       stateSchema,
+      ui,
       notify,
       goal,
       agent,
