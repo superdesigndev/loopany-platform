@@ -1,12 +1,16 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
+import { forwardRef, lazy, Suspense, useEffect, useImperativeHandle, useState } from 'react'
 import type { ChannelSummary, JobPayload, StateField } from '../types'
 import { listChannels } from '../server/notifyFns'
 import { cronText } from '../lib/format'
-import { areaCls, inputCls, labelCls, selectCls } from './ui'
-import { ModalSection } from './Modal'
+import { inputCls, labelCls, sectionHeadCls, selectCls } from './ui'
+
+// CodeMirror rides in its own lazy chunk (heavy) - the manual form is a
+// rarely-entered mode, so the editors load on demand and stay out of the
+// base client bundle (same discipline as the recharts-bearing LoopView).
+const CodeField = lazy(() => import('./CodeField'))
 
 export interface LoopFormHandle {
-  /** Build the payload, or null if a field is invalid (the form alerts the user). */
+  /** Build the payload, or null if a field is invalid (the form shows the error inline). */
   read: () => JobPayload | null
 }
 
@@ -54,6 +58,9 @@ function initState(initial?: LoopFormSeed): FormState {
   }
 }
 
+/** Quiet helper line under a field - guidance, not chrome. */
+const hintCls = 'mt-1 text-caption leading-snug text-disabled'
+
 // Module-level so identity is stable across renders (an inner component would
 // remount on each keystroke and drop input focus).
 function TextField({
@@ -62,15 +69,17 @@ function TextField({
   onChange,
   mono,
   ph,
+  hint,
 }: {
   label: string
   value: string
   onChange: (v: string) => void
   mono?: boolean
   ph?: string
+  hint?: string
 }) {
   return (
-    <div className="flex-1">
+    <div className="min-w-0">
       <label className={labelCls}>{label}</label>
       <input
         type="text"
@@ -79,14 +88,33 @@ function TextField({
         placeholder={ph}
         onChange={(e) => onChange(e.target.value)}
       />
+      {hint && <div className={hintCls}>{hint}</div>}
     </div>
   )
+}
+
+/** Section divider - same recipe as ModalSection, local so the form owns its rhythm. */
+function Section({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div className="mb-1 mt-7 border-b border-hairline pb-1.5">
+      <h2 className={sectionHeadCls}>{title}</h2>
+      {hint && <div className="mt-0.5 text-caption text-disabled">{hint}</div>}
+    </div>
+  )
+}
+
+/** Chunk-load placeholder that holds the editor's footprint (no layout jump). */
+function EditorFallback({ minHeight }: { minHeight: string }) {
+  return <div className="rounded-control border border-wire bg-raised" style={{ minHeight }} />
 }
 
 export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; channels?: ChannelSummary[] }>(
   function LoopForm({ initial, channels: channelsProp }, ref) {
     const [f, setF] = useState<FormState>(() => initState(initial))
     const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((s) => ({ ...s, [k]: v }))
+    // Inline validation for the one client-parsed field (everything else is
+    // validated server-side); shown under the field, never an alert().
+    const [schemaErr, setSchemaErr] = useState<string | null>(null)
     // The parent (LoopDetailView) already holds the team's channel list — reuse it
     // when handed down, and only self-fetch when rendered standalone.
     const [fetched, setFetched] = useState<ChannelSummary[]>([])
@@ -106,7 +134,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           try {
             stateSchema = JSON.parse(ss)
           } catch {
-            alert('stateSchema is not valid JSON')
+            setSchemaErr('Not valid JSON - expected an array like [{"key":"mrr","label":"MRR","unit":"$"}]')
             return null
           }
         }
@@ -132,39 +160,47 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
       },
     }))
 
+    // Two panes on lg: a narrow settings rail (the small fields) and a wide
+    // content pane where the three code editors get the width they deserve.
+    // `minmax(0,1fr)` + min-w-0 keep a long code line scrolling INSIDE its
+    // editor, never widening the page. Collapses to one column below lg.
     return (
-      <div>
-        <div className="flex gap-3">
+      <div className="grid gap-x-10 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]">
+        {/* settings rail */}
+        <div className="min-w-0">
+          <Section title="Basics" />
           <TextField label="Name" value={f.name} onChange={(v) => set('name', v)} />
-          <div className="flex-1">
-            <label className={labelCls}>cron · edit via agent</label>
+          <div className="min-w-0">
+            <label className={labelCls}>Schedule</label>
             <div
-              className={`${inputCls} flex items-center justify-between gap-2 cursor-default select-none`}
+              className={`${inputCls} flex cursor-default select-none items-center justify-between gap-2 bg-raised`}
               title={f.cron}
             >
-              <span className="text-primary">{cronText(f.cron)}</span>
-              <span className="font-mono text-caption text-secondary">{f.cron}</span>
+              <span className="truncate text-primary">{cronText(f.cron)}</span>
+              <span className="shrink-0 font-mono text-caption text-secondary">{f.cron}</span>
             </div>
+            <div className={hintCls}>Change the cadence via Edit with Claude Code - it validates the cron for you.</div>
           </div>
-        </div>
+          <TextField
+            label="Task file"
+            value={f.taskFile}
+            onChange={(v) => set('taskFile', v)}
+            mono
+            hint="Path of the markdown file this loop tracks/maintains on the machine (optional)."
+          />
 
-        <TextField
-          label="taskFile (the md it tracks/maintains on the machine, optional)"
-          value={f.taskFile}
-          onChange={(v) => set('taskFile', v)}
-        />
-
-        <div className="flex gap-3">
-          <div className="flex-1">
-            <label className={labelCls}>notify</label>
+          <Section title="Notifications" />
+          <div className="min-w-0">
+            <label className={labelCls}>Notify</label>
             <select className={selectCls} value={f.notify} onChange={(e) => set('notify', e.target.value)}>
               {['auto', 'always', 'never'].map((n) => (
                 <option key={n}>{n}</option>
               ))}
             </select>
+            <div className={hintCls}>auto pushes only when a run found something; never silences everything.</div>
           </div>
-          <div className="flex-1">
-            <label className={labelCls}>push channel</label>
+          <div className="min-w-0">
+            <label className={labelCls}>Push channel</label>
             <select className={selectCls} value={f.channelId} onChange={(e) => set('channelId', e.target.value)}>
               <option value="">none (dashboard only)</option>
               {channels.map((c) => (
@@ -174,45 +210,83 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
               ))}
             </select>
           </div>
+
+          <Section title="Execution" hint="Binds claude on the machine as the executor." />
+          <TextField
+            label="Working directory"
+            value={f.workdir}
+            onChange={(v) => set('workdir', v)}
+            mono
+            ph="/Users/you/Workspace/project"
+            hint="Project root on the machine - empty means workflow-only / agent() escalation."
+          />
+          <TextField label="Model" value={f.model} onChange={(v) => set('model', v)} hint="Optional - the daemon default when empty." />
+          <label className="mt-4 flex cursor-pointer items-center gap-2 text-body text-primary">
+            <input
+              type="checkbox"
+              className="accent-[color:var(--color-display)]"
+              checked={f.allowControl}
+              onChange={(e) => set('allowControl', e.target.checked)}
+            />
+            Allow self-rescheduling
+          </label>
         </div>
 
-        <ModalSection>exec (bind claude on the machine as executor)</ModalSection>
-        <TextField
-          label="workdir (project root on the machine - empty ⇒ workflow-only / agent() escalation)"
-          value={f.workdir}
-          onChange={(v) => set('workdir', v)}
-          mono
-          ph="/Users/you/Workspace/project"
-        />
-        <TextField label="model (optional)" value={f.model} onChange={(v) => set('model', v)} />
-        <label className="mt-3.5 flex items-center gap-2 text-sm text-primary">
-          <input
-            type="checkbox"
-            className="accent-[color:var(--color-display)]"
-            checked={f.allowControl}
-            onChange={(e) => set('allowControl', e.target.checked)}
+        {/* content pane - the agent-authored artifacts, in real editors */}
+        <div className="min-w-0">
+          <Section
+            title="Agent-authored content"
+            hint="Workflow, metrics and dashboard - usually written by evolve passes; edit by hand here when you know exactly what you want."
           />
-          allowControl (allow self-rescheduling)
-        </label>
 
-        <label className={labelCls}>workflow (JS function body - zero-LLM; optional)</label>
-        <textarea className={areaCls} value={f.workflow} onChange={(e) => set('workflow', e.target.value)} />
+          <label className={labelCls}>Workflow · JavaScript function body</label>
+          <Suspense fallback={<EditorFallback minHeight="180px" />}>
+            <CodeField
+              lang="js"
+              value={f.workflow}
+              onChange={(v) => set('workflow', v)}
+              minHeight="180px"
+              placeholder={'const res = await tools.call("server.tool", { ... })\nreturn { message: "...", state: { ... } }'}
+            />
+          </Suspense>
+          <div className={hintCls}>
+            Deterministic zero-LLM pre-stage; top-level await and return {'{message, state}'} are allowed (optional).
+          </div>
 
-        <label className={labelCls}>stateSchema (per-run metrics, JSON array)</label>
-        <textarea
-          className={areaCls}
-          value={f.stateSchema}
-          placeholder='[{"key":"mrr","label":"MRR","unit":"$"},{"key":"paid"}]'
-          onChange={(e) => set('stateSchema', e.target.value)}
-        />
+          <label className={labelCls}>Metrics schema · JSON array</label>
+          <Suspense fallback={<EditorFallback minHeight="90px" />}>
+            <CodeField
+              lang="json"
+              value={f.stateSchema}
+              onChange={(v) => {
+                set('stateSchema', v)
+                setSchemaErr(null)
+              }}
+              minHeight="90px"
+              invalid={!!schemaErr}
+              placeholder='[{"key":"mrr","label":"MRR","unit":"$"},{"key":"paid"}]'
+            />
+          </Suspense>
+          {schemaErr ? (
+            <div className="mt-1 text-caption leading-snug text-accent">{schemaErr}</div>
+          ) : (
+            <div className={hintCls}>Per-run metrics the agent reports; they feed the dashboard charts.</div>
+          )}
 
-        <label className={labelCls}>ui (dashboard template · agent-authored HTML + bindings, optional)</label>
-        <textarea
-          className={`${areaCls} min-h-24`}
-          value={f.ui}
-          placeholder={'<h3>{{latest.mrr}}$</h3>\n<loop-chart series="mrr:MRR:$"></loop-chart>'}
-          onChange={(e) => set('ui', e.target.value)}
-        />
+          <label className={labelCls}>Dashboard template · HTML</label>
+          <Suspense fallback={<EditorFallback minHeight="240px" />}>
+            <CodeField
+              lang="html"
+              value={f.ui}
+              onChange={(v) => set('ui', v)}
+              minHeight="240px"
+              placeholder={'<h3>{{latest.mrr}}$</h3>\n<loop-chart series="mrr:MRR:$"></loop-chart>'}
+            />
+          </Suspense>
+          <div className={hintCls}>
+            Agent-authored HTML with {'{{bindings}}'} and loop-chart / loop-embed / loop-calendar / loop-kanban elements.
+          </div>
+        </div>
       </div>
     )
   },

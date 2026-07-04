@@ -1,12 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
-import type { ChannelSummary, CodingAgent, JobDetail, RunSummary, TranscriptStep } from '../types'
-import { cronText, dotColor, dotLabel, dur, fmt, formatTranscript, isClosed, isCompleted, tsShort, until } from '../lib/format'
+import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../types'
+import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
-import { deleteJob, evolveJob, getJobDetail, getTranscript, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
+import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
-import { ModalSection } from './Modal'
 import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { MachinesModal } from './MachinesModal'
@@ -15,6 +14,15 @@ import { ArtifactList, btn, btnCost, btnPrimary, btnQuiet, ErrorBanner, Loading,
 import { ConfirmBar, FlashLine, LoadErrorCard, useDeferredDelete, useFlash } from './actionUi'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+
+/** Composer starters - one per editable dimension, so a blank box never stalls
+ *  the owner. Clicking seeds the instruction; the agent handles the rest. */
+const EDIT_SEEDS = [
+  { label: 'Change the schedule', seed: 'Change the schedule: ' },
+  { label: 'Adjust what it does', seed: 'Change what this loop does: ' },
+  { label: 'Improve the dashboard', seed: 'Improve the dashboard: ' },
+  { label: 'Set a finish line', seed: 'Give this loop a goal, and finish it once the goal is met: ' },
+] as const
 
 // The agent-authored dashboard rides in its own lazy chunk (it pulls in
 // recharts via LoopChart) - a loop without a `ui` template never loads it.
@@ -27,8 +35,16 @@ const LoopView = lazy(() => import('./LoopView').then((m) => ({ default: m.LoopV
  * the action toolbar), an optional agent-authored dashboard, then a two-column
  * main with the UNIFIED Files panel (the task file alongside synced artifacts) and
  * the Runs timeline (a strip + a clickable list, each run linking to its own
- * detail route). Self-polls while open (fast while a run is live). The edit paths
- * (hand-to-Claude-Code; manual field form) remain in-page mode takeovers.
+ * detail route). Self-polls while open (fast while a run is live).
+ *
+ * Editing (2026-07 redesign): the primary path is an INLINE composer in the
+ * header footer (same slot as the Push settings) - the page stays visible, so
+ * the owner describes the change while looking at the spec/dashboard it applies
+ * to. Dispatch swaps the composer for a live status card under the header
+ * (queued → applying with progress → settled with report + files + a link to
+ * the edit run); the page keeps polling, so the applied change surfaces around
+ * the card. Only the manual field form (the raw-settings fallback) remains a
+ * full-page takeover.
  */
 export function LoopDetailView({ id }: { id: string }) {
   const navigate = useNavigate()
@@ -37,13 +53,12 @@ export function LoopDetailView({ id }: { id: string }) {
   const [err, setErr] = useState<string | null>(null) // fatal load error - replaces the whole view
   const [actionErr, setActionErr] = useState<string | null>(null) // inline action error - never nukes the view
   const [editing, setEditing] = useState(false) // manual field form (LoopForm) - the demoted fallback
-  const [editVia, setEditVia] = useState(false) // primary: hand the edit to Claude Code on the machine
+  const [editVia, setEditVia] = useState(false) // primary: the inline hand-to-Claude-Code composer
   const [editInstruction, setEditInstruction] = useState('')
-  const [editDispatched, setEditDispatched] = useState(false) // dispatched → watch the edit run stream in
+  const [editDispatched, setEditDispatched] = useState(false) // dispatched → the live status card watches the edit run
   const [editLog, setEditLog] = useState<{ step: number; label: string }[]>([]) // accumulated live progress
-  const [editTrace, setEditTrace] = useState<TranscriptStep[] | null>(null) // full transcript, pulled once settled
   const seenRunIds = useRef<Set<string>>(new Set())
-  const traceFetched = useRef(false)
+  const editBoxRef = useRef<HTMLTextAreaElement>(null)
   const findEditRun = (rs: RunSummary[]) => rs.find((r) => r.role === 'edit' && !seenRunIds.current.has(r.id))
   const [pushOpen, setPushOpen] = useState(false)
   const [pushSaved, setPushSaved] = useState(false)
@@ -82,8 +97,7 @@ export function LoopDetailView({ id }: { id: string }) {
     setEditInstruction('')
     setEditDispatched(false)
     setEditLog([])
-    setEditTrace(null)
-    traceFetched.current = false
+    seenRunIds.current = new Set()
     setPushOpen(false)
     setOlder([])
     void load()
@@ -107,24 +121,16 @@ export function LoopDetailView({ id }: { id: string }) {
     return () => clearTimeout(t)
   }, [pushSaved])
 
-  // While an edit is dispatched: accumulate live progress, then pull the full
-  // transcript once it settles (progress is cleared server-side at finalize).
+  // While an edit is dispatched: accumulate live progress into the status card
+  // (progress is cleared server-side at finalize, so keep our own trail). The
+  // full transcript lives on the edit run's own detail page - the card links there.
   useEffect(() => {
     if (!editDispatched) return
-    const er = findEditRun(detail?.runs ?? [])
-    if (!er) return
-    if (er.running) {
-      const p = er.progress
-      if (p)
-        setEditLog((prev) =>
-          prev.at(-1)?.step === p.step && prev.at(-1)?.label === p.label ? prev : [...prev, { step: p.step, label: p.label }],
-        )
-    } else if (!traceFetched.current) {
-      traceFetched.current = true
-      void getTranscript({ data: { runId: er.id } })
-        .then((res) => !('error' in res) && setEditTrace(res.steps))
-        .catch(() => (traceFetched.current = false))
-    }
+    const p = findEditRun(detail?.runs ?? [])?.progress
+    if (!p) return
+    setEditLog((prev) =>
+      prev.at(-1)?.step === p.step && prev.at(-1)?.label === p.label ? prev : [...prev, { step: p.step, label: p.label }],
+    )
   }, [editDispatched, detail])
 
   async function refreshAll() {
@@ -203,9 +209,8 @@ export function LoopDetailView({ id }: { id: string }) {
       const r = await requestEdit({ data: { id, instruction } })
       if (r.error) return setActionErr(`Couldn't queue the edit: ${r.error}`)
       setEditLog([])
-      setEditTrace(null)
-      traceFetched.current = false // a fresh dispatch fetches its own settled transcript
       setEditDispatched(true)
+      setEditVia(false) // composer collapses; the live status card takes over
       setEditInstruction('')
       await refreshAll()
     } finally {
@@ -252,6 +257,16 @@ export function LoopDetailView({ id }: { id: string }) {
   const completed = isCompleted(s)
   // A closed loop still working toward its goal (not yet completed).
   const closedActive = isClosed(s) && !completed
+  const onMachine = detail.machine.name ? `“${detail.machine.name}”` : 'the bound machine'
+  // The dispatched edit run (once the poll surfaces it) drives the status card.
+  const editRun = editDispatched ? findEditRun(runs) : undefined
+  const editSettled = !!editRun && !editRun.running
+  const editInFlight = editDispatched && !editSettled
+  const dismissEdit = () => {
+    if (editRun) seenRunIds.current.add(editRun.id) // a dismissed run never re-surfaces as "the" edit
+    setEditDispatched(false)
+    setEditLog([])
+  }
 
   const CONFIRM = {
     run: { q: 'Run one real cycle now?', note: 'Spawns the coding agent (claude).', cta: 'Run once', danger: false },
@@ -284,6 +299,74 @@ export function LoopDetailView({ id }: { id: string }) {
   ) : del.armed ? (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-wire bg-raised px-4 py-3">
       <FlashLine tone="gone" label="Deleted" onUndo={del.cancel} />
+    </div>
+  ) : editVia ? (
+    <div
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && pending !== 'edit') {
+          e.stopPropagation()
+          setEditVia(false)
+        }
+      }}
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <span className="text-body font-medium text-display">Edit with Claude Code</span>
+        <span className="text-meta text-secondary">One agent pass on {onMachine} · spends credits</span>
+      </div>
+      <textarea
+        ref={editBoxRef}
+        autoFocus
+        value={editInstruction}
+        onChange={(e) => setEditInstruction(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && editInstruction.trim() && online && pending !== 'edit')
+            void onRequestEdit()
+        }}
+        rows={3}
+        placeholder="e.g. run at 9am on weekdays instead, and also check coffee stock"
+        className="mt-3 w-full resize-y rounded-control border border-wire bg-raised p-3 font-mono text-label leading-relaxed text-primary outline-none transition-shadow placeholder:text-disabled focus:border-transparent focus:shadow-focus"
+      />
+      {!editInstruction.trim() && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {EDIT_SEEDS.map((sd) => (
+            <button
+              key={sd.label}
+              type="button"
+              onClick={() => {
+                setEditInstruction(sd.seed)
+                editBoxRef.current?.focus()
+              }}
+              className="cursor-pointer rounded-full border border-wire bg-surface px-3 py-1 text-label font-medium text-secondary transition-colors hover:bg-raised hover:text-display"
+            >
+              {sd.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="mt-3.5 flex flex-wrap items-center gap-x-2.5 gap-y-2">
+        <button
+          className={btnCost}
+          disabled={pending === 'edit' || !editInstruction.trim() || !online}
+          title={offlineHint}
+          onClick={() => void onRequestEdit()}
+        >
+          {pending === 'edit' ? 'Dispatching…' : 'Dispatch to Claude Code'}
+        </button>
+        <button className={btn} disabled={pending === 'edit'} onClick={() => setEditVia(false)}>
+          Cancel
+        </button>
+        <span className="hidden text-caption text-disabled sm:inline">⌘↩ dispatch · esc cancel</span>
+        <button
+          type="button"
+          onClick={() => {
+            setEditVia(false)
+            setEditing(true)
+          }}
+          className="ml-auto cursor-pointer border-none bg-transparent p-0 text-label text-secondary underline underline-offset-2 transition-colors hover:text-display"
+        >
+          Manual settings →
+        </button>
+      </div>
     </div>
   ) : pushOpen ? (
     <div className="flex flex-wrap items-center gap-2.5">
@@ -328,7 +411,12 @@ export function LoopDetailView({ id }: { id: string }) {
       >
         {pending === 'run' ? 'Running…' : 'Run once'}
       </button>
-      <button className={btn} disabled={busy} onClick={() => setEditVia(true)}>
+      <button
+        className={btn}
+        disabled={busy || editInFlight}
+        title={editInFlight ? 'An edit is already in flight' : undefined}
+        onClick={() => setEditVia(true)}
+      >
         Edit
       </button>
       <Menu.Root>
@@ -383,148 +471,23 @@ export function LoopDetailView({ id }: { id: string }) {
     </div>
   )
 
-  // ---- edit-via-Claude-Code mode (primary edit path) ----
-  if (editVia) {
-    const onMachine = detail.machine.name ? `“${detail.machine.name}”` : 'the machine this loop runs on'
-    const exitEdit = () => {
-      setEditVia(false)
-      setEditDispatched(false)
-    }
-    const editRun = editDispatched ? findEditRun(runs) : undefined
-    const editSettled = editRun && !editRun.running
-    const traceText = editTrace?.length ? formatTranscript(editTrace) : ''
-    return (
-      <Shell back={backLink}>
-        <EditHead name={s.name} />
-        <button
-          type="button"
-          onClick={exitEdit}
-          className={`mt-1.5 ${btnQuiet}`}
-        >
-          <span aria-hidden>←</span> Back
-        </button>
-
-        {editDispatched ? (
-          <div className="mt-4">
-            <div className="text-body leading-snug text-secondary">
-              Dispatched to Claude Code on {onMachine}. Watching it apply the change:
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-              {!editRun ? (
-                <span className="inline-flex items-center gap-2.5 text-body text-secondary">
-                  <span aria-hidden className="size-1.5 rounded-full" style={runPulseStyle} />
-                  Queued - waiting for the machine to pick it up…
-                </span>
-              ) : editRun.running ? (
-                <span className="inline-flex items-center gap-2.5 text-body text-secondary">
-                  <span aria-hidden className="size-1.5 rounded-full" style={runPulseStyle} />
-                  Applying the change…
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-2 text-body">
-                  <span aria-hidden className="size-2.5 rounded-[2px]" style={{ background: dotColor(editRun) }} />
-                  <span className="font-medium" style={{ color: dotColor(editRun) }}>
-                    {dotLabel(editRun)}
-                  </span>
-                  {editRun.error && <span className="text-secondary">· {editRun.error}</span>}
-                </span>
-              )}
-            </div>
-            {(traceText || editLog.length > 0) && (
-              <>
-                <ModalSection>Activity</ModalSection>
-                {traceText ? (
-                  <Pre>{traceText}</Pre>
-                ) : (
-                  <ul className="max-h-[300px] space-y-1.5 overflow-y-auto rounded-control border border-hairline bg-raised px-4 py-3.5 font-mono text-label leading-relaxed text-secondary">
-                    {editLog.map((e, i) => (
-                      <li key={i} className="flex gap-2">
-                        <span className="shrink-0 text-disabled">{e.step}</span>
-                        <span className="break-words">{e.label}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            )}
-            {editSettled && editRun.message && (
-              <>
-                <ModalSection>Report</ModalSection>
-                <Pre>{editRun.message}</Pre>
-              </>
-            )}
-            {editSettled && editRun.artifacts?.length ? (
-              <>
-                <ModalSection>Files ({editRun.artifacts.length})</ModalSection>
-                <ArtifactList artifacts={editRun.artifacts} />
-              </>
-            ) : null}
-            <div className="mt-5">
-              <button className={btnPrimary} onClick={exitEdit}>
-                {editSettled ? 'Done' : 'Back to detail'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="mt-4 text-body leading-snug text-secondary">
-              Describe the change - Claude Code on {onMachine} applies it (schedule, cadence, or what the loop does).
-              It runs as one agent pass, so it spends credits and needs the machine online.
-            </div>
-            <textarea
-              value={editInstruction}
-              onChange={(e) => setEditInstruction(e.target.value)}
-              rows={4}
-              placeholder="e.g. run at 9am on weekdays instead, and also check coffee stock"
-              className="mt-3 w-full resize-y rounded-lg border border-wire bg-raised p-3 font-mono text-label leading-relaxed text-primary outline-none transition-colors placeholder:text-disabled focus:border-display"
-            />
-            {actionErrEl}
-            <div className="mt-4 flex flex-wrap items-center gap-2.5">
-              <button className={btnCost} disabled={pending === 'edit' || !editInstruction.trim()} onClick={() => void onRequestEdit()}>
-                {pending === 'edit' ? 'Dispatching…' : 'Dispatch to Claude Code'}
-              </button>
-              <button className={btn} disabled={pending === 'edit'} onClick={exitEdit}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setEditVia(false)
-                  setEditing(true)
-                }}
-                className="ml-auto cursor-pointer border-none bg-transparent p-0 text-label text-secondary underline underline-offset-2 transition-colors hover:text-display"
-              >
-                Edit fields manually →
-              </button>
-            </div>
-          </>
-        )}
-      </Shell>
-    )
-  }
-
-  // ---- manual field-form edit mode ----
+  // ---- manual field-form edit mode (the raw-settings fallback takeover) ----
   if (editing) {
     return (
       <Shell back={backLink}>
-        <EditHead name={s.name} />
-        <button
-          type="button"
-          onClick={() => setEditing(false)}
-          className={`mt-1.5 ${btnQuiet}`}
-        >
-          <span aria-hidden>←</span> Back
-        </button>
-        <div className="mt-4">
+        <EditHead name={s.name} onBack={() => setEditing(false)} />
+        <div className="mt-5 rounded-card border border-hairline bg-surface px-6 pb-6 pt-2 shadow-card">
           <LoopForm ref={formRef} initial={job} channels={channels} />
-          {actionErrEl}
-          <div className="mt-5 flex flex-wrap gap-2.5">
-            <button className={btnPrimary} disabled={pending === 'save'} onClick={onSave}>
-              {pending === 'save' ? 'Saving…' : 'Save'}
-            </button>
-            <button className={btn} disabled={pending === 'save'} onClick={() => setEditing(false)}>
-              Cancel
-            </button>
+          <div className="mt-7 border-t border-hairline pt-4">
+            {actionErrEl}
+            <div className="flex flex-wrap gap-2.5">
+              <button className={btnPrimary} disabled={pending === 'save'} onClick={onSave}>
+                {pending === 'save' ? 'Saving…' : 'Save'}
+              </button>
+              <button className={btn} disabled={pending === 'save'} onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       </Shell>
@@ -607,6 +570,77 @@ export function LoopDetailView({ id }: { id: string }) {
         </div>
       </header>
 
+      {/* dispatched edit - the live status card (queued → applying → settled).
+          The page stays live around it, so the applied change (new schedule,
+          rewritten spec, fresh dashboard) surfaces as the card settles. */}
+      {editDispatched && (
+        <section
+          className="mt-6 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card"
+          style={{ animation: 'fadeIn 0.2s ease-out' }}
+          aria-live="polite"
+        >
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {!editRun ? (
+              <span className="inline-flex items-center gap-2.5 text-body text-secondary">
+                <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={runPulseStyle} />
+                <span className="font-medium text-primary">Edit queued</span>
+                <span>waiting for {onMachine} to pick it up…</span>
+              </span>
+            ) : editRun.running ? (
+              <span className="inline-flex min-w-0 items-center gap-2.5 text-body text-secondary">
+                <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={runPulseStyle} />
+                <span className="shrink-0 font-medium text-primary">Applying your edit</span>
+                {editRun.progress && <span className="truncate">· {editRun.progress.label}</span>}
+              </span>
+            ) : (
+              <span className="inline-flex min-w-0 items-center gap-2 text-body">
+                <span aria-hidden className="size-2.5 shrink-0 rounded-[2px]" style={{ background: dotColor(editRun) }} />
+                <span className="font-medium" style={{ color: dotColor(editRun) }}>
+                  {editRun.canceled ? 'Edit canceled' : editRun.outcome === 'error' ? 'Edit failed' : 'Edit applied'}
+                </span>
+                {editRun.error && <span className="truncate text-secondary">· {editRun.error}</span>}
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-3.5">
+              {editRun && (
+                <Link
+                  to="/loops/$loopId/runs/$runId"
+                  params={{ loopId: id, runId: editRun.id }}
+                  className="text-label font-medium text-interactive underline underline-offset-2 transition-colors hover:text-display"
+                >
+                  View run →
+                </Link>
+              )}
+              <button type="button" onClick={dismissEdit} className={btnQuiet}>
+                {editSettled ? 'Done' : 'Hide'}
+              </button>
+            </div>
+          </div>
+
+          {/* live activity trail while it works; the settled report replaces it */}
+          {!editSettled && editLog.length > 0 && (
+            <ul className="mt-3.5 max-h-[200px] space-y-1.5 overflow-y-auto rounded-control border border-hairline bg-raised px-4 py-3 font-mono text-label leading-relaxed text-secondary">
+              {editLog.map((e, i) => (
+                <li key={i} className="flex gap-2">
+                  <span className="shrink-0 text-disabled">{e.step}</span>
+                  <span className="break-words">{e.label}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {editSettled && editRun.message && (
+            <div className="mt-3.5">
+              <Pre>{editRun.message}</Pre>
+            </div>
+          )}
+          {editSettled && editRun.artifacts?.length ? (
+            <div className="mt-3.5">
+              <ArtifactList artifacts={editRun.artifacts} />
+            </div>
+          ) : null}
+        </section>
+      )}
+
       {/* agent-authored dashboard (when present) */}
       {hasUi && (
         <section className="mt-6 min-w-0 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card">
@@ -658,13 +692,27 @@ export function LoopDetailView({ id }: { id: string }) {
 }
 
 /**
- * Edit-mode page heading. The edit views are in-page mode takeovers (NOT modals),
- * so this is a plain heading — NOT `ModalHead`, whose Base UI `Dialog.Title`/
- * `Dialog.Close` require a `Dialog.Root` ancestor and throw ("Cannot destructure
- * property 'store' of 'useDialogRootContext(...)'") when rendered on a bare page.
+ * Manual-settings page heading. The field form is an in-page mode takeover (NOT
+ * a modal), so this is a plain heading - NOT `ModalHead`, whose Base UI
+ * `Dialog.Title`/`Dialog.Close` require a `Dialog.Root` ancestor and throw
+ * ("Cannot destructure property 'store' of 'useDialogRootContext(...)'") when
+ * rendered on a bare page.
  */
-function EditHead({ name }: { name: string }) {
-  return <h1 className="text-[22px] font-medium tracking-tight text-display">Edit · {name}</h1>
+function EditHead({ name, onBack }: { name: string; onBack: () => void }) {
+  return (
+    <div>
+      <button type="button" onClick={onBack} className={btnQuiet}>
+        <span aria-hidden>←</span> Back to loop
+      </button>
+      <h1 className="mt-2.5 text-[24px] font-semibold leading-tight tracking-[-0.015em] text-display">
+        Manual settings · {name}
+      </h1>
+      <p className="mt-1.5 max-w-[640px] text-meta leading-snug text-secondary">
+        The raw fields, saved directly - no agent pass, no credits. For schedule or task changes in plain words, use
+        Edit with Claude Code instead.
+      </p>
+    </div>
+  )
 }
 
 /** The page shell — centered column, a back affordance, consistent padding. */

@@ -11,9 +11,12 @@ import { describe, expect, it } from 'vitest'
  * must clear `err` on success, and the error view must offer a Retry (mirroring
  * RunDetailView's).
  *
- * (2) LoopDetailView: `traceFetched` was never reset when dispatching a new edit,
- * so the SECOND edit in a page session never fetched/showed its settled
- * transcript. `onRequestEdit` must reset it.
+ * (2) LoopDetailView: dispatching a SECOND edit in a page session must start
+ * from a clean slate - `onRequestEdit` re-seeds `seenRunIds` from the current
+ * runs (so the status card tracks the NEW edit run, not a settled earlier one)
+ * and clears the accumulated progress log. (The transcript variant of this bug
+ * died with the takeover: the settled transcript now lives on the edit run's
+ * own detail page.)
  *
  * (3) ComposeModal: the claimStatus setInterval tick had no rejection handler —
  * an unhandled rejection every 2.5s during a server hiccup. The tick must catch.
@@ -41,10 +44,11 @@ describe('LoopDetailView poll/error resilience', () => {
     expect(errView).toContain('void load()')
   })
 
-  it('resets traceFetched when dispatching a new edit (second edit shows its transcript)', () => {
+  it('starts a fresh dispatch from a clean slate (second edit tracks its own run)', () => {
     const dispatch = /async function onRequestEdit\(\) \{[\s\S]*?\n  \}/.exec(src)?.[0]
     expect(dispatch, 'onRequestEdit should exist').toBeTruthy()
-    expect(dispatch).toContain('traceFetched.current = false')
+    expect(dispatch).toContain('seenRunIds.current = new Set(')
+    expect(dispatch).toContain('setEditLog([])')
   })
 })
 
