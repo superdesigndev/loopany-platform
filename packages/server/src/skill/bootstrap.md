@@ -9,8 +9,9 @@ and keep questions to quick check-ins — don't run a full interview.
 This bootstrap doc is served over HTTP on first contact, before the loopany skill is
 installed on disk. Do the two steps below, then hand off to the create reference,
 which owns everything from "what should this loop be?" onward. (`loopany up`
-installs the skill at USER scope — `~/.claude/skills/loopany/` — and `loopany new`
-refreshes it, so a later session in ANY folder on this machine auto-triggers the
+installs the skill at USER scope for each coding agent loopany knows about (Claude
+Code `~/.claude/skills/loopany/`, Codex `~/.agents/skills/loopany/`) and `loopany
+new` refreshes it, so a later session in ANY folder on this machine auto-triggers the
 installed skill and reads the same references from disk.)
 
 ## The pasted values
@@ -41,7 +42,9 @@ One idempotent command does the whole thing — run it verbatim (substitute
 token, else adopts the connect-key), starts a single detached daemon if none is live
 — it survives this session and never doubles up — and waits until the server reports
 the machine online. Once connected it also best-effort refreshes the loopany skill
-at USER scope (`~/.claude/skills/loopany/`), announced in one line, never blocking.
+at USER scope for each coding agent loopany knows about (Claude Code
+`~/.claude/skills/loopany/`, Codex `~/.agents/skills/loopany/`), announced in one
+line, never blocking.
 
 It exits `0` once connected (printing `daemon online …` or `daemon already running
 …`); then continue. If it can't come online, it says where the log is.

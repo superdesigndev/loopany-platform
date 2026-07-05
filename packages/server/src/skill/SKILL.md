@@ -26,6 +26,7 @@ Read the reference for the job (they live on disk next to this file, under
   sharpens its **task** and **workflow** from its own run history, then fits its
   dashboard to the data): **`references/evolve.md`**.
 
-The machine is already connected — this skill was installed at user scope
-(`~/.claude/skills/loopany/`) when it connected via `loopany up`. Just author the
+The machine is already connected — this skill was installed at user scope for each
+coding agent loopany knows about (Claude Code `~/.claude/skills/loopany/`, Codex
+`~/.agents/skills/loopany/`) when it connected via `loopany up`. Just author the
 loop and run the `loopany` CLI; the references cover the exact commands.
