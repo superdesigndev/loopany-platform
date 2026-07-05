@@ -291,6 +291,18 @@ computes pure functions. Run instructions: `README.md`.
   trailing `_` un-nests it). Never render Base UI `Dialog.*` parts (e.g. `ModalHead`)
   without a `Dialog.Root` ancestor - it throws at runtime; bare-page edit modes use
   `EditHead`.
+- **Loop-detail Edit composer (`editVia`)** offers TWO paths: (1) **Dispatch** -
+  `requestEdit({id, instruction})` runs ONE agent pass on the owner's machine
+  (spends credits, no conversation); (2) **Copy prompt** - `copyEditPrompt` copies a
+  self-contained prompt (`lib/editPrompt.ts` `buildEditPrompt`, a PURE + unit-tested
+  helper) for the owner to paste into their OWN local coding-agent session and adjust
+  the loop conversationally (no dispatch, no credits). The hint names WHERE to run it,
+  deriving the loop's on-disk dir from `job.taskFile` via `loopDir` (degrades to a
+  generic instruction, never a fabricated path). Generic operation copy is
+  **agent-neutral** ("your coding agent"), NOT "Claude Code" - Loopany runs more than
+  one agent (claude-code, codex, more later); the only "Claude Code"/"Codex" survivors
+  are the `AGENT_LABEL` chip (the loop's ACTUAL recorded agent, a factual label).
+  Guarded by `loopDetailEdit.regression.test.ts`.
 - **Hard rule: no page-level horizontal scroll.** `min-w-0` on every grid/flex child;
   wide content scrolls inside its own pane (dashboard `overflow-x-auto`, `.taskmd
   table` as a scrolling block, `Timeline` row `min-w-0 overflow-x-auto`). Guarded by
