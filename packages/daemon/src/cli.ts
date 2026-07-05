@@ -18,7 +18,9 @@
  *   loopany down               → setup mode: stop the detached daemon `up` started.
  *   loopany log [<loop>]       → read mode: print a loop's recent run history
  *                                (status + transcript) for the loop in this workdir.
- *   loopany --help | -h | help → print usage and exit (NEVER start the daemon).
+ *   loopany --help | -h | help → print usage (leads with the version) and exit
+ *                                (NEVER start the daemon).
+ *   loopany --version | -v     → print just the daemon version and exit.
  *   loopany loops|edit […]     → interactive mode: the owner edits a loop from
  *                                their own Claude Code, reusing the persisted
  *                                device token (→ /api/machine/loop).
@@ -29,6 +31,7 @@
 const argv = process.argv.slice(2);
 const INTERACTIVE_VERBS = new Set(["loops", "edit"]);
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
+const VERSION_FLAGS = new Set(["--version", "-v"]);
 // Leading tokens that mean "run the daemon WITH flags" (the detached spawn from
 // `loopany up` re-execs us as `… --server-url <url> --api-key <token>`, and a
 // power user may launch it the same way). Any OTHER leading flag is unknown.
@@ -47,6 +50,11 @@ async function main(): Promise<number> {
   // launch a backgrounded daemon. Handled before any heavy import.
   if (argv.length > 0 && HELP_FLAGS.has(argv[0]!)) {
     return (await import("./help.js")).printHelp();
+  }
+  // Version wins over the daemon fallback too — the canonical troubleshooting
+  // affordance: print just the version and exit, loading nothing heavy.
+  if (argv.length > 0 && VERSION_FLAGS.has(argv[0]!)) {
+    return (await import("./help.js")).printVersion();
   }
   // Setup verbs the owner's Claude Code calls OUTSIDE a run to stand a loop up.
   if (argv[0] === "up") {

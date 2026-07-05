@@ -253,8 +253,12 @@ computes pure functions. Run instructions: `README.md`.
 ## Daemon gotchas
 
 - `cli.ts` dispatch order: in-run callback (`LOOPANY_RUN_TOKEN`+args) FIRST, then
-  help/up/new/skill/status/down/log/update/interactive verbs. The daemon fallback is
-  guarded: an unknown leading verb errors exit 2, never silently backgrounds a daemon.
+  help/version/up/new/skill/status/down/log/update/interactive verbs. `-v`/`--version`
+  (like `--help`/`-h`/`help`) is a light fast-path handled BEFORE the daemon fallback -
+  it prints just the version (`help.ts` `printVersion`, reusing `daemonVersion()`) and
+  never launches a daemon; the usage screen also leads with that version. The daemon
+  fallback is guarded: an unknown leading verb errors exit 2, never silently
+  backgrounds a daemon.
 - Pidfile `~/.loopany/daemon.pid` records `<pid>:<startTime>` so a pid reused after
   an unclean crash is never mistaken for the daemon (or SIGTERMed by `down`).
   `loopany up` consults the pidfile first (never spawns a second daemon); the device

@@ -1,11 +1,16 @@
 /**
- * `loopany --help` / `-h` / `help` — the usage screen. Kept in its own module so
- * the help path loads nothing heavy (no daemon/network), and so the verb list has
- * a single readable source. Grouped setup-vs-management; the in-run callbacks
- * (`loopany report …`, which the agent invokes via the PATH wrapper) are NOT user
- * commands and are deliberately omitted.
+ * `loopany --help` / `-h` / `help` — the usage screen, and `loopany -v` /
+ * `--version` — the bare version line. Kept in its own module so both paths load
+ * nothing heavy (no daemon/network), and so the verb list has a single readable
+ * source. The usage screen leads with the daemon version (a troubleshooting
+ * affordance, reusing `daemonVersion()`); when the version is unreadable it
+ * degrades to the plain header instead of throwing. Grouped setup-vs-management;
+ * the in-run callbacks (`loopany report …`, which the agent invokes via the PATH
+ * wrapper) are NOT user commands and are deliberately omitted.
  */
-const HELP = `loopany - the Loopany daemon: connects this machine to a Loopany
+import { daemonVersion } from "./version.js";
+
+const HELP_BODY = ` connects this machine to a Loopany
 server and runs your scheduled agent loops locally with your own coding agent.
 
 Usage: loopany [command] [options]
@@ -39,9 +44,27 @@ Interactive (edit loops from your own agent session, using the stored device tok
     [--dry-run]           --schema-file; --dry-run previews before/after).
 
   -h, --help              Show this help.
+  -v, --version           Print the daemon version and exit.
 `;
 
-export function printHelp(out: (s: string) => void = (s) => process.stdout.write(s)): number {
-  out(HELP);
+/** `loopany <version>` for humans, or a plain fallback when it's unreadable. */
+function versionLabel(version: string | undefined): string {
+  return version ? `loopany v${version}` : "loopany";
+}
+
+export function printHelp(
+  out: (s: string) => void = (s) => process.stdout.write(s),
+  version: string | undefined = daemonVersion(),
+): number {
+  out(`${versionLabel(version)} - the Loopany daemon:${HELP_BODY}`);
+  return 0;
+}
+
+/** `loopany -v` / `--version`: just the version line, never starts the daemon. */
+export function printVersion(
+  out: (s: string) => void = (s) => process.stdout.write(s),
+  version: string | undefined = daemonVersion(),
+): number {
+  out(`${version ? `loopany v${version}` : "loopany (version unknown)"}\n`);
   return 0;
 }

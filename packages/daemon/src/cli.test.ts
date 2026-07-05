@@ -11,6 +11,8 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
+import { daemonVersion } from "./version.js";
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tsx = path.resolve(here, "../node_modules/.bin/tsx");
 const entry = path.resolve(here, "cli.ts");
@@ -43,6 +45,29 @@ describe("loopany CLI dispatch", () => {
     const r = await runCli(["-h"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("Usage: loopany");
+  });
+
+  test("--help leads with the daemon version (reused, not hardcoded)", async () => {
+    const version = daemonVersion();
+    expect(version).toBeTruthy(); // resolvable from this package's package.json
+    const r = await runCli(["--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`loopany v${version}`);
+  });
+
+  test("--version prints just the version and exits 0 (no daemon)", async () => {
+    const version = daemonVersion();
+    const r = await runCli(["--version"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`loopany v${version}`);
+    expect(r.stdout).not.toContain("Usage: loopany"); // version only, not the full screen
+  });
+
+  test("-v prints the version and exits 0", async () => {
+    const version = daemonVersion();
+    const r = await runCli(["-v"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`loopany v${version}`);
   });
 
   test("help (bare verb) prints usage and exits 0", async () => {
