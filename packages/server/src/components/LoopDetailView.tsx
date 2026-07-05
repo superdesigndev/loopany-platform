@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../types'
+import { buildEditPrompt, loopDir } from '../lib/editPrompt'
 import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
@@ -53,8 +54,9 @@ export function LoopDetailView({ id }: { id: string }) {
   const [err, setErr] = useState<string | null>(null) // fatal load error - replaces the whole view
   const [actionErr, setActionErr] = useState<string | null>(null) // inline action error - never nukes the view
   const [editing, setEditing] = useState(false) // manual field form (LoopForm) - the demoted fallback
-  const [editVia, setEditVia] = useState(false) // primary: the inline hand-to-Claude-Code composer
+  const [editVia, setEditVia] = useState(false) // primary: the inline hand-to-your-coding-agent composer
   const [editInstruction, setEditInstruction] = useState('')
+  const [promptCopied, setPromptCopied] = useState(false) // copy-prompt path: adjust the loop yourself, no dispatch
   const [editDispatched, setEditDispatched] = useState(false) // dispatched → the live status card watches the edit run
   const [editLog, setEditLog] = useState<{ step: number; label: string }[]>([]) // accumulated live progress
   const seenRunIds = useRef<Set<string>>(new Set())
@@ -95,6 +97,7 @@ export function LoopDetailView({ id }: { id: string }) {
     setEditing(false)
     setEditVia(false)
     setEditInstruction('')
+    setPromptCopied(false)
     setEditDispatched(false)
     setEditLog([])
     seenRunIds.current = new Set()
@@ -267,6 +270,18 @@ export function LoopDetailView({ id }: { id: string }) {
     setEditDispatched(false)
     setEditLog([])
   }
+  // The loop's on-disk folder — where the owner runs their own coding agent for
+  // the copy-prompt path (null ⇒ generic instruction, no fabricated path).
+  const editDir = loopDir(job.taskFile)
+  const copyEditPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(buildEditPrompt({ loopId: id, loopName: s.name, instruction: editInstruction }))
+      setPromptCopied(true)
+      setTimeout(() => setPromptCopied(false), 4000)
+    } catch {
+      setActionErr('Could not copy the prompt - try again or copy it manually.')
+    }
+  }
 
   const CONFIRM = {
     run: { q: 'Run one real cycle now?', note: 'Spawns the coding agent (claude).', cta: 'Run once', danger: false },
@@ -310,7 +325,7 @@ export function LoopDetailView({ id }: { id: string }) {
       }}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <span className="text-body font-medium text-display">Edit with Claude Code</span>
+        <span className="text-body font-medium text-display">Edit with your coding agent</span>
         <span className="text-meta text-secondary">One agent pass on {onMachine} · spends credits</span>
       </div>
       <textarea
@@ -350,7 +365,15 @@ export function LoopDetailView({ id }: { id: string }) {
           title={offlineHint}
           onClick={() => void onRequestEdit()}
         >
-          {pending === 'edit' ? 'Dispatching…' : 'Dispatch to Claude Code'}
+          {pending === 'edit' ? 'Dispatching…' : 'Dispatch to your coding agent'}
+        </button>
+        <button
+          type="button"
+          className={btn}
+          disabled={pending === 'edit'}
+          onClick={() => void copyEditPrompt()}
+        >
+          {promptCopied ? '✓ Prompt copied' : 'Copy prompt'}
         </button>
         <button className={btn} disabled={pending === 'edit'} onClick={() => setEditVia(false)}>
           Cancel
@@ -366,6 +389,25 @@ export function LoopDetailView({ id }: { id: string }) {
         >
           Manual settings →
         </button>
+      </div>
+      {/* Copy-prompt path — no dispatch, no credits: paste into your own coding
+          agent and iterate on the loop yourself. The hint names WHERE to run it. */}
+      <div className="mt-2 text-caption leading-snug text-disabled">
+        {promptCopied ? (
+          <span className="text-secondary">
+            ✓ Copied · run your coding agent{' '}
+            {editDir ? (
+              <>
+                in <code className="break-all font-mono text-primary">{editDir}</code>
+              </>
+            ) : (
+              "in the loop’s local directory on this machine"
+            )}{' '}
+            and paste the prompt to adjust the loop yourself.
+          </span>
+        ) : (
+          <>Prefer to adjust it yourself? Copy prompt drops a ready-to-paste prompt for your own coding agent - no dispatch, no credits.</>
+        )}
       </div>
     </div>
   ) : pushOpen ? (
@@ -709,7 +751,7 @@ function EditHead({ name, onBack }: { name: string; onBack: () => void }) {
       </h1>
       <p className="mt-1.5 max-w-[640px] text-meta leading-snug text-secondary">
         The raw fields, saved directly - no agent pass, no credits. For schedule or task changes in plain words, use
-        Edit with Claude Code instead.
+        Edit with your coding agent instead.
       </p>
     </div>
   )

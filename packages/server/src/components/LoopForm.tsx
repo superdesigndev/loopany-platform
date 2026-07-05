@@ -179,7 +179,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
               <span className="truncate text-primary">{cronText(f.cron)}</span>
               <span className="shrink-0 font-mono text-caption text-secondary">{f.cron}</span>
             </div>
-            <div className={hintCls}>Change the cadence via Edit with Claude Code - it validates the cron for you.</div>
+            <div className={hintCls}>Change the cadence via Edit with your coding agent - it validates the cron for you.</div>
           </div>
           <TextField
             label="Task file"
