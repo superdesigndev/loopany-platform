@@ -25,6 +25,9 @@ Read the reference for the job (they live on disk next to this file, under
 - **How a loop stays coherent and improves over time** (the evolution pass that
   sharpens its **task** and **workflow** from its own run history, then fits its
   dashboard to the data): **`references/evolve.md`**.
+- **How a loop behaves each time it runs** (the runtime protocol: the task file as
+  memory, surfacing only what changed, the report/finish grammar and finish bar, the
+  schedule levers, and front-matter product conventions): **`references/run.md`**.
 
 The machine is already connected — this skill was installed at user scope for each
 coding agent loopany knows about (Claude Code `~/.claude/skills/loopany/`, Codex

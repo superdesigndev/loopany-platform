@@ -10,11 +10,13 @@ import { createFileRoute } from '@tanstack/react-router'
 import create from '../skill/references/create.md?raw'
 import update from '../skill/references/update.md?raw'
 import evolve from '../skill/references/evolve.md?raw'
+import run from '../skill/references/run.md?raw'
 
 const REFERENCES: Record<string, string> = {
   'create.md': create,
   'update.md': update,
   'evolve.md': evolve,
+  'run.md': run,
 }
 
 const PREFIX = '/api/skill/references/'

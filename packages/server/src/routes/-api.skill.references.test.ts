@@ -1,7 +1,7 @@
 /**
  * The path-safe /api/skill/references/<file> fallback route. Exercises the GET
  * handler directly (vitest resolves the `?raw` skill imports the same way the
- * nitro build does) — the three exact reference names serve their bundled bytes
+ * nitro build does) — the four exact reference names serve their bundled bytes
  * as markdown, and everything else (unknown name, nested path, traversal) is a
  * clean JSON 404. This is the prod behavior; the Vite dev static layer swallows
  * `.md` paths before the route runs, so it can only be observed off the dev server.
@@ -22,7 +22,7 @@ const call = (pathname: string) =>
 const flat = (s: string) => s.replace(/\s+/g, ' ')
 
 describe('/api/skill/references/$', () => {
-  for (const name of ['create.md', 'update.md', 'evolve.md']) {
+  for (const name of ['create.md', 'update.md', 'evolve.md', 'run.md']) {
     test(`serves ${name} as markdown`, async () => {
       const res = await call(`/api/skill/references/${name}`)
       expect(res.status).toBe(200)
@@ -84,6 +84,44 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('evolve.md` §3')
     // `ui` is now a documented (optional) config field.
     expect(body).toContain('`ui` is optional')
+  })
+
+  test('run.md carries the runtime protocol depth (batch 3: extracted from exec-loop §1-§4)', async () => {
+    const body = flat(await (await call('/api/skill/references/run.md')).text())
+    // The task file is the loop's memory, with its three standing sections.
+    expect(body).toContain('## Spec')
+    expect(body).toContain('## Current understanding')
+    expect(body).toContain('## Timeline')
+    // Compress-don't-append discipline.
+    expect(body).toContain('Compress, don\'t append forever')
+    // Surface-only-what-changed nuance.
+    expect(body).toContain('surfaces only what is new or changed')
+    // The report/finish grammar and the strict finish bar.
+    expect(body).toContain('loopany report --status nothing-new')
+    expect(body).toContain('loopany finish --message')
+    expect(body).toContain('self-finish: allowed')
+    expect(body).toContain('Never finish early')
+    // The schedule levers with `loopany show` first, and the run-path cadence floors.
+    expect(body).toContain('loopany show')
+    expect(body).toContain('loopany reschedule')
+    expect(body).toContain('loopany set-cron')
+    expect(body).toContain('cadence floors')
+    // Front-matter product conventions (type/title/date).
+    expect(body).toContain('front-matter')
+    expect(body).toContain('type: report')
+  })
+
+  test('run.md is dual-audience (in-run enrichment + owner-readable), not edit-run mechanics', async () => {
+    const body = flat(await (await call('/api/skill/references/run.md')).text())
+    // Explicitly addresses both the in-run agent and the owner reading the skill.
+    expect(body).toContain('Two audiences')
+    // The prompt's inline CORE stays authoritative; the skill is enrichment.
+    expect(body).toContain('your prompt wins')
+    // OQ1 scope guard: the edit-run CORE stays server-internal — no set-*/edit-run
+    // verb mechanics leak into the public run protocol.
+    expect(body).not.toContain('set-ui')
+    expect(body).not.toContain('set-workflow')
+    expect(body).not.toContain('set-schema')
   })
 
   test('unknown name → 404 json', async () => {

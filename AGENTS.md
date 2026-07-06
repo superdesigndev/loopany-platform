@@ -67,7 +67,7 @@ computes pure functions. Run instructions: `README.md`.
 - ALL prompt prose lives here, split by audience:
   1. `bootstrap.md` - first-contact onboarding, served at `/api/bootstrap`; never
      bundled or installed.
-  2. `SKILL.md` + `references/{create,update,evolve}.md` - the PUBLIC installable
+  2. `SKILL.md` + `references/{create,update,evolve,run}.md` - the PUBLIC installable
      skill, bundled into the daemon npm package and auto-installed at USER scope for
      EVERY coding agent loopany knows about (`SKILL_TARGET_AGENTS` in
      `daemon/src/skill-install.ts` - Claude Code `~/.claude/skills/loopany` + Codex
@@ -85,14 +85,18 @@ computes pure functions. Run instructions: `README.md`.
      the OWNER authoring CLI (`loopany edit <id> --json`) - a merge would ship
      run-token instructions in the public bundle.
 - `references/evolve.md` doubles as the evolve RUN prompt (same `?raw` import), so
-  skill and run-dispatch cannot drift.
+  skill and run-dispatch cannot drift. `references/run.md` is the PUBLIC runtime
+  protocol (dual-audience: in-run enrichment + owner docs) - the depth extracted
+  from `run/exec-loop.md` §1-§4 (task-file discipline, report/finish grammar + finish
+  bar, schedule levers, front-matter conventions); the server-injected exec CORE stays
+  authoritative and self-sufficient, so run.md is enrichment, never a dependency.
 - **HARD GUARDRAIL**: `packages/daemon/scripts/sync-skill.mjs` is a SELECTIVE
-  whitelist copy (exactly `SKILL.md` + the 3 references). Never make it recursive -
+  whitelist copy (exactly `SKILL.md` + the 4 references). Never make it recursive -
   that would ship the internal run prompts and `bootstrap.md` into the public npm
-  tarball. Guarded by `sync-skill.test.ts`. Edit the six source files; never fork
+  tarball. Guarded by `sync-skill.test.ts`. Edit the source files; never fork
   the content. `packages/daemon/skill/` is generated + gitignored.
 - References are also served at `/api/skill/references/<file>` (static map, only
-  the 3 exact names resolve; in dev vite's static layer 404s the `.md` path - the
+  the 4 exact names resolve; in dev vite's static layer 404s the `.md` path - the
   handler works in prod, covered by unit test).
 - Skill/prompt markdown compiles INTO the server bundle via `?raw` imports, so a
   prompt-only `.md` edit MUST deploy (`deploy.yml` paths-ignore lists explicit doc
