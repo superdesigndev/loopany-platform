@@ -6,7 +6,7 @@ import { LoopCalendar } from './LoopCalendar'
 import type { ArtifactSummary } from '../types'
 
 vi.mock('../server/loopApi', () => ({
-  getArtifact: vi.fn(async () => ({ text: 'hello' })),
+  getArtifact: vi.fn(async () => ({ text: 'hello from the product' })),
 }))
 
 // jsdom has no ResizeObserver/layout. The stub reports `measuredWidth` on
@@ -80,10 +80,9 @@ describe('LoopCalendar dot mode', () => {
 })
 
 describe('LoopCalendar front-matter dating', () => {
-  it('dates a product by its front-matter date over the filename, and labels the source', async () => {
+  it('dates a product by its front-matter date over the filename, and labels the source in the modal', async () => {
     measuredWidth = 800
-    // Filename says 2026-07-01; front matter says the 15th → the 15th wins and is
-    // the newest, so it auto-selects and the viewer labels it "dated by front matter".
+    // Filename says 2026-07-01; front matter says the 15th → the 15th wins.
     const arts = [file('reports/digest-2026-07-01.md', { date: '2026-07-15', title: 'Mid-July' })]
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -91,12 +90,29 @@ describe('LoopCalendar front-matter dating', () => {
     await act(async () => {
       root.render(createElement(LoopCalendar, { loopId: 'loop-1', match: 'reports/*.md', artifacts: arts }))
     })
-    const out = host.innerHTML
+    // The calendar shows July 2026 (the front-matter month, not June)…
+    expect(host.innerHTML).toContain('July 2026')
+    // …and nothing is reviewed yet (the modal is a body-level portal).
+    expect(document.body.innerHTML).not.toContain('hello from the product')
+    // Click the product chip → the modal opens with the body and the date source.
+    const chip = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('digest'))
+    if (!chip) throw new Error('no product chip')
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(document.body.innerHTML).toContain('hello from the product')
+    expect(document.body.innerHTML).toContain('Mid-July') // front-matter title as the head
+    expect(document.body.innerHTML).toContain('dated by front matter')
+    // Close returns to the grid.
+    const close = [...document.body.querySelectorAll('button')].find(
+      (b) => b.getAttribute('aria-label') === 'Close',
+    )
+    if (!close) throw new Error('no modal close button')
+    await act(async () => {
+      close.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(document.body.innerHTML).not.toContain('hello from the product')
     await act(async () => root.unmount())
     host.remove()
-    // The selected product's viewer caption reflects the authoritative source…
-    expect(out).toContain('· dated by front matter ·')
-    // …and the calendar shows July 2026 (the front-matter month, not June).
-    expect(out).toContain('July 2026')
   })
 })

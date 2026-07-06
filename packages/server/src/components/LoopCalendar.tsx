@@ -2,17 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactSummary } from '../types'
 import { fmt } from '../lib/format'
 import { isTaskPath } from '../lib/fileEntries'
-import { localDay, matchArtifacts, newestMatch, productDate, type ProductDate } from '../lib/productDate'
-import { ArtifactBody, ViewerHead } from './artifactView'
+import { localDay, matchArtifacts, productDate, type ProductDate } from '../lib/productDate'
+import { ArtifactBody } from './artifactView'
+import { Modal, ModalHead } from './Modal'
 
 /**
  * `<loop-calendar match="reports/*.md">` - the loop's products on a month
  * grid. Each product lands on the day parsed from its FILENAME (ISO-ish
  * patterns), falling back to its sync time (marked with a dashed chip - sync
  * time can misattribute a re-synced old file, so the fallback is visible, not
- * silent). Clicking a product opens it below in the shared artifact viewer:
- * the calendar is the index, the embed is the detail. `match` is optional -
- * the default is every synced artifact except the task file.
+ * silent). Clicking a product reviews its full body in the shared Modal
+ * (focus trap, Esc, scroll lock come from Base UI Dialog - the kanban card
+ * pattern); close returns to the grid. `match` is optional - the default is
+ * every synced artifact except the task file.
  *
  * Monday-start (ISO), mono day numbers top-right, today inverted. Chips carry
  * the product's basename (max 2 per day + a "+N" overflow); under ~620px of
@@ -31,6 +33,8 @@ interface Product {
 }
 
 const monthOf = (day: string): string => day.slice(0, 7) // YYYY-MM
+
+const basename = (path: string): string => path.split('/').pop() || path
 
 /** Human label for how a product got its day (front matter is authoritative). */
 function dateSourceLabel(source: ProductDate['source']): string {
@@ -125,22 +129,16 @@ export function LoopCalendar({
     return m
   }, [products])
 
-  // Month bounds follow the data; the shown month defaults to the newest product's.
+  // Month bounds follow the data; clampMonth defaults to the newest month.
   const months = useMemo(() => [...new Set(products.map((p) => monthOf(p.date)))].sort(), [products])
-  const newest = useMemo(
-    () => newestMatch(products.map((p) => p.file), undefined),
-    [products],
-  )
   const [shown, setShown] = useState<string | null>(null)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [reviewing, setReviewing] = useState<Product | null>(null)
 
-  // Default / repair selection when the product set changes (poll refresh):
-  // keep a live manual pick, else select the newest product and show its month.
+  // Repair the review pick when the product set changes (poll refresh): a
+  // vanished artifact's modal closes instead of pointing at stale data.
   useEffect(() => {
-    if (selected && products.some((p) => p.file.path === selected)) return
-    setSelected(newest?.path ?? null)
-    if (newest) setShown(monthOf(productDate(newest).date))
-  }, [products, selected, newest])
+    if (reviewing && !products.some((p) => p.file.path === reviewing.file.path)) setReviewing(null)
+  }, [products, reviewing])
 
   // The ref'd root wraps EVERY state (loading/empty/grid): the width observer
   // attaches once on mount, so the observed element must exist on the very
@@ -165,7 +163,6 @@ export function LoopCalendar({
   const month = clampMonth(months, shown)
   const mi = months.indexOf(month)
   const today = localDay(new Date().toISOString())
-  const selectedProduct = products.find((p) => p.file.path === selected)
 
   const [y, m] = month.split('-').map(Number)
   const lead = (new Date(y!, m! - 1, 1).getDay() + 6) % 7 // Monday-start offset
@@ -222,13 +219,12 @@ export function LoopCalendar({
           const day = `${month}-${String(i + 1).padStart(2, '0')}`
           const fs = byDay.get(day) ?? []
           const isToday = day === today
-          const hasSelected = fs.some((p) => p.file.path === selected)
           return (
             <div
               key={day}
               className={`relative min-w-0 border-b border-r border-hairline bg-surface px-1.5 pb-1.5 ${
                 dotMode ? 'min-h-[46px] pt-5' : 'min-h-[74px] pt-6'
-              } ${hasSelected ? 'bg-raised shadow-[inset_0_0_0_1px_var(--color-display)]' : ''}`}
+              }`}
             >
               <span
                 className={`absolute right-1.5 top-1 font-mono text-micro ${
@@ -242,14 +238,13 @@ export function LoopCalendar({
                   key={p.file.path}
                   product={p}
                   dot={dotMode}
-                  on={p.file.path === selected}
-                  onPick={() => setSelected(p.file.path)}
+                  onPick={() => setReviewing(p)}
                 />
               ))}
               {fs.length > CHIPS_PER_DAY && (
                 <button
                   type="button"
-                  onClick={() => setSelected(fs[CHIPS_PER_DAY]!.file.path)}
+                  onClick={() => setReviewing(fs[CHIPS_PER_DAY]!)}
                   className="mt-0.5 block cursor-pointer border-none bg-transparent p-0 px-1 font-mono text-[9.5px] text-disabled transition-colors hover:text-display"
                 >
                   +{fs.length - CHIPS_PER_DAY}
@@ -274,25 +269,22 @@ export function LoopCalendar({
         </span>
       </div>
 
-      {/* detail - the selected product in the shared artifact viewer */}
-      {selectedProduct && (
-        <div className="mt-4 min-w-0 overflow-hidden rounded-card border border-hairline bg-surface shadow-card">
-          <ViewerHead
-            path={selectedProduct.file.path}
-            meta={`${dateSourceLabel(selectedProduct.source)} · synced ${fmt(selectedProduct.file.updatedAt)}`}
-            action={
-              <a
-                href="#files"
-                className="text-caption font-medium text-interactive transition-colors hover:text-display"
-              >
-                Open in files →
-              </a>
+      {/* review - the picked product's full body in the shared Modal */}
+      {reviewing && (
+        <Modal open onClose={() => setReviewing(null)}>
+          <ModalHead
+            title={reviewing.file.meta?.title?.trim() || basename(reviewing.file.path)}
+            sub={
+              <span className="font-mono">
+                {reviewing.file.path} · {dateSourceLabel(reviewing.source)} · synced{' '}
+                {fmt(reviewing.file.updatedAt)}
+              </span>
             }
           />
-          <div className="max-h-[340px] min-w-0 overflow-y-auto">
-            <ArtifactBody loopId={loopId} file={selectedProduct.file} />
+          <div className="mt-4 min-w-0">
+            <ArtifactBody loopId={loopId} file={reviewing.file} />
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   )
@@ -302,12 +294,10 @@ export function LoopCalendar({
 function ProductChip({
   product,
   dot,
-  on,
   onPick,
 }: {
   product: Product
   dot: boolean
-  on: boolean
   onPick: () => void
 }) {
   const fallback = product.source === 'sync'
@@ -320,7 +310,7 @@ function ProductChip({
         title={title}
         aria-label={product.file.path}
         className={`mr-1 mt-1 inline-block size-2 cursor-pointer rounded-full border-none p-0 ${
-          on ? 'bg-display' : fallback ? 'bg-disabled' : 'bg-secondary'
+          fallback ? 'bg-disabled' : 'bg-secondary'
         }`}
       />
     )
@@ -329,9 +319,9 @@ function ProductChip({
       type="button"
       onClick={onPick}
       title={title}
-      className={`mt-1 block w-full min-w-0 cursor-pointer truncate rounded-full border px-1.5 py-0.5 text-left font-mono text-micro transition-colors hover:border-display ${
+      className={`mt-1 block w-full min-w-0 cursor-pointer truncate rounded-full border border-hairline bg-raised px-1.5 py-0.5 text-left font-mono text-micro text-primary transition-colors hover:border-display ${
         fallback ? 'border-dashed' : ''
-      } ${on ? 'border-display bg-surface text-display' : 'border-hairline bg-raised text-primary'}`}
+      }`}
     >
       {chipName(product.file.path)}
     </button>
