@@ -84,7 +84,6 @@ test("evolve task inlines a COMPACT run survey: keys not values, clipped message
       role: "exec",
       outcome: "exec",
       status: "new",
-      sample: null,
       state: { drift: 3, prs: 1 },
       message: "Detected drift " + "x".repeat(200), // long enough to force truncation
       costUsd: 0.4231,
@@ -95,7 +94,6 @@ test("evolve task inlines a COMPACT run survey: keys not values, clipped message
       role: "exec",
       outcome: "exec",
       status: "nothing-new",
-      sample: null,
       state: null,
       message: "no drift since last sweep",
       costUsd: null,
@@ -206,9 +204,10 @@ test("exec task keeps the untrusted-data guard prominent in the user turn", () =
 });
 
 test("exec task report grammar is schema-derived (stateLine)", () => {
-  // No schema → the optional single-metric --sample line.
+  // No schema → a plain report line with no metrics grammar; points at defining a schema.
   const open = buildExecTask(loop());
-  expect(open).toContain("loopany report --status new --sample <number>");
+  expect(open).toContain("loopany report --status new");
+  expect(open).toContain("no metric schema");
   expect(open).not.toContain("--state '{");
   // Declared schema → the --state grammar lists every declared key.
   const withSchema = buildExecTask(
@@ -216,7 +215,7 @@ test("exec task report grammar is schema-derived (stateLine)", () => {
   );
   expect(withSchema).toContain("loopany report --status <s> --state");
   expect(withSchema).toContain('"mrr":<n>');
-  expect(withSchema).not.toContain("--sample <number>");
+  expect(withSchema).not.toContain("no metric schema");
 });
 
 test("exec task injects a Goal (finish line) iff the loop has a goal", () => {

@@ -70,7 +70,7 @@ describe("runLog", () => {
           ok: true,
           name: "Here",
           runs: [
-            { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, sample: null, transcript: "$ Bash echo hi", transcriptTruncated: false },
+            { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, transcript: "$ Bash echo hi", transcriptTruncated: false },
           ],
         },
       },
@@ -99,7 +99,7 @@ describe("runLog", () => {
           ok: true,
           name: "Here",
           runs: [
-            { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, sample: null, transcript: "$ Bash echo hi", transcriptTruncated: false },
+            { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, transcript: "$ Bash echo hi", transcriptTruncated: false },
           ],
         },
       },
@@ -147,7 +147,7 @@ describe("runLog", () => {
   });
 
   test("--limit and --json are forwarded / honored", async () => {
-    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: null, error: null, message: null, sessionId: "sess-r1", state: { mrr: 42 }, sample: null, transcript: "", transcriptTruncated: false }];
+    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: null, error: null, message: null, sessionId: "sess-r1", state: { mrr: 42 }, transcript: "", transcriptTruncated: false }];
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
       "/api/machine/log": { body: { ok: true, name: "X", runs } },
@@ -215,7 +215,7 @@ function stubUnified(loops: LoopStub[], runsFor: (argv: string[]) => { ok: boole
 type LoopStub = { id: string; name: string; workdir: string | null; taskFile: string | null };
 
 describe("runLog — unified /api/machine/cli (new server)", () => {
-  const oneRun = [{ id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, sample: null, transcript: "$ Bash echo hi", transcriptTruncated: false }];
+  const oneRun = [{ id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, transcript: "$ Bash echo hi", transcriptTruncated: false }];
 
   test("resolves the workdir loop and posts `loops` then `log <id>` to the unified endpoint", async () => {
     const { fetchFn, calls } = stubUnified(

@@ -90,14 +90,14 @@ def main():
         rows.append((
             str(uuid.uuid4()), loop_id, user_id, machine_id, phase, role, iso(ts),
             outcome, status, msg, 800 + (i * 37) % 2500, error,
-            None, state,
+            state,
         ))
 
     cur.executemany(
         """INSERT INTO runs
            (id,loop_id,user_id,machine_id,phase,role,ts,outcome,status,message,
-            duration_ms,error,sample,state)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            duration_ms,error,state)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         rows,
     )
     con.commit()

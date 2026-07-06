@@ -666,7 +666,7 @@ export class MachineGateway {
    * to a loop bound to THAT machine (`loop.machineId === machineId`, exactly like
    * `editLoop`/`sync`) — a token can never read another loop's or another device's
    * runs. Read-only. Returns the most recent N runs newest-first with each run's
-   * outcome, its claude-code `sessionId`, its reported metrics (`state`/`sample`),
+   * outcome, its claude-code `sessionId`, its reported metrics (`state`),
    * and a clipped transcript so the create/update/evolve flows can see how past runs
    * actually went before reshaping the loop.
    */
@@ -711,11 +711,10 @@ export class MachineGateway {
         // The claude-code session id lets the agent jump from this survey straight
         // to the run's on-disk `<session>.jsonl` for a deep dive (see evolve.md).
         sessionId: r.sessionId ?? null,
-        // The metrics the run reported: the metric object (`state`) plus the
-        // single-metric `sample`, so `loopany log` surfaces them alongside the
-        // transcript (matches what buildEvolveTask feeds the evolve agent).
+        // The metrics the run reported (the `state` object), so `loopany log`
+        // surfaces them alongside the transcript (matches what buildEvolveTask
+        // feeds the evolve agent).
         state: r.state ?? null,
-        sample: r.sample ?? null,
         transcript: text,
         transcriptTruncated: truncated,
       };
@@ -1690,7 +1689,6 @@ export class MachineGateway {
           ...(isStatus(status) ? { status } : {}),
           // Clipped to the same cap the report finalText fallback enforces.
           ...(str("message") !== undefined ? { message: str("message")!.slice(0, MESSAGE_CAP) } : {}),
-          ...(str("sample") !== undefined ? { sample: Number(str("sample")) } : {}),
           ...(state !== undefined ? { state } : {}),
         });
         return { code: 200, text: "reported" };
@@ -1767,7 +1765,7 @@ export class MachineGateway {
       "loopany — in-run agent CLI. Verbs:",
       "",
       "always available:",
-      "  report [--status new|resolved|nothing-new] [--message <s>] [--sample <n>] [--state '{\"k\":n}' | --state-file <p>]",
+      "  report [--status new|resolved|nothing-new] [--message <s>] [--state '{\"k\":n}' | --state-file <p>]",
       "          record this run's outcome + metrics (keys must match the loop's schema)",
       "  show    print this loop's current config + recent state",
       ...(slot.canFinish

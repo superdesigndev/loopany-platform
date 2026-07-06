@@ -415,7 +415,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
                   )}
                 </Field>
               )}
-              {run.sample != null && <Field k="Sample">{String(run.sample)}</Field>}
               {run.state != null && (
                 <Field k="Run state">
                   <code className="block break-all font-mono text-label text-secondary">{JSON.stringify(run.state)}</code>

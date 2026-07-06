@@ -228,7 +228,6 @@ export const runs = sqliteTable(
     message: text("message"),
     durationMs: integer("duration_ms"),
     error: text("error"),
-    sample: real("sample"),
     /** This run's observation snapshot — numeric metrics (chart points) plus scalar
      *  values the generative UI binds via {{latest.*}} (strings ok; chart ignores them). */
     state: text("state", { mode: "json" }).$type<Record<string, number | string>>(),

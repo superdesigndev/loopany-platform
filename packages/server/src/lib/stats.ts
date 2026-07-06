@@ -20,10 +20,8 @@ export function numericSeries(runsNewestFirst: RunSummary[]): Record<string, Ser
       r.state && typeof r.state === 'object' && !Array.isArray(r.state)
         ? (r.state as Record<string, Json>)
         : {}
-    const merged: Record<string, Json> = { ...obj }
-    if (typeof r.sample === 'number' && merged.sample === undefined) merged.sample = r.sample
-    for (const k in merged) {
-      const v = merged[k]
+    for (const k in obj) {
+      const v = obj[k]
       if (typeof v === 'number' && isFinite(v)) (series[k] ??= []).push({ t: r.ts, v })
     }
   }

@@ -141,6 +141,13 @@
       "when": 1783315339448,
       "tag": "0019_watery_black_widow",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1783330289295,
+      "tag": "0020_many_shen",
+      "breakpoints": true
     }
   ]
 }

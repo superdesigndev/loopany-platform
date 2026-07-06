@@ -13,7 +13,6 @@ const run = (id: string, ts: string, over: Partial<RunSummary> = {}): RunSummary
   costUsd: null,
   usage: null,
   error: null,
-  sample: null,
   state: null,
   control: null,
   sessionId: null,

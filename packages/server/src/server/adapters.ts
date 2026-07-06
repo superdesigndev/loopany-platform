@@ -40,7 +40,6 @@ export function toRunSummary(r: Run): RunSummary {
     costUsd: r.costUsd ?? null,
     usage: r.usage ?? null,
     error: r.error ?? null,
-    sample: r.sample ?? null,
     state: (r.state as RunSummary["state"]) ?? null,
     control: (r.control as RunSummary["control"]) ?? null,
     sessionId: r.sessionId ?? null,

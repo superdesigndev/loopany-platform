@@ -13,7 +13,6 @@ const run = (ts: string, state: RunSummary['state']): RunSummary => ({
   costUsd: null,
   usage: null,
   error: null,
-  sample: null,
   state,
   control: null,
   sessionId: null,

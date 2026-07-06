@@ -56,7 +56,6 @@ export interface RunSummary {
     numTurns?: number
   } | null
   error: string | null
-  sample: number | string | null
   state: Record<string, Json> | null
   control: Array<{ command: string; args: Json; result: string; detail?: string }> | null
   sessionId: string | null

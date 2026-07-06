@@ -74,7 +74,9 @@ function stateReportLine(loop: Loop): string {
   # record this run's metrics for the trend chart. Fields (keys must match, values must be finite numbers):
   #   ${formatSchemaFields(schema)}
   # report a subset if you only observed some; big payloads: --state-file <path>.`
-    : `loopany report --status new --sample <number>     # optional single metric for charts`;
+    : `loopany report --status new
+  # this loop has no metric schema, so this run records no chart metrics — just the status/message.
+  # to start charting a trend, an evolve/edit pass can define a metric schema first.`;
 }
 
 /**
