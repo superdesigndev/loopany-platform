@@ -102,10 +102,13 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   (superset — an old daemon reads the fields it knows); `renderLoopsText(records,
   fields)` picks columns via `loopCell`.
 - **`new` idempotency (F8, OQ3)**: the daemon (`create.ts`) computes
-  `idempotencyKey = sha256(machineId + canonicalJson(config))` — `machineId` derived
-  from the device token by the SAME frozen `m-sha256(tok)[:16]` scheme, `config` = the
-  user's parsed `--json` intent (NOT the CLI envelope) — and sends it on REAL creates
-  only (a dry-run creates nothing). Server keeps an in-memory `newIdempotency` map
+  `idempotencyKey = sha256(machineId + canonicalJson(config) + connectKey)` — `machineId`
+  derived from the device token by the SAME frozen `m-sha256(tok)[:16]` scheme, `config`
+  = the user's parsed `--json` intent (NOT the CLI envelope), and the `--connect-key`
+  folded in because it selects the target TEAM (so two creates with identical config but
+  different connect-keys — different teams — get DISTINCT keys and don't collide; a genuine
+  retry reuses the same nonce-free connect-key, so it still dedupes). Sent on REAL creates
+  only (a dry-run creates nothing). Server treats the key as opaque — no server-side change. Server keeps an in-memory `newIdempotency` map
   (`tokens.ts`, 15-min TTL `NEW_IDEMPOTENCY_TTL_MS`, pruned on write like
   `claimIntents`); `readNewIdempotency(key, machineId)` also rechecks the record's
   machineId (a cross-machine key never replays another machine's loop) and

@@ -351,6 +351,18 @@ describe("idempotencyKey / canonicalJson (F8 — `new` retry-safety, design §8.
     // A different device token ⇒ a different machine id in the hash ⇒ a different key.
     expect(idempotencyKey("dk_a", base)).not.toBe(idempotencyKey("dk_b", base));
   });
+
+  test("the connect-key (target team) is folded in: same config + different connect-key ⇒ different keys", () => {
+    const base = { name: "Docs", cron: "0 6 * * 1", taskFile: "x" };
+    // Same config + same connect-key ⇒ same key (a genuine retry into one team still dedupes).
+    expect(idempotencyKey("dk_test", base, "dk_teamA")).toBe(idempotencyKey("dk_test", base, "dk_teamA"));
+    // Same config + DIFFERENT connect-key (different team) ⇒ different keys (no cross-team collapse).
+    expect(idempotencyKey("dk_test", base, "dk_teamA")).not.toBe(idempotencyKey("dk_test", base, "dk_teamB"));
+    // No connect-key still works and stays stable across retries.
+    expect(idempotencyKey("dk_test", base)).toBe(idempotencyKey("dk_test", base));
+    // An omitted connect-key differs from a present one (an unclaimed create isn't a team create).
+    expect(idempotencyKey("dk_test", base)).not.toBe(idempotencyKey("dk_test", base, "dk_teamA"));
+  });
 });
 
 describe("runCreate — sends the idempotency key on a real create, omits it on --dry-run", () => {

@@ -78,16 +78,22 @@ function machineIdFromToken(token: string): string {
 }
 
 /**
- * The `new` idempotency key (F8, design §8.1): `sha256(machineId + canonicalJSON(config))`.
+ * The `new` idempotency key (F8, design §8.1): `sha256(machineId + canonicalJSON(config) + connectKey)`.
  * A timed-out retry of the SAME `loopany new` sends the SAME key, so the server
  * returns the existing loop instead of a twin; two genuinely-different configs get
  * different keys (an intentional twin survives). The config hashed is the user's
- * INTENT (the parsed `--json` object) — not the CLI envelope (timezone/agent/claim),
- * which is derived, not intent. Additive on the wire: an old server ignores the key,
- * a new server treats an absent key as no-dedupe, so both directions stay compatible.
+ * INTENT (the parsed `--json` object) — not the CLI envelope (timezone/agent),
+ * which is derived, not intent. The connect-key IS folded in, though: it selects the
+ * target TEAM, so two creates with identical config but different connect-keys are
+ * genuinely different creates (different teams) and must NOT collapse — a retry reuses
+ * the same nonce-free connect-key, so it still dedupes. Additive on the wire: an old
+ * server ignores the key, a new server treats an absent key as no-dedupe, so both
+ * directions stay compatible.
  */
-export function idempotencyKey(token: string, config: Record<string, unknown>): string {
-  return createHash("sha256").update(`${machineIdFromToken(token)}\n${canonicalJson(config)}`).digest("hex");
+export function idempotencyKey(token: string, config: Record<string, unknown>, connectKey?: string): string {
+  return createHash("sha256")
+    .update(`${machineIdFromToken(token)}\n${canonicalJson(config)}\n${connectKey ?? ""}`)
+    .digest("hex");
 }
 
 /** The coding agents Loopany can record a loop against (TS-only; cheap to widen). */
@@ -210,9 +216,11 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   if (connectKey) body.claim = connectKey;
   // Idempotency (F8): stamp a content-hash key on real creates so a timed-out retry
   // replays the existing loop instead of making a twin. A dry-run creates nothing, so
-  // it carries no key. Hashed over the user's intent (`config`), stable across retries.
+  // it carries no key. Hashed over the user's intent (`config`) PLUS the connect-key
+  // (which selects the target team, so different-team creates don't collide), stable
+  // across retries (a retry reuses the same nonce-free connect-key).
   if (dryRun) body.dryRun = true;
-  else body.idempotencyKey = idempotencyKey(token, config);
+  else body.idempotencyKey = idempotencyKey(token, config, connectKey);
 
   try {
     // The whole config travels as the unified `new --json <config>` verb; the legacy
