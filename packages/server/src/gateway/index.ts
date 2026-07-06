@@ -1770,6 +1770,16 @@ export class MachineGateway {
       }
       case "show":
         return { code: 200, text: this.describe(lease.loopId, lease.allowControl, lease.canFinish) };
+      case "log": {
+        // The run's OWN-loop history. Batch 4 wired this into dispatch so the help
+        // that advertises `log` is truthful on BOTH the unified `/api/machine/cli`
+        // (runCli) AND the legacy `/agent-api/loop` transport (which reaches dispatch
+        // directly). Scoped to the lease's own loop/machine — dispatch never reads a
+        // loop id from flags, so a run can never target another loop (the loop-fence
+        // lives in runCli for the positional-arg case).
+        const res = this.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
+        return { code: res.status, text: (res.body as { text?: string }).text ?? "" };
+      }
       case "finish":
       case "complete": {
         if (!lease.canFinish) {

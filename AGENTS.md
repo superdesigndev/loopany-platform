@@ -275,8 +275,10 @@ computes pure functions. Run instructions: `README.md`.
   are run-only → 403); a **run** credential (an `rk_`-prefixed run lease, or a
   pre-Batch-6 bare UUID over a deploy) → the per-run `dispatch()` verbs PLUS a read
   branch (`log`/`show`) scoped to the lease's OWN loop (this closes the historical
-  in-run `loopany log` 400 seam — `dispatch` has no `log` case, so `/agent-api/loop`
-  still 400s `log` by design). Run-credential rules: owner-only verbs
+  in-run `loopany log` 400 seam; batch 4 also wired a `log` case into `dispatch`
+  itself, so run-credential `log` now works on BOTH the unified `/api/machine/cli`
+  and the legacy `/agent-api/loop` transports — keeping the in-run help that
+  advertises `log` truthful everywhere). Run-credential rules: owner-only verbs
   (`new`/`edit`/`loops`/`status`) → 403; a `--loop`/positional loop id that is not the
   lease's loop → **403, never a silent retarget**; a terminal-grace (reclaimed) lease →
   409 (same reclaim grace as `agentApi`). Floors/`allowControl`/`canFinish`/the shared

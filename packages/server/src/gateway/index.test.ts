@@ -1734,9 +1734,12 @@ test("cli run credential: log returns the run's OWN-loop history (closes the not
   const body = res.body as any;
   expect(body.loopId).toBe(loop.id);
   expect(body.runs.some((r: any) => r.id === run.id && r.message === "did a thing")).toBe(true);
-  // The agentApi/dispatch path still 400s on `log` (unchanged legacy behavior),
-  // proving the seam fix lives only in the unified dispatch.
-  expect(gateway().agentApi(runToken, ["log"]).status).toBe(400);
+  // Batch 4 wired a `log` case into dispatch, so the legacy `/agent-api/loop`
+  // transport now yields the run's OWN-loop log too — the help that advertises
+  // `log` is truthful on both transports (the seam is closed everywhere).
+  const legacy = gateway().agentApi(runToken, ["log"]);
+  expect(legacy.status).toBe(200);
+  expect((legacy.body as { text: string }).text).toContain(loop.id);
 });
 
 test("cli run credential: show is scoped to the run's own loop with its caps", () => {
