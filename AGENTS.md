@@ -226,7 +226,16 @@ computes pure functions. Run instructions: `README.md`.
 - The daemon watcher (chokidar) syncs each loop's folder: full sha256 manifest
   (deletions = absence) -> `POST /api/machine/sync` (device token, not run token) ->
   server replies `needHashes` -> `PUT /api/machine/blob/:hash` (server verifies the
-  hash). Bytes live in R2 (`LOOPANY_R2_*`; in-memory store when unset - the test/dev
+  hash). The manifest is always FULL but hashing is INCREMENTAL (`watcher.ts`
+  `buildManifest`): a stat cache (size+mtime+ctime, git-index-style racy-write
+  guard) means unchanged files are never re-read; bytes are re-read + re-verified
+  only when the server wants them (never buffered per-flush); PUTs run
+  4-concurrent; a rebuild whose digest matches the last acked sync skips the
+  network entirely. Inline blobs (≤64KB each) are budgeted 1MB aggregate per POST
+  (a burst must never 413 the server's 32MB `SYNC_BODY_CAP`; overflow takes the
+  PUT path), and the FIRST flush after watcher start inlines nothing
+  (post-restart the server already has almost everything). Bytes live in R2
+  (`LOOPANY_R2_*`; in-memory store when unset - the test/dev
   default), metadata in `blobs`/`artifact_files`. The ignore list (`.git`,
   `node_modules`, `.env*`, key files, ...) is enforced on BOTH daemon and server.
   Per-file cap 10MB (larger = metadata-only `oversize`).
