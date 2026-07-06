@@ -39,7 +39,7 @@ Always report, even `nothing-new`, so the run is on record — whether the user 
 
 loopany finish --message "<what was achieved>" --reason "<one line: why the goal is met>"
 
-`finish` records this run as a success AND completes the loop (it stops running and the user is told). Because it's terminal, hold to a strict bar: run `loopany show` and confirm `goal:` shows a setpoint and `self-finish: allowed` (if either is off you cannot finish — `report` as normal); judge the setpoint met per the Spec's definition of done, from real evidence this run, not a hunch; and if you're close but not there, `report` your progress and let the loop run again. Never finish early — a premature finish silently ends a loop the user still needs. When unsure, report. Only one terminal call per run — `report` OR `finish`, not both.
+`finish` records this run as a success AND completes the loop (it stops running and the user is told). Because it's terminal, hold to a strict bar: run `loopany show` and confirm `goal` shows a setpoint and `selfFinish: allowed` (if either is off you cannot finish — `report` as normal); judge the setpoint met per the Spec's definition of done, from real evidence this run, not a hunch; and if you're close but not there, `report` your progress and let the loop run again. Never finish early — a premature finish silently ends a loop the user still needs. When unsure, report. Only one terminal call per run — `report` OR `finish`, not both.
 
 `loopany report`/`finish` are one-way: you cannot ask a question and get an answer back in this run. If you are blocked (missing credentials, an API down or hanging), do not wait, retry, or poll indefinitely: make one bounded attempt, then `loopany report --status new --message "<one line on what is blocking>"` and exit. If finishing needs a human decision, say so plainly in that message.
 
@@ -47,7 +47,7 @@ loopany finish --message "<what was achieved>" --reason "<one line: why the goal
 First decide whether what you found means this loop's cadence should change — run sooner/later, or change the regular cadence. Usually it doesn't; if so, skip this section.
 
 If it does:
-1. Run `loopany show` — it prints the current schedule and whether this loop may change its own schedule (`self-schedule: allowed|off`).
+1. Run `loopany show` — it prints the current schedule and whether this loop may change its own schedule (`selfSchedule: allowed|off`).
 2. If allowed, apply the change with one of the two levers below, recording a clear reason in the Timeline. Each validates, applies immediately, and prints the result; read it to confirm:
 
 loopany reschedule --run-at <30m|2h|ISO> one-shot: run again sooner/later, then resume cadence

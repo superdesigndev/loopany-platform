@@ -99,7 +99,7 @@ describe('/api/skill/references/$', () => {
     // The report/finish grammar and the strict finish bar.
     expect(body).toContain('loopany report --status nothing-new')
     expect(body).toContain('loopany finish --message')
-    expect(body).toContain('self-finish: allowed')
+    expect(body).toContain('selfFinish: allowed')
     expect(body).toContain('Never finish early')
     // The schedule levers with `loopany show` first, and the run-path cadence floors.
     expect(body).toContain('loopany show')

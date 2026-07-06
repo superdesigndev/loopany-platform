@@ -144,12 +144,13 @@ test("show reports the run's effective self-schedule capability", () => {
   };
   // A run that MAY self-schedule reads `allowed`; one that may not reads `off`.
   const allowed = showText(true);
-  expect(allowed).toContain("self-schedule: allowed");
-  expect(allowed).toContain(`cron: ${loop.cron}`);
+  expect(allowed).toContain("selfSchedule: allowed");
+  // cron carries spaces → TOON-quoted inside the envelope block.
+  expect(allowed).toContain(`cron: "${loop.cron}"`);
   const off = showText(false);
-  expect(off).toContain("self-schedule: off");
+  expect(off).toContain("selfSchedule: off");
   // An evolve/edit pass carries the effective (structural) capability, so it reads allowed.
-  expect(showText(true, "evolve")).toContain("self-schedule: allowed");
+  expect(showText(true, "evolve")).toContain("selfSchedule: allowed");
 });
 
 test("help (and a bare/unknown-flag invocation) returns role-aware usage", () => {
@@ -1006,11 +1007,11 @@ test("poll mints canFinish only for an exec run on a closed loop (via show self-
 
   const closedShow = (gw.agentApi(tokenFor(closed.id), ["show"]).body as { text: string }).text;
   expect(closedShow).toContain("goal: g");
-  expect(closedShow).toContain("self-finish: allowed");
+  expect(closedShow).toContain("selfFinish: allowed");
 
   const openShow = (gw.agentApi(tokenFor(open.id), ["show"]).body as { text: string }).text;
   expect(openShow).toContain("goal: —");
-  expect(openShow).toContain("self-finish: off");
+  expect(openShow).toContain("selfFinish: off");
 });
 
 test("createLoop accepts a goal (closed loop); absent goal ⇒ open loop", () => {
@@ -1223,8 +1224,8 @@ test("reschedule floor: a run can't reschedule sooner than 5 min out", () => {
 test("show reports the goal line and self-finish gating for a run", () => {
   const { loop, rt } = seededClosedRun();
   const text = (gateway().agentApi(rt, ["show"]).body as { text: string }).text;
-  expect(text).toContain("goal: reach the goal");
-  expect(text).toContain("self-finish: allowed");
+  expect(text).toContain('goal: "reach the goal"');
+  expect(text).toContain("selfFinish: allowed");
   expect(loop.goal).toBe("reach the goal");
 });
 
@@ -1583,10 +1584,11 @@ test("show computes `next` in the loop's timezone", () => {
     const loop = store.createLoop({ userId: "u1", machineId, name: `L-${timezone}`, cron: "0 8 * * *", timezone, enabled: true, notify: "auto" });
     const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
     const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
-    return (gw.agentApi(rt, ["show"]).body as { text: string }).text.split("\n")[0]!;
+    const text = (gw.agentApi(rt, ["show"]).body as { text: string }).text;
+    return text.split("\n").find((l) => l.startsWith("nextFire:"))!;
   };
-  // Same cron, timezones 25h apart — honoring the loop tz must yield different
-  // next-fire instants (the old tz-less probe rendered both in server time).
+  // Same cron, timezones 25h apart — the derived nextFire, rendered IN the loop's own
+  // timezone, must read differently for the two zones.
   expect(showNext("Pacific/Kiritimati")).not.toBe(showNext("Pacific/Niue"));
 });
 
@@ -1747,8 +1749,8 @@ test("cli run credential: show is scoped to the run's own loop with its caps", (
   const res = gateway().cli(runToken, ["show"]);
   expect(res.status).toBe(200);
   const text = (res.body as { text: string }).text;
-  expect(text).toContain(`cron: ${loop.cron}`);
-  expect(text).toContain("self-schedule: allowed");
+  expect(text).toContain(`cron: "${loop.cron}"`);
+  expect(text).toContain("selfSchedule: allowed");
 });
 
 test("cli run credential: owner-only verbs (new/edit/loops/status) are 403, not unknown-command", () => {
@@ -1943,7 +1945,7 @@ test("cli device credential: new/edit/loops/log/show route to the existing gatew
   // show → describe for that loop
   const show = gw.cli(deviceToken, ["show", newId]);
   expect(show.status).toBe(200);
-  expect((show.body as { text: string }).text).toContain("cron: 0 9 * * *");
+  expect((show.body as { text: string }).text).toContain('cron: "0 9 * * *"');
 });
 
 test("cli device credential: edit honors --dry-run (validate-only, no persistence)", () => {
@@ -2073,8 +2075,140 @@ test("cli show [D]: text is the config detail with exitCode 0", () => {
   const { deviceToken, loop } = seededCli();
   const res = gateway().cli(deviceToken, ["show", loop.id]);
   expect(res.status).toBe(200);
-  expect(textOf(res)).toContain(`cron: ${loop.cron}`);
+  expect(textOf(res)).toContain(`cron: "${loop.cron}"`);
   expect((res.body as { exitCode: number }).exitCode).toBe(0);
+});
+
+// ---- Batch 2: `show` full editable envelope + read/write identity (§4.1, F1/F6) ----
+
+/** Create a richly-configured loop (every editable field non-default) so the
+ *  roundtrip actually exercises each key, not just the defaults. */
+function seededRichLoop() {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const gw = gateway();
+  const created = gw.cli(deviceToken, [
+    "new",
+    "--json",
+    JSON.stringify({
+      name: "Docs Sweep",
+      cron: "0 6 * * 1",
+      timezone: "America/Los_Angeles",
+      notify: "always",
+      taskFile: "loopany/docs-sweep/README.md",
+      goal: "ship v1",
+      workflow: "return { state: prev };",
+      ui: "<div id=\"dash\">hello dashboard body that is comfortably over the size hint threshold</div>",
+      stateSchema: [{ key: "drift", label: "Drift", unit: "files" }],
+    }),
+  ]);
+  const id = (created.body as any).id as string;
+  // model/allowControl aren't create fields; the pinned runAt override is edit-only.
+  // Set them so the envelope carries non-default values for every editable key.
+  const edited = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify({ model: "opus", allowControl: false, runAt: "2h" })]);
+  expect(edited.status).toBe(200);
+  return { deviceToken, machineId, id, gw };
+}
+
+test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op patch (read/write identity)", () => {
+  const { deviceToken, id, gw } = seededRichLoop();
+
+  const show = gw.cli(deviceToken, ["show", id, "--json"]);
+  expect(show.status).toBe(200);
+  const env = (show.body as { loop: Record<string, unknown> }).loop;
+  // The wire `text` IS the JSON envelope (what a text-sink daemon prints).
+  expect(JSON.parse((show.body as { text: string }).text)).toEqual(env);
+  // Keyed EXACTLY as edit --json accepts: id + every EDITABLE_LOOP_FIELDS key.
+  expect(Object.keys(env).sort()).toEqual(
+    ["allowControl", "cron", "enabled", "goal", "id", "model", "name", "notify", "runAt", "stateSchema", "taskFile", "timezone", "ui", "workflow"].sort(),
+  );
+  expect(env.id).toBe(id);
+  // No derived read-only aggregates leak into the editable envelope.
+  for (const k of ["nextFire", "classification", "runs", "selfSchedule", "selfFinish"]) {
+    expect(env).not.toHaveProperty(k);
+  }
+
+  // Drop id (identity, not editable); the rest fed verbatim to edit --dry-run changes nothing.
+  const { id: _drop, ...patch } = env;
+  const dry = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify(patch), "--dry-run"]);
+  expect(dry.status).toBe(200);
+  const b = dry.body as { ok: boolean; changes: unknown[]; rejections: unknown[] };
+  expect(b.ok).toBe(true);
+  expect(b.changes).toEqual([]);
+  expect(b.rejections).toEqual([]);
+});
+
+test("show --json → edit roundtrip holds when the pinned runAt is stale (past): re-feeding it is a no-op, never a 400", () => {
+  const { deviceToken, id, gw } = seededRichLoop();
+  // A paused/completed loop keeps a stale (past) pin — the scheduler never clears
+  // nextRunAt for a disabled loop, so `show --json` echoes a past ISO.
+  const pastPin = "2020-01-01T00:00:00.000Z";
+  store.updateLoop(id, { nextRunAt: pastPin, enabled: false });
+
+  const show = gw.cli(deviceToken, ["show", id, "--json"]);
+  expect(show.status).toBe(200);
+  const env = (show.body as { loop: Record<string, unknown> }).loop;
+  expect(env.runAt).toBe(pastPin);
+
+  const { id: _drop, ...patch } = env;
+  const dry = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify(patch), "--dry-run"]);
+  expect(dry.status).toBe(200);
+  const b = dry.body as { ok: boolean; changes: unknown[]; rejections: unknown[] };
+  expect(b.ok).toBe(true);
+  expect(b.changes).toEqual([]);
+  expect(b.rejections).toEqual([]);
+});
+
+test("show: large ui/workflow show a size hint by default and inline under --full", () => {
+  const { deviceToken, id, gw } = seededRichLoop();
+
+  const def = textOf(gw.cli(deviceToken, ["show", id]));
+  // Presence + size hint, NOT the body (feedback #2 — never a char-clipped body).
+  expect(def).toMatch(/ui: present, \d+ bytes — use --full to see/);
+  expect(def).toMatch(/workflow: present, \d+ bytes — use --full to see/);
+  expect(def).not.toContain("hello dashboard body");
+  expect(def).not.toContain("return { state: prev }");
+
+  const full = textOf(gw.cli(deviceToken, ["show", id, "--full"]));
+  // --full inlines the complete bodies.
+  expect(full).toContain("hello dashboard body");
+  expect(full).toContain("return { state: prev }");
+  expect(full).not.toContain("use --full to see");
+});
+
+test("show: runAt (pinned override) and nextFire (derived cron fire) are both present and distinct (F4)", () => {
+  const { deviceToken, id, gw } = seededRichLoop();
+  const text = textOf(gw.cli(deviceToken, ["show", id]));
+  const runAtLine = text.split("\n").find((l) => l.trim().startsWith("runAt:"))!;
+  const nextFireLine = text.split("\n").find((l) => l.startsWith("nextFire:"))!;
+  expect(runAtLine).toBeTruthy();
+  expect(nextFireLine).toBeTruthy();
+  // runAt was pinned (2h out) — a real ISO, not the em-dash placeholder.
+  expect(runAtLine).not.toContain("—");
+  // The two carry different values (override instant ≠ next weekly cron fire).
+  expect(runAtLine.replace("runAt:", "").trim()).not.toBe(nextFireLine.replace("nextFire:", "").trim());
+});
+
+test("show: derived aggregates (nextFire/classification/runs) accompany the envelope", () => {
+  const { deviceToken, id, gw } = seededRichLoop();
+  const text = textOf(gw.cli(deviceToken, ["show", id]));
+  expect(text).toMatch(/^nextFire: /m);
+  // Closed loop (has a goal).
+  expect(text).toContain("classification: closed (has goal");
+  expect(text).toMatch(/^runs: \d+ total/m);
+});
+
+test("show --json [R]: the run credential emits the same envelope, scoped to its own loop", () => {
+  const { runToken, loop } = seededCli({ allowControl: true });
+  const res = gateway().cli(runToken, ["show", "--json"]);
+  expect(res.status).toBe(200);
+  const env = (res.body as { loop: Record<string, unknown> }).loop;
+  expect(env.id).toBe(loop.id);
+  // The run's effective selfSchedule/selfFinish lines are TOON-only — never in the
+  // read/write envelope.
+  expect(env).not.toHaveProperty("selfSchedule");
+  expect(env).not.toHaveProperty("selfFinish");
 });
 
 test("cli new: text is the created-loop confirmation, structured id/name intact", () => {

@@ -304,8 +304,15 @@ computes pure functions. Run instructions: `README.md`.
   and errors render as `error:`/`code:` TOON. Two behavior changes ride along: `report`
   and `finish` now reject an invalid `--status` with a 400 `VALIDATION_ERROR` instead of
   silently dropping it (F5), and a second `finish` on an already-finished loop pins
-  `CONFLICT`. `describe()` (`show`) is intentionally left UNCHANGED (its redesign is
-  batch 2).
+  `CONFLICT`. `describe()` (`show`) now emits the FULL editable envelope (batch 2):
+  every `EDITABLE_LOOP_FIELDS` key keyed EXACTLY as `edit --json` accepts (`runAt` is
+  the writable pinned override; the DB column stays `nextRunAt`) PLUS derived read-only
+  aggregates (`nextFire`/`classification`/`runs`). `show --json` emits the envelope
+  verbatim so dropping `id` roundtrips to a no-op `edit` patch (read/write identity,
+  pinned by a roundtrip test); large `ui`/`workflow` show a `present, N bytes` hint
+  unless `--full`. A run credential adds camelCase `selfSchedule`/`selfFinish` effective
+  lines (these REPLACED the old kebab `self-schedule`/`self-finish` display keys). See
+  `packages/server/AGENTS.md` for the durable notes.
 - `auth.ts` THROWS at boot when the GitHub gate is on but `LOOPANY_AUTH_SECRET` is
   unset. Set the Fly secret before deploying with the gate on.
 - Per-team connect-key: the claim carries the team (`rememberClaimIntent`, in-memory,

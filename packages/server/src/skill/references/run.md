@@ -94,7 +94,7 @@ met, it ends with `finish` instead of `report`:
 user is told. Because it is terminal and irreversible for the loop, hold to a strict
 bar:
 
-- Run `loopany show` and confirm `goal:` shows a setpoint and `self-finish: allowed`.
+- Run `loopany show` and confirm `goal` shows a setpoint and `selfFinish: allowed`.
   If either is off, you cannot finish — `report` as normal.
 - Judge the setpoint met per the Spec's own definition of done, from real evidence
   gathered *this run*, not a hunch.
@@ -120,7 +120,7 @@ cadence. Most runs leave the schedule alone; if so, skip this entirely.
 When a change is warranted:
 
 1. Run `loopany show` — it prints the current schedule and whether this loop may
-   change its own schedule (`self-schedule: allowed|off`).
+   change its own schedule (`selfSchedule: allowed|off`).
 2. If allowed, apply the change with one of the two levers, recording a clear reason in
    the Timeline. Each validates, applies immediately, and prints the result — read it
    to confirm:

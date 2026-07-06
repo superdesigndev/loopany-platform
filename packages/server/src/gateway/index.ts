@@ -44,6 +44,7 @@ import {
 } from "./tokens.js";
 import { isSuperAdmin } from "../superadmin.js";
 import {
+  ABSENT,
   codeForStatus,
   countLine,
   detailBlock,
@@ -869,9 +870,16 @@ export class MachineGateway {
     const update: Partial<NewLoop> = {};
     const changes: Array<{ key: string; from: unknown; to: unknown }> = [];
     const rejections: Array<{ key: string; reason: string }> = [];
+    // A `set` whose new value equals the current one is a NO-OP for the CHANGES
+    // preview: the write still flows to `update` (an all-no-op patch is a harmless
+    // idempotent re-apply, not a "nothing to change" 400), but it is not RECORDED as a
+    // change. This is what makes read/write identity real — feeding a `show --json`
+    // envelope back to `edit --dry-run` reports zero changes (the roundtrip pin).
+    // Values compare structurally (stateSchema is an array); null and undefined are
+    // equal (an absent field re-fed as null is unchanged).
     const set = (key: string, to: unknown, from: unknown): void => {
       (update as Record<string, unknown>)[key] = to;
-      changes.push({ key, from: clipPreview(from), to: clipPreview(to) });
+      if (!sameLoopValue(to, from)) changes.push({ key, from: clipPreview(from), to: clipPreview(to) });
     };
 
     // Timezone before cron: the cadence probe runs in the loop's EFFECTIVE
@@ -905,16 +913,28 @@ export class MachineGateway {
     // and enabling a completed loop reopens it (drops the stamps).
     if (p.goal !== undefined) set("goal", str(p.goal)?.slice(0, GOAL_CAP) ?? null, loop.goal);
     if (p.runAt !== undefined) {
-      const when = parseWhen(String(p.runAt));
-      if (!when) rejections.push({ key: "runAt", reason: "run-at must be 30m|2h|1d or a future ISO time" });
-      else if (Date.parse(when) > Date.now() + MAX_NEXT_MS) rejections.push({ key: "runAt", reason: "run-at too far in the future (>30d)" });
-      else set("nextRunAt", when, loop.nextRunAt);
+      // `null`/blank clears the pinned override (symmetric with goal:null, and what
+      // `show --json` re-feeds when there is no override) — a no-op when already null.
+      if (p.runAt === null || p.runAt === "") set("nextRunAt", null, loop.nextRunAt);
+      // Re-feeding the loop's CURRENT pin verbatim is a recorded no-op, bypassing the
+      // future-time guard: a paused/completed loop keeps a stale (past) `nextRunAt` that
+      // `show --json` echoes, and roundtripping it back through `edit` must not 400.
+      else if (String(p.runAt) === loop.nextRunAt) set("nextRunAt", loop.nextRunAt, loop.nextRunAt);
+      else {
+        const when = parseWhen(String(p.runAt));
+        if (!when) rejections.push({ key: "runAt", reason: "run-at must be 30m|2h|1d or a future ISO time" });
+        else if (Date.parse(when) > Date.now() + MAX_NEXT_MS) rejections.push({ key: "runAt", reason: "run-at too far in the future (>30d)" });
+        else set("nextRunAt", when, loop.nextRunAt);
+      }
     }
     // Content fields reuse the SAME validators the run-token set-* path uses, so
     // the owner edit surface can't drift from the evolve/edit run behavior. They
     // also get the same wire clip discipline as createLoop's workflow.
+    // Content fields accept `null` as an explicit clear (what `show --json` re-feeds
+    // when the field is unset — a no-op when already null, so the roundtrip holds).
     if (p.workflow !== undefined) {
-      if (typeof p.workflow !== "string") rejections.push({ key: "workflow", reason: "workflow must be a string (the pre-stage JS)" });
+      if (p.workflow === null) set("workflow", null, loop.workflow);
+      else if (typeof p.workflow !== "string") rejections.push({ key: "workflow", reason: "workflow must be a string (the pre-stage JS)" });
       else {
         const v = this.validateWorkflow(p.workflow.slice(0, WIRE_TEXT_CAP));
         if (!v.ok) rejections.push({ key: "workflow", reason: v.detail });
@@ -922,13 +942,17 @@ export class MachineGateway {
       }
     }
     if (p.ui !== undefined) {
-      if (typeof p.ui !== "string") rejections.push({ key: "ui", reason: "ui must be a string (the dashboard HTML)" });
+      if (p.ui === null) set("ui", null, loop.ui);
+      else if (typeof p.ui !== "string") rejections.push({ key: "ui", reason: "ui must be a string (the dashboard HTML)" });
       else set("ui", this.validateUi(p.ui.slice(0, WIRE_TEXT_CAP)).value, loop.ui);
     }
     if (p.stateSchema !== undefined) {
-      const v = this.validateSchema(loop.id, p.stateSchema);
-      if (!v.ok) rejections.push({ key: "stateSchema", reason: v.detail });
-      else set("stateSchema", v.value, loop.stateSchema);
+      if (p.stateSchema === null) set("stateSchema", null, loop.stateSchema);
+      else {
+        const v = this.validateSchema(loop.id, p.stateSchema);
+        if (!v.ok) rejections.push({ key: "stateSchema", reason: v.detail });
+        else set("stateSchema", v.value, loop.stateSchema);
+      }
     }
     return { update, changes, rejections };
   }
@@ -1016,7 +1040,14 @@ export class MachineGateway {
         // check mirrors loopLog/editLoop (flat 404, existence never leaks).
         const loop = loopArg ? store.getLoop(loopArg) : undefined;
         if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
-        return { status: 200, body: { ok: true, text: this.describe(loop.id) } };
+        // `--json`: emit the full editable envelope with complete bodies (the exact
+        // `edit --json` shape; the roundtrip transport, §4.1). Otherwise the TOON
+        // detail view (size hints by default, full bodies under `--full`).
+        if (flags["json"] === true) {
+          const env = loopEnvelope(loop);
+          return { status: 200, body: { ok: true, loop: env, text: JSON.stringify(env, null, 2) } };
+        }
+        return { status: 200, body: { ok: true, text: this.describe(loop.id, { full: flags["full"] === true }) } };
       }
       case "report":
       case "finish":
@@ -1067,10 +1098,20 @@ export class MachineGateway {
     }
 
     // Read branch — the seam fix. `log` gains a run-credential path (it has no case
-    // in `dispatch`, so today it 400s in-run); `show` stays in `dispatch` (already
-    // scoped to lease.loopId with the run's caps).
+    // in `dispatch`, so today it 400s in-run); `show` TOON stays in `dispatch`
+    // (already scoped to lease.loopId with the run's caps), but `show --json` needs a
+    // structured body (`dispatch` returns text-only), so it is served here.
     if (verb === "log") {
       return this.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
+    }
+    if (verb === "show" && flags["json"] === true) {
+      const loop = store.getLoop(lease.loopId);
+      if (!loop) return { status: 404, body: { text: errorBlock("loop not found", "NOT_FOUND"), exitCode: 1 } };
+      // The full editable envelope — identical shape to the device `show --json`
+      // (the run's effective selfSchedule/selfFinish lines are TOON-only, not in the
+      // read/write envelope). Scoped to the run's own loop (fenced above).
+      const env = loopEnvelope(loop);
+      return { status: 200, body: { ok: true, loop: env, text: JSON.stringify(env, null, 2), exitCode: 0 } };
     }
 
     const out = this.dispatch(lease, argv);
@@ -1769,7 +1810,10 @@ export class MachineGateway {
         return { code: 200, text: renderReportedText(status, state, message !== undefined) };
       }
       case "show":
-        return { code: 200, text: this.describe(lease.loopId, lease.allowControl, lease.canFinish) };
+        return {
+          code: 200,
+          text: this.describe(lease.loopId, { allowControl: lease.allowControl, canFinish: lease.canFinish, full: flags["full"] === true }),
+        };
       case "log": {
         // The run's OWN-loop history. Batch 4 wired this into dispatch so the help
         // that advertises `log` is truthful on BOTH the unified `/api/machine/cli`
@@ -2057,37 +2101,23 @@ export class MachineGateway {
     return { ok: true, detail: `schema set (${v.value.map((f) => f.key).join(", ")})` };
   }
 
-  // `allowControl` is the EFFECTIVE self-schedule capability of the run calling
-  // `show` (the run lease's `structural || loop.allowControl`), not just the loop
-  // flag — so an evolve/edit pass reads as allowed while a normal exec run reflects
-  // the loop's flag. The standing exec prompt's §4 tells the run to consult this line
-  // before attempting reschedule/set-cron. Undefined ⇒ omit the line (non-run callers).
-  private describe(loopId: string, allowControl?: boolean, canFinish?: boolean): string {
+  // The full editable envelope (F1/F6, §4.1 batch 2): every EDITABLE_LOOP_FIELDS key
+  // keyed EXACTLY as `edit --json` accepts, PLUS the read-only derived aggregates
+  // (nextFire/classification/runs). Large content (ui/workflow) shows a presence+size
+  // hint by default and inlines under `--full`; stateSchema renders structurally.
+  //
+  // `opts.allowControl`/`opts.canFinish` are a RUN caller's EFFECTIVE capabilities
+  // (the run lease's `structural || loop.allowControl`, and the exec-on-closed-loop
+  // finish gate); when present the run adds the `selfSchedule`/`selfFinish` effective
+  // lines and run-appropriate help. A device caller passes neither and gets the
+  // owner-facing help (edit/log). `--json` is emitted by the callers, not here.
+  private describe(loopId: string, opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {}): string {
     const loop = store.getLoop(loopId);
     if (!loop) return "loop not found";
-    let next = "?";
-    try {
-      // In the loop's timezone (matching how the scheduler actually arms it) —
-      // without it, `next` reads wrong for every non-server-tz loop.
-      const probe = new Cron(loop.cron, { paused: true, ...(loop.timezone ? { timezone: loop.timezone } : {}) });
-      next = probe.nextRun()?.toLocaleString() ?? "(never)";
-      probe.stop();
-    } catch {
-      next = "(invalid cron)";
-    }
-    const lines = [
-      `cron: ${loop.cron} (next ${next})`,
-      `nextRunAt: ${loop.nextRunAt ?? "—"}`,
-      `enabled: ${loop.enabled}`,
-      `notify: ${loop.notify}`,
-      // The setpoint: a value ⇒ CLOSED loop (finishable); "—" ⇒ OPEN (monitor).
-      `goal: ${loop.goal ?? "—"}`,
-    ];
-    if (allowControl !== undefined) lines.push(`self-schedule: ${allowControl ? "allowed" : "off"}`);
-    // Whether THIS run may declare the goal met (exec-on-closed-loop). Mirrors the
-    // self-schedule line's run-gating (omitted for non-run callers).
-    if (canFinish !== undefined) lines.push(`self-finish: ${canFinish ? "allowed" : "off"}`);
-    return lines.join("\n");
+    // The most recent exec run (newest-first) anchors the `runs:` tally's last-outcome.
+    const recent = store.listRuns(loop.id, LOG_RUNS_DEFAULT).slice().reverse();
+    const lastExec = recent.find((r) => r.role === "exec") ?? null;
+    return renderShowText(loop, loopEnvelope(loop), store.countRuns(loop.id), lastExec, opts);
   }
 
   private audit(lease: RunLease, command: string, args: Record<string, string>, r: Applied): void {
@@ -2609,6 +2639,144 @@ function verbHelpText(verb: string, lease?: RunLease): string | undefined {
   );
 }
 
+/**
+ * The full editable envelope keyed EXACTLY as `edit --json` accepts (read/write
+ * identity, F6/§4.1 batch 2): `id` + every EDITABLE_LOOP_FIELDS key with its raw
+ * stored value (full bodies, no truncation). `show --json` emits this verbatim;
+ * dropping `id` yields a no-op `edit` patch (pinned by the roundtrip test). The
+ * pinned next-run OVERRIDE is keyed `runAt` (matching the edit key; the DB column
+ * stays `nextRunAt`), NOT the derived read-only `nextFire` aggregate.
+ */
+function loopEnvelope(loop: Loop): Record<string, unknown> {
+  return {
+    id: loop.id,
+    name: loop.name ?? null,
+    cron: loop.cron,
+    timezone: loop.timezone ?? null,
+    notify: loop.notify,
+    model: loop.model ?? null,
+    allowControl: loop.allowControl,
+    taskFile: loop.taskFile ?? null,
+    enabled: loop.enabled,
+    runAt: loop.nextRunAt ?? null,
+    goal: loop.goal ?? null,
+    workflow: loop.workflow ?? null,
+    ui: loop.ui ?? null,
+    stateSchema: loop.stateSchema ?? null,
+  };
+}
+
+/** Render a large content field (ui/workflow) for the `show` detail block: `absent`
+ *  when unset, the full body (scalar-quoted) under `--full`, else a presence + size
+ *  hint (P3 / feedback #2 — never a char-clipped body). */
+function contentField(value: string | null, full: boolean): Scalar | { raw: string } {
+  if (value == null) return "absent";
+  if (full) return value; // scalar() quotes the full body (newlines escaped to one line)
+  return { raw: `present, ${value.length} bytes — use --full to see` };
+}
+
+/** Render the state schema STRUCTURALLY (not char-clipped): the header
+ *  `stateSchema[N]{key,label,unit}:` plus one `key,label,unit` triple per field,
+ *  joined by ` · `. Absent → the bare `absent` token. */
+function schemaField(schema: StateField[] | null): { key: string; value: Scalar | { raw: string } } {
+  if (!schema || !schema.length) return { key: "stateSchema", value: "absent" };
+  const rows = schema.map((f) => [f.key, f.label ?? ABSENT, f.unit ?? ABSENT].join(",")).join(" · ");
+  return { key: `stateSchema[${schema.length}]{key,label,unit}`, value: { raw: rows } };
+}
+
+/** The next cadence fire (the derived read-only aggregate), formatted in the loop's
+ *  OWN timezone with a short zone name (`2026-07-13 06:00:00 PDT`) — matching how the
+ *  scheduler arms it. Distinct from the writable `runAt` override (F4). */
+function nextFireDisplay(cron: string, timezone: string | null): string {
+  const iso = nextFires(cron, timezone, 1)[0];
+  if (!iso) return "(never)";
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone ?? undefined,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      timeZoneName: "short",
+    }).formatToParts(new Date(iso));
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")} ${get("timeZoneName")}`;
+  } catch {
+    return fmtTime(iso);
+  }
+}
+
+/**
+ * `loopany show` — the full editable envelope TOON (F1/F6, feedback #1/#2, §4.1).
+ * The `loop:` block keys are EXACTLY `edit --json`'s keys (read/write identity),
+ * then the read-only derived aggregates (`nextFire`/`classification`/`runs`). A run
+ * caller (opts.allowControl/canFinish present) adds the effective `selfSchedule`/
+ * `selfFinish` lines + run-appropriate help; a device caller gets owner help.
+ */
+function renderShowText(
+  loop: Loop,
+  env: Record<string, unknown>,
+  totalRuns: number,
+  lastExec: { phase: string; outcome: string | null; status: string | null; ts: string } | null,
+  opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {},
+): string {
+  const full = opts.full === true;
+  const schema = schemaField(loop.stateSchema ?? null);
+  const block = detailBlock("loop", [
+    ["id", env.id as Scalar],
+    ["name", env.name as Scalar],
+    ["cron", env.cron as Scalar],
+    ["timezone", env.timezone as Scalar],
+    ["notify", env.notify as Scalar],
+    ["model", env.model as Scalar],
+    ["allowControl", env.allowControl as Scalar],
+    ["taskFile", env.taskFile as Scalar],
+    ["enabled", env.enabled as Scalar],
+    ["runAt", env.runAt as Scalar],
+    // The setpoint: a value ⇒ CLOSED loop (finishable); em-dash ⇒ OPEN (monitor).
+    ["goal", env.goal as Scalar],
+    ["workflow", contentField(loop.workflow ?? null, full)],
+    ["ui", contentField(loop.ui ?? null, full)],
+    [schema.key, schema.value],
+  ]);
+  const classification =
+    loop.goal != null
+      ? "closed (has goal — self-finishes when the goal is met)"
+      : "open (no goal — runs until paused)";
+  const runsTally = lastExec
+    ? `${totalRuns} total · last exec ${runOutcomeToken(lastExec)} ${fmtTime(lastExec.ts)}`
+    : `${totalRuns} total`;
+  // A run caller reads its EFFECTIVE capabilities; a device caller (both undefined)
+  // omits these and gets the owner help below.
+  const isRun = opts.allowControl !== undefined || opts.canFinish !== undefined;
+  const help = isRun
+    ? [
+        "Run `loopany reschedule --run-at 2h` to run again sooner (then resume cadence)",
+        `Run \`loopany set-cron "${loop.cron}"\` to change the cadence (floors apply)`,
+        'Run `loopany report --status new --message "<one line>"` to record this run',
+      ]
+    : [
+        `Run \`loopany show ${loop.id} --full\` to see the complete ui/workflow bodies`,
+        `Run \`loopany edit ${loop.id} --json '{"cron":"0 7 * * 1"}'\` to change the schedule`,
+        `Run \`loopany log ${loop.id}\` to see recent run outcomes`,
+      ];
+  return doc(
+    block,
+    kvLine("nextFire", nextFireDisplay(loop.cron, loop.timezone ?? null)),
+    `classification: ${classification}`,
+    `runs: ${runsTally}`,
+    // EFFECTIVE run capabilities (camelCase, replacing the old self-schedule/
+    // self-finish display keys): whether this run may self-reschedule, and whether it
+    // may declare the goal met (exec-on-closed-loop).
+    opts.allowControl !== undefined ? kvLine("selfSchedule", opts.allowControl ? "allowed" : "off") : null,
+    opts.canFinish !== undefined ? kvLine("selfFinish", opts.canFinish ? "allowed" : "off") : null,
+    helpBlock(help),
+  );
+}
+
 /** Scalar (number/string) fields of a workflow's returned cursor — the run's
  *  chartable + bindable snapshot. Drops objects/arrays/booleans/null/non-finite. */
 function scalarState(cursor: unknown): Record<string, number | string> | undefined {
@@ -2628,6 +2796,18 @@ function isStatus(s: string | undefined): s is RunStatus {
 /** Trim a value to a non-empty string, or null. Shared by createLoop/editLoop. */
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** Structural equality for an editLoop before→after comparison: null and undefined
+ *  are equal (an absent field re-fed as null is unchanged); objects/arrays compare by
+ *  their JSON serialization (stateSchema is a small array); everything else by `===`.
+ *  Powers the no-op filter that makes the `show --json` → `edit` roundtrip a no-op. */
+function sameLoopValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  if (typeof a === "object" || typeof b === "object") return JSON.stringify(a) === JSON.stringify(b);
+  return false;
 }
 
 /** Bound a value for the dry-run before→after preview: a long content string

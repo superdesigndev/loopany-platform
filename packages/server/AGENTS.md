@@ -30,8 +30,6 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   of the old silent `isStatus(...) ? {status} : {}` drop.
 - All dispatch errors render via `derr(code, message, slug?)` → `errorBlock` (slug
   defaults from HTTP status; `finishLoop`'s already-finished rejection pins CONFLICT).
-  `describe()` (`show`) is intentionally UNCHANGED in batch 1 — its full-envelope
-  redesign is batch 2, and existing tests pin `self-schedule:`/`goal:` kebab keys.
 
 ## axi-conformance CLI (batch 4 — per-verb `--help`, in-run help TOON, F4)
 
@@ -58,3 +56,34 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   undefined and the caller falls through to its unknown-command 400 (device) / 400
   (run dispatch). Availability values are multi-word ⇒ TOON-quoted (`availability:
   "available to this run"`); inner `"exec"` quotes escape inside the quoted value.
+
+## axi-conformance CLI — `show` full editable envelope (batch 2)
+
+- **`show` emits the FULL editable envelope** keyed EXACTLY as `edit --json` accepts
+  (`loopEnvelope(loop)`: id + every `EDITABLE_LOOP_FIELDS` key — name, cron, timezone,
+  notify, model, allowControl, taskFile, enabled, runAt, goal, workflow, ui,
+  stateSchema) PLUS the derived read-only aggregates `nextFire`/`classification`/`runs`.
+  `renderShowText` is the pure TOON renderer; `describe(loopId, {allowControl, canFinish,
+  full})` wraps it with the loop lookup + runs tally. Large fields (`ui`/`workflow`)
+  render as `present, N bytes — use --full to see` (or `absent`); `stateSchema` renders
+  STRUCTURALLY (`[N]{key,label,unit}:` rows); `--full` inlines complete bodies (scalar-
+  quoted, newlines escaped). A RUN credential adds the effective `selfSchedule`/
+  `selfFinish` lines (camelCase — these REPLACED the old kebab `self-schedule`/
+  `self-finish` display keys) + run help; a DEVICE credential gets owner help (edit/log).
+- **Naming (F4):** the writable pinned override is `runAt` (the edit key; the DB column
+  stays `nextRunAt`); the derived cron fire is the read-only `nextFire` (formatted in the
+  loop's own tz via Intl, `nextFireDisplay`). The old wire display name `nextRunAt`
+  retired. Both `runAt` and `nextFire` appear in `show`, distinct.
+- **`show --json`** emits the envelope with COMPLETE bodies (no truncation) — body
+  `{ok, loop: <env>, text: JSON.stringify(env)}`, served by the device `show` handler
+  and a runCli `show --json` special-case (dispatch returns text-only, so `--json` can't
+  ride the TOON path). Derived aggregates are NOT in the `--json` envelope (only the 13
+  editable keys + id), so dropping `id` yields a clean no-op `edit` patch.
+- **Read/write identity is REAL, pinned by the roundtrip test:** `show --json` minus
+  `id` fed to `edit --dry-run` reports zero changes. Two `buildEditUpdate` changes make
+  this hold: (1) `set()` still writes to `update` but only RECORDS a change when the
+  value actually differs (`sameLoopValue`, structural, null≡undefined) — so an all-no-op
+  patch is a harmless idempotent re-apply (still 200, not "nothing to change"), while the
+  dry-run preview shows zero changes; (2) `runAt`/`workflow`/`ui`/`stateSchema` accept
+  `null` as an explicit clear (symmetric with `goal:null`), which is what `show --json`
+  re-feeds for an unset field — a no-op when already null.
