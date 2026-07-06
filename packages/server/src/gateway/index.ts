@@ -986,6 +986,14 @@ export class MachineGateway {
     const flags = parseFlags(argv.slice(1));
     const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
 
+    // Per-verb `--help` (P10): full owner-facing help for a device verb (no lease ⇒
+    // no availability caveats). An unknown verb has no help spec → falls through to
+    // the switch's default (unknown-command 400), matching today's behavior.
+    if (flags["help"] === true) {
+      const h = verbHelpText(verb);
+      if (h) return { status: 200, body: { ok: true, text: h } };
+    }
+
     switch (verb) {
       case "new": {
         const parsed = parseJsonFlag(flags["json"]);
@@ -1046,6 +1054,16 @@ export class MachineGateway {
     const targeted = typeof flags["loop"] === "string" ? (flags["loop"] as string) : (verb === "log" || verb === "show") && typeof flags["_"] === "string" ? (flags["_"] as string) : undefined;
     if (targeted !== undefined && targeted !== lease.loopId) {
       return { status: 403, body: { text: errorBlock("a run may only act on its own loop", "FORBIDDEN"), exitCode: 1 } };
+    }
+
+    // Per-verb `--help` (P10), role-aware from the lease caps. Covers the read verbs
+    // (`log`/`show`) that runCli handles before/around `dispatch` AND the dispatch
+    // verbs, so `<verb> --help` is uniform on the run path. An owner-only verb was
+    // already 403'd above; an unknown verb has no spec → falls through to `dispatch`
+    // (unknown-command 400).
+    if (flags["help"] === true) {
+      const h = verbHelpText(verb, lease);
+      if (h) return { status: 200, body: { text: h, exitCode: 0 } };
     }
 
     // Read branch — the seam fix. `log` gains a run-credential path (it has no case
@@ -1710,6 +1728,15 @@ export class MachineGateway {
     const flags = parseFlags(argv.slice(1));
     const str = (k: string) => (typeof flags[k] === "string" ? (flags[k] as string) : undefined);
 
+    // Per-verb `--help` (P10): a concrete verb carrying `--help` gets that verb's
+    // syntax + flags + templates, role-aware from the lease caps. (The unified
+    // `runCli` intercepts this before dispatch; this branch covers the legacy
+    // `/agent-api/loop` transport, which reaches `dispatch` directly.)
+    if (typeof verb === "string" && verb && flags["help"] === true) {
+      const h = verbHelpText(verb, lease);
+      if (h) return { code: 200, text: h };
+    }
+
     switch (verb) {
       case undefined:
       case "":
@@ -1743,6 +1770,16 @@ export class MachineGateway {
       }
       case "show":
         return { code: 200, text: this.describe(lease.loopId, lease.allowControl, lease.canFinish) };
+      case "log": {
+        // The run's OWN-loop history. Batch 4 wired this into dispatch so the help
+        // that advertises `log` is truthful on BOTH the unified `/api/machine/cli`
+        // (runCli) AND the legacy `/agent-api/loop` transport (which reaches dispatch
+        // directly). Scoped to the lease's own loop/machine — dispatch never reads a
+        // loop id from flags, so a run can never target another loop (the loop-fence
+        // lives in runCli for the positional-arg case).
+        const res = this.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
+        return { code: res.status, text: (res.body as { text?: string }).text ?? "" };
+      }
       case "finish":
       case "complete": {
         if (!lease.canFinish) {
@@ -1809,42 +1846,64 @@ export class MachineGateway {
     return derr(400, `unknown command "${verb ?? ""}" (try: loopany help)`, "VALIDATION_ERROR");
   }
 
-  /** Usage for `loopany help` / `--help` / a bare invocation. Role-aware: marks
-   *  the structural + control groups by whether THIS run may actually use them,
-   *  so the agent doesn't waste a turn probing a verb it'll be 403'd on. */
+  /** Usage for `loopany help` / `--help` / a bare invocation, rendered as the §4.9
+   *  axi TOON: grouped verbs with an availability tag reflecting THIS lease's caps
+   *  (always / finish / dashboard-gate / schedule), then a trailing `help[]`. Still
+   *  role-aware — the tags flip with the lease's role + caps, so the agent never
+   *  wastes a turn probing a verb it'll be 403'd on. */
   private helpText(lease: RunLease): string {
+    const finishTag = lease.canFinish
+      ? "available — declare the goal met (--message <achieved> [--reason <one line>])"
+      : `exec run on a goal (closed) loop only — this run is "${lease.role}"`;
     const structural = lease.canSetUi ? "available to this run" : `evolve/edit pass only — this run is "${lease.role}"`;
     const control = lease.allowControl ? "available to this run" : "needs allowControl (off for this loop)";
-    return [
-      "loopany — in-run agent CLI. Verbs:",
-      "",
-      "always available:",
-      "  report [--status new|resolved|nothing-new] [--message <s>] [--state '{\"k\":n}' | --state-file <p>]",
-      "          record this run's outcome + metrics (keys must match the loop's schema)",
-      "  show    print this loop's current config + recent state",
-      ...(lease.canFinish
-        ? ['  finish  --message "<achieved>" [--reason "<one line>"]  declare the goal met — completes this loop']
-        : []),
-      "",
-      `dashboard / gate (${structural}):`,
-      "  set-ui --file <path>        replace the dashboard HTML",
-      "  set-schema --file <path>    declare metrics — a JSON array of {key, label?, unit?}",
-      "  set-workflow --file <path>  replace the deterministic pre-stage JS",
-      "",
-      `schedule control (${control}):`,
-      '  reschedule --run-at <when> · set-cron "<expr>" · pause · resume',
-      "  notify always|auto|never · set-name <s> · set-tz <z> · set-model <m>",
-      "",
-      "every set-* takes --file <path> (the shim inlines it); bare/inline values are rejected.",
-    ].join("\n");
+
+    // The `always` group is a typed list; indent every line two spaces to nest it
+    // under the `verbs:` top key (matching the reference tool's nested shape).
+    const always = indent(
+      listBlock("always", ["verb", "syntax"], [
+        ["report", "[--status new|resolved|nothing-new] [--message <s>] [--state '{\"k\":n}' | --state-file <p>]"],
+        ["show", "print this loop's config + recent state"],
+        ["log", "recent run survey for this loop"],
+      ]),
+    );
+    // The schedule group is a typed list whose HEADER carries the availability tag
+    // (a list header with a trailing tag, per §4.9). Build the header by hand so the
+    // tag rides after the `{…}:` and indent the whole block under `verbs:`.
+    const scheduleRows: Scalar[][] = [
+      ["reschedule", "--run-at <30m|2h|ISO>   one extra run soon, then resume cadence"],
+      ["set-cron", '"<5-field cron>"   change the cadence (floor applies)'],
+      ["pause/resume", "toggle this loop"],
+      ["notify", "always|auto|never · set-name/-tz/-model"],
+    ];
+    const schedule = indent(
+      [
+        `schedule[${scheduleRows.length}]{verb,syntax}: ${control}`,
+        ...scheduleRows.map((r) => `  ${r.map(scalar).join(",")}`),
+      ].join("\n"),
+    );
+    return doc(
+      "verbs:",
+      always,
+      `  finish: ${finishTag}`,
+      `  dashboard/gate: ${structural}`,
+      schedule,
+      helpBlock([
+        "Run `loopany show` to read the current config before changing it",
+        "Run `loopany report --status nothing-new` to close this run with no news",
+      ]),
+    );
   }
 
   private applyMutation(loopId: string, verb: string, flags: Flags, str: (k: string) => string | undefined): Applied {
     switch (verb) {
       case "reschedule": {
-        const next = str("next");
-        const when = next ? parseWhen(next) : undefined;
-        if (!when) return { ok: false, detail: `reschedule needs --next <30m|2h|ISO>` };
+        // F4: `--run-at` is canonical (aligns with the `runAt` edit key + the help
+        // text); `--next` is kept as a working back-compat alias so existing
+        // prompts/scripts don't break. Both drive the same pinned one-shot next fire.
+        const raw = str("run-at") ?? str("next");
+        const when = raw ? parseWhen(raw) : undefined;
+        if (!when) return { ok: false, detail: `reschedule needs --run-at <30m|2h|ISO>` };
         if (Date.parse(when) > Date.now() + MAX_NEXT_MS) return { ok: false, detail: "too far in the future (>30d)" };
         // Self-schedule floor (RUN path only; the owner's edit path is unlimited): a
         // run may not schedule itself sooner than the reschedule floor.
@@ -2365,6 +2424,188 @@ function renderFinishedText(loopId: string): string {
     `finished: ${scalar(loop.name ?? loop.id)} (${loop.id}) — goal met`,
     loop.completedAt ? kvLine("completedAt", fmtTime(loop.completedAt)) : null,
     loop.completionReason ? kvLine("completionReason", loop.completionReason) : null,
+  );
+}
+
+/** Indent every line of a rendered TOON block two spaces, so a typed list/detail
+ *  nests under a parent top key (e.g. the `always[]`/`schedule[]` groups under
+ *  `verbs:` in the in-run help). */
+function indent(block: string): string {
+  return block
+    .split("\n")
+    .map((l) => "  " + l)
+    .join("\n");
+}
+
+// ---- per-verb `--help` (P10) --------------------------------------------------
+// `<verb> --help` prints that verb's syntax + a one-line summary + concrete `help[]`
+// templates. Rendered server-side so it is ROLE-AWARE for a run credential (the lease
+// caps decide the availability line) and full for a device credential (owner
+// authority, no availability caveats). Two maps because the run + owner verb surfaces
+// barely overlap (`show`/`log` differ by scope); a verb absent from the relevant map
+// has no `--help` and falls through to the caller's unknown-command handling.
+
+interface VerbHelpSpec {
+  syntax: string;
+  summary: string;
+  help: string[];
+  /** Availability line for a RUN lease (role-aware); omitted ⇒ no availability line. */
+  avail?: (lease: RunLease) => string;
+}
+
+/** Availability of a schedule/control mutation for a run: gated by `allowControl`. */
+const controlAvail = (l: RunLease): string => (l.allowControl ? "available to this run" : "needs allowControl (off for this loop)");
+/** Availability of a structural (set-ui/schema/workflow) verb: evolve/edit pass only. */
+const gateAvail = (has: (l: RunLease) => boolean | undefined) => (l: RunLease): string =>
+  has(l) ? "available to this run (evolve/edit pass)" : `evolve/edit pass only — this run is "${l.role}"`;
+const alwaysAvail = (): string => "always available";
+
+/** RUN-credential verb help (in-run `rk_` lease). */
+const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
+  report: {
+    syntax: "report [--status new|resolved|nothing-new] [--message <s>] [--state '{\"k\":n}' | --state-file <path>]",
+    summary: "record this run's outcome + metrics (state keys must match the loop's schema)",
+    avail: alwaysAvail,
+    help: [
+      "Run `loopany report --status nothing-new` to close this run with no news",
+      'Run `loopany report --status new --message "<one line>" --state \'{"drift":3}\'` to record metrics',
+    ],
+  },
+  finish: {
+    syntax: 'finish --message "<achieved>" [--reason "<one line>"]',
+    summary: "declare the goal met — completes this closed loop",
+    avail: (l) => (l.canFinish ? "available — declare the goal met" : `exec run on a goal (closed) loop only — this run is "${l.role}"`),
+    help: ['Run `loopany finish --message "<what was achieved>" --reason "<one line>"` to complete the loop'],
+  },
+  show: {
+    syntax: "show",
+    summary: "print this loop's current config + recent state",
+    avail: alwaysAvail,
+    help: ["Run `loopany log` to see this loop's recent runs"],
+  },
+  log: {
+    syntax: "log [--limit <n>] [--transcript] [--json]",
+    summary: "recent run survey for this loop (session ids + metrics)",
+    avail: alwaysAvail,
+    help: ["Run `loopany log --transcript` to inline each run's transcript"],
+  },
+  reschedule: {
+    syntax: "reschedule --run-at <30m|2h|ISO>",
+    summary: "run once more soon, then resume the cadence (floor applies; --next is an alias)",
+    avail: controlAvail,
+    help: ["Run `loopany reschedule --run-at 2h` to run again in two hours"],
+  },
+  "set-cron": {
+    syntax: 'set-cron "<5-field cron>"',
+    summary: "change the cadence (floor applies)",
+    avail: controlAvail,
+    help: ['Run `loopany set-cron "0 7 * * 1"` to change the cadence'],
+  },
+  "set-ui": {
+    syntax: "set-ui --file <path>",
+    summary: "replace the dashboard HTML (the shim inlines the file)",
+    avail: gateAvail((l) => l.canSetUi),
+    help: ["Run `loopany set-ui --file dashboard.html` to replace the dashboard"],
+  },
+  "set-schema": {
+    syntax: "set-schema --file <path>",
+    summary: "declare metrics — a JSON array of {key, label?, unit?}",
+    avail: gateAvail((l) => l.canSetSchema),
+    help: ["Run `loopany set-schema --file schema.json` to declare the loop's metrics"],
+  },
+  "set-workflow": {
+    syntax: "set-workflow --file <path>",
+    summary: "replace the deterministic pre-stage JS",
+    avail: gateAvail((l) => l.canSetWorkflow),
+    help: ["Run `loopany set-workflow --file workflow.js` to replace the pre-stage"],
+  },
+  pause: {
+    syntax: "pause",
+    summary: "pause this loop (enabled=false)",
+    avail: controlAvail,
+    help: ["Run `loopany resume` to re-enable it"],
+  },
+  resume: {
+    syntax: "resume",
+    summary: "resume this loop (enabled=true)",
+    avail: controlAvail,
+    help: ["Run `loopany pause` to pause it again"],
+  },
+  notify: {
+    syntax: "notify always|auto|never",
+    summary: "set this loop's failure/success notification policy",
+    avail: controlAvail,
+    help: ["Run `loopany notify auto` to notify only on meaningful changes"],
+  },
+  "set-name": {
+    syntax: 'set-name "<name>"',
+    summary: "rename this loop",
+    avail: controlAvail,
+    help: ['Run `loopany set-name "Docs Sweep"` to rename the loop'],
+  },
+  "set-tz": {
+    syntax: "set-tz <IANA zone>",
+    summary: "set the loop's timezone (the cron fires in it)",
+    avail: controlAvail,
+    help: ["Run `loopany set-tz America/Los_Angeles` to change the timezone"],
+  },
+  "set-model": {
+    syntax: "set-model <model>",
+    summary: "pin the coding-agent model for this loop",
+    avail: controlAvail,
+    help: ["Run `loopany set-model claude-opus-4-8` to pin the model"],
+  },
+};
+// `complete` is a documented alias of `finish` (§6.2).
+RUN_VERB_HELP.complete = RUN_VERB_HELP.finish!;
+
+/** DEVICE-credential verb help (owner `dk_` device token). */
+const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
+  new: {
+    syntax: "new --json '<config>' [--dry-run]",
+    summary: `create a loop (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")}; cron + taskFile|workflow required)`,
+    help: [
+      "Run `loopany new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create a loop",
+      "Run `loopany new --json '{...}' --dry-run` to validate without creating",
+    ],
+  },
+  loops: {
+    syntax: "loops",
+    summary: "list every loop bound to this machine",
+    help: ["Run `loopany show <id>` to see a loop's full config", "Run `loopany log <id>` to see a loop's recent runs"],
+  },
+  edit: {
+    syntax: "edit <id> --json '<patch>' [--dry-run]",
+    summary: `change a loop's config (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")})`,
+    help: [
+      "Run `loopany edit <id> --json '{\"cron\":\"0 7 * * 1\"}'` to change the schedule",
+      "Run `loopany edit <id> --json '{...}' --dry-run` to preview the change",
+    ],
+  },
+  show: {
+    syntax: "show <id>",
+    summary: "print a loop's full config + recent state",
+    help: ["Run `loopany loops` to list loops on this machine", "Run `loopany log <id>` to see the loop's recent runs"],
+  },
+  log: {
+    syntax: "log [<id>] [--limit <n>] [--transcript] [--json]",
+    summary: "recent run survey for a loop (session ids + metrics)",
+    help: ["Run `loopany log <id> --transcript` to inline each run's transcript", "Run `loopany log <id> --json` for the structured run rows"],
+  },
+};
+
+/** Render a verb's `--help` (P10). A run lease ⇒ role-aware (availability line from
+ *  the caps); no lease ⇒ the device (owner) surface. Returns undefined for a verb
+ *  with no help spec, so the caller falls back to its unknown-command handling. */
+function verbHelpText(verb: string, lease?: RunLease): string | undefined {
+  const spec = lease ? RUN_VERB_HELP[verb] : DEVICE_VERB_HELP[verb];
+  if (!spec) return undefined;
+  return doc(
+    kvLine("verb", verb),
+    kvLine("syntax", spec.syntax),
+    kvLine("summary", spec.summary),
+    lease && spec.avail ? kvLine("availability", spec.avail(lease)) : null,
+    helpBlock(spec.help),
   );
 }
 

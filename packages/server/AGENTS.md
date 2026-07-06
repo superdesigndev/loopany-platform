@@ -32,3 +32,29 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   defaults from HTTP status; `finishLoop`'s already-finished rejection pins CONFLICT).
   `describe()` (`show`) is intentionally UNCHANGED in batch 1 — its full-envelope
   redesign is batch 2, and existing tests pin `self-schedule:`/`goal:` kebab keys.
+
+## axi-conformance CLI (batch 4 — per-verb `--help`, in-run help TOON, F4)
+
+- **F4 naming**: `applyMutation` reschedule reads `str("run-at") ?? str("next")` —
+  `--run-at` is canonical (matches the `runAt` edit key + all help text), `--next`
+  stays a working back-compat alias. This closed the shipped drift where the help
+  documented `--run-at` but the code only read `--next` (following the help failed).
+- **In-run `help`** (`helpText`) renders the §4.9 TOON: a `verbs:` top key with
+  grouped typed lists (`always[3]`, `schedule[4]`) + `finish:`/`dashboard/gate:`
+  lines, each carrying an availability TAG that flips with the lease caps (exec vs
+  evolve/edit: `evolve/edit pass only — this run is "exec"` ↔ `available to this run`;
+  schedule tag gates on `allowControl`), then a trailing `help[]`. The schedule list
+  header carries its tag AFTER the `{…}:` (a list-header-with-tag, hand-built since
+  `listBlock` emits a bare header); groups are nested under `verbs:` via `indent()`.
+- **Per-verb `--help`** (P10): `<verb> --help` returns `verb:`/`syntax:`/`summary:`
+  (+ role-aware `availability:` for a run) + a short `help[]`, via `verbHelpText(verb,
+  lease?)` over two spec maps — `RUN_VERB_HELP` (lease present ⇒ role-aware) and
+  `DEVICE_VERB_HELP` (owner surface, no availability line; `new`/`edit` summaries list
+  `EDITABLE_LOOP_FIELDS` so schemas are discoverable without failing). `complete`
+  aliases `finish`. Intercepted in THREE places: `deviceCli` + `runCli` (unified CLI,
+  after the DEVICE_ONLY/loop-fence checks so an owner-only verb still 403s on a run
+  credential, never leaks help) and at the top of `dispatch` (the legacy
+  `/agent-api/loop` transport). An unknown verb has no spec → `verbHelpText` returns
+  undefined and the caller falls through to its unknown-command 400 (device) / 400
+  (run dispatch). Availability values are multi-word ⇒ TOON-quoted (`availability:
+  "available to this run"`); inner `"exec"` quotes escape inside the quoted value.

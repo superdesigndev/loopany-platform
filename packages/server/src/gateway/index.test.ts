@@ -169,16 +169,20 @@ test("help (and a bare/unknown-flag invocation) returns role-aware usage", () =>
   };
   for (const argv of [["help"], ["--help"], []]) {
     const text = helpText(argv);
-    expect(text).toContain("loopany — in-run agent CLI");
+    // The §4.9 TOON: a `verbs:` top key with grouped, typed lists + a trailing help[].
+    expect(text).toContain("verbs:");
+    expect(text).toContain("always[3]{verb,syntax}:");
     expect(text).toContain("report");
-    expect(text).toContain("set-schema");
+    expect(text).toContain("reschedule");
+    expect(text).toContain("help[2]:");
   }
-  // An exec run can't set-* or control → help says so, not "available".
+  // An exec run can't set-* or control → the availability TAGS say so, not "available".
   const execHelp = helpText(["help"]);
-  expect(execHelp).toContain('evolve/edit pass only — this run is "exec"');
-  expect(execHelp).toContain("needs allowControl");
+  expect(execHelp).toContain('dashboard/gate: evolve/edit pass only — this run is "exec"');
+  expect(execHelp).toContain("schedule[4]{verb,syntax}: needs allowControl (off for this loop)");
+  expect(execHelp).toContain('finish: exec run on a goal (closed) loop only — this run is "exec"');
 
-  // An evolve run with the caps sees those groups marked available.
+  // An evolve run with the caps sees those same tags FLIP to available.
   const evolveToken = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -188,8 +192,8 @@ test("help (and a bare/unknown-flag invocation) returns role-aware usage", () =>
     canSetUi: true,
   });
   const evolveHelp = (gw.agentApi(evolveToken, ["help"]).body as { text: string }).text;
-  expect(evolveHelp).toContain("dashboard / gate (available to this run)");
-  expect(evolveHelp).toContain("schedule control (available to this run)");
+  expect(evolveHelp).toContain("dashboard/gate: available to this run");
+  expect(evolveHelp).toContain("schedule[4]{verb,syntax}: available to this run");
 });
 
 test("set-schema rejects dropping keys still used by UI or recent runs", () => {
@@ -1730,9 +1734,12 @@ test("cli run credential: log returns the run's OWN-loop history (closes the not
   const body = res.body as any;
   expect(body.loopId).toBe(loop.id);
   expect(body.runs.some((r: any) => r.id === run.id && r.message === "did a thing")).toBe(true);
-  // The agentApi/dispatch path still 400s on `log` (unchanged legacy behavior),
-  // proving the seam fix lives only in the unified dispatch.
-  expect(gateway().agentApi(runToken, ["log"]).status).toBe(400);
+  // Batch 4 wired a `log` case into dispatch, so the legacy `/agent-api/loop`
+  // transport now yields the run's OWN-loop log too — the help that advertises
+  // `log` is truthful on both transports (the seam is closed everywhere).
+  const legacy = gateway().agentApi(runToken, ["log"]);
+  expect(legacy.status).toBe(200);
+  expect((legacy.body as { text: string }).text).toContain(loop.id);
 });
 
 test("cli run credential: show is scoped to the run's own loop with its caps", () => {
@@ -1790,6 +1797,105 @@ test("cli run credential: the reschedule floor still applies through the unified
   // 30m clears the floor — the floor logic is identical to the agent-api path.
   expect(gateway().cli(runToken, ["reschedule", "--next", "30m"]).status).toBe(200);
   expect(store.getLoop(loop.id)!.nextRunAt).toBeTruthy();
+});
+
+test("reschedule: --run-at (canonical) and --next (alias) both drive the pinned next fire, floors enforced", () => {
+  // F4: the in-run help documents `--run-at` while the code historically only read
+  // `--next` — following the help guaranteed a failure. Now BOTH parse.
+  const runAt = seededCli({ allowControl: true });
+  const viaRunAt = gateway().cli(runAt.runToken, ["reschedule", "--run-at", "30m"]);
+  expect(viaRunAt.status).toBe(200);
+  expect(store.getLoop(runAt.loop.id)!.nextRunAt).toBeTruthy();
+
+  const next = seededCli({ allowControl: true });
+  const viaNext = gateway().cli(next.runToken, ["reschedule", "--next", "30m"]);
+  expect(viaNext.status).toBe(200);
+  expect(store.getLoop(next.loop.id)!.nextRunAt).toBeTruthy();
+
+  // The self-schedule floor applies to the canonical flag exactly as to the alias.
+  const floored = seededCli({ allowControl: true });
+  const denied = gateway().cli(floored.runToken, ["reschedule", "--run-at", "2m"]);
+  expect(denied.status).toBe(400);
+  expect((denied.body as { text: string }).text).toMatch(/5 min/);
+  expect(store.getLoop(floored.loop.id)!.nextRunAt).toBeNull();
+});
+
+test("the in-run help documents exactly what parses (no --run-at drift): its reschedule syntax succeeds verbatim", () => {
+  const { runToken } = seededCli({ allowControl: true });
+  const gw = gateway();
+  const help = (gw.agentApi(runToken, ["help"]).body as { text: string }).text;
+  // Help shows the canonical `--run-at` flag (not the retired `--next`).
+  expect(help).toContain("--run-at <30m|2h|ISO>");
+  // And the flag the help documents actually parses — following the help succeeds,
+  // never the shipped drift where the documented flag was silently rejected.
+  const followed = gw.cli(runToken, ["reschedule", "--run-at", "2h"]);
+  expect(followed.status).toBe(200);
+});
+
+test("per-verb --help (run credential): role-aware syntax + availability from the lease caps", () => {
+  const { runToken } = seededCli({ allowControl: true, goal: "reach the goal" });
+  const gw = gateway();
+  // reschedule --help: syntax + the canonical flag + an availability line.
+  const resched = gw.cli(runToken, ["reschedule", "--help"]);
+  expect(resched.status).toBe(200);
+  const rt = (resched.body as { text: string }).text;
+  expect(rt).toContain("verb: reschedule");
+  expect(rt).toContain("--run-at <30m|2h|ISO>");
+  // Multi-word values render quoted (TOON), matching the reference tool.
+  expect(rt).toContain('availability: "available to this run"');
+  expect(rt).toContain("help[");
+
+  // report --help is always available regardless of caps.
+  const report = (gw.cli(runToken, ["report", "--help"]).body as { text: string }).text;
+  expect(report).toContain("verb: report");
+  expect(report).toContain("--status new|resolved|nothing-new");
+  expect(report).toContain('availability: "always available"');
+
+  // finish --help flips its availability with canFinish: allowed on a closed exec run…
+  const finishClosed = (gw.cli(runToken, ["finish", "--help"]).body as { text: string }).text;
+  expect(finishClosed).toContain('availability: "available — declare the goal met"');
+  // …and unavailable on an open (goal-less) loop's exec run.
+  const open = seededCli({ allowControl: true, goal: null });
+  const finishOpen = (gateway().cli(open.runToken, ["finish", "--help"]).body as { text: string }).text;
+  expect(finishOpen).toContain("goal (closed) loop only");
+
+  // A structural set-* verb reflects the (missing) evolve/edit cap on an exec run.
+  const setUi = (gw.cli(runToken, ["set-ui", "--help"]).body as { text: string }).text;
+  expect(setUi).toContain("verb: set-ui");
+  expect(setUi).toContain("evolve/edit pass only");
+});
+
+test("per-verb --help (device credential): owner verbs print full syntax + templates, no availability line", () => {
+  const { deviceToken } = seededCli();
+  const gw = gateway();
+  const edit = gw.cli(deviceToken, ["edit", "--help"]);
+  expect(edit.status).toBe(200);
+  const et = (edit.body as { text: string }).text;
+  expect(et).toContain("verb: edit");
+  expect(et).toContain("edit <id> --json '<patch>'");
+  // The owner surface lists the editable envelope keys (discoverable without failing).
+  expect(et).toContain("cron");
+  expect(et).toContain("taskFile");
+  expect(et).toContain("help[");
+  // No run-lease availability caveat on the owner surface.
+  expect(et).not.toContain("availability:");
+
+  for (const verb of ["new", "loops", "show", "log"]) {
+    const text = (gw.cli(deviceToken, [verb, "--help"]).body as { text: string }).text;
+    expect(text).toContain(`verb: ${verb}`);
+  }
+});
+
+test("--help on an unknown verb falls through to unknown-command (no fabricated help)", () => {
+  const { deviceToken, runToken } = seededCli();
+  const gw = gateway();
+  // Device: unknown verb + --help → the switch default 400 (unchanged behavior).
+  const dev = gw.cli(deviceToken, ["frobnicate", "--help"]);
+  expect(dev.status).toBe(400);
+  // Run: an owner-only verb is still 403 even with --help (role-aware, not help).
+  expect(gw.cli(runToken, ["new", "--help"]).status).toBe(403);
+  // Run: a genuinely unknown verb + --help → dispatch's unknown-command 400.
+  expect(gw.cli(runToken, ["frobnicate", "--help"]).status).toBe(400);
 });
 
 test("cli run credential: allowControl still gates schedule mutations through the unified dispatch", () => {

@@ -17,8 +17,8 @@ names and rules here are sufficient.
 
 - **Schedule / envelope**: `loopany set-cron "<5-field cron>"`, `set-tz "<IANA name>"`,
   `set-name "<name>"`, `notify always|auto|never`, `set-model <model>`,
-  `pause` / `resume`, `reschedule --next <30m|2h|ISO>` (one extra run soon, then
-  resume the cadence).
+  `pause` / `resume`, `reschedule --run-at <30m|2h|ISO>` (one extra run soon, then
+  resume the cadence; `--next` is a back-compat alias).
 - **What the loop does** (its instructions, context, log): edit the loop's task file
   directly in the repo, keeping its `## Spec` / `## Current understanding` /
   `## Timeline` structure and changing only what was asked. For a goal-driven (closed)
