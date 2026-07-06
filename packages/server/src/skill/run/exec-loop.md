@@ -50,7 +50,7 @@ If it does:
 1. Run `loopany show` — it prints the current schedule and whether this loop may change its own schedule (`self-schedule: allowed|off`).
 2. If allowed, apply the change with one of the two levers below, recording a clear reason in the Timeline. Each validates, applies immediately, and prints the result; read it to confirm:
 
-loopany reschedule --next <30m|2h|ISO>   one-shot: run again sooner/later, then resume cadence
+loopany reschedule --run-at <30m|2h|ISO> one-shot: run again sooner/later, then resume cadence
 loopany set-cron "<cron expr>"           change the regular cadence permanently
 
 If self-schedule is off, don't force it — just carry on. (Server floors apply to a run's own changes: a run can't schedule itself more often than the cadence floor. The owner can set any schedule via edit.)

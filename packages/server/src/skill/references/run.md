@@ -9,7 +9,8 @@ installed skill, this documents exactly how a loop behaves at runtime, so you ca
 author a Spec that a run will follow and know what its levers are.
 
 A run reaches the user and changes anything only through the `loopany` command on its
-PATH — `loopany help` prints the full, role-aware verb list. In practice a run uses
+PATH — `loopany help` prints the full, role-aware verb list, and `loopany <verb> --help`
+prints one verb's syntax + availability for this run. In practice a run uses
 `report`, `show`, and — for a loop with a goal — `finish`.
 
 **Command forms.** Every loop verb has a canonical explicit form that names the loop it
@@ -124,7 +125,7 @@ When a change is warranted:
    the Timeline. Each validates, applies immediately, and prints the result — read it
    to confirm:
 
-       loopany reschedule --next <30m|2h|ISO>   one-shot: run again sooner/later, then resume cadence
+       loopany reschedule --run-at <30m|2h|ISO> one-shot: run again sooner/later, then resume cadence
        loopany set-cron "<cron expr>"           change the regular cadence permanently
 
 If self-schedule is off, don't force it — carry on as normal. Server-side **cadence
