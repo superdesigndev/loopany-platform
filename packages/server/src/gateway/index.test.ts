@@ -1510,7 +1510,7 @@ test("a canceled EVOLVE run's report clears the evolve marker (finishEvolution),
   expect(finished).toBe(loop.id);
 });
 
-test("sweep revokes a reclaimed run's token (the orphaned agent's agent-api goes 401)", () => {
+test("sweep marks a reclaimed run's token reclaimed: agent-api mutations are refused (409), but the token survives for one wake-report", () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
@@ -1525,7 +1525,10 @@ test("sweep revokes a reclaimed run's token (the orphaned agent's agent-api goes
   gw.sweep();
   expect(store.getRun(run.id)!.phase).toBe("error");
   expect(store.getRun(run.id)!.error).toBe("machine timed out / disconnected");
-  expect(gw.agentApi(rt, ["show"]).status).toBe(401); // dead after
+  // The orphaned agent can no longer MUTATE the loop (reclaimed → 409, not silent),
+  // but the token is not revoked outright: it survives to accept one wake-report.
+  expect(gw.agentApi(rt, ["show"]).status).toBe(409);
+  expect(tokens.resolveRunToken(rt)).toBeTruthy();
 });
 
 test("sweep is INACTIVITY-based: a >20min run with a fresh progress heartbeat is NOT reclaimed", () => {

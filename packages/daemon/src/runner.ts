@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { boundedFetch } from "./http.js";
+import { logger } from "./logger.js";
 import { execEnv, runProcess } from "./spawn.js";
 import { runWorkflow, type AgentCall } from "./workflow.js";
 import { expandTilde } from "./loopdir.js";
@@ -551,11 +552,26 @@ async function report(serverUrl: string, runToken: string, body: ReportBody): Pr
   // best-effort: the server's reclaim sweep covers a genuinely lost report.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await boundedFetch(`${serverUrl.replace(/\/$/, "")}/machine/report`, {
+      const res = await boundedFetch(`${serverUrl.replace(/\/$/, "")}/machine/report`, {
         method: "POST",
         headers: { Authorization: `Bearer ${runToken}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }, REPORT_TIMEOUT_MS);
+      // A 401 here means the run token was already revoked server-side — almost
+      // always because the run was reclaimed while this machine was asleep/offline
+      // and only now delivered its result. Don't retry (the token stays 401) and
+      // don't fail silently: name it so on-machine debugging isn't a mystery. The
+      // server honors one such late report to reconcile the run when it can.
+      if (res.status === 401) {
+        logger.warn(
+          { runId: body.runId, status: res.status },
+          "report: run was already reclaimed by the server (machine was likely asleep); result delivered late",
+        );
+        return;
+      }
+      if (!res.ok) {
+        logger.warn({ runId: body.runId, status: res.status, statusText: res.statusText }, "report: non-ok response");
+      }
       return;
     } catch {
       /* retry once, then give up */
