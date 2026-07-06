@@ -23,3 +23,9 @@ test('a genuine run failure still surfaces the real reason', () => {
   expect(failureMessage('claude reported an error')).toBe('⚠️ Run failed — claude reported an error')
   expect(failureMessage(null)).toBe('⚠️ Run failed.')
 })
+
+test("the daemon's exec-timeout is a real failure, not the calm asleep copy", () => {
+  const m = failureMessage('claude timed out (30s)')
+  expect(m).toBe('⚠️ Run failed — claude timed out (30s)')
+  expect(m).not.toMatch(/asleep|resumes automatically/i)
+})

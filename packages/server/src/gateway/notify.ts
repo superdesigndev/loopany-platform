@@ -82,7 +82,9 @@ export function shouldNotifyFailure(notify: NotifyPolicy, streak: number): boole
 export function failureMessage(reason?: string | null): string {
   const r = (reason ?? "").trim();
   // A running run interrupted mid-flight when the machine went to sleep/offline.
-  if (/timed out|disconnect/i.test(r)) {
+  // Match only the SERVER's reclaim reason ("machine timed out / disconnected"),
+  // never the daemon's local exec-timeout failure "claude timed out (Ns)".
+  if (/machine timed out|disconnect/i.test(r)) {
     return "⏸ Your machine went to sleep or offline while a run was in progress, so it was interrupted. It resumes automatically when the machine is back.";
   }
   // A scheduled run that couldn't start because the machine was asleep/offline.
