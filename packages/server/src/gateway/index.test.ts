@@ -1680,3 +1680,212 @@ test("poll persists the daemon version, updating only when it changes", () => {
   gateway().poll(token, { host: "mac", version: "9".repeat(200) });
   expect(store.getMachine(machineId)!.daemonVersion!.length).toBe(64);
 });
+
+// ---- /api/machine/cli — unified dispatch, verb × credential matrix (§4.1) ----
+
+/** A machine seeded from a REAL device token, an OPEN loop bound to it, and an exec
+ *  run RUNNING with a fresh run token — so one setup drives both the device-credential
+ *  and run-credential branches of `cli()` against the same loop. */
+function seededCli(opts: { allowControl?: boolean; goal?: string | null } = {}) {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const loop = store.createLoop({
+    userId: "u1",
+    machineId,
+    name: "L",
+    cron: "0 0 1 1 *",
+    enabled: true,
+    notify: "auto",
+    goal: opts.goal === undefined ? null : opts.goal,
+  });
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const runToken = tokens.registerRunToken({
+    runId: run.id,
+    loopId: loop.id,
+    machineId,
+    role: "exec",
+    allowControl: opts.allowControl ?? true,
+    canFinish: loop.goal != null,
+  });
+  return { deviceToken, machineId, loop, run, runToken };
+}
+
+test("cli branches by credential: dk_ prefix → device path, bare-UUID → run path", () => {
+  const { deviceToken, runToken, loop } = seededCli();
+  const gw = gateway();
+  // Device credential lists the machine's loops (owner authority).
+  const dev = gw.cli(deviceToken, ["loops"]);
+  expect(dev.status).toBe(200);
+  expect((dev.body as any).loops.map((l: any) => l.id)).toContain(loop.id);
+  // The same `loops` verb on a RUN credential is owner-only → 403.
+  const run = gw.cli(runToken, ["loops"]);
+  expect(run.status).toBe(403);
+});
+
+test("cli run credential: log returns the run's OWN-loop history (closes the note.md seam)", () => {
+  const { runToken, loop, run } = seededCli();
+  store.updateRun(run.id, { status: "new", message: "did a thing", sessionId: "sess-abc" });
+  const res = gateway().cli(runToken, ["log"]);
+  expect(res.status).toBe(200);
+  const body = res.body as any;
+  expect(body.loopId).toBe(loop.id);
+  expect(body.runs.some((r: any) => r.id === run.id && r.message === "did a thing")).toBe(true);
+  // The agentApi/dispatch path still 400s on `log` (unchanged legacy behavior),
+  // proving the seam fix lives only in the unified dispatch.
+  expect(gateway().agentApi(runToken, ["log"]).status).toBe(400);
+});
+
+test("cli run credential: show is scoped to the run's own loop with its caps", () => {
+  const { runToken, loop } = seededCli({ allowControl: true });
+  const res = gateway().cli(runToken, ["show"]);
+  expect(res.status).toBe(200);
+  const text = (res.body as { text: string }).text;
+  expect(text).toContain(`cron: ${loop.cron}`);
+  expect(text).toContain("self-schedule: allowed");
+});
+
+test("cli run credential: owner-only verbs (new/edit/loops/status) are 403, not unknown-command", () => {
+  const { runToken } = seededCli();
+  const gw = gateway();
+  for (const argv of [["new"], ["edit"], ["loops"], ["status"]]) {
+    const res = gw.cli(runToken, argv);
+    expect(res.status).toBe(403);
+    expect((res.body as { text: string }).text).toMatch(/device credential|own loop/);
+  }
+});
+
+test("cli device credential: report/finish are run-only → 403", () => {
+  const { deviceToken } = seededCli();
+  const gw = gateway();
+  for (const verb of ["report", "finish", "complete"]) {
+    const res = gw.cli(deviceToken, [verb]);
+    expect(res.status).toBe(403);
+    expect((res.body as { error: string }).error).toMatch(/run-only verb/);
+  }
+});
+
+test("cli run credential: a --loop naming another loop is 403 (never a silent retarget)", () => {
+  const { runToken, loop } = seededCli();
+  const gw = gateway();
+  // Own loop id via --loop is accepted (it equals the slot's loop).
+  expect(gw.cli(runToken, ["log", "--loop", loop.id]).status).toBe(200);
+  expect(gw.cli(runToken, ["show", "--loop", loop.id]).status).toBe(200);
+  // A different loop id → hard 403 on both the read verbs and a mutation.
+  expect(gw.cli(runToken, ["log", "--loop", "loop-other"]).status).toBe(403);
+  expect(gw.cli(runToken, ["show", "--loop", "loop-other"]).status).toBe(403);
+  expect(gw.cli(runToken, ["reschedule", "--loop", "loop-other", "--next", "30m"]).status).toBe(403);
+  // A positional loop id on a read verb is checked the same way.
+  expect(gw.cli(runToken, ["log", "loop-other"]).status).toBe(403);
+  expect(gw.cli(runToken, ["show", "loop-other"]).status).toBe(403);
+  // The mismatch must not have touched the loop.
+  expect(store.getLoop(loop.id)!.nextRunAt).toBeNull();
+});
+
+test("cli run credential: the reschedule floor still applies through the unified dispatch", () => {
+  const { runToken, loop } = seededCli({ allowControl: true });
+  const denied = gateway().cli(runToken, ["reschedule", "--next", "2m"]);
+  expect(denied.status).toBe(400);
+  expect((denied.body as { text: string }).text).toMatch(/5 min/);
+  expect(store.getLoop(loop.id)!.nextRunAt).toBeNull();
+  // 30m clears the floor — the floor logic is identical to the agent-api path.
+  expect(gateway().cli(runToken, ["reschedule", "--next", "30m"]).status).toBe(200);
+  expect(store.getLoop(loop.id)!.nextRunAt).toBeTruthy();
+});
+
+test("cli run credential: allowControl still gates schedule mutations through the unified dispatch", () => {
+  const { runToken, loop } = seededCli({ allowControl: false });
+  const res = gateway().cli(runToken, ["pause"]);
+  expect(res.status).toBe(403);
+  expect((res.body as { text: string }).text).toMatch(/allowControl/);
+  expect(store.getLoop(loop.id)!.enabled).toBe(true);
+});
+
+test("cli run credential: canFinish still gates finish (open loop refused, closed loop honored)", () => {
+  // Open loop → the exec run's canFinish is false → finish 403.
+  const open = seededCli({ goal: null });
+  const refused = gateway().cli(open.runToken, ["finish", "--message", "done"]);
+  expect(refused.status).toBe(403);
+  expect((refused.body as { text: string }).text).toMatch(/open\/monitor loop/);
+
+  // Closed loop → exec run carries canFinish → finish completes the loop.
+  const closed = seededCli({ goal: "reach the goal" });
+  const ok = gateway().cli(closed.runToken, ["finish", "--message", "goal met"]);
+  expect(ok.status).toBe(200);
+  expect(store.getLoop(closed.loop.id)!.completedAt).toBeTruthy();
+});
+
+test("cli device credential: new/edit/loops/log/show route to the existing gateway logic", () => {
+  const { deviceToken, machineId } = seededCli();
+  const gw = gateway();
+  // new → createLoop
+  const created = gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "loopany/x/README.md" })]);
+  expect(created.status).toBe(200);
+  const newId = (created.body as any).id as string;
+  expect(store.getLoop(newId)!.machineId).toBe(machineId);
+  // loops → listLoops (includes the just-created loop)
+  const loops = gw.cli(deviceToken, ["loops"]);
+  expect((loops.body as any).loops.map((l: any) => l.id)).toContain(newId);
+  // edit → editLoop (positional loop id + --json patch)
+  const edited = gw.cli(deviceToken, ["edit", newId, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always" })]);
+  expect(edited.status).toBe(200);
+  expect(store.getLoop(newId)!.cron).toBe("0 9 * * *");
+  expect(store.getLoop(newId)!.notify).toBe("always");
+  // log → loopLog for that loop
+  const log = gw.cli(deviceToken, ["log", newId]);
+  expect(log.status).toBe(200);
+  expect((log.body as any).loopId).toBe(newId);
+  // show → describe for that loop
+  const show = gw.cli(deviceToken, ["show", newId]);
+  expect(show.status).toBe(200);
+  expect((show.body as { text: string }).text).toContain("cron: 0 9 * * *");
+});
+
+test("cli device credential: edit honors --dry-run (validate-only, no persistence)", () => {
+  const { deviceToken, loop } = seededCli();
+  const before = store.getLoop(loop.id)!.cron;
+  const dry = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *" }), "--dry-run"]);
+  expect(dry.status).toBe(200);
+  expect((dry.body as any).dryRun).toBe(true);
+  expect(store.getLoop(loop.id)!.cron).toBe(before); // unchanged
+});
+
+test("cli device credential: log/show of a loop on ANOTHER machine is a flat 404 (existence never leaks)", () => {
+  const { deviceToken } = seededCli();
+  // A second machine + loop the first device does not own.
+  const otherDevice = tokens.mintDeviceToken();
+  const otherMachineId = tokens.machineIdFromToken(otherDevice);
+  store.createMachine({ id: otherMachineId, userId: "u2", name: "M2", tokenHash: tokens.sha256(otherDevice), online: true });
+  const otherLoop = store.createLoop({ userId: "u2", machineId: otherMachineId, name: "Other", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const gw = gateway();
+  expect(gw.cli(deviceToken, ["log", otherLoop.id]).status).toBe(404);
+  expect(gw.cli(deviceToken, ["show", otherLoop.id]).status).toBe(404);
+});
+
+test("cli device credential: bad --json for new is a legible 400", () => {
+  const { deviceToken } = seededCli();
+  const res = gateway().cli(deviceToken, ["new", "--json", "{not json"]);
+  expect(res.status).toBe(400);
+  expect((res.body as { error: string }).error).toMatch(/--json/);
+});
+
+test("cli rejects an unknown machine (unregistered device token) and a stale run token", () => {
+  const gw = gateway();
+  const unknown = tokens.mintDeviceToken();
+  expect(gw.cli(unknown, ["loops"]).status).toBe(401);
+  // A bare-UUID that maps to no live run slot → run path 401.
+  expect(gw.cli("00000000-0000-0000-0000-000000000000", ["show"]).status).toBe(401);
+});
+
+test("cli run credential: a reclaimed run refuses mutations (409), same as agent-api", () => {
+  const { runToken } = seededCli({ allowControl: true });
+  tokens.markRunTokensReclaimed(seededReclaimTarget(runToken));
+  const res = gateway().cli(runToken, ["reschedule", "--next", "30m"]);
+  expect(res.status).toBe(409);
+});
+
+/** Resolve the runId behind a token so the test can drive markRunTokensReclaimed
+ *  (which keys on runId) without threading the run through every helper. */
+function seededReclaimTarget(runToken: string): string {
+  return tokens.resolveRunToken(runToken)!.runId;
+}

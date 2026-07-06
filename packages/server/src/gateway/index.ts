@@ -673,6 +673,16 @@ export class MachineGateway {
   loopLog(deviceToken: string, loopId: unknown, limit?: unknown): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
     if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    return this.renderLoopLog(machineId, loopId, limit);
+  }
+
+  /** The machine-scoped run survey, shared by the device-token `loopLog` (resolves
+   *  the machine from the token) AND the unified-dispatch run-credential `log` branch
+   *  (passes the run slot's own machineId + loopId — this is what closes the in-run
+   *  `loopany log` 400 seam). Scoping is identical for both callers: only a loop
+   *  bound to `machineId` is visible; anything else is a flat 404 (existence never
+   *  leaks), exactly as before for the device path. */
+  private renderLoopLog(machineId: string, loopId: unknown, limit?: unknown): HttpResult {
     if (typeof loopId !== "string" || !loopId) return { status: 400, body: { error: "loopId required" } };
     const loop = store.getLoop(loopId);
     // Loop+device scoping: only a loop bound to this machine is visible. A token
@@ -901,6 +911,111 @@ export class MachineGateway {
         body: { text: "loopany: this run was reclaimed by the server (the machine was likely asleep); its result is delivered via the final report", exitCode: 1 },
       };
     }
+    const out = this.dispatch(slot, argv);
+    return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
+  }
+
+  // ---- POST /api/machine/cli — one CLI dispatch, keyed by credential ----
+
+  /**
+   * The unified CLI endpoint. It is a ROUTER in front of the gateway logic that
+   * already exists — never a rewrite — that keys authority on the CREDENTIAL TYPE
+   * first, then routes to the same methods the legacy endpoints call:
+   *   · DEVICE credential (`dk_`-prefixed) → owner authority over any loop bound to
+   *     the machine: `new`→createLoop, `loops`→listLoops, `edit`→editLoop,
+   *     `log`→loopLog, `show`→describe. `report`/`finish` are RUN-only (403).
+   *   · RUN credential (bare-UUID run token; the `rk_` prefix arrives in Batch 6) →
+   *     the least-privilege per-run `dispatch()` verbs, PLUS a read branch (`log`/
+   *     `show`) scoped strictly to the slot's OWN loop — this closes the in-run
+   *     `loopany log` 400 seam. Owner-only verbs (`new`/`edit`/`loops`/`status`) are
+   *     403 for a run credential.
+   * Floors, `allowControl`, `canFinish`, and the shared content validators all flow
+   * through the reused `dispatch`/`createLoop`/`editLoop`/`loopLog` unchanged.
+   */
+  cli(token: string, argv: string[]): HttpResult {
+    return token.startsWith("dk_") ? this.deviceCli(token, argv) : this.runCli(token, argv);
+  }
+
+  /** DEVICE-credential branch of the unified CLI. */
+  private deviceCli(deviceToken: string, argv: string[]): HttpResult {
+    const machineId = machineIdFromToken(deviceToken);
+    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const verb = argv[0] ?? "";
+    const flags = parseFlags(argv.slice(1));
+    const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
+
+    switch (verb) {
+      case "new": {
+        const parsed = parseJsonFlag(flags["json"]);
+        if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
+        const config = { ...parsed.value } as Record<string, unknown>;
+        if (flags["dry-run"] === true) config.dryRun = true;
+        return this.createLoop(deviceToken, config);
+      }
+      case "loops":
+        return this.listLoops(deviceToken);
+      case "edit": {
+        const parsed = parseJsonFlag(flags["json"]);
+        if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
+        return this.editLoop(deviceToken, loopArg || undefined, parsed.value as Record<string, unknown>, flags["dry-run"] === true);
+      }
+      case "log":
+        return this.loopLog(deviceToken, loopArg, flags["limit"]);
+      case "show": {
+        // Device `show` may inspect ANY loop bound to the machine; the machine-scope
+        // check mirrors loopLog/editLoop (flat 404, existence never leaks).
+        const loop = loopArg ? store.getLoop(loopArg) : undefined;
+        if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
+        return { status: 200, body: { ok: true, text: this.describe(loop.id) } };
+      }
+      case "report":
+      case "finish":
+      case "complete":
+        // Per §4.1: there is no run to attribute a device-credential report/finish to.
+        return { status: 403, body: { error: `loopany: "${verb}" is a run-only verb — a run reports/finishes itself; the owner edits via "edit"` } };
+      default:
+        return { status: 400, body: { error: `loopany: unknown command "${verb}" for the device credential (try: new, loops, edit, log, show)` } };
+    }
+  }
+
+  /** RUN-credential branch of the unified CLI: the existing per-run `dispatch()`
+   *  verbs, plus the read branch (`log`/`show`) scoped to the slot's own loop. */
+  private runCli(runToken: string, argv: string[]): HttpResult {
+    const slot = resolveRunToken(runToken);
+    if (!slot) return { status: 401, body: { text: "loopany: invalid or expired token", exitCode: 1 } };
+    // Reclaimed (machine likely asleep) — accepts only the reconciling /machine/report,
+    // never further CLI mutations. Same rule agentApi enforces (see reclaim-grace).
+    if (slot.reclaimedAt != null) {
+      return {
+        status: 409,
+        body: { text: "loopany: this run was reclaimed by the server (the machine was likely asleep); its result is delivered via the final report", exitCode: 1 },
+      };
+    }
+    const verb = argv[0] ?? "";
+    const flags = parseFlags(argv.slice(1));
+
+    // Owner-only verbs are never reachable with a run credential (least-privilege):
+    // a run has no create/edit/cross-loop-list/machine-status need. Explicit 403 so
+    // the denial is legible (not a generic "unknown command").
+    if (DEVICE_ONLY_VERBS.has(verb)) {
+      return { status: 403, body: { text: `loopany: "${verb}" needs the device credential (owner authority); a run may only act on its own loop`, exitCode: 1 } };
+    }
+
+    // Loop-arg fence: a run may only target its OWN loop. An explicit `--loop` (any
+    // verb) or a positional loop id (only `log`/`show` take one) that names another
+    // loop is a hard 403 — never a silent retarget onto the run's own loop.
+    const targeted = typeof flags["loop"] === "string" ? (flags["loop"] as string) : (verb === "log" || verb === "show") && typeof flags["_"] === "string" ? (flags["_"] as string) : undefined;
+    if (targeted !== undefined && targeted !== slot.loopId) {
+      return { status: 403, body: { text: "loopany: a run may only act on its own loop", exitCode: 1 } };
+    }
+
+    // Read branch — the seam fix. `log` gains a run-credential path (it has no case
+    // in `dispatch`, so today it 400s in-run); `show` stays in `dispatch` (already
+    // scoped to slot.loopId with the run's caps).
+    if (verb === "log") {
+      return this.renderLoopLog(slot.machineId, slot.loopId, flags["limit"]);
+    }
+
     const out = this.dispatch(slot, argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
   }
@@ -1889,6 +2004,28 @@ interface Applied {
 type Flags = Record<string, string | boolean>;
 
 const MUTATION_VERBS = new Set(["reschedule", "set-cron", "pause", "resume", "notify", "set-name", "set-tz", "set-model"]);
+
+/** Verbs that require OWNER (device) authority — a run credential is 403'd on these
+ *  in the unified `cli` dispatch (§4.1). `report`/`finish` are the mirror image
+ *  (run-only, 403 for a device credential) and are handled inline in `deviceCli`. */
+const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "status"]);
+
+/** Parse a `--json '<obj>'` flag into an object. Absent → an empty object (the
+ *  downstream createLoop/editLoop validators then produce the precise error, e.g.
+ *  "cron required"). Present-but-not-a-JSON-object → a legible 400. Shared by the
+ *  device-credential `new`/`edit` verbs of the unified CLI. */
+function parseJsonFlag(raw: unknown): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
+  if (raw === undefined || raw === true) return { ok: true, value: {} };
+  if (typeof raw !== "string") return { ok: false, error: "loopany: --json must be a JSON object string" };
+  let obj: unknown;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: "loopany: --json must be valid JSON (an object)" };
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "loopany: --json must be a JSON object" };
+  return { ok: true, value: obj as Record<string, unknown> };
+}
 
 function stringifyFlags(flags: Flags): Record<string, string> {
   const out: Record<string, string> = {};

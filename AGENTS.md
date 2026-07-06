@@ -228,6 +228,27 @@ computes pure functions. Run instructions: `README.md`.
 - The device token fully impersonates the machine; it is serialized OWNER-ONLY
   (`tokenVisibleTo`) - teammates/admins get `token: null`. `loopLog` (`loopany log`
   backend) is scoped to loops bound to that machine; cross-scope = flat 404.
+- **Unified CLI dispatch `POST /api/machine/cli`** (`gateway.cli(token, argv)`) is a
+  ROUTER in front of the existing gateway logic, keying authority on CREDENTIAL TYPE
+  first: a `dk_`-prefixed **device** token → owner verbs (`new`→createLoop,
+  `loops`→listLoops, `edit`→editLoop, `log`→loopLog, `show`→describe; `report`/`finish`
+  are run-only → 403); a bare-UUID **run** token → the per-run `dispatch()` verbs PLUS a
+  read branch (`log`/`show`) scoped to the slot's OWN loop (this closes the historical
+  in-run `loopany log` 400 seam — `dispatch` has no `log` case, so `/agent-api/loop`
+  still 400s `log` by design). Run-credential rules: owner-only verbs
+  (`new`/`edit`/`loops`/`status`) → 403; a `--loop`/positional loop id that is not the
+  slot's loop → **403, never a silent retarget**; reclaimed slot → 409 (same reclaim
+  grace as `agentApi`). Floors/`allowControl`/`canFinish`/the shared content validators
+  all flow through unchanged because the run path reuses `dispatch`. The run-token wire
+  format is still a bare UUID (no `rk_` prefix — that arrives with the run-lease work);
+  branch on `dk_` vs run-slot lookup, NOT on an `rk_` prefix. `loopLog`'s scoping body
+  is factored into a private `renderLoopLog(machineId, loopId, limit)` shared by both
+  the device `loopLog` (derives machineId from the token) and the run `log` branch
+  (uses `slot.machineId`+`slot.loopId`), so the flat-404 existence-never-leaks rule
+  cannot drift between them. The legacy `/agent-api/loop`, `/api/machine/loop`, and
+  `/api/machine/log` routes stay as thin aliases onto the same gateway methods (no
+  behavior change for existing daemons); `/machine/report` is untouched (daemon
+  finalize, not a user verb). Same 2MB `readJsonBody` cap as every machine route.
 - `auth.ts` THROWS at boot when the GitHub gate is on but `LOOPANY_AUTH_SECRET` is
   unset. Set the Fly secret before deploying with the gate on.
 - Per-team connect-key: the claim carries the team (`rememberClaimIntent`, in-memory,
