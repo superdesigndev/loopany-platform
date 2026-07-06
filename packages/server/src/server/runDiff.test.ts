@@ -60,7 +60,7 @@ interface FileSpec {
 /** One full run cycle: create the run, sync its files (run-tagged), report → snapshot. */
 async function doRun(token: string, machineId: string, loopId: string, ts: string, files: FileSpec[]) {
   const run = store.addRun({ loopId, userId: "u1", machineId, phase: "running", role: "exec", ts });
-  const runToken = tokens.registerRunToken({
+  const runToken = tokens.registerRunLease({
     runId: run.id,
     loopId,
     machineId,

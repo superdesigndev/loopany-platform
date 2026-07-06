@@ -68,7 +68,7 @@ function seededExecRun(notify: "always" | "auto" | "never" = "auto") {
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify });
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
   return { machineId, loop, run, rt };
 }
 
@@ -110,7 +110,7 @@ function seededLoop() {
 
 test("set-ui is only allowed for an evolution run token and is audited", () => {
   const { loop, machine, run } = seededLoop();
-  const execToken = tokens.registerRunToken({
+  const execToken = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -120,7 +120,7 @@ test("set-ui is only allowed for an evolution run token and is audited", () => {
   const rejected = gateway().agentApi(execToken, ["set-ui", "--file-content", "<h3>Denied</h3>"]);
   expect(rejected.status).toBe(403);
 
-  const evolveToken = tokens.registerRunToken({
+  const evolveToken = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -139,7 +139,7 @@ test("show reports the run's effective self-schedule capability", () => {
   const { loop, machine, run } = seededLoop();
   const gw = gateway();
   const showText = (allowControl: boolean, role: "exec" | "evolve" = "exec") => {
-    const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId: machine.id, role, allowControl });
+    const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role, allowControl });
     return (gw.agentApi(rt, ["show"]).body as { text: string }).text;
   };
   // A run that MAY self-schedule reads `allowed`; one that may not reads `off`.
@@ -154,7 +154,7 @@ test("show reports the run's effective self-schedule capability", () => {
 
 test("help (and a bare/unknown-flag invocation) returns role-aware usage", () => {
   const { loop, machine, run } = seededLoop();
-  const execToken = tokens.registerRunToken({
+  const execToken = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -179,7 +179,7 @@ test("help (and a bare/unknown-flag invocation) returns role-aware usage", () =>
   expect(execHelp).toContain("needs allowControl");
 
   // An evolve run with the caps sees those groups marked available.
-  const evolveToken = tokens.registerRunToken({
+  const evolveToken = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -194,7 +194,7 @@ test("help (and a bare/unknown-flag invocation) returns role-aware usage", () =>
 
 test("set-schema rejects dropping keys still used by UI or recent runs", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -212,7 +212,7 @@ test("set-schema rejects dropping keys still used by UI or recent runs", () => {
 
 test("report persists the slimmed transcript, retrievable by session id", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -243,7 +243,7 @@ test("report persists the slimmed transcript, retrievable by session id", () => 
 
 test("report persists the claude-reported cost (usd column + usage json), rejecting garbage fields", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -271,7 +271,7 @@ test("report persists the claude-reported cost (usd column + usage json), reject
 
 test("report with an absent or wholly-garbage cost leaves the cost columns null", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -288,7 +288,7 @@ test("report with an absent or wholly-garbage cost leaves the cost columns null"
 
 test("report syncs the machine's task file content onto the loop", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -549,14 +549,14 @@ test("poll stores live progress on this machine's running run; report clears it"
   expect(store.getRun(run.id)!.progress).toMatchObject({ step: 3, label: "Editing report.md" });
 
   // Finalizing the run clears the live signal (the full transcript supersedes it).
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
   gateway().report(rt, { ok: true, durationMs: 10 });
   expect(store.getRun(run.id)!.progress).toBeNull();
 });
 
 test("set-tz applies the timezone through an allowControl run token", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "edit", allowControl: true });
+  const token = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "edit", allowControl: true });
   const res = gateway().agentApi(token, ["set-tz", "Asia/Tokyo"]);
   expect(res.status).toBe(200);
   expect(store.getLoop(loop.id)!.timezone).toBe("Asia/Tokyo");
@@ -572,7 +572,7 @@ test("an edit run's report routes to finishEdit (the pending edit marker is clea
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", editRequest: "run at 9am" });
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", ts: new Date().toISOString() });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "edit", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "edit", allowControl: true });
 
   let finished = "";
   const gw = new gatewayMod.MachineGateway({
@@ -698,7 +698,7 @@ test("listMachinesForTeam is membership-scoped — a machine shows in its owner'
 
 test("set-workflow updates only through an evolution token", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId: machine.id,
@@ -724,7 +724,7 @@ const GOOD_WORKFLOW = 'const res = await tools.call("posthog.exec", { q: 1 });\n
 
 test("set-workflow rejects an `export const meta` body with a fix-teaching message; loop untouched", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
   });
   const res = gateway().agentApi(token, ["set-workflow", "--file-content", EXPORT_META]);
@@ -740,7 +740,7 @@ test("set-workflow rejects an `export const meta` body with a fix-teaching messa
 
 test("set-workflow rejects a static import body", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
   });
   const res = gateway().agentApi(token, ["set-workflow", "--file-content", STATIC_IMPORT]);
@@ -750,7 +750,7 @@ test("set-workflow rejects a static import body", () => {
 
 test("set-workflow accepts a real `await tools.call(...)` body unchanged", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
   });
   const res = gateway().agentApi(token, ["set-workflow", "--file-content", GOOD_WORKFLOW]);
@@ -760,7 +760,7 @@ test("set-workflow accepts a real `await tools.call(...)` body unchanged", () =>
 
 test("set-workflow accepts a body containing the literal word `export` inside a string (no false positive)", () => {
   const { loop, machine, run } = seededLoop();
-  const token = tokens.registerRunToken({
+  const token = tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
   });
   const body = 'return { message: "export const meta = not real" };';
@@ -833,7 +833,7 @@ function seededClosedRun(opts: { notify?: "always" | "auto" | "never"; goal?: st
   const goal = opts.goal === undefined ? "reach the goal" : opts.goal;
   const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: opts.notify ?? "auto", goal });
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true, canFinish: loop.goal != null });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true, canFinish: loop.goal != null });
   return { token, machineId, loop, run, rt };
 }
 
@@ -938,7 +938,7 @@ test("finish validates --state against the loop schema like report", () => {
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "g", stateSchema: [{ key: "mrr" }] });
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true, canFinish: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true, canFinish: true });
 
   // An unknown key is rejected (400) and nothing completes.
   const bad = gateway().agentApi(rt, ["finish", "--state", '{"nope":1}']);
@@ -971,7 +971,7 @@ test("evolve and edit runs never get canFinish — finish refused even on a clos
   for (const role of ["evolve", "edit"] as const) {
     const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() });
     // Mirrors poll: structural runs get canFinish false.
-    const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true, canFinish: false });
+    const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true, canFinish: false });
     const res = gateway().agentApi(rt, ["finish", "--message", "x"]);
     expect(res.status).toBe(403);
     expect((res.body as { text: string }).text).toMatch(/only an exec run/i);
@@ -1165,7 +1165,7 @@ test("editLoop --dry-run reflects the reopen stamp-clear in the preview", () => 
 
 test("set-cron floor: a run can't schedule more often than 15 min; the owner's edit can", () => {
   const { loop, machine, run } = seededLoop();
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: true });
 
   // Every 5 minutes is under the 15-min self floor → rejected, cron unchanged.
   const denied = gateway().agentApi(rt, ["set-cron", "*/5 * * * *"]);
@@ -1193,7 +1193,7 @@ test("set-cron floor is timezone-aware (probes adjacent fires in the loop's tz)"
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", timezone: "Asia/Tokyo", enabled: true, notify: "auto" });
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   // A daily cron (adjacent fires 24h apart, well over the floor) is accepted.
   expect(gateway().agentApi(rt, ["set-cron", "0 9 * * *"]).status).toBe(200);
@@ -1203,7 +1203,7 @@ test("set-cron floor is timezone-aware (probes adjacent fires in the loop's tz)"
 
 test("reschedule floor: a run can't reschedule sooner than 5 min out", () => {
   const { loop, machine, run } = seededLoop();
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: true });
 
   // 2 minutes out is under the 5-min floor → rejected, nextRunAt unchanged.
   const denied = gateway().agentApi(rt, ["reschedule", "--next", "2m"]);
@@ -1267,7 +1267,7 @@ test("repeated consecutive failures are anti-spam'd: notify on the 1st and every
   for (let i = 1; i <= 12; i++) {
     const run = addExecRun(loop.id, machineId, "error", `2026-06-01T00:00:${String(i).padStart(2, "0")}Z`).id;
     // The run row is already error; drive report on a token for it to exercise the path.
-    const rt = tokens.registerRunToken({ runId: run, loopId: loop.id, machineId, role: "exec", allowControl: false });
+    const rt = tokens.registerRunLease({ runId: run, loopId: loop.id, machineId, role: "exec", allowControl: false });
     gw.report(rt, { ok: false, error: "boom", durationMs: 1 });
   }
   expect(sent).toHaveLength(3);
@@ -1286,7 +1286,7 @@ test("a success between failures resets the streak so the next failure re-alerts
 
   // Now a fresh failure → streak is 1 again → it must re-alert.
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: "2026-06-01T00:00:03Z" });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
   gateway(fn).report(rt, { ok: false, error: "boom", durationMs: 1 });
 
   expect(sent).toHaveLength(1);
@@ -1302,7 +1302,7 @@ test("evolve and edit run failures never produce user-facing failure notificatio
 
   for (const role of ["evolve", "edit"] as const) {
     const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() });
-    const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
+    const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
     gw.report(rt, { ok: false, error: "boom", durationMs: 1 });
   }
   expect(sent).toHaveLength(0);
@@ -1490,7 +1490,7 @@ test("a canceled EVOLVE run's report clears the evolve marker (finishEvolution),
   store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", evolveDue: true });
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "canceled", role: "evolve", ts: new Date().toISOString() });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "evolve", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "evolve", allowControl: true });
 
   let finished = "";
   const gw = new gatewayMod.MachineGateway({
@@ -1517,7 +1517,7 @@ test("sweep marks a reclaimed run's token reclaimed: agent-api mutations are ref
   // Claimed 30min ago, no progress heard since → past the 20min inactivity window.
   const staleTs = new Date(Date.now() - 30 * 60_000).toISOString();
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: staleTs });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
 
   const gw = gateway();
   expect(gw.agentApi(rt, ["show"]).status).toBe(200); // live before the sweep
@@ -1527,7 +1527,7 @@ test("sweep marks a reclaimed run's token reclaimed: agent-api mutations are ref
   // The orphaned agent can no longer MUTATE the loop (reclaimed → 409, not silent),
   // but the token is not revoked outright: it survives to accept one wake-report.
   expect(gw.agentApi(rt, ["show"]).status).toBe(409);
-  expect(tokens.resolveRunToken(rt)).toBeTruthy();
+  expect(tokens.resolveLease(rt)).toBeTruthy();
 });
 
 test("sweep is INACTIVITY-based: a >20min run with a fresh progress heartbeat is NOT reclaimed", () => {
@@ -1578,7 +1578,7 @@ test("show computes `next` in the loop's timezone", () => {
   const showNext = (timezone: string) => {
     const loop = store.createLoop({ userId: "u1", machineId, name: `L-${timezone}`, cron: "0 8 * * *", timezone, enabled: true, notify: "auto" });
     const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
-    const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+    const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
     return (gw.agentApi(rt, ["show"]).body as { text: string }).text.split("\n")[0]!;
   };
   // Same cron, timezones 25h apart — honoring the loop tz must yield different
@@ -1699,7 +1699,7 @@ function seededCli(opts: { allowControl?: boolean; goal?: string | null } = {}) 
     goal: opts.goal === undefined ? null : opts.goal,
   });
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const runToken = tokens.registerRunToken({
+  const runToken = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
     machineId,
@@ -1872,19 +1872,19 @@ test("cli rejects an unknown machine (unregistered device token) and a stale run
   const gw = gateway();
   const unknown = tokens.mintDeviceToken();
   expect(gw.cli(unknown, ["loops"]).status).toBe(401);
-  // A bare-UUID that maps to no live run slot → run path 401.
+  // A bare-UUID that maps to no live run lease → run path 401.
   expect(gw.cli("00000000-0000-0000-0000-000000000000", ["show"]).status).toBe(401);
 });
 
 test("cli run credential: a reclaimed run refuses mutations (409), same as agent-api", () => {
   const { runToken } = seededCli({ allowControl: true });
-  tokens.markRunTokensReclaimed(seededReclaimTarget(runToken));
+  tokens.terminalizeLease(seededReclaimTarget(runToken));
   const res = gateway().cli(runToken, ["reschedule", "--next", "30m"]);
   expect(res.status).toBe(409);
 });
 
-/** Resolve the runId behind a token so the test can drive markRunTokensReclaimed
+/** Resolve the runId behind a token so the test can drive terminalizeLease
  *  (which keys on runId) without threading the run through every helper. */
 function seededReclaimTarget(runToken: string): string {
-  return tokens.resolveRunToken(runToken)!.runId;
+  return tokens.resolveLease(runToken)!.runId;
 }

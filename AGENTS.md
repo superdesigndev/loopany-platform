@@ -42,7 +42,7 @@ computes pure functions. Run instructions: `README.md`.
 - Scheduler tick creates a pending run; the bound machine's **HTTP short-poll**
   (~3s, not WS) claims it; the daemon spawns claude; the agent talks back via
   run-token verbs (`loopany report/show/set-*/reschedule/finish`, `/agent-api/loop`);
-  the final `report()` persists transcript/metrics/artifacts and revokes the token.
+  the final `report()` persists transcript/metrics/artifacts and retires the run lease.
 - Run roles: `exec` (scheduled run), `evolve` (self-improvement pass), `edit`
   (owner-requested change). Only exec runs produce user-facing notifications,
   success or failure.
@@ -263,20 +263,22 @@ computes pure functions. Run instructions: `README.md`.
   ROUTER in front of the existing gateway logic, keying authority on CREDENTIAL TYPE
   first: a `dk_`-prefixed **device** token → owner verbs (`new`→createLoop,
   `loops`→listLoops, `edit`→editLoop, `log`→loopLog, `show`→describe; `report`/`finish`
-  are run-only → 403); a bare-UUID **run** token → the per-run `dispatch()` verbs PLUS a
-  read branch (`log`/`show`) scoped to the slot's OWN loop (this closes the historical
+  are run-only → 403); a **run** credential (an `rk_`-prefixed run lease, or a
+  pre-Batch-6 bare UUID over a deploy) → the per-run `dispatch()` verbs PLUS a read
+  branch (`log`/`show`) scoped to the lease's OWN loop (this closes the historical
   in-run `loopany log` 400 seam — `dispatch` has no `log` case, so `/agent-api/loop`
   still 400s `log` by design). Run-credential rules: owner-only verbs
   (`new`/`edit`/`loops`/`status`) → 403; a `--loop`/positional loop id that is not the
-  slot's loop → **403, never a silent retarget**; reclaimed slot → 409 (same reclaim
-  grace as `agentApi`). Floors/`allowControl`/`canFinish`/the shared content validators
-  all flow through unchanged because the run path reuses `dispatch`. The run-token wire
-  format is still a bare UUID (no `rk_` prefix — that arrives with the run-lease work);
-  branch on `dk_` vs run-slot lookup, NOT on an `rk_` prefix. `loopLog`'s scoping body
-  is factored into a private `renderLoopLog(machineId, loopId, limit)` shared by both
-  the device `loopLog` (derives machineId from the token) and the run `log` branch
-  (uses `slot.machineId`+`slot.loopId`), so the flat-404 existence-never-leaks rule
-  cannot drift between them. The legacy `/agent-api/loop`, `/api/machine/loop`, and
+  lease's loop → **403, never a silent retarget**; a terminal-grace (reclaimed) lease →
+  409 (same reclaim grace as `agentApi`). Floors/`allowControl`/`canFinish`/the shared
+  content validators all flow through unchanged because the run path reuses `dispatch`.
+  The router branches on the `dk_` device prefix vs a run-lease lookup, NOT on an `rk_`
+  prefix — so a bare-UUID run token still routes to the run path (see the run-lease
+  gotcha above for the wire format + back-compat). `loopLog`'s scoping body is factored
+  into a private `renderLoopLog(machineId, loopId, limit)` shared by both the device
+  `loopLog` (derives machineId from the token) and the run `log` branch (uses
+  `lease.machineId`+`lease.loopId`), so the flat-404 existence-never-leaks rule cannot
+  drift between them. The legacy `/agent-api/loop`, `/api/machine/loop`, and
   `/api/machine/log` routes stay as thin aliases onto the same gateway methods (no
   behavior change for existing daemons); `/machine/report` is untouched (daemon
   finalize, not a user verb). Same 2MB `readJsonBody` cap as every machine route.
@@ -296,20 +298,45 @@ computes pure functions. Run instructions: `README.md`.
   freshness stamp into run progress; a run is reclaimed only after `RUN_TIMEOUT_MS`
   of silence. A canceled run's late `report()`
   is ignored BEFORE any loop-level write (never advances cursor/taskFileContent).
-- **Sweep-reclaimed runs are NOT token-revoked immediately** - the usual cause is a
-  laptop that merely fell ASLEEP mid-run, and on wake the daemon delivers the real
-  (often successful) result. `reclaimRun` (`gateway/index.ts`) MARKS the run's tokens
-  reclaimed (`markRunTokensReclaimed`) instead; they survive `RECLAIM_GRACE_MS`
-  (24h, `tokens.ts`) so `report()`'s `phase==="error" && slot.reclaimedAt` branch
-  honors exactly ONE late wake-report: a success flips the run back to `done` (clears
-  the false error, records message/artifacts, retracts via the normal success push;
-  the failure streak self-corrects since it's derived from persisted rows), a real
-  failure replaces the generic reclaim reason (no second push). Single-shot (token
-  revoked after). While reclaimed, `agentApi` refuses mutations with 409 (only the
-  final report reconciles). The daemon's `runner.ts` `report()` logs a clear line on a
-  401 (already reclaimed) instead of silently dropping it. A pending run has no token
-  yet, so its reclaim (`machine offline`) is unchanged. Sweep also prunes
-  grace-expired reclaimed tokens (`pruneReclaimedRunTokens`).
+- **The run credential is a RUN LEASE (`tokens.ts`, Batch 6)**, not a mint→revoke
+  token: the per-run caps (`runId/loopId/machineId/role/allowControl/canSet*/canFinish`
+  — the old `RunSlot` fields, now `RunLeaseCaps`) PLUS a tiny state machine `state:
+  "active" | "terminal-grace"` + `expiresAt`. Wire token is `rk_<random>` (device
+  stays `dk_`); the unified `cli` router branches on the `dk_` prefix, so a run token
+  (rk_ OR a pre-Batch-6 bare UUID) falls through to the run path. The lease table is
+  keyed by the FULL wire token, so `resolveLease` needs NO prefix parsing — a
+  bare-UUID token minted before the deploy resolves identically (free back-compat; a
+  daemon release is NOT required for this batch — the daemon forwards whatever token
+  its env carries, opaque to shape). `resolveLease` lazily drops a lease past
+  `expiresAt` (active leases carry `Infinity`, so a live run never times out here — the
+  server's inactivity sweep is the vanished-machine guard).
+- **The old revoke/reclaim scatter collapses to ONE terminalize transition +
+  retire + prune.** `registerRunLease` mints `active`. `terminalizeLease(runId)`
+  flips `active` → `terminal-grace` with `expiresAt = now + TERMINAL_GRACE_MS` (24h,
+  subsumes the former `RECLAIM_GRACE_MS`); it is called ONLY by `reclaimRun`
+  (`gateway/index.ts`) when the sweep reclaims a stuck run as a false failure — so
+  `terminal-grace` UNIQUELY marks a swept run (this is load-bearing: it lets the
+  reconcile branch fire only for swept runs, never a normal failure report).
+  `retireLease(token)` deletes the lease single-shot — called by every `report()`
+  finalize consummation (normal final report, the enriching report after `finish`, the
+  ONE reconciling wake-report, a canceled-run report). `pruneExpiredLeases(now)` in
+  `sweep()` bounds memory. NB: `finish` deliberately does NOT terminalize — it leaves
+  the lease ACTIVE for one enriching report, so the run may still `show` / a second
+  `finish` → 400 (idempotency guard), and the enriching report retires it.
+- **Sweep-reclaimed runs are NOT retired immediately** - the usual cause is a laptop
+  that merely fell ASLEEP mid-run, and on wake the daemon delivers the real (often
+  successful) result. `reclaimRun` TERMINALIZES the run's lease (grace) instead of
+  retiring it, so `report()`'s `phase==="error" && lease.state==="terminal-grace"`
+  branch honors exactly ONE late wake-report: a success flips the run back to `done`
+  (clears the false error, records message/artifacts, retracts via the normal success
+  push; the failure streak self-corrects since it's derived from persisted rows), a
+  real failure replaces the generic reclaim reason (no second push). Single-shot
+  (lease retired after). While terminal-grace, `agentApi`/`runCli` refuse mutations
+  with 409 (only the final report reconciles). The daemon's `runner.ts` `report()`
+  logs a clear line on a 401 (already retired) instead of silently dropping it. A
+  pending run has no lease yet, so its reclaim (`machine offline`) is unchanged.
+  Leases stay IN-MEMORY for v1 (owner-settled §10: a deploy during a long sleep drops
+  the lease → a wake-report 401s even inside grace; accepted known gap, no DB table).
 - **Machine presence is THREE-state** (`lib/machinePresence.ts`, shared by server
   `adapters.toJobDetail` + client `MachinesModal`): `online` (polled < 30s),
   `asleep` (seen < `MACHINE_ASLEEP_TTL_MS` = 6h — calm, "resumes automatically"),

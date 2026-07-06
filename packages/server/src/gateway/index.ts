@@ -31,17 +31,16 @@ import {
   machineIdFromToken,
   getDeviceOwner,
   readClaimIntent,
-  registerRunToken,
-  resolveRunToken,
-  revokeRunToken,
-  revokeRunTokensForRun,
-  markRunTokensReclaimed,
-  pruneReclaimedRunTokens,
+  registerRunLease,
+  resolveLease,
+  retireLease,
+  terminalizeLease,
+  pruneExpiredLeases,
   fulfillClaim,
   readClaim,
   sha256,
   type ClaimResult,
-  type RunSlot,
+  type RunLease,
 } from "./tokens.js";
 import { isSuperAdmin } from "../superadmin.js";
 
@@ -262,28 +261,28 @@ export class MachineGateway {
         }
       }
     }
-    // Drop reclaimed run tokens whose wake-report grace has elapsed (bounded memory).
-    pruneReclaimedRunTokens(now);
+    // Drop terminal-grace leases whose wake-report window has elapsed (bounded memory).
+    pruneExpiredLeases(now);
   }
 
   /** Finalize one stuck run as an error (the sweep's reclaim path): persist the
-   *  failure, MARK any run token for it reclaimed (rather than revoking it
-   *  outright), clear an evolve marker, and surface the failure through the anti-
-   *  spam'd notify path.
+   *  failure, TERMINALIZE its run lease (flip it to `terminal-grace` rather than
+   *  retiring it outright), clear an evolve marker, and surface the failure through
+   *  the anti-spam'd notify path.
    *
-   *  Why mark, not revoke: the usual cause is a laptop that merely fell ASLEEP
-   *  mid-run. When it wakes, claude finishes and the daemon delivers the real
-   *  (often SUCCESSFUL) result. Revoking the token here would 401 that late
-   *  report and strand the run as a permanent false failure with its message
-   *  lost (the investigated bug). So the token survives a bounded grace window
-   *  (`RECLAIM_GRACE_MS`) during which exactly ONE late wake-report may reconcile
-   *  the run — see `report()`'s reclaimed branch. The credential is still bounded:
-   *  agent-api mutations are refused while reclaimed, and the reconciliation
-   *  revokes the token single-shot. A pending run (no token minted yet) is
-   *  unaffected — the mark is a no-op there. */
+   *  Why terminalize, not retire: the usual cause is a laptop that merely fell
+   *  ASLEEP mid-run. When it wakes, claude finishes and the daemon delivers the real
+   *  (often SUCCESSFUL) result. Retiring the lease here would 401 that late report
+   *  and strand the run as a permanent false failure with its message lost (the
+   *  investigated bug). So the lease survives a bounded grace window
+   *  (`TERMINAL_GRACE_MS`) during which exactly ONE late wake-report may reconcile
+   *  the run — see `report()`'s terminal-grace branch. The credential is still
+   *  bounded: agent-api mutations are refused while terminal-grace, and the
+   *  reconciliation retires the lease single-shot. A pending run (no lease minted
+   *  yet) is unaffected — the terminalize is a no-op there. */
   private reclaimRun(run: Run, reason: string): void {
     store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
-    markRunTokensReclaimed(run.id);
+    terminalizeLease(run.id);
     if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
     this.notifyRunFailure(run.loopId, run.role, reason);
   }
@@ -400,7 +399,7 @@ export class MachineGateway {
       // Edit + evolve runs exist to change the loop, so they always get control
       // AND the structural edit caps (schedule, UI, schema, workflow).
       const structural = run.role === "evolve" || run.role === "edit";
-      const token = registerRunToken({
+      const token = registerRunLease({
         runId: run.id,
         loopId: loop.id,
         machineId,
@@ -678,7 +677,7 @@ export class MachineGateway {
 
   /** The machine-scoped run survey, shared by the device-token `loopLog` (resolves
    *  the machine from the token) AND the unified-dispatch run-credential `log` branch
-   *  (passes the run slot's own machineId + loopId — this is what closes the in-run
+   *  (passes the run lease's own machineId + loopId — this is what closes the in-run
    *  `loopany log` 400 seam). Scoping is identical for both callers: only a loop
    *  bound to `machineId` is visible; anything else is a flat 404 (existence never
    *  leaks), exactly as before for the device path. */
@@ -899,18 +898,19 @@ export class MachineGateway {
   // ---- POST /agent-api/loop ----
 
   agentApi(runToken: string, argv: string[]): HttpResult {
-    const slot = resolveRunToken(runToken);
-    if (!slot) return { status: 401, body: { text: "loopany: invalid or expired token", exitCode: 1 } };
+    const lease = resolveLease(runToken);
+    if (!lease) return { status: 401, body: { text: "loopany: invalid or expired token", exitCode: 1 } };
     // The run was already reclaimed by the server (the machine was likely asleep).
-    // Its token lives on only to accept ONE reconciling wake-report via
-    // /machine/report — never further agent-api mutations (reschedule/set-*/finish).
-    if (slot.reclaimedAt != null) {
+    // Its lease is terminal-grace: it lives on only to accept ONE reconciling
+    // wake-report via /machine/report — never further agent-api mutations
+    // (reschedule/set-*/finish).
+    if (lease.state === "terminal-grace") {
       return {
         status: 409,
         body: { text: "loopany: this run was reclaimed by the server (the machine was likely asleep); its result is delivered via the final report", exitCode: 1 },
       };
     }
-    const out = this.dispatch(slot, argv);
+    const out = this.dispatch(lease, argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
   }
 
@@ -923,11 +923,13 @@ export class MachineGateway {
    *   · DEVICE credential (`dk_`-prefixed) → owner authority over any loop bound to
    *     the machine: `new`→createLoop, `loops`→listLoops, `edit`→editLoop,
    *     `log`→loopLog, `show`→describe. `report`/`finish` are RUN-only (403).
-   *   · RUN credential (bare-UUID run token; the `rk_` prefix arrives in Batch 6) →
-   *     the least-privilege per-run `dispatch()` verbs, PLUS a read branch (`log`/
-   *     `show`) scoped strictly to the slot's OWN loop — this closes the in-run
-   *     `loopany log` 400 seam. Owner-only verbs (`new`/`edit`/`loops`/`status`) are
-   *     403 for a run credential.
+   *   · RUN credential (an `rk_`-prefixed run lease — or a bare-UUID token from a
+   *     pre-Batch-6 mint over a deploy) → the least-privilege per-run `dispatch()`
+   *     verbs, PLUS a read branch (`log`/`show`) scoped strictly to the lease's OWN
+   *     loop — this closes the in-run `loopany log` 400 seam. Owner-only verbs
+   *     (`new`/`edit`/`loops`/`status`) are 403 for a run credential.
+   * The branch keys on the `dk_` device prefix, NOT an `rk_` run prefix, so a
+   * bare-UUID run token still routes to the run path (it just isn't a device token).
    * Floors, `allowControl`, `canFinish`, and the shared content validators all flow
    * through the reused `dispatch`/`createLoop`/`editLoop`/`loopLog` unchanged.
    */
@@ -978,13 +980,13 @@ export class MachineGateway {
   }
 
   /** RUN-credential branch of the unified CLI: the existing per-run `dispatch()`
-   *  verbs, plus the read branch (`log`/`show`) scoped to the slot's own loop. */
+   *  verbs, plus the read branch (`log`/`show`) scoped to the lease's own loop. */
   private runCli(runToken: string, argv: string[]): HttpResult {
-    const slot = resolveRunToken(runToken);
-    if (!slot) return { status: 401, body: { text: "loopany: invalid or expired token", exitCode: 1 } };
-    // Reclaimed (machine likely asleep) — accepts only the reconciling /machine/report,
-    // never further CLI mutations. Same rule agentApi enforces (see reclaim-grace).
-    if (slot.reclaimedAt != null) {
+    const lease = resolveLease(runToken);
+    if (!lease) return { status: 401, body: { text: "loopany: invalid or expired token", exitCode: 1 } };
+    // Reclaimed (machine likely asleep) — terminal-grace accepts only the reconciling
+    // /machine/report, never further CLI mutations. Same rule agentApi enforces.
+    if (lease.state === "terminal-grace") {
       return {
         status: 409,
         body: { text: "loopany: this run was reclaimed by the server (the machine was likely asleep); its result is delivered via the final report", exitCode: 1 },
@@ -1004,18 +1006,18 @@ export class MachineGateway {
     // verb) or a positional loop id (only `log`/`show` take one) that names another
     // loop is a hard 403 — never a silent retarget onto the run's own loop.
     const targeted = typeof flags["loop"] === "string" ? (flags["loop"] as string) : (verb === "log" || verb === "show") && typeof flags["_"] === "string" ? (flags["_"] as string) : undefined;
-    if (targeted !== undefined && targeted !== slot.loopId) {
+    if (targeted !== undefined && targeted !== lease.loopId) {
       return { status: 403, body: { text: "loopany: a run may only act on its own loop", exitCode: 1 } };
     }
 
     // Read branch — the seam fix. `log` gains a run-credential path (it has no case
     // in `dispatch`, so today it 400s in-run); `show` stays in `dispatch` (already
-    // scoped to slot.loopId with the run's caps).
+    // scoped to lease.loopId with the run's caps).
     if (verb === "log") {
-      return this.renderLoopLog(slot.machineId, slot.loopId, flags["limit"]);
+      return this.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
     }
 
-    const out = this.dispatch(slot, argv);
+    const out = this.dispatch(lease, argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
   }
 
@@ -1045,23 +1047,23 @@ export class MachineGateway {
       cost?: unknown;
     },
   ): HttpResult {
-    const slot = resolveRunToken(runToken);
-    if (!slot) return { status: 401, body: { error: "invalid or expired token" } };
+    const lease = resolveLease(runToken);
+    if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
     const ok = !!body.ok;
 
-    const run = store.getRun(slot.runId);
+    const run = store.getRun(lease.runId);
     // The user stopped this run while the machine was still working — keep it
     // canceled, and bail BEFORE any loop-level write: a late report must not
     // advance the workflow cursor / task file (the next run would silently skip
     // data whose output the user never saw), nor flip the phase to done/error.
     if (run?.phase === "canceled") {
-      revokeRunToken(runToken);
+      retireLease(runToken);
       // Clear a pending edit even if its run was canceled, so it doesn't re-fire —
       // and symmetrically clear an evolve marker (evolveDue), or the canceled
       // evolve pass re-fires on the very next tick.
-      if (slot.role === "edit") this.scheduler.finishEdit(slot.loopId);
-      if (slot.role === "evolve") this.scheduler.finishEvolution(slot.loopId);
-      log.info({ runId: slot.runId }, "report: ignored (run was canceled)");
+      if (lease.role === "edit") this.scheduler.finishEdit(lease.loopId);
+      if (lease.role === "evolve") this.scheduler.finishEvolution(lease.loopId);
+      log.info({ runId: lease.runId }, "report: ignored (run was canceled)");
       return { status: 200, body: { ok: true } };
     }
 
@@ -1070,12 +1072,12 @@ export class MachineGateway {
     // sessionId (+ transcript/artifacts), which finish couldn't know mid-run. ENRICH
     // the already-completed run with those so a finished run's log matches a reported
     // one — but do NOT re-stamp the loop, re-notify, advance the cursor, or re-
-    // snapshot (finish did all of that). Then revoke the token: finish deliberately
-    // left it live for exactly this one enriching report.
+    // snapshot (finish did all of that). Then retire the lease: finish deliberately
+    // left it active for exactly this one enriching report.
     if (run?.phase === "done") {
       const enrichArtifacts = coerceArtifacts(body.artifacts);
       const enrichTranscript = coerceTranscript(body.transcript);
-      store.updateRun(slot.runId, {
+      store.updateRun(lease.runId, {
         ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
         ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
         ...(enrichArtifacts ? { artifacts: enrichArtifacts } : {}),
@@ -1084,25 +1086,25 @@ export class MachineGateway {
         ...coerceCost(body.cost),
       });
       if (typeof body.taskFileContent === "string") {
-        store.updateLoop(slot.loopId, {
+        store.updateLoop(lease.loopId, {
           taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
           taskFileSyncedAt: nowIso(),
         });
       }
-      revokeRunToken(runToken);
-      log.info({ runId: slot.runId }, "report: enriched a finished run (durationMs/sessionId)");
+      retireLease(runToken);
+      log.info({ runId: lease.runId }, "report: enriched a finished run (durationMs/sessionId)");
       return { status: 200, body: { ok: true } };
     }
 
     // ── Late wake-report for a sweep-RECLAIMED run ─────────────────────────────
     // The machine went unreachable (asleep/offline) mid-run, so the sweep reclaimed
     // this run as a false `error` and pushed a machine-offline alert — but kept the
-    // token alive (reclaimed) for the grace window instead of revoking it. The
+    // lease alive (terminal-grace) for the grace window instead of retiring it. The
     // daemon has now resumed and delivered the run's REAL result. Honor exactly ONE
-    // such late report to correct the record, then revoke the token single-shot
-    // (like the finish→enrich handshake). Recognized by the slot's `reclaimedAt`
-    // stamp — set ONLY by `reclaimRun` for the three machine-availability reasons.
-    if (run?.phase === "error" && slot.reclaimedAt != null) {
+    // such late report to correct the record, then retire the lease single-shot
+    // (like the finish→enrich handshake). Recognized by the lease's terminal-grace
+    // state — set ONLY by `reclaimRun` (via `terminalizeLease`).
+    if (run?.phase === "error" && lease.state === "terminal-grace") {
       const artifacts = coerceArtifacts(body.artifacts);
       const transcript = coerceTranscript(body.transcript);
       const rawMessage = body.message !== undefined ? body.message : body.finalText;
@@ -1116,23 +1118,23 @@ export class MachineGateway {
       if (cursor !== undefined) {
         const serialized = JSON.stringify(cursor);
         if ((serialized?.length ?? 0) > CURSOR_CAP) {
-          log.warn({ runId: slot.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
+          log.warn({ runId: lease.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
           cursor = undefined;
         }
       }
       if (typeof body.taskFileContent === "string") {
-        store.updateLoop(slot.loopId, {
+        store.updateLoop(lease.loopId, {
           taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
           taskFileSyncedAt: nowIso(),
         });
       }
-      if (cursor !== undefined) store.updateLoop(slot.loopId, { state: cursor });
+      if (cursor !== undefined) store.updateLoop(lease.loopId, { state: cursor });
       // Mirror the workflow's scalar cursor onto THIS run for {{latest.*}} / the
       // trend chart — don't clobber a state the run already reported.
       const runState = ok && !run.state ? scalarState(cursor) : undefined;
-      const finalized = store.updateRun(slot.runId, {
+      const finalized = store.updateRun(lease.runId, {
         phase: ok ? "done" : "error",
-        outcome: ok ? claimedOutcome ?? (slot.role === "evolve" ? "evolve" : "exec") : "error",
+        outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
         ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
         ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
         ...(artifacts ? { artifacts } : {}),
@@ -1148,20 +1150,20 @@ export class MachineGateway {
         ts: nowIso(),
       });
       // Single-shot: no second late report may re-flip this run.
-      revokeRunToken(runToken);
+      retireLease(runToken);
       // Re-capture the end-state snapshot (best-effort), same as the normal path.
       try {
-        store.putRunSnapshot(slot.runId, slot.loopId, store.buildLoopManifest(slot.loopId));
-        store.pruneRunSnapshots(slot.loopId, snapshotRetention());
+        store.putRunSnapshot(lease.runId, lease.loopId, store.buildLoopManifest(lease.loopId));
+        store.pruneRunSnapshots(lease.loopId, snapshotRetention());
       } catch (err) {
-        log.warn({ runId: slot.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
+        log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
       }
-      if (ok && slot.role !== "evolve" && slot.role !== "edit") {
+      if (ok && lease.role !== "evolve" && lease.role !== "edit") {
         // The failure alert was WRONG — the run actually succeeded. Flipping the row
         // to `done` already corrects the failure streak (it's derived from persisted
         // rows), so a later tick won't count this. Retract by pushing the real result
         // (a cheap, honest correction), gated by the loop's normal notify policy.
-        const loop = store.getLoop(slot.loopId);
+        const loop = store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
           void this.notify(loop, finalized.message);
         }
@@ -1169,7 +1171,7 @@ export class MachineGateway {
       // A genuine late FAILURE is recorded honestly but does NOT re-notify: the
       // reclaim already alerted the user once for this run.
       log.info(
-        { runId: slot.runId, ok, reclaimed: true },
+        { runId: lease.runId, ok, reclaimed: true },
         ok ? "report: reconciled a reclaimed run to done (machine woke)" : "report: recorded a reclaimed run's real error",
       );
       return { status: 200, body: { ok: true, reconciled: true } };
@@ -1182,16 +1184,16 @@ export class MachineGateway {
     if (cursor !== undefined) {
       const serialized = JSON.stringify(cursor);
       if ((serialized?.length ?? 0) > CURSOR_CAP) {
-        log.warn({ runId: slot.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
+        log.warn({ runId: lease.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
         cursor = undefined;
       }
     }
-    if (cursor !== undefined) store.updateLoop(slot.loopId, { state: cursor });
+    if (cursor !== undefined) store.updateLoop(lease.loopId, { state: cursor });
 
     // Sync the machine's task file onto the loop (untrusted wire input — clip
     // defensively even though the daemon already caps it).
     if (typeof body.taskFileContent === "string") {
-      store.updateLoop(slot.loopId, {
+      store.updateLoop(lease.loopId, {
         taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
         taskFileSyncedAt: nowIso(),
       });
@@ -1217,9 +1219,9 @@ export class MachineGateway {
     // Whitelist the claimed outcome (untrusted wire input) — anything outside the
     // known enum falls back to the role default rather than landing in the column.
     const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
-    const finalized = store.updateRun(slot.runId, {
+    const finalized = store.updateRun(lease.runId, {
       phase: ok ? "done" : "error",
-      outcome: ok ? claimedOutcome ?? (slot.role === "evolve" ? "evolve" : "exec") : "error",
+      outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
       durationMs: body.durationMs ?? null,
       // Untrusted wire input — clip like every other free-text field.
       sessionId: typeof body.sessionId === "string" ? body.sessionId.slice(0, SESSION_ID_CAP) : null,
@@ -1232,7 +1234,7 @@ export class MachineGateway {
       progress: null, // live signal done — the full transcript supersedes it
       ts: nowIso(),
     });
-    revokeRunToken(runToken);
+    retireLease(runToken);
 
     // Capture the loop's full file set as THIS run's snapshot (Phase 3 diff
     // baseline). Cheap: just record the manifest from the already-synced
@@ -1240,33 +1242,33 @@ export class MachineGateway {
     // here. The daemon flushes a final run-tagged sync before reporting, so this
     // reflects the run's end-state. Best-effort — never let it fail the report.
     try {
-      store.putRunSnapshot(slot.runId, slot.loopId, store.buildLoopManifest(slot.loopId));
+      store.putRunSnapshot(lease.runId, lease.loopId, store.buildLoopManifest(lease.loopId));
       // Bound the snapshot history right away (cheap, keeps the table from growing
       // unbounded between maintenance passes). The blobs this unpins are reclaimed
       // by the periodic GC, not here — the grace window means a just-unreferenced
       // blob isn't collectable yet anyway, and report() must stay lean + zero-exec.
-      store.pruneRunSnapshots(slot.loopId, snapshotRetention());
+      store.pruneRunSnapshots(lease.loopId, snapshotRetention());
     } catch (err) {
-      log.warn({ runId: slot.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
+      log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
     }
 
-    if (slot.role === "evolve") {
-      this.scheduler.finishEvolution(slot.loopId);
-    } else if (slot.role === "edit") {
+    if (lease.role === "evolve") {
+      this.scheduler.finishEvolution(lease.loopId);
+    } else if (lease.role === "edit") {
       // Always clear the marker (done OR error) so a stuck edit can't hijack
       // every subsequent tick. The owner re-issues if it didn't take.
-      this.scheduler.finishEdit(slot.loopId);
+      this.scheduler.finishEdit(lease.loopId);
     } else if (ok) {
-      this.scheduler.maybeFlagEvolve(slot.loopId);
+      this.scheduler.maybeFlagEvolve(lease.loopId);
     }
 
     // Notify (the loop's chosen channel), best-effort. Edit/evolve runs are
     // internal (owner config change / self-shaping) — never user-facing, success
     // OR failure. `updateRun` already returned the finalized row.
-    if (slot.role !== "evolve" && slot.role !== "edit") {
+    if (lease.role !== "evolve" && lease.role !== "edit") {
       if (ok) {
         // Success: gate on the loop's notify policy + the run's content status.
-        const loop = store.getLoop(slot.loopId);
+        const loop = store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
           void this.notify(loop, finalized.message);
         }
@@ -1274,10 +1276,10 @@ export class MachineGateway {
         // Failure: surface it (silent failure is the BYOA default failure mode),
         // anti-spam'd by the consecutive-failure streak so a persistently-broken
         // loop doesn't push every tick.
-        this.notifyRunFailure(slot.loopId, slot.role, finalized?.error ?? null);
+        this.notifyRunFailure(lease.loopId, lease.role, finalized?.error ?? null);
       }
     }
-    log.info({ runId: slot.runId, ok }, "report: finalized");
+    log.info({ runId: lease.runId, ok }, "report: finalized");
     return { status: 200, body: { ok: true } };
   }
 
@@ -1287,28 +1289,30 @@ export class MachineGateway {
    * run's summary/metrics, then stamp the loop terminal (completedAt=now,
    * completionReason, enabled=false), remove it from the scheduler, capture the end-
    * state snapshot, and fire a completion notification unless notify=never. Gated
-   * upstream by slot.canFinish (exec-on-closed-loop only).
+   * upstream by lease.canFinish (exec-on-closed-loop only).
    *
    * TOCTOU guard: canFinish was minted at poll; the owner may have CLEARED the goal
    * since (editLoop {goal:null}) — completing then would violate the invariant
    * "completedAt != null implies goal != null". So re-read the loop and refuse with
    * a clear error when it's no longer a closed loop. Nothing is stamped.
    *
-   * The run token is NOT revoked here: finish can't know the run's precise durationMs
-   * / sessionId mid-run, so it leaves the token live for exactly ONE enriching
-   * post-run report (see report()'s phase==="done" branch), which records those and
-   * revokes. Because the token stays live, a second `finish` on the same run is
-   * possible — so this ALSO refuses when the loop is already completed
+   * The run lease is NOT terminalized here: finish can't know the run's precise
+   * durationMs / sessionId mid-run, so it leaves the lease ACTIVE for exactly ONE
+   * enriching post-run report (see report()'s phase==="done" branch), which records
+   * those and retires it. Leaving the lease active (rather than flipping it to
+   * terminal-grace) is deliberate: the run may still `show` or issue a second
+   * `finish` — because the lease stays active, a second `finish` on the same run is
+   * possible, so this ALSO refuses when the loop is already completed
    * (completedAt != null), keeping finish single-shot (no re-stamp, no re-snapshot,
    * no re-notify). Double-notify/double-finalize stay impossible — both this guard
    * and report()'s phase==="done" branch never re-stamp or re-notify.
    */
   private finishLoop(
-    slot: RunSlot,
+    lease: RunLease,
     { message, reason, state }: { message?: string; reason: string | null; state?: Record<string, number | string> },
   ): Applied {
     // TOCTOU: refuse if the loop is no longer closed (goal cleared since poll).
-    const current = store.getLoop(slot.loopId);
+    const current = store.getLoop(lease.loopId);
     if (!current || current.goal == null) {
       return { ok: false, detail: "this loop no longer has a goal to finish — its goal was cleared since this run started" };
     }
@@ -1321,9 +1325,9 @@ export class MachineGateway {
     // Record durationMs server-side from the run's claim/running timestamp so a
     // finished run always carries a duration even if the daemon's enriching report
     // is lost; the enriching report overrides it with the precise value.
-    const run = store.getRun(slot.runId);
+    const run = store.getRun(lease.runId);
     const durationMs = run ? Date.now() - Date.parse(run.ts) : NaN;
-    store.updateRun(slot.runId, {
+    store.updateRun(lease.runId, {
       phase: "done",
       outcome: "exec",
       status: "resolved",
@@ -1333,21 +1337,21 @@ export class MachineGateway {
       progress: null,
       ts,
     });
-    const loop = store.updateLoop(slot.loopId, { completedAt: ts, completionReason: reason, enabled: false });
-    this.scheduler.removeLoop(slot.loopId);
+    const loop = store.updateLoop(lease.loopId, { completedAt: ts, completionReason: reason, enabled: false });
+    this.scheduler.removeLoop(lease.loopId);
     // Snapshot the loop's end-state (Phase 3 diff baseline), best-effort like report().
     try {
-      store.putRunSnapshot(slot.runId, slot.loopId, store.buildLoopManifest(slot.loopId));
-      store.pruneRunSnapshots(slot.loopId, snapshotRetention());
+      store.putRunSnapshot(lease.runId, lease.loopId, store.buildLoopManifest(lease.loopId));
+      store.pruneRunSnapshots(lease.loopId, snapshotRetention());
     } catch (err) {
-      log.warn({ runId: slot.runId, err: err instanceof Error ? err.message : String(err) }, "finish: snapshot capture failed");
+      log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "finish: snapshot capture failed");
     }
     // Completion is a distinct terminal event — notify unless the user opted out
     // of all pushes (notify: "never"). Best-effort (void), like the report path.
     if (loop && loop.notify !== "never") {
       void this.notify(loop, completionMessage(reason, message));
     }
-    log.info({ runId: slot.runId, loopId: slot.loopId }, "finish: loop completed");
+    log.info({ runId: lease.runId, loopId: lease.loopId }, "finish: loop completed");
     return { ok: true, detail: "loop finished — goal met, loop completed" };
   }
 
@@ -1663,7 +1667,7 @@ export class MachineGateway {
 
   // ---- agent-api verb dispatch (compact port of control.ts) ----
 
-  private dispatch(slot: RunSlot, argv: string[]): { code: number; text: string } {
+  private dispatch(lease: RunLease, argv: string[]): { code: number; text: string } {
     const verb = argv[0];
     const flags = parseFlags(argv.slice(1));
     const str = (k: string) => (typeof flags[k] === "string" ? (flags[k] as string) : undefined);
@@ -1674,18 +1678,18 @@ export class MachineGateway {
       case "-h":
       case "--help":
       case "help":
-        return { code: 200, text: this.helpText(slot) };
+        return { code: 200, text: this.helpText(lease) };
       case "report": {
         const rawState = str("state") ?? str("state-content");
         let state: Record<string, number | string> | undefined;
         if (rawState !== undefined) {
-          const loop = store.getLoop(slot.loopId);
+          const loop = store.getLoop(lease.loopId);
           const v = validateState(rawState, loop?.stateSchema ?? undefined);
           if (!v.ok) return { code: 400, text: `loopany: ${v.error}` };
           state = v.value;
         }
         const status = str("status");
-        store.updateRun(slot.runId, {
+        store.updateRun(lease.runId, {
           ...(isStatus(status) ? { status } : {}),
           // Clipped to the same cap the report finalText fallback enforces.
           ...(str("message") !== undefined ? { message: str("message")!.slice(0, MESSAGE_CAP) } : {}),
@@ -1694,13 +1698,13 @@ export class MachineGateway {
         return { code: 200, text: "reported" };
       }
       case "show":
-        return { code: 200, text: this.describe(slot.loopId, slot.allowControl, slot.canFinish) };
+        return { code: 200, text: this.describe(lease.loopId, lease.allowControl, lease.canFinish) };
       case "finish":
       case "complete": {
-        if (!slot.canFinish) {
+        if (!lease.canFinish) {
           // canFinish is false both for OPEN loops (no goal) and for evolve/edit
           // runs — give the right message for each. The open-loop case is primary.
-          const loop = store.getLoop(slot.loopId);
+          const loop = store.getLoop(lease.loopId);
           if (!loop || loop.goal == null) {
             return { code: 403, text: "loopany: this loop has no goal to finish (it's an open/monitor loop)" };
           }
@@ -1710,46 +1714,46 @@ export class MachineGateway {
         const rawState = str("state") ?? str("state-content");
         let state: Record<string, number | string> | undefined;
         if (rawState !== undefined) {
-          const loop = store.getLoop(slot.loopId);
+          const loop = store.getLoop(lease.loopId);
           const v = validateState(rawState, loop?.stateSchema ?? undefined);
           if (!v.ok) return { code: 400, text: `loopany: ${v.error}` };
           state = v.value;
         }
         const message = str("message")?.slice(0, MESSAGE_CAP);
         const reason = str("reason")?.slice(0, MESSAGE_CAP) ?? null;
-        const r = this.finishLoop(slot, { message, reason, state });
+        const r = this.finishLoop(lease, { message, reason, state });
         return r.ok ? { code: 200, text: r.detail ?? "finished" } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
       }
       case "set-ui": {
-        if (!slot.canSetUi) return { code: 403, text: "loopany: only the evolution or edit pass may set the UI" };
+        if (!lease.canSetUi) return { code: 403, text: "loopany: only the evolution or edit pass may set the UI" };
         const html = str("body") ?? str("file-content");
         if (html === undefined) return { code: 400, text: "loopany: set-ui needs --file <path> (shim inlines it)" };
-        const r = this.applySetUi(slot.loopId, html);
-        this.audit(slot, "set-ui", { bytes: String(html.length) }, r);
+        const r = this.applySetUi(lease.loopId, html);
+        this.audit(lease, "set-ui", { bytes: String(html.length) }, r);
         return r.ok ? { code: 200, text: r.detail ?? "ui updated" } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
       }
       case "set-schema": {
-        if (!slot.canSetSchema) return { code: 403, text: "loopany: only the evolution or edit pass may set the schema" };
+        if (!lease.canSetSchema) return { code: 403, text: "loopany: only the evolution or edit pass may set the schema" };
         const json = str("body") ?? str("file-content");
         if (json === undefined) return { code: 400, text: "loopany: set-schema needs --file <path> (a JSON array of {key,label,unit})" };
-        const r = this.applySetSchema(slot.loopId, json);
-        this.audit(slot, "set-schema", { bytes: String(json.length) }, r);
+        const r = this.applySetSchema(lease.loopId, json);
+        this.audit(lease, "set-schema", { bytes: String(json.length) }, r);
         return r.ok ? { code: 200, text: r.detail ?? "schema updated" } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
       }
       case "set-workflow": {
-        if (!slot.canSetWorkflow) return { code: 403, text: "loopany: only the evolution or edit pass may set the workflow" };
+        if (!lease.canSetWorkflow) return { code: 403, text: "loopany: only the evolution or edit pass may set the workflow" };
         const body = str("body") ?? str("file-content");
         if (!body) return { code: 400, text: "loopany: set-workflow needs --file <path> (shim inlines it)" };
-        const r = this.applySetWorkflow(slot.loopId, body);
-        this.audit(slot, "set-workflow", { bytes: String(body.length) }, r);
+        const r = this.applySetWorkflow(lease.loopId, body);
+        this.audit(lease, "set-workflow", { bytes: String(body.length) }, r);
         return r.ok ? { code: 200, text: r.detail ?? "workflow updated" } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
       }
     }
 
     if (MUTATION_VERBS.has(verb ?? "")) {
-      if (!slot.allowControl) return { code: 403, text: "loopany: this loop may not change its own schedule (allowControl is off)" };
-      const r = this.applyMutation(slot.loopId, verb!, flags, str);
-      this.audit(slot, verb!, stringifyFlags(flags), r);
+      if (!lease.allowControl) return { code: 403, text: "loopany: this loop may not change its own schedule (allowControl is off)" };
+      const r = this.applyMutation(lease.loopId, verb!, flags, str);
+      this.audit(lease, verb!, stringifyFlags(flags), r);
       return r.ok ? { code: 200, text: r.detail ?? `${verb} applied` } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
     }
     return { code: 400, text: `loopany: unknown command "${verb ?? ""}" (try: loopany help)` };
@@ -1758,9 +1762,9 @@ export class MachineGateway {
   /** Usage for `loopany help` / `--help` / a bare invocation. Role-aware: marks
    *  the structural + control groups by whether THIS run may actually use them,
    *  so the agent doesn't waste a turn probing a verb it'll be 403'd on. */
-  private helpText(slot: RunSlot): string {
-    const structural = slot.canSetUi ? "available to this run" : `evolve/edit pass only — this run is "${slot.role}"`;
-    const control = slot.allowControl ? "available to this run" : "needs allowControl (off for this loop)";
+  private helpText(lease: RunLease): string {
+    const structural = lease.canSetUi ? "available to this run" : `evolve/edit pass only — this run is "${lease.role}"`;
+    const control = lease.allowControl ? "available to this run" : "needs allowControl (off for this loop)";
     return [
       "loopany — in-run agent CLI. Verbs:",
       "",
@@ -1768,7 +1772,7 @@ export class MachineGateway {
       "  report [--status new|resolved|nothing-new] [--message <s>] [--state '{\"k\":n}' | --state-file <p>]",
       "          record this run's outcome + metrics (keys must match the loop's schema)",
       "  show    print this loop's current config + recent state",
-      ...(slot.canFinish
+      ...(lease.canFinish
         ? ['  finish  --message "<achieved>" [--reason "<one line>"]  declare the goal met — completes this loop']
         : []),
       "",
@@ -1945,7 +1949,7 @@ export class MachineGateway {
   }
 
   // `allowControl` is the EFFECTIVE self-schedule capability of the run calling
-  // `show` (the run slot's `structural || loop.allowControl`), not just the loop
+  // `show` (the run lease's `structural || loop.allowControl`), not just the loop
   // flag — so an evolve/edit pass reads as allowed while a normal exec run reflects
   // the loop's flag. The standing exec prompt's §4 tells the run to consult this line
   // before attempting reschedule/set-cron. Undefined ⇒ omit the line (non-run callers).
@@ -1977,8 +1981,8 @@ export class MachineGateway {
     return lines.join("\n");
   }
 
-  private audit(slot: RunSlot, command: string, args: Record<string, string>, r: Applied): void {
-    const run = store.getRun(slot.runId);
+  private audit(lease: RunLease, command: string, args: Record<string, string>, r: Applied): void {
+    const run = store.getRun(lease.runId);
     const control: ControlAction[] = [
       ...((run?.control as ControlAction[] | null | undefined) ?? []),
       {
@@ -1989,7 +1993,7 @@ export class MachineGateway {
         detail: r.detail,
       },
     ];
-    store.updateRun(slot.runId, { control });
+    store.updateRun(lease.runId, { control });
   }
 }
 

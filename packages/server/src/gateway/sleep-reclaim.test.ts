@@ -86,7 +86,7 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   // Laptop slept mid-run: no heartbeat for 21 min, run was claimed 21 min ago.
   const { machineId, loop } = seedMachineLoop(21 * MIN);
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   // Sweep reclaims the stuck run and pushes the (soft) offline alert.
   gw.sweep();
@@ -95,8 +95,9 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   expect(swept.error).toBe("machine timed out / disconnected");
   expect(sent).toHaveLength(1);
   expect(sent[0]!.message).toMatch(/asleep|interrupted/i);
-  // The token was NOT revoked (kept alive for the wake-report) — it still resolves.
-  expect(tokens.resolveRunToken(rt)).toBeTruthy();
+  // The lease was NOT retired (terminalized to grace for the wake-report) — it still
+  // resolves, now in terminal-grace.
+  expect(tokens.resolveLease(rt)?.state).toBe("terminal-grace");
 
   // Laptop wakes: claude finished successfully, daemon reports late.
   const res = gw.report(rt, { ok: true, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42" });
@@ -111,8 +112,8 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   // A retraction push carried the real result.
   expect(sent).toHaveLength(2);
   expect(sent[1]!.message).toBe("opened PR #42");
-  // Single-shot: the token is now revoked — a second late report is rejected.
-  expect(tokens.resolveRunToken(rt)).toBeUndefined();
+  // Single-shot: the lease is now retired — a second late report is rejected.
+  expect(tokens.resolveLease(rt)).toBeUndefined();
   expect(gw.report(rt, { ok: true, finalText: "again" }).status).toBe(401);
 });
 
@@ -121,7 +122,7 @@ test("(a') a late FAILURE report records the real error honestly, without a seco
   const gw = gateway(fn);
   const { machineId, loop } = seedMachineLoop(21 * MIN);
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   gw.sweep();
   expect(sent).toHaveLength(1); // the reclaim alert
@@ -138,7 +139,7 @@ test("(a'') a successful late reconcile advances loop.state and mirrors the scal
   const gw = gateway(() => Promise.resolve());
   const { machineId, loop } = seedMachineLoop(21 * MIN);
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   gw.sweep();
   expect(store.getRun(run.id)!.phase).toBe("error");
@@ -156,7 +157,7 @@ test("(a''') a FAILED late reconcile does NOT advance loop.state (no reprocess/s
   const gw = gateway(() => Promise.resolve());
   const { machineId, loop } = seedMachineLoop(21 * MIN);
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   gw.sweep();
   const res = gw.report(rt, { ok: false, error: "workflow blew up", cursor: { processed: 7 } });
@@ -199,7 +200,7 @@ test("agent-api verbs are refused for a reclaimed run (only the final report rec
   const gw = gateway(() => Promise.resolve());
   const { machineId, loop } = seedMachineLoop(21 * MIN);
   const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
-  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   gw.sweep();
   const out = gw.agentApi(rt, ["reschedule", "1h"]);

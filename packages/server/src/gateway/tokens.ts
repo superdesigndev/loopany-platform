@@ -1,10 +1,12 @@
 /**
- * Machine + run token helpers. Device tokens identify a machine (its id is
- * derived from the token: `m-sha256(token)[:16]`, BYOA §2). Run tokens are
- * minted per delivery, bound to one run, held in-process, and revoked when the
- * run finishes — the agent-api authorizes the `loopany` shim against them.
+ * Machine + run credential helpers. Device tokens (`dk_…`) identify a machine
+ * (its id is derived from the token: `m-sha256(token)[:16]`, BYOA §2). A RUN
+ * LEASE (`rk_…`) is minted per delivery, bound to one run, held in-process, and
+ * carries the run's least-privilege caps — the CLI dispatch authorizes the
+ * `loopany` shim against it. Its lifecycle is a small state machine (`active` →
+ * `terminal-grace` → expired), not a mint→revoke pair; see `RunLease` below.
  */
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import type { CodingAgent, RunRole } from "../db/schema.js";
 
@@ -91,7 +93,10 @@ export function readClaimIntent(connectKey: string | null | undefined): ClaimInt
   return intent;
 }
 
-export interface RunSlot {
+/** The least-privilege capability set a run lease carries, minted at poll time
+ *  from the run's role + the loop's config (see gateway `poll`). Identical to the
+ *  fields the old `RunSlot` held — a lease is these caps PLUS a lifecycle state. */
+export interface RunLeaseCaps {
   runId: string;
   loopId: string;
   machineId: string;
@@ -104,70 +109,100 @@ export interface RunSlot {
    *  only for an EXEC run on a CLOSED loop (loop.goal != null) — independent of
    *  allowControl (like the structural caps). Evolve/edit runs never get it. */
   canFinish?: boolean;
-  /** Set (ms epoch) when the sweep reclaimed this run as a (false) failure while
-   *  the machine was unreachable (asleep/offline). The token is NOT revoked at
-   *  reclaim — it survives the reclaim grace window (`RECLAIM_GRACE_MS`) so exactly
-   *  ONE late wake-report can reconcile the run (see gateway `report()`). While a
-   *  slot is reclaimed, agent-api mutations are refused; only the final report is
-   *  honored, and it revokes the token single-shot. */
-  reclaimedAt?: number;
 }
 
-/** How long a sweep-reclaimed run's token stays alive to accept one late
- *  wake-report. Generous on purpose: a laptop can sleep overnight or across a
- *  weekend before the daemon resumes and delivers the run's real result. */
-export const RECLAIM_GRACE_MS = 24 * 60 * 60 * 1000;
+/**
+ * A run lease: the per-run credential's caps plus a tiny lifecycle state machine
+ * that replaces the old mint→revoke scatter (`revokeRunToken` /
+ * `revokeRunTokensForRun` / `markRunTokensReclaimed` / `pruneReclaimedRunTokens`).
+ *
+ *   active  ──[normal report / finish→enrich / canceled]──▶ retired (deleted)
+ *      │
+ *      └────[sweep reclaim]──▶ terminal-grace ──[one reconciling report]──▶ retired
+ *
+ * `terminal-grace` uniquely marks a SWEPT run (the machine went unreachable
+ * mid-run, so the sweep finalized a false failure but kept the lease alive). While
+ * terminal-grace, agent-api mutations are refused (409); ONLY the single
+ * reconciling wake-report is honored, and it retires the lease single-shot. A
+ * lease past `expiresAt` is dead — dropped lazily on the next `resolveLease` (so a
+ * lease that never gets its wake-report can't be reused) and swept by
+ * `pruneExpiredLeases`. `finish` deliberately leaves the lease ACTIVE for one
+ * enriching report (the run may still want `show`/a second finish → 400), so it is
+ * NOT a terminal-grace transition.
+ */
+export interface RunLease extends RunLeaseCaps {
+  state: "active" | "terminal-grace";
+  /** Absolute expiry (ms epoch). `Infinity` while active (a live run never times
+   *  out here — the server's inactivity sweep is the vanished-machine guard);
+   *  `now + TERMINAL_GRACE_MS` once terminalized. */
+  expiresAt: number;
+}
 
-const slots = new Map<string, RunSlot>();
+/** How long a terminal-grace lease stays alive to accept one late wake-report.
+ *  Generous on purpose: a laptop can sleep overnight or across a weekend before the
+ *  daemon resumes and delivers the run's real result. (Subsumes the former
+ *  `RECLAIM_GRACE_MS`.) */
+export const TERMINAL_GRACE_MS = 24 * 60 * 60 * 1000;
 
-export function registerRunToken(slot: RunSlot): string {
-  const token = randomUUID();
-  slots.set(token, slot);
+/** In-process lease table, keyed by the FULL wire token. Keying on the full string
+ *  means a bare-UUID run token minted by a PRE-Batch-6 server resolves identically
+ *  to an `rk_`-prefixed one — no prefix parsing, so back-compat over a deploy is
+ *  free (`resolveLease` just misses the `rk_` shape and reads the raw key). */
+const leases = new Map<string, RunLease>();
+
+/** Mint a fresh run lease and return its wire token (`rk_…`, so the unified CLI
+ *  dispatch can tell a run credential from a device `dk_…` in O(1) before any map
+ *  lookup). Starts `active` with no expiry. */
+export function registerRunLease(caps: RunLeaseCaps): string {
+  const token = `rk_${randomBytes(16).toString("hex")}`;
+  leases.set(token, { ...caps, state: "active", expiresAt: Number.POSITIVE_INFINITY });
   return token;
 }
 
-export function resolveRunToken(token: string): RunSlot | undefined {
-  const slot = slots.get(token);
-  if (!slot) return undefined;
-  // A reclaimed token is valid only within the grace window; past it, it's dead
-  // (lazy expiry so a token that never gets a wake-report can't be reused).
-  if (slot.reclaimedAt != null && Date.now() - slot.reclaimedAt > RECLAIM_GRACE_MS) {
-    slots.delete(token);
+/** Resolve a run lease by its wire token, lazily dropping it once past expiry.
+ *  Accepts both `rk_`-prefixed leases and bare-UUID tokens from a pre-Batch-6
+ *  mint (the map is keyed by the full token, so no prefix stripping is needed). */
+export function resolveLease(token: string, now: number = Date.now()): RunLease | undefined {
+  const lease = leases.get(token);
+  if (!lease) return undefined;
+  if (now > lease.expiresAt) {
+    leases.delete(token);
     return undefined;
   }
-  return slot;
+  return lease;
 }
 
-export function revokeRunToken(token: string): void {
-  slots.delete(token);
-}
-
-/** Revoke every run token minted for `runId`. The sweep finalizes stuck runs by
- *  id (it never held the token string), and a swept run's token must die with it
- *  or the orphaned agent keeps a valid agent-api credential indefinitely. The
- *  slots map holds one entry per in-flight run, so a scan is fine. */
-export function revokeRunTokensForRun(runId: string): void {
-  for (const [token, slot] of slots) {
-    if (slot.runId === runId) slots.delete(token);
+/** Terminalize the lease(s) for `runId`: flip `active` → `terminal-grace`, opening
+ *  the reconcile grace window (`TERMINAL_GRACE_MS`). This is the ONE transition the
+ *  sweep uses when it reclaims a stuck run as a false failure — the lease survives
+ *  so exactly ONE late wake-report can reconcile the run if the machine was merely
+ *  asleep (see gateway `report()`). Idempotent: only an `active` lease flips (a
+ *  re-terminalize keeps the first window), and it's a no-op for a run with no lease
+ *  (e.g. a still-pending run). */
+export function terminalizeLease(runId: string, now: number = Date.now()): void {
+  for (const lease of leases.values()) {
+    if (lease.runId === runId && lease.state === "active") {
+      lease.state = "terminal-grace";
+      lease.expiresAt = now + TERMINAL_GRACE_MS;
+    }
   }
 }
 
-/** Mark every run token for `runId` as reclaimed (instead of revoking it). The
- *  sweep finalized the run as a false failure while the machine was unreachable,
- *  but keeps the credential alive for the reclaim grace so one late wake-report can
- *  reconcile it if the machine was merely asleep. No-op for a run that never had a
- *  token minted (e.g. a still-pending run). */
-export function markRunTokensReclaimed(runId: string, at: number = Date.now()): void {
-  for (const slot of slots.values()) {
-    if (slot.runId === runId) slot.reclaimedAt = at;
-  }
+/** Retire a lease immediately (single-shot): the run's server-side lifecycle is
+ *  fully consumed — a normal final report, the enriching report after `finish`, the
+ *  one reconciling wake-report for a terminal-grace lease, or a canceled-run report.
+ *  Deleting is what keeps each of those single-shot (a second report 401s). */
+export function retireLease(token: string): void {
+  leases.delete(token);
 }
 
-/** Drop reclaimed run tokens whose grace window has elapsed — bounded memory, so a
- *  token never reported against doesn't linger forever. Called from the sweep. */
-export function pruneReclaimedRunTokens(now: number = Date.now()): void {
-  for (const [token, slot] of slots) {
-    if (slot.reclaimedAt != null && now - slot.reclaimedAt > RECLAIM_GRACE_MS) slots.delete(token);
+/** Drop leases whose window has elapsed — bounded memory, so a terminal-grace lease
+ *  that never gets its wake-report doesn't linger forever. Called from the sweep.
+ *  (`active` leases have `Infinity` expiry and are never pruned here; a vanished
+ *  machine's run is reclaimed by the inactivity sweep, which terminalizes it.) */
+export function pruneExpiredLeases(now: number = Date.now()): void {
+  for (const [token, lease] of leases) {
+    if (now > lease.expiresAt) leases.delete(token);
   }
 }
 
