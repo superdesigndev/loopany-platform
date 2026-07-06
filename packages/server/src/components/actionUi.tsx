@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { buildResumeCommand } from '../lib/resumeCommand'
 import { btn, btnDanger, btnPrimary } from './ui'
 
 /**
@@ -81,6 +82,98 @@ export function ConfirmBar({
       </div>
     </div>
   )
+}
+
+/** The claude-code pixel-terminal mark (LobeHub icon set), in the Claude brand
+ *  orange. Decorative (aria-hidden): the button text stays the accessible name,
+ *  keeping generic copy agent-neutral while the LOGO is factual — the session
+ *  being resumed is always a claude one today. Swap per-agent when codex
+ *  execution ships. */
+function ClaudeCodeMark({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      aria-hidden
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="#D97757"
+      fillRule="evenodd"
+      className="shrink-0"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        clipRule="evenodd"
+        d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z"
+      />
+    </svg>
+  )
+}
+
+/**
+ * "Continue agent session" copy affordance (run page + loop page) — copies a
+ * ready-to-paste terminal command (`cd '<loop dir>' && claude --resume <id>`)
+ * that reopens the run's coding-agent session on the owner's machine. BYOA: the
+ * session lives there, so copy-a-command is the whole feature.
+ *
+ * A hook returning TWO pieces, because the paste-it-here instruction must NOT
+ * be the button's flex sibling: these toolbars are flex-wrap rows, and an
+ * injected full-width line reflows the buttons after it (a real bug: the ⋯ menu
+ * got pushed to its own line). The caller places `button` IN the row and `hint`
+ * BELOW the row. `sessionId: null` ⇒ both render null, so callers can invoke
+ * the hook unconditionally (hooks can't be conditional) while data loads.
+ * Prose stays agent-neutral; the literal `claude` binary in the copied command
+ * is factual (execution is always Claude today).
+ */
+export function useContinueSession({
+  sessionId,
+  dir,
+  machineName,
+  label,
+}: {
+  sessionId: string | null
+  dir?: string | null
+  machineName?: string | null
+  label: string
+}): { button: React.ReactNode; hint: React.ReactNode } {
+  const [copied, setCopied] = useState(false)
+  const [copyErr, setCopyErr] = useState(false)
+  if (!sessionId) return { button: null, hint: null }
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(buildResumeCommand({ sessionId, dir }))
+      setCopyErr(false)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 4000)
+    } catch {
+      setCopyErr(true)
+    }
+  }
+  const onMachine = machineName ? `“${machineName}”` : 'the bound machine'
+  const button = (
+    <button
+      type="button"
+      className={btn}
+      title={`Copies a terminal command that resumes this coding-agent session on ${onMachine}`}
+      onClick={() => void onCopy()}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <ClaudeCodeMark />
+        {copied ? '✓ Command copied' : label}
+      </span>
+    </button>
+  )
+  const hint = (copied || copyErr) && (
+    <div role="status" aria-live="polite" className="mt-2 text-caption leading-snug text-secondary">
+      {copyErr ? (
+        <span className="text-accent">Could not copy the command - try again or copy it manually.</span>
+      ) : (
+        <>
+          ✓ Copied · paste it in a terminal on {onMachine} to continue the agent conversation for this loop.
+        </>
+      )}
+    </div>
+  )
+  return { button, hint }
 }
 
 /**

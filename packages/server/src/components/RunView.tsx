@@ -2,12 +2,13 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import type { ArtifactSummary, JobDetail, RunDiffResult, RunSummary, TranscriptResult } from '../types'
 import { dur, fmt } from '../lib/format'
+import { loopDir } from '../lib/editPrompt'
 import { cancelRun, getArtifacts, getJobDetail, getRunDiff, getTranscript, loadOlderRuns } from '../server/loopApi'
 import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
 import { DiffView } from './DiffView'
 import { TranscriptView } from './TranscriptView'
 import { btn, btnDanger, Loading, Pill, sectionHeadCls, StatusPill } from './ui'
-import { LoadErrorCard } from './actionUi'
+import { LoadErrorCard, useContinueSession } from './actionUi'
 
 /** A section card - mirrors the loop page's surface panels with a sentence-case
  *  section heading. `min-w-0` so wide inner content (a diff / transcript line)
@@ -279,6 +280,15 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
     return () => clearInterval(t)
   }, [running, poll])
 
+  // Unconditional hook call (null sessionId while loading ⇒ renders nothing);
+  // must sit above the early-return guards below.
+  const continueSession = useContinueSession({
+    sessionId: run?.sessionId ?? null,
+    dir: detail ? detail.job.exec?.workdir || loopDir(detail.job.taskFile) : null,
+    machineName: detail?.machine.name || null,
+    label: 'Continue agent session',
+  })
+
   async function onStop() {
     if (!run) return
     if (!confirm('Stop this run? It will be marked canceled.')) return
@@ -334,12 +344,15 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
           <Link to="/loops/$loopId" params={{ loopId }} className={btn}>
             View the whole loop →
           </Link>
+          {continueSession.button}
           {run.running && (
             <button type="button" onClick={onStop} className={btnDanger}>
               Stop run
             </button>
           )}
         </div>
+        {/* paste-it-here instruction — BELOW the toolbar row, never a flex sibling */}
+        {continueSession.hint}
       </header>
 
       {/* two-column main: meaty content wide, metadata in a capped rail */}

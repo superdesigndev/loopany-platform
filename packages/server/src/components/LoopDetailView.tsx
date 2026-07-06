@@ -12,7 +12,7 @@ import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { MachinesModal } from './MachinesModal'
 import { Timeline, WINDOW } from './Timeline'
 import { ArtifactList, btn, btnCost, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, Pre, runPulseStyle, sectionHeadCls } from './ui'
-import { ConfirmBar, FlashLine, LoadErrorCard, useDeferredDelete, useFlash } from './actionUi'
+import { ConfirmBar, FlashLine, LoadErrorCard, useContinueSession, useDeferredDelete, useFlash } from './actionUi'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
 
@@ -238,6 +238,16 @@ export function LoopDetailView({ id }: { id: string }) {
     </Link>
   )
 
+  // Latest resumable coding-agent session (runs are newest-first; any role — an
+  // edit/evolve session is just as continuable as an exec one). Unconditional
+  // hook call (null while loading ⇒ renders nothing); must sit above the guards.
+  const continueSession = useContinueSession({
+    sessionId: detail?.runs.find((r) => r.sessionId)?.sessionId ?? null,
+    dir: detail ? detail.job.exec?.workdir || loopDir(detail.job.taskFile) : null,
+    machineName: detail?.machine.name || null,
+    label: 'Continue agent session',
+  })
+
   if (err)
     return (
       <Shell back={backLink}>
@@ -443,6 +453,7 @@ export function LoopDetailView({ id }: { id: string }) {
       </div>
     </div>
   ) : (
+    <>
     <div className="flex flex-wrap items-center gap-2">
       <button
         className={btnPrimary}
@@ -461,6 +472,7 @@ export function LoopDetailView({ id }: { id: string }) {
       >
         Edit
       </button>
+      {continueSession.button}
       <Menu.Root>
         <Menu.Trigger className={`${btn} px-2.5`} disabled={busy} aria-label="More actions">
           <svg aria-hidden width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -492,6 +504,9 @@ export function LoopDetailView({ id }: { id: string }) {
         </Menu.Portal>
       </Menu.Root>
     </div>
+    {/* paste-it-here instruction — BELOW the toolbar row, never a flex sibling */}
+    {continueSession.hint}
+    </>
   )
 
   const actionErrEl = actionErr && <ErrorBanner message={actionErr} onDismiss={() => setActionErr(null)} className="mb-2.5" />
