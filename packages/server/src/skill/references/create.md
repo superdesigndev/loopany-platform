@@ -136,6 +136,14 @@ A workflow **IS** a plain **JavaScript statement sequence** that Loopany runs
 *inside* an async function — so top-level `await` is fine and you end with
 `return { message?, state? }`. The injected globals `prev`, `agent(message?, data?)`,
 `tools.call(name, args)`, and `fetch` are already in scope — use them directly.
+It runs **locally on the loop's machine** as a bare `node` subprocess (isolation =
+subprocess + timeout + allowlisted env, not a capability sandbox): every node builtin
+works via dynamic `await import(...)`, so a script may read a local credential file at
+runtime and call an authenticated API with plain `fetch` — an MCP server is one way to
+reach an external tool, never the only one. One hard rule: **never embed a secret
+literal in the body** — it is stored server-side; credentials belong on the machine
+(a local file read at runtime, or `LOOPANY_WORKFLOW_ENV` passthrough), never in the
+script text.
 
 A workflow is **NOT an ES module** and **not the Claude Code `Workflow` tool**. Do
 **not** start it with `export const meta = {…}`; any top-level `export`/`import` is a
