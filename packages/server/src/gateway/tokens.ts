@@ -104,7 +104,19 @@ export interface RunSlot {
    *  only for an EXEC run on a CLOSED loop (loop.goal != null) — independent of
    *  allowControl (like the structural caps). Evolve/edit runs never get it. */
   canFinish?: boolean;
+  /** Set (ms epoch) when the sweep reclaimed this run as a (false) failure while
+   *  the machine was unreachable (asleep/offline). The token is NOT revoked at
+   *  reclaim — it survives the reclaim grace window (`RECLAIM_GRACE_MS`) so exactly
+   *  ONE late wake-report can reconcile the run (see gateway `report()`). While a
+   *  slot is reclaimed, agent-api mutations are refused; only the final report is
+   *  honored, and it revokes the token single-shot. */
+  reclaimedAt?: number;
 }
+
+/** How long a sweep-reclaimed run's token stays alive to accept one late
+ *  wake-report. Generous on purpose: a laptop can sleep overnight or across a
+ *  weekend before the daemon resumes and delivers the run's real result. */
+export const RECLAIM_GRACE_MS = 24 * 60 * 60 * 1000;
 
 const slots = new Map<string, RunSlot>();
 
@@ -115,7 +127,15 @@ export function registerRunToken(slot: RunSlot): string {
 }
 
 export function resolveRunToken(token: string): RunSlot | undefined {
-  return slots.get(token);
+  const slot = slots.get(token);
+  if (!slot) return undefined;
+  // A reclaimed token is valid only within the grace window; past it, it's dead
+  // (lazy expiry so a token that never gets a wake-report can't be reused).
+  if (slot.reclaimedAt != null && Date.now() - slot.reclaimedAt > RECLAIM_GRACE_MS) {
+    slots.delete(token);
+    return undefined;
+  }
+  return slot;
 }
 
 export function revokeRunToken(token: string): void {
@@ -129,6 +149,25 @@ export function revokeRunToken(token: string): void {
 export function revokeRunTokensForRun(runId: string): void {
   for (const [token, slot] of slots) {
     if (slot.runId === runId) slots.delete(token);
+  }
+}
+
+/** Mark every run token for `runId` as reclaimed (instead of revoking it). The
+ *  sweep finalized the run as a false failure while the machine was unreachable,
+ *  but keeps the credential alive for the reclaim grace so one late wake-report can
+ *  reconcile it if the machine was merely asleep. No-op for a run that never had a
+ *  token minted (e.g. a still-pending run). */
+export function markRunTokensReclaimed(runId: string, at: number = Date.now()): void {
+  for (const slot of slots.values()) {
+    if (slot.runId === runId) slot.reclaimedAt = at;
+  }
+}
+
+/** Drop reclaimed run tokens whose grace window has elapsed — bounded memory, so a
+ *  token never reported against doesn't linger forever. Called from the sweep. */
+export function pruneReclaimedRunTokens(now: number = Date.now()): void {
+  for (const [token, slot] of slots) {
+    if (slot.reclaimedAt != null && now - slot.reclaimedAt > RECLAIM_GRACE_MS) slots.delete(token);
   }
 }
 

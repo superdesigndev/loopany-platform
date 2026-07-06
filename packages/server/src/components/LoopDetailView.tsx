@@ -3,7 +3,7 @@ import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../types'
 import { buildEditPrompt, loopDir } from '../lib/editPrompt'
-import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, money, tsShort, until } from '../lib/format'
+import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, money, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
@@ -266,7 +266,14 @@ export function LoopDetailView({ id }: { id: string }) {
   const busy = !!pending
   const showEvolve = true
   const online = detail.machine.online
-  const offlineHint = !online ? 'Machine offline - reconnect first' : undefined
+  // A machine recently seen but not currently polling is likely just ASLEEP (calm),
+  // vs one gone long enough to read as genuinely offline. Both still can't run.
+  const asleep = detail.machine.presence === 'asleep'
+  const offlineHint = !online
+    ? asleep
+      ? 'Machine asleep - it must be awake to run'
+      : 'Machine offline - reconnect first'
+    : undefined
   const completed = isCompleted(s)
   // A closed loop still working toward its goal (not yet completed).
   const closedActive = isClosed(s) && !completed
@@ -527,10 +534,14 @@ export function LoopDetailView({ id }: { id: string }) {
   const offlineEl = !online && (
     <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border border-hairline bg-raised px-4 py-2.5">
       <span className="inline-flex items-center gap-2 text-meta font-medium text-secondary">
-        <span aria-hidden className="size-2 rounded-full bg-disabled" />
-        Machine {detail.machine.name ? `“${detail.machine.name}” ` : ''}offline
+        <span aria-hidden className={`size-2 rounded-full ${asleep ? 'bg-rubik-yellow' : 'bg-disabled'}`} />
+        Machine {detail.machine.name ? `“${detail.machine.name}” ` : ''}
+        {asleep ? 'seems to be asleep or offline' : 'offline'}
       </span>
-      <span className="text-meta text-secondary">- run &amp; evolve are paused until it reconnects.</span>
+      <span className="text-meta text-secondary">
+        {asleep ? '- runs resume automatically when it reconnects.' : '- run & evolve are paused until it reconnects.'}
+        {detail.machine.lastSeen ? ` Last seen ${rel(detail.machine.lastSeen)}.` : ''}
+      </span>
       <button
         type="button"
         onClick={() => setMachinesOpen(true)}
@@ -609,8 +620,8 @@ export function LoopDetailView({ id }: { id: string }) {
               <span>next {fmt(s.nextRun)}</span>
               {s.nextRun && s.enabled && !completed && <span className="text-disabled">({until(s.nextRun)})</span>}
               {metaDot}
-              <span className="inline-flex items-center gap-1.5" title={online ? 'Machine online' : 'Machine offline'}>
-                <span className={`size-1.5 rounded-full ${online ? 'bg-rubik-green' : 'bg-disabled'}`} />
+              <span className="inline-flex items-center gap-1.5" title={online ? 'Machine online' : asleep ? 'Machine asleep' : 'Machine offline'}>
+                <span className={`size-1.5 rounded-full ${online ? 'bg-rubik-green' : asleep ? 'bg-rubik-yellow' : 'bg-disabled'}`} />
                 {detail.machine.name || 'machine'}
               </span>
               {metaDot}

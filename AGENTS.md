@@ -242,8 +242,31 @@ computes pure functions. Run instructions: `README.md`.
 - Exec timeout is OPT-IN (`LOOPANY_EXEC_TIMEOUT_MS`; default unlimited). The guard
   against a vanished machine is the SERVER's inactivity-based sweep: poll writes a
   freshness stamp into run progress; a run is reclaimed only after `RUN_TIMEOUT_MS`
-  of silence. Swept runs get their tokens revoked. A canceled run's late `report()`
+  of silence. A canceled run's late `report()`
   is ignored BEFORE any loop-level write (never advances cursor/taskFileContent).
+- **Sweep-reclaimed runs are NOT token-revoked immediately** - the usual cause is a
+  laptop that merely fell ASLEEP mid-run, and on wake the daemon delivers the real
+  (often successful) result. `reclaimRun` (`gateway/index.ts`) MARKS the run's tokens
+  reclaimed (`markRunTokensReclaimed`) instead; they survive `RECLAIM_GRACE_MS`
+  (24h, `tokens.ts`) so `report()`'s `phase==="error" && slot.reclaimedAt` branch
+  honors exactly ONE late wake-report: a success flips the run back to `done` (clears
+  the false error, records message/artifacts, retracts via the normal success push;
+  the failure streak self-corrects since it's derived from persisted rows), a real
+  failure replaces the generic reclaim reason (no second push). Single-shot (token
+  revoked after). While reclaimed, `agentApi` refuses mutations with 409 (only the
+  final report reconciles). The daemon's `runner.ts` `report()` logs a clear line on a
+  401 (already reclaimed) instead of silently dropping it. A pending run has no token
+  yet, so its reclaim (`machine offline`) is unchanged. Sweep also prunes
+  grace-expired reclaimed tokens (`pruneReclaimedRunTokens`).
+- **Machine presence is THREE-state** (`lib/machinePresence.ts`, shared by server
+  `adapters.toJobDetail` + client `MachinesModal`): `online` (polled < 30s),
+  `asleep` (seen < `MACHINE_ASLEEP_TTL_MS` = 6h — calm, "resumes automatically"),
+  else `offline`. `JobDetail.machine` carries `{online, presence, lastSeen}`; `online`
+  still gates run/evolve (a sleeping machine can't execute). The failure push copy
+  (`notify.ts` `failureMessage`) is de-alarmed and names sleep as the likely cause,
+  distinguishing an interrupted running run from a skipped scheduled one (no more
+  "📵 appears offline"). Banner/string edits in `LoopDetailView`: entities in JS
+  STRING literals are not decoded — write `&`, not `&amp;` (only JSX text decodes).
 - Failure alerting: notifications fire on failure too (`report()` !ok + sweep
   reclaim). Anti-spam streak derives from persisted run rows (exact, deploy-safe):
   notify at streak 1, then every 5th; a success resets. Only exec failures notify;

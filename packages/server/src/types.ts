@@ -10,6 +10,9 @@ export type Json = string | number | boolean | null | { [k: string]: Json } | Js
 /** The indexed front-matter subset of a loop product (all fields optional). See
  *  `server/frontmatter.ts` for the parsing convention. */
 export type { ArtifactMeta } from './server/frontmatter'
+
+import type { MachinePresence } from './lib/machinePresence'
+export type { MachinePresence } from './lib/machinePresence'
 import type { ArtifactMeta } from './server/frontmatter'
 
 /** The coding agent a loop is bound to / recorded as its host. Recording-only:
@@ -185,8 +188,11 @@ export interface JobDetail {
   taskFileContent: string | null
   /** When taskFileContent was last synced from the machine (ISO); null ⇒ never. */
   taskFileSyncedAt: string | null
-  /** The loop's execution machine + its live online state — gates run/evolve. */
-  machine: { id: string; name: string; online: boolean }
+  /** The loop's execution machine + its live presence. `online` gates run/evolve
+   *  (a sleeping/offline machine can't execute); `presence` distinguishes a calm
+   *  "asleep" (recently seen, likely just idle) from a hard "offline", and
+   *  `lastSeen` (ISO) feeds the "last seen 3m ago" hint. */
+  machine: { id: string; name: string; online: boolean; presence: MachinePresence; lastSeen: string | null }
   runs: RunSummary[]
 }
 

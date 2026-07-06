@@ -35,6 +35,8 @@ import {
   resolveRunToken,
   revokeRunToken,
   revokeRunTokensForRun,
+  markRunTokensReclaimed,
+  pruneReclaimedRunTokens,
   fulfillClaim,
   readClaim,
   sha256,
@@ -260,15 +262,28 @@ export class MachineGateway {
         }
       }
     }
+    // Drop reclaimed run tokens whose wake-report grace has elapsed (bounded memory).
+    pruneReclaimedRunTokens(now);
   }
 
   /** Finalize one stuck run as an error (the sweep's reclaim path): persist the
-   *  failure, revoke any run token minted for it (a swept run's orphaned agent
-   *  must not keep a live agent-api credential), clear an evolve marker, and
-   *  surface the failure through the anti-spam'd notify path. */
+   *  failure, MARK any run token for it reclaimed (rather than revoking it
+   *  outright), clear an evolve marker, and surface the failure through the anti-
+   *  spam'd notify path.
+   *
+   *  Why mark, not revoke: the usual cause is a laptop that merely fell ASLEEP
+   *  mid-run. When it wakes, claude finishes and the daemon delivers the real
+   *  (often SUCCESSFUL) result. Revoking the token here would 401 that late
+   *  report and strand the run as a permanent false failure with its message
+   *  lost (the investigated bug). So the token survives a bounded grace window
+   *  (`RECLAIM_GRACE_MS`) during which exactly ONE late wake-report may reconcile
+   *  the run — see `report()`'s reclaimed branch. The credential is still bounded:
+   *  agent-api mutations are refused while reclaimed, and the reconciliation
+   *  revokes the token single-shot. A pending run (no token minted yet) is
+   *  unaffected — the mark is a no-op there. */
   private reclaimRun(run: Run, reason: string): void {
     store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
-    revokeRunTokensForRun(run.id);
+    markRunTokensReclaimed(run.id);
     if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
     this.notifyRunFailure(run.loopId, run.role, reason);
   }
@@ -877,6 +892,15 @@ export class MachineGateway {
   agentApi(runToken: string, argv: string[]): HttpResult {
     const slot = resolveRunToken(runToken);
     if (!slot) return { status: 401, body: { text: "loopany: invalid or expired token", exitCode: 1 } };
+    // The run was already reclaimed by the server (the machine was likely asleep).
+    // Its token lives on only to accept ONE reconciling wake-report via
+    // /machine/report — never further agent-api mutations (reschedule/set-*/finish).
+    if (slot.reclaimedAt != null) {
+      return {
+        status: 409,
+        body: { text: "loopany: this run was reclaimed by the server (the machine was likely asleep); its result is delivered via the final report", exitCode: 1 },
+      };
+    }
     const out = this.dispatch(slot, argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
   }
@@ -954,6 +978,87 @@ export class MachineGateway {
       revokeRunToken(runToken);
       log.info({ runId: slot.runId }, "report: enriched a finished run (durationMs/sessionId)");
       return { status: 200, body: { ok: true } };
+    }
+
+    // ── Late wake-report for a sweep-RECLAIMED run ─────────────────────────────
+    // The machine went unreachable (asleep/offline) mid-run, so the sweep reclaimed
+    // this run as a false `error` and pushed a machine-offline alert — but kept the
+    // token alive (reclaimed) for the grace window instead of revoking it. The
+    // daemon has now resumed and delivered the run's REAL result. Honor exactly ONE
+    // such late report to correct the record, then revoke the token single-shot
+    // (like the finish→enrich handshake). Recognized by the slot's `reclaimedAt`
+    // stamp — set ONLY by `reclaimRun` for the three machine-availability reasons.
+    if (run?.phase === "error" && slot.reclaimedAt != null) {
+      const artifacts = coerceArtifacts(body.artifacts);
+      const transcript = coerceTranscript(body.transcript);
+      const rawMessage = body.message !== undefined ? body.message : body.finalText;
+      const message = typeof rawMessage === "string" ? rawMessage.slice(0, MESSAGE_CAP) : undefined;
+      const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
+      // Only a SUCCESSFUL reconcile carries the workflow cursor forward — same as
+      // the normal path, a failed run must never advance loop.state (the next run's
+      // `prev` would bind data whose output the user never saw). Bounded by
+      // CURSOR_CAP; an over-cap cursor is dropped, the run still reconciles.
+      let cursor = ok ? body.cursor : undefined;
+      if (cursor !== undefined) {
+        const serialized = JSON.stringify(cursor);
+        if ((serialized?.length ?? 0) > CURSOR_CAP) {
+          log.warn({ runId: slot.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
+          cursor = undefined;
+        }
+      }
+      if (typeof body.taskFileContent === "string") {
+        store.updateLoop(slot.loopId, {
+          taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
+          taskFileSyncedAt: nowIso(),
+        });
+      }
+      if (cursor !== undefined) store.updateLoop(slot.loopId, { state: cursor });
+      // Mirror the workflow's scalar cursor onto THIS run for {{latest.*}} / the
+      // trend chart — don't clobber a state the run already reported.
+      const runState = ok && !run.state ? scalarState(cursor) : undefined;
+      const finalized = store.updateRun(slot.runId, {
+        phase: ok ? "done" : "error",
+        outcome: ok ? claimedOutcome ?? (slot.role === "evolve" ? "evolve" : "exec") : "error",
+        ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
+        ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
+        ...(artifacts ? { artifacts } : {}),
+        ...(transcript ? { transcript } : {}),
+        ...(runState ? { state: runState } : {}),
+        ...(message !== undefined ? { message } : {}),
+        // Success clears the generic reclaim reason; a genuine late failure REPLACES
+        // it with the real error (honest record), keeping the run an error.
+        ...(ok
+          ? { error: null }
+          : { error: typeof body.error === "string" ? body.error.slice(0, MESSAGE_CAP) : run.error }),
+        progress: null,
+        ts: nowIso(),
+      });
+      // Single-shot: no second late report may re-flip this run.
+      revokeRunToken(runToken);
+      // Re-capture the end-state snapshot (best-effort), same as the normal path.
+      try {
+        store.putRunSnapshot(slot.runId, slot.loopId, store.buildLoopManifest(slot.loopId));
+        store.pruneRunSnapshots(slot.loopId, snapshotRetention());
+      } catch (err) {
+        log.warn({ runId: slot.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
+      }
+      if (ok && slot.role !== "evolve" && slot.role !== "edit") {
+        // The failure alert was WRONG — the run actually succeeded. Flipping the row
+        // to `done` already corrects the failure streak (it's derived from persisted
+        // rows), so a later tick won't count this. Retract by pushing the real result
+        // (a cheap, honest correction), gated by the loop's normal notify policy.
+        const loop = store.getLoop(slot.loopId);
+        if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
+          void this.notify(loop, finalized.message);
+        }
+      }
+      // A genuine late FAILURE is recorded honestly but does NOT re-notify: the
+      // reclaim already alerted the user once for this run.
+      log.info(
+        { runId: slot.runId, ok, reclaimed: true },
+        ok ? "report: reconciled a reclaimed run to done (machine woke)" : "report: recorded a reclaimed run's real error",
+      );
+      return { status: 200, body: { ok: true, reconciled: true } };
     }
 
     // Persist the workflow cursor (free-form), if any — bounded by serialized size

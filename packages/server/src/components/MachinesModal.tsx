@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Modal, ModalHead, ModalSection } from './Modal'
 import { btn, btnDanger, btnPrimary, ErrorBanner, inputCls, labelCls } from './ui'
 import { rel } from '../lib/format'
+import { machinePresence } from '../lib/machinePresence'
 import {
   listMachines,
   createMachine,
@@ -202,17 +203,30 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
       {delErr && <ErrorBanner message={delErr} onDismiss={() => setDelErr(null)} />}
       {machines.length === 0 && <div className="py-3 text-body text-secondary">No machines yet.</div>}
       <ul className="flex flex-col gap-2">
-        {machines.map((m) => (
+        {machines.map((m) => {
+          // Three-state presence: a recently-seen-but-not-polling machine is likely
+          // just ASLEEP (calm yellow) rather than genuinely offline (grey).
+          const presence = machinePresence(m.online, m.lastSeen)
+          const dotCls = presence === 'online' ? 'bg-rubik-green' : presence === 'asleep' ? 'bg-rubik-yellow' : 'bg-disabled'
+          const stateText =
+            presence === 'online'
+              ? 'online'
+              : presence === 'asleep'
+                ? `asleep${m.lastSeen ? ` · seen ${rel(m.lastSeen)}` : ''}`
+                : m.lastSeen
+                  ? `offline · seen ${rel(m.lastSeen)}`
+                  : 'offline'
+          return (
           <li key={m.id} className="flex flex-col gap-2 rounded-control border border-hairline bg-surface px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <span
-                  className={`inline-block h-2 w-2 rounded-full ${m.online ? 'bg-rubik-green' : 'bg-disabled'}`}
-                  title={m.online ? 'online' : 'offline'}
+                  className={`inline-block h-2 w-2 rounded-full ${dotCls}`}
+                  title={presence}
                 />
                 <span className="text-[15px] font-medium text-display">{m.name}</span>
                 <span className="text-label text-secondary">
-                  {m.online ? 'online' : m.lastSeen ? `seen ${rel(m.lastSeen)}` : 'offline'}
+                  {stateText}
                   {m.platform ? ` · ${m.platform} ${m.arch ?? ''}` : ''}
                   {m.loopCount > 0 ? ` · ${m.loopCount} loop${m.loopCount === 1 ? '' : 's'}` : ''}
                 </span>
@@ -261,7 +275,8 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
               </div>
             )}
           </li>
-        ))}
+          )
+        })}
       </ul>
 
       <div className="mt-6">

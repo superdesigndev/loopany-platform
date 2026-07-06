@@ -9,10 +9,9 @@ import * as store from "../db/store.js";
 import type { ArtifactFileWithMeta } from "../db/store.js";
 import type { Loop, Run } from "../db/schema.js";
 import type { ArtifactSummary, JobDetail, JobFull, JobSummary, RunSummary } from "../types.js";
+import { machinePresence } from "../lib/machinePresence.js";
 
 const SUMMARY_RUNS = 18;
-/** Mirrors gateway's ONLINE_TTL_MS — a machine is "online" only if it polled recently. */
-const MACHINE_ONLINE_TTL_MS = 30_000;
 
 function nextRun(loop: Loop): string | null {
   if (loop.nextRunAt) return loop.nextRunAt;
@@ -120,14 +119,15 @@ function toJobFull(loop: Loop): JobFull {
 export function toJobDetail(loop: Loop): JobDetail {
   const fullRuns = store.listRuns(loop.id, 100).map(toRunSummary).reverse(); // newest first
   const m = store.getMachine(loop.machineId);
-  const online =
-    !!m?.online && !!m.lastSeen && Date.now() - Date.parse(m.lastSeen) < MACHINE_ONLINE_TTL_MS;
+  const presence = machinePresence(m?.online, m?.lastSeen);
   return {
     job: toJobFull(loop),
     summary: toJobSummary(loop),
     taskFileContent: loop.taskFileContent ?? null, // synced from the machine on each run report
     taskFileSyncedAt: loop.taskFileSyncedAt ?? null,
-    machine: { id: loop.machineId, name: m?.name || "", online },
+    // `online` gates run/evolve (only a live daemon can execute); `presence`
+    // drives the calm asleep-vs-offline dashboard copy.
+    machine: { id: loop.machineId, name: m?.name || "", online: presence === "online", presence, lastSeen: m?.lastSeen ?? null },
     runs: fullRuns,
   };
 }

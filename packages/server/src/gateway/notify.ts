@@ -70,14 +70,26 @@ export function shouldNotifyFailure(notify: NotifyPolicy, streak: number): boole
 
 /**
  * Build the user-facing failure message from a run's recorded `error`. Machine-
- * availability reasons ("machine offline", "run never claimed", "machine timed
- * out / disconnected") get a distinct, actionable phrasing (reconnect your
- * machine); anything else reads as a plain run failure with the reason appended.
+ * availability reasons are usually just a laptop that fell ASLEEP (or briefly
+ * dropped offline) and comes back on its own — so they get a calm, de-alarmed
+ * phrasing that names sleep as the likely cause and reassures that the loop
+ * resumes automatically, rather than reading like a scary failure. The two
+ * shapes are distinguished: a RUNNING run that was interrupted mid-flight
+ * ("timed out / disconnected") vs a scheduled run that couldn't start
+ * ("machine offline" / "run never claimed"). Anything else reads as a plain run
+ * failure with the reason appended.
  */
 export function failureMessage(reason?: string | null): string {
   const r = (reason ?? "").trim();
-  if (/offline|disconnect|never claimed/i.test(r)) {
-    return "📵 Your machine appears offline — the scheduled run was skipped. Reconnect it to resume this loop.";
+  // A running run interrupted mid-flight when the machine went to sleep/offline.
+  // Match only the SERVER's reclaim reason ("machine timed out / disconnected"),
+  // never the daemon's local exec-timeout failure "claude timed out (Ns)".
+  if (/machine timed out|disconnect/i.test(r)) {
+    return "⏸ Your machine went to sleep or offline while a run was in progress, so it was interrupted. It resumes automatically when the machine is back.";
+  }
+  // A scheduled run that couldn't start because the machine was asleep/offline.
+  if (/offline|never claimed/i.test(r)) {
+    return "⏸ Your machine was asleep or offline when this run was due, so it was skipped. It resumes automatically when the machine is back.";
   }
   return r ? `⚠️ Run failed — ${r}` : "⚠️ Run failed.";
 }
