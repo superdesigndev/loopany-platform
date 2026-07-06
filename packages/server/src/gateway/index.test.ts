@@ -2397,22 +2397,38 @@ test("cli loops --fields: a default column requested as an extra is rejected (on
 test("cli new: an idempotent replay with the same key returns the SAME loop (never a twin)", () => {
   const { deviceToken, machineId } = seededCli();
   const gw = gateway();
-  const cfg = JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md", idempotencyKey: "key-abc" });
+  const cfg = JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md", ui: "<div id='dash'>hi</div>", idempotencyKey: "key-abc" });
   const before = store.loopsForMachine(machineId).length;
   const first = gw.cli(deviceToken, ["new", "--json", cfg]);
   expect(first.status).toBe(200);
-  const firstBody = first.body as { id: string; idempotent?: boolean };
+  const firstBody = first.body as { id: string; idempotent?: boolean; ui?: boolean };
   expect(firstBody.idempotent).toBeUndefined(); // a genuine first create
+  expect(firstBody.ui).toBe(true); // a dashboard was applied on the real create
   expect(store.loopsForMachine(machineId).length).toBe(before + 1);
 
   // A retry with the SAME key returns the SAME loop — the §4.5 replay TOON, no twin.
   const replay = gw.cli(deviceToken, ["new", "--json", cfg]);
   expect(replay.status).toBe(200);
-  const replayBody = replay.body as { id: string; idempotent?: boolean; text: string };
+  const replayBody = replay.body as { id: string; idempotent?: boolean; ui?: boolean; text: string };
   expect(replayBody.id).toBe(firstBody.id);
   expect(replayBody.idempotent).toBe(true);
+  // The replay echoes the EXISTING loop's dashboard state, so the daemon's
+  // `dashboard ui: applied` line stays factually accurate on a timed-out retry.
+  expect(replayBody.ui).toBe(true);
   expect(replayBody.text).toContain("[idempotent replay — existing loop returned]");
   expect(store.loopsForMachine(machineId).length).toBe(before + 1); // still exactly one
+});
+
+test("cli new: an idempotent replay of a no-dashboard loop echoes ui:false", () => {
+  const { deviceToken } = seededCli();
+  const gw = gateway();
+  const cfg = JSON.stringify({ name: "Plain", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "key-noui" });
+  const first = gw.cli(deviceToken, ["new", "--json", cfg]);
+  expect((first.body as { ui?: boolean }).ui).toBe(false);
+  const replay = gw.cli(deviceToken, ["new", "--json", cfg]);
+  const replayBody = replay.body as { idempotent?: boolean; ui?: boolean };
+  expect(replayBody.idempotent).toBe(true);
+  expect(replayBody.ui).toBe(false);
 });
 
 test("cli new: a different key (different config) does NOT collide — an intentional twin survives", () => {

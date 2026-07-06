@@ -616,6 +616,7 @@ export class MachineGateway {
             id: existing.id,
             name: existing.name ?? existing.id,
             idempotent: true,
+            ui: existing.ui != null,
             text: renderReplayText(existing.name ?? existing.id, existing.id, existing.goal),
           },
         };

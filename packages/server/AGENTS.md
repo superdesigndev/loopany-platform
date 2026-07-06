@@ -118,7 +118,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   `createLoop` rechecks the loop still exists + belongs to the machine before
   replaying. A live-key hit returns the existing loop with `idempotent:true` + the
   §4.5 replay TOON (`renderReplayText`), never a twin; an absent key ⇒ no dedupe (old
-  daemons keep working). The check sits AFTER validation and the dry-run branch, and
+  daemons keep working). The replay body ALSO echoes `ui: existing.ui != null` (like the
+  real-create + dry-run branches) so the daemon's `dashboard ui: applied|not applied`
+  line stays factually accurate on a timed-out retry of a create that DID apply a
+  dashboard. The check sits AFTER validation and the dry-run branch, and
   the create is recorded only on success. Additive body field: old servers ignore it.
 - **`edit --json '{}'`** is now a VALID no-op (feedback #3): status 200, exit 0,
   `nothing to change:` + the editable-key list (`renderEditNoopText`), not the old
