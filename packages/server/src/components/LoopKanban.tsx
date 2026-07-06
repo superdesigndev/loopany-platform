@@ -3,8 +3,8 @@ import type { ArtifactSummary } from '../types'
 import { isTaskPath } from '../lib/fileEntries'
 import { fmt } from '../lib/format'
 import { matchArtifacts, productDate, type ProductDate } from '../lib/productDate'
-import { ArtifactBody, isMarkdown, ViewerHead } from './artifactView'
-import { CollapsibleBody } from './LoopEmbed'
+import { ArtifactBody, isMarkdown } from './artifactView'
+import { Modal, ModalHead } from './Modal'
 
 /**
  * `<loop-kanban columns="research,in-progress,done" match="notes/*.md">` - a
@@ -25,8 +25,8 @@ import { CollapsibleBody } from './LoopEmbed'
  *   status is the TASK chip, not a kanban type).
  * - Cards: minimal - title (fallback filename) + a small date when the product
  *   is actually dated. Sorted date desc, then sync-time desc.
- * - Click a card to expand its body inline under it (shared artifact viewer +
- *   the loop-embed collapse wrapper); click again to collapse.
+ * - Click a card to review its full body in the shared Modal (focus trap, Esc,
+ *   scroll lock come from Base UI Dialog); close returns to the board.
  *
  * Layout: the board row scrolls INSIDE its own pane (`min-w-0 overflow-x-auto`),
  * columns are `shrink-0` fixed-width - a wide board never widens the dashboard
@@ -70,7 +70,7 @@ export function LoopKanban({
   /** The loop's task-file path - always excluded (it isn't a typed product). */
   taskFile?: string
 }) {
-  const [expanded, setExpanded] = useState<string | null>(null)
+  const [reviewing, setReviewing] = useState<Card | null>(null)
   const cols = [
     ...new Set(
       (columns ?? '')
@@ -122,11 +122,14 @@ export function LoopKanban({
   return (
     // The board row is the ONLY horizontal-scroll container: min-w-0 lets it
     // shrink below its content, overflow-x-auto keeps a wide board inside the
-    // pane, and the columns are shrink-0 fixed-width tracks.
-    <div className={`${shell} flex gap-3 overflow-x-auto pb-1`}>
+    // pane, and the columns are shrink-0 fixed-width tracks. Vertically the
+    // board is capped too: a tall column scrolls its OWN card list (min-h-0 +
+    // overflow-y-auto below) under a sticky-feeling header, so a 20-card
+    // backlog never stretches the dashboard box.
+    <div className={`${shell} flex max-h-[420px] gap-3 overflow-x-auto pb-1`}>
       {board.map((col) => (
-        <div key={col.overflow ? OVERFLOW_REACT_KEY : col.name} className="flex w-[248px] shrink-0 flex-col">
-          <div className="mb-2 flex items-center gap-2 border-b border-hairline pb-1.5">
+        <div key={col.overflow ? OVERFLOW_REACT_KEY : col.name} className="flex min-h-0 w-[248px] shrink-0 flex-col">
+          <div className="mb-2 flex shrink-0 items-center gap-2 border-b border-hairline pb-1.5">
             <span
               className={`text-label font-semibold ${
                 col.overflow ? 'text-disabled' : 'text-primary'
@@ -136,51 +139,48 @@ export function LoopKanban({
             </span>
             <span className="text-caption text-disabled">{col.cards.length}</span>
           </div>
-          <div className="flex flex-col gap-2">
+          <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pb-1 pr-0.5">
             {col.cards.length === 0 ? (
               <div className="rounded-control border border-dashed border-hairline px-2.5 py-3 text-center text-caption text-disabled">
                 Empty
               </div>
             ) : (
               col.cards.map((card) => (
-                <KanbanCard
-                  key={card.file.path}
-                  loopId={loopId}
-                  card={card}
-                  open={expanded === card.file.path}
-                  onToggle={() => setExpanded(expanded === card.file.path ? null : card.file.path)}
-                />
+                <KanbanCard key={card.file.path} card={card} onOpen={() => setReviewing(card)} />
               ))
             )}
           </div>
         </div>
       ))}
+      {reviewing && (
+        <Modal open onClose={() => setReviewing(null)}>
+          <ModalHead
+            title={reviewing.title}
+            sub={
+              <span className="font-mono">
+                {reviewing.file.path}
+                {reviewing.date.source !== 'sync' && ` · ${reviewing.date.date}`} · synced{' '}
+                {fmt(reviewing.file.updatedAt)}
+              </span>
+            }
+          />
+          <div className="mt-4 min-w-0">
+            <ArtifactBody loopId={loopId} file={reviewing.file} />
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
 
-/** One artifact as a card: title + small date, click to expand its body inline. */
-function KanbanCard({
-  loopId,
-  card,
-  open,
-  onToggle,
-}: {
-  loopId: string
-  card: Card
-  open: boolean
-  onToggle: () => void
-}) {
+/** One artifact as a card: title + small date, click to review it in the modal. */
+function KanbanCard({ card, onOpen }: { card: Card; onOpen: () => void }) {
   const dated = card.date.source !== 'sync'
   return (
-    <div
-      className={`min-w-0 overflow-hidden rounded-control border bg-surface shadow-card transition-colors ${
-        open ? 'border-display' : 'border-hairline hover:border-wire'
-      }`}
-    >
+    <div className="min-w-0 overflow-hidden rounded-control border border-hairline bg-surface shadow-card transition-colors hover:border-wire">
       <button
         type="button"
-        onClick={onToggle}
+        onClick={onOpen}
         className="flex w-full min-w-0 cursor-pointer flex-col items-start gap-1 border-none bg-transparent px-2.5 py-2 text-left"
       >
         <span className="w-full min-w-0 truncate text-meta text-primary" title={card.file.path}>
@@ -190,14 +190,6 @@ function KanbanCard({
           <span className="font-mono text-micro text-disabled">{card.date.date}</span>
         )}
       </button>
-      {open && (
-        <div className="border-t border-hairline">
-          <ViewerHead path={card.file.path} meta={`synced ${fmt(card.file.updatedAt)}`} />
-          <CollapsibleBody collapse={!card.file.binary && !card.file.oversize}>
-            <ArtifactBody loopId={loopId} file={card.file} />
-          </CollapsibleBody>
-        </div>
-      )}
     </div>
   )
 }

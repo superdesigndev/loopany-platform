@@ -65,8 +65,18 @@ describe('LoopKanban width containment', () => {
     expect(src).toMatch(/min-w-0 truncate/) // card title truncates inside the column
   })
 
-  it('clips an expanded card body via the shared collapse wrapper', () => {
-    expect(src).toMatch(/CollapsibleBody/)
+  it('caps board height and scrolls tall columns internally', () => {
+    // The board is height-capped; a long column scrolls its own card list
+    // (min-h-0 + overflow-y-auto) instead of stretching the dashboard box.
+    expect(src).toMatch(/max-h-\[420px\]/)
+    expect(src).toMatch(/min-h-0 flex-col gap-2 overflow-y-auto/)
+  })
+
+  it('reviews a card body in the shared Modal (its own scroll container), never inline', () => {
+    // The card body renders in the portal-mounted Modal (overflow-auto, viewport
+    // capped) — an inline expansion inside a 248px column can't clip/scroll sanely.
+    expect(src).toMatch(/<Modal open onClose/)
+    expect(src).not.toMatch(/CollapsibleBody/)
   })
 })
 

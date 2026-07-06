@@ -177,17 +177,26 @@ describe('LoopKanban card sort', () => {
   })
 })
 
-describe('LoopKanban inline expand', () => {
-  it('expands the card body on click and collapses on a second click', async () => {
+describe('LoopKanban review modal', () => {
+  it('opens the card body in a modal on click and closes it again', async () => {
     const el = await mount({
       ...base,
       artifacts: [file('notes/a.md', { type: 'research', title: 'Alpha' })],
     })
-    expect(el.innerHTML).not.toContain('synced') // no ViewerHead before expand
+    // Nothing reviewed yet — the modal (a body-level portal) isn't mounted.
+    expect(document.body.innerHTML).not.toContain('hello from the card')
     await clickCard(el, 'Alpha')
-    expect(el.innerHTML).toContain('hello from the card') // body fetched + rendered
-    await clickCard(el, 'Alpha')
-    expect(el.innerHTML).not.toContain('hello from the card') // collapsed again
+    // Body fetched + rendered inside the portal, with the path in the head.
+    expect(document.body.innerHTML).toContain('hello from the card')
+    expect(document.body.innerHTML).toContain('notes/a.md')
+    const close = [...document.body.querySelectorAll('button')].find(
+      (b) => b.getAttribute('aria-label') === 'Close',
+    )
+    if (!close) throw new Error('no modal close button')
+    await act(async () => {
+      close.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(document.body.innerHTML).not.toContain('hello from the card')
   })
 })
 
