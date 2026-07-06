@@ -105,6 +105,37 @@ describe("runCallback — unified dispatch", () => {
     expect(stdout()).toContain("reported (legacy).");
   });
 
+  test("F2: in-run `loopany log` prints the server's TOON survey text on the EXISTING daemon", async () => {
+    // Batch 1 makes the server's `/api/machine/cli` `log` response carry a `text`
+    // field ALONGSIDE the structured `runs` (superset body). This UNCHANGED 0.11
+    // callback already prints `body.text` — so the moment the server ships, in-run
+    // `loopany log` (which printed nothing before, F2) starts working with no daemon
+    // release. This e2e proves that contract at the callback boundary.
+    const survey = [
+      'loop: "Docs Sweep" (loop-abc)',
+      "count: 1 of 12 total",
+      "runs[1]{ts,role,outcome,cost,metrics,session,message}:",
+      '  "2026-07-05 06:00",exec,ok/nothing-new,$0.08,drift=0,sess-abc,"no drift"',
+      "summary: showing 1 of 12 · 1 ok · last exec ok/nothing-new 2026-07-05 06:00",
+      "help[2]:",
+      "  Run `loopany log loop-abc --full` to inline each run's transcript",
+    ].join("\n");
+    const calls = stubFetch(() => ({
+      status: 200,
+      // The real superset body: structured fields + the new `text`/`exitCode`.
+      body: { ok: true, loopId: "loop-abc", name: "Docs Sweep", runs: [{ id: "r1" }], text: survey, exitCode: 0 },
+    }));
+    const code = await runCallback(["log"]);
+    expect(code).toBe(0);
+    expect(calls[0]!.url).toBe("https://srv.test/api/machine/cli");
+    expect(JSON.parse(calls[0]!.init.body).argv).toEqual(["log"]);
+    // The key F2 assertion: stdout is NON-EMPTY and carries the survey.
+    expect(stdout().length).toBeGreaterThan(0);
+    expect(stdout()).toContain('loop: "Docs Sweep" (loop-abc)');
+    expect(stdout()).toContain("runs[1]{ts,role,outcome,cost,metrics,session,message}:");
+    expect(stdout()).toContain("summary:");
+  });
+
   test("no server url → control channel not configured (exit 2, no fetch)", async () => {
     delete process.env.LOOPANY_SERVER_URL;
     const calls = stubFetch(() => ({ status: 200, body: {} }));

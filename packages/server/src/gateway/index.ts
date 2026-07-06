@@ -43,6 +43,21 @@ import {
   type RunLease,
 } from "./tokens.js";
 import { isSuperAdmin } from "../superadmin.js";
+import {
+  codeForStatus,
+  countLine,
+  detailBlock,
+  doc,
+  emptyList,
+  errorBlock,
+  helpBlock,
+  inlineArray,
+  kvLine,
+  listBlock,
+  scalar,
+  truncate,
+  type Scalar,
+} from "./toon.js";
 
 const log = logger.child({ mod: "gateway" });
 
@@ -540,34 +555,37 @@ export class MachineGateway {
     // return the normalized config + fire preview + open/closed classification and
     // persist NOTHING (no store write, no scheduler, no team-auth side effects).
     if (body.dryRun === true) {
+      const config = {
+        name: str(body.name),
+        cron,
+        timezone: timezone ?? null,
+        taskFile: taskFile ?? null,
+        workdir: str(body.workdir) ?? null,
+        // The workflow JS body can be large — report presence, not the source.
+        workflow: workflow != null,
+        // Ditto for the dashboard HTML — presence flag, not the markup.
+        ui: ui != null,
+        goal,
+        notify,
+        agent,
+        stateSchema,
+      };
+      const nextRuns = nextFires(cron, timezone, 3);
       return {
         status: 200,
         body: {
           ok: true,
           dryRun: true,
-          config: {
-            name: str(body.name),
-            cron,
-            timezone: timezone ?? null,
-            taskFile: taskFile ?? null,
-            workdir: str(body.workdir) ?? null,
-            // The workflow JS body can be large — report presence, not the source.
-            workflow: workflow != null,
-            // Ditto for the dashboard HTML — presence flag, not the markup.
-            ui: ui != null,
-            goal,
-            notify,
-            agent,
-            stateSchema,
-          },
+          config,
           timezone: timezone ?? null,
-          nextRuns: nextFires(cron, timezone, 3),
+          nextRuns,
           classification: goal != null ? "closed" : "open",
           classificationText:
             goal != null
               ? "closed (has goal): will self-finish when the goal is met"
               : "open: runs until paused",
           ...(uiWarning ? { warning: uiWarning } : {}),
+          text: renderCreateDryRunText(config, nextRuns, uiWarning),
         },
       };
     }
@@ -633,7 +651,17 @@ export class MachineGateway {
     log.info({ machineId, loopId: loop.id, agent, ui: ui != null }, "createLoop: created from a coding agent");
     // Echo `ui` presence (like dry-run) + a warning when a provided dashboard was
     // dropped, so the CLI/response can surface it — never a silent no-dashboard.
-    return { status: 200, body: { ok: true, id: loop.id, name, ui: ui != null, ...(uiWarning ? { warning: uiWarning } : {}) } };
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        id: loop.id,
+        name,
+        ui: ui != null,
+        ...(uiWarning ? { warning: uiWarning } : {}),
+        text: renderCreatedText(name, loop.id, cron, timezone ?? null, goal, ui != null, uiWarning),
+      },
+    };
   }
 
   // ---- GET/PATCH /api/machine/loop — the owner's interactive agent edits ----
@@ -655,7 +683,7 @@ export class MachineGateway {
       workdir: l.workdir ?? null,
       taskFile: l.taskFile ?? null,
     }));
-    return { status: 200, body: { ok: true, loops } };
+    return { status: 200, body: { ok: true, loops, text: renderLoopsText(loops) } };
   }
 
   /**
@@ -718,7 +746,11 @@ export class MachineGateway {
         transcriptTruncated: truncated,
       };
     });
-    return { status: 200, body: { ok: true, loopId: loop.id, name: loop.name ?? loop.id, runs } };
+    // F2: the in-run callback prints `text`, so an empty text is why in-run `loopany
+    // log` shows nothing today. Carry the TOON survey ALONGSIDE the structured `runs`
+    // (superset body) — an old daemon ignores `text` and renders `runs` unchanged.
+    const survey = renderLogText(loop.name ?? loop.id, loop.id, runs, store.countRuns(loopId));
+    return { status: 200, body: { ok: true, loopId: loop.id, name: loop.name ?? loop.id, runs, text: survey } };
   }
 
   /**
@@ -794,6 +826,7 @@ export class MachineGateway {
           name: loop.name ?? loop.id,
           changes,
           rejections: allRejections,
+          text: renderEditDryRunText(loop.id, loop.name ?? loop.id, changes, allRejections),
         },
       };
     }
@@ -809,7 +842,17 @@ export class MachineGateway {
     if (updated.enabled) this.scheduler.addLoop(updated);
     else this.scheduler.removeLoop(updated.id);
     log.info({ machineId, loopId: id, fields: Object.keys(update) }, "editLoop: applied");
-    return { status: 200, body: { ok: true, id: updated.id, name: updated.name ?? updated.id, applied: Object.keys(update) } };
+    const applied = Object.keys(update);
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        id: updated.id,
+        name: updated.name ?? updated.id,
+        applied,
+        text: renderEditAppliedText(updated.id, updated.name ?? updated.id, applied),
+      },
+    };
   }
 
   /**
@@ -899,16 +942,13 @@ export class MachineGateway {
 
   agentApi(runToken: string, argv: string[]): HttpResult {
     const lease = resolveLease(runToken);
-    if (!lease) return { status: 401, body: { text: "loopany: invalid or expired token", exitCode: 1 } };
+    if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
     // The run was already reclaimed by the server (the machine was likely asleep).
     // Its lease is terminal-grace: it lives on only to accept ONE reconciling
     // wake-report via /machine/report — never further agent-api mutations
     // (reschedule/set-*/finish).
     if (lease.state === "terminal-grace") {
-      return {
-        status: 409,
-        body: { text: "loopany: this run was reclaimed by the server (the machine was likely asleep); its result is delivered via the final report", exitCode: 1 },
-      };
+      return { status: 409, body: { text: errorBlock(RECLAIMED_MSG, "CONFLICT"), exitCode: 1 } };
     }
     const out = this.dispatch(lease, argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
@@ -934,7 +974,8 @@ export class MachineGateway {
    * through the reused `dispatch`/`createLoop`/`editLoop`/`loopLog` unchanged.
    */
   cli(token: string, argv: string[]): HttpResult {
-    return token.startsWith("dk_") ? this.deviceCli(token, argv) : this.runCli(token, argv);
+    const res = token.startsWith("dk_") ? this.deviceCli(token, argv) : this.runCli(token, argv);
+    return finalizeCli(res);
   }
 
   /** DEVICE-credential branch of the unified CLI. */
@@ -983,14 +1024,11 @@ export class MachineGateway {
    *  verbs, plus the read branch (`log`/`show`) scoped to the lease's own loop. */
   private runCli(runToken: string, argv: string[]): HttpResult {
     const lease = resolveLease(runToken);
-    if (!lease) return { status: 401, body: { text: "loopany: invalid or expired token", exitCode: 1 } };
+    if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
     // Reclaimed (machine likely asleep) — terminal-grace accepts only the reconciling
     // /machine/report, never further CLI mutations. Same rule agentApi enforces.
     if (lease.state === "terminal-grace") {
-      return {
-        status: 409,
-        body: { text: "loopany: this run was reclaimed by the server (the machine was likely asleep); its result is delivered via the final report", exitCode: 1 },
-      };
+      return { status: 409, body: { text: errorBlock(RECLAIMED_MSG, "CONFLICT"), exitCode: 1 } };
     }
     const verb = argv[0] ?? "";
     const flags = parseFlags(argv.slice(1));
@@ -999,7 +1037,7 @@ export class MachineGateway {
     // a run has no create/edit/cross-loop-list/machine-status need. Explicit 403 so
     // the denial is legible (not a generic "unknown command").
     if (DEVICE_ONLY_VERBS.has(verb)) {
-      return { status: 403, body: { text: `loopany: "${verb}" needs the device credential (owner authority); a run may only act on its own loop`, exitCode: 1 } };
+      return { status: 403, body: { text: errorBlock(`"${verb}" needs the device credential (owner authority); a run may only act on its own loop`, "FORBIDDEN"), exitCode: 1 } };
     }
 
     // Loop-arg fence: a run may only target its OWN loop. An explicit `--loop` (any
@@ -1007,7 +1045,7 @@ export class MachineGateway {
     // loop is a hard 403 — never a silent retarget onto the run's own loop.
     const targeted = typeof flags["loop"] === "string" ? (flags["loop"] as string) : (verb === "log" || verb === "show") && typeof flags["_"] === "string" ? (flags["_"] as string) : undefined;
     if (targeted !== undefined && targeted !== lease.loopId) {
-      return { status: 403, body: { text: "loopany: a run may only act on its own loop", exitCode: 1 } };
+      return { status: 403, body: { text: errorBlock("a run may only act on its own loop", "FORBIDDEN"), exitCode: 1 } };
     }
 
     // Read branch — the seam fix. `log` gains a run-credential path (it has no case
@@ -1319,7 +1357,7 @@ export class MachineGateway {
     // Idempotency: the run lease stays active for the enriching report, so a second
     // `finish` on the same run is possible — refuse it so completion stays single-shot.
     if (current.completedAt != null) {
-      return { ok: false, detail: "this loop is already finished" };
+      return { ok: false, detail: "this loop is already finished", code: "CONFLICT" };
     }
     const ts = nowIso();
     // Record durationMs server-side from the run's claim/running timestamp so a
@@ -1685,17 +1723,23 @@ export class MachineGateway {
         if (rawState !== undefined) {
           const loop = store.getLoop(lease.loopId);
           const v = validateState(rawState, loop?.stateSchema ?? undefined);
-          if (!v.ok) return { code: 400, text: `loopany: ${v.error}` };
+          if (!v.ok) return derr(400, v.error, "VALIDATION_ERROR");
           state = v.value;
         }
+        // F5 (fail-loud): a bad --status was previously gated into `{}` by `isStatus`
+        // — the typo dropped silently, exit 0. Reject it up front instead.
         const status = str("status");
+        if (status !== undefined && !isStatus(status)) {
+          return derr(400, `status must be new|resolved|nothing-new (got "${status}")`, "VALIDATION_ERROR");
+        }
+        const message = str("message");
         store.updateRun(lease.runId, {
-          ...(isStatus(status) ? { status } : {}),
+          ...(status !== undefined ? { status: status as RunStatus } : {}),
           // Clipped to the same cap the report finalText fallback enforces.
-          ...(str("message") !== undefined ? { message: str("message")!.slice(0, MESSAGE_CAP) } : {}),
+          ...(message !== undefined ? { message: message.slice(0, MESSAGE_CAP) } : {}),
           ...(state !== undefined ? { state } : {}),
         });
-        return { code: 200, text: "reported" };
+        return { code: 200, text: renderReportedText(status, state, message !== undefined) };
       }
       case "show":
         return { code: 200, text: this.describe(lease.loopId, lease.allowControl, lease.canFinish) };
@@ -1706,9 +1750,15 @@ export class MachineGateway {
           // runs — give the right message for each. The open-loop case is primary.
           const loop = store.getLoop(lease.loopId);
           if (!loop || loop.goal == null) {
-            return { code: 403, text: "loopany: this loop has no goal to finish (it's an open/monitor loop)" };
+            return derr(403, "this loop has no goal to finish (it's an open/monitor loop)", "FORBIDDEN");
           }
-          return { code: 403, text: "loopany: only an exec run may finish a loop" };
+          return derr(403, "only an exec run may finish a loop", "FORBIDDEN");
+        }
+        // F5 (fail-loud): reject a bad --status here too, even though finish forces
+        // status=resolved internally — a typo must never pass silently.
+        const fstatus = str("status");
+        if (fstatus !== undefined && !isStatus(fstatus)) {
+          return derr(400, `status must be new|resolved|nothing-new (got "${fstatus}")`, "VALIDATION_ERROR");
         }
         // Optional --state, validated exactly like the report verb.
         const rawState = str("state") ?? str("state-content");
@@ -1716,47 +1766,47 @@ export class MachineGateway {
         if (rawState !== undefined) {
           const loop = store.getLoop(lease.loopId);
           const v = validateState(rawState, loop?.stateSchema ?? undefined);
-          if (!v.ok) return { code: 400, text: `loopany: ${v.error}` };
+          if (!v.ok) return derr(400, v.error, "VALIDATION_ERROR");
           state = v.value;
         }
         const message = str("message")?.slice(0, MESSAGE_CAP);
         const reason = str("reason")?.slice(0, MESSAGE_CAP) ?? null;
         const r = this.finishLoop(lease, { message, reason, state });
-        return r.ok ? { code: 200, text: r.detail ?? "finished" } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
+        return r.ok ? { code: 200, text: renderFinishedText(lease.loopId) } : derr(400, r.detail ?? "rejected", r.code);
       }
       case "set-ui": {
-        if (!lease.canSetUi) return { code: 403, text: "loopany: only the evolution or edit pass may set the UI" };
+        if (!lease.canSetUi) return derr(403, "only the evolution or edit pass may set the UI", "FORBIDDEN");
         const html = str("body") ?? str("file-content");
-        if (html === undefined) return { code: 400, text: "loopany: set-ui needs --file <path> (shim inlines it)" };
+        if (html === undefined) return derr(400, "set-ui needs --file <path> (shim inlines it)", "VALIDATION_ERROR");
         const r = this.applySetUi(lease.loopId, html);
         this.audit(lease, "set-ui", { bytes: String(html.length) }, r);
-        return r.ok ? { code: 200, text: r.detail ?? "ui updated" } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
+        return r.ok ? { code: 200, text: r.detail ?? "ui updated" } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
       }
       case "set-schema": {
-        if (!lease.canSetSchema) return { code: 403, text: "loopany: only the evolution or edit pass may set the schema" };
+        if (!lease.canSetSchema) return derr(403, "only the evolution or edit pass may set the schema", "FORBIDDEN");
         const json = str("body") ?? str("file-content");
-        if (json === undefined) return { code: 400, text: "loopany: set-schema needs --file <path> (a JSON array of {key,label,unit})" };
+        if (json === undefined) return derr(400, "set-schema needs --file <path> (a JSON array of {key,label,unit})", "VALIDATION_ERROR");
         const r = this.applySetSchema(lease.loopId, json);
         this.audit(lease, "set-schema", { bytes: String(json.length) }, r);
-        return r.ok ? { code: 200, text: r.detail ?? "schema updated" } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
+        return r.ok ? { code: 200, text: r.detail ?? "schema updated" } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
       }
       case "set-workflow": {
-        if (!lease.canSetWorkflow) return { code: 403, text: "loopany: only the evolution or edit pass may set the workflow" };
+        if (!lease.canSetWorkflow) return derr(403, "only the evolution or edit pass may set the workflow", "FORBIDDEN");
         const body = str("body") ?? str("file-content");
-        if (!body) return { code: 400, text: "loopany: set-workflow needs --file <path> (shim inlines it)" };
+        if (!body) return derr(400, "set-workflow needs --file <path> (shim inlines it)", "VALIDATION_ERROR");
         const r = this.applySetWorkflow(lease.loopId, body);
         this.audit(lease, "set-workflow", { bytes: String(body.length) }, r);
-        return r.ok ? { code: 200, text: r.detail ?? "workflow updated" } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
+        return r.ok ? { code: 200, text: r.detail ?? "workflow updated" } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
       }
     }
 
     if (MUTATION_VERBS.has(verb ?? "")) {
-      if (!lease.allowControl) return { code: 403, text: "loopany: this loop may not change its own schedule (allowControl is off)" };
+      if (!lease.allowControl) return derr(403, "this loop may not change its own schedule (allowControl is off)", "FORBIDDEN");
       const r = this.applyMutation(lease.loopId, verb!, flags, str);
       this.audit(lease, verb!, stringifyFlags(flags), r);
-      return r.ok ? { code: 200, text: r.detail ?? `${verb} applied` } : { code: 400, text: `loopany: ${r.detail ?? "rejected"}` };
+      return r.ok ? { code: 200, text: r.detail ?? `${verb} applied` } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
     }
-    return { code: 400, text: `loopany: unknown command "${verb ?? ""}" (try: loopany help)` };
+    return derr(400, `unknown command "${verb ?? ""}" (try: loopany help)`, "VALIDATION_ERROR");
   }
 
   /** Usage for `loopany help` / `--help` / a bare invocation. Role-aware: marks
@@ -2002,10 +2052,19 @@ export class MachineGateway {
 interface Applied {
   ok: boolean;
   detail?: string;
+  /** An explicit axi error slug for a rejection (else the caller derives it from the
+   *  HTTP status). Used to mark a second-`finish` as CONFLICT rather than a generic
+   *  VALIDATION_ERROR. */
+  code?: string;
 }
 type Flags = Record<string, string | boolean>;
 
 const MUTATION_VERBS = new Set(["reschedule", "set-cron", "pause", "resume", "notify", "set-name", "set-tz", "set-model"]);
+
+/** The one message for a reclaimed (terminal-grace) run's refused CLI mutation —
+ *  shared by `agentApi` + `runCli` so the two transports can't drift. */
+const RECLAIMED_MSG =
+  "this run was reclaimed by the server (the machine was likely asleep); its result is delivered via the final report";
 
 /** Verbs that require OWNER (device) authority — a run credential is 403'd on these
  *  in the unified `cli` dispatch (§4.1). `report`/`finish` are the mirror image
@@ -2074,6 +2133,239 @@ function renderTranscript(steps: TranscriptStep[] | null | undefined): { text: s
   const joined = lines.join("\n\n");
   if (joined.length > LOG_TRANSCRIPT_CAP) return { text: joined.slice(0, LOG_TRANSCRIPT_CAP), truncated: true };
   return { text: joined, truncated: false };
+}
+
+// ---- TOON render helpers (batch 1: the axi-conformance spine) ----------------
+// Each builds the `text` a `/api/machine/cli` verb carries ALONGSIDE its structured
+// fields (superset body). Pure — no I/O, no clock — so they're exercised both here
+// (via the verb tests) and directly in `toon.test.ts`.
+
+/** Compact a stored ISO timestamp to `YYYY-MM-DD HH:MM` (UTC, as stored) for a TOON
+ *  cell — a date the agent reads at a glance without the `T`/seconds/zone noise. */
+function fmtTime(iso: string): string {
+  return iso.slice(0, 16).replace("T", " ");
+}
+
+/** A structured error result to STDOUT (P6): `error:`/`code:` TOON as the verb `text`.
+ *  Mirrors the `{code, text}` shape `dispatch` returns; the slug defaults from the
+ *  HTTP status but a caller may pin it (e.g. CONFLICT). */
+function derr(code: number, message: string, slug?: string): { code: number; text: string } {
+  return { code, text: errorBlock(message, slug ?? codeForStatus(code)) };
+}
+
+/** Ensure a `/api/machine/cli` body carries `text` + `exitCode` (P1/P6). A body that
+ *  already rendered its own `text` (every success + the dispatch errors) is left
+ *  alone; a structured `{error}` (createLoop/editLoop validation, the deviceCli
+ *  denials) is rendered to `error:`/`code:` TOON here so the daemon prints it to
+ *  stdout. Idempotent + additive: structured fields are never removed. */
+function finalizeCli(res: HttpResult): HttpResult {
+  const b = res.body;
+  if (b && typeof b === "object" && !Array.isArray(b)) {
+    const body = b as Record<string, unknown>;
+    if (typeof body.text !== "string" && typeof body.error === "string") {
+      body.text = errorBlock(body.error, codeForStatus(res.status));
+    }
+    if (typeof body.exitCode !== "number") {
+      body.exitCode = res.status >= 200 && res.status < 300 ? 0 : 1;
+    }
+  }
+  return res;
+}
+
+/** `loopany loops` — the typed loop list (P2/P4/P5/P9). Batch-1 fields are today's
+ *  columns (id/name/cron/enabled); Batch 3 enriches with nextFire/lastOutcome. */
+function renderLoopsText(loops: Array<{ id: string; name: string; cron: string; enabled: boolean }>): string {
+  if (!loops.length) {
+    return doc(
+      countLine(0),
+      emptyList("loops"),
+      helpBlock([
+        "Run `loopany new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create your first loop",
+        "Run `loopany up` if this machine isn't connected yet",
+      ]),
+    );
+  }
+  return doc(
+    countLine(loops.length),
+    listBlock(
+      "loops",
+      ["id", "name", "cron", "enabled"],
+      loops.map((l) => [l.id, l.name, l.cron, l.enabled ? "on" : "paused"]),
+    ),
+    helpBlock(["Run `loopany show <id>` to see a loop's full config", "Run `loopany log <id>` to see a loop's recent runs"]),
+  );
+}
+
+/** One run's `outcome` cell: an evolve pass reads `evolve`; otherwise `ok`/`failed`
+ *  (from the phase) suffixed with the content status (`ok/nothing-new`). */
+function runOutcomeToken(r: { phase: string; outcome: string | null; status: string | null }): string {
+  if (r.outcome === "evolve") return "evolve";
+  const base = r.phase === "error" ? "failed" : r.phase === "done" ? "ok" : r.phase;
+  return r.status ? `${base}/${r.status}` : base;
+}
+
+/** A run's reported metrics as `k=v,k=v` (or null → the em-dash), for the log cell. */
+function runMetricsToken(state: Record<string, unknown> | null | undefined): string | null {
+  if (!state || typeof state !== "object") return null;
+  const parts = Object.entries(state).map(([k, v]) => `${k}=${v}`);
+  return parts.length ? parts.join(",") : null;
+}
+
+/** How many chars of a run message the log cell inlines before the size hint. */
+const LOG_MESSAGE_CELL_CAP = 100;
+
+interface LogRun {
+  ts: string;
+  role: string;
+  phase: string;
+  outcome: string | null;
+  status: string | null;
+  costUsd: number | null;
+  sessionId: string | null;
+  state: Record<string, unknown> | null;
+  message: string | null;
+}
+
+/** `loopany log` — the TOON run survey (F2: the in-run callback prints this `text`,
+ *  so in-run `loopany log` starts working the day Batch 1 deploys). */
+function renderLogText(name: string, loopId: string, runs: LogRun[], total: number): string {
+  const head = `loop: ${scalar(name)} (${loopId})`;
+  if (!runs.length) {
+    return doc(
+      head,
+      countLine(0, { total }),
+      emptyList("runs"),
+      helpBlock([`Run \`loopany show ${loopId}\` to see the loop config`]),
+    );
+  }
+  const rows: (string | number | null)[][] = runs.map((r) => [
+    fmtTime(r.ts),
+    r.role,
+    runOutcomeToken(r),
+    r.costUsd != null ? `$${r.costUsd.toFixed(2)}` : null,
+    runMetricsToken(r.state),
+    r.sessionId,
+    r.message ? truncate(r.message, LOG_MESSAGE_CELL_CAP, "use --full").value : null,
+  ]);
+  const ok = runs.filter((r) => r.phase === "done").length;
+  const failed = runs.filter((r) => r.phase === "error").length;
+  const lastExec = runs.find((r) => r.role === "exec");
+  const summary = [
+    `showing ${runs.length} of ${total}`,
+    `${ok} ok`,
+    ...(failed ? [`${failed} failed`] : []),
+    ...(lastExec ? [`last exec ${runOutcomeToken(lastExec)} ${fmtTime(lastExec.ts)}`] : []),
+  ].join(" · ");
+  return doc(
+    head,
+    countLine(runs.length, { total }),
+    listBlock("runs", ["ts", "role", "outcome", "cost", "metrics", "session", "message"], rows),
+    `summary: ${summary}`,
+    helpBlock([
+      `Run \`loopany log ${loopId} --full\` to inline each run's transcript`,
+      "Run `find ~/.claude/projects -name '<session>.jsonl'` to deep-dive a run's session",
+    ]),
+  );
+}
+
+/** `loopany new` (real create) — the created-loop confirmation (P4/P9). */
+function renderCreatedText(
+  name: string,
+  loopId: string,
+  cron: string,
+  timezone: string | null,
+  goal: string | null,
+  uiApplied: boolean,
+  warning: string | undefined,
+): string {
+  const nextRuns = nextFires(cron, timezone, 3).map(fmtTime);
+  return doc(
+    `created: ${scalar(name)} (${loopId})`,
+    `classification: ${goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
+    `dashboard: ${uiApplied ? "applied" : "not applied"}`,
+    nextRuns.length ? inlineArray("nextRuns", nextRuns, " · ") : null,
+    warning ? kvLine("warning", warning) : null,
+    helpBlock([
+      `Run \`loopany show ${loopId}\` to see the full config`,
+      `Run \`loopany log ${loopId}\` after the first run to see how it went`,
+    ]),
+  );
+}
+
+/** `loopany new --dry-run` — the normalized config + fire preview (no persistence). */
+function renderCreateDryRunText(
+  config: { name: string | null; cron: string; timezone: string | null; taskFile: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
+  nextRuns: string[],
+  warning: string | undefined,
+): string {
+  return doc(
+    detailBlock("dry-run", [
+      ["name", config.name],
+      ["cron", config.cron],
+      ["timezone", config.timezone],
+      ["taskFile", config.taskFile],
+      ["workflow", config.workflow ? "present" : "absent"],
+      ["ui", config.ui ? "present" : "absent"],
+      ["goal", config.goal],
+      ["notify", config.notify],
+    ]),
+    nextRuns.length ? inlineArray("nextRuns", nextRuns.map(fmtTime), " · ") : null,
+    `classification: ${config.goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
+    warning ? kvLine("warning", warning) : null,
+    helpBlock(["Run `loopany new --json '{...}'` (drop --dry-run) to create the loop"]),
+  );
+}
+
+/** `loopany edit` (real apply) — the updated-loop confirmation. */
+function renderEditAppliedText(loopId: string, name: string, applied: string[]): string {
+  return doc(
+    `updated: ${scalar(name)} (${loopId})`,
+    inlineArray("applied", applied),
+    helpBlock([`Run \`loopany show ${loopId}\` to confirm the new config`]),
+  );
+}
+
+/** `loopany edit --dry-run` — the per-key before→after preview + rejections. */
+function renderEditDryRunText(
+  loopId: string,
+  name: string,
+  changes: Array<{ key: string; from: unknown; to: unknown }>,
+  rejections: Array<{ key: string; reason: string }>,
+): string {
+  const header = rejections.length
+    ? `dry-run: ${scalar(name)} — ${changes.length} change${changes.length === 1 ? "" : "s"} valid, ${rejections.length} rejected`
+    : `dry-run: ${scalar(name)} — nothing changed`;
+  return doc(
+    header,
+    changes.length
+      ? listBlock("changes", ["key", "from", "to"], changes.map((c) => [c.key, c.from as Scalar, c.to as Scalar]))
+      : "changes: none",
+    rejections.length
+      ? listBlock("rejections", ["key", "reason"], rejections.map((r) => [r.key, r.reason]))
+      : "rejections: none",
+    helpBlock([`Run \`loopany edit ${loopId} --json '{...}'\` (drop --dry-run) to apply`]),
+  );
+}
+
+/** `loopany report` — the compact run-outcome confirmation (§4.6). */
+function renderReportedText(status: string | undefined, state: Record<string, number | string> | undefined, hasMessage: boolean): string {
+  const parts: string[] = [];
+  if (status) parts.push(`status=${status}`);
+  const metrics = runMetricsToken(state);
+  if (metrics) parts.push(`metrics ${metrics}`);
+  if (hasMessage) parts.push("message recorded");
+  return `reported: ${parts.length ? parts.join(" · ") : "recorded"}`;
+}
+
+/** `loopany finish` — the goal-met confirmation, read back off the completed loop. */
+function renderFinishedText(loopId: string): string {
+  const loop = store.getLoop(loopId);
+  if (!loop) return "finished: goal met";
+  return doc(
+    `finished: ${scalar(loop.name ?? loop.id)} (${loop.id}) — goal met`,
+    loop.completedAt ? kvLine("completedAt", fmtTime(loop.completedAt)) : null,
+    loop.completionReason ? kvLine("completionReason", loop.completionReason) : null,
+  );
 }
 
 /** Scalar (number/string) fields of a workflow's returned cursor — the run's

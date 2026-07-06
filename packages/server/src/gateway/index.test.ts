@@ -1888,3 +1888,208 @@ test("cli run credential: a reclaimed run refuses mutations (409), same as agent
 function seededReclaimTarget(runToken: string): string {
   return tokens.resolveLease(runToken)!.runId;
 }
+
+// ---- batch 1: the axi-conformance spine — every cli verb carries a TOON `text` ----
+// The structured fields stay byte-compatible ALONGSIDE `text` (superset body), and
+// `exitCode` is present everywhere. Errors render as `error:`/`code:` TOON to stdout.
+
+const textOf = (res: { body: unknown }) => (res.body as { text?: string }).text ?? "";
+
+test("cli loops: text is a TOON list (count + typed header + help), structured loops intact", () => {
+  const { deviceToken, loop } = seededCli();
+  const res = gateway().cli(deviceToken, ["loops"]);
+  expect(res.status).toBe(200);
+  const body = res.body as { ok: boolean; loops: any[]; text: string; exitCode: number };
+  // Structured fields unchanged (byte-compatible with today's body).
+  expect(body.ok).toBe(true);
+  expect(body.loops.map((l) => l.id)).toContain(loop.id);
+  // TOON surface.
+  expect(body.text).toContain("count: 1");
+  expect(body.text).toContain("loops[1]{id,name,cron,enabled}:");
+  expect(body.text).toContain(loop.id);
+  expect(body.text).toContain("help[2]:");
+  expect(body.exitCode).toBe(0);
+});
+
+test("cli loops: an empty machine renders the definitive empty state (count: 0 + loops: [])", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const res = gateway().cli(deviceToken, ["loops"]);
+  const text = textOf(res);
+  expect(text).toContain("count: 0");
+  expect(text).toContain("loops: []");
+  expect((res.body as { loops: any[] }).loops).toEqual([]);
+});
+
+test("cli log [D+R]: text is the TOON run survey (F2), structured runs intact", () => {
+  const { deviceToken, machineId } = seededCli();
+  const withRuns = store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  store.addRun({
+    loopId: withRuns.id, userId: "u1", machineId, phase: "done", role: "exec",
+    ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new", sessionId: "sess-abc",
+    costUsd: 0.08, state: { drift: 0 }, message: "no drift since last sweep",
+  });
+  const res = gateway().cli(deviceToken, ["log", withRuns.id]);
+  expect(res.status).toBe(200);
+  const body = res.body as { ok: boolean; runs: any[]; text: string; exitCode: number };
+  // Structured fields still there.
+  expect(body.runs).toHaveLength(1);
+  expect(body.runs[0].sessionId).toBe("sess-abc");
+  // F2: a non-empty TOON survey the in-run callback can print.
+  expect(body.text.length).toBeGreaterThan(0);
+  expect(body.text).toContain(`loop: "Docs Sweep" (${withRuns.id})`);
+  expect(body.text).toContain("count: 1 of 1 total");
+  expect(body.text).toContain("runs[1]{ts,role,outcome,cost,metrics,session,message}:");
+  expect(body.text).toContain("exec,ok/nothing-new,$0.08,drift=0,sess-abc");
+  expect(body.text).toContain("summary:");
+  expect(body.exitCode).toBe(0);
+});
+
+test("cli log: an empty loop renders count: 0 of 0 total + runs: []", () => {
+  const { deviceToken, machineId } = seededCli();
+  const empty = store.createLoop({ userId: "u1", machineId, name: "Empty", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const text = textOf(gateway().cli(deviceToken, ["log", empty.id]));
+  expect(text).toContain("count: 0 of 0 total");
+  expect(text).toContain("runs: []");
+});
+
+test("cli log [R]: the in-run run credential also gets the TOON survey text (F2 in-run)", () => {
+  const { runToken, run } = seededCli();
+  store.updateRun(run.id, { status: "new", message: "did a thing", sessionId: "sess-run" });
+  const res = gateway().cli(runToken, ["log"]);
+  expect(res.status).toBe(200);
+  expect(textOf(res)).toContain("runs[1]{");
+  expect(textOf(res)).toContain("sess-run");
+});
+
+test("cli show [D]: text is the config detail with exitCode 0", () => {
+  const { deviceToken, loop } = seededCli();
+  const res = gateway().cli(deviceToken, ["show", loop.id]);
+  expect(res.status).toBe(200);
+  expect(textOf(res)).toContain(`cron: ${loop.cron}`);
+  expect((res.body as { exitCode: number }).exitCode).toBe(0);
+});
+
+test("cli new: text is the created-loop confirmation, structured id/name intact", () => {
+  const { deviceToken } = seededCli();
+  const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" })]);
+  expect(res.status).toBe(200);
+  const body = res.body as { id: string; name: string; text: string; exitCode: number };
+  const text = body.text;
+  expect(text).toContain(`created: "Docs Sweep" (${body.id})`);
+  expect(text).toContain("classification: open — runs until paused");
+  expect(text).toContain("dashboard: not applied");
+  expect(text).toContain("nextRuns[3]:");
+  expect(text).toContain("help[2]:");
+  expect(body.exitCode).toBe(0);
+});
+
+test("cli new: a closed loop reads classification closed; a provided-but-dropped ui warns loud", () => {
+  const { deviceToken } = seededCli();
+  const closed = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Ship v1", cron: "0 9 * * *", taskFile: "x", goal: "ship v1" })]);
+  expect(textOf(closed)).toContain("classification: closed — self-finishes when the goal is met");
+  // A ui that sanitizes to nothing is surfaced as a warning line, not silently dropped.
+  const dropped = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "W", cron: "0 8 * * *", taskFile: "x", ui: "   " })]);
+  expect(textOf(dropped)).toContain("warning:");
+  expect((dropped.body as { warning?: string }).warning).toBeTruthy(); // structured warning kept
+});
+
+test("cli new --dry-run: text is the normalized config detail + fire preview, structured config intact", () => {
+  const { deviceToken } = seededCli();
+  const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" }), "--dry-run"]);
+  expect(res.status).toBe(200);
+  const body = res.body as { dryRun: boolean; config: any; text: string };
+  expect(body.dryRun).toBe(true);
+  expect(body.config.cron).toBe("0 6 * * 1"); // structured config unchanged
+  expect(body.text).toContain("dry-run:");
+  expect(body.text).toContain('cron: "0 6 * * 1"');
+  expect(body.text).toContain("nextRuns[3]:");
+});
+
+test("cli edit: text is the updated-loop confirmation with the applied keys inline", () => {
+  const { deviceToken, loop } = seededCli();
+  const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always" })]);
+  expect(res.status).toBe(200);
+  const body = res.body as { applied: string[]; text: string; exitCode: number };
+  expect(body.applied).toEqual(expect.arrayContaining(["cron", "notify"])); // structured intact
+  expect(body.text).toContain(`updated: L (${loop.id})`); // bare: "L" needs no quoting
+  expect(body.text).toMatch(/applied\[2\]: (cron, notify|notify, cron)/);
+  expect(body.exitCode).toBe(0);
+});
+
+test("cli edit --dry-run: text renders the changes list; a rejection flips the header + adds a rejections block", () => {
+  const { deviceToken, loop } = seededCli();
+  const ok = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *" }), "--dry-run"]);
+  expect(textOf(ok)).toContain("nothing changed");
+  expect(textOf(ok)).toContain("changes[1]{key,from,to}:");
+  expect(textOf(ok)).toContain("rejections: none");
+  // A bad notify value is a per-key rejection in dry-run.
+  const bad = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "sometimes" }), "--dry-run"]);
+  const text = textOf(bad);
+  expect(text).toContain("1 change valid, 1 rejected");
+  expect(text).toContain("rejections[1]{key,reason}:");
+  expect(text).toContain("notify,");
+});
+
+test("cli report [R]: success renders the compact TOON line; state metrics inline", () => {
+  const { runToken } = seededCli();
+  const res = gateway().cli(runToken, ["report", "--status", "nothing-new"]);
+  expect(res.status).toBe(200);
+  expect(textOf(res)).toBe("reported: status=nothing-new");
+  expect((res.body as { exitCode: number }).exitCode).toBe(0);
+
+  const withMetrics = gateway().cli(runToken, ["report", "--status", "new", "--state", '{"drift":3}', "--message", "opened a PR"]);
+  expect(textOf(withMetrics)).toBe("reported: status=new · metrics drift=3 · message recorded");
+});
+
+test("F5: cli report rejects an invalid --status with a 400 VALIDATION_ERROR (no silent drop)", () => {
+  const { runToken, run } = seededCli();
+  const res = gateway().cli(runToken, ["report", "--status", "wibble"]);
+  expect(res.status).toBe(400);
+  const text = textOf(res);
+  expect(text).toContain('error: "status must be new|resolved|nothing-new (got \\"wibble\\")"');
+  expect(text).toContain("code: VALIDATION_ERROR");
+  expect((res.body as { exitCode: number }).exitCode).toBe(1);
+  // Fail-loud: the run's status was NOT mutated (the old code dropped it, exit 0).
+  expect(store.getRun(run.id)!.status ?? null).toBeNull();
+});
+
+test("F5: the same fail-loud guard applies through the raw agent-api transport too", () => {
+  const { rt, run } = seededExecRun();
+  const res = gateway().agentApi(rt, ["report", "--status", "bogus"]);
+  expect(res.status).toBe(400);
+  expect((res.body as { text: string }).text).toContain("code: VALIDATION_ERROR");
+  expect(store.getRun(run.id)!.status ?? null).toBeNull();
+});
+
+test("cli finish [R]: success renders the goal-met detail; a second finish is a CONFLICT", () => {
+  const closed = seededCli({ goal: "reach the goal" });
+  const ok = gateway().cli(closed.runToken, ["finish", "--message", "goal met", "--reason", "shipped"]);
+  expect(ok.status).toBe(200);
+  const text = textOf(ok);
+  expect(text).toContain(`finished: L (${closed.loop.id}) — goal met`); // bare: "L" needs no quoting
+  expect(text).toContain("completedAt:");
+  expect(text).toContain("completionReason: shipped");
+  // The lease stays live for one enriching report, so a second finish is a legible CONFLICT.
+  const again = gateway().cli(closed.runToken, ["finish", "--message", "again"]);
+  expect(again.status).toBe(400);
+  expect(textOf(again)).toContain("code: CONFLICT");
+});
+
+test("cli errors render as error:/code: TOON to stdout with exitCode 1", () => {
+  const { deviceToken } = seededCli();
+  // A createLoop validation error (bad --json) → structured error + rendered text.
+  const badJson = gateway().cli(deviceToken, ["new", "--json", "{not json"]);
+  expect(badJson.status).toBe(400);
+  expect((badJson.body as { error: string }).error).toMatch(/--json/); // structured field kept
+  expect(textOf(badJson)).toContain("error: ");
+  expect(textOf(badJson)).toContain("code: VALIDATION_ERROR");
+  expect((badJson.body as { exitCode: number }).exitCode).toBe(1);
+
+  // The device-credential run-only denial surfaces as a FORBIDDEN error to stdout.
+  const denied = gateway().cli(deviceToken, ["report"]);
+  expect(denied.status).toBe(403);
+  expect(textOf(denied)).toContain("code: FORBIDDEN");
+  expect(textOf(denied)).toContain("run-only verb");
+});

@@ -291,6 +291,19 @@ computes pure functions. Run instructions: `README.md`.
   `/api/machine/log` routes stay as thin aliases onto the same gateway methods (no
   behavior change for existing daemons); `/machine/report` is untouched (daemon
   finalize, not a user verb). Same 2MB `readJsonBody` cap as every machine route.
+  Every `/api/machine/cli` verb now returns a **superset body**: its axi-shaped TOON in
+  a `text` field (plus an `exitCode`) ALONGSIDE the existing structured JSON fields,
+  never replacing them (the axi-conformance spine, batch 1 - `gateway/toon.ts`, detailed
+  in `packages/server/AGENTS.md`). The 0.11 daemon ignores `text` and renders the
+  structured fields, so this ships server-first with no daemon release; the in-run
+  callback already prints `body.text`, so `renderLoopLog` gaining `text` is what finally
+  makes in-run `loopany log` print (the F2 fix). `finalizeCli` wraps `cli()` to fill
+  `text` from any structured `{error}` and ensure `exitCode` (idempotent + additive),
+  and errors render as `error:`/`code:` TOON. Two behavior changes ride along: `report`
+  and `finish` now reject an invalid `--status` with a 400 `VALIDATION_ERROR` instead of
+  silently dropping it (F5), and a second `finish` on an already-finished loop pins
+  `CONFLICT`. `describe()` (`show`) is intentionally left UNCHANGED (its redesign is
+  batch 2).
 - `auth.ts` THROWS at boot when the GitHub gate is on but `LOOPANY_AUTH_SECRET` is
   unset. Set the Fly secret before deploying with the gate on.
 - Per-team connect-key: the claim carries the team (`rememberClaimIntent`, in-memory,
