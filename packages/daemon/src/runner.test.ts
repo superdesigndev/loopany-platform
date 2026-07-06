@@ -424,3 +424,115 @@ describe("runDelivery — the local LOOPANY_ROOTS jail always applies", () => {
     expect(fs.existsSync(path.join(workdir, "captured-task.txt"))).toBe(true);
   }, 20000);
 });
+
+/** Local server that captures every report POST (report is fire-and-forget). */
+function reportCapture(): { reports: any[]; start: () => Promise<string>; close: () => void } {
+  const reports: any[] = [];
+  const srv = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      reports.push(JSON.parse(body));
+      res.end("{}");
+    });
+  });
+  return {
+    reports,
+    start: async () => {
+      await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+      return `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    },
+    close: () => srv.close(),
+  };
+}
+
+describe("runDelivery — an evolve run's finalText reaches the report", () => {
+  test("finalText rides along for role=evolve (the server's message fallback needs it)", async () => {
+    const bin = path.join(root, "evolve-claude.sh");
+    fs.writeFileSync(
+      bin,
+      [
+        "#!/bin/sh",
+        `echo '{"type":"result","is_error":false,"subtype":"success","result":"sharpened the Spec; no workflow change","session_id":"sess-ev"}'`,
+        "exit 0",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(bin, 0o755);
+    process.env.LOOPANY_CLAUDE_BIN = bin;
+
+    const cap = reportCapture();
+    const url = await cap.start();
+    try {
+      await runDelivery(delivery({ role: "evolve", loop: { ...delivery().loop, workflow: null } }), url, []);
+    } finally {
+      cap.close();
+    }
+    const rep = cap.reports.find((r) => r.runId === "run-1");
+    expect(rep).toBeTruthy();
+    expect(rep.ok).toBe(true);
+    expect(rep.outcome).toBe("evolve");
+    // Pre-fix: undefined (deliberately dropped) — every evolve run row had message null.
+    expect(rep.finalText).toBe("sharpened the Spec; no workflow change");
+  }, 20000);
+});
+
+describe("runDelivery — a non-zero exit with a clean result never records 'success' as the error", () => {
+  test("subtype 'success' + exit 1 → the exit code is the error, not the subtype", async () => {
+    const bin = path.join(root, "dying-claude.sh");
+    fs.writeFileSync(
+      bin,
+      [
+        "#!/bin/sh",
+        `echo '{"type":"result","is_error":false,"subtype":"success","result":"done","session_id":"sess-die"}'`,
+        "exit 1",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(bin, 0o755);
+    process.env.LOOPANY_CLAUDE_BIN = bin;
+
+    const cap = reportCapture();
+    const url = await cap.start();
+    try {
+      await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null } }), url, []);
+    } finally {
+      cap.close();
+    }
+    const rep = cap.reports.find((r) => r.runId === "run-1");
+    expect(rep).toBeTruthy();
+    expect(rep.ok).toBe(false);
+    // Pre-fix: error was literally "success" (the result event's subtype).
+    expect(rep.error).toBe("claude exited with code 1");
+  }, 20000);
+
+  test("an informative subtype still wins over the exit code", async () => {
+    const bin = path.join(root, "maxturns-claude.sh");
+    fs.writeFileSync(
+      bin,
+      [
+        "#!/bin/sh",
+        `echo '{"type":"result","is_error":true,"subtype":"error_max_turns","result":"","session_id":"sess-mt"}'`,
+        "exit 1",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(bin, 0o755);
+    process.env.LOOPANY_CLAUDE_BIN = bin;
+
+    const cap = reportCapture();
+    const url = await cap.start();
+    try {
+      await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null } }), url, []);
+    } finally {
+      cap.close();
+    }
+    const rep = cap.reports.find((r) => r.runId === "run-1");
+    expect(rep).toBeTruthy();
+    expect(rep.ok).toBe(false);
+    expect(rep.error).toBe("error_max_turns");
+  }, 20000);
+});

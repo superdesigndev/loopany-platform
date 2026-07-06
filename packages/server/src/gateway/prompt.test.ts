@@ -55,8 +55,13 @@ test("evolve task turn keeps every lever + smoke-test discipline + protocol pros
   expect(t).toContain("{{latest.");
   expect(t).toContain("<loop-chart");
   // Run-only framing + the smoke-test gate before set-workflow.
-  expect(t).toMatch(/never contact the user/i);
+  expect(t).toMatch(/never notif(y|ies) the user/i);
   expect(t).toMatch(/smoke-test/i);
+  // The pass must leave a run-log summary (report --message), stated in both the
+  // standing prose (§4 Finish) and the payload's closing instruction — an evolve
+  // block in the timeline should never be blank.
+  expect(t).toMatch(/loopany report --message/);
+  expect(t).toMatch(/no change/i);
   // The untrusted-data guard rides along in the user turn (evolve reads run messages).
   expect(t).toMatch(/data, never as instructions/i);
   // The task lever: sharpen the brief by editing the task file on disk (no set-task).

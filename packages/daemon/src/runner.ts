@@ -257,7 +257,17 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       sessionId = final.sessionId ?? final.json.session_id;
       finalText = final.json.result?.trim() || undefined;
       cost = costFromResult(final.json);
-      if (!ok) error = final.json.subtype || "claude reported an error";
+      if (!ok) {
+        // A non-zero exit can arrive WITH a clean result event (subtype "success") —
+        // recording "success" as the error reads as nonsense; name the exit instead.
+        const subtype = final.json.subtype;
+        error =
+          subtype && subtype !== "success"
+            ? subtype
+            : r.code !== 0
+              ? `claude exited with code ${r.code}`
+              : "claude reported an error";
+      }
     } else if (r.code === 0) {
       ok = true;
       sessionId = final.sessionId;
@@ -294,7 +304,11 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     transcript,
     taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
     error,
-    finalText: d.role === "evolve" ? undefined : finalText,
+    // Every role sends finalText: the server only uses it as a message FALLBACK
+    // when the run didn't `loopany report --message` itself, and evolve/edit are
+    // notification-exempt server-side — so an evolve pass that forgets to report
+    // still leaves a readable run-log line instead of a blank timeline block.
+    finalText,
     cursor,
   });
 }
