@@ -1,19 +1,26 @@
 /**
- * Builds the exec-loop standing system prompt + per-run task on the SERVER, to
- * ship inside a delivery (the machine just writes the prompt to a file and runs
- * claude with it). Ported from c0's loop-prompt.ts, bound to the new Loop row
- * and the renamed `loopany` CLI. Prompt prose lives as markdown loaded +
- * `{{token}}`-filled here. ALL prompt prose now lives under src/skill/: the public
- * authoring trio (create/update/evolve) in skill/references/, and the INTERNAL
- * run prompts (exec-loop, edit) in skill/run/ — server-side run-dispatch only,
- * never served or bundled. The `evolve` text is the SINGLE source of truth shared
- * with the installable agent skill (skill/references/evolve.md) — run-dispatch and
- * the skill read the same file, so the evolution guidance can't drift. `edit` is a
- * run-token verb prompt with no authoring twin (see skill/references/update.md for
- * the authoring CLI). §4 of exec-loop is ONE static section for every loop — the
- * prompt does NOT branch on `allowControl`; it tells the run to consult `loopany
- * show` (which reports the effective self-schedule capability) before nudging the
- * cadence, and the run's self-schedule surface is just reschedule + set-cron.
+ * Builds the per-run prompts on the SERVER, to ship inside a delivery (the machine
+ * just writes the prompt to a file and runs claude with it). Ported from c0's
+ * loop-prompt.ts, bound to the new Loop row and the renamed `loopany` CLI. Prompt
+ * prose lives as markdown loaded + `{{token}}`-filled here. ALL prompt prose lives
+ * under src/skill/: the public authoring trio (create/update/evolve) in
+ * skill/references/, and the INTERNAL run prompts (exec-core, edit) in skill/run/ —
+ * server-side run-dispatch only, never served or bundled. The `evolve` text is the
+ * SINGLE source of truth shared with the installable agent skill
+ * (skill/references/evolve.md) — run-dispatch and the skill read the same file, so
+ * the evolution guidance can't drift. `edit` is a run-token verb prompt with no
+ * authoring twin (see skill/references/update.md for the authoring CLI).
+ *
+ * Run-experience redesign, Batch 1: the exec run's instructions now live entirely
+ * in the FIRST USER TURN (`buildExecTask` ← exec-core.md), not the system prompt.
+ * `buildLoopSystemPrompt` returns "" — the daemon still writes it to the sys file
+ * and passes `--append-system-prompt-file`, but an empty file is a harmless no-op
+ * on every existing daemon (so this ships server-first, no daemon change). exec-core
+ * is the self-sufficient CORE (identity + untrusted-data guard + the non-negotiable
+ * fallback core + per-run trigger + a pointer to the installable loopany skill for
+ * the deep protocol); the deep protocol itself moves to the skill in a later batch.
+ * The old standing system prompt (exec-loop.md) is retained as that batch's source
+ * but is no longer imported or delivered.
  */
 import type { Loop, Run, StateField } from "../db/schema.js";
 
@@ -21,14 +28,12 @@ import type { Loop, Run, StateField } from "../db/schema.js";
 // bundle. Reading them from disk at runtime broke in prod: nitro bundles JS only,
 // so the `*.md` source files don't exist under .output and poll() threw ENOENT.
 // `?raw` resolves identically from skill/run/ as it did from scheduler/prompts/.
-import execLoop from "../skill/run/exec-loop.md?raw";
-import execTrigger from "../skill/run/exec-trigger.md?raw";
+import execCore from "../skill/run/exec-core.md?raw";
 import evolve from "../skill/references/evolve.md?raw";
 import edit from "../skill/run/edit.md?raw";
 
 const PROMPTS: Record<string, string> = {
-  "exec-loop": execLoop,
-  "exec-trigger": execTrigger,
+  "exec-core": execCore,
   evolve,
   edit,
 };
@@ -48,34 +53,44 @@ function formatSchemaFields(schema: StateField[]): string {
   return schema.map((f) => `${f.key}${f.unit ? ` (${f.unit})` : ""}${f.label ? ` — ${f.label}` : ""}`).join("; ");
 }
 
-/** Standing instructions injected via `--append-system-prompt-file`. */
-export function buildLoopSystemPrompt(loop: Loop): string {
-  const name = loop.name || loop.id;
-  const taskFile = loop.taskFile ?? "(none — work from the instruction you were given)";
+/** The schema-derived `loopany report` grammar line for a loop's metric charts. */
+function stateReportLine(loop: Loop): string {
   const schema = loop.stateSchema ?? [];
-  const stateLine = schema.length
+  return schema.length
     ? `loopany report --status <s> --state '{${schema.map((f) => `"${f.key}":<n>`).join(",")}}'
   # record this run's metrics for the trend chart. Fields (keys must match, values must be finite numbers):
   #   ${formatSchemaFields(schema)}
   # report a subset if you only observed some; big payloads: --state-file <path>.`
     : `loopany report --status new --sample <number>     # optional single metric for charts`;
-  return fillVars(loadPrompt("exec-loop"), { name, taskFile, stateLine });
 }
 
 /**
- * The per-run user turn — a fixed STATIC trigger (no more per-loop `task` column,
- * removed in batch 2). The whole standing brief lives in the loop's task file's
- * `## Spec`; this trigger just points the run at it and states how the run ends
- * (report, or `finish` for a closed loop). A closed loop injects its setpoint as a
- * `Goal (finish line): <goal>` line — prompt-injected so it wins over the file per
- * the trust hierarchy. Minimal + neutral on purpose: batch 3 owns the polished
- * prose in skill/run/exec-trigger.md; edit the template there, not this filler.
+ * The standing system prompt is now EMPTY: the exec run's instructions moved into
+ * the first user turn (`buildExecTask`, see the run-experience redesign / Batch 1).
+ * The daemon still writes this to the sys file and passes `--append-system-prompt-file`,
+ * so returning "" makes that flag a harmless no-op on every existing daemon — the
+ * prompt move ships server-first with no daemon change (design §5.2). Kept as a
+ * function so callers/wiring stay stable; retire once the daemon drops the flag.
+ */
+export function buildLoopSystemPrompt(_loop: Loop): string {
+  return "";
+}
+
+/**
+ * The per-run user turn — now the FULL exec CORE (identity, untrusted-data guard,
+ * the non-negotiable inline fallback core, the report/finish grammar, the per-run
+ * trigger, and a pointer to the installable loopany skill for the deep protocol).
+ * Self-sufficient by design: the skill is enrichment, never a dependency (§3.1). A
+ * closed loop injects its setpoint as a `Goal (finish line): <goal>` line —
+ * prompt-injected so it wins over the file per the trust hierarchy; an open loop
+ * leaves that line blank. `{{stateLine}}` carries the schema-derived report grammar.
  */
 export function buildExecTask(loop: Loop): string {
   const name = loop.name || loop.id;
   const taskFile = loop.taskFile ?? "(none — this loop has no task file yet; create one to hold its Spec)";
   const goalLine = loop.goal ? `Goal (finish line): ${loop.goal}` : "";
-  return fillVars(loadPrompt("exec-trigger"), { name, taskFile, goalLine });
+  const stateLine = stateReportLine(loop);
+  return fillVars(loadPrompt("exec-core"), { name, taskFile, goalLine, stateLine });
 }
 
 /** Fixed internal prompt for the data-grounded evolution pass. */

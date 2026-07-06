@@ -502,8 +502,8 @@ export class MachineGateway {
 
     // Untrusted wire input — clip the free-text fields defensively (same
     // discipline as taskFileContent on report). The `task` column is GONE (batch 2):
-    // a loop's standing brief lives in its task file's Spec, and the run message is a
-    // server-composed static trigger (see buildExecTask). So a loop needs either a
+    // a loop's standing brief lives in its task file's Spec, and the run message is the
+    // server-composed exec CORE (see buildExecTask). So a loop needs either a
     // deterministic workflow OR a task file to work from.
     // Parse-check the workflow at write time (zero-exec) so a syntactically
     // broken body — most often the Claude Code Workflow tool's `export const

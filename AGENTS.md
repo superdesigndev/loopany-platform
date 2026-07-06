@@ -54,9 +54,17 @@ computes pure functions. Run instructions: `README.md`.
   every caller: `goal:null` clears completion stamps; `enabled:true` on a completed
   loop is a reopen; `enabled:false` is a plain pause.
 - A loop's standing brief lives ONLY in its task file's `## Spec` (there is no
-  `task` column). The per-run message is a server-composed static trigger
-  (`gateway/prompt.ts` + `skill/run/exec-trigger.md`); a closed loop's goal is
-  prompt-injected as `Goal (finish line): <goal>`.
+  `task` column). The exec run's instructions live ENTIRELY in the first user turn
+  (`buildExecTask` ← `skill/run/exec-core.md`): the self-sufficient CORE (identity +
+  untrusted-data guard + the non-negotiable fallback core - read task file first, do
+  the work / surface only what changed, end with exactly ONE `loopany report`/`finish`,
+  `{{stateLine}}` report grammar, one pass then stop + per-run trigger + a pointer to
+  the installable loopany skill for the deep protocol). `buildLoopSystemPrompt` returns
+  `""` so the daemon's `--append-system-prompt-file` is a harmless no-op on every
+  daemon (ships server-first, no daemon change). A closed loop's goal is prompt-injected
+  as `Goal (finish line): <goal>` (an own-line fill, `{{goalLine}}`). The old standing
+  system prompt `skill/run/exec-loop.md` is retained as the source for the later
+  skill-side `references/run.md` batch but is no longer imported or delivered.
 - `allowControl` defaults TRUE; `false` means the owner pins the schedule. A run's
   self-schedule surface is only `reschedule` + `set-cron`, with cadence floors
   (`LOOPANY_SELF_CRON_FLOOR_MINUTES`, `LOOPANY_SELF_RESCHEDULE_FLOOR_MINUTES`)
@@ -77,8 +85,11 @@ computes pure functions. Run instructions: `README.md`.
      agents regardless of presence) on `loopany up`/`new`; best-effort, never blocks.
      `installArgs` + `loopany skill status` both derive from `SKILL_TARGET_AGENTS`, so
      adding an agent is a one-line list edit.
-  3. `skill/run/{exec-loop,edit,exec-trigger}.md` - INTERNAL run prompts, imported
-     `?raw` by `gateway/prompt.ts`; never served, never bundled. `run/edit.md`
+  3. `skill/run/{exec-core,edit}.md` - INTERNAL run prompts, imported `?raw` by
+     `gateway/prompt.ts`; never served, never bundled. `exec-core.md` is the exec
+     run's full first-user-turn CORE (folds the former `exec-trigger.md`, deleted);
+     the former standing prompt `exec-loop.md` still sits in `skill/run/` (Batch-3
+     source for `references/run.md`) but is imported by nothing. `run/edit.md`
      stays SEPARATE from `references/update.md` on purpose: the edit RUN uses
      run-token verbs on the current loop (`loopany set-cron`/`set-ui` ..., no id)
      and must be self-contained (skill install is best-effort), while update.md is

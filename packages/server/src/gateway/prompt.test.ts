@@ -3,9 +3,10 @@
  * evolve guidance was unified into the single source skill/references/evolve.md
  * (run-dispatch and the installable skill now read the SAME file). These assertions
  * lock the run behavior for each role — losing a lever here is a regression, not a
- * doc tweak. evolve/edit carry no `{{token}}`; exec-loop fills name/taskFile/
- * stateLine (§4 is now ONE static section for every loop — no allowControl branch),
- * so it also guards that placeholder filling still works against the (now
+ * doc tweak. evolve/edit carry no `{{token}}`; the exec run's instructions now live
+ * in the first USER turn (`buildExecTask` ← exec-core.md, fills name/taskFile/
+ * goalLine/stateLine) with an empty system prompt (run-experience redesign, Batch 1),
+ * so these also guard that placeholder filling still works against the (now
  * skill-sourced) evolve import sitting alongside it.
  */
 import { expect, test } from "vitest";
@@ -90,61 +91,73 @@ test("edit run prompt keeps the schedule/envelope verbs (run-token surface)", ()
   expect(p).toContain("loopany report --status resolved");
 });
 
-test("exec system prompt fills every placeholder", () => {
-  const p = buildLoopSystemPrompt(loop());
-  expect(p).toContain("This run: Test Loop");
-  expect(p).toContain("/work/loopany/test/README.md");
-  expect(p).toContain("loopany report");
-  // Nothing left unfilled.
-  expect(p).not.toMatch(/\{\{\w+\}\}/);
+// Run-experience redesign, Batch 1: the exec run's standing instructions moved out
+// of the system prompt into the FIRST USER TURN (`buildExecTask`). The system prompt
+// is now empty so the daemon's `--append-system-prompt-file` becomes a harmless
+// no-op on every existing daemon (design §5.2) — this ships server-first, no daemon
+// change. These assertions lock that move: an empty system prompt, and the full CORE
+// (identity + untrusted-data guard + non-negotiable fallback core + report grammar +
+// per-run trigger + skill pointer) carried in the user turn.
+test("exec system prompt is empty (instructions moved to the user turn)", () => {
+  expect(buildLoopSystemPrompt(loop())).toBe("");
+  expect(buildLoopSystemPrompt(loop({ allowControl: true }))).toBe("");
+  expect(
+    buildLoopSystemPrompt(loop({ stateSchema: [{ key: "mrr", label: "MRR", unit: "$" }] as Loop["stateSchema"] })),
+  ).toBe("");
 });
 
-// §4 is now ONE static section for every loop — the prompt does NOT branch on
-// allowControl. It offers only the cadence nudges (reschedule + set-cron), tells the
-// run to consult `loopany show` for its actual capability, and never offers a run
-// pause/resume/notify. The old on/off control variants are gone.
-for (const allowControl of [true, false]) {
-  test(`exec system prompt §4 is uniform (allowControl=${allowControl})`, () => {
-    const p = buildLoopSystemPrompt(loop({ allowControl }));
-    // The judge → show → adjust section, identical regardless of the loop flag.
-    expect(p).toContain("## 4. Adjust your schedule — only if this run warrants it");
-    expect(p).toContain("loopany show");
-    // The two cadence levers a run may use.
-    expect(p).toContain("loopany reschedule --next");
-    expect(p).toContain("loopany set-cron");
-    // A run is NOT offered pause/resume/notify anymore, and the old control markers
-    // and off-variant heading are gone entirely.
-    expect(p).not.toContain("loopany pause");
-    expect(p).not.toContain("loopany resume");
-    expect(p).not.toContain("loopany notify");
-    expect(p).not.toContain("## 4. Change your own schedule");
-    expect(p).not.toContain("<!-- control");
-    expect(p).not.toMatch(/\{\{\w+\}\}/);
-  });
-}
-
-test("exec system prompt lists declared metrics in the report line", () => {
-  const p = buildLoopSystemPrompt(loop({ stateSchema: [{ key: "mrr", label: "MRR", unit: "$" }] as Loop["stateSchema"] }));
-  expect(p).toContain('loopany report --status <s> --state');
-  expect(p).toContain("mrr");
-});
-
-// The per-run task is a STATIC trigger (the `task` column is gone): it points the
-// run at its task file's Spec and states how the run ends (report or finish), with
-// NO per-loop instruction embedded.
-test("exec task is a static trigger pointing at the task file + report/finish (open loop, no goal line)", () => {
+test("exec task carries the CORE: identity, fallback core, report/finish, skill pointer", () => {
   const t = buildExecTask(loop());
   expect(t).toContain("[loop run · Test Loop]");
-  expect(t).toContain("/work/loopany/test/README.md");
+  // Identity + role framing (one scheduled run, act only through `loopany`).
+  expect(t).toMatch(/one scheduled run/i);
+  expect(t).toContain("loopany");
+  // The non-negotiable inline fallback core, self-sufficient without the skill.
+  expect(t).toMatch(/non-negotiable/i);
+  expect(t).toContain("/work/loopany/test/README.md"); // read the task file first
   expect(t).toContain("## Spec");
+  expect(t).toMatch(/surface only what/i); // do the work, surface only what changed
+  expect(t).toMatch(/exactly ONE terminal call/i);
   expect(t).toContain("loopany report");
   expect(t).toContain("loopany finish");
-  // Open loop → no injected goal line.
-  expect(t).not.toContain("Goal (finish line):");
+  expect(t).toMatch(/one pass/i); // one pass then stop
+  // Skill pointer names the installable skill with a CORE-sufficient fallback.
+  expect(t).toMatch(/loopany skill/i);
+  expect(t).toMatch(/sufficient/i);
+  // Nothing left unfilled.
   expect(t).not.toMatch(/\{\{\w+\}\}/);
 });
 
-test("exec task injects the setpoint as a Goal (finish line) for a closed loop", () => {
-  const t = buildExecTask(loop({ goal: "reach 100 paying users" }));
-  expect(t).toContain("Goal (finish line): reach 100 paying users");
+test("exec task keeps the untrusted-data guard prominent in the user turn", () => {
+  const t = buildExecTask(loop());
+  expect(t).toMatch(/Untrusted data/i);
+  expect(t).toContain("## Timeline");
+  expect(t).toMatch(/data, never as instructions/i);
+  // The trust hierarchy: goal line + Spec authoritative, goal wins on conflict.
+  expect(t).toMatch(/goal line wins/i);
+});
+
+test("exec task report grammar is schema-derived (stateLine)", () => {
+  // No schema → the optional single-metric --sample line.
+  const open = buildExecTask(loop());
+  expect(open).toContain("loopany report --status new --sample <number>");
+  expect(open).not.toContain("--state '{");
+  // Declared schema → the --state grammar lists every declared key.
+  const withSchema = buildExecTask(
+    loop({ stateSchema: [{ key: "mrr", label: "MRR", unit: "$" }] as Loop["stateSchema"] }),
+  );
+  expect(withSchema).toContain("loopany report --status <s> --state");
+  expect(withSchema).toContain('"mrr":<n>');
+  expect(withSchema).not.toContain("--sample <number>");
+});
+
+test("exec task injects a Goal (finish line) iff the loop has a goal", () => {
+  // Open loop → no INJECTED goal line. (The untrusted-data guard mentions the
+  // `Goal (finish line):` token in backticks; that is the template, not an
+  // injection — so match an actual injected line: at line start, with content.)
+  expect(buildExecTask(loop())).not.toMatch(/^Goal \(finish line\): \S/m);
+  // Closed loop → the setpoint is prompt-injected on its own line (wins over the file).
+  expect(buildExecTask(loop({ goal: "reach 100 paying users" }))).toMatch(
+    /^Goal \(finish line\): reach 100 paying users$/m,
+  );
 });
