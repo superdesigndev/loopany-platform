@@ -34,9 +34,13 @@ describe('template registry', () => {
     expect(new Set(names).size).toBe(names.length)
   })
 
-  test('ships exactly the three default templates', () => {
+  test('ships exactly the default templates', () => {
     expect(TEMPLATES.map((t) => t.name)).toEqual([
+      'dependency-triage',
+      'docs-sweep',
+      'error-sweep',
       'follow-up-tracker',
+      'housekeeper',
       'market-research',
       'react-doctor',
     ])
@@ -65,6 +69,63 @@ describe('template registry', () => {
     expect(d).toContain('type: report') // front-matter convention for the calendar view
     expect(d).toContain('calendar') // reports ride the calendar; dashboard shows one
     expect(d).toContain('one dated markdown report') // exactly one report per day
+  })
+
+  test('ships the Dependency Triage template with its defining behaviors in the description', () => {
+    const dt = TEMPLATES.find((t) => t.name === 'dependency-triage') as TemplateInfo
+    expect(dt).toBeTruthy()
+    expect(dt.label).toBe('Dependency Triage')
+    const d = dt.description.toLowerCase()
+    expect(d).toContain('smoke test') // verify gh can see dependency PRs before creating
+    expect(d).toContain('confirm') // merge authority is propose-then-confirm at create
+    expect(d).toContain('review-and-report-only') // the no-authority mode is explicit
+    expect(d).toContain('exactly once') // one pass per PR per sweep
+    expect(d).toContain('not proof of safety') // version labels are inputs, not proof
+    expect(d).toContain('worktree') // tests run in a fresh worktree off main
+    expect(d).toContain('kanban') // merged/deferred/blocked board
+  })
+
+  test('ships the Docs Sweep template with its defining behaviors in the description', () => {
+    const ds = TEMPLATES.find((t) => t.name === 'docs-sweep') as TemplateInfo
+    expect(ds).toBeTruthy()
+    expect(ds.label).toBe('Docs Sweep')
+    const d = ds.description.toLowerCase()
+    expect(d).toContain('worktree') // fresh worktree off main - never dirty the checkout
+    expect(d).toContain('unmerged') // no-stacking rule
+    expect(d).toContain('since the previous sweep') // scope = drift since the last sweep
+    expect(d).toContain('never rewrite accurate docs') // anti-busywork guard
+    expect(d).toContain('drift count') // per-run metric; zero is a clean stop
+  })
+
+  test('ships the Housekeeper template with its defining behaviors in the description', () => {
+    const hk = TEMPLATES.find((t) => t.name === 'housekeeper') as TemplateInfo
+    expect(hk).toBeTruthy()
+    expect(hk.label).toBe('Housekeeper')
+    const d = hk.description.toLowerCase()
+    expect(d).toContain('one candidate') // one proven cleanup per day
+    expect(d).toContain('low-risk') // prove safety with concrete evidence first
+    expect(d).toContain('uncommitted') // protect active/uncommitted/generated/uncertain work
+    expect(d).toContain('worktree') // fresh worktree off main - never dirty the checkout
+    expect(d).toContain('unmerged') // no-stacking rule
+    expect(d).toContain('deferred-candidates') // uncertain items are listed, never deleted
+    expect(d).toContain('kanban') // open/merged cleanup board
+    expect(d).toContain('cleanups landed') // the daily metric
+  })
+
+  test('ships the Error Sweep template with its defining behaviors in the description', () => {
+    const es = TEMPLATES.find((t) => t.name === 'error-sweep') as TemplateInfo
+    expect(es).toBeTruthy()
+    expect(es.label).toBe('Error Sweep')
+    const d = es.description.toLowerCase()
+    expect(d).toContain('smoke-test') // verify a real way to read errors before creating
+    expect(d).toContain('blind loop') // refuse when nothing can be observed
+    expect(d).toContain('confirm it with me') // source + sweep window are propose-then-confirm
+    expect(d).toContain('agreed window') // each sweep covers the window agreed at create
+    expect(d).toContain('worktree') // fresh worktree off main - never dirty the checkout
+    expect(d).toContain('unmerged') // no-stacking rule
+    expect(d).toContain('credentials') // logs are production data - never copy secrets/PII
+    expect(d).toContain('type: report') // dated reports ride the calendar convention
+    expect(d).toContain('actionable-error count') // the daily metric; clean stop at zero
   })
 
   test('ships the Follow-up Tracker template with its defining behaviors in the description', () => {

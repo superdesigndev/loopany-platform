@@ -1,0 +1,23 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of the loop's dashboard: a doc page with stale lines caught and
+       corrected, beside the drift count trending to zero. Colors ride the
+       app's CSS variables. -->
+  <rect x="10.5" y="8.5" width="61" height="63" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="17" y="15" width="30" height="3" rx="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <g fill="var(--color-hairline, #e3e5ea)">
+    <rect x="17" y="25" width="48" height="2.5" rx="1.25"/>
+    <rect x="17" y="31" width="40" height="2.5" rx="1.25"/>
+    <rect x="17" y="49" width="48" height="2.5" rx="1.25"/>
+    <rect x="17" y="61" width="28" height="2.5" rx="1.25"/>
+  </g>
+  <rect x="17" y="37" width="44" height="2.5" rx="1.25" fill="var(--color-rubik-orange, #ff5800)" opacity="0.45"/>
+  <path d="M15 38.25h48" stroke="var(--color-rubik-orange, #ff5800)" stroke-width="1.2" stroke-linecap="round"/>
+  <rect x="17" y="43" width="38" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <path d="M58 43.5l2 2 3.5-4" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="17" y="55" width="34" height="2.5" rx="1.25" fill="var(--color-rubik-orange, #ff5800)" opacity="0.45"/>
+  <path d="M15 56.25h40" stroke="var(--color-rubik-orange, #ff5800)" stroke-width="1.2" stroke-linecap="round"/>
+  <rect x="80" y="12" width="24" height="3" rx="1.5" fill="var(--color-rubik-orange, #ff5800)"/>
+  <path d="M80 66h54" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
+  <path d="M81 26 92 33 103 31 114 45 125 56 133 64" stroke="var(--color-rubik-orange, #ff5800)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="133" cy="64" r="3" fill="var(--color-rubik-green, #009b48)"/>
+</svg>

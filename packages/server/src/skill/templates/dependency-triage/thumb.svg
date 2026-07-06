@@ -1,0 +1,27 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of the loop's dashboard: the merged / deferred / blocked triage
+       kanban over the open-dependency-PR count easing down. Colors ride the
+       app's CSS variables. -->
+  <rect x="10" y="8" width="36" height="3" rx="1.5" fill="var(--color-rubik-green, #009b48)"/>
+  <rect x="10.5" y="16.5" width="35" height="15" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="15" y="21" width="20" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <path d="M37 23l2 2 3.5-4" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="10.5" y="36.5" width="35" height="15" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="15" y="41" width="24" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="15" y="46" width="14" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <rect x="54" y="8" width="36" height="3" rx="1.5" fill="var(--color-rubik-yellow, #ffd500)"/>
+  <rect x="54.5" y="16.5" width="35" height="15" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="59" y="21" width="22" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="59" y="26" width="12" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <rect x="98" y="8" width="36" height="3" rx="1.5" fill="var(--color-rubik-red, #b71234)"/>
+  <rect x="98.5" y="16.5" width="35" height="15" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="103" y="21" width="18" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <circle cx="127" cy="24" r="2.5" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.4"/>
+  <path d="M125.3 22.3l3.4 3.4" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.4" stroke-linecap="round"/>
+  <rect x="54" y="42" width="24" height="7" rx="3.5" fill="var(--color-interactive-soft, rgba(0,70,173,0.08))"/>
+  <path d="M60 47.5v-4m0 0l-1.7 1.7M60 43.5l1.7 1.7" stroke="var(--color-rubik-blue, #0046ad)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="65" y="44.5" width="10" height="2.5" rx="1.25" fill="var(--color-rubik-blue, #0046ad)" opacity="0.5"/>
+  <path d="M12 74h122" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
+  <path d="M12 60 36 63 60 61 84 67 108 66 132 70" stroke="var(--color-rubik-blue, #0046ad)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="12" y="55" width="20" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+</svg>

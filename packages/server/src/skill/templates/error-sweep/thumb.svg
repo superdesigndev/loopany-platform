@@ -1,0 +1,28 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of the loop's mechanics: a production log pane with an incident
+       traced to a verified fix PR, and the actionable-error count falling.
+       Colors ride the app's CSS variables. -->
+  <rect x="10.5" y="8.5" width="62" height="63" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="17" y="15" width="26" height="3" rx="1.5" fill="var(--color-rubik-red, #b71234)"/>
+  <g fill="var(--color-hairline, #e3e5ea)">
+    <rect x="24" y="26" width="40" height="2.5" rx="1.25"/>
+    <rect x="24" y="50" width="42" height="2.5" rx="1.25"/>
+    <rect x="24" y="62" width="30" height="2.5" rx="1.25"/>
+  </g>
+  <circle cx="19.5" cy="27.25" r="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="15" y="34.5" width="53" height="9" rx="3" fill="var(--color-rubik-red, #b71234)" opacity="0.08"/>
+  <circle cx="19.5" cy="39" r="2" fill="var(--color-rubik-red, #b71234)"/>
+  <rect x="24" y="37.75" width="38" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <circle cx="19.5" cy="51.25" r="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <circle cx="19.5" cy="63.25" r="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <path d="M72 39h16" stroke="var(--color-wire, #cfd3db)" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <rect x="90.5" y="28.5" width="43" height="21" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="96" y="34" width="22" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="96" y="40" width="14" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <circle cx="125" cy="39" r="5.5" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+  <path d="M122.5 39l1.8 1.8 3.2-3.6" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="90" y="12" width="20" height="3" rx="1.5" fill="var(--color-hairline, #e3e5ea)"/>
+  <path d="M90 68h44" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
+  <path d="M91 56 100 59 109 57 118 63 127 65 133 66.5" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="133" cy="66.5" r="2.5" fill="var(--color-rubik-green, #009b48)"/>
+</svg>

@@ -123,9 +123,11 @@ computes pure functions. Run instructions: `README.md`.
 - **PUBLIC but NOT bundled.** `meta.json` rides to the client via `listTemplates`, and
   `sync-skill.mjs`'s whitelist stays selective (`skill/templates/` never ships in the
   daemon npm tarball; guarded by `sync-skill.test.ts`).
-- v1 ships three templates, each `description` a short English paragraph at the same
+- Seven templates ship today, each `description` a short English paragraph at the same
   granularity (intent + defining disciplines, no tool flags, no machinery the create
-  flow already handles). Keep them tight. English only.
+  flow already handles). Keep them tight. English only. `templates.test.ts` pins the
+  full name list AND asserts each template's defining behaviors stay in its
+  description. The v1 three:
   - **React Doctor** (open): daily ~6am `npx react-doctor@latest`, fix the single worst
     issue in a fresh worktree off `main` (never dirty the checkout), PR via gh,
     no-stacking while a prior PR is unmerged (still refresh status + score), one
@@ -144,6 +146,31 @@ computes pure functions. Run instructions: `README.md`.
     concrete finish condition and create the loop CLOSED with it as the goal; confirm
     cadence; finish only when genuinely met, report regressions plainly; modest
     dashboard at create (latest-report embed + metric chart when one was defined).
+  The four added later (adapted from top-scoring public loop cases), same disciplines
+  at the same granularity:
+  - **Docs Sweep** (open): weekly Monday ~6am, compare docs against what the code
+    ships now, scoped to drift since the previous sweep; verify commands/links/examples
+    by actually running them; never rewrite accurate docs to create activity (zero
+    drift = clean stop); worktree + PR + no-stacking; drift count as metric; dashboard
+    = latest-summary embed + drift chart.
+  - **Housekeeper** (open): daily ~7am, ONE proven low-risk cleanup per day
+    (prove-before-delete with concrete evidence, keep only if checks stay green);
+    protect active/uncommitted/generated/uncertain work; uncertain candidates go to a
+    deferred-candidates file, never deleted; worktree + PR + no-stacking; `type:
+    open|merged` kanban cards + cleanups-landed metric.
+  - **Dependency Triage** (open): weekly Monday; smoke-test gh sees the repo's
+    Dependabot/Renovate PRs BEFORE creating, and confirm merge authority with the
+    owner (merge low-risk patch/minor vs review-and-report-only); snapshot open PRs,
+    process each exactly once on real evidence at the exact head (version labels are
+    inputs, not proof of safety), tests in a worktree; `type:
+    merged|deferred|blocked` kanban cards + open-PR-count metric.
+  - **Error Sweep** (open monitor): daily ~6am production reliability pass; carries
+    the Follow-up Tracker observation-path discipline (verify + smoke-test an error
+    source, propose source/window and confirm, never a blind loop); separate
+    actionable errors from noise, root-cause, smallest verified fix, one PR per fix,
+    no-stacking; NEVER copy credentials/tokens/PII into reports or PRs; one dated
+    `type: report` per run + actionable-error-count metric; nothing actionable = clean
+    stop.
 
 ## Workflows (deterministic pre-stage)
 

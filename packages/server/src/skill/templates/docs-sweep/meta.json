@@ -1,0 +1,6 @@
+{
+  "name": "docs-sweep",
+  "label": "Docs Sweep",
+  "desc": "A weekly sweep that catches documentation drift, verifies what really works, and lands fixes as a PR.",
+  "description": "Set up a weekly loop that keeps this project's documentation honest. Every Monday around 6am my local time, review what has changed since the previous sweep - the loop keeps track of where the last one ended - and compare the README, setup guides, examples, and runbooks against what the code actually ships now. Verify for real: run the commands, check the links, try the examples rather than trusting memory. Fix only material that is genuinely stale - never rewrite accurate docs just to create activity; finding nothing wrong is a clean stop. Do the work in a fresh git worktree off the main branch, so my own working checkout is never touched, and open a pull request explaining the drift and the fixes - but if a previous sweep's PR is still unmerged, don't stack another one. Write a short summary each sweep and report the drift count as a metric, zero included. Set up the loop's dashboard at creation: an embed of the latest sweep summary plus a chart of the drift count over time."
+}

@@ -1,0 +1,27 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of the loop's mechanics: one proven deletion kept only because the
+       checks stay green, a deferred candidate parked, and cleanups landing
+       over time. Colors ride the app's CSS variables. -->
+  <rect x="10.5" y="8.5" width="80" height="63" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="17" y="15" width="34" height="3" rx="1.5" fill="var(--color-rubik-yellow, #ffd500)"/>
+  <g fill="var(--color-hairline, #e3e5ea)">
+    <rect x="17" y="25" width="60" height="2.5" rx="1.25"/>
+    <rect x="17" y="43" width="64" height="2.5" rx="1.25"/>
+    <rect x="17" y="61" width="42" height="2.5" rx="1.25"/>
+  </g>
+  <rect x="15" y="31.5" width="70" height="8" rx="3" fill="var(--color-rubik-red, #b71234)" opacity="0.08"/>
+  <rect x="19" y="34.25" width="3.5" height="2.5" rx="1.25" fill="var(--color-rubik-red, #b71234)"/>
+  <rect x="26" y="34.25" width="46" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <path d="M26 35.5h46" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.2" stroke-linecap="round"/>
+  <circle cx="20.5" cy="53.25" r="2" fill="var(--color-rubik-yellow, #ffd500)"/>
+  <rect x="26" y="52" width="38" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="68" y="50" width="14" height="6" rx="3" fill="var(--color-interactive-soft, rgba(0,70,173,0.08))"/>
+  <circle cx="113" cy="22" r="9" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+  <path d="M108.5 22l3 3 5.5-6" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="var(--color-rubik-green, #009b48)">
+    <rect x="99" y="60" width="6" height="8" rx="1.5" opacity="0.35"/>
+    <rect x="108" y="55" width="6" height="13" rx="1.5" opacity="0.55"/>
+    <rect x="117" y="50" width="6" height="18" rx="1.5" opacity="0.75"/>
+    <rect x="126" y="44" width="6" height="24" rx="1.5"/>
+  </g>
+</svg>

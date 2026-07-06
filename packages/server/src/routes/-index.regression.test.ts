@@ -53,15 +53,25 @@ describe('dashboard poll resilience', () => {
 describe('dashboard template fan layout', () => {
   it('fan cards wrap and stay fixed-width - no template count may widen the page', () => {
     // The hero template fan grows with the registry. Per the
-    // no-page-level-horizontal-scroll rule the fan row must WRAP at narrow
-    // widths (flex-wrap on the container) and each card is a fixed narrow
+    // no-page-level-horizontal-scroll rule each fan ROW must WRAP at narrow
+    // widths (flex-wrap on the row container) and each card is a fixed narrow
     // width (w-[..px] shrink-0), so no count of templates can overflow the
     // viewport - extra cards fold into a second row instead.
-    const fan = /<div className="flex flex-wrap[^"]*">[\s\S]*?templates\.map/.exec(src)?.[0]
+    const fan = /<div key=\{r\} className="flex flex-wrap[^"]*">[\s\S]*?row\.map/.exec(src)?.[0]
     expect(fan, 'the wrapping fan row should contain the template cards').toBeTruthy()
-    const card = /templates\.map\([\s\S]*?className="([^"]*)"/.exec(src)?.[1]
+    const card = /row\.map\([\s\S]*?className="([^"]*)"/.exec(src)?.[1]
     expect(card, 'the template card should have a className').toBeTruthy()
     expect(card).toMatch(/\bw-\[\d+px\]/)
     expect(card).toContain('shrink-0')
+  })
+
+  it('splits 6+ templates into balanced rows - a full row never strands one orphan card', () => {
+    // With 7 templates a single flex-wrap row broke 6/1 at common desktop
+    // widths - a lone centered card under a full row reads as a bug. The fan
+    // must pre-split into balanced rows (max 4 per row) instead of letting
+    // flex-wrap decide the break point.
+    expect(src).toMatch(/templates\.length <= 5 \? 1 : Math\.ceil\(templates\.length \/ 4\)/)
+    // Remaining cards divide evenly across remaining rows (7 -> 4/3, not 4/3/0).
+    expect(src).toMatch(/Math\.ceil\(\(templates\.length - at\) \/ \(rowCount - r\)\)/)
   })
 })

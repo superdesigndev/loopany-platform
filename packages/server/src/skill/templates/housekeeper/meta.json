@@ -1,0 +1,6 @@
+{
+  "name": "housekeeper",
+  "label": "Housekeeper",
+  "desc": "A daily janitor that finds one provably safe cleanup in your codebase and lands it as a PR.",
+  "description": "Set up a daily loop that keeps this codebase tidy, one proven cleanup at a time. Every morning around 7am my local time, survey for housekeeping debt - dead code, stale files and comments, unused dependencies, duplication, inconsistent names - while protecting active, uncommitted, generated, and uncertain work. Pick one candidate, prove it genuinely low-risk with concrete evidence before touching it, then make the smallest coherent change in a fresh git worktree off the main branch, so my own working checkout is never touched, and keep it only if the build, tests, and runtime checks stay green. Open a pull request - but if a previous Housekeeper PR is still open (unmerged), don't open another one that day; just refresh the existing PRs' statuses. Uncertain candidates go into a deferred-candidates file, listed, never deleted. Track each cleanup PR as a markdown card with front matter `type: open` or `type: merged`, and report cleanups landed as a daily metric. Set up the loop's dashboard at creation: a kanban of the cleanup cards plus a chart of cleanups landed over time."
+}
