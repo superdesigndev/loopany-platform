@@ -128,6 +128,8 @@ When a change is warranted:
        loopany reschedule --run-at <30m|2h|ISO> one-shot: run again sooner/later, then resume cadence
        loopany set-cron "<cron expr>"           change the regular cadence permanently
 
+   `--run-at` is canonical; `--next` is accepted as a back-compat alias for it.
+
 If self-schedule is off, don't force it — carry on as normal. Server-side **cadence
 floors** apply to a run's own changes: a run cannot schedule itself more frequently
 than the floor allows. Those floors bind the run path only — the owner can set any

@@ -61,16 +61,30 @@ for i in $(seq 1 30); do
 done
 [ "$ONLINE" = "true" ] || { echo "machine never came online:"; tail -30 "$TMP/daemon.log"; exit 1; }
 
-echo "▶ creating loop 'Cookie每日早餐报告' (runs once immediately on create)"
-read -r -d '' TASK <<'EOF' || true
+# `taskFile` is a filesystem PATH to the loop's Spec, not the brief text — the
+# daemon resolves the loop folder via dirname(taskFile) and the run reads the
+# standing brief from the file's `## Spec`. Author it on disk inside a loop
+# folder the demo controls under $TMP, then pass its path (with the matching
+# workdir) in the create body.
+echo "▶ authoring the loop's task file (its standing ## Spec) on disk"
+LOOP_DIR="$TMP/workspace/loopany/cookie-breakfast"
+mkdir -p "$LOOP_DIR"
+TASK_FILE="$LOOP_DIR/README.md"
+cat >"$TASK_FILE" <<'EOF'
+# Cookie每日早餐报告
+
+## Spec
+
 你是 Cookie，一只热爱美食、贴心的小助手。每天早上为主人生成一份「今日早餐报告」：
 结合当前季节与营养均衡，推荐一份具体的中式早餐搭配（主食 + 蛋白 + 果蔬 + 一杯饮品），
 并在结尾附一句温暖的早安寄语。整体控制在 5 行以内，用中文，语气轻松温暖。
 EOF
+
+echo "▶ creating loop 'Cookie每日早餐报告' (runs once immediately on create)"
 LOOP_ID="$(node -e '
-  process.stdout.write(JSON.stringify({name:"Cookie每日早餐报告",cron:"0 8 * * *",task:process.argv[1],notify:"always"}));
-' "$TASK" | { read -r payload; machine_post /api/machine/loop "$payload"; } | node -e 'console.log(JSON.parse(require("fs").readFileSync(0)).id)')"
-echo "  loop: $LOOP_ID"
+  process.stdout.write(JSON.stringify({name:"Cookie每日早餐报告",cron:"0 8 * * *",workdir:process.argv[1],taskFile:process.argv[2],notify:"always"}));
+' "$LOOP_DIR" "$TASK_FILE" | { read -r payload; machine_post /api/machine/loop "$payload"; } | node -e 'console.log(JSON.parse(require("fs").readFileSync(0)).id)')"
+echo "  loop: $LOOP_ID (task file: $TASK_FILE)"
 
 echo "▶ waiting for the run to complete ..."
 PHASE=""

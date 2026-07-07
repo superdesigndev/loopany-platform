@@ -111,6 +111,27 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('type: report')
   })
 
+  test('run.md schedule levers name --run-at canonical + --next alias (batch 5, F4)', async () => {
+    const body = flat(await (await call('/api/skill/references/run.md')).text())
+    // The reschedule lever documents the canonical flag and keeps the back-compat alias.
+    expect(body).toContain('loopany reschedule --run-at')
+    expect(body).toContain('`--run-at` is canonical; `--next` is accepted as a back-compat alias')
+    // The run-facing effective-capability keys are the shipped camelCase TOON keys,
+    // not the retired kebab display names.
+    expect(body).toContain('selfSchedule: allowed|off')
+    expect(body).not.toContain('self-schedule: allowed')
+    expect(body).not.toContain('self-finish: allowed')
+  })
+
+  test('evolve.md log survey names the shipped TOON columns (batch 5)', async () => {
+    const body = flat(await (await call('/api/skill/references/evolve.md')).text())
+    // The "reading the log" prose matches the server's `renderLogText` header + summary.
+    expect(body).toContain('runs[N]{ts,role,outcome,cost,metrics,session,message}')
+    expect(body).toContain('`summary:`')
+    // `loopany log` shows metric values as key=value; the task-message inline is keys-only.
+    expect(body).toContain('`metrics` column carries them as `key=value`')
+  })
+
   test('run.md is dual-audience (in-run enrichment + owner-readable), not edit-run mechanics', async () => {
     const body = flat(await (await call('/api/skill/references/run.md')).text())
     // Explicitly addresses both the in-run agent and the owner reading the skill.

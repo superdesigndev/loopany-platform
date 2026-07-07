@@ -128,3 +128,28 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   bare-usage 400. **`edit --dry-run`** with a rejection now signals **exit 1** via an
   explicit `body.exitCode` (HTTP stays 200 with the rich changes/rejections tables —
   `finalizeCli` leaves a pre-set `exitCode` alone).
+
+## axi-conformance CLI (batch 5 — skill/prose alignment)
+
+- Batch 5 is PROSE/markdown + the demo script ONLY (no gateway/daemon source): it
+  aligns the `?raw`-bundled public skill (`skill/references/{run,evolve}.md`) with the
+  TOON surface batches 1-4 shipped. `run.md` already carried the camelCase
+  `selfFinish`/`selfSchedule` show keys (batch 2 #75 did that); batch 5 only adds the
+  "`--run-at` is canonical; `--next` is a back-compat alias" note to the reschedule
+  lever (F4). `evolve.md`'s "reading the log" survey now names the shipped
+  `renderLogText` header verbatim — `runs[N]{ts,role,outcome,cost,metrics,session,message}`
+  + the `summary:` tally — and clarifies that `loopany log`'s `metrics` column shows
+  `key=value` while the task-message inline table is metric-KEYS-only. `exec-core.md`
+  and `run/edit.md` were verified conformant and left untouched.
+- **When you change the `loopany log` TOON columns (`renderLogText`) you MUST update
+  `evolve.md`'s survey prose** — the pair is pinned by `-api.skill.references.test.ts`
+  ("evolve.md log survey names the shipped TOON columns"), which substring-matches the
+  exact header + `summary:` + the `key=value` phrasing. That serving test is the
+  lightweight guard for this batch (it also pins run.md's `--run-at`/`--next` note and
+  that the retired kebab `self-schedule:`/`self-finish:` display keys never reappear).
+- `scripts/demo-cookie-unified.sh` create body used a stale `task:` field; `createLoop`
+  dropped the `task` column (batch 2) and 400s without `taskFile`/`workflow`, so the
+  demo was actually broken — batch 5 renames it to `taskFile` (review F7).
+- These `.md` edits compile into the server bundle via `?raw`, so this batch DEPLOYS
+  server-side AND rides the next `@crewlet/loopany` npm tarball for the installed skill
+  (`sync-skill.mjs` whitelist is untouched — still SKILL.md + the 4 references).
