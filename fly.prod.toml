@@ -21,7 +21,9 @@
 #       LOOPANY_R2_ACCOUNT_ID=... LOOPANY_R2_BUCKET=... \
 #       LOOPANY_R2_ACCESS_KEY_ID=... LOOPANY_R2_SECRET_ACCESS_KEY=...
 #   fly certs add loopany.ai -a loopany-prod   # then add the DNS records Fly prints
-#   fly deploy -c fly.prod.toml                # boot runs drizzle-kit migrate over DIRECT_DATABASE_URL
+#   fly deploy --ha=false -c fly.prod.toml     # --ha=false = exactly ONE machine
+#                                              # (Fly's default HA spawns a 2nd -> double scheduler).
+#                                              # boot runs the migration over DIRECT_DATABASE_URL.
 
 app = "loopany-prod"
 # Colocated with the Supabase project (us-west-1) to minimize DB latency.

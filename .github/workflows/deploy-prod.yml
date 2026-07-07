@@ -31,7 +31,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy
-        run: flyctl deploy --remote-only -c fly.prod.toml -a loopany-prod
+        # --ha=false: exactly ONE machine. Fly's default HA creates a second
+        # machine, which would run a second in-process scheduler → double-fire.
+        run: flyctl deploy --remote-only --ha=false -c fly.prod.toml -a loopany-prod
         env:
           # Separate token from staging's FLY_API_TOKEN (set it in repo secrets).
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}
