@@ -519,11 +519,13 @@ export class MachineGateway {
     // the actual folder per loop (dirname(taskFile) → workdir).
     let cached = this.watchCache.get(machineId);
     if (!cached || deliveries.length || Date.now() - cached.at > WATCH_CACHE_TTL_MS) {
-      const watch: WatchEntry[] = (await store.loopsForMachine(machineId)).map((l) => ({
-        loopId: l.id,
-        workdir: l.workdir ?? null,
-        taskFile: l.taskFile ?? null,
-      }));
+      const watch: WatchEntry[] = (await store.loopsForMachine(machineId))
+        .map((l) => ({
+          loopId: l.id,
+          workdir: l.workdir ?? null,
+          taskFile: l.taskFile ?? null,
+        }))
+        .sort((a, b) => (a.loopId < b.loopId ? -1 : a.loopId > b.loopId ? 1 : 0));
       cached = { at: Date.now(), digest: sha256(JSON.stringify(watch)), watch };
       this.watchCache.set(machineId, cached);
     }
