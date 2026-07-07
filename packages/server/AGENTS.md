@@ -339,6 +339,24 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   folder must be watched before it writes); gateway `createLoop`/`editLoop` call
   `invalidateWatch`; store-direct write paths (web loopApi) are covered by the TTL.
 
+## Gateway layout (`gateway/sync.ts` - the ArtifactSync split)
+
+- The artifact byte-ingress cluster lives in `gateway/sync.ts` as `ArtifactSync`:
+  `sync()` (POST /api/machine/sync manifest reconcile), `putBlob()` (PUT
+  /api/machine/blob/:hash), `readBlob()` (the download seam `artifactFiles.ts` /
+  `runDiff.ts` resolve bytes through), plus the private task-file mirror
+  `refreshTaskFileContent`. `MachineGateway` (`gateway/index.ts`) keeps everything
+  else: poll/pollWait, report/reclaimRun/sweep, the CLI cluster, owner verbs, and
+  `maintainStorage` (retention/GC).
+- **Boot constructs ONE `createBlobStore()` and hands the SAME instance to both
+  classes** (`boot.ts`; accessors `getGateway()` / `getArtifactSync()`). This is
+  load-bearing with the in-memory store: two instances would mean retention/GC
+  deleting bytes ArtifactSync never wrote (and vice versa). Tests mirror the
+  sharing (`retention.test.ts` `gatewayWithStore`).
+- `sync.ts` imports the shared wire helpers from `index.ts` (`clipText`, `nowIso`,
+  `WIRE_TEXT_CAP`, `HttpResult`) - one clipping/NUL-stripping discipline, no fork;
+  `index.ts` never imports `sync.ts`, so there is no cycle.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

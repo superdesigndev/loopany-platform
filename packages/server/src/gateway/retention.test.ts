@@ -19,6 +19,7 @@ let tmp: string;
 let db: typeof import("../db/index.js");
 let store: typeof import("../db/store.js");
 let gatewayMod: typeof import("./index.js");
+let syncMod: typeof import("./sync.js");
 let retention: typeof import("./retention.js");
 let tokens: typeof import("./tokens.js");
 
@@ -31,6 +32,7 @@ beforeAll(async () => {
   await db.runMigrations();
   store = await import("../db/store.js");
   gatewayMod = await import("./index.js");
+  syncMod = await import("./sync.js");
   retention = await import("./retention.js");
   tokens = await import("./tokens.js");
 });
@@ -62,9 +64,15 @@ const scheduler = {
   runNow(): void {},
 } as any;
 
-function gatewayWithStore(): { gw: InstanceType<typeof gatewayMod.MachineGateway>; blobs: MemoryBlobStore } {
+/** Gateway (retention/GC) + ArtifactSync (byte ingress) over ONE shared blob
+ *  store - the same sharing boot wires up. */
+function gatewayWithStore(): {
+  gw: InstanceType<typeof gatewayMod.MachineGateway>;
+  art: InstanceType<typeof syncMod.ArtifactSync>;
+  blobs: MemoryBlobStore;
+} {
   const blobs = new MemoryBlobStore();
-  return { gw: new gatewayMod.MachineGateway(scheduler, blobs), blobs };
+  return { gw: new gatewayMod.MachineGateway(scheduler, blobs), art: new syncMod.ArtifactSync(blobs), blobs };
 }
 
 async function seed() {
@@ -183,21 +191,21 @@ test("GC deletes bytes before metadata: a blob re-referenced mid-delete drops me
 test("putBlob enforces the per-loop cap against the REAL byte length (sync under-reported the size)", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
-  const { gw, blobs } = gatewayWithStore();
+  const { art, blobs } = gatewayWithStore();
 
   const big = "z".repeat(200); // real bytes exceed the 100B cap…
   const hbig = sha256(big);
 
   // …but the sync under-reports the size (10B) for a NON-inline file, so it slips
   // past sync's projected-footprint check and lands in needHashes (no bytes yet).
-  const s = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "big.bin", hash: hbig, size: 10 }] });
+  const s = await art.sync(token, { loopId: loop.id, manifest: [{ path: "big.bin", hash: hbig, size: 10 }] });
   expect(s.status).toBe(200);
   expect((s.body as any).needHashes).toContain(hbig);
   expect((await store.getArtifactFile(loop.id, "big.bin"))).toBeDefined();
 
   // The daemon then PUTs the real (over-cap) bytes → refused at putBlob, with the
   // dangling row dropped so nothing points at a blob the server won't store.
-  const p = await gw.putBlob(token, hbig, Buffer.from(big));
+  const p = await art.putBlob(token, hbig, Buffer.from(big));
   expect(p.status).toBe(413);
   expect((p.body as any).capExceeded).toBe(true);
   expect(await blobs.has(hbig)).toBe(false);
@@ -208,14 +216,14 @@ test("putBlob enforces the per-loop cap against the REAL byte length (sync under
 test("putBlob stores a NEW blob that fits the per-loop cap (honest path not falsely rejected)", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "1000";
   const { token, loop } = (await seed());
-  const { gw, blobs } = gatewayWithStore();
+  const { art, blobs } = gatewayWithStore();
 
   const data = "y".repeat(200);
   const h = sha256(data);
-  const s = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "f.bin", hash: h, size: data.length }] });
+  const s = await art.sync(token, { loopId: loop.id, manifest: [{ path: "f.bin", hash: h, size: data.length }] });
   expect((s.body as any).needHashes).toContain(h);
 
-  const p = await gw.putBlob(token, h, Buffer.from(data));
+  const p = await art.putBlob(token, h, Buffer.from(data));
   expect(p.status).toBe(200);
   expect(await blobs.has(h)).toBe(true);
   expect((await store.blobExists(h))).toBe(true);
@@ -260,7 +268,7 @@ test("pruneSnapshots applies the window across every loop", async () => {
 test("per-loop cap blocks new bytes past the limit and surfaces it", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100"; // tiny cap for the test
   const { token, loop } = (await seed());
-  const { gw, blobs } = gatewayWithStore();
+  const { art, blobs } = gatewayWithStore();
 
   const a = "a".repeat(60);
   const b = "b".repeat(60);
@@ -268,7 +276,7 @@ test("per-loop cap blocks new bytes past the limit and surfaces it", async () =>
   const hb = sha256(b);
 
   // First file (60B) fits under the 100B cap → stored.
-  const r1 = await gw.sync(token, {
+  const r1 = await art.sync(token, {
     loopId: loop.id,
     manifest: [{ path: "a.txt", hash: ha, size: a.length }],
     blobs: [{ hash: ha, encoding: "utf8", data: a }],
@@ -278,7 +286,7 @@ test("per-loop cap blocks new bytes past the limit and surfaces it", async () =>
   expect(await blobs.has(ha)).toBe(true);
 
   // Second file (another 60B) would push the loop to 120B > 100B cap → rejected.
-  const r2 = await gw.sync(token, {
+  const r2 = await art.sync(token, {
     loopId: loop.id,
     manifest: [
       { path: "a.txt", hash: ha, size: a.length },
@@ -299,14 +307,14 @@ test("per-loop cap blocks new bytes past the limit and surfaces it", async () =>
 test("reusing an already-stored hash adds no bytes, so it's allowed even at the cap", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
-  const { gw, blobs } = gatewayWithStore();
+  const { art, blobs } = gatewayWithStore();
   const a = "a".repeat(60);
   const ha = sha256(a);
 
-  await gw.sync(token, { loopId: loop.id, manifest: [{ path: "a.txt", hash: ha, size: a.length }], blobs: [{ hash: ha, encoding: "utf8", data: a }] });
+  await art.sync(token, { loopId: loop.id, manifest: [{ path: "a.txt", hash: ha, size: a.length }], blobs: [{ hash: ha, encoding: "utf8", data: a }] });
 
   // A second path with the SAME content (dedup ⇒ zero new bytes) is accepted.
-  const r = await gw.sync(token, {
+  const r = await art.sync(token, {
     loopId: loop.id,
     manifest: [
       { path: "a.txt", hash: ha, size: a.length },
@@ -321,12 +329,12 @@ test("reusing an already-stored hash adds no bytes, so it's allowed even at the 
 test("the per-loop cap counts only NET growth, not in-place overwrites", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
-  const { gw, blobs } = gatewayWithStore();
+  const { art, blobs } = gatewayWithStore();
 
   // v1 (80B) fits under the 100B cap → stored.
   const v1 = "a".repeat(80);
   const hv1 = sha256(v1);
-  const r1 = await gw.sync(token, {
+  const r1 = await art.sync(token, {
     loopId: loop.id,
     manifest: [{ path: "report.md", hash: hv1, size: v1.length }],
     blobs: [{ hash: hv1, encoding: "utf8", data: v1 }],
@@ -339,7 +347,7 @@ test("the per-loop cap counts only NET growth, not in-place overwrites", async (
   // 160B and falsely rejected (the running-memory model: a large file updated in place).
   const v2 = "b".repeat(80);
   const hv2 = sha256(v2);
-  const r2 = await gw.sync(token, {
+  const r2 = await art.sync(token, {
     loopId: loop.id,
     manifest: [{ path: "report.md", hash: hv2, size: v2.length }],
     blobs: [{ hash: hv2, encoding: "utf8", data: v2 }],
@@ -403,13 +411,13 @@ test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate sna
 test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
-  const { gw, blobs } = gatewayWithStore();
+  const { art, blobs } = gatewayWithStore();
 
   // Sync 1: an 80B file whose size the daemon UNDER-reports as 10B. Inline bytes
   // are authoritative, so the blob (and the artifact_files row) record the real 80B.
   const a = "a".repeat(80);
   const ha = sha256(a);
-  await gw.sync(token, {
+  await art.sync(token, {
     loopId: loop.id,
     manifest: [{ path: "a.txt", hash: ha, size: 10 }],
     blobs: [{ hash: ha, encoding: "utf8", data: a }],
@@ -423,7 +431,7 @@ test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size",
   // check (80 base + 10 reported = 90 ≤ 100) and lands in needHashes (no bytes yet).
   const b = "b".repeat(80);
   const hb = sha256(b);
-  const s = await gw.sync(token, {
+  const s = await art.sync(token, {
     loopId: loop.id,
     manifest: [
       { path: "a.txt", hash: ha, size: 10 },
@@ -435,7 +443,7 @@ test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size",
   // putBlob measures the real 80B against the AUTHORITATIVE base (a.txt's verified
   // 80B), so 80 + 80 = 160 > 100 → refused. A reported-size base (10B) would have let
   // the loop creep past the cap one under-reported blob at a time.
-  const p = await gw.putBlob(token, hb, Buffer.from(b));
+  const p = await art.putBlob(token, hb, Buffer.from(b));
   expect(p.status).toBe(413);
   expect((p.body as any).capExceeded).toBe(true);
   expect(await blobs.has(hb)).toBe(false);
@@ -445,21 +453,21 @@ test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size",
 test("overwrite 'freed' credit uses the VERIFIED prior size — an over-reported one can't mint cap headroom", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
-  const { gw, blobs } = gatewayWithStore();
+  const { art, blobs } = gatewayWithStore();
 
   // f.bin first, alone: the daemon OVER-reports 95B (fits an empty loop), but the
   // PUT stores only 20 REAL bytes — blobs.size records 20 while the artifact_files
   // row keeps the reported 95.
   const small = "s".repeat(20);
   const h1 = sha256(small);
-  const s1 = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "f.bin", hash: h1, size: 95 }] });
+  const s1 = await art.sync(token, { loopId: loop.id, manifest: [{ path: "f.bin", hash: h1, size: 95 }] });
   expect((s1.body as any).needHashes).toContain(h1);
-  expect((await gw.putBlob(token, h1, Buffer.from(small))).status).toBe(200);
+  expect((await art.putBlob(token, h1, Buffer.from(small))).status).toBe(200);
 
   // A second, honest 60B file → verified footprint 60 + 20 = 80.
   const base = "x".repeat(60);
   const hbase = sha256(base);
-  await gw.sync(token, {
+  await art.sync(token, {
     loopId: loop.id,
     manifest: [
       { path: "f.bin", hash: h1, size: 95 },
@@ -475,7 +483,7 @@ test("overwrite 'freed' credit uses the VERIFIED prior size — an over-reported
   // projects 145 > 100 → rejected.
   const over = "o".repeat(85);
   const hover = sha256(over);
-  const r = await gw.sync(token, {
+  const r = await art.sync(token, {
     loopId: loop.id,
     manifest: [
       { path: "f.bin", hash: hover, size: over.length },

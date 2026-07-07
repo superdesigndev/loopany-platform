@@ -9,12 +9,15 @@
 import { runMigrations, closeClient } from "../db/index.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
+import { ArtifactSync } from "../gateway/sync.js";
+import { createBlobStore } from "../gateway/blobstore.js";
 import { gcIntervalMs } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
 
 interface Booted {
   scheduler: Scheduler;
   gateway: MachineGateway;
+  artifactSync: ArtifactSync;
   abort: AbortController;
 }
 
@@ -48,7 +51,12 @@ async function boot(): Promise<Booted> {
   let gateway: MachineGateway;
   const dispatcher: Dispatcher = { dispatch: (loop) => gateway.dispatcher.dispatch(loop) };
   const scheduler = new Scheduler(dispatcher);
-  gateway = new MachineGateway(scheduler);
+  // ONE blob store, shared explicitly: ArtifactSync writes/reads the bytes and
+  // the gateway's maintainStorage (retention/GC) deletes them - two stores would
+  // GC bytes the other half just wrote.
+  const blobStore = createBlobStore();
+  gateway = new MachineGateway(scheduler, blobStore);
+  const artifactSync = new ArtifactSync(blobStore);
 
   await scheduler.start(abort.signal);
 
@@ -75,7 +83,7 @@ async function boot(): Promise<Booted> {
   abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
 
   logger.info("loopany server booted");
-  return { scheduler, gateway, abort };
+  return { scheduler, gateway, artifactSync, abort };
 }
 
 export async function getScheduler(): Promise<Scheduler> {
@@ -84,4 +92,8 @@ export async function getScheduler(): Promise<Scheduler> {
 
 export async function getGateway(): Promise<MachineGateway> {
   return (await ensureServer()).gateway;
+}
+
+export async function getArtifactSync(): Promise<ArtifactSync> {
+  return (await ensureServer()).artifactSync;
 }

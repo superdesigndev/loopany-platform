@@ -1,6 +1,6 @@
 /**
- * Phase 2 — web artifact reads. Drives the gateway's in-memory blob store
- * (no R2/creds) through `getGateway()` so the read helpers resolve the same
+ * Phase 2 — web artifact reads. Drives the booted in-memory blob store
+ * (no R2/creds) through `getArtifactSync()` so the read helpers resolve the same
  * bytes the sync wrote. Covers the list/text/binary/oversize/not-found server-fn
  * core, the download route's byte resolver (path-safety + 404s), and the shared
  * loopInScope authorization predicate.
@@ -18,7 +18,7 @@ let boot: typeof import("./boot.js");
 let tokens: typeof import("../gateway/tokens.js");
 let artifacts: typeof import("./artifactFiles.js");
 let auth: typeof import("../auth.js");
-let gw: Awaited<ReturnType<typeof import("./boot.js")["getGateway"]>>;
+let art: Awaited<ReturnType<typeof import("./boot.js")["getArtifactSync"]>>;
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-art2-"));
@@ -32,7 +32,7 @@ beforeAll(async () => {
   tokens = await import("../gateway/tokens.js");
   artifacts = await import("./artifactFiles.js");
   auth = await import("../auth.js");
-  gw = await boot.getGateway();
+  art = await boot.getArtifactSync();
 });
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -56,7 +56,7 @@ async function seed() {
 /** Sync one inline file (text or binary bytes) and return its hash. */
 async function syncFile(token: string, loopId: string, p: string, bytes: Buffer, binary = false) {
   const hash = sha256(bytes);
-  await gw.sync(token, {
+  await art.sync(token, {
     loopId,
     manifest: [{ path: p, hash, size: bytes.length, binary }],
     blobs: [{ hash, encoding: "base64", data: bytes.toString("base64") }],
@@ -69,7 +69,7 @@ test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes 
   // One full-manifest sync (each sync is a complete reconciliation, not append).
   const z = Buffer.from("# Z");
   const b = Buffer.from("hello");
-  await gw.sync(token, {
+  await art.sync(token, {
     loopId: loop.id,
     manifest: [
       { path: "z.md", hash: sha256(z), size: z.length },
@@ -99,7 +99,7 @@ test("readLoopArtifact returns a binary marker for binary files (download-only)"
 
 test("readLoopArtifact marks oversize (metadata-only) files; no bytes are read", async () => {
   const { token, loop } = await seed();
-  await gw.sync(token, {
+  await art.sync(token, {
     loopId: loop.id,
     manifest: [{ path: "big.bin", hash: sha256("x"), size: 20 * 1024 * 1024, oversize: true }],
   });
@@ -113,7 +113,7 @@ test("readLoopArtifact reports not-found for unknown + tombstoned paths", async 
   expect(await artifacts.readLoopArtifact(loop.id, "nope.md")).toEqual({ error: "file not found" });
 
   // Re-sync without keep.md → it tombstones → no longer readable inline.
-  await gw.sync(token, { loopId: loop.id, manifest: [] });
+  await art.sync(token, { loopId: loop.id, manifest: [] });
   expect(await artifacts.readLoopArtifact(loop.id, "keep.md")).toEqual({ error: "file not found" });
 });
 
@@ -133,7 +133,7 @@ test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid byte
   expect(ok.filename).toBe("raw.json");
 
   // Oversize has no stored bytes → 404.
-  await gw.sync(token, {
+  await art.sync(token, {
     loopId: loop.id,
     manifest: [{ path: "data/raw.json", hash: sha256(bytes), size: bytes.length }, { path: "huge.bin", hash: sha256("h"), size: 20 * 1024 * 1024, oversize: true }],
     blobs: [{ hash: sha256(bytes), encoding: "base64", data: bytes.toString("base64") }],

@@ -17,6 +17,7 @@ let boot: typeof import("./boot.js");
 let tokens: typeof import("../gateway/tokens.js");
 let runDiff: typeof import("./runDiff.js");
 let gw: Awaited<ReturnType<typeof import("./boot.js")["getGateway"]>>;
+let art: Awaited<ReturnType<typeof import("./boot.js")["getArtifactSync"]>>;
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-diff-"));
@@ -30,6 +31,7 @@ beforeAll(async () => {
   tokens = await import("../gateway/tokens.js");
   runDiff = await import("./runDiff.js");
   gw = await boot.getGateway();
+  art = await boot.getArtifactSync();
 });
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -78,7 +80,7 @@ async function doRun(token: string, machineId: string, loopId: string, ts: strin
   const blobs = files
     .filter((f) => !f.oversize)
     .map((f) => ({ hash: sha256(f.bytes), encoding: "base64" as const, data: f.bytes.toString("base64") }));
-  await gw.sync(token, { loopId, runId: run.id, manifest, blobs });
+  await art.sync(token, { loopId, runId: run.id, manifest, blobs });
   const r = await gw.report(runToken, { ok: true, durationMs: 1 });
   expect(r.status).toBe(200);
   return run;
