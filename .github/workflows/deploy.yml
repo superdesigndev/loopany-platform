@@ -40,6 +40,32 @@ jobs:
         #   with:
         #     version: <flyctl version, e.g. 0.3.x>
       - name: Deploy
-        run: flyctl deploy --remote-only
+        # GIT_SHA / BUILT_AT bake the pushed commit into the image so /api/health
+        # reports it (the smoke check below asserts the promoted image matches).
+        run: |
+          flyctl deploy --remote-only \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      # Same cheap smoke as prod: confirm loopany-testing actually serves the
+      # commit we just pushed. This is also the live proof of the version endpoint.
+      - name: Smoke — /api/health serves the pushed SHA
+        run: |
+          expected='${{ github.sha }}'
+          for attempt in 1 2 3 4 5; do
+            body="$(curl -fsS --max-time 15 https://loopany-testing.fly.dev/api/health)" && break
+            echo "health not ready (attempt $attempt), retrying in 10s…" >&2
+            sleep 10
+          done
+          if [ -z "$body" ]; then
+            echo "::error::/api/health did not return 2xx after retries." >&2
+            exit 1
+          fi
+          echo "health: $body"
+          got="$(printf '%s' "$body" | sed -n 's/.*"sha":"\([^"]*\)".*/\1/p')"
+          if [ "$got" != "$expected" ]; then
+            echo "::error::staging /api/health sha=$got but pushed sha=$expected — the deploy did not take." >&2
+            exit 1
+          fi
+          echo "staging is serving $got ✔"

@@ -20,6 +20,15 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm --filter @loopany/server build
 
+# Build provenance baked into the image, surfaced at /api/health for the deploy
+# smoke check + drift visibility. CI passes these (--build-arg GIT_SHA=<github.sha>
+# --build-arg BUILT_AT=<utc iso>); the empty defaults keep a local `docker build`
+# working (the health route then reports "unknown").
+ARG GIT_SHA=""
+ARG BUILT_AT=""
+ENV GIT_SHA=${GIT_SHA}
+ENV BUILT_AT=${BUILT_AT}
+
 ENV NODE_ENV=production
 ENV LOOPANY_DATA_DIR=/data
 ENV PORT=3000
