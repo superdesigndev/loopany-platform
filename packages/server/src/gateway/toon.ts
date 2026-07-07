@@ -1,8 +1,11 @@
 /**
  * gateway/toon.ts — a pure, dependency-free TOON serializer (the axi-conformance
  * spine, batch 1). Every `/api/machine/cli` verb renders its result through these
- * helpers into the response `text` field the daemon prints; the structured JSON
- * fields ride ALONGSIDE (superset body) so an old daemon keeps rendering them.
+ * helpers into the response `text` field the daemon prints. Batch 1 rode the
+ * structured JSON fields ALONGSIDE (superset body); batch 7 retired that — the
+ * `/api/machine/cli` boundary (`finalizeCli`) now STRIPS to `{text, exitCode, loops,
+ * runs}`, so `text` is the sole render channel (the legacy endpoints keep the full
+ * structured bodies, they don't pass through `finalizeCli`).
  *
  * TOON (token-oriented object notation, https://axi.md/) is the axi default output:
  * braces/commas/quotes omitted where unambiguous. The shapes this module produces

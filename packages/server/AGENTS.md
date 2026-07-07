@@ -14,13 +14,15 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   absent-value placeholder is a bare em-dash `—` (`ABSENT`); truncation hints and
   `classification:`/`finished:` lines DELIBERATELY use `—` to match the axi reference
   shapes verbatim (the one place em-dashes are intentional in this repo).
-- **Superset body**: every `/api/machine/cli` verb returns its axi TOON in a `text`
-  field (+ `exitCode`) ALONGSIDE its existing structured JSON fields — never
-  replacing them. The 0.11 daemon ignores `text` and renders structured; the next
-  daemon prefers `text`. So a render change ships server-first with no daemon release.
-  `renderLoopLog`/`listLoops`/`createLoop`/`editLoop` add `text` at the source (so the
-  legacy routes benefit too); `finalizeCli` (wraps `cli()`) fills `text` from a
-  structured `{error}` and ensures `exitCode` — it is idempotent + additive.
+- **Superset body (batch 1, RETIRED in batch 7)**: batch 1 had every `/api/machine/cli`
+  verb return its axi TOON in a `text` field (+ `exitCode`) ALONGSIDE its structured JSON
+  fields, so the 0.11 daemon could keep rendering structured while `text` shipped
+  server-first with no daemon release. `renderLoopLog`/`listLoops`/`createLoop`/`editLoop`
+  add `text` at the source (so the legacy routes benefit too); `finalizeCli` (wraps
+  `cli()`) fills `text` from a structured `{error}` and ensures `exitCode`. **Batch 7
+  retired the superset**: `finalizeCli` now STRIPS the cli body to `{text, exitCode,
+  loops, runs}` (the daemon is a pure text sink) — see the batch-7 section below. The
+  legacy endpoints skip `finalizeCli`, so their full structured bodies are unchanged.
 - **F2** (in-run `loopany log` printed nothing): fixed for free by `renderLoopLog`
   gaining `text` — the in-run callback already prints `body.text`. Proven at the
   callback boundary by `daemon/src/callback.test.ts` (a stub server returning the new
@@ -98,9 +100,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   `unknown field(s): … — available: <optional set>`, exit 1. `listLoops(deviceToken,
   fieldsFlag?)` computes per-loop `nextFire` (derived cron fire in the loop's tz, `—`
   when paused), `runs` (`countRuns`), and `lastOutcome` (`runOutcomeToken` of the
-  newest run). The structured `loops` body carries the WHOLE `LoopListRecord`
-  (superset — an old daemon reads the fields it knows); `renderLoopsText(records,
-  fields)` picks columns via `loopCell`.
+  newest run). The structured `loops` body carries the WHOLE `LoopListRecord` — a
+  RETAINED data channel (`CLI_RETAINED_KEYS`, batch 7) the daemon reads to resolve
+  cwd→loop client-side, not for rendering; `renderLoopsText(records, fields)` picks
+  columns via `loopCell` into the `text` the daemon prints.
 - **`new` idempotency (F8, OQ3)**: the daemon (`create.ts`) computes
   `idempotencyKey = sha256(machineId + canonicalJson(resolvedBody))` over the ENTIRE
   outgoing request body (config + `timezone` + `claim`/connect-key + `agent`) MINUS the
@@ -171,12 +174,15 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   against the passed `--home` since the SERVER's home is irrelevant) to split loops into
   "here" vs an `elsewhere` count; no cwd (or none matching) ⇒ ALL loops are "here". This
   is the one place `gateway/index.ts` imports `node:path` (pure, no I/O).
-- **Daemon is a text sink** (`packages/daemon/src`): every server-verb path PREFERS
-  `body.text`+`body.exitCode` via the shared `cli-client.ts` `printText` (returns null
-  only when `text` is absent → an OLD server, one-release structured fallback via the
-  RETAINED `printLoops`/`printEditDryRun`/`formatRun`/`printCreateDryRun`). `--json`
-  (log/show) stays the escape hatch; `loopany log --transcript` keeps the structured
-  render (the server survey is concise, no `--full` inline yet). Converged on
+- **Daemon is a text sink** (`packages/daemon/src`): every server-verb path PRINTS
+  `body.text`+`body.exitCode` via the shared `cli-client.ts`. Batch 6 had `printText`
+  return null on a text-less OLD server for a one-release structured fallback; **batch 7
+  retired that fallback** — `printTextOrTooOld` now prints a definitive `SERVER_TOO_OLD`
+  error instead (the render-only `printLoops`/`printEditDryRun`/`printCreateDryRun`/
+  `formatRun`-fallback were deleted; `home` prints a definitive `tooOldHome` exit 0). See
+  the batch-7 section below. `--json` (log/show) stays the escape hatch; `loopany log
+  --transcript` keeps its client render from the RETAINED `runs` channel (the server
+  survey is concise, no `--full` inline yet). Converged on
   `callback`/`interactive`/`log`/`create`/`show`/`home`.
 - **Routing lives in the pure `route.ts` `classify(argv, env)`** (unit-tested; `cli.ts`
   maps a `Route` to its lazily-imported handler). The Batch-6 behavior change (OQ1): bare
@@ -266,6 +272,39 @@ server (deploys) vs daemon (rides the NEXT `@crewlet/loopany` npm release):
 - **home header (F11)**: the cwd-scoped list block is `loops here[N]` (design §5.1) only
   when there IS an elsewhere count (`elsewhere > 0`); an unscoped full-machine view stays
   the plain `loops[N]`.
+
+## axi-conformance CLI (batch 7 — retire the superset scaffolding)
+
+The final axi batch: the daemon is a PURE text sink, so the transitional "superset" render
+fields are retired. Ships server-first (deploys); the daemon changes ride the next
+`@crewlet/loopany` npm release (0.13.0) with PR #80's daemon fixes.
+- **Server strips at the cli boundary.** `finalizeCli` (wraps `cli()` ONLY) now reduces
+  every `/api/machine/cli` body to `CLI_RETAINED_KEYS` = `{text, exitCode, loops, runs}`
+  after filling `text`/`exitCode` — dropping the render-only `ok`/`id`/`name`/`loop`/
+  `loopId`/`changes`/`rejections`/`applied`/`config`/`nextRuns`/`classification`/`ui`/
+  `warning`/`idempotent`/`dryRun`. `loops` (client-side cwd→loop resolution) and `runs`
+  (`log --json` + `--transcript` escape hatch) are RETAINED data channels, not scaffolding
+  — the daemon reads them as data, and the server's `log`/`show` dispatch needs an explicit
+  id (design §3), so resolution must stay client-side. The verb HANDLERS still construct the
+  full structured bodies (createLoop/editLoop/listLoops/renderLoopLog) because the LEGACY
+  endpoints (`/api/machine/loop|log`, `/agent-api/loop`) call the methods DIRECTLY (not
+  through `finalizeCli`) and their bodies are UNCHANGED — a pre-0.12 daemon on the postCli
+  404-fallback still renders. `--json` is unaffected: it renders JSON into `text`
+  (`show`/`loops`) which the daemon prints verbatim.
+- **Daemon has no structured-render fallback.** `cli-client.ts` `printTextOrTooOld` replaces
+  the per-verb `printText`-null → `printLoops`/`printEditDryRun`/`printCreateDryRun`/
+  `formatRun` fallback: when `text` is ABSENT (a pre-0.12 server) it prints a definitive
+  `error:`/`code: SERVER_TOO_OLD` to stdout, exit 1, never blank. `home` is the ONE
+  exception — it stays never-empty/never-alarm on the SessionStart hot path, rendering a
+  definitive `tooOldHome` (exit 0). `log --transcript` KEEPS its client render from the
+  retained `runs` (+ the loop name from `resolveLoopId`, now `{id,name}`); `log --json`
+  keeps `JSON.stringify(runs)`.
+- **Compat:** the 0.12 daemon (already a text sink) keeps working — it reads `text`/
+  `exitCode` + the retained `loops`/`runs`. Daemons **≤ 0.11** (which render the structured
+  fields) get EMPTY device-verb output against the new server; mitigation: `npx @latest`
+  users auto-upgrade, global installs run `loopany update`. The in-run path keeps working on
+  ≤ 0.11 (it prints `text`, which stays). The postCli 404-fallback + legacy endpoint aliases
+  are OUT of scope here (separate `rexp-b7`, its own upgrade-window gate).
 
 ## Maintaining this file
 

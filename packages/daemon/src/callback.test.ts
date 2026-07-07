@@ -106,11 +106,11 @@ describe("runCallback — unified dispatch", () => {
   });
 
   test("F2: in-run `loopany log` prints the server's TOON survey text on the EXISTING daemon", async () => {
-    // Batch 1 makes the server's `/api/machine/cli` `log` response carry a `text`
-    // field ALONGSIDE the structured `runs` (superset body). This UNCHANGED 0.11
-    // callback already prints `body.text` — so the moment the server ships, in-run
-    // `loopany log` (which printed nothing before, F2) starts working with no daemon
-    // release. This e2e proves that contract at the callback boundary.
+    // The server's `/api/machine/cli` `log` response carries a rendered `text` field
+    // (Batch 1's F2 fix); the callback prints `body.text`. Batch 7 keeps `runs` as a
+    // retained data channel (for `--json`/`--transcript`) but the callback reads only
+    // `text` — so any extra structured fields the stub returns are simply ignored here.
+    // This e2e proves the F2 contract at the callback boundary.
     const survey = [
       'loop: "Docs Sweep" (loop-abc)',
       "count: 1 of 12 total",
@@ -136,12 +136,13 @@ describe("runCallback — unified dispatch", () => {
     expect(stdout()).toContain("summary:");
   });
 
-  test("a body with no `text` (pre-Batch-1 server) exits by HTTP status, printing nothing", async () => {
+  test("a body with no `text` (too-old server) surfaces the definitive SERVER_TOO_OLD error, exit 1", async () => {
+    // Batch 7 retired the structured-render fallback: with no rendered `text` the daemon
+    // is a pure text sink, so it prints a DEFINITIVE error rather than nothing.
     stubFetch(() => ({ status: 200, body: { ok: true } }));
-    expect(await runCallback(["report"])).toBe(0);
-    expect(stdout()).toBe("");
-    stubFetch(() => ({ status: 400, body: { error: "nope" } }));
     expect(await runCallback(["report"])).toBe(1);
+    expect(stdout()).toContain("code: SERVER_TOO_OLD");
+    expect(stdout()).toContain("too old for this CLI");
   });
 
   test("no server url → control channel not configured (exit 2, no fetch)", async () => {

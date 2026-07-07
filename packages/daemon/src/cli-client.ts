@@ -133,12 +133,12 @@ export async function postCli(argv: string[], legacy: LegacyFallback, deps: Post
 }
 
 /**
- * The text-sink primary path (Batch 6): print the server's pre-rendered `text` and
- * return its `exitCode`. This is the ONE render every verb path now prefers — the
- * server owns the TOON, the daemon is a dumb sink. Returns null when `text` is absent
- * (an OLD server, pre-Batch-1), so the caller runs its one-release structured
- * fallback. Never used for the not-configured/read-error/network-error results (those
- * carry no server body) — callers handle those first.
+ * The text-sink primary path: print the server's pre-rendered `text` and return its
+ * `exitCode`. This is the ONE render every verb path prefers — the server owns the
+ * TOON, the daemon is a dumb sink. Returns null when `text` is absent (a server that
+ * predates the axi text spine, pre-0.12). Never used for the
+ * not-configured/read-error/network-error results (those carry no server body) —
+ * callers handle those first.
  */
 export function printText(
   body: Record<string, unknown>,
@@ -151,6 +151,29 @@ export function printText(
     return typeof body.exitCode === "number" ? body.exitCode : status >= 200 && status < 300 ? 0 : 1;
   }
   return null;
+}
+
+/**
+ * The text-sink render with the too-old-server guard (Batch 7). Prints the server's
+ * `text` (+ returns its `exitCode`); when `text` is ABSENT the server predates the axi
+ * text spine (pre-0.12) — this CLI is a pure text sink with no structured render
+ * fallback anymore, so print a DEFINITIVE structured error to stdout (P6) rather than
+ * silently nothing, and exit 1. The mitigation is on the line: update the server, or
+ * pin an older `@crewlet/loopany`.
+ */
+export function printTextOrTooOld(
+  body: Record<string, unknown>,
+  status: number,
+  out: (s: string) => void,
+): number {
+  const code = printText(body, status, out);
+  if (code !== null) return code;
+  out(
+    `error: ${JSON.stringify(
+      "this Loopany server is too old for this CLI (no rendered `text`) — update the server, or pin an older `@crewlet/loopany`",
+    )}\ncode: SERVER_TOO_OLD\n`,
+  );
+  return 1;
 }
 
 /** Run-token legacy fallback: the pre-batch-4 `/agent-api/loop` verb endpoint. The

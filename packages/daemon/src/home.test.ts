@@ -100,16 +100,31 @@ describe("runHome", () => {
     expect(cap.stdout()).not.toContain("code: ERROR");
   });
 
-  test("old server (no `home` verb → 404): renders a minimal home from the loops fallback", async () => {
+  test("older server (no `home` verb → 404) that STILL renders `text`: text-sinks the legacy endpoint's render", async () => {
+    // A batch-1+ legacy `/api/machine/loop` GET renders `text`; the daemon prints it as a
+    // degraded home over the 404→legacy path (Batch 7 removed the structured-render home).
+    const legacyToon = "count: 1\nloops[1]{id,name,cron,enabled,nextFire}:\n  loop-1,Cookie,\"0 8 * * *\",on,—";
     const { fetchFn } = stub((url) =>
       url.includes("/api/machine/cli")
         ? { ok: false, status: 404, body: {} }
-        : { ok: true, body: { loops: [{ id: "loop-1", name: "Cookie", cron: "0 8 * * *", enabled: true }] } },
+        : { ok: true, body: { ok: true, loops: [{ id: "loop-1" }], text: legacyToon } },
     );
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runHome(cap.deps)).toBe(0);
-    expect(cap.stdout()).toContain("machine: connected");
-    expect(cap.stdout()).toContain("loop-1,Cookie");
-    expect(cap.stdout()).toContain("Run `loopany loops`");
+    expect(cap.stdout()).toBe(legacyToon + "\n");
+  });
+
+  test("too-old server (a `home`/loops reply with NO `text`): a DEFINITIVE 'server too old' home, exit 0, never alarming", async () => {
+    // Batch 7: no structured-render fallback. The home stays never-empty/never-alarm on
+    // the SessionStart hot path, so it renders a definitive too-old home (exit 0), not the
+    // SERVER_TOO_OLD error other verbs print.
+    const { fetchFn } = stub((url) =>
+      url.includes("/api/machine/cli") ? { ok: false, status: 404, body: {} } : { ok: true, body: { loops: [{ id: "loop-1" }] } },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runHome(cap.deps)).toBe(0);
+    expect(cap.stdout()).toContain("server too old for this CLI");
+    expect(cap.stdout()).toContain("update the Loopany server");
+    expect(cap.stdout()).not.toContain("error:");
   });
 });

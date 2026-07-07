@@ -24,7 +24,7 @@
 import path from "node:path";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
-import { postCli, printText } from "./cli-client.js";
+import { postCli, printTextOrTooOld } from "./cli-client.js";
 import { resolveLoopDir } from "./loopdir.js";
 
 export interface LoopRow {
@@ -128,12 +128,12 @@ export function resolveLoopId(
   loops: LoopRow[],
   explicit: string | undefined,
   cwd: string,
-): { id: string } | ResolveError {
+): { id: string; name: string } | ResolveError {
   if (explicit) {
     const byId = loops.find((l) => l.id === explicit);
-    if (byId) return { id: byId.id };
+    if (byId) return { id: byId.id, name: byId.name };
     const byName = loops.filter((l) => l.name === explicit);
-    if (byName.length === 1) return { id: byName[0]!.id };
+    if (byName.length === 1) return { id: byName[0]!.id, name: byName[0]!.name };
     if (byName.length > 1) return { error: `"${explicit}" matches multiple loops — pass the loop id instead` };
     // An explicitly-named loop that doesn't exist is the P6 NOT_FOUND case (exit 1,
     // structured to stdout) — NOT a usage error. Keep the actionable guidance.
@@ -149,7 +149,7 @@ export function resolveLoopId(
   if (matches.length === 0) {
     return { error: "no loop folder matches this directory — pass a loop id, e.g. `loopany log <loop-id>` (`loopany loops` lists them)" };
   }
-  return { id: matches[0]!.l.id };
+  return { id: matches[0]!.l.id, name: matches[0]!.l.name };
 }
 
 /** Render a `resolveLoopId` failure. A coded error (NOT_FOUND) is a P6 structured
@@ -249,36 +249,29 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   if (got.kind === "not-configured") return notConnected(), 2;
   if (got.kind === "read-error") return d.err(`loopany: cannot read ${got.path}\n`), 1;
   if (got.kind === "network-error") return d.err(`loopany: ${got.message}\n`), 1;
-  const data = got.body as { ok?: boolean; name?: string; runs?: RunRow[]; error?: string };
+  const data = got.body as { runs?: RunRow[]; error?: string };
 
-  // `--json` is the escape hatch (§4.3): emit the full structured runs the server
-  // carries alongside the TOON (superset body), unchanged for existing consumers.
-  if (json) {
+  // `--json` and `--transcript` read the RETAINED structured `runs` data channel
+  // (`CLI_RETAINED_KEYS` server-side): the concise server survey (`text`) omits per-run
+  // transcripts, so these two escape hatches render CLIENT-side from `runs`. A missing
+  // `runs` here means an error status (or a too-old server without the channel).
+  if (json || showTranscript) {
     if (got.status >= 400 || !data.runs) {
       d.err(`loopany: ${data.error || `log failed (${got.status})`}\n`);
       return 1;
     }
-    d.out(`${JSON.stringify(data.runs, null, 2)}\n`);
+    if (json) {
+      d.out(`${JSON.stringify(data.runs, null, 2)}\n`);
+      return 0;
+    }
+    // `--transcript`/`--full`: the concise header + each run's inlined clipped transcript.
+    d.out(`${resolved.name} — ${data.runs.length} recent run${data.runs.length === 1 ? "" : "s"}\n`);
+    if (data.runs.length === 0) return d.out("no runs yet\n"), 0;
+    d.out(`\n${data.runs.map((r) => formatRun(r, true)).join("\n\n")}\n`);
     return 0;
   }
 
   // TOON default: text-sink — the server renders the concise survey (incl. the empty
-  // state). `--transcript`/`--full` keeps the structured render, which inlines each
-  // run's transcript from the structured `runs` (the server survey stays concise);
-  // and `printText` returns null for an OLD server → the same structured fallback.
-  if (!showTranscript) {
-    const code = printText(got.body, got.status, d.out);
-    if (code !== null) return code;
-  }
-  if (got.status >= 400 || !data.ok || !data.runs) {
-    d.err(`loopany: ${data.error || `log failed (${got.status})`}\n`);
-    return 1;
-  }
-  d.out(`${data.name ?? resolved.id} — ${data.runs.length} recent run${data.runs.length === 1 ? "" : "s"}\n`);
-  if (data.runs.length === 0) {
-    d.out("no runs yet\n");
-    return 0;
-  }
-  d.out(`\n${data.runs.map((r) => formatRun(r, showTranscript)).join("\n\n")}\n`);
-  return 0;
+  // state). A too-old server (no `text`) → a definitive SERVER_TOO_OLD error.
+  return printTextOrTooOld(got.body, got.status, d.out);
 }

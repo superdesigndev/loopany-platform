@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import type { CliResponse, LegacyFallback } from "./cli-client.js";
-import { postCli, printText } from "./cli-client.js";
+import { postCli, printTextOrTooOld } from "./cli-client.js";
 import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
 import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
 
@@ -245,28 +245,13 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
       process.stderr.write(`loopany: ${detail}\n`);
       return 1;
     }
-    const data = r.body as CreateResponse;
-    if (r.status >= 400 || !data.ok) {
-      // Text-sink: the server renders the error TOON (`error:`/`code:`) to stdout via
-      // finalizeCli; print it, else fall back to the structured error line (old server).
-      const errCode = printText(r.body, r.status, write);
-      if (errCode === null) process.stderr.write(`loopany: ${data.error || `create failed (${r.status})`}\n`);
-      return errCode ?? 1;
-    }
-    // Text-sink primary: the server renders the created / dry-run / idempotent-replay
-    // TOON (incl. classification, nextRuns, dashboard applied/not, and the dropped-
-    // dashboard `warning:` line). `printText` returns null only for an OLD server.
-    const printed = printText(r.body, r.status, write) !== null;
-    if (dryRun) {
-      if (!printed) printCreateDryRun(write, data, timezone);
-      return 0;
-    }
-    if (!printed) {
-      // Old-server structured fallback (one release).
-      write(`created loop ${data.name ?? data.id} — ${config.cron} ${timezone}\n`);
-      if (config.ui !== undefined) write(`  dashboard ui: ${data.ui ? "applied" : "not applied"}\n`);
-      if (data.warning) process.stderr.write(`loopany: warning: ${data.warning}\n`);
-    }
+    // Text-sink: the server renders the created / dry-run / idempotent-replay TOON (incl.
+    // classification, nextRuns, dashboard applied/not, the dropped-dashboard `warning:`
+    // line) AND the error TOON (`error:`/`code:`); we just print it. A too-old server
+    // (no `text`) → a definitive SERVER_TOO_OLD error, never blank output.
+    const code = printTextOrTooOld(r.body, r.status, write);
+    if (code !== 0) return code;
+    if (dryRun) return 0;
     // Best-effort: now that the loop exists, install/refresh the loopany skill at
     // USER scope (`~/.claude/skills/loopany`), so the coding agent discovers the
     // references from ANY loop workdir. Announced, never blocks — any failure
@@ -279,49 +264,6 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     process.stderr.write(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
-}
-
-/** POST /api/machine/loop response (real create or `--dry-run` preview). */
-interface CreateResponse {
-  ok?: boolean;
-  id?: string;
-  name?: string;
-  error?: string;
-  dryRun?: boolean;
-  config?: Record<string, unknown>;
-  timezone?: string | null;
-  nextRuns?: string[];
-  classification?: string;
-  classificationText?: string;
-  /** Whether a dashboard ui was applied (echoed on real create, like the dry-run
-   *  preview's presence flag). */
-  ui?: boolean;
-  /** Set when a provided dashboard was dropped — surfaced loudly so it's never silent. */
-  warning?: string;
-  /** True when the server replayed an existing loop for a repeated idempotency key
-   *  (F8) instead of creating a new one — a timed-out retry returns the same loop. */
-  idempotent?: boolean;
-}
-
-/** Render the `--dry-run` create preview: the normalized config, detected tz, the
- *  next 3 fire times in that tz, and the open/closed classification. */
-function printCreateDryRun(write: (s: string) => void, data: CreateResponse, timezone: string): void {
-  const c = data.config ?? {};
-  const tz = (typeof data.timezone === "string" && data.timezone) || timezone || "(server-local)";
-  write("dry-run — nothing created; config is valid\n");
-  write(`  name: ${c.name ?? "(unnamed)"}\n`);
-  write(`  cron: ${String(c.cron ?? "")} ${tz}\n`);
-  if (c.taskFile) write(`  taskFile: ${String(c.taskFile)}\n`);
-  write(`  workflow: ${c.workflow ? "yes" : "no"}\n`);
-  write(`  ui: ${c.ui ? "yes" : "no"}\n`);
-  write(`  goal: ${c.goal != null ? String(c.goal) : "—"}\n`);
-  if (data.classificationText) write(`  ${data.classificationText}\n`);
-  const runs = data.nextRuns ?? [];
-  if (runs.length) {
-    write(`  next ${runs.length} runs:\n`);
-    for (const t of runs) write(`    ${t}\n`);
-  }
-  if (data.warning) write(`  warning: ${data.warning}\n`);
 }
 
 /** Best-effort, announced USER-scope install (`~/.claude/skills/loopany`). Swallows

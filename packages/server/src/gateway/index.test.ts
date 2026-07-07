@@ -1734,8 +1734,8 @@ test("cli run credential: log returns the run's OWN-loop history (closes the not
   const res = gateway().cli(runToken, ["log"]);
   expect(res.status).toBe(200);
   const body = res.body as any;
-  expect(body.loopId).toBe(loop.id);
-  expect(body.runs.some((r: any) => r.id === run.id && r.message === "did a thing")).toBe(true);
+  expect(body.text).toContain(loop.id); // loopId is render-only (stripped); the survey text carries it
+  expect(body.runs.some((r: any) => r.id === run.id && r.message === "did a thing")).toBe(true); // runs channel retained
   // Batch 4 wired a `log` case into dispatch, so the legacy `/agent-api/loop`
   // transport now yields the run's OWN-loop log too — the help that advertises
   // `log` is truthful on both transports (the seam is closed everywhere).
@@ -1769,7 +1769,7 @@ test("cli device credential: report/finish are run-only → 403", () => {
   for (const verb of ["report", "finish", "complete"]) {
     const res = gw.cli(deviceToken, [verb]);
     expect(res.status).toBe(403);
-    expect((res.body as { error: string }).error).toMatch(/run-only verb/);
+    expect((res.body as { text: string }).text).toMatch(/run-only verb/); // error → text (P6)
   }
 });
 
@@ -1928,9 +1928,9 @@ test("cli device credential: new/edit/loops/log/show route to the existing gatew
   // new → createLoop
   const created = gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "loopany/x/README.md" })]);
   expect(created.status).toBe(200);
-  const newId = (created.body as any).id as string;
+  const newId = idIn(created);
   expect(store.getLoop(newId)!.machineId).toBe(machineId);
-  // loops → listLoops (includes the just-created loop)
+  // loops → listLoops (includes the just-created loop; the `loops` channel is retained)
   const loops = gw.cli(deviceToken, ["loops"]);
   expect((loops.body as any).loops.map((l: any) => l.id)).toContain(newId);
   // edit → editLoop (positional loop id + --json patch)
@@ -1941,7 +1941,7 @@ test("cli device credential: new/edit/loops/log/show route to the existing gatew
   // log → loopLog for that loop
   const log = gw.cli(deviceToken, ["log", newId]);
   expect(log.status).toBe(200);
-  expect((log.body as any).loopId).toBe(newId);
+  expect(textOf(log)).toContain(newId); // loopId is render-only; the survey text carries it
   // show → describe for that loop
   const show = gw.cli(deviceToken, ["show", newId]);
   expect(show.status).toBe(200);
@@ -1953,7 +1953,7 @@ test("cli device credential: edit honors --dry-run (validate-only, no persistenc
   const before = store.getLoop(loop.id)!.cron;
   const dry = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *" }), "--dry-run"]);
   expect(dry.status).toBe(200);
-  expect((dry.body as any).dryRun).toBe(true);
+  expect(textOf(dry)).toContain("dry-run:"); // the dry-run render (structured dryRun flag retired)
   expect(store.getLoop(loop.id)!.cron).toBe(before); // unchanged
 });
 
@@ -1973,7 +1973,7 @@ test("cli device credential: bad --json for new is a legible 400", () => {
   const { deviceToken } = seededCli();
   const res = gateway().cli(deviceToken, ["new", "--json", "{not json"]);
   expect(res.status).toBe(400);
-  expect((res.body as { error: string }).error).toMatch(/--json/);
+  expect(textOf(res)).toMatch(/--json/); // error → text (P6)
 });
 
 test("cli rejects an unknown machine (unregistered device token) and a stale run token", () => {
@@ -1998,18 +1998,23 @@ function seededReclaimTarget(runToken: string): string {
 }
 
 // ---- batch 1: the axi-conformance spine — every cli verb carries a TOON `text` ----
-// The structured fields stay byte-compatible ALONGSIDE `text` (superset body), and
-// `exitCode` is present everywhere. Errors render as `error:`/`code:` TOON to stdout.
+// Batch 7 retired the superset render fields: a `/api/machine/cli` body now carries only
+// `text` + `exitCode` (+ the retained data channels `loops`/`runs` the daemon reads for
+// client-side loop resolution and the `log --json`/`--transcript` escape hatch). Errors
+// render as `error:`/`code:` TOON in `text` to stdout. So these tests assert on `text`,
+// never the retired `ok`/`id`/`loop`/`changes`/`config`/`ui`/`warning`/… fields.
 
 const textOf = (res: { body: unknown }) => (res.body as { text?: string }).text ?? "";
+/** The loop id the server embeds in a `text` render (`created: "X" (loop-abc)`, `loop:
+ *  "X" (loop-abc)`, …) — for tests that used to read the now-stripped `body.id`. */
+const idIn = (res: { body: unknown }) => textOf(res).match(/\((loop-[a-z0-9-]+)\)/i)?.[1] ?? "";
 
-test("cli loops: text is a TOON list (count + typed header + help), structured loops intact", () => {
+test("cli loops: text is a TOON list (count + typed header + help), the `loops` channel is retained", () => {
   const { deviceToken, loop } = seededCli();
   const res = gateway().cli(deviceToken, ["loops"]);
   expect(res.status).toBe(200);
-  const body = res.body as { ok: boolean; loops: any[]; text: string; exitCode: number };
-  // Structured fields unchanged (byte-compatible with today's body).
-  expect(body.ok).toBe(true);
+  const body = res.body as { loops: any[]; text: string; exitCode: number };
+  // `loops` is a RETAINED data channel (client-side cwd→loop resolution); `ok` retired.
   expect(body.loops.map((l) => l.id)).toContain(loop.id);
   // TOON surface — default columns are the minimal id/name/cron/enabled/nextFire (P2).
   expect(body.text).toContain("count: 1");
@@ -2103,7 +2108,7 @@ function seededRichLoop() {
       stateSchema: [{ key: "drift", label: "Drift", unit: "files" }],
     }),
   ]);
-  const id = (created.body as any).id as string;
+  const id = idIn(created);
   // model/allowControl aren't create fields; the pinned runAt override is edit-only.
   // Set them so the envelope carries non-default values for every editable key.
   const edited = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify({ model: "opus", allowControl: false, runAt: "2h" })]);
@@ -2116,9 +2121,9 @@ test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op
 
   const show = gw.cli(deviceToken, ["show", id, "--json"]);
   expect(show.status).toBe(200);
-  const env = (show.body as { loop: Record<string, unknown> }).loop;
-  // The wire `text` IS the JSON envelope (what a text-sink daemon prints).
-  expect(JSON.parse((show.body as { text: string }).text)).toEqual(env);
+  // The wire `text` IS the JSON envelope (what a text-sink daemon prints); the retired
+  // structured `loop` field is gone, so parse the envelope out of `text` (§4.1 transport).
+  const env = JSON.parse((show.body as { text: string }).text) as Record<string, unknown>;
   // Keyed EXACTLY as edit --json accepts: id + every EDITABLE_LOOP_FIELDS key.
   expect(Object.keys(env).sort()).toEqual(
     ["allowControl", "cron", "enabled", "goal", "id", "model", "name", "notify", "runAt", "stateSchema", "taskFile", "timezone", "ui", "workflow"].sort(),
@@ -2133,10 +2138,15 @@ test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op
   const { id: _drop, ...patch } = env;
   const dry = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify(patch), "--dry-run"]);
   expect(dry.status).toBe(200);
-  const b = dry.body as { ok: boolean; changes: unknown[]; rejections: unknown[] };
-  expect(b.ok).toBe(true);
-  expect(b.changes).toEqual([]);
-  expect(b.rejections).toEqual([]);
+  // Read/write identity via `text` (structured changes/rejections retired): a no-op dry-run
+  // renders "nothing changed" + "changes: none" + "rejections: none", never a change/rejection block.
+  expect(dry.body).toHaveProperty("exitCode", 0);
+  const dryText = textOf(dry);
+  expect(dryText).toContain("nothing changed");
+  expect(dryText).toContain("changes: none");
+  expect(dryText).toContain("rejections: none");
+  expect(dryText).not.toMatch(/changes\[\d+\]/);
+  expect(dryText).not.toMatch(/rejections\[\d+\]/);
 });
 
 test("show --json → edit roundtrip holds when the pinned runAt is stale (past): re-feeding it is a no-op, never a 400", () => {
@@ -2148,16 +2158,17 @@ test("show --json → edit roundtrip holds when the pinned runAt is stale (past)
 
   const show = gw.cli(deviceToken, ["show", id, "--json"]);
   expect(show.status).toBe(200);
-  const env = (show.body as { loop: Record<string, unknown> }).loop;
+  const env = JSON.parse((show.body as { text: string }).text) as Record<string, unknown>;
   expect(env.runAt).toBe(pastPin);
 
   const { id: _drop, ...patch } = env;
   const dry = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify(patch), "--dry-run"]);
   expect(dry.status).toBe(200);
-  const b = dry.body as { ok: boolean; changes: unknown[]; rejections: unknown[] };
-  expect(b.ok).toBe(true);
-  expect(b.changes).toEqual([]);
-  expect(b.rejections).toEqual([]);
+  expect(dry.body).toHaveProperty("exitCode", 0);
+  const dryText = textOf(dry);
+  expect(dryText).toContain("nothing changed");
+  expect(dryText).not.toMatch(/changes\[\d+\]/);
+  expect(dryText).not.toMatch(/rejections\[\d+\]/);
 });
 
 test("show: large ui/workflow show a size hint by default and inline under --full", () => {
@@ -2203,7 +2214,7 @@ test("show --json [R]: the run credential emits the same envelope, scoped to its
   const { runToken, loop } = seededCli({ allowControl: true });
   const res = gateway().cli(runToken, ["show", "--json"]);
   expect(res.status).toBe(200);
-  const env = (res.body as { loop: Record<string, unknown> }).loop;
+  const env = JSON.parse((res.body as { text: string }).text) as Record<string, unknown>;
   expect(env.id).toBe(loop.id);
   // The run's effective selfSchedule/selfFinish lines are TOON-only — never in the
   // read/write envelope.
@@ -2211,13 +2222,13 @@ test("show --json [R]: the run credential emits the same envelope, scoped to its
   expect(env).not.toHaveProperty("selfFinish");
 });
 
-test("cli new: text is the created-loop confirmation, structured id/name intact", () => {
+test("cli new: text is the created-loop confirmation (id/name are render-only now, in `text`)", () => {
   const { deviceToken } = seededCli();
   const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" })]);
   expect(res.status).toBe(200);
-  const body = res.body as { id: string; name: string; text: string; exitCode: number };
+  const body = res.body as { text: string; exitCode: number };
   const text = body.text;
-  expect(text).toContain(`created: "Docs Sweep" (${body.id})`);
+  expect(text).toContain(`created: "Docs Sweep" (${idIn(res)})`);
   expect(text).toContain("classification: open — runs until paused");
   expect(text).toContain("dashboard: not applied");
   expect(text).toContain("nextRuns[3]:");
@@ -2231,17 +2242,14 @@ test("cli new: a closed loop reads classification closed; a provided-but-dropped
   expect(textOf(closed)).toContain("classification: closed — self-finishes when the goal is met");
   // A ui that sanitizes to nothing is surfaced as a warning line, not silently dropped.
   const dropped = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "W", cron: "0 8 * * *", taskFile: "x", ui: "   " })]);
-  expect(textOf(dropped)).toContain("warning:");
-  expect((dropped.body as { warning?: string }).warning).toBeTruthy(); // structured warning kept
+  expect(textOf(dropped)).toContain("warning:"); // the dropped-dashboard warning rides in `text` (structured `warning` retired)
 });
 
-test("cli new --dry-run: text is the normalized config detail + fire preview, structured config intact", () => {
+test("cli new --dry-run: text is the normalized config detail + fire preview (structured config retired)", () => {
   const { deviceToken } = seededCli();
   const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" }), "--dry-run"]);
   expect(res.status).toBe(200);
-  const body = res.body as { dryRun: boolean; config: any; text: string };
-  expect(body.dryRun).toBe(true);
-  expect(body.config.cron).toBe("0 6 * * 1"); // structured config unchanged
+  const body = res.body as { text: string };
   expect(body.text).toContain("dry-run:");
   expect(body.text).toContain('cron: "0 6 * * 1"');
   expect(body.text).toContain("nextRuns[3]:");
@@ -2279,7 +2287,7 @@ test("F4: cli loops --json returns REAL JSON (the full records), not TOON", () =
   const rec = parsed.find((l: { id: string }) => l.id === loop.id) as { runs: number; lastOutcome: string | null };
   expect(rec.runs).toBe(store.countRuns(loop.id));
   expect(rec.runs).toBeGreaterThan(0);
-  // Structured `loops` still rides alongside (superset body).
+  // The `loops` data channel still rides alongside (retained for client-side resolution).
   expect((res.body as { loops: unknown[] }).loops.length).toBeGreaterThan(0);
   expect((res.body as { exitCode: number }).exitCode).toBe(0);
 });
@@ -2288,10 +2296,9 @@ test("F8: cli edit with an empty patch is a valid no-op reporting 'nothing to ch
   const { deviceToken, loop } = seededCli();
   const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", "{}"]);
   expect(res.status).toBe(200);
-  const body = res.body as { nothingToChange: boolean; text: string; exitCode: number };
-  expect(body.nothingToChange).toBe(true);
+  const body = res.body as { text: string; exitCode: number };
   expect(body.exitCode).toBe(0);
-  expect(body.text).toContain(`nothing to change: L (${loop.id})`);
+  expect(body.text).toContain(`nothing to change: L (${loop.id})`); // nothingToChange flag retired → asserted via text
   expect(body.text).toContain("editable[");
   expect(body.text).toContain("cron"); // the key list is present so the next attempt is well-formed
 });
@@ -2300,9 +2307,8 @@ test("cli edit: text is the updated-loop confirmation with the applied keys inli
   const { deviceToken, loop } = seededCli();
   const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always" })]);
   expect(res.status).toBe(200);
-  const body = res.body as { applied: string[]; text: string; exitCode: number };
-  expect(body.applied).toEqual(expect.arrayContaining(["cron", "notify"])); // structured intact
-  expect(body.text).toContain(`updated: L (${loop.id})`); // bare: "L" needs no quoting
+  const body = res.body as { text: string; exitCode: number };
+  expect(body.text).toContain(`updated: L (${loop.id})`); // bare: "L" needs no quoting; `applied` now render-only in `text`
   expect(body.text).toMatch(/applied\[2\]: (cron, notify|notify, cron)/);
   expect(body.exitCode).toBe(0);
 });
@@ -2371,7 +2377,7 @@ test("cli errors render as error:/code: TOON to stdout with exitCode 1", () => {
   // A createLoop validation error (bad --json) → structured error + rendered text.
   const badJson = gateway().cli(deviceToken, ["new", "--json", "{not json"]);
   expect(badJson.status).toBe(400);
-  expect((badJson.body as { error: string }).error).toMatch(/--json/); // structured field kept
+  expect(textOf(badJson)).toMatch(/--json/); // structured `error` → rendered into `text`
   expect(textOf(badJson)).toContain("error: ");
   expect(textOf(badJson)).toContain("code: VALIDATION_ERROR");
   expect((badJson.body as { exitCode: number }).exitCode).toBe(1);
@@ -2476,34 +2482,30 @@ test("cli new: an idempotent replay with the same key returns the SAME loop (nev
   const before = store.loopsForMachine(machineId).length;
   const first = gw.cli(deviceToken, ["new", "--json", cfg]);
   expect(first.status).toBe(200);
-  const firstBody = first.body as { id: string; idempotent?: boolean; ui?: boolean };
-  expect(firstBody.idempotent).toBeUndefined(); // a genuine first create
-  expect(firstBody.ui).toBe(true); // a dashboard was applied on the real create
+  const firstId = idIn(first);
+  expect(textOf(first)).not.toContain("idempotent replay"); // a genuine first create
+  expect(store.getLoop(firstId)!.ui).toBeTruthy(); // a dashboard was applied on the real create
   expect(store.loopsForMachine(machineId).length).toBe(before + 1);
 
   // A retry with the SAME key returns the SAME loop — the §4.5 replay TOON, no twin.
   const replay = gw.cli(deviceToken, ["new", "--json", cfg]);
   expect(replay.status).toBe(200);
-  const replayBody = replay.body as { id: string; idempotent?: boolean; ui?: boolean; text: string };
-  expect(replayBody.id).toBe(firstBody.id);
-  expect(replayBody.idempotent).toBe(true);
-  // The replay echoes the EXISTING loop's dashboard state, so the daemon's
-  // `dashboard ui: applied` line stays factually accurate on a timed-out retry.
-  expect(replayBody.ui).toBe(true);
-  expect(replayBody.text).toContain("[idempotent replay — existing loop returned]");
+  expect(idIn(replay)).toBe(firstId); // same loop, no twin
+  expect(textOf(replay)).toContain("[idempotent replay — existing loop returned]");
+  // The replayed loop still carries its dashboard (id/idempotent/ui are render-only now).
+  expect(store.getLoop(firstId)!.ui).toBeTruthy();
   expect(store.loopsForMachine(machineId).length).toBe(before + 1); // still exactly one
 });
 
-test("cli new: an idempotent replay of a no-dashboard loop echoes ui:false", () => {
+test("cli new: an idempotent replay of a no-dashboard loop stays dashboard-less", () => {
   const { deviceToken } = seededCli();
   const gw = gateway();
   const cfg = JSON.stringify({ name: "Plain", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "key-noui" });
   const first = gw.cli(deviceToken, ["new", "--json", cfg]);
-  expect((first.body as { ui?: boolean }).ui).toBe(false);
+  expect(store.getLoop(idIn(first))!.ui ?? null).toBeNull(); // no dashboard applied
   const replay = gw.cli(deviceToken, ["new", "--json", cfg]);
-  const replayBody = replay.body as { idempotent?: boolean; ui?: boolean };
-  expect(replayBody.idempotent).toBe(true);
-  expect(replayBody.ui).toBe(false);
+  expect(textOf(replay)).toContain("idempotent replay");
+  expect(store.getLoop(idIn(replay))!.ui ?? null).toBeNull();
 });
 
 test("cli new: a different key (different config) does NOT collide — an intentional twin survives", () => {
@@ -2511,8 +2513,8 @@ test("cli new: a different key (different config) does NOT collide — an intent
   const gw = gateway();
   const a = gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "A", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "k-a" })]);
   const b = gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "B", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "k-b" })]);
-  expect((a.body as { id: string }).id).not.toBe((b.body as { id: string }).id);
-  expect((b.body as { idempotent?: boolean }).idempotent).toBeUndefined();
+  expect(idIn(a)).not.toBe(idIn(b));
+  expect(textOf(b)).not.toContain("idempotent replay"); // an intentional twin, not a replay
 });
 
 test("cli new: idempotency binds the machine — the same key from another machine is not a replay", () => {
@@ -2527,10 +2529,10 @@ test("cli new: idempotency binds the machine — the same key from another machi
   const a = gw.cli(tokenA, ["new", "--json", cfg]);
   const b = gw.cli(tokenB, ["new", "--json", cfg]);
   // Same content key, different machines ⇒ two distinct loops (no cross-machine replay).
-  expect((a.body as { id: string }).id).not.toBe((b.body as { id: string }).id);
-  expect((b.body as { idempotent?: boolean }).idempotent).toBeUndefined();
-  expect(store.getLoop((a.body as { id: string }).id)!.machineId).toBe(machineA);
-  expect(store.getLoop((b.body as { id: string }).id)!.machineId).toBe(machineB);
+  expect(idIn(a)).not.toBe(idIn(b));
+  expect(textOf(b)).not.toContain("idempotent replay");
+  expect(store.getLoop(idIn(a))!.machineId).toBe(machineA);
+  expect(store.getLoop(idIn(b))!.machineId).toBe(machineB);
 });
 
 test("cli new: an EXPIRED idempotency key allows a genuine re-create (TTL window elapsed)", () => {
@@ -2540,21 +2542,17 @@ test("cli new: an EXPIRED idempotency key allows a genuine re-create (TTL window
   tokens.recordNewIdempotency("stale-key", machineId, "loop-ancient", Date.now() - (tokens.NEW_IDEMPOTENCY_TTL_MS + 1000));
   const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Fresh", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "stale-key" })]);
   expect(res.status).toBe(200);
-  const body = res.body as { id: string; idempotent?: boolean };
-  expect(body.idempotent).toBeUndefined(); // NOT a replay — the stale key expired
-  expect(body.id).not.toBe("loop-ancient");
-  expect(store.getLoop(body.id)!.machineId).toBe(machineId);
+  expect(textOf(res)).not.toContain("idempotent replay"); // NOT a replay — the stale key expired
+  expect(idIn(res)).not.toBe("loop-ancient");
+  expect(store.getLoop(idIn(res))!.machineId).toBe(machineId);
 });
 
 test("cli edit --json '{}': an empty patch is a valid no-op (nothing to change + the editable keys), exit 0", () => {
   const { deviceToken, loop } = seededCli();
   const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", "{}"]);
   expect(res.status).toBe(200);
-  const body = res.body as { ok: boolean; applied: string[]; nothingToChange?: boolean; text: string; exitCode: number };
-  expect(body.ok).toBe(true);
-  expect(body.applied).toEqual([]);
-  expect(body.nothingToChange).toBe(true);
-  expect(body.text).toContain("nothing to change:");
+  const body = res.body as { text: string; exitCode: number };
+  expect(body.text).toContain("nothing to change:"); // ok/applied/nothingToChange retired → asserted via text
   expect(body.text).toContain("editable[");
   expect(body.text).toContain("cron"); // the allowed-key list is surfaced
   expect(body.exitCode).toBe(0);
@@ -2563,16 +2561,16 @@ test("cli edit --json '{}': an empty patch is a valid no-op (nothing to change +
 test("cli edit --dry-run: a rejection flips the header, lists changes + rejections, and exits 1", () => {
   const { deviceToken, loop } = seededCli();
   const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "sometimes" }), "--dry-run"]);
-  // A dry-run with a rejection is not ok → exit 1 (the error contract).
-  const body = res.body as { ok: boolean; changes: any[]; rejections: any[]; text: string; exitCode: number };
-  expect(body.ok).toBe(false);
+  // A dry-run with a rejection is not ok → exit 1 (the error contract). ok/changes/
+  // rejections are render-only now → the whole shape is asserted via `text`.
+  const body = res.body as { text: string; exitCode: number };
   expect(body.exitCode).toBe(1);
-  expect(body.changes.map((c) => c.key)).toEqual(["cron"]);
-  expect(body.rejections.map((r) => r.key)).toEqual(["notify"]);
   const text = body.text;
   expect(text).toContain("1 change valid, 1 rejected");
   expect(text).toContain("changes[1]{key,from,to}:");
+  expect(text).toContain("cron"); // the valid change
   expect(text).toContain("rejections[1]{key,reason}:");
+  expect(text).toContain("notify"); // the rejected key
 });
 
 // ---- content-first home (P8/§5.1, Batch 6) ----------------------------------
