@@ -65,6 +65,7 @@ The whitelist — every key `--json` accepts:
 | `workflow`     | JS string                      | usually via `--workflow-file` instead |
 | `ui`           | HTML string                    | usually via `--ui-file` instead |
 | `stateSchema`  | array of `{key,label?,unit?}`  | usually via `--schema-file` instead |
+| `syncPaths`    | array of paths / `{path,as?}`, or `null` | extra folders to watch + sync as prefixed loop artifacts (relative → workdir; `null` clears) |
 
 Preview any patch with `--dry-run` — the server shows each key's before→after and any
 rejections, changing nothing (exits non-zero if the patch would be rejected):

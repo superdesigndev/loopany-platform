@@ -141,6 +141,13 @@
       "when": 1783315339448,
       "tag": "0019_watery_black_widow",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1783321824760,
+      "tag": "0020_flat_gladiator",
+      "breakpoints": true
     }
   ]
 }

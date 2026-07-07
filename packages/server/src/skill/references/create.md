@@ -174,6 +174,7 @@ file to write. Only the loop's real intent goes in it; the CLI fills the envelop
   "workdir": "<absolute project dir>",
   "taskFile": "<absolute path to the task file above>",
   "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
+  "syncPaths": ["signals", { "path": "~/other-repo/out", "as": "ext" }],
   "ui": "<small dashboard HTML — optional; see 'Dashboard at create' below>",
   "notify": "auto"
 }
@@ -188,6 +189,18 @@ Rules:
   `loopany finish` when met, ending the loop. Omit `goal` for a monitor/digest loop
   that runs indefinitely (§2).
 - `stateSchema` is optional — declare numeric per-run metrics to get a chart.
+- `syncPaths` is optional — EXTRA folders to watch + live-sync as loop artifacts,
+  beyond the loop's own folder (use when the project already has a structure the
+  loop writes into, e.g. a `signals/` or `tickets/` KB folder). Each entry is a
+  machine path: a relative one resolves against `workdir`; absolute and `~/` work
+  too. Synced files from an extra folder are prefixed with the folder's basename
+  (`signals/FB-1.md`) — or pass `{ "path": …, "as": "<prefix>" }` to set the prefix
+  explicitly. Dashboard panels match them like any artifact
+  (`<loop-kanban match="signals/*.md">`). The daemon enforces its roots jail and
+  the secrets ignore-list inside every extra folder, and all folders share the
+  loop's storage cap. The same list can also live machine-locally in a
+  `.loopany-sync.json` file (`{"syncPaths": [...]}`) inside the loop folder —
+  it unions with the config's list.
 - `ui` is optional — the loop's dashboard panel as small HTML (see **Dashboard at
   create** below).
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.

@@ -362,6 +362,47 @@ test("createLoop records the coding agent: codex when declared, claude-code by d
   expect(store.getLoop((weird.body as any).id)!.agent).toBe("claude-code");
 });
 
+test("syncPaths: createLoop + editLoop accept/validate them, poll's watch specs carry them", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+
+  // Create with a mixed shape: workdir-relative string + {path, as}.
+  const paths = ["signals", { path: "/abs/other-repo/out", as: "ext" }];
+  const created = gateway().createLoop(token, {
+    name: "KB loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", syncPaths: paths,
+  });
+  expect(created.status).toBe(200);
+  const id = (created.body as any).id as string;
+  expect(store.getLoop(id)!.syncPaths).toEqual(paths);
+
+  // The poll watch spec carries syncPaths to the daemon.
+  const watch = (gateway().poll(token).body as any).watch as Array<{ loopId: string; syncPaths?: unknown }>;
+  expect(watch.find((w) => w.loopId === id)?.syncPaths).toEqual(paths);
+
+  // Edit replaces them; explicit null clears; bad shapes are rejected untouched.
+  const edited = gateway().editLoop(token, id, { syncPaths: ["tickets"] });
+  expect(edited.status).toBe(200);
+  expect(store.getLoop(id)!.syncPaths).toEqual(["tickets"]);
+  const cleared = gateway().editLoop(token, id, { syncPaths: null });
+  expect(cleared.status).toBe(200);
+  expect(store.getLoop(id)!.syncPaths).toBeNull();
+  for (const bad of ["signals", [{ as: "no-path" }], [{ path: "x", as: "../up" }], [""], [{ path: "x", as: "/abs" }]]) {
+    expect(gateway().editLoop(token, id, { syncPaths: bad }).status).toBe(400);
+  }
+  expect(store.getLoop(id)!.syncPaths).toBeNull();
+
+  // Create rejects the same bad shapes.
+  const badCreate = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "x", syncPaths: [{ as: "only" }] });
+  expect(badCreate.status).toBe(400);
+
+  // Dry-run echoes the normalized entries and persists nothing.
+  const before = store.loopsForMachine(machineId).length;
+  const dry = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "x", syncPaths: ["signals"], dryRun: true });
+  expect((dry.body as any).config.syncPaths).toEqual(["signals"]);
+  expect(store.loopsForMachine(machineId).length).toBe(before);
+});
+
 test("createLoop accepts an initial ui (day-one dashboard) — validated, persisted, presence-flagged in dry-run", () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);

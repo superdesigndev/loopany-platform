@@ -26,6 +26,16 @@ export interface StateField {
   unit?: string;
 }
 
+/**
+ * One extra folder the daemon watches + syncs for a loop, beyond the loop folder.
+ * A string is a machine path (relative → resolved against the loop's workdir;
+ * absolute and `~/` allowed) whose synced files are prefixed with the folder's
+ * basename. The object form sets the prefix explicitly (`as`) when basenames
+ * would collide. Paths are machine-local — the daemon (not the server) resolves
+ * and jails them against the machine's roots allowlist.
+ */
+export type SyncPathEntry = string | { path: string; as?: string };
+
 /** One control command an exec/evolve run issued via the `loopany` shim (audit). */
 export interface ControlAction {
   ts: string;
@@ -163,6 +173,9 @@ export const loops = sqliteTable(
     ui: text("ui"),
     /** Per-run metric schema. */
     stateSchema: text("state_schema", { mode: "json" }).$type<StateField[]>(),
+    /** Extra folders the daemon watches + syncs for this loop (beyond the loop
+     *  folder). Machine-local paths; synced files carry the entry's prefix. */
+    syncPaths: text("sync_paths", { mode: "json" }).$type<SyncPathEntry[]>(),
     notify: text("notify", { enum: ["always", "auto", "never"] }).notNull().default("auto"),
     /** May a run change its own schedule (reschedule/set-cron)? Default TRUE — a
      *  loop self-adjusts unless the owner PINS the schedule (allowControl=false =

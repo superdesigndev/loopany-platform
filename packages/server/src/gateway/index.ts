@@ -17,7 +17,7 @@ import { Cron } from "croner";
 
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
-import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, Run, RunArtifact, RunRole, RunStatus, RunUsage, StateField, TranscriptStep } from "../db/schema.js";
+import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, Run, RunArtifact, RunRole, RunStatus, RunUsage, StateField, SyncPathEntry, TranscriptStep } from "../db/schema.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
 import { completionMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
@@ -70,8 +70,52 @@ const EDITABLE_LOOP_FIELDS = new Set([
   "workflow",
   "ui",
   "stateSchema",
+  "syncPaths",
   "goal",
 ]);
+
+/** Caps for the `syncPaths` config (extra watch/sync folders). */
+const SYNC_PATHS_MAX = 8;
+const SYNC_PATH_LEN_MAX = 1024;
+const SYNC_PREFIX_LEN_MAX = 128;
+
+/**
+ * Validate + normalize a `syncPaths` config value. Paths are MACHINE-local (the
+ * daemon resolves them against the loop's workdir and jails them to the machine
+ * roots) — the server only vets shape: each entry a non-empty string path or
+ * `{path, as?}`, and any `as` prefix a clean relative path (it becomes the top
+ * segment of synced artifact paths, so it must satisfy the same rules
+ * `safeRelPath` enforces on incoming manifest paths — no `..`, not absolute).
+ * `null` (explicit clear) and `undefined` (absent) both normalize to null.
+ */
+function normalizeSyncPaths(raw: unknown): { ok: true; value: SyncPathEntry[] | null } | { ok: false; detail: string } {
+  if (raw == null) return { ok: true, value: null };
+  if (!Array.isArray(raw)) return { ok: false, detail: "syncPaths must be an array of paths or {path, as} objects" };
+  if (raw.length === 0) return { ok: true, value: null };
+  if (raw.length > SYNC_PATHS_MAX) return { ok: false, detail: `syncPaths supports at most ${SYNC_PATHS_MAX} entries` };
+  const value: SyncPathEntry[] = [];
+  for (const entry of raw) {
+    const isObj = typeof entry === "object" && entry !== null && !Array.isArray(entry);
+    const path = typeof entry === "string" ? entry.trim() : isObj ? str((entry as { path?: unknown }).path) : null;
+    if (!path) return { ok: false, detail: "each syncPaths entry needs a non-empty path" };
+    if (path.length > SYNC_PATH_LEN_MAX) return { ok: false, detail: `syncPaths path too long (max ${SYNC_PATH_LEN_MAX})` };
+    if (typeof entry === "string") {
+      value.push(path);
+      continue;
+    }
+    const as = str((entry as { as?: unknown }).as);
+    if (as != null) {
+      if (as.length > SYNC_PREFIX_LEN_MAX) return { ok: false, detail: `syncPaths "as" prefix too long (max ${SYNC_PREFIX_LEN_MAX})` };
+      // The prefix heads every synced artifact path — hold it to the same rules
+      // the sync endpoint enforces on manifest paths.
+      if (safeRelPath(as) !== as) return { ok: false, detail: `syncPaths "as" must be a clean relative prefix (got "${as}")` };
+      value.push({ path, as });
+    } else {
+      value.push({ path });
+    }
+  }
+  return { ok: true, value };
+}
 const MIN_INTERVAL_MS = 60_000;
 const MAX_ARTIFACTS = 200;
 const MAX_TRANSCRIPT_STEPS = 200;
@@ -425,6 +469,7 @@ export class MachineGateway {
       loopId: l.id,
       workdir: l.workdir ?? null,
       taskFile: l.taskFile ?? null,
+      syncPaths: l.syncPaths ?? null,
     }));
 
     if (deliveries.length) log.info({ machineId, exec: deliveries.length }, "poll: delivered");
@@ -466,6 +511,8 @@ export class MachineGateway {
       workdir?: unknown;
       taskFile?: unknown;
       stateSchema?: unknown;
+      /** Optional extra watch/sync folders (machine paths; see normalizeSyncPaths). */
+      syncPaths?: unknown;
       /** Optional initial dashboard UI (small HTML, same surface as `set-ui`). Lets a
        *  template-driven loop ship a day-one dashboard instead of waiting for an
        *  evolve pass. Validated by the same `validateUi` editLoop uses. */
@@ -526,6 +573,11 @@ export class MachineGateway {
     const agent: CodingAgent = body.agent === "codex" ? "codex" : "claude-code";
 
     const stateSchema = store.coerceStateSchema(body.stateSchema) ?? null;
+    // Optional extra watch/sync folders — shape-validated here; the daemon
+    // resolves + jails the actual machine paths.
+    const sp = normalizeSyncPaths(body.syncPaths);
+    if (!sp.ok) return { status: 400, body: { error: sp.detail } };
+    const syncPaths = sp.value;
     // Optional day-one dashboard — same validate/clip surface as `set-ui` (editLoop).
     // Sanitized to the allowed tags/attrs; an unusable value coerces to null.
     const ui = this.validateUi(str(body.ui)?.slice(0, WIRE_TEXT_CAP) ?? "").value;
@@ -560,6 +612,7 @@ export class MachineGateway {
             notify,
             agent,
             stateSchema,
+            syncPaths,
           },
           timezone: timezone ?? null,
           nextRuns: nextFires(cron, timezone, 3),
@@ -616,6 +669,7 @@ export class MachineGateway {
       workdir: str(body.workdir),
       taskFile,
       stateSchema,
+      syncPaths,
       ui,
       notify,
       goal,
@@ -736,6 +790,7 @@ export class MachineGateway {
       workflow?: unknown;
       ui?: unknown;
       stateSchema?: unknown;
+      syncPaths?: unknown;
       goal?: unknown;
     },
     /** Validate-only (`loopany edit --dry-run`): compute the per-key before→after
@@ -878,6 +933,11 @@ export class MachineGateway {
       const v = this.validateSchema(loop.id, p.stateSchema);
       if (!v.ok) rejections.push({ key: "stateSchema", reason: v.detail });
       else set("stateSchema", v.value, loop.stateSchema);
+    }
+    if (p.syncPaths !== undefined) {
+      const v = normalizeSyncPaths(p.syncPaths);
+      if (!v.ok) rejections.push({ key: "syncPaths", reason: v.detail });
+      else set("syncPaths", v.value, loop.syncPaths);
     }
     return { update, changes, rejections };
   }

@@ -1,0 +1,1 @@
+ALTER TABLE `loops` ADD `sync_paths` text;

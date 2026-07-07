@@ -74,6 +74,41 @@ describe("WatchManager.reconcile — local roots jail", () => {
     expect(mgr.watchedDirs().has("traversal")).toBe(false);
   });
 
+  test("syncPaths extras join the watch (prefixed), out-of-jail extras drop while the loop folder stays watched", () => {
+    const jail = path.join(root, "jail");
+    const loopDir = path.join(jail, "repo", "loopany", "loop");
+    const signals = path.join(jail, "repo", "signals");
+    const outside = path.join(root, "outside");
+    fs.mkdirSync(loopDir, { recursive: true });
+    fs.mkdirSync(signals, { recursive: true });
+    fs.mkdirSync(outside, { recursive: true });
+    mgr = new WatchManager("http://127.0.0.1:1", "dk_x", [jail]);
+    mgr.reconcile([
+      { loopId: "l1", workdir: path.join(jail, "repo"), taskFile: path.join(loopDir, "README.md"), syncPaths: ["signals", outside] },
+    ]);
+    expect(mgr.watchedDirs().get("l1")).toBe(loopDir);
+    const key = mgr.watchedRoots().get("l1")!;
+    expect(key).toContain(`signals ${signals}`);
+    expect(key).not.toContain(outside);
+  });
+
+  test("a syncPaths change (via .loopany-sync.json) reshapes the watch on the next reconcile", () => {
+    const repo = path.join(root, "repo");
+    const loopDir = path.join(repo, "loop");
+    const extra = path.join(repo, "briefs");
+    fs.mkdirSync(loopDir, { recursive: true });
+    fs.mkdirSync(extra, { recursive: true });
+    mgr = new WatchManager("http://127.0.0.1:1", "dk_x");
+    const spec = { loopId: "l1", workdir: repo, taskFile: path.join(loopDir, "README.md") };
+    mgr.reconcile([spec]);
+    const before = mgr.watchedRoots().get("l1")!;
+    expect(before).not.toContain("briefs");
+    fs.writeFileSync(path.join(loopDir, ".loopany-sync.json"), JSON.stringify({ syncPaths: ["briefs"] }));
+    mgr.reconcile([spec]);
+    const after = mgr.watchedRoots().get("l1")!;
+    expect(after).toContain(`briefs ${extra}`);
+  });
+
   test("the daemon-owned scratch dir stays allowed under a jail (its location is local, not server-chosen)", () => {
     const scratchLoop = `watch-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const scratchDir = path.join(LOOPANY_DIR, "work", scratchLoop);

@@ -24,6 +24,7 @@ import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { resolveLoopDir } from "./loopdir.js";
 import { isScratchDir, isWithinResolvedRoots, resolveRoots } from "./roots.js";
+import { resolveSyncRoots, type SyncPathEntry, type SyncRoot } from "./syncroots.js";
 
 const log = logger.child({ mod: "watcher" });
 
@@ -45,6 +46,8 @@ export interface WatchSpec {
   loopId: string;
   workdir: string | null;
   taskFile: string | null;
+  /** Extra folders to watch + sync (prefixed); see syncroots.ts. */
+  syncPaths?: SyncPathEntry[] | null;
 }
 
 // ---- active-run attribution (mirrors progress.ts) ----
@@ -113,10 +116,18 @@ interface SyncResponse {
   rejected?: string[];
 }
 
-/** Walk a loop folder into a full manifest + the bytes of each in-cap file. */
-function buildManifest(dir: string): { entries: ManifestEntry[]; blobs: Map<string, Buffer> } {
+/** Walk the loop's watch roots into ONE full manifest + the bytes of each
+ *  in-cap file. A single merged manifest is required: the server tombstones
+ *  absent paths, so per-root syncs would delete each other's files. Extra
+ *  roots' paths carry their prefix (`signals/FB-1.md`); the loop folder's own
+ *  tree stays unprefixed. */
+function buildManifest(roots: SyncRoot[]): { entries: ManifestEntry[]; blobs: Map<string, Buffer> } {
   const entries: ManifestEntry[] = [];
   const blobs = new Map<string, Buffer>();
+  // The manifest prefix of the root currently being walked ("" for the loop
+  // folder). Ignore rules run on the ROOT-relative path so a prefix name can
+  // never mask (or trip) the secrets/junk list.
+  let pfx = "";
   const walk = (abs: string, rel: string): void => {
     let dirents: fs.Dirent[];
     try {
@@ -141,7 +152,7 @@ function buildManifest(dir: string): { entries: ManifestEntry[]; blobs: Map<stri
         continue;
       }
       if (st.size > BLOB_CAP) {
-        entries.push({ path: childRel, hash: null, size: st.size, binary: false, oversize: true });
+        entries.push({ path: pfx + childRel, hash: null, size: st.size, binary: false, oversize: true });
         continue;
       }
       let buf: Buffer;
@@ -152,10 +163,13 @@ function buildManifest(dir: string): { entries: ManifestEntry[]; blobs: Map<stri
       }
       const hash = sha256(buf);
       blobs.set(hash, buf);
-      entries.push({ path: childRel, hash, size: buf.length, binary: looksBinary(buf), oversize: false });
+      entries.push({ path: pfx + childRel, hash, size: buf.length, binary: looksBinary(buf), oversize: false });
     }
   };
-  walk(dir, "");
+  for (const root of roots) {
+    pfx = root.prefix ? `${root.prefix}/` : "";
+    walk(root.absDir, "");
+  }
   return { entries, blobs };
 }
 
@@ -173,30 +187,46 @@ class LoopWatcher {
   private synced = new Set<string>();
   private closed = false;
 
+  /** All watch roots: the loop folder (prefix "") + any resolved syncPaths. */
+  private readonly roots: SyncRoot[];
+
   constructor(
     private readonly loopId: string,
     private readonly dir: string,
     private readonly server: string,
     private readonly token: string,
-  ) {}
+    extraRoots: SyncRoot[] = [],
+  ) {
+    this.roots = [{ absDir: dir, prefix: "" }, ...extraRoots];
+  }
 
   start(): void {
-    this.fsw = watch(this.dir, {
-      ignored: (p: string) => {
-        const rel = path.relative(this.dir, p);
-        if (rel === "") return false;
-        if (rel.startsWith("..")) return true;
-        return isIgnoredRel(rel);
+    this.fsw = watch(
+      this.roots.map((r) => r.absDir),
+      {
+        ignored: (p: string) => {
+          // Resolve the event against the root that contains it; the ignore
+          // rules run on that root-relative path (same base as the manifest).
+          for (const r of this.roots) {
+            const rel = path.relative(r.absDir, p);
+            if (rel === "") return false;
+            if (!rel.startsWith("..")) return isIgnoredRel(rel);
+          }
+          return true; // outside every root
+        },
+        awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
+        ignoreInitial: false, // emit the current tree on start → initial reconciliation
+        followSymlinks: false,
+        depth: 99,
       },
-      awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
-      ignoreInitial: false, // emit the current tree on start → initial reconciliation
-      followSymlinks: false,
-      depth: 99,
-    });
+    );
     this.fsw.on("all", () => this.schedule());
     this.fsw.on("error", (err) => log.warn({ loopId: this.loopId, err: msg(err) }, "watch error"));
     watchersByLoop.set(this.loopId, this);
-    log.info({ loopId: this.loopId, dir: this.dir }, "watching loop folder");
+    log.info(
+      { loopId: this.loopId, dir: this.dir, extraRoots: this.roots.slice(1).map((r) => `${r.absDir} → ${r.prefix}/`) },
+      "watching loop folder",
+    );
   }
 
   /** Force an immediate flush (bypassing the debounce timer) and await it — the
@@ -243,7 +273,7 @@ class LoopWatcher {
 
   private async runFlush(): Promise<void> {
     try {
-      const { entries, blobs } = buildManifest(this.dir);
+      const { entries, blobs } = buildManifest(this.roots);
       const runId = activeRuns.get(this.loopId) ?? null;
 
       // Inline changed small files to save the PUT round-trip.
@@ -336,6 +366,13 @@ class LoopWatcher {
     return this.dir;
   }
 
+  /** Identity of the FULL root set (dirs + prefixes) — reconcile replaces the
+   *  watcher when this changes (a syncPaths edit or a `.loopany-sync.json`
+   *  change must reshape the watch, exactly like a taskFile move). */
+  get rootsKey(): string {
+    return this.roots.map((r) => `${r.prefix} ${r.absDir}`).join("\n");
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer);
@@ -391,14 +428,27 @@ export class WatchManager {
         log.warn({ loopId: id, dir }, "loop folder is outside LOOPANY_ROOTS — not watching");
         continue;
       }
+      if (!fs.existsSync(dir)) {
+        const existing = this.watchers.get(id);
+        if (existing) {
+          void existing.close(); // dir moved to a not-yet-existing path → stop the stale watcher
+          this.watchers.delete(id);
+        }
+        continue;
+      }
+      // Extra sync roots (server-sent syncPaths ∪ the folder's .loopany-sync.json)
+      // resolve on EVERY poll — cheap (a stat per entry), and it's what picks up a
+      // .loopany-sync.json edit within a poll cycle. Each root passes the same
+      // jail as the loop folder (inside resolveSyncRoots).
+      const extras = resolveSyncRoots(id, spec.syncPaths, dir, spec.workdir, this.roots);
+      const key = [{ absDir: dir, prefix: "" }, ...extras].map((r) => `${r.prefix} ${r.absDir}`).join("\n");
       const existing = this.watchers.get(id);
       if (existing) {
-        if (existing.watchDir === dir) continue; // unchanged → leave alone
-        void existing.close(); // dir moved → drop the stale watcher
+        if (existing.rootsKey === key) continue; // unchanged → leave alone
+        void existing.close(); // dir moved / root set changed → drop the stale watcher
         this.watchers.delete(id);
       }
-      if (!fs.existsSync(dir)) continue;
-      const w = new LoopWatcher(id, dir, this.server, this.token);
+      const w = new LoopWatcher(id, dir, this.server, this.token, extras);
       w.start();
       this.watchers.set(id, w);
     }
@@ -407,6 +457,12 @@ export class WatchManager {
   /** The dirs currently watched, by loopId (introspection/test seam). */
   watchedDirs(): Map<string, string> {
     return new Map([...this.watchers].map(([id, w]) => [id, w.watchDir] as const));
+  }
+
+  /** Each loop's FULL root-set identity (introspection/test seam) — the same
+   *  key reconcile compares, so tests can assert extra sync roots landed. */
+  watchedRoots(): Map<string, string> {
+    return new Map([...this.watchers].map(([id, w]) => [id, w.rootsKey] as const));
   }
 
   async closeAll(): Promise<void> {
