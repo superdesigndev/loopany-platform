@@ -7,7 +7,7 @@ import { cancelRun, getArtifacts, getJobDetail, getRunDiff, getTranscript, loadO
 import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
 import { DiffView } from './DiffView'
 import { TranscriptView } from './TranscriptView'
-import { btn, btnDanger, Loading, Pill, sectionHeadCls, StatusPill } from './ui'
+import { btn, btnDanger, Loading, Pill, runPulseStyle, sectionHeadCls, StatusPill } from './ui'
 import { LoadErrorCard, useContinueSession } from './actionUi'
 
 /** A section card - mirrors the loop page's surface panels with a sentence-case
@@ -164,6 +164,43 @@ function Transcript({ runId, running }: { runId: string; running?: boolean }) {
         <TranscriptView steps={data.steps} />
       </div>
     </div>
+  )
+}
+
+/**
+ * Live activity for an in-flight run — the run detail page's answer to the loop
+ * page's Runs list line (pulsing dot + step + label). Without this an executing
+ * run's own page showed nothing about what it was doing (Report/Changes/Transcript
+ * all settle only at finalize), while the list that links to it streamed progress.
+ *
+ * The page self-polls every 3s while running, so `run.progress`/`run.ts` refresh in
+ * place; a local 1s timer keeps the elapsed clock smooth between polls. Renders only
+ * for a running run — terminal runs never mount it, so their pages are byte-identical.
+ */
+function LiveActivity({ run }: { run: RunSummary }) {
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 1_000)
+    return () => clearInterval(t)
+  }, [])
+  const elapsed = dur(Math.max(0, Date.now() - Date.parse(run.ts)))
+  return (
+    <Card label="Activity">
+      <div className="flex items-start gap-2.5">
+        <span aria-hidden className="mt-[5px] size-2 shrink-0 rounded-full" style={runPulseStyle} />
+        <div className="min-w-0 flex-1">
+          {run.progress ? (
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <span className="shrink-0 font-mono text-label text-disabled">step {run.progress.step}</span>
+              <span className="min-w-0 break-words text-body text-primary">{run.progress.label}</span>
+            </div>
+          ) : (
+            <span className="text-body text-secondary">Starting - waiting for the first heartbeat.</span>
+          )}
+          <div className="mt-1 text-meta text-disabled">{elapsed ? `Running for ${elapsed} · ` : ''}updates live</div>
+        </div>
+      </div>
+    </Card>
   )
 }
 
@@ -359,6 +396,8 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
       {/* two-column main: meaty content wide, metadata in a capped rail */}
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
         <div className="flex min-w-0 flex-col gap-6">
+          {run.running && <LiveActivity run={run} />}
+
           {run.message && (
             <Card label="Report">
               <div className="whitespace-pre-wrap break-words rounded-control border border-hairline bg-raised px-4 py-3.5 text-body leading-relaxed text-primary">
