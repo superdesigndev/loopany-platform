@@ -24,8 +24,8 @@
 #   fly deploy -c fly.prod.toml                # boot runs drizzle-kit migrate over DIRECT_DATABASE_URL
 
 app = "loopany-prod"
-# Pick the region CLOSEST to the Supabase project region to minimize DB latency.
-primary_region = "nrt"
+# Colocated with the Supabase project (us-west-1) to minimize DB latency.
+primary_region = "sjc"
 
 [build]
   dockerfile = "Dockerfile"
