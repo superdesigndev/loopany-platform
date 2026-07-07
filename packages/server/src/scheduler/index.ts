@@ -55,12 +55,25 @@ export class Scheduler {
 
   /** Load enabled loops and run until `signal` aborts. */
   async start(signal: AbortSignal): Promise<void> {
-    for (const loop of await store.listEnabledLoops()) {
-      this.schedule(loop);
-      await this.catchUpMissedFire(loop);
-    }
+    const loops = await store.listEnabledLoops();
+    for (const loop of loops) this.schedule(loop);
     signal.addEventListener("abort", () => this.stopAll(), { once: true });
     log.info({ loops: this.crons.size }, "scheduler started");
+    // Boot readiness never blocks on the misfire sweep (per-loop DB probe +
+    // possible dispatch): run it in the background so a longer catch-up can't
+    // widen the deploy window in which in-flight runs see a down server.
+    void this.catchUpMissedFires(loops);
+  }
+
+  /** Background misfire catch-up across all enabled loops (see start()). Each
+   *  per-loop probe already swallows its own errors; guard the sweep so nothing
+   *  escapes into the fire-and-forget caller. */
+  private async catchUpMissedFires(loops: Loop[]): Promise<void> {
+    try {
+      for (const loop of loops) await this.catchUpMissedFire(loop);
+    } catch (err) {
+      log.warn({ err: msg(err) }, "misfire catch-up sweep failed");
+    }
   }
 
   /**
