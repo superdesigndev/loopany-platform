@@ -137,7 +137,7 @@ function coerceArtifacts(raw: unknown): RunArtifact[] | undefined {
     const p = (a as { path?: unknown })?.path;
     const k = (a as { kind?: unknown })?.kind;
     if (typeof p === "string" && p.trim() && (k === "created" || k === "edited")) {
-      out.push({ path: p.slice(0, 1024), kind: k });
+      out.push({ path: clipText(p, 1024), kind: k });
       if (out.length >= MAX_ARTIFACTS) break;
     }
   }
@@ -184,9 +184,9 @@ function coerceTranscript(raw: unknown): TranscriptStep[] | undefined {
     const text = (s as { text?: unknown })?.text;
     const name = (s as { name?: unknown })?.name;
     const input = (s as { input?: unknown })?.input;
-    if (typeof text === "string") step.text = text.slice(0, STEP_FIELD_MAX);
-    if (typeof name === "string") step.name = name.slice(0, 200);
-    if (typeof input === "string") step.input = input.slice(0, STEP_FIELD_MAX);
+    if (typeof text === "string") step.text = clipText(text, STEP_FIELD_MAX);
+    if (typeof name === "string") step.name = clipText(name, 200);
+    if (typeof input === "string") step.input = clipText(input, STEP_FIELD_MAX);
     out.push(step);
     if (out.length >= MAX_TRANSCRIPT_STEPS) break;
   }
@@ -221,11 +221,11 @@ export class MachineGateway {
    * throwing: the run's error is already on the dashboard regardless. Call AFTER
    * the run row has been finalized to `error`, so the streak count includes it.
    */
-  private notifyRunFailure(loopId: string, role: RunRole, reason: string | null): void {
+  private async notifyRunFailure(loopId: string, role: RunRole, reason: string | null): Promise<void> {
     if (role !== "exec") return;
-    const loop = store.getLoop(loopId);
+    const loop = await store.getLoop(loopId);
     if (!loop) return;
-    const streak = store.execFailureStreak(loopId);
+    const streak = await store.execFailureStreak(loopId);
     if (shouldNotifyFailure(loop.notify, streak)) {
       void this.notify(loop, failureMessage(reason));
     }
@@ -246,14 +246,14 @@ export class MachineGateway {
    * or a claimed run that never reported ("timed out"). Best-effort delivery
    * with no inbox/catch-up, so stuck runs become errors rather than lingering.
    */
-  sweep(): void {
+  async sweep(): Promise<void> {
     const now = Date.now();
-    for (const m of store.listMachines()) {
+    for (const m of await store.listMachines()) {
       if (m.online && (!m.lastSeen || now - Date.parse(m.lastSeen) > ONLINE_TTL_MS)) {
-        store.updateMachine(m.id, { online: false });
+        await store.updateMachine(m.id, { online: false });
       }
     }
-    for (const run of store.openRuns()) {
+    for (const run of await store.openRuns()) {
       const age = now - Date.parse(run.ts);
       if (run.phase === "pending") {
         // Don't kill a queued run just because its machine is busy: only reclaim
@@ -261,11 +261,11 @@ export class MachineGateway {
         // daemon claims pending runs on its next poll (seconds), so a healthy
         // machine clears the queue itself. The long fallback catches a delivery
         // that's wedged (e.g. never claimable) so it can't linger forever.
-        const online = store.getMachine(run.machineId)?.online ?? false;
+        const online = (await store.getMachine(run.machineId))?.online ?? false;
         if (!online && age > PENDING_GRACE_MS) {
-          this.reclaimRun(run, "machine offline");
+          await this.reclaimRun(run, "machine offline");
         } else if (age > RUN_TIMEOUT_MS) {
-          this.reclaimRun(run, "run never claimed");
+          await this.reclaimRun(run, "run never claimed");
         }
       } else if (run.phase === "running") {
         // INACTIVITY-based timeout, not since-claim: a healthy run keeps its
@@ -278,7 +278,7 @@ export class MachineGateway {
         const at = run.progress?.at;
         const heardAt = Math.max(Date.parse(run.ts), at ? Date.parse(at) || 0 : 0);
         if (now - heardAt > RUN_TIMEOUT_MS) {
-          this.reclaimRun(run, "machine timed out / disconnected");
+          await this.reclaimRun(run, "machine timed out / disconnected");
         }
       }
     }
@@ -301,11 +301,11 @@ export class MachineGateway {
    *  bounded: agent-api mutations are refused while terminal-grace, and the
    *  reconciliation retires the lease single-shot. A pending run (no lease minted
    *  yet) is unaffected — the terminalize is a no-op there. */
-  private reclaimRun(run: Run, reason: string): void {
-    store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
+  private async reclaimRun(run: Run, reason: string): Promise<void> {
+    await store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
     terminalizeLease(run.id);
-    if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
-    this.notifyRunFailure(run.loopId, run.role, reason);
+    if (run.role === "evolve") await this.scheduler.finishEvolution(run.loopId);
+    await this.notifyRunFailure(run.loopId, run.role, reason);
   }
 
   /**
@@ -334,13 +334,13 @@ export class MachineGateway {
 
   // ---- POST /api/machine/poll ----
 
-  poll(
+  async poll(
     deviceToken: string,
     info?: { host?: string; platform?: string; arch?: string; version?: string },
     progress?: Array<{ runId: string; step: number; label: string }>,
-  ): HttpResult {
+  ): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    let machine = store.getMachine(machineId);
+    let machine = await store.getMachine(machineId);
     if (!machine) {
       // Self-register: the daemon presents a valid device token (minted by New
       // loop or stored locally) — create its machine row on first contact, no
@@ -355,8 +355,8 @@ export class MachineGateway {
       // team preserves the safe invariant that a machine's fallback can never be a
       // shared team the owner is merely a (possibly later-revoked) member of.
       const teamId = store.teamIdForUser(owner);
-      store.ensureTeam(teamId, owner === "shared" ? "Shared Workspace" : "Personal Team", owner === "shared" ? null : owner);
-      machine = store.createMachine({
+      await store.ensureTeam(teamId, owner === "shared" ? "Shared Workspace" : "Personal Team", owner === "shared" ? null : owner);
+      machine = await store.createMachine({
         id: machineId,
         userId: owner,
         teamId,
@@ -369,12 +369,12 @@ export class MachineGateway {
       });
       log.info({ machineId, host: info?.host }, "poll: self-registered machine");
     }
-    store.setMachineOnline(machineId, true); // stamps online + lastSeen (TTL) every poll
+    await store.setMachineOnline(machineId, true); // stamps online + lastSeen (TTL) every poll
     // Identity rarely changes after the first poll — only write it when a field
     // actually differs, so the hot path (every ~3s/machine) isn't a 2nd UPDATE.
     if (info) {
       // Untrusted wire input: a version is a short semver, so clip defensively.
-      const version = typeof info.version === "string" ? info.version.slice(0, 64) : undefined;
+      const version = typeof info.version === "string" ? clipText(info.version, 64) : undefined;
       const patch = {
         ...(info.host && info.host !== machine.hostname ? { hostname: info.host } : {}),
         ...(info.platform && info.platform !== machine.platform ? { platform: info.platform } : {}),
@@ -382,7 +382,7 @@ export class MachineGateway {
         ...(version && version !== machine.daemonVersion ? { daemonVersion: version } : {}),
         ...(info.host && !machine.name?.trim() ? { name: info.host } : {}),
       };
-      if (Object.keys(patch).length) store.updateMachine(machineId, patch);
+      if (Object.keys(patch).length) await store.updateMachine(machineId, patch);
     }
 
     // Live progress for in-flight runs (slim activity line, not the transcript).
@@ -392,10 +392,10 @@ export class MachineGateway {
     if (progress?.length) {
       for (const p of progress.slice(0, MAX_PROGRESS_ENTRIES)) {
         if (typeof p?.runId !== "string" || typeof p.label !== "string") continue;
-        const run = store.getRun(p.runId);
+        const run = await store.getRun(p.runId);
         if (run?.machineId !== machineId || run.phase !== "running") continue;
         const step = Number(p.step) || 0;
-        const label = p.label.slice(0, 200);
+        const label = clipText(p.label, 200);
         // Skip the write when the signal hasn't moved — claude can sit inside one
         // long tool_use across several 3s heartbeats, so most polls repeat it. The
         // freshness stamp (`at`, the sweep's inactivity signal) still refreshes,
@@ -404,17 +404,17 @@ export class MachineGateway {
         const moved = cur?.step !== step || cur?.label !== label;
         const stampStale = !cur?.at || Date.now() - Date.parse(cur.at) > PROGRESS_STAMP_REFRESH_MS;
         if (moved || stampStale) {
-          store.updateRun(p.runId, { progress: { step, label, at: nowIso() } });
+          await store.updateRun(p.runId, { progress: { step, label, at: nowIso() } });
         }
       }
     }
 
     const deliveries: Delivery[] = [];
-    for (const run of store.openRuns()) {
+    for (const run of await store.openRuns()) {
       if (run.machineId !== machineId || run.phase !== "pending") continue;
-      const loop = store.getLoop(run.loopId);
+      const loop = await store.getLoop(run.loopId);
       if (!loop) {
-        store.updateRun(run.id, { phase: "error", outcome: "error", error: "loop removed", ts: nowIso() });
+        await store.updateRun(run.id, { phase: "error", outcome: "error", error: "loop removed", ts: nowIso() });
         continue;
       }
       // Edit + evolve runs exist to change the loop, so they always get control
@@ -433,15 +433,15 @@ export class MachineGateway {
         // of allowControl (like the structural caps). Evolve/edit never finish.
         canFinish: run.role === "exec" && loop.goal != null,
       });
-      store.updateRun(run.id, { phase: "running", ts: nowIso() });
-      deliveries.push(buildDelivery(loop, run.id, token, machine.roots ?? []));
+      await store.updateRun(run.id, { phase: "running", ts: nowIso() });
+      deliveries.push(await buildDelivery(loop, run.id, token, machine.roots ?? []));
     }
 
     // Watch set: every loop bound to this machine (not just those with a pending
     // run) so the daemon watches each loop's folder continuously — between runs
     // and across restarts (the set is re-learned each poll, server-authoritative).
     // The daemon resolves the actual folder per loop (dirname(taskFile) → workdir).
-    const watch = store.loopsForMachine(machineId).map((l) => ({
+    const watch = (await store.loopsForMachine(machineId)).map((l) => ({
       loopId: l.id,
       workdir: l.workdir ?? null,
       taskFile: l.taskFile ?? null,
@@ -458,9 +458,9 @@ export class MachineGateway {
    * Claude Code can avoid starting a duplicate. `online` is fresh-checked against
    * the poll TTL, not just the stored flag.
    */
-  status(deviceToken: string): HttpResult {
+  async status(deviceToken: string): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    const machine = store.getMachine(machineId);
+    const machine = await store.getMachine(machineId);
     // Unknown token ⇒ not connected yet (the daemon self-registers on first poll),
     // so report offline rather than erroring — keeps the skill's check uniform.
     if (!machine) return { status: 200, body: { online: false, name: null, lastSeen: null } };
@@ -476,7 +476,7 @@ export class MachineGateway {
    * the loop config and POSTs it here. Binds the loop to the token's machine and
    * schedules it immediately. The web's New-loop dialog is just waiting on this.
    */
-  createLoop(
+  async createLoop(
     deviceToken: string,
     body: {
       name?: unknown;
@@ -508,9 +508,9 @@ export class MachineGateway {
        *  first created instead of a twin (F8). Absent ⇒ no dedupe (old daemon). */
       idempotencyKey?: unknown;
     },
-  ): HttpResult {
+  ): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    const machine = store.getMachine(machineId);
+    const machine = await store.getMachine(machineId);
     if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
 
     const cron = str(body.cron);
@@ -608,7 +608,7 @@ export class MachineGateway {
     const idempotencyKey = str(body.idempotencyKey);
     if (idempotencyKey) {
       const existingId = readNewIdempotency(idempotencyKey, machineId);
-      const existing = existingId ? store.getLoop(existingId) : undefined;
+      const existing = existingId ? await store.getLoop(existingId) : undefined;
       // Recheck existence + ownership: a since-deleted loop (or a stale record) falls
       // through to a fresh create rather than replaying a loop that is gone.
       if (existing && existing.machineId === machineId) {
@@ -646,8 +646,8 @@ export class MachineGateway {
         return { status: 403, body: { error: "connect-key was minted by a different user" } };
       }
       const authorized =
-        store.isTeamMember(intent.teamId, machine.userId) ||
-        (!!store.getTeam(intent.teamId) && isSuperAdmin(store.userEmail(machine.userId)));
+        (await store.isTeamMember(intent.teamId, machine.userId)) ||
+        (!!(await store.getTeam(intent.teamId)) && isSuperAdmin(await store.userEmail(machine.userId)));
       if (!authorized) {
         return { status: 403, body: { error: "not authorized to create loops in that team" } };
       }
@@ -656,8 +656,8 @@ export class MachineGateway {
     // Default to the team's most recently configured channel (listChannels is
     // newest-first) so a freshly-added Feishu/Telegram channel auto-applies to new
     // loops — computed against the RESOLVED team so it routes to that team's channel.
-    const channelId = store.defaultChannelId(teamId);
-    const loop = store.createLoop({
+    const channelId = await store.defaultChannelId(teamId);
+    const loop = await store.createLoop({
       userId: machine.userId ?? "shared",
       teamId,
       channelId,
@@ -678,7 +678,7 @@ export class MachineGateway {
     this.scheduler.addLoop(loop);
     // Run once immediately so a freshly-created loop produces output without
     // waiting for its first cron tick (gated on `enabled`).
-    if (loop.enabled) this.scheduler.runNow(loop.id);
+    if (loop.enabled) await this.scheduler.runNow(loop.id);
     const name = loop.name ?? loop.id;
     if (typeof body.claim === "string" && body.claim.trim()) {
       fulfillClaim(body.claim.trim(), { loopId: loop.id, name, machineId, agent });
@@ -709,9 +709,9 @@ export class MachineGateway {
    *  from the optional set, and an unknown field fails loud (P6, VALIDATION_ERROR).
    *  `--json` (OQ4) is the escape hatch: the full structured records as real JSON
    *  (first byte `[`), mirroring `show --json` — the daemon prints `text` either way. */
-  listLoops(deviceToken: string, fieldsFlag?: string, json?: boolean): HttpResult {
+  async listLoops(deviceToken: string, fieldsFlag?: string, json?: boolean): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
 
     // --fields extends the default columns with any of the optional set; an unknown
     // field fails loud (exit 1) listing what IS available (matches gh-axi's shape).
@@ -734,32 +734,34 @@ export class MachineGateway {
     const wantRuns = json || fields.includes("runs");
     const wantLastOutcome = json || fields.includes("lastOutcome");
 
-    const loops: LoopListRecord[] = store.loopsForMachine(machineId).map((l) => {
-      // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
-      // paused loop shows no next fire (— in the cell), matching §4.2.
-      const nextFire = l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null;
-      // The last-outcome cell tracks the newest EXEC (scheduled) run, aligning with
-      // `show` — a later successful evolve/edit must never mask a failed scheduled run.
-      const last = wantLastOutcome ? store.lastExecRun(l.id) : undefined;
-      return {
-        id: l.id,
-        name: l.name ?? l.id,
-        cron: l.cron,
-        timezone: l.timezone,
-        enabled: l.enabled,
-        notify: l.notify,
-        model: l.model ?? null,
-        goal: l.goal ?? null,
-        taskFile: l.taskFile ?? null,
-        nextRunAt: l.nextRunAt,
-        // Folder hint so a workdir-scoped CLI (`loopany log`) can map the current
-        // directory back to a loop the same way the watcher resolves it.
-        workdir: l.workdir ?? null,
-        nextFire,
-        runs: wantRuns ? store.countRuns(l.id) : 0,
-        lastOutcome: last ? runOutcomeToken(last) : null,
-      };
-    });
+    const loops: LoopListRecord[] = await Promise.all(
+      (await store.loopsForMachine(machineId)).map(async (l) => {
+        // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
+        // paused loop shows no next fire (— in the cell), matching §4.2.
+        const nextFire = l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null;
+        // The last-outcome cell tracks the newest EXEC (scheduled) run, aligning with
+        // `show` — a later successful evolve/edit must never mask a failed scheduled run.
+        const last = wantLastOutcome ? await store.lastExecRun(l.id) : undefined;
+        return {
+          id: l.id,
+          name: l.name ?? l.id,
+          cron: l.cron,
+          timezone: l.timezone,
+          enabled: l.enabled,
+          notify: l.notify,
+          model: l.model ?? null,
+          goal: l.goal ?? null,
+          taskFile: l.taskFile ?? null,
+          nextRunAt: l.nextRunAt,
+          // Folder hint so a workdir-scoped CLI (`loopany log`) can map the current
+          // directory back to a loop the same way the watcher resolves it.
+          workdir: l.workdir ?? null,
+          nextFire,
+          runs: wantRuns ? await store.countRuns(l.id) : 0,
+          lastOutcome: last ? runOutcomeToken(last) : null,
+        };
+      }),
+    );
     // `--json` escape hatch: emit the full records as real JSON in `text` (the daemon
     // prints it verbatim), the exact counterpart to `show --json`. TOON is the default.
     const text = json ? JSON.stringify(loops, null, 2) : renderLoopsText(loops, fields);
@@ -780,9 +782,9 @@ export class MachineGateway {
    * and a clipped transcript so the create/update/evolve flows can see how past runs
    * actually went before reshaping the loop.
    */
-  loopLog(deviceToken: string, loopId: unknown, limit?: unknown): HttpResult {
+  async loopLog(deviceToken: string, loopId: unknown, limit?: unknown): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     return this.renderLoopLog(machineId, loopId, limit);
   }
 
@@ -792,9 +794,9 @@ export class MachineGateway {
    *  `loopany log` 400 seam). Scoping is identical for both callers: only a loop
    *  bound to `machineId` is visible; anything else is a flat 404 (existence never
    *  leaks), exactly as before for the device path. */
-  private renderLoopLog(machineId: string, loopId: unknown, limit?: unknown): HttpResult {
+  private async renderLoopLog(machineId: string, loopId: unknown, limit?: unknown): Promise<HttpResult> {
     if (typeof loopId !== "string" || !loopId) return { status: 400, body: { error: "loopId required" } };
-    const loop = store.getLoop(loopId);
+    const loop = await store.getLoop(loopId);
     // Loop+device scoping: only a loop bound to this machine is visible. A token
     // for device A, or for a different loop, gets a flat 404 (existence never leaks).
     if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
@@ -803,7 +805,7 @@ export class MachineGateway {
     const n = Math.min(Math.max(Number.isFinite(want) && want > 0 ? Math.floor(want) : LOG_RUNS_DEFAULT, 1), LOG_RUNS_MAX);
     // listRuns returns the newest n runs oldest-first; reverse to newest-first so
     // the agent reads the most recent history at the top.
-    const rows = store.listRuns(loopId, n).slice().reverse();
+    const rows = (await store.listRuns(loopId, n)).slice().reverse();
     const runs = rows.map((r) => {
       const { text, truncated } = renderTranscript(r.transcript as TranscriptStep[] | null);
       return {
@@ -835,7 +837,7 @@ export class MachineGateway {
     // since the survey `text` stays concise. `ok`/`loopId`/`name` are render-only and
     // stripped at the cli boundary; the LEGACY `/api/machine/log` route (not finalized)
     // still carries them for a pre-0.12 daemon on the postCli 404-fallback.
-    const survey = renderLogText(loop.name ?? loop.id, loop.id, runs, store.countRuns(loopId));
+    const survey = renderLogText(loop.name ?? loop.id, loop.id, runs, await store.countRuns(loopId));
     return { status: 200, body: { ok: true, loopId: loop.id, name: loop.name ?? loop.id, runs, text: survey } };
   }
 
@@ -846,7 +848,7 @@ export class MachineGateway {
    * governs a running run rescheduling ITSELF; the human owner may always edit).
    * Task CONTENT lives in the loop's README.md on the machine, so it's edited there, not here.
    */
-  editLoop(
+  async editLoop(
     deviceToken: string,
     id: unknown,
     patch: {
@@ -867,11 +869,11 @@ export class MachineGateway {
     /** Validate-only (`loopany edit --dry-run`): compute the per-key before→after
      *  preview + rejections, persist NOTHING. */
     dryRun = false,
-  ): HttpResult {
+  ): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     if (typeof id !== "string" || !id) return { status: 400, body: { error: "loop id required" } };
-    const loop = store.getLoop(id);
+    const loop = await store.getLoop(id);
     if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
 
     const p = (patch ?? {}) as Record<string, unknown>;
@@ -887,7 +889,7 @@ export class MachineGateway {
       };
     }
 
-    const { update, changes, rejections } = this.buildEditUpdate(loop, p);
+    const { update, changes, rejections } = await this.buildEditUpdate(loop, p);
 
     if (dryRun) {
       const allRejections = [
@@ -941,7 +943,7 @@ export class MachineGateway {
       };
     }
 
-    const updated = store.updateLoop(id, update);
+    const updated = await store.updateLoop(id, update);
     if (!updated) return { status: 404, body: { error: "loop not found" } };
     // Re-arm the scheduler: an enabled flip toggles add/remove, any other change re-adds.
     if (updated.enabled) this.scheduler.addLoop(updated);
@@ -967,10 +969,10 @@ export class MachineGateway {
    * Assumes unknown keys were already filtered by the caller. Field order mirrors
    * the old inline checks so the real path's first-rejection message is stable.
    */
-  private buildEditUpdate(
+  private async buildEditUpdate(
     loop: Loop,
     p: Record<string, unknown>,
-  ): { update: Partial<NewLoop>; changes: Array<{ key: string; from: unknown; to: unknown }>; rejections: Array<{ key: string; reason: string }> } {
+  ): Promise<{ update: Partial<NewLoop>; changes: Array<{ key: string; from: unknown; to: unknown }>; rejections: Array<{ key: string; reason: string }> }> {
     const update: Partial<NewLoop> = {};
     const changes: Array<{ key: string; from: unknown; to: unknown }> = [];
     const rejections: Array<{ key: string; reason: string }> = [];
@@ -1040,7 +1042,7 @@ export class MachineGateway {
       if (p.workflow === null) set("workflow", null, loop.workflow);
       else if (typeof p.workflow !== "string") rejections.push({ key: "workflow", reason: "workflow must be a string (the pre-stage JS)" });
       else {
-        const v = this.validateWorkflow(p.workflow.slice(0, WIRE_TEXT_CAP));
+        const v = this.validateWorkflow(clipText(p.workflow, WIRE_TEXT_CAP));
         if (!v.ok) rejections.push({ key: "workflow", reason: v.detail });
         else set("workflow", v.value, loop.workflow);
       }
@@ -1048,12 +1050,12 @@ export class MachineGateway {
     if (p.ui !== undefined) {
       if (p.ui === null) set("ui", null, loop.ui);
       else if (typeof p.ui !== "string") rejections.push({ key: "ui", reason: "ui must be a string (the dashboard HTML)" });
-      else set("ui", this.validateUi(p.ui.slice(0, WIRE_TEXT_CAP)).value, loop.ui);
+      else set("ui", this.validateUi(clipText(p.ui, WIRE_TEXT_CAP)).value, loop.ui);
     }
     if (p.stateSchema !== undefined) {
       if (p.stateSchema === null) set("stateSchema", null, loop.stateSchema);
       else {
-        const v = this.validateSchema(loop.id, p.stateSchema);
+        const v = await this.validateSchema(loop.id, p.stateSchema);
         if (!v.ok) rejections.push({ key: "stateSchema", reason: v.detail });
         else set("stateSchema", v.value, loop.stateSchema);
       }
@@ -1068,7 +1070,7 @@ export class MachineGateway {
 
   // ---- POST /agent-api/loop ----
 
-  agentApi(runToken: string, argv: string[]): HttpResult {
+  async agentApi(runToken: string, argv: string[]): Promise<HttpResult> {
     const lease = resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
     // The run was already reclaimed by the server (the machine was likely asleep).
@@ -1078,7 +1080,7 @@ export class MachineGateway {
     if (lease.state === "terminal-grace") {
       return { status: 409, body: { text: errorBlock(RECLAIMED_MSG, "CONFLICT"), exitCode: 1 } };
     }
-    const out = this.dispatch(lease, argv);
+    const out = await this.dispatch(lease, argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
   }
 
@@ -1101,21 +1103,21 @@ export class MachineGateway {
    * Floors, `allowControl`, `canFinish`, and the shared content validators all flow
    * through the reused `dispatch`/`createLoop`/`editLoop`/`loopLog` unchanged.
    */
-  cli(token: string, argv: string[]): HttpResult {
-    const res = token.startsWith("dk_") ? this.deviceCli(token, argv) : this.runCli(token, argv);
+  async cli(token: string, argv: string[]): Promise<HttpResult> {
+    const res = token.startsWith("dk_") ? await this.deviceCli(token, argv) : await this.runCli(token, argv);
     return finalizeCli(res);
   }
 
   /** DEVICE-credential branch of the unified CLI. */
-  private deviceCli(deviceToken: string, argv: string[]): HttpResult {
+  private async deviceCli(deviceToken: string, argv: string[]): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
     const verb = argv[0] ?? "";
     // The content-first home (P8): bare `loopany` posts `["home"]`. It renders a
     // DEFINITIVE state for an unregistered machine ("not connected — run `loopany
     // up`") rather than a 401, so the ambient dashboard is never an error/empty —
     // handled BEFORE the unknown-machine guard the other verbs sit behind.
-    if (verb === "home") return { status: 200, body: { ok: true, text: this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
-    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (verb === "home") return { status: 200, body: { ok: true, text: await this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     const flags = parseFlags(argv.slice(1));
     const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
 
@@ -1147,7 +1149,7 @@ export class MachineGateway {
       case "show": {
         // Device `show` may inspect ANY loop bound to the machine; the machine-scope
         // check mirrors loopLog/editLoop (flat 404, existence never leaks).
-        const loop = loopArg ? store.getLoop(loopArg) : undefined;
+        const loop = loopArg ? await store.getLoop(loopArg) : undefined;
         if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
         // `--json`: emit the full editable envelope with complete bodies (the exact
         // `edit --json` shape; the roundtrip transport, §4.1). Otherwise the TOON
@@ -1156,7 +1158,7 @@ export class MachineGateway {
           const env = loopEnvelope(loop);
           return { status: 200, body: { ok: true, loop: env, text: JSON.stringify(env, null, 2) } };
         }
-        return { status: 200, body: { ok: true, text: this.describe(loop.id, { full: flags["full"] === true }) } };
+        return { status: 200, body: { ok: true, text: await this.describe(loop.id, { full: flags["full"] === true }) } };
       }
       case "report":
       case "finish":
@@ -1170,7 +1172,7 @@ export class MachineGateway {
 
   /** RUN-credential branch of the unified CLI: the existing per-run `dispatch()`
    *  verbs, plus the read branch (`log`/`show`) scoped to the lease's own loop. */
-  private runCli(runToken: string, argv: string[]): HttpResult {
+  private async runCli(runToken: string, argv: string[]): Promise<HttpResult> {
     const lease = resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
     // Reclaimed (machine likely asleep) — terminal-grace accepts only the reconciling
@@ -1210,7 +1212,7 @@ export class MachineGateway {
     // and gets the run's OWN loop context (identity + role + goal + recent runs),
     // scoped strictly to the lease's loop (no cross-loop leak).
     if (verb === "home") {
-      return { status: 200, body: { text: this.homeRun(lease), exitCode: 0 } };
+      return { status: 200, body: { text: await this.homeRun(lease), exitCode: 0 } };
     }
 
     // Read branch — the seam fix. `log` gains a run-credential path (it has no case
@@ -1221,7 +1223,7 @@ export class MachineGateway {
       return this.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
     }
     if (verb === "show" && flags["json"] === true) {
-      const loop = store.getLoop(lease.loopId);
+      const loop = await store.getLoop(lease.loopId);
       if (!loop) return { status: 404, body: { text: errorBlock("loop not found", "NOT_FOUND"), exitCode: 1 } };
       // The full editable envelope — identical shape to the device `show --json`
       // (the run's effective selfSchedule/selfFinish lines are TOON-only, not in the
@@ -1230,13 +1232,13 @@ export class MachineGateway {
       return { status: 200, body: { ok: true, loop: env, text: JSON.stringify(env, null, 2), exitCode: 0 } };
     }
 
-    const out = this.dispatch(lease, argv);
+    const out = await this.dispatch(lease, argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
   }
 
   // ---- POST /machine/report ----
 
-  report(
+  async report(
     runToken: string,
     body: {
       ok?: boolean;
@@ -1259,12 +1261,12 @@ export class MachineGateway {
       /** Claude-reported cost/usage for this run (usd + token counts). */
       cost?: unknown;
     },
-  ): HttpResult {
+  ): Promise<HttpResult> {
     const lease = resolveLease(runToken);
     if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
     const ok = !!body.ok;
 
-    const run = store.getRun(lease.runId);
+    const run = await store.getRun(lease.runId);
     // The user stopped this run while the machine was still working — keep it
     // canceled, and bail BEFORE any loop-level write: a late report must not
     // advance the workflow cursor / task file (the next run would silently skip
@@ -1274,8 +1276,8 @@ export class MachineGateway {
       // Clear a pending edit even if its run was canceled, so it doesn't re-fire —
       // and symmetrically clear an evolve marker (evolveDue), or the canceled
       // evolve pass re-fires on the very next tick.
-      if (lease.role === "edit") this.scheduler.finishEdit(lease.loopId);
-      if (lease.role === "evolve") this.scheduler.finishEvolution(lease.loopId);
+      if (lease.role === "edit") await this.scheduler.finishEdit(lease.loopId);
+      if (lease.role === "evolve") await this.scheduler.finishEvolution(lease.loopId);
       log.info({ runId: lease.runId }, "report: ignored (run was canceled)");
       return { status: 200, body: { ok: true } };
     }
@@ -1290,17 +1292,17 @@ export class MachineGateway {
     if (run?.phase === "done") {
       const enrichArtifacts = coerceArtifacts(body.artifacts);
       const enrichTranscript = coerceTranscript(body.transcript);
-      store.updateRun(lease.runId, {
+      await store.updateRun(lease.runId, {
         ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
-        ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
+        ...(typeof body.sessionId === "string" ? { sessionId: clipText(body.sessionId, SESSION_ID_CAP) } : {}),
         ...(enrichArtifacts ? { artifacts: enrichArtifacts } : {}),
         ...(enrichTranscript ? { transcript: enrichTranscript } : {}),
         // Cost, like durationMs, is only known post-run — enrich the finished row.
         ...coerceCost(body.cost),
       });
       if (typeof body.taskFileContent === "string") {
-        store.updateLoop(lease.loopId, {
-          taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
+        await store.updateLoop(lease.loopId, {
+          taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
           taskFileSyncedAt: nowIso(),
         });
       }
@@ -1321,7 +1323,7 @@ export class MachineGateway {
       const artifacts = coerceArtifacts(body.artifacts);
       const transcript = coerceTranscript(body.transcript);
       const rawMessage = body.message !== undefined ? body.message : body.finalText;
-      const message = typeof rawMessage === "string" ? rawMessage.slice(0, MESSAGE_CAP) : undefined;
+      const message = typeof rawMessage === "string" ? clipText(rawMessage, MESSAGE_CAP) : undefined;
       const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
       // Only a SUCCESSFUL reconcile carries the workflow cursor forward — same as
       // the normal path, a failed run must never advance loop.state (the next run's
@@ -1333,23 +1335,26 @@ export class MachineGateway {
         if ((serialized?.length ?? 0) > CURSOR_CAP) {
           log.warn({ runId: lease.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
           cursor = undefined;
+        } else {
+          // Postgres jsonb rejects NUL — strip it from the free-form cursor's strings.
+          cursor = stripNulDeep(cursor);
         }
       }
       if (typeof body.taskFileContent === "string") {
-        store.updateLoop(lease.loopId, {
-          taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
+        await store.updateLoop(lease.loopId, {
+          taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
           taskFileSyncedAt: nowIso(),
         });
       }
-      if (cursor !== undefined) store.updateLoop(lease.loopId, { state: cursor });
+      if (cursor !== undefined) await store.updateLoop(lease.loopId, { state: cursor });
       // Mirror the workflow's scalar cursor onto THIS run for {{latest.*}} / the
       // trend chart — don't clobber a state the run already reported.
       const runState = ok && !run.state ? scalarState(cursor) : undefined;
-      const finalized = store.updateRun(lease.runId, {
+      const finalized = await store.updateRun(lease.runId, {
         phase: ok ? "done" : "error",
         outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
         ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
-        ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
+        ...(typeof body.sessionId === "string" ? { sessionId: clipText(body.sessionId, SESSION_ID_CAP) } : {}),
         ...(artifacts ? { artifacts } : {}),
         ...(transcript ? { transcript } : {}),
         ...(runState ? { state: runState } : {}),
@@ -1358,7 +1363,7 @@ export class MachineGateway {
         // it with the real error (honest record), keeping the run an error.
         ...(ok
           ? { error: null }
-          : { error: typeof body.error === "string" ? body.error.slice(0, MESSAGE_CAP) : run.error }),
+          : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : run.error }),
         progress: null,
         ts: nowIso(),
       });
@@ -1366,8 +1371,8 @@ export class MachineGateway {
       retireLease(runToken);
       // Re-capture the end-state snapshot (best-effort), same as the normal path.
       try {
-        store.putRunSnapshot(lease.runId, lease.loopId, store.buildLoopManifest(lease.loopId));
-        store.pruneRunSnapshots(lease.loopId, snapshotRetention());
+        await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
+        await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
       } catch (err) {
         log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
       }
@@ -1376,7 +1381,7 @@ export class MachineGateway {
         // to `done` already corrects the failure streak (it's derived from persisted
         // rows), so a later tick won't count this. Retract by pushing the real result
         // (a cheap, honest correction), gated by the loop's normal notify policy.
-        const loop = store.getLoop(lease.loopId);
+        const loop = await store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
           void this.notify(loop, finalized.message);
         }
@@ -1399,15 +1404,18 @@ export class MachineGateway {
       if ((serialized?.length ?? 0) > CURSOR_CAP) {
         log.warn({ runId: lease.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
         cursor = undefined;
+      } else {
+        // Postgres jsonb rejects NUL — strip it from the free-form cursor's strings.
+        cursor = stripNulDeep(cursor);
       }
     }
-    if (cursor !== undefined) store.updateLoop(lease.loopId, { state: cursor });
+    if (cursor !== undefined) await store.updateLoop(lease.loopId, { state: cursor });
 
     // Sync the machine's task file onto the loop (untrusted wire input — clip
     // defensively even though the daemon already caps it).
     if (typeof body.taskFileContent === "string") {
-      store.updateLoop(lease.loopId, {
-        taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
+      await store.updateLoop(lease.loopId, {
+        taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
         taskFileSyncedAt: nowIso(),
       });
     }
@@ -1417,7 +1425,7 @@ export class MachineGateway {
     // Clipped to the same cap the agent-api report verb enforces.
     const rawMessage =
       body.message !== undefined ? body.message : !run?.message && body.finalText ? body.finalText : undefined;
-    const message = typeof rawMessage === "string" ? rawMessage.slice(0, MESSAGE_CAP) : rawMessage;
+    const message = typeof rawMessage === "string" ? clipText(rawMessage, MESSAGE_CAP) : rawMessage;
 
     const artifacts = coerceArtifacts(body.artifacts);
     const transcript = coerceTranscript(body.transcript);
@@ -1432,18 +1440,18 @@ export class MachineGateway {
     // Whitelist the claimed outcome (untrusted wire input) — anything outside the
     // known enum falls back to the role default rather than landing in the column.
     const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
-    const finalized = store.updateRun(lease.runId, {
+    const finalized = await store.updateRun(lease.runId, {
       phase: ok ? "done" : "error",
       outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
       durationMs: body.durationMs ?? null,
       // Untrusted wire input — clip like every other free-text field.
-      sessionId: typeof body.sessionId === "string" ? body.sessionId.slice(0, SESSION_ID_CAP) : null,
+      sessionId: typeof body.sessionId === "string" ? clipText(body.sessionId, SESSION_ID_CAP) : null,
       ...(artifacts ? { artifacts } : {}),
       ...(transcript ? { transcript } : {}),
       ...coerceCost(body.cost),
       ...(runState ? { state: runState } : {}),
       ...(message !== undefined ? { message } : {}),
-      ...(ok ? {} : { error: typeof body.error === "string" ? body.error.slice(0, MESSAGE_CAP) : "run failed on machine" }),
+      ...(ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
       progress: null, // live signal done — the full transcript supersedes it
       ts: nowIso(),
     });
@@ -1455,24 +1463,24 @@ export class MachineGateway {
     // here. The daemon flushes a final run-tagged sync before reporting, so this
     // reflects the run's end-state. Best-effort — never let it fail the report.
     try {
-      store.putRunSnapshot(lease.runId, lease.loopId, store.buildLoopManifest(lease.loopId));
+      await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
       // Bound the snapshot history right away (cheap, keeps the table from growing
       // unbounded between maintenance passes). The blobs this unpins are reclaimed
       // by the periodic GC, not here — the grace window means a just-unreferenced
       // blob isn't collectable yet anyway, and report() must stay lean + zero-exec.
-      store.pruneRunSnapshots(lease.loopId, snapshotRetention());
+      await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
     } catch (err) {
       log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
     }
 
     if (lease.role === "evolve") {
-      this.scheduler.finishEvolution(lease.loopId);
+      await this.scheduler.finishEvolution(lease.loopId);
     } else if (lease.role === "edit") {
       // Always clear the marker (done OR error) so a stuck edit can't hijack
       // every subsequent tick. The owner re-issues if it didn't take.
-      this.scheduler.finishEdit(lease.loopId);
+      await this.scheduler.finishEdit(lease.loopId);
     } else if (ok) {
-      this.scheduler.maybeFlagEvolve(lease.loopId);
+      await this.scheduler.maybeFlagEvolve(lease.loopId);
     }
 
     // Notify (the loop's chosen channel), best-effort. Edit/evolve runs are
@@ -1481,7 +1489,7 @@ export class MachineGateway {
     if (lease.role !== "evolve" && lease.role !== "edit") {
       if (ok) {
         // Success: gate on the loop's notify policy + the run's content status.
-        const loop = store.getLoop(lease.loopId);
+        const loop = await store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
           void this.notify(loop, finalized.message);
         }
@@ -1489,7 +1497,7 @@ export class MachineGateway {
         // Failure: surface it (silent failure is the BYOA default failure mode),
         // anti-spam'd by the consecutive-failure streak so a persistently-broken
         // loop doesn't push every tick.
-        this.notifyRunFailure(lease.loopId, lease.role, finalized?.error ?? null);
+        await this.notifyRunFailure(lease.loopId, lease.role, finalized?.error ?? null);
       }
     }
     log.info({ runId: lease.runId, ok }, "report: finalized");
@@ -1520,12 +1528,12 @@ export class MachineGateway {
    * no re-notify). Double-notify/double-finalize stay impossible — both this guard
    * and report()'s phase==="done" branch never re-stamp or re-notify.
    */
-  private finishLoop(
+  private async finishLoop(
     lease: RunLease,
     { message, reason, state }: { message?: string; reason: string | null; state?: Record<string, number | string> },
-  ): Applied {
+  ): Promise<Applied> {
     // TOCTOU: refuse if the loop is no longer closed (goal cleared since poll).
-    const current = store.getLoop(lease.loopId);
+    const current = await store.getLoop(lease.loopId);
     if (!current || current.goal == null) {
       return { ok: false, detail: "this loop no longer has a goal to finish — its goal was cleared since this run started" };
     }
@@ -1538,9 +1546,9 @@ export class MachineGateway {
     // Record durationMs server-side from the run's claim/running timestamp so a
     // finished run always carries a duration even if the daemon's enriching report
     // is lost; the enriching report overrides it with the precise value.
-    const run = store.getRun(lease.runId);
+    const run = await store.getRun(lease.runId);
     const durationMs = run ? Date.now() - Date.parse(run.ts) : NaN;
-    store.updateRun(lease.runId, {
+    await store.updateRun(lease.runId, {
       phase: "done",
       outcome: "exec",
       status: "resolved",
@@ -1550,12 +1558,12 @@ export class MachineGateway {
       progress: null,
       ts,
     });
-    const loop = store.updateLoop(lease.loopId, { completedAt: ts, completionReason: reason, enabled: false });
+    const loop = await store.updateLoop(lease.loopId, { completedAt: ts, completionReason: reason, enabled: false });
     this.scheduler.removeLoop(lease.loopId);
     // Snapshot the loop's end-state (Phase 3 diff baseline), best-effort like report().
     try {
-      store.putRunSnapshot(lease.runId, lease.loopId, store.buildLoopManifest(lease.loopId));
-      store.pruneRunSnapshots(lease.loopId, snapshotRetention());
+      await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
+      await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
     } catch (err) {
       log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "finish: snapshot capture failed");
     }
@@ -1589,18 +1597,18 @@ export class MachineGateway {
     },
   ): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    const machine = store.getMachine(machineId);
+    const machine = await store.getMachine(machineId);
     if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
 
     const loopId = typeof body.loopId === "string" ? body.loopId : "";
     if (!loopId) return { status: 400, body: { error: "loopId required" } };
-    const loop = store.getLoop(loopId);
+    const loop = await store.getLoop(loopId);
     if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
 
     // runId attribution (Phase 3 seam): honored only when it names a run on this loop.
     let runId: string | null = null;
     if (typeof body.runId === "string" && body.runId) {
-      const run = store.getRun(body.runId);
+      const run = await store.getRun(body.runId);
       if (run && run.loopId === loopId) runId = body.runId;
     }
 
@@ -1642,10 +1650,10 @@ export class MachineGateway {
     // wedged), and surface the cap on the response (mirrors the per-file oversize
     // signal). Reusing an already-stored hash adds no bytes, so it's always allowed.
     const bytesCap = loopBytesCap();
-    let projectedBytes = store.loopStoredBytes(loopId);
+    let projectedBytes = await store.loopStoredBytes(loopId);
     // Per-path breakdown of that same footprint (one upfront query, not two point
     // queries per manifest file) — consulted for the overwrite "freed" credit below.
-    const priorSizes = store.liveArtifactSizes(loopId);
+    const priorSizes = await store.liveArtifactSizes(loopId);
     const rejectedPaths: string[] = [];
     let capExceeded = false;
 
@@ -1664,7 +1672,7 @@ export class MachineGateway {
 
       if (oversize) {
         // Metadata-only: genuinely over the per-file cap (path + size, no bytes).
-        store.upsertArtifactFile({
+        await store.upsertArtifactFile({
           loopId,
           path: rel,
           hash: null,
@@ -1695,7 +1703,7 @@ export class MachineGateway {
       // a buggy/hostile client, which we want to bound, not trust). putBlob re-checks
       // against the real byte length regardless.
       const fileSize = inlined?.length ?? (sizeOk ? rawSize : BLOB_CAP);
-      const addsNewBytes = !(store.blobExists(hash) || toStore.has(hash) || needHashes.has(hash));
+      const addsNewBytes = !((await store.blobExists(hash)) || toStore.has(hash) || needHashes.has(hash));
       if (addsNewBytes) {
         // Cap only the NET growth: overwriting an existing live, byte-backed row at
         // `rel` FREES its currently-counted bytes (the upsert below replaces it), so
@@ -1720,9 +1728,9 @@ export class MachineGateway {
       }
 
       if (inlined) toStore.set(hash, inlined);
-      else if (!store.blobExists(hash)) needHashes.add(hash);
+      else if (!(await store.blobExists(hash))) needHashes.add(hash);
 
-      store.upsertArtifactFile({
+      await store.upsertArtifactFile({
         loopId,
         path: rel,
         hash,
@@ -1742,9 +1750,9 @@ export class MachineGateway {
     // re-parsing (the conflict no-op keeps it), and a binary blob is never parsed.
     for (const [hash, bytes] of toStore) {
       await this.blobStore.put(hash, bytes);
-      if (store.blobExists(hash)) continue; // dedup: meta already computed for this hash
+      if (await store.blobExists(hash)) continue; // dedup: meta already computed for this hash
       const binary = looksBinary(bytes);
-      store.recordBlob(hash, bytes.length, binary, binary ? null : artifactMeta(bytes.toString("utf8")));
+      await store.recordBlob(hash, bytes.length, binary, binary ? null : artifactMeta(bytes.toString("utf8")));
     }
 
     // Task-file live refresh: when this manifest carries the loop's task file and
@@ -1755,14 +1763,14 @@ export class MachineGateway {
     // reflects idle-time human edits within a flush. Bytes still pending a PUT are
     // handled by putBlob's mirror below.
     await this.refreshTaskFileContent(loop, pathHashes, async (hash) =>
-      toStore.get(hash) ?? inline.get(hash) ?? (store.blobExists(hash) ? await this.blobStore.get(hash) : null),
+      toStore.get(hash) ?? inline.get(hash) ?? ((await store.blobExists(hash)) ? await this.blobStore.get(hash) : null),
     );
 
     // Deletions = absence from the full manifest → tombstone the vanished paths.
     // Cap-rejected paths are NOT tombstoned: keep their prior row (the last accepted
     // version) intact rather than dropping the file just because new bytes were
     // refused — so they're added to the keep set for the deletion reconciliation.
-    const tombstoned = store.tombstoneMissingArtifacts(loopId, [...keepPaths, ...rejectedPaths], runId);
+    const tombstoned = await store.tombstoneMissingArtifacts(loopId, [...keepPaths, ...rejectedPaths], runId);
 
     log.info(
       { machineId, loopId, files: keepPaths.length, inlined: toStore.size, need: needHashes.size, tombstoned, rejected: rejectedPaths.length },
@@ -1800,9 +1808,9 @@ export class MachineGateway {
     if (!best) return;
     const bytes = await bytesFor(pathHashes.get(best)!);
     if (!bytes || looksBinary(bytes)) return;
-    const text = bytes.toString("utf8").slice(0, WIRE_TEXT_CAP);
+    const text = clipText(bytes.toString("utf8"), WIRE_TEXT_CAP);
     if (text === loop.taskFileContent) return; // unchanged → no row churn per flush
-    store.updateLoop(loop.id, { taskFileContent: text, taskFileSyncedAt: nowIso() });
+    await store.updateLoop(loop.id, { taskFileContent: text, taskFileSyncedAt: nowIso() });
   }
 
   // ---- PUT /api/machine/blob/:hash ----
@@ -1814,7 +1822,7 @@ export class MachineGateway {
    */
   async putBlob(deviceToken: string, hash: string, bytes: Buffer): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     if (!isValidHash(hash)) return { status: 400, body: { error: "invalid hash (expect sha256 hex)" } };
     if (bytes.length > BLOB_CAP) return { status: 413, body: { error: "blob exceeds size cap" } };
     if (sha256Buf(bytes) !== hash) return { status: 400, body: { error: "hash mismatch (sha256(body) !== :hash)" } };
@@ -1824,7 +1832,7 @@ export class MachineGateway {
     // (an arbitrary self-hashed blob nothing references) is refused, so a device
     // token can't be used as an uncapped R2 write channel. A re-PUT of a still-
     // referenced hash stays accepted (idempotent — daemon retries are safe).
-    if (!store.machineReferencesBlob(machineId, hash)) {
+    if (!(await store.machineReferencesBlob(machineId, hash))) {
       return { status: 403, body: { error: "hash was not requested for this machine (sync a manifest first)" } };
     }
 
@@ -1835,13 +1843,16 @@ export class MachineGateway {
     // returned this hash in needHashes). If storing would push a referencing loop
     // past its cap, refuse the bytes AND drop that loop's dangling rows so nothing
     // points at a blob we won't store — a later sync re-reconciles (self-healing).
-    if (!store.blobExists(hash)) {
+    if (!(await store.blobExists(hash))) {
       const cap = loopBytesCap();
-      const overLoops = store
-        .loopsReferencingHash(hash)
-        .filter((loopId) => store.loopStoredBytesExcludingHash(loopId, hash) + bytes.length > cap);
+      // Pre-await the per-loop sizes into an array BEFORE filtering — a filter callback
+      // can't await, so `store.loopStoredBytesExcludingHash(...) + bytes.length` would
+      // otherwise be `Promise + number`.
+      const referencing = await store.loopsReferencingHash(hash);
+      const sizes = await Promise.all(referencing.map((loopId) => store.loopStoredBytesExcludingHash(loopId, hash)));
+      const overLoops = referencing.filter((_loopId, i) => sizes[i]! + bytes.length > cap);
       if (overLoops.length) {
-        for (const loopId of overLoops) store.dropArtifactFilesForHash(loopId, hash);
+        for (const loopId of overLoops) await store.dropArtifactFilesForHash(loopId, hash);
         log.warn({ machineId, hash, bytes: bytes.length, loops: overLoops.length }, "putBlob: per-loop storage cap reached — refused");
         return { status: 413, body: { error: "blob would exceed per-loop storage cap", capExceeded: true } };
       }
@@ -1852,16 +1863,16 @@ export class MachineGateway {
     // reuse: a re-PUT of an already-recorded hash no-ops and keeps its meta; binary
     // bytes are never parsed).
     const binary = looksBinary(bytes);
-    store.recordBlob(hash, bytes.length, binary, binary ? null : artifactMeta(bytes.toString("utf8")));
+    await store.recordBlob(hash, bytes.length, binary, binary ? null : artifactMeta(bytes.toString("utf8")));
     // Late-arriving task-file bytes: a task file over the daemon's inline cap rides
     // this PUT (sync couldn't mirror it — no bytes in hand, and no follow-up sync is
     // guaranteed on an idle folder). Mirror onto each referencing loop whose task
     // file this blob backs, via the same refresh path sync uses.
     if (!binary) {
-      for (const loopId of store.loopsReferencingHash(hash)) {
-        const loop = store.getLoop(loopId);
+      for (const loopId of await store.loopsReferencingHash(hash)) {
+        const loop = await store.getLoop(loopId);
         if (!loop?.taskFile) continue;
-        const rows = store.listArtifacts(loopId).filter((r) => r.hash);
+        const rows = (await store.listArtifacts(loopId)).filter((r) => r.hash);
         await this.refreshTaskFileContent(
           loop,
           new Map(rows.map((r) => [r.path, r.hash!] as const)),
@@ -1880,7 +1891,7 @@ export class MachineGateway {
 
   // ---- agent-api verb dispatch (compact port of control.ts) ----
 
-  private dispatch(lease: RunLease, argv: string[]): { code: number; text: string } {
+  private async dispatch(lease: RunLease, argv: string[]): Promise<{ code: number; text: string }> {
     const verb = argv[0];
     const flags = parseFlags(argv.slice(1));
     const str = (k: string) => (typeof flags[k] === "string" ? (flags[k] as string) : undefined);
@@ -1905,7 +1916,7 @@ export class MachineGateway {
         const rawState = str("state") ?? str("state-content");
         let state: Record<string, number | string> | undefined;
         if (rawState !== undefined) {
-          const loop = store.getLoop(lease.loopId);
+          const loop = await store.getLoop(lease.loopId);
           const v = validateState(rawState, loop?.stateSchema ?? undefined);
           if (!v.ok) return derr(400, v.error, "VALIDATION_ERROR");
           state = v.value;
@@ -1917,7 +1928,7 @@ export class MachineGateway {
           return derr(400, `status must be new|resolved|nothing-new (got "${status}")`, "VALIDATION_ERROR");
         }
         const message = str("message");
-        store.updateRun(lease.runId, {
+        await store.updateRun(lease.runId, {
           ...(status !== undefined ? { status: status as RunStatus } : {}),
           // Clipped to the same cap the report finalText fallback enforces.
           ...(message !== undefined ? { message: message.slice(0, MESSAGE_CAP) } : {}),
@@ -1928,7 +1939,7 @@ export class MachineGateway {
       case "show":
         return {
           code: 200,
-          text: this.describe(lease.loopId, { allowControl: lease.allowControl, canFinish: lease.canFinish, full: flags["full"] === true }),
+          text: await this.describe(lease.loopId, { allowControl: lease.allowControl, canFinish: lease.canFinish, full: flags["full"] === true }),
         };
       case "log": {
         // The run's OWN-loop history. Batch 4 wired this into dispatch so the help
@@ -1937,7 +1948,7 @@ export class MachineGateway {
         // directly). Scoped to the lease's own loop/machine — dispatch never reads a
         // loop id from flags, so a run can never target another loop (the loop-fence
         // lives in runCli for the positional-arg case).
-        const res = this.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
+        const res = await this.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
         return { code: res.status, text: (res.body as { text?: string }).text ?? "" };
       }
       case "finish":
@@ -1945,7 +1956,7 @@ export class MachineGateway {
         if (!lease.canFinish) {
           // canFinish is false both for OPEN loops (no goal) and for evolve/edit
           // runs — give the right message for each. The open-loop case is primary.
-          const loop = store.getLoop(lease.loopId);
+          const loop = await store.getLoop(lease.loopId);
           if (!loop || loop.goal == null) {
             return derr(403, "this loop has no goal to finish (it's an open/monitor loop)", "FORBIDDEN");
           }
@@ -1961,46 +1972,46 @@ export class MachineGateway {
         const rawState = str("state") ?? str("state-content");
         let state: Record<string, number | string> | undefined;
         if (rawState !== undefined) {
-          const loop = store.getLoop(lease.loopId);
+          const loop = await store.getLoop(lease.loopId);
           const v = validateState(rawState, loop?.stateSchema ?? undefined);
           if (!v.ok) return derr(400, v.error, "VALIDATION_ERROR");
           state = v.value;
         }
         const message = str("message")?.slice(0, MESSAGE_CAP);
         const reason = str("reason")?.slice(0, MESSAGE_CAP) ?? null;
-        const r = this.finishLoop(lease, { message, reason, state });
-        return r.ok ? { code: 200, text: renderFinishedText(lease.loopId) } : derr(400, r.detail ?? "rejected", r.code);
+        const r = await this.finishLoop(lease, { message, reason, state });
+        return r.ok ? { code: 200, text: await renderFinishedText(lease.loopId) } : derr(400, r.detail ?? "rejected", r.code);
       }
       case "set-ui": {
         if (!lease.canSetUi) return derr(403, "only the evolution or edit pass may set the UI", "FORBIDDEN");
         const html = str("body") ?? str("file-content");
         if (html === undefined) return derr(400, "set-ui needs --file <path> (shim inlines it)", "VALIDATION_ERROR");
-        const r = this.applySetUi(lease.loopId, html);
-        this.audit(lease, "set-ui", { bytes: String(html.length) }, r);
+        const r = await this.applySetUi(lease.loopId, html);
+        await this.audit(lease, "set-ui", { bytes: String(html.length) }, r);
         return r.ok ? { code: 200, text: r.detail ?? "ui updated" } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
       }
       case "set-schema": {
         if (!lease.canSetSchema) return derr(403, "only the evolution or edit pass may set the schema", "FORBIDDEN");
         const json = str("body") ?? str("file-content");
         if (json === undefined) return derr(400, "set-schema needs --file <path> (a JSON array of {key,label,unit})", "VALIDATION_ERROR");
-        const r = this.applySetSchema(lease.loopId, json);
-        this.audit(lease, "set-schema", { bytes: String(json.length) }, r);
+        const r = await this.applySetSchema(lease.loopId, json);
+        await this.audit(lease, "set-schema", { bytes: String(json.length) }, r);
         return r.ok ? { code: 200, text: r.detail ?? "schema updated" } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
       }
       case "set-workflow": {
         if (!lease.canSetWorkflow) return derr(403, "only the evolution or edit pass may set the workflow", "FORBIDDEN");
         const body = str("body") ?? str("file-content");
         if (!body) return derr(400, "set-workflow needs --file <path> (shim inlines it)", "VALIDATION_ERROR");
-        const r = this.applySetWorkflow(lease.loopId, body);
-        this.audit(lease, "set-workflow", { bytes: String(body.length) }, r);
+        const r = await this.applySetWorkflow(lease.loopId, body);
+        await this.audit(lease, "set-workflow", { bytes: String(body.length) }, r);
         return r.ok ? { code: 200, text: r.detail ?? "workflow updated" } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
       }
     }
 
     if (MUTATION_VERBS.has(verb ?? "")) {
       if (!lease.allowControl) return derr(403, "this loop may not change its own schedule (allowControl is off)", "FORBIDDEN");
-      const r = this.applyMutation(lease.loopId, verb!, flags, str);
-      this.audit(lease, verb!, stringifyFlags(flags), r);
+      const r = await this.applyMutation(lease.loopId, verb!, flags, str);
+      await this.audit(lease, verb!, stringifyFlags(flags), r);
       return r.ok ? { code: 200, text: r.detail ?? `${verb} applied` } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
     }
     return derr(400, `unknown command "${verb ?? ""}" (try: loopany help)`, "VALIDATION_ERROR");
@@ -2055,7 +2066,7 @@ export class MachineGateway {
     );
   }
 
-  private applyMutation(loopId: string, verb: string, flags: Flags, str: (k: string) => string | undefined): Applied {
+  private async applyMutation(loopId: string, verb: string, flags: Flags, str: (k: string) => string | undefined): Promise<Applied> {
     switch (verb) {
       case "reschedule": {
         // F4: `--run-at` is canonical (aligns with the `runAt` edit key + the help
@@ -2071,14 +2082,14 @@ export class MachineGateway {
         if (Date.parse(when) - Date.now() < floorMin * 60_000) {
           return { ok: false, detail: `a run can't reschedule sooner than ${floorMin} min out — the owner can set any time via edit` };
         }
-        const loop = store.updateLoop(loopId, { nextRunAt: when });
+        const loop = await store.updateLoop(loopId, { nextRunAt: when });
         if (loop) this.scheduler.addLoop(loop);
         return { ok: true, detail: `next run at ${new Date(when).toLocaleString()}` };
       }
       case "set-cron": {
         const cron = str("_") ?? str("cron");
         if (!cron) return { ok: false, detail: 'set-cron needs the expression, e.g. set-cron "*/30 * * * *"' };
-        const tz = store.getLoop(loopId)?.timezone;
+        const tz = (await store.getLoop(loopId))?.timezone;
         const c = validCadence(cron, tz);
         if (!c.ok) return c;
         // Self-schedule floor (RUN path only; owner's edit path is unlimited): a run
@@ -2092,38 +2103,38 @@ export class MachineGateway {
             detail: `a run can't schedule more often than every ${floorMin} min (that cron fires every ~${Math.round(interval / 60_000)} min) — the owner can set any cadence via edit`,
           };
         }
-        const loop = store.updateLoop(loopId, { cron });
+        const loop = await store.updateLoop(loopId, { cron });
         if (loop) this.scheduler.addLoop(loop);
         return { ok: true, detail: `cron set to "${cron}"` };
       }
       case "pause":
       case "resume": {
         const enabled = verb === "resume";
-        const loop = store.updateLoop(loopId, { enabled });
+        const loop = await store.updateLoop(loopId, { enabled });
         if (loop) enabled ? this.scheduler.addLoop(loop) : this.scheduler.removeLoop(loopId);
         return { ok: true, detail: enabled ? "resumed" : "paused" };
       }
       case "notify": {
         const v = (str("_") ?? str("notify")) as NotifyPolicy | undefined;
         if (v !== "always" && v !== "auto" && v !== "never") return { ok: false, detail: "notify needs always|auto|never" };
-        store.updateLoop(loopId, { notify: v });
+        await store.updateLoop(loopId, { notify: v });
         return { ok: true, detail: `notify set to ${v}` };
       }
       case "set-name": {
         const name = (str("_") ?? str("name"))?.trim() || null;
-        store.updateLoop(loopId, { name });
+        await store.updateLoop(loopId, { name });
         return { ok: true, detail: name ? `name set to "${name}"` : "name cleared" };
       }
       case "set-tz": {
         const tz = (str("_") ?? str("tz") ?? str("timezone"))?.trim() || null;
         if (tz && !validTimezone(tz)) return { ok: false, detail: invalidTimezoneError(tz) };
-        const loop = store.updateLoop(loopId, { timezone: tz });
+        const loop = await store.updateLoop(loopId, { timezone: tz });
         if (loop) this.scheduler.addLoop(loop); // tz changes the cron's interpretation
         return { ok: true, detail: tz ? `timezone set to ${tz}` : "timezone cleared (server-local)" };
       }
       case "set-model": {
         const model = (str("_") ?? str("model"))?.trim() || null;
-        store.updateLoop(loopId, { model });
+        await store.updateLoop(loopId, { model });
         return { ok: true, detail: model ? `model set to ${model}` : "model cleared" };
       }
       default:
@@ -2172,8 +2183,8 @@ export class MachineGateway {
    *  already-parsed value (an `editLoop` JSON patch may carry the array inline).
    *  Enforces the additive rule: keys still bound by the UI or reported by
    *  recent runs may not be dropped. */
-  private validateSchema(loopId: string, input: unknown): { ok: true; value: StateField[] } | { ok: false; detail: string } {
-    if (!store.getLoop(loopId)) return { ok: false, detail: "loop not found" };
+  private async validateSchema(loopId: string, input: unknown): Promise<{ ok: true; value: StateField[] } | { ok: false; detail: string }> {
+    if (!(await store.getLoop(loopId))) return { ok: false, detail: "loop not found" };
     let parsed: unknown = input;
     if (typeof input === "string") {
       try {
@@ -2185,7 +2196,7 @@ export class MachineGateway {
     const schema = store.coerceStateSchema(parsed);
     if (!schema) return { ok: false, detail: "schema must be a non-empty array of {key, label?, unit?}" };
     const have = new Set(schema.map((f) => f.key));
-    const dropped = schemaKeysInUse(loopId).filter((k) => !have.has(k));
+    const dropped = (await schemaKeysInUse(loopId)).filter((k) => !have.has(k));
     if (dropped.length) {
       return {
         ok: false,
@@ -2195,25 +2206,25 @@ export class MachineGateway {
     return { ok: true, value: schema };
   }
 
-  private applySetUi(loopId: string, html: string): Applied {
+  private async applySetUi(loopId: string, html: string): Promise<Applied> {
     const { value: ui } = this.validateUi(html);
-    const loop = store.updateLoop(loopId, { ui });
+    const loop = await store.updateLoop(loopId, { ui });
     if (!loop) return { ok: false, detail: "loop not found" };
     return { ok: true, detail: ui ? `ui updated (${ui.length} bytes)` : "ui cleared" };
   }
 
-  private applySetWorkflow(loopId: string, body: string): Applied {
+  private async applySetWorkflow(loopId: string, body: string): Promise<Applied> {
     const v = this.validateWorkflow(body);
     if (!v.ok) return { ok: false, detail: v.detail };
-    const loop = store.updateLoop(loopId, { workflow: v.value });
+    const loop = await store.updateLoop(loopId, { workflow: v.value });
     if (!loop) return { ok: false, detail: "loop not found" };
     return { ok: true, detail: loop.workflow ? `workflow updated (${loop.workflow.length} bytes)` : "workflow cleared" };
   }
 
-  private applySetSchema(loopId: string, json: string): Applied {
-    const v = this.validateSchema(loopId, json);
+  private async applySetSchema(loopId: string, json: string): Promise<Applied> {
+    const v = await this.validateSchema(loopId, json);
     if (!v.ok) return { ok: false, detail: v.detail };
-    store.updateLoop(loopId, { stateSchema: v.value });
+    await store.updateLoop(loopId, { stateSchema: v.value });
     return { ok: true, detail: `schema set (${v.value.map((f) => f.key).join(", ")})` };
   }
 
@@ -2227,13 +2238,13 @@ export class MachineGateway {
   // finish gate); when present the run adds the `selfSchedule`/`selfFinish` effective
   // lines and run-appropriate help. A device caller passes neither and gets the
   // owner-facing help (edit/log). `--json` is emitted by the callers, not here.
-  private describe(loopId: string, opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {}): string {
-    const loop = store.getLoop(loopId);
+  private async describe(loopId: string, opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {}): Promise<string> {
+    const loop = await store.getLoop(loopId);
     if (!loop) return "loop not found";
     // The most recent exec run (newest-first) anchors the `runs:` tally's last-outcome.
-    const recent = store.listRuns(loop.id, LOG_RUNS_DEFAULT).slice().reverse();
+    const recent = (await store.listRuns(loop.id, LOG_RUNS_DEFAULT)).slice().reverse();
     const lastExec = recent.find((r) => r.role === "exec") ?? null;
-    return renderShowText(loop, loopEnvelope(loop), store.countRuns(loop.id), lastExec, opts);
+    return renderShowText(loop, loopEnvelope(loop), await store.countRuns(loop.id), lastExec, opts);
   }
 
   /**
@@ -2244,8 +2255,8 @@ export class MachineGateway {
    * "not connected" state (never empty, never an error). This same text is what the
    * SessionStart hook emits every session, so it self-heals when a machine is asleep.
    */
-  private homeDevice(machineId: string, flags: Flags): string {
-    const machine = store.getMachine(machineId);
+  private async homeDevice(machineId: string, flags: Flags): Promise<string> {
+    const machine = await store.getMachine(machineId);
     const ctx: HomeContext = {
       bin: typeof flags["bin"] === "string" ? (flags["bin"] as string) : null,
       pid: typeof flags["pid"] === "string" ? (flags["pid"] as string) : null,
@@ -2255,27 +2266,29 @@ export class MachineGateway {
     };
     if (!machine) return renderHomeText(ctx, null, [], 0, []);
     const presence = machinePresence(machine.online, machine.lastSeen);
-    const loops = store.loopsForMachine(machineId);
+    const loops = await store.loopsForMachine(machineId);
     const scoped = scopeLoopsByCwd(loops, ctx.cwd, ctx.home);
-    const here: HomeLoop[] = scoped.here.map((l) => ({
-      id: l.id,
-      name: l.name ?? l.id,
-      cron: l.cron,
-      enabled: l.enabled,
-      nextFire: l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null,
-      lastOutcome: (() => {
-        const last = store.lastExecRun(l.id);
-        return last ? runOutcomeToken(last) : null;
-      })(),
-    }));
-    return renderHomeText(ctx, presence, here, scoped.elsewhere, recentMachineRuns(loops, 3));
+    const here: HomeLoop[] = await Promise.all(
+      scoped.here.map(async (l) => ({
+        id: l.id,
+        name: l.name ?? l.id,
+        cron: l.cron,
+        enabled: l.enabled,
+        nextFire: l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null,
+        lastOutcome: await (async () => {
+          const last = await store.lastExecRun(l.id);
+          return last ? runOutcomeToken(last) : null;
+        })(),
+      })),
+    );
+    return renderHomeText(ctx, presence, here, scoped.elsewhere, await recentMachineRuns(loops, 3));
   }
 
   /** `loopany` (bare) inside a run — the RUN credential's own-loop home (§5.1). */
-  private homeRun(lease: RunLease): string {
-    const loop = store.getLoop(lease.loopId);
+  private async homeRun(lease: RunLease): Promise<string> {
+    const loop = await store.getLoop(lease.loopId);
     if (!loop) return errorBlock("loop not found", "NOT_FOUND");
-    const recent = store.listRuns(loop.id, 2).slice().reverse().map((r) => ({
+    const recent = (await store.listRuns(loop.id, 2)).slice().reverse().map((r) => ({
       ts: r.ts,
       outcome: runOutcomeToken(r),
       message: r.message ?? null,
@@ -2283,8 +2296,8 @@ export class MachineGateway {
     return renderRunHomeText(loop.name ?? loop.id, loop.id, lease.role, loop.goal ?? null, recent);
   }
 
-  private audit(lease: RunLease, command: string, args: Record<string, string>, r: Applied): void {
-    const run = store.getRun(lease.runId);
+  private async audit(lease: RunLease, command: string, args: Record<string, string>, r: Applied): Promise<void> {
+    const run = await store.getRun(lease.runId);
     const control: ControlAction[] = [
       ...((run?.control as ControlAction[] | null | undefined) ?? []),
       {
@@ -2295,7 +2308,7 @@ export class MachineGateway {
         detail: r.detail,
       },
     ];
-    store.updateRun(lease.runId, { control });
+    await store.updateRun(lease.runId, { control });
   }
 }
 
@@ -2346,9 +2359,9 @@ function stringifyFlags(flags: Flags): Record<string, string> {
   return out;
 }
 
-function schemaKeysInUse(loopId: string): string[] {
+async function schemaKeysInUse(loopId: string): Promise<string[]> {
   const keys = new Set<string>();
-  const loop = store.getLoop(loopId);
+  const loop = await store.getLoop(loopId);
   if (loop?.ui) {
     for (const m of loop.ui.matchAll(/\{\{\s*(?:latest|state)\.([a-zA-Z0-9_-]+)[^}]*\}\}/g)) keys.add(m[1]!);
     for (const m of loop.ui.matchAll(/(?:series|key)=["']([^"']+)["']/g)) {
@@ -2358,7 +2371,7 @@ function schemaKeysInUse(loopId: string): string[] {
       }
     }
   }
-  for (const run of store.listRuns(loopId, 100)) {
+  for (const run of await store.listRuns(loopId, 100)) {
     if (!run.state || typeof run.state !== "object") continue;
     for (const key of Object.keys(run.state as Record<string, unknown>)) keys.add(key);
   }
@@ -2732,8 +2745,8 @@ function renderReportedText(status: string | undefined, state: Record<string, nu
 }
 
 /** `loopany finish` — the goal-met confirmation, read back off the completed loop. */
-function renderFinishedText(loopId: string): string {
-  const loop = store.getLoop(loopId);
+async function renderFinishedText(loopId: string): Promise<string> {
+  const loop = await store.getLoop(loopId);
   if (!loop) return "finished: goal met";
   return doc(
     `finished: ${scalar(loop.name ?? loop.id)} (${loop.id}) — goal met`,
@@ -3117,10 +3130,10 @@ export function scopeLoopsByCwd(
 
 /** The most recent runs across ALL of a machine's loops, newest-first, for the home
  *  `recent[]` block. Merges each loop's newest few then globally sorts by ts. */
-function recentMachineRuns(loops: Loop[], n: number): Array<{ ts: string; loop: string; outcome: string }> {
+async function recentMachineRuns(loops: Loop[], n: number): Promise<Array<{ ts: string; loop: string; outcome: string }>> {
   const rows: Array<{ ts: string; loop: string; outcome: string }> = [];
   for (const l of loops) {
-    for (const r of store.listRuns(l.id, n)) {
+    for (const r of await store.listRuns(l.id, n)) {
       rows.push({ ts: r.ts, loop: l.name ?? l.id, outcome: runOutcomeToken(r) });
     }
   }
@@ -3230,21 +3243,67 @@ function isStatus(s: string | undefined): s is RunStatus {
   return s === "new" || s === "resolved" || s === "nothing-new";
 }
 
-/** Trim a value to a non-empty string, or null. Shared by createLoop/editLoop. */
+/** Strip NUL (U+0000) from a wire string: Postgres text/jsonb columns REJECT the
+ *  NUL byte (SQLite tolerated it), so a daemon-supplied string carrying one would
+ *  throw mid-finalize on the DB write. The single sanitizing primitive shared by
+ *  `str`, `clipText`, and `stripNulDeep`. */
+function stripNul(s: string): string {
+  return s.replace(/\u0000/g, "");
+}
+
+/** Clip a free-text wire field to its byte-budget cap AND strip NUL — the shared
+ *  chokepoint for every capped daemon string (message / transcript / taskFileContent
+ *  / sessionId / error / …). Caps are unchanged; NUL is removed so the DB write can't
+ *  throw. */
+function clipText(s: string, cap: number): string {
+  return stripNul(s.slice(0, cap));
+}
+
+/** Recursively strip NUL from a free-form JSON value's string keys + values — for the
+ *  workflow cursor, which is stored whole into the `loop.state` jsonb column (same
+ *  Postgres U+0000 constraint). Structure-preserving; non-strings pass through. */
+function stripNulDeep(v: unknown): unknown {
+  if (typeof v === "string") return stripNul(v);
+  if (Array.isArray(v)) return v.map(stripNulDeep);
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[stripNul(k)] = stripNulDeep(val);
+    return out;
+  }
+  return v;
+}
+
+/** Trim a value to a non-empty string, or null (NUL stripped). Shared by
+ *  createLoop/editLoop. */
 function str(v: unknown): string | null {
-  return typeof v === "string" && v.trim() ? v.trim() : null;
+  if (typeof v !== "string") return null;
+  const t = stripNul(v).trim();
+  return t ? t : null;
 }
 
 /** Structural equality for an editLoop before→after comparison: null and undefined
  *  are equal (an absent field re-fed as null is unchanged); objects/arrays compare by
- *  their JSON serialization (stateSchema is a small array); everything else by `===`.
- *  Powers the no-op filter that makes the `show --json` → `edit` roundtrip a no-op. */
+ *  their CANONICAL JSON serialization (stateSchema is a small array; object keys are
+ *  sorted so the comparison is order-INSENSITIVE — a value re-read from a pg `jsonb`
+ *  column comes back with its keys normalized, which must not read as a change against
+ *  a freshly-coerced value); everything else by `===`. Powers the no-op filter that
+ *  makes the `show --json` → `edit` roundtrip a no-op. */
 function sameLoopValue(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a == null && b == null) return true;
   if (a == null || b == null) return false;
-  if (typeof a === "object" || typeof b === "object") return JSON.stringify(a) === JSON.stringify(b);
+  if (typeof a === "object" || typeof b === "object") return canonicalJson(a) === canonicalJson(b);
   return false;
+}
+
+/** Stable JSON with recursively sorted object keys — so two structurally-equal values
+ *  serialize identically regardless of key ordering (pg `jsonb` normalizes key order). */
+function canonicalJson(v: unknown): string {
+  return JSON.stringify(v, (_k, val) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(Object.entries(val as Record<string, unknown>).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)))
+      : val,
+  );
 }
 
 /** Bound a value for the dry-run before→after preview: a long content string

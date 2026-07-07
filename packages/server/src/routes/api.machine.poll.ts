@@ -19,7 +19,7 @@ export const Route = createFileRoute('/api/machine/poll')({
           progress?: Array<{ runId: string; step: number; label: string }>
         }
         const { getGateway } = await import('../server/boot.js')
-        const r = getGateway().poll(token, body, body.progress)
+        const r = await (await getGateway()).poll(token, body, body.progress)
         return Response.json(r.body, { status: r.status })
       },
     },

@@ -9,7 +9,7 @@ export const Route = createFileRoute('/api/machine/status')({
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const { getGateway } = await import('../server/boot.js')
-        const r = getGateway().status(token)
+        const r = await (await getGateway()).status(token)
         return Response.json(r.body, { status: r.status })
       },
     },

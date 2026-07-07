@@ -63,8 +63,8 @@ export function toArtifactSummary(row: ArtifactFileWithMeta): ArtifactSummary {
   };
 }
 
-export function toJobSummary(loop: Loop): JobSummary {
-  const runs = store.listRuns(loop.id, SUMMARY_RUNS).map(toRunSummary);
+export async function toJobSummary(loop: Loop): Promise<JobSummary> {
+  const runs = (await store.listRuns(loop.id, SUMMARY_RUNS)).map(toRunSummary);
   return {
     id: loop.id,
     name: loop.name ?? loop.id,
@@ -74,15 +74,15 @@ export function toJobSummary(loop: Loop): JobSummary {
     enabled: loop.enabled,
     notify: loop.notify,
     nextRun: nextRun(loop),
-    running: store.hasOpenRun(loop.id),
+    running: await store.hasOpenRun(loop.id),
     lastRunTs: runs.length ? runs[runs.length - 1]!.ts : null,
     graduation: null, // shadow/graduation is post-v1
     goal: loop.goal ?? null,
     completedAt: loop.completedAt ?? null,
     completionReason: loop.completionReason ?? null,
     runs,
-    runCount: store.countRuns(loop.id),
-    totalCostUsd: store.sumRunCost(loop.id),
+    runCount: await store.countRuns(loop.id),
+    totalCostUsd: await store.sumRunCost(loop.id),
   };
 }
 
@@ -115,13 +115,13 @@ function toJobFull(loop: Loop): JobFull {
   };
 }
 
-export function toJobDetail(loop: Loop): JobDetail {
-  const fullRuns = store.listRuns(loop.id, 100).map(toRunSummary).reverse(); // newest first
-  const m = store.getMachine(loop.machineId);
+export async function toJobDetail(loop: Loop): Promise<JobDetail> {
+  const fullRuns = (await store.listRuns(loop.id, 100)).map(toRunSummary).reverse(); // newest first
+  const m = await store.getMachine(loop.machineId);
   const presence = machinePresence(m?.online, m?.lastSeen);
   return {
     job: toJobFull(loop),
-    summary: toJobSummary(loop),
+    summary: await toJobSummary(loop),
     taskFileContent: loop.taskFileContent ?? null, // synced from the machine on each run report
     taskFileSyncedAt: loop.taskFileSyncedAt ?? null,
     // `online` gates run/evolve (only a live daemon can execute); `presence`

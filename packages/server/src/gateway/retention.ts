@@ -42,10 +42,10 @@ export interface MaintainResult {
  * (most-recent-N). Returns the total number pruned. This is what makes an old
  * snapshot's now-unreferenced blobs collectable by gcBlobs().
  */
-export function pruneSnapshots(keep: number = snapshotRetention()): number {
+export async function pruneSnapshots(keep: number = snapshotRetention()): Promise<number> {
   let pruned = 0;
-  for (const loopId of store.loopIdsWithSnapshots()) {
-    pruned += store.pruneRunSnapshots(loopId, keep);
+  for (const loopId of await store.loopIdsWithSnapshots()) {
+    pruned += await store.pruneRunSnapshots(loopId, keep);
   }
   return pruned;
 }
@@ -75,27 +75,27 @@ export function pruneSnapshots(keep: number = snapshotRetention()): number {
  *         live blobs row pointing at deleted bytes.
  */
 export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGraceMs()): Promise<number> {
-  const refs = store.liveBlobRefs();
+  const refs = await store.liveBlobRefs();
   const cutoff = new Date(Date.now() - graceMs).toISOString();
-  const candidates = store.blobHashesOlderThan(cutoff);
+  const candidates = await store.blobHashesOlderThan(cutoff);
   const garbage = candidates.filter((h) => !refs.has(h));
 
   // Precompute the snapshot-referenced hash set ONCE (one full scan), refreshed only
   // when the snapshot row count changes — so a snapshot a concurrent report() writes
   // mid-pass is still caught while genuine garbage costs an O(1) Set lookup, not a
   // per-candidate full snapshot scan.
-  let snapCount = store.countRunSnapshots();
-  let snapRefs = store.snapshotBlobRefs();
+  let snapCount = await store.countRunSnapshots();
+  let snapRefs = await store.snapshotBlobRefs();
 
   let reclaimed = 0;
   for (const hash of garbage) {
     // Pre-delete guard: re-referenced before we touched it → keep bytes + metadata.
-    const count = store.countRunSnapshots();
+    const count = await store.countRunSnapshots();
     if (count !== snapCount) {
       snapCount = count;
-      snapRefs = store.snapshotBlobRefs();
+      snapRefs = await store.snapshotBlobRefs();
     }
-    if (store.artifactFileReferencesHash(hash) || snapRefs.has(hash)) continue;
+    if ((await store.artifactFileReferencesHash(hash)) || snapRefs.has(hash)) continue;
     try {
       // Bytes first…
       await blobStore.delete(hash);
@@ -105,7 +105,7 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGrac
       // No post-delete recheck: deleteBlob runs regardless, so re-scanning snapshots
       // here would only adjust a counter while paying a full manifest scan on the
       // common genuine-garbage path. The pre-delete guard above is the correctness gate.
-      store.deleteBlob(hash);
+      await store.deleteBlob(hash);
       reclaimed++;
     } catch (err) {
       // A failed byte-delete leaves BOTH the bytes and the metadata row intact, so a
@@ -123,7 +123,7 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGrac
  * garbage (returns zeros).
  */
 export async function maintainStorage(blobStore: BlobStore): Promise<MaintainResult> {
-  const snapshotsPruned = pruneSnapshots();
+  const snapshotsPruned = await pruneSnapshots();
   const blobsReclaimed = await gcBlobs(blobStore);
   if (snapshotsPruned || blobsReclaimed) {
     log.info({ snapshotsPruned, blobsReclaimed }, "storage maintenance");

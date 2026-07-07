@@ -13,8 +13,8 @@ export const Route = createFileRoute('/machine/report')({
         if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
         const body = parsed.kind === 'ok' ? parsed.body : {}
         const { getGateway } = await import('../server/boot.js')
-        const gw = getGateway()
-        const r = gw.report(token, body as Parameters<typeof gw.report>[1])
+        const gw = await getGateway()
+        const r = await gw.report(token, body as Parameters<typeof gw.report>[1])
         return Response.json(r.body, { status: r.status })
       },
     },

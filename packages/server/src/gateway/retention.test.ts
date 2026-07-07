@@ -28,7 +28,7 @@ beforeAll(async () => {
   process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
   process.env.LOOPANY_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
-  db.runMigrations();
+  await db.runMigrations();
   store = await import("../db/store.js");
   gatewayMod = await import("./index.js");
   retention = await import("./retention.js");
@@ -39,8 +39,8 @@ afterAll(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-beforeEach(() => {
-  db.sqlite.exec(
+beforeEach(async () => {
+  await (db.client as any).exec(
     "DELETE FROM run_snapshots; DELETE FROM artifact_files; DELETE FROM blobs; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
   );
 });
@@ -67,11 +67,11 @@ function gatewayWithStore(): { gw: InstanceType<typeof gatewayMod.MachineGateway
   return { gw: new gatewayMod.MachineGateway(scheduler, blobs), blobs };
 }
 
-function seed() {
+async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   return { token, machineId, loop };
 }
 
@@ -79,7 +79,7 @@ function seed() {
 async function putBlob(blobs: MemoryBlobStore, content: string): Promise<string> {
   const hash = sha256(content);
   await blobs.put(hash, Buffer.from(content));
-  store.recordBlob(hash, content.length, false);
+  (await store.recordBlob(hash, content.length, false));
   return hash;
 }
 
@@ -88,33 +88,33 @@ async function putBlob(blobs: MemoryBlobStore, content: string): Promise<string>
 const FORCE = -10_000;
 
 test("GC keeps a blob still referenced by another live file (shared content)", async () => {
-  const { loop } = seed();
+  const { loop } = (await seed());
   const { blobs } = gatewayWithStore();
   const hash = await putBlob(blobs, "shared bytes");
 
   // Two distinct paths point at the SAME content hash.
-  store.upsertArtifactFile({ loopId: loop.id, path: "a.txt", hash, size: 11, binary: false, oversize: false, lastRunId: null });
-  store.upsertArtifactFile({ loopId: loop.id, path: "b.txt", hash, size: 11, binary: false, oversize: false, lastRunId: null });
+  (await store.upsertArtifactFile({ loopId: loop.id, path: "a.txt", hash, size: 11, binary: false, oversize: false, lastRunId: null }));
+  (await store.upsertArtifactFile({ loopId: loop.id, path: "b.txt", hash, size: 11, binary: false, oversize: false, lastRunId: null }));
 
   // Delete one path → it tombstones, but the blob is still referenced by the other.
-  store.tombstoneMissingArtifacts(loop.id, ["a.txt"], null);
+  (await store.tombstoneMissingArtifacts(loop.id, ["a.txt"], null));
 
   const reclaimed = await retention.gcBlobs(blobs, FORCE);
   expect(reclaimed).toBe(0);
   expect(await blobs.has(hash)).toBe(true);
-  expect(store.blobExists(hash)).toBe(true);
+  expect((await store.blobExists(hash))).toBe(true);
 });
 
 test("GC keeps a blob a retained snapshot still references, then reclaims it once pruned", async () => {
-  const { loop, machineId } = seed();
+  const { loop, machineId } = (await seed());
   const { blobs } = gatewayWithStore();
   const hash = await putBlob(blobs, "report v1");
 
   // The blob was a live file, captured into a run snapshot, then the file deleted.
-  store.upsertArtifactFile({ loopId: loop.id, path: "report.md", hash, size: 9, binary: false, oversize: false, lastRunId: null });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
-  store.putRunSnapshot(run.id, loop.id, { "report.md": { hash, size: 9, binary: false, oversize: false } });
-  store.tombstoneMissingArtifacts(loop.id, [], null); // path gone from live set
+  (await store.upsertArtifactFile({ loopId: loop.id, path: "report.md", hash, size: 9, binary: false, oversize: false, lastRunId: null }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() }));
+  (await store.putRunSnapshot(run.id, loop.id, { "report.md": { hash, size: 9, binary: false, oversize: false } }));
+  (await store.tombstoneMissingArtifacts(loop.id, [], null)); // path gone from live set
 
   // No live artifact_files row references it now — but the snapshot does, so KEEP.
   const r1 = await retention.gcBlobs(blobs, FORCE);
@@ -122,11 +122,11 @@ test("GC keeps a blob a retained snapshot still references, then reclaims it onc
   expect(await blobs.has(hash)).toBe(true);
 
   // Prune the snapshot (window of 0) → nothing references the hash anymore → reclaim.
-  expect(store.pruneRunSnapshots(loop.id, 0)).toBe(1);
+  expect((await store.pruneRunSnapshots(loop.id, 0))).toBe(1);
   const r2 = await retention.gcBlobs(blobs, FORCE);
   expect(r2).toBe(1);
   expect(await blobs.has(hash)).toBe(false);
-  expect(store.blobExists(hash)).toBe(false);
+  expect((await store.blobExists(hash))).toBe(false);
 });
 
 test("the grace window protects freshly-written (unreferenced) blobs", async () => {
@@ -146,12 +146,12 @@ test("the grace window protects freshly-written (unreferenced) blobs", async () 
 });
 
 test("GC deletes bytes before metadata: a blob re-referenced mid-delete drops metadata to self-heal", async () => {
-  const { loop } = seed();
+  const { loop } = (await seed());
   const base = new MemoryBlobStore();
   const content = "racy bytes";
   const hash = sha256(content);
   await base.put(hash, Buffer.from(content));
-  store.recordBlob(hash, content.length, false);
+  (await store.recordBlob(hash, content.length, false));
   // No live row references it at pass start → it's garbage.
 
   // A BlobStore whose delete() simulates a concurrent sync racing the byte delete:
@@ -163,8 +163,8 @@ test("GC deletes bytes before metadata: a blob re-referenced mid-delete drops me
     get: (h: string) => base.get(h),
     async delete(h: string): Promise<void> {
       if (h === hash) {
-        store.upsertArtifactFile({ loopId: loop.id, path: "racer.txt", hash, size: content.length, binary: false, oversize: false, lastRunId: null });
-        store.recordBlob(hash, content.length, false);
+        (await store.upsertArtifactFile({ loopId: loop.id, path: "racer.txt", hash, size: content.length, binary: false, oversize: false, lastRunId: null }));
+        (await store.recordBlob(hash, content.length, false));
       }
       return base.delete(h);
     },
@@ -176,13 +176,13 @@ test("GC deletes bytes before metadata: a blob re-referenced mid-delete drops me
   // (self-heal). The invariant: never a live blobs row left pointing at deleted bytes.
   expect(reclaimed).toBe(1);
   expect(await base.has(hash)).toBe(false);
-  expect(store.blobExists(hash)).toBe(false);
-  expect(store.getArtifactFile(loop.id, "racer.txt")!.deleted).toBe(false);
+  expect((await store.blobExists(hash))).toBe(false);
+  expect((await store.getArtifactFile(loop.id, "racer.txt"))!.deleted).toBe(false);
 });
 
 test("putBlob enforces the per-loop cap against the REAL byte length (sync under-reported the size)", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
 
   const big = "z".repeat(200); // real bytes exceed the 100B cap…
@@ -193,7 +193,7 @@ test("putBlob enforces the per-loop cap against the REAL byte length (sync under
   const s = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "big.bin", hash: hbig, size: 10 }] });
   expect(s.status).toBe(200);
   expect((s.body as any).needHashes).toContain(hbig);
-  expect(store.getArtifactFile(loop.id, "big.bin")).toBeDefined();
+  expect((await store.getArtifactFile(loop.id, "big.bin"))).toBeDefined();
 
   // The daemon then PUTs the real (over-cap) bytes → refused at putBlob, with the
   // dangling row dropped so nothing points at a blob the server won't store.
@@ -201,13 +201,13 @@ test("putBlob enforces the per-loop cap against the REAL byte length (sync under
   expect(p.status).toBe(413);
   expect((p.body as any).capExceeded).toBe(true);
   expect(await blobs.has(hbig)).toBe(false);
-  expect(store.blobExists(hbig)).toBe(false);
-  expect(store.getArtifactFile(loop.id, "big.bin")).toBeUndefined();
+  expect((await store.blobExists(hbig))).toBe(false);
+  expect((await store.getArtifactFile(loop.id, "big.bin"))).toBeUndefined();
 });
 
 test("putBlob stores a NEW blob that fits the per-loop cap (honest path not falsely rejected)", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "1000";
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
 
   const data = "y".repeat(200);
@@ -218,48 +218,48 @@ test("putBlob stores a NEW blob that fits the per-loop cap (honest path not fals
   const p = await gw.putBlob(token, h, Buffer.from(data));
   expect(p.status).toBe(200);
   expect(await blobs.has(h)).toBe(true);
-  expect(store.blobExists(h)).toBe(true);
+  expect((await store.blobExists(h))).toBe(true);
 });
 
 test("snapshot retention prunes the oldest beyond the window, keeps the newest N", async () => {
-  const { loop, machineId } = seed();
+  const { loop, machineId } = (await seed());
   const ids: string[] = [];
   for (let i = 0; i < 5; i++) {
-    const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
-    store.putRunSnapshot(run.id, loop.id, {});
+    const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() }));
+    (await store.putRunSnapshot(run.id, loop.id, {}));
     ids.push(run.id);
     await new Promise((r) => setTimeout(r, 5)); // distinct createdAt for deterministic ordering
   }
 
   // Keep the 2 most recent → 3 oldest pruned.
-  const pruned = store.pruneRunSnapshots(loop.id, 2);
+  const pruned = (await store.pruneRunSnapshots(loop.id, 2));
   expect(pruned).toBe(3);
   // Oldest three gone, newest two survive.
-  expect(store.getRunSnapshot(ids[0]!)).toBeUndefined();
-  expect(store.getRunSnapshot(ids[2]!)).toBeUndefined();
-  expect(store.getRunSnapshot(ids[3]!)).toBeDefined();
-  expect(store.getRunSnapshot(ids[4]!)).toBeDefined();
+  expect((await store.getRunSnapshot(ids[0]!))).toBeUndefined();
+  expect((await store.getRunSnapshot(ids[2]!))).toBeUndefined();
+  expect((await store.getRunSnapshot(ids[3]!))).toBeDefined();
+  expect((await store.getRunSnapshot(ids[4]!))).toBeDefined();
 
   // Idempotent: pruning again at the same window removes nothing.
-  expect(store.pruneRunSnapshots(loop.id, 2)).toBe(0);
+  expect((await store.pruneRunSnapshots(loop.id, 2))).toBe(0);
 });
 
 test("pruneSnapshots applies the window across every loop", async () => {
-  const { machineId } = seed();
-  const l2 = store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const { machineId } = (await seed());
+  const l2 = (await store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   for (const loopId of [l2.id]) {
     for (let i = 0; i < 4; i++) {
-      const run = store.addRun({ loopId, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
-      store.putRunSnapshot(run.id, loopId, {});
+      const run = (await store.addRun({ loopId, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() }));
+      (await store.putRunSnapshot(run.id, loopId, {}));
       await new Promise((r) => setTimeout(r, 5));
     }
   }
-  expect(retention.pruneSnapshots(1)).toBe(3);
+  expect((await retention.pruneSnapshots(1))).toBe(3);
 });
 
 test("per-loop cap blocks new bytes past the limit and surfaces it", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100"; // tiny cap for the test
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
 
   const a = "a".repeat(60);
@@ -291,14 +291,14 @@ test("per-loop cap blocks new bytes past the limit and surfaces it", async () =>
   expect((r2.body as any).rejected).toEqual(["b.txt"]);
   // The rejected file's bytes were NOT stored and it's not in the live set…
   expect(await blobs.has(hb)).toBe(false);
-  expect(store.getArtifactFile(loop.id, "b.txt")).toBeUndefined();
+  expect((await store.getArtifactFile(loop.id, "b.txt"))).toBeUndefined();
   // …but the already-accepted file is untouched (loop not wedged).
-  expect(store.getArtifactFile(loop.id, "a.txt")!.hash).toBe(ha);
+  expect((await store.getArtifactFile(loop.id, "a.txt"))!.hash).toBe(ha);
 });
 
 test("reusing an already-stored hash adds no bytes, so it's allowed even at the cap", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
   const a = "a".repeat(60);
   const ha = sha256(a);
@@ -314,13 +314,13 @@ test("reusing an already-stored hash adds no bytes, so it's allowed even at the 
     ],
   });
   expect((r.body as any).capExceeded).toBeUndefined();
-  expect(store.getArtifactFile(loop.id, "copy.txt")!.hash).toBe(ha);
+  expect((await store.getArtifactFile(loop.id, "copy.txt"))!.hash).toBe(ha);
   expect(await blobs.has(ha)).toBe(true);
 });
 
 test("the per-loop cap counts only NET growth, not in-place overwrites", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
 
   // v1 (80B) fits under the 100B cap → stored.
@@ -345,36 +345,36 @@ test("the per-loop cap counts only NET growth, not in-place overwrites", async (
     blobs: [{ hash: hv2, encoding: "utf8", data: v2 }],
   });
   expect((r2.body as any).capExceeded).toBeUndefined();
-  expect(store.getArtifactFile(loop.id, "report.md")!.hash).toBe(hv2);
+  expect((await store.getArtifactFile(loop.id, "report.md"))!.hash).toBe(hv2);
   expect(await blobs.has(hv2)).toBe(true);
 });
 
 test("pruneRunSnapshots handles a large backlog without a per-victim bound-variable explosion", async () => {
-  const { loop, machineId } = seed();
+  const { loop, machineId } = (await seed());
   const N = 1200;
   for (let i = 0; i < N; i++) {
-    const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
-    store.putRunSnapshot(run.id, loop.id, {});
+    const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() }));
+    (await store.putRunSnapshot(run.id, loop.id, {}));
   }
   // Prune to the window in ONE statement — the delete binds only the survivors (≤20),
   // not 1180 victim ids, so a pre-feature backlog can't trip SQLite's variable limit.
-  expect(store.pruneRunSnapshots(loop.id, 20)).toBe(N - 20);
-  expect(store.pruneRunSnapshots(loop.id, 20)).toBe(0);
+  expect((await store.pruneRunSnapshots(loop.id, 20))).toBe(N - 20);
+  expect((await store.pruneRunSnapshots(loop.id, 20))).toBe(0);
 });
 
 test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate snapshot guard)", async () => {
-  const { loop, machineId } = seed();
+  const { loop, machineId } = (await seed());
   const base = new MemoryBlobStore();
   const c1 = "first garbage";
   const c2 = "second garbage";
   const h1 = sha256(c1);
   const h2 = sha256(c2);
   await base.put(h1, Buffer.from(c1));
-  store.recordBlob(h1, c1.length, false);
+  (await store.recordBlob(h1, c1.length, false));
   await base.put(h2, Buffer.from(c2));
-  store.recordBlob(h2, c2.length, false);
+  (await store.recordBlob(h2, c2.length, false));
   // Neither is referenced at pass start → both are garbage in the keep-set computed then.
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() }));
 
   // While the FIRST garbage blob's bytes are being deleted, a report() captures the
   // SECOND garbage hash into a retained snapshot — the GC-check-time race that the
@@ -385,7 +385,7 @@ test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate sna
     get: (h: string) => base.get(h),
     async delete(h: string): Promise<void> {
       if (h === h1) {
-        store.putRunSnapshot(run.id, loop.id, { "report.md": { hash: h2, size: c2.length, binary: false, oversize: false } });
+        (await store.putRunSnapshot(run.id, loop.id, { "report.md": { hash: h2, size: c2.length, binary: false, oversize: false } }));
       }
       return base.delete(h);
     },
@@ -395,14 +395,14 @@ test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate sna
   // h1 collected; h2 SPARED because the per-candidate guard now also consults snapshots.
   expect(reclaimed).toBe(1);
   expect(await base.has(h1)).toBe(false);
-  expect(store.blobExists(h1)).toBe(false);
+  expect((await store.blobExists(h1))).toBe(false);
   expect(await base.has(h2)).toBe(true);
-  expect(store.blobExists(h2)).toBe(true);
+  expect((await store.blobExists(h2))).toBe(true);
 });
 
 test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
 
   // Sync 1: an 80B file whose size the daemon UNDER-reports as 10B. Inline bytes
@@ -417,7 +417,7 @@ test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size",
   expect(await blobs.has(ha)).toBe(true);
   // The cap base reflects the REAL 80B (blobs.size), not the reported 10B — so an
   // under-reporting daemon can't keep the base artificially low.
-  expect(store.loopStoredBytes(loop.id)).toBe(80);
+  expect((await store.loopStoredBytes(loop.id))).toBe(80);
 
   // Sync 2: a NEW 80B file, again under-reported (10B), slips past sync's projected
   // check (80 base + 10 reported = 90 ≤ 100) and lands in needHashes (no bytes yet).
@@ -439,12 +439,12 @@ test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size",
   expect(p.status).toBe(413);
   expect((p.body as any).capExceeded).toBe(true);
   expect(await blobs.has(hb)).toBe(false);
-  expect(store.blobExists(hb)).toBe(false);
+  expect((await store.blobExists(hb))).toBe(false);
 });
 
 test("overwrite 'freed' credit uses the VERIFIED prior size — an over-reported one can't mint cap headroom", async () => {
   process.env.LOOPANY_LOOP_BYTES_CAP = "100";
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
 
   // f.bin first, alone: the daemon OVER-reports 95B (fits an empty loop), but the
@@ -467,7 +467,7 @@ test("overwrite 'freed' credit uses the VERIFIED prior size — an over-reported
     ],
     blobs: [{ hash: hbase, encoding: "utf8", data: base }],
   });
-  expect(store.loopStoredBytes(loop.id)).toBe(80);
+  expect((await store.loopStoredBytes(loop.id))).toBe(80);
 
   // Overwrite f.bin in place with 85 real bytes. A REPORTED-size freed credit (95)
   // would project 80 + 85 - 95 = 70 ≤ 100 and ACCEPT — dodging the cap while the
@@ -487,31 +487,31 @@ test("overwrite 'freed' credit uses the VERIFIED prior size — an over-reported
   expect((r.body as any).rejected).toEqual(["f.bin"]);
   expect(await blobs.has(hover)).toBe(false);
   // The prior version survives (a rejected file keeps its last accepted row).
-  expect(store.getArtifactFile(loop.id, "f.bin")!.hash).toBe(h1);
+  expect((await store.getArtifactFile(loop.id, "f.bin"))!.hash).toBe(h1);
 });
 
 test("deleting a loop cascades runs/artifact_files/run_snapshots so its blobs become collectable", async () => {
-  const { loop, machineId } = seed();
+  const { loop, machineId } = (await seed());
   const { blobs } = gatewayWithStore();
   const hash = await putBlob(blobs, "doomed loop content");
 
   // The blob is pinned twice: a live file row AND a retained run snapshot.
-  store.upsertArtifactFile({ loopId: loop.id, path: "f.md", hash, size: 19, binary: false, oversize: false, lastRunId: null });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
-  store.putRunSnapshot(run.id, loop.id, { "f.md": { hash, size: 19, binary: false, oversize: false } });
+  (await store.upsertArtifactFile({ loopId: loop.id, path: "f.md", hash, size: 19, binary: false, oversize: false, lastRunId: null }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() }));
+  (await store.putRunSnapshot(run.id, loop.id, { "f.md": { hash, size: 19, binary: false, oversize: false } }));
   expect(await retention.gcBlobs(blobs, FORCE)).toBe(0); // referenced → kept
 
   // Delete the loop → its runs / file rows / snapshots go with it (previously they
   // lived forever, pinning the blob in the keep-set permanently).
-  expect(store.deleteLoop(loop.id)).toBe(true);
-  expect(store.getRun(run.id)).toBeUndefined();
-  expect(store.listAllArtifactFiles(loop.id)).toHaveLength(0);
-  expect(store.getRunSnapshot(run.id)).toBeUndefined();
+  expect((await store.deleteLoop(loop.id))).toBe(true);
+  expect((await store.getRun(run.id))).toBeUndefined();
+  expect((await store.listAllArtifactFiles(loop.id))).toHaveLength(0);
+  expect((await store.getRunSnapshot(run.id))).toBeUndefined();
 
   // Nothing references the blob anymore → the next GC pass reclaims the bytes.
   expect(await retention.gcBlobs(blobs, FORCE)).toBe(1);
   expect(await blobs.has(hash)).toBe(false);
-  expect(store.blobExists(hash)).toBe(false);
+  expect((await store.blobExists(hash))).toBe(false);
 });
 
 test("maintainStorage skips a concurrent pass while one is already running (in-flight guard)", async () => {
@@ -521,7 +521,7 @@ test("maintainStorage skips a concurrent pass while one is already running (in-f
   const content = "garbage bytes";
   const hash = sha256(content);
   await base.put(hash, Buffer.from(content));
-  store.recordBlob(hash, content.length, false);
+  (await store.recordBlob(hash, content.length, false));
   await new Promise((r) => setTimeout(r, 5)); // elapse the 1ms grace
 
   let release!: () => void;
@@ -571,17 +571,17 @@ test("maintainStorage is idempotent and safe with no garbage", async () => {
 });
 
 test("maintainStorage prunes snapshots then reclaims the blobs they freed", async () => {
-  const { loop, machineId } = seed();
+  const { loop, machineId } = (await seed());
   const { gw, blobs } = gatewayWithStore();
 
   // Two runs, each snapshotting its own (now unreferenced — no live file) blob.
   const old = await putBlob(blobs, "old run content");
   const recent = await putBlob(blobs, "recent run content");
-  const r1 = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
-  store.putRunSnapshot(r1.id, loop.id, { "f.md": { hash: old, size: 15, binary: false, oversize: false } });
+  const r1 = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() }));
+  (await store.putRunSnapshot(r1.id, loop.id, { "f.md": { hash: old, size: 15, binary: false, oversize: false } }));
   await new Promise((r) => setTimeout(r, 5));
-  const r2 = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
-  store.putRunSnapshot(r2.id, loop.id, { "f.md": { hash: recent, size: 18, binary: false, oversize: false } });
+  const r2 = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() }));
+  (await store.putRunSnapshot(r2.id, loop.id, { "f.md": { hash: recent, size: 18, binary: false, oversize: false } }));
 
   // Window of 1: prune the older snapshot → its blob `old` becomes collectable.
   // (Use a forced grace via the lower-level call after pruning, since maintainStorage

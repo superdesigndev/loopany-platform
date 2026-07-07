@@ -65,7 +65,7 @@ talking to your local coding agent.
 │  machine routes: /api/machine/cli (unified CLI dispatch) · /api/machine/poll     │
 │                  /machine/report · /api/machine/sync · /api/machine/blob/:hash    │
 │                  /agent-api/loop · /api/machine/loop|log (legacy CLI aliases)     │
-│  SQLite (Drizzle) on a volume · artifact bytes in object storage                 │
+│  Postgres (Drizzle; embedded pglite by default) · artifact bytes in object store │
 └───────────▲ HTTP short-poll ────────────────────────────────────────────────────┘
             │
 ┌───────────┴── @crewlet/loopany (your machine · `npx`) ──────────────────────────┐
@@ -98,11 +98,15 @@ pnpm dev            # http://127.0.0.1:3000
 ```
 
 That is a fully working server out of the box: auth is off (the app runs open),
-the SQLite DB lives in `~/.loopany`, and artifact bytes are held in memory. Use
-the Quickstart above against `http://127.0.0.1:3000` to connect a machine.
+the database is an embedded, file-backed **pglite** Postgres at `~/.loopany/pgdata`
+(zero external DB — it migrates itself at boot), and artifact bytes are held in
+memory. Use the Quickstart above against `http://127.0.0.1:3000` to connect a machine.
 
-All configuration is env-based - copy [`.env.example`](.env.example) to
-`packages/server/.env` and uncomment what you need.
+All configuration is env-based. For **local development only**, copy
+[`.env.example`](.env.example) to `packages/server/.env` and uncomment what you
+need - vite loads that file for `pnpm dev`. **`pnpm start` and Docker do NOT read
+`.env`**: in production pass real environment variables instead (Fly secrets,
+`docker -e` / `--env-file`, or a systemd `Environment=`), never a committed `.env`.
 
 ### Production (any Node host)
 
@@ -114,7 +118,12 @@ pnpm start          # applies pending DB migrations, then serves on $PORT
 
 For a real deployment, set at minimum:
 
-- `LOOPANY_DATA_DIR` - a persistent directory for the SQLite DB.
+- **Database** - either point `DATABASE_URL` at a Postgres (e.g. Supabase; set
+  it to the transaction pooler `:6543`, plus `DIRECT_DATABASE_URL` at the direct
+  `:5432` URL for migrations), or leave both unset and give `LOOPANY_DATA_DIR` a
+  persistent directory - the embedded pglite database lives at `<dir>/pgdata`.
+  `pnpm start` applies pending migrations before serving (over the direct URL for
+  the hosted tier; in-process for the pglite tier).
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` + `LOOPANY_AUTH_SECRET` (a long
   random value) + `LOOPANY_BASE_URL` + `LOOPANY_ALLOWED_LOGINS` - gate sign-in
   behind GitHub. Leaving these unset runs the app **open, with no auth** - fine
@@ -122,17 +131,32 @@ For a real deployment, set at minimum:
 - `LOOPANY_R2_*` - an S3-compatible object store (e.g. Cloudflare R2) for
   artifact bytes. Unset, artifacts are stored in memory and lost on restart.
 
+> **Exposing a server publicly? Set the auth vars.** With `GITHUB_CLIENT_ID` /
+> `GITHUB_CLIENT_SECRET` / `LOOPANY_AUTH_SECRET` / `LOOPANY_BASE_URL` /
+> `LOOPANY_ALLOWED_LOGINS` unset the app runs **open, with no sign-in** - anyone
+> who can reach it is in. This applies equally to a bare Node host and the Docker
+> image below.
+
 > **Run exactly one server process.** The in-process scheduler owns the cron
 > loop; two processes against the same DB would double-fire every run.
 
+> **Backing up the embedded pglite tier.** `<LOOPANY_DATA_DIR>/pgdata` is a LIVE
+> Postgres data directory. Stop the server before copying it - a hot copy of a
+> running data dir is not crash-consistent. If you need real, online backups, run
+> the hosted tier instead (`DATABASE_URL`/Supabase gives you point-in-time backups).
+
 ### Docker
 
-The included [`Dockerfile`](Dockerfile) builds the server and stores data on a
-volume at `/data`:
+The included [`Dockerfile`](Dockerfile) builds the server. With no `DATABASE_URL`
+it runs the embedded pglite database on a volume at `/data`; with a `DATABASE_URL`
+(Supabase/any Postgres) the container is stateless and needs no volume:
 
 ```bash
 docker build -t loopany .
+# Embedded pglite (persist the DB on a volume):
 docker run -p 3000:3000 -v loopany-data:/data loopany
+# Or against Postgres (stateless):
+docker run -p 3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... loopany
 ```
 
 Pass configuration with `-e KEY=value` or `--env-file` (same variables as

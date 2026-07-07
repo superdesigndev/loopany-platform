@@ -47,7 +47,7 @@ const PICK_TEAM_ERROR = 'pick a specific team before creating a loop'
  * treat both as "not found" so existence never leaks across users.
  */
 async function ownedLoop(id: string) {
-  const loop = store.getLoop(id)
+  const loop = await store.getLoop(id)
   if (!loop) return undefined
   const scope = await requestScope()
   // Admins in the "All teams" view may open/act on any team's loop; everyone
@@ -86,10 +86,10 @@ export const getConfig = createServerFn({ method: 'GET' }).handler(() => {
  *  selection. Admins get every team plus the `__all__` aggregate; a regular user
  *  gets only their memberships (usually one ⇒ no dropdown). Open mode ⇒ empty. */
 export const listMyTeams = createServerFn({ method: 'GET' }).handler(async (): Promise<TeamsView> => {
-  backend()
+  await backend()
   const { enforce, userId, teamId, isAdmin, allTeams } = await requestScope()
   if (!enforce || !userId) return { teams: [], activeTeamId: teamId, isAdmin: false, allTeams: false }
-  const teams = (isAdmin ? store.listAllTeams() : store.listTeamsForUser(userId)).map((t) => ({
+  const teams = (isAdmin ? await store.listAllTeams() : await store.listTeamsForUser(userId)).map((t) => ({
     id: t.id,
     name: t.name,
   }))
@@ -99,22 +99,22 @@ export const listMyTeams = createServerFn({ method: 'GET' }).handler(async (): P
 /** GET — the signed-in user's loops as compact summaries (newest first).
  *  Gate on ⇒ only your loops; open mode ⇒ the full shared list. */
 export const listJobs = createServerFn({ method: 'GET' }).handler(async () => {
-  backend()
+  await backend()
   const { enforce, userId, teamId, allTeams } = await requestScope()
   if (enforce && !userId) return [] as JobSummary[]
   // Scope to the active team — except an admin's "All teams" view, which lists
   // every loop (undefined ⇒ no team filter), same as open mode.
-  return store
-    .listLoops(enforce && !allTeams ? teamId : undefined)
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-    .map(toJobSummary) as JobSummary[]
+  const loops = (await store.listLoops(enforce && !allTeams ? teamId : undefined)).sort((a, b) =>
+    a.createdAt < b.createdAt ? 1 : -1,
+  )
+  return (await Promise.all(loops.map(toJobSummary))) as JobSummary[]
 })
 
 /** GET — full detail (job + summary + reversed runs). */
 export const getJobDetail = createServerFn({ method: 'GET' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<JobDetail> => {
-    backend()
+    await backend()
     const owned = await ownedLoop(id)
     if (!owned) throw new Error('loop not found')
     return toJobDetail(owned.loop)
@@ -125,10 +125,10 @@ export const getJobDetail = createServerFn({ method: 'GET' })
 export const loadOlderRuns = createServerFn({ method: 'GET' })
   .validator((d: { loopId: string; beforeTs: string; limit?: number }) => d)
   .handler(async ({ data }): Promise<RunSummary[]> => {
-    backend()
+    await backend()
     if (!(await ownedLoop(data.loopId))) return []
     const limit = Math.min(Math.max(data.limit ?? 16, 1), 100)
-    return store.listRunsBefore(data.loopId, data.beforeTs, limit).map(toRunSummary)
+    return (await store.listRunsBefore(data.loopId, data.beforeTs, limit)).map(toRunSummary)
   })
 
 /** GET — a run's slimmed execution trace. Parsed on the machine and pushed up
@@ -136,8 +136,8 @@ export const loadOlderRuns = createServerFn({ method: 'GET' })
 export const getTranscript = createServerFn({ method: 'GET' })
   .validator((d: { runId: string }) => d)
   .handler(async ({ data }): Promise<TranscriptResult> => {
-    backend()
-    const run = store.getRun(data.runId)
+    await backend()
+    const run = await store.getRun(data.runId)
     if (!run) return { error: 'run not found' }
     if (!(await ownedLoop(run.loopId))) return { error: 'run not found' }
     return { steps: (run.transcript as TranscriptStep[] | null) ?? [] }
@@ -148,7 +148,7 @@ export const getTranscript = createServerFn({ method: 'GET' })
 export const getArtifacts = createServerFn({ method: 'GET' })
   .validator((d: { loopId: string }) => d)
   .handler(async ({ data }): Promise<ArtifactSummary[]> => {
-    backend()
+    await backend()
     if (!(await ownedLoop(data.loopId))) return []
     const { listLoopArtifacts } = await import('./artifactFiles.js')
     return listLoopArtifacts(data.loopId)
@@ -159,7 +159,7 @@ export const getArtifacts = createServerFn({ method: 'GET' })
 export const getArtifact = createServerFn({ method: 'GET' })
   .validator((d: { loopId: string; path: string }) => d)
   .handler(async ({ data }): Promise<ArtifactContent> => {
-    backend()
+    await backend()
     if (!(await ownedLoop(data.loopId))) return { error: 'file not found' }
     const { readLoopArtifact } = await import('./artifactFiles.js')
     return readLoopArtifact(data.loopId, data.path)
@@ -171,8 +171,8 @@ export const getArtifact = createServerFn({ method: 'GET' })
 export const getRunDiff = createServerFn({ method: 'GET' })
   .validator((d: { runId: string }) => d)
   .handler(async ({ data }): Promise<RunDiffResult> => {
-    backend()
-    const run = store.getRun(data.runId)
+    await backend()
+    const run = await store.getRun(data.runId)
     if (!run) return { hasSnapshot: false, files: [] }
     if (!(await ownedLoop(run.loopId))) return { hasSnapshot: false, files: [] }
     const { computeRunDiff } = await import('./runDiff.js')
@@ -192,7 +192,7 @@ export const listTemplates = createServerFn({ method: 'GET' }).handler((): Templ
 export const createJob = createServerFn({ method: 'POST' })
   .validator((d: JobPayload & { machineId?: string }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {
-    const { scheduler } = backend()
+    const { scheduler } = await backend()
     const { enforce, userId, teamId, allTeams } = await requestScope()
     if (enforce && !userId) return { error: 'not signed in' }
     // Fail SAFE in the admin "All teams" aggregate view (mirrors mintClaim).
@@ -201,19 +201,21 @@ export const createJob = createServerFn({ method: 'POST' })
     // Membership-scoped machine pick: any machine whose owner belongs to the active
     // team (one machine serves all of its owner's teams, report §2.3). Open mode has
     // no membership rows, so use the full shared list there.
-    const machineId = data.machineId ?? (enforce ? store.listMachinesForTeam(teamId) : store.listMachines())[0]?.id
+    const machineId =
+      data.machineId ?? (enforce ? await store.listMachinesForTeam(teamId) : await store.listMachines())[0]?.id
     if (!machineId) return { error: 'no machine registered — connect a daemon first' }
     // A loop may run on your own machine, or any machine whose owner is a member of
     // the active team — NOT keyed to the machine's single home team anymore.
-    const machine = store.getMachine(machineId)
-    const usable = !!machine && (!enforce || machine.userId === owner || store.isTeamMember(teamId, machine.userId))
+    const machine = await store.getMachine(machineId)
+    const usable =
+      !!machine && (!enforce || machine.userId === owner || (await store.isTeamMember(teamId, machine.userId)))
     if (!usable) return { error: 'machine not found' }
     if (!data.cron) return { error: 'cron required' }
     // A chosen channel must belong to this team; default to the team's latest
     // channel (newest-first) when none was picked, so new loops auto-route.
-    const channelId = data.channelId?.trim() || store.defaultChannelId(teamId)
-    if (channelId && enforce && store.getChannel(channelId)?.teamId !== teamId) return { error: 'channel not found' }
-    const loop = store.createLoop({
+    const channelId = data.channelId?.trim() || (await store.defaultChannelId(teamId))
+    if (channelId && enforce && (await store.getChannel(channelId))?.teamId !== teamId) return { error: 'channel not found' }
+    const loop = await store.createLoop({
       userId: owner,
       teamId,
       machineId,
@@ -234,14 +236,14 @@ export const createJob = createServerFn({ method: 'POST' })
     // Kick off one run immediately so a new loop produces output without waiting
     // for its first cron tick. armNextRunAt gates on `enabled`, so a loop created
     // paused stays idle until its schedule.
-    if (loop.enabled) scheduler.runNow(loop.id)
+    if (loop.enabled) await scheduler.runNow(loop.id)
     return { ok: true, id: loop.id }
   })
 
 export const patchJob = createServerFn({ method: 'POST' })
   .validator((d: { id: string; patch: JobPayload }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {
-    const { scheduler } = backend()
+    const { scheduler } = await backend()
     const owned = await ownedLoop(data.id)
     if (!owned) return { error: 'not found' }
     const { enforce } = owned
@@ -249,10 +251,10 @@ export const patchJob = createServerFn({ method: 'POST' })
     // A chosen channel must belong to the LOOP's team — not the requester's active
     // team (an admin patching from another team's view, or the All-teams aggregate,
     // would otherwise reject the loop's own valid channels / accept foreign ones).
-    if (p.channelId && enforce && store.getChannel(p.channelId)?.teamId !== owned.loop.teamId) {
+    if (p.channelId && enforce && (await store.getChannel(p.channelId))?.teamId !== owned.loop.teamId) {
       return { error: 'channel not found' }
     }
-    const loop = store.updateLoop(data.id, {
+    const loop = await store.updateLoop(data.id, {
       ...(p.name !== undefined ? { name: p.name.trim() || null } : {}),
       ...(p.cron !== undefined ? { cron: p.cron } : {}),
       ...(p.notify !== undefined ? { notify: p.notify as 'auto' | 'always' | 'never' } : {}),
@@ -277,29 +279,29 @@ export const patchJob = createServerFn({ method: 'POST' })
 export const deleteJob = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
-    const { scheduler } = backend()
+    const { scheduler } = await backend()
     if (!(await ownedLoop(id))) return { error: 'not found' }
     scheduler.removeLoop(id)
-    return { ok: store.deleteLoop(id) }
+    return { ok: await store.deleteLoop(id) }
   })
 
 export const runJob = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
-    const { scheduler } = backend()
+    const { scheduler } = await backend()
     if (!(await ownedLoop(id))) return { error: 'not found' }
-    scheduler.runNow(id)
+    await scheduler.runNow(id)
     return { ok: true }
   })
 
 export const evolveJob = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
-    const { scheduler } = backend()
+    const { scheduler } = await backend()
     const owned = await ownedLoop(id)
     if (!owned) return { error: 'not found' }
     if (!store.canEvolve(owned.loop)) return { error: 'nothing to evolve — add metrics or a workflow first' }
-    if (!scheduler.evolveNow(id)) return { error: 'failed to schedule evolution' }
+    if (!(await scheduler.evolveNow(id))) return { error: 'failed to schedule evolution' }
     return { ok: true }
   })
 
@@ -308,11 +310,11 @@ export const evolveJob = createServerFn({ method: 'POST' })
 export const requestEdit = createServerFn({ method: 'POST' })
   .validator((d: { id: string; instruction: string }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {
-    const { scheduler } = backend()
+    const { scheduler } = await backend()
     if (!(await ownedLoop(data.id))) return { error: 'not found' }
     const instruction = data.instruction.trim()
     if (!instruction) return { error: 'describe what to change' }
-    if (!scheduler.requestEdit(data.id, instruction)) return { error: 'failed to queue the edit' }
+    if (!(await scheduler.requestEdit(data.id, instruction))) return { error: 'failed to queue the edit' }
     return { ok: true }
   })
 
@@ -322,12 +324,12 @@ export const requestEdit = createServerFn({ method: 'POST' })
 export const cancelRun = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
-    backend()
-    const run = store.getRun(id)
+    await backend()
+    const run = await store.getRun(id)
     if (!run) return { error: 'run not found' }
     if (!(await ownedLoop(run.loopId))) return { error: 'run not found' }
     if (run.phase !== 'pending' && run.phase !== 'running') return { error: 'run is not in progress' }
-    store.updateRun(id, { phase: 'canceled', error: 'stopped by user' })
+    await store.updateRun(id, { phase: 'canceled', error: 'stopped by user' })
     return { ok: true }
   })
 
@@ -341,7 +343,7 @@ export const cancelRun = createServerFn({ method: 'POST' })
  */
 export const mintClaim = createServerFn({ method: 'POST' }).handler(
   async (): Promise<{ token: string } | { error: string }> => {
-    backend()
+    await backend()
     const { mintDeviceToken, machineIdFromToken, setDeviceOwner, rememberClaimIntent } = await import(
       '../gateway/tokens.js'
     )
@@ -364,7 +366,7 @@ export const mintClaim = createServerFn({ method: 'POST' }).handler(
 /** Poll a claim while the New-loop dialog waits for Claude Code to create the loop. */
 export const claimStatus = createServerFn({ method: 'GET' })
   .validator((token: string) => token)
-  .handler(({ data: token }): { done: boolean; id?: string; name?: string; agent?: CodingAgent } => {
-    const r = backend().gateway.claimStatus(token)
+  .handler(async ({ data: token }): Promise<{ done: boolean; id?: string; name?: string; agent?: CodingAgent }> => {
+    const r = (await backend()).gateway.claimStatus(token)
     return r ? { done: true, id: r.loopId, name: r.name, agent: r.agent } : { done: false }
   })

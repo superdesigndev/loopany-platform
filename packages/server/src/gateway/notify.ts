@@ -193,7 +193,7 @@ export const CHANNELS: Record<ChannelType, ChannelKind> = {
 /** Route a finished run's message to the loop's channel. Best-effort, no throw. */
 export async function dispatchNotification(loop: Loop, message: string): Promise<void> {
   if (!loop.channelId) return; // no channel ⇒ dashboard only
-  const channel = store.getChannel(loop.channelId);
+  const channel = await store.getChannel(loop.channelId);
   if (!channel) return; // channel deleted out from under the loop
   const r = await CHANNELS[channel.type].send(channel.config, loop.name || loop.id, message);
   if (!r.ok) log.warn({ err: r.error, channel: channel.id }, "notify dispatch failed");

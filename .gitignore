@@ -6,6 +6,8 @@ dist/
 .vinxi/
 .env
 .env.local
+.env.prod
+.env.*.local
 *.log
 
 # local SQLite (the data dir / Fly volume lives outside the repo anyway)
@@ -19,3 +21,6 @@ dist/
 
 # development docs
 .lavish/
+
+# local MCP server config (may carry machine-specific paths/secrets)
+.mcp.json

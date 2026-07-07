@@ -1,0 +1,49 @@
+# Loopany PRODUCTION on Fly.io — app "loopany-prod", domain loopany.ai.
+#
+# ONE always-on machine (the scheduler owns the cron loop; never scale to >1 or
+# you'd double-fire). STATELESS container: all state lives in Supabase Postgres
+# (DATABASE_URL / DIRECT_DATABASE_URL secrets) and Cloudflare R2 (artifact bytes).
+# No mounted volume — nothing on local disk to persist.
+#
+# `loopany-testing` (fly.toml) stays as staging; this is a SEPARATE app so a
+# staging push can never touch prod.
+#
+# One-time setup:
+#   fly launch --no-deploy --name loopany-prod --copy-config -c fly.prod.toml
+#   fly secrets set -a loopany-prod \
+#       DATABASE_URL='postgresql://...pooler.supabase.com:6543/postgres?sslmode=require' \
+#       DIRECT_DATABASE_URL='postgresql://...supabase.com:5432/postgres?sslmode=require' \
+#       LOOPANY_AUTH_SECRET="$(openssl rand -hex 32)" \
+#       GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
+#       LOOPANY_BASE_URL=https://loopany.ai \
+#       LOOPANY_ALLOWED_LOGINS=you@example.com \
+#       LOOPANY_SUPERADMINS=you@example.com \
+#       LOOPANY_R2_ACCOUNT_ID=... LOOPANY_R2_BUCKET=... \
+#       LOOPANY_R2_ACCESS_KEY_ID=... LOOPANY_R2_SECRET_ACCESS_KEY=...
+#   fly certs add loopany.ai -a loopany-prod   # then add the DNS records Fly prints
+#   fly deploy --ha=false -c fly.prod.toml     # --ha=false = exactly ONE machine
+#                                              # (Fly's default HA spawns a 2nd -> double scheduler).
+#                                              # boot runs the migration over DIRECT_DATABASE_URL.
+
+app = "loopany-prod"
+# Colocated with the Supabase project (us-west-1) to minimize DB latency.
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  # No LOOPANY_DATA_DIR / volume: the container is stateless (Supabase + R2).
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Scheduler must stay awake → no scale-to-zero, exactly one machine.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1024mb"

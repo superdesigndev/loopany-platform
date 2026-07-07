@@ -1,1 +1,0 @@
-ALTER TABLE `loops` DROP COLUMN `task`;

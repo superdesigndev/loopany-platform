@@ -19,7 +19,7 @@ export const Route = createFileRoute('/api/machine/sync')({
         if (parsed.kind === 'too-large') return Response.json({ error: 'sync body too large' }, { status: 413 })
         if (parsed.kind === 'invalid') return Response.json({ error: 'invalid JSON' }, { status: 400 })
         const { getGateway } = await import('../server/boot.js')
-        const r = await getGateway().sync(token, parsed.body as Record<string, unknown>)
+        const r = await (await getGateway()).sync(token, parsed.body as Record<string, unknown>)
         return Response.json(r.body, { status: r.status })
       },
     },

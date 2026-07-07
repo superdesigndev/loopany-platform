@@ -23,14 +23,14 @@ export const Route = createFileRoute('/api/machine/loop')({
         if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
         const body = (parsed.kind === 'ok' ? parsed.body : {}) as Record<string, unknown>
         const { getGateway } = await import('../server/boot.js')
-        const r = getGateway().createLoop(token, body)
+        const r = await (await getGateway()).createLoop(token, body)
         return Response.json(r.body, { status: r.status })
       },
       GET: async ({ request }: { request: Request }) => {
         const token = deviceToken(request)
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const { getGateway } = await import('../server/boot.js')
-        const r = getGateway().listLoops(token)
+        const r = await (await getGateway()).listLoops(token)
         return Response.json(r.body, { status: r.status })
       },
       PATCH: async ({ request }: { request: Request }) => {
@@ -40,7 +40,7 @@ export const Route = createFileRoute('/api/machine/loop')({
         if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
         const body = (parsed.kind === 'ok' ? parsed.body : {}) as { id?: unknown; patch?: Record<string, unknown>; dryRun?: unknown }
         const { getGateway } = await import('../server/boot.js')
-        const r = getGateway().editLoop(token, body.id, body.patch ?? {}, body.dryRun === true)
+        const r = await (await getGateway()).editLoop(token, body.id, body.patch ?? {}, body.dryRun === true)
         return Response.json(r.body, { status: r.status })
       },
     },

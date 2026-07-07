@@ -35,7 +35,7 @@ export const Route = createFileRoute('/api/artifact/$loopId/$')({
 
         // Session auth + team scope (the same gate as the server fns' ownedLoop).
         const store = await import('../db/store.js')
-        const loop = store.getLoop(loopId)
+        const loop = await store.getLoop(loopId)
         if (!loop) return Response.json({ error: 'not found' }, { status: 404 })
         const { requestScope, loopInScope } = await import('../auth.js')
         if (!loopInScope(loop.teamId, await requestScope()))

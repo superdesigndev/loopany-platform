@@ -2,17 +2,49 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * Loopany server data directory — holds the SQLite database (and any other
- * server-side state). On Fly this is the mounted volume; locally it defaults to
- * `~/.loopany`. Override with `LOOPANY_DATA_DIR`.
+ * Loopany server data directory — server-side file state, and (for the embedded
+ * pglite tier) the on-disk Postgres data dir at `<dataDir>/pgdata`. Locally it
+ * defaults to `~/.loopany`. Override with `LOOPANY_DATA_DIR`. The HOSTED tier
+ * (DATABASE_URL set) is stateless and never touches this.
  */
 export function dataDir(): string {
   return process.env.LOOPANY_DATA_DIR?.trim() || path.join(os.homedir(), ".loopany");
 }
 
-/** Absolute path to the SQLite database file. */
-export function dbPath(): string {
-  return process.env.LOOPANY_DB_PATH?.trim() || path.join(dataDir(), "loopany.db");
+/**
+ * Supabase (or any Postgres) connection string for the RUNTIME app process. When
+ * set, the server uses the postgres-js driver (hosted prod/staging) — point it at
+ * the Supabase TRANSACTION POOLER (`:6543`); the driver forces `prepare:false`.
+ * When UNSET, the server falls back to the embedded, file-backed pglite database
+ * at `<dataDir>/pgdata` (local dev + light self-host + tests) — zero external DB.
+ */
+export function databaseUrl(): string | undefined {
+  return process.env.DATABASE_URL?.trim() || undefined;
+}
+
+/**
+ * Direct (session-mode, `:5432`) Postgres URL used ONLY for migrations — DDL and
+ * the migrator's advisory lock must NOT go through the transaction pooler. Falls
+ * back to `DATABASE_URL` when unset (e.g. a plain non-pooled Postgres).
+ *
+ * Fails LOUD when that fallback would silently route DDL/advisory-lock traffic
+ * over a Supabase transaction pooler: the pooler multiplexes connections and
+ * cannot hold the session-scoped advisory lock the migrator relies on, so a
+ * migration over `:6543` deadlocks or corrupts. A plain non-pooled Postgres URL
+ * as the fallback stays allowed.
+ */
+export function directDatabaseUrl(): string | undefined {
+  const explicit = process.env.DIRECT_DATABASE_URL?.trim();
+  if (explicit) return explicit;
+  const fallback = databaseUrl();
+  if (fallback && (fallback.includes(":6543") || fallback.includes("pooler.supabase.com"))) {
+    throw new Error(
+      "DIRECT_DATABASE_URL is unset but DATABASE_URL points at the Supabase transaction pooler " +
+        "(:6543 / pooler.supabase.com) — set DIRECT_DATABASE_URL to the direct (:5432, session-mode) " +
+        "connection so migrations run off the pooler",
+    );
+  }
+  return fallback;
 }
 
 /**

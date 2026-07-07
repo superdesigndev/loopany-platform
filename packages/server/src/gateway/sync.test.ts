@@ -18,7 +18,7 @@ beforeAll(async () => {
   process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
   process.env.LOOPANY_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
-  db.runMigrations();
+  await db.runMigrations();
   store = await import("../db/store.js");
   gatewayMod = await import("./index.js");
   tokens = await import("./tokens.js");
@@ -28,8 +28,8 @@ afterAll(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-beforeEach(() => {
-  db.sqlite.exec("DELETE FROM artifact_files; DELETE FROM blobs; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+beforeEach(async () => {
+  await (db.client as any).exec("DELETE FROM artifact_files; DELETE FROM blobs; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 function sha256(s: string | Buffer): string {
@@ -52,16 +52,16 @@ function gatewayWithStore(): { gw: InstanceType<typeof gatewayMod.MachineGateway
 }
 
 /** A registered machine (by device token) + a loop bound to it. */
-function seed() {
+async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   return { token, machineId, loop };
 }
 
 test("negotiated upload: manifest → needHashes → PUT blob lands bytes in the store", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
   const content = "# Breakfast report\n4g dispensed\n";
   const hash = sha256(content);
@@ -76,7 +76,7 @@ test("negotiated upload: manifest → needHashes → PUT blob lands bytes in the
   expect(await blobs.has(hash)).toBe(false); // not stored until the PUT
 
   // artifact_files already reflects the file (hash recorded, pointing at the pending blob).
-  const files = store.listArtifacts(loop.id);
+  const files = (await store.listArtifacts(loop.id));
   expect(files.map((f) => f.path)).toEqual(["report.md"]);
   expect(files[0]!.hash).toBe(hash);
   expect(files[0]!.deleted).toBe(false);
@@ -85,7 +85,7 @@ test("negotiated upload: manifest → needHashes → PUT blob lands bytes in the
   const put = await gw.putBlob(token, hash, Buffer.from(content));
   expect(put.status).toBe(200);
   expect((await blobs.get(hash))!.toString()).toBe(content);
-  expect(store.blobExists(hash)).toBe(true);
+  expect((await store.blobExists(hash))).toBe(true);
 
   // 3. Re-sync the unchanged manifest → content-addressed dedupe ⇒ zero uploads.
   const r2 = await gw.sync(token, {
@@ -96,7 +96,7 @@ test("negotiated upload: manifest → needHashes → PUT blob lands bytes in the
 });
 
 test("inline small text blobs are stored in one round-trip (no needHashes)", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
   const content = "hello inline";
   const hash = sha256(content);
@@ -112,7 +112,7 @@ test("inline small text blobs are stored in one round-trip (no needHashes)", asy
 });
 
 test("inline blob whose bytes don't match its hash is rejected (anti-poisoning) → needs PUT", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
   const claimed = sha256("the real bytes");
 
@@ -127,21 +127,21 @@ test("inline blob whose bytes don't match its hash is rejected (anti-poisoning) 
 });
 
 test("files over 10MB are recorded as metadata only (no bytes, no needHashes)", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const r = await gw.sync(token, {
     loopId: loop.id,
     manifest: [{ path: "big.bin", hash: sha256("x"), size: 11 * 1024 * 1024, oversize: true }],
   });
   expect((r.body as any).needHashes).toEqual([]);
-  const file = store.getArtifactFile(loop.id, "big.bin")!;
+  const file = (await store.getArtifactFile(loop.id, "big.bin"))!;
   expect(file.oversize).toBe(true);
   expect(file.hash).toBeNull();
   expect(file.size).toBe(11 * 1024 * 1024);
 });
 
 test("a size over the cap is treated as oversize even if oversize flag is absent", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const hash = sha256("doesn't matter");
   const r = await gw.sync(token, {
@@ -149,11 +149,11 @@ test("a size over the cap is treated as oversize even if oversize flag is absent
     manifest: [{ path: "huge.dat", hash, size: 20 * 1024 * 1024 }],
   });
   expect((r.body as any).needHashes).toEqual([]); // server won't request oversize bytes
-  expect(store.getArtifactFile(loop.id, "huge.dat")!.oversize).toBe(true);
+  expect((await store.getArtifactFile(loop.id, "huge.dat"))!.oversize).toBe(true);
 });
 
 test("ignore rules keep .git / node_modules / secrets out entirely (server defense in depth)", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const h = (s: string) => sha256(s);
   const r = await gw.sync(token, {
@@ -169,13 +169,13 @@ test("ignore rules keep .git / node_modules / secrets out entirely (server defen
   });
   expect(r.status).toBe(200);
   // Only the report survives; everything ignored never becomes an artifact row.
-  expect(store.listArtifacts(loop.id).map((f) => f.path)).toEqual(["report.md"]);
+  expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["report.md"]);
   // …and the server never asked for any secret/junk hash.
   expect((r.body as any).needHashes).toEqual([h("ok")]);
 });
 
 test("path traversal / absolute paths are rejected", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const r = await gw.sync(token, {
     loopId: loop.id,
@@ -185,11 +185,11 @@ test("path traversal / absolute paths are rejected", async () => {
       { path: "ok/file.txt", hash: sha256("c"), size: 1 },
     ],
   });
-  expect(store.listArtifacts(loop.id).map((f) => f.path)).toEqual(["ok/file.txt"]);
+  expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["ok/file.txt"]);
 });
 
 test("deletions: a path absent from the manifest is tombstoned, not hard-deleted", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const a = sha256("a-content");
   const b = sha256("b-content");
@@ -201,35 +201,35 @@ test("deletions: a path absent from the manifest is tombstoned, not hard-deleted
       { path: "b.md", hash: b, size: 9 },
     ],
   });
-  expect(store.listArtifacts(loop.id).map((f) => f.path)).toEqual(["a.md", "b.md"]);
+  expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["a.md", "b.md"]);
 
   // Re-sync with b.md gone → it tombstones (drops out of the live set, kept as a row).
   await gw.sync(token, { loopId: loop.id, manifest: [{ path: "a.md", hash: a, size: 9 }] });
-  expect(store.listArtifacts(loop.id).map((f) => f.path)).toEqual(["a.md"]);
-  const tomb = store.getArtifactFile(loop.id, "b.md")!;
+  expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["a.md"]);
+  const tomb = (await store.getArtifactFile(loop.id, "b.md"))!;
   expect(tomb.deleted).toBe(true);
   expect(tomb.hash).toBeNull();
 });
 
 test("runId is attributed onto the synced file when it names a run on the loop", async () => {
-  const { token, machineId, loop } = seed();
+  const { token, machineId, loop } = (await seed());
   const { gw } = gatewayWithStore();
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
   const hash = sha256("from a run");
   await gw.sync(token, {
     loopId: loop.id,
     runId: run.id,
     manifest: [{ path: "out.md", hash, size: 10 }],
   });
-  expect(store.getArtifactFile(loop.id, "out.md")!.lastRunId).toBe(run.id);
+  expect((await store.getArtifactFile(loop.id, "out.md"))!.lastRunId).toBe(run.id);
 
   // A runId for a different loop is ignored (not attributed).
   await gw.sync(token, { loopId: loop.id, runId: "run-bogus", manifest: [{ path: "out.md", hash, size: 10 }] });
-  expect(store.getArtifactFile(loop.id, "out.md")!.lastRunId).toBeNull();
+  expect((await store.getArtifactFile(loop.id, "out.md"))!.lastRunId).toBeNull();
 });
 
 test("device-token auth: unknown machine 401; a loop on another machine 404", async () => {
-  const { loop } = seed();
+  const { loop } = (await seed());
   const { gw } = gatewayWithStore();
   const stranger = tokens.mintDeviceToken();
   const unknown = await gw.sync(stranger, { loopId: loop.id, manifest: [] });
@@ -238,13 +238,13 @@ test("device-token auth: unknown machine 401; a loop on another machine 404", as
   // A registered machine that doesn't own the loop → 404.
   const otherToken = tokens.mintDeviceToken();
   const otherId = tokens.machineIdFromToken(otherToken);
-  store.createMachine({ id: otherId, userId: "u2", name: "B", tokenHash: tokens.sha256(otherToken), online: true });
+  (await store.createMachine({ id: otherId, userId: "u2", name: "B", tokenHash: tokens.sha256(otherToken), online: true }));
   const wrong = await gw.sync(otherToken, { loopId: loop.id, manifest: [] });
   expect(wrong.status).toBe(404);
 });
 
 test("putBlob rejects a hash that doesn't match the body, and a bad hash format", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
   const realHash = sha256("real");
   // The handshake first: sync writes the referencing row + asks for the hash
@@ -260,11 +260,11 @@ test("putBlob rejects a hash that doesn't match the body, and a bad hash format"
 
   const ok = await gw.putBlob(token, realHash, Buffer.from("real"));
   expect(ok.status).toBe(200);
-  expect(store.blobExists(realHash)).toBe(true);
+  expect((await store.blobExists(realHash))).toBe(true);
 });
 
 test("putBlob refuses a blob the sync handshake never asked this machine for (403, no write amplification)", async () => {
-  const { token } = seed();
+  const { token } = (await seed());
   const { gw, blobs } = gatewayWithStore();
 
   // A well-formed, self-consistent blob that NO artifact_files row references —
@@ -274,11 +274,11 @@ test("putBlob refuses a blob the sync handshake never asked this machine for (40
   const res = await gw.putBlob(token, hash, Buffer.from(content));
   expect(res.status).toBe(403);
   expect(await blobs.has(hash)).toBe(false);
-  expect(store.blobExists(hash)).toBe(false);
+  expect((await store.blobExists(hash))).toBe(false);
 });
 
 test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine scoping)", async () => {
-  const { token: tokenA, loop } = seed();
+  const { token: tokenA, loop } = (await seed());
   const { gw, blobs } = gatewayWithStore();
   const content = "machine A's file";
   const hash = sha256(content);
@@ -288,7 +288,7 @@ test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine
   // …but machine B (registered, unrelated) may not supply the bytes for it.
   const tokenB = tokens.mintDeviceToken();
   const machineB = tokens.machineIdFromToken(tokenB);
-  store.createMachine({ id: machineB, userId: "u2", name: "B", tokenHash: tokens.sha256(tokenB), online: true });
+  (await store.createMachine({ id: machineB, userId: "u2", name: "B", tokenHash: tokens.sha256(tokenB), online: true }));
   const denied = await gw.putBlob(tokenB, hash, Buffer.from(content));
   expect(denied.status).toBe(403);
   expect(await blobs.has(hash)).toBe(false);
@@ -304,12 +304,12 @@ test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine
 const PRODUCT = `---\ntype: idea\ntitle: My Idea\ndate: 2026-07-01\n---\n\n# Body\n`;
 
 /** The joined-out meta for a loop's live file at `path` (null when untyped). */
-function metaOf(loopId: string, path: string) {
-  return store.listArtifactsWithMeta(loopId).find((f) => f.path === path)?.meta ?? null;
+async function metaOf(loopId: string, path: string) {
+  return (await store.listArtifactsWithMeta(loopId)).find((f) => f.path === path)?.meta ?? null;
 }
 
 test("sync inline path parses + persists front-matter meta on the blob", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const hash = sha256(PRODUCT);
   const r = await gw.sync(token, {
@@ -318,11 +318,11 @@ test("sync inline path parses + persists front-matter meta on the blob", async (
     blobs: [{ hash, encoding: "utf8", data: PRODUCT }],
   });
   expect(r.status).toBe(200);
-  expect(metaOf(loop.id, "idea.md")).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
+  expect((await metaOf(loop.id, "idea.md"))).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
 });
 
 test("putBlob path parses + persists front-matter meta", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const hash = sha256(PRODUCT);
   // Manifest first (no inline) → the server asks for the hash…
@@ -331,11 +331,11 @@ test("putBlob path parses + persists front-matter meta", async () => {
   // …then the PUT lands the bytes and parses meta at that ingress point.
   const put = await gw.putBlob(token, hash, Buffer.from(PRODUCT));
   expect(put.status).toBe(200);
-  expect(metaOf(loop.id, "idea.md")).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
+  expect((await metaOf(loop.id, "idea.md"))).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
 });
 
 test("dedup: a re-referenced hash keeps its already-parsed meta (no re-parse needed)", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const hash = sha256(PRODUCT);
   await gw.sync(token, {
@@ -353,11 +353,11 @@ test("dedup: a re-referenced hash keeps its already-parsed meta (no re-parse nee
     ],
   });
   expect((r.body as any).needHashes).toEqual([]); // dedup: nothing re-requested
-  expect(metaOf(loop.id, "copy.md")).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
+  expect((await metaOf(loop.id, "copy.md"))).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
 });
 
 test("malformed front matter stores null meta and never fails the sync", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const broken = "---\ntype: idea\nnever closes the fence\n"; // no closing `---`
   const plain = "# Just a heading, no front matter\n";
@@ -375,12 +375,12 @@ test("malformed front matter stores null meta and never fails the sync", async (
     ],
   });
   expect(r.status).toBe(200);
-  expect(metaOf(loop.id, "broken.md")).toBeNull();
-  expect(metaOf(loop.id, "plain.md")).toBeNull();
+  expect((await metaOf(loop.id, "broken.md"))).toBeNull();
+  expect((await metaOf(loop.id, "plain.md"))).toBeNull();
 });
 
 test("getArtifacts (listLoopArtifacts) surfaces meta per file; null for untyped", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = (await seed());
   const { gw } = gatewayWithStore();
   const plain = "# no front matter\n";
   await gw.sync(token, {
@@ -395,17 +395,17 @@ test("getArtifacts (listLoopArtifacts) surfaces meta per file; null for untyped"
     ],
   });
   const { listLoopArtifacts } = await import("../server/artifactFiles.js");
-  const rows = listLoopArtifacts(loop.id);
+  const rows = await listLoopArtifacts(loop.id);
   expect(rows.find((f) => f.path === "idea.md")!.meta).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
   expect(rows.find((f) => f.path === "plain.md")!.meta).toBeNull();
 });
 
-test("poll response carries the watch set for every loop bound to the machine", () => {
-  const { token, machineId } = seed();
+test("poll response carries the watch set for every loop bound to the machine", async () => {
+  const { token, machineId } = (await seed());
   // A second loop on the same machine, one with a taskFile.
-  store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/proj/loopany/l2/README.md", workdir: "/proj" });
+  (await store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/proj/loopany/l2/README.md", workdir: "/proj" }));
   const { gw } = gatewayWithStore();
-  const res = gw.poll(token);
+  const res = (await gw.poll(token));
   const watch = (res.body as any).watch as Array<{ loopId: string; workdir: string | null; taskFile: string | null }>;
   expect(watch).toHaveLength(2);
   const withTask = watch.find((w) => w.taskFile)!;
@@ -421,33 +421,33 @@ test("poll response carries the watch set for every loop bound to the machine", 
 
 /** A machine + a loop whose task file lives at an ABSOLUTE machine path (the
  *  daemon syncs paths RELATIVE to the watched folder — suffix matching applies). */
-function seedWithTaskFile(taskFile = "/home/u/loops/demo/README.md") {
+async function seedWithTaskFile(taskFile = "/home/u/loops/demo/README.md") {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile }));
   return { token, machineId, loop };
 }
 
 test("syncing the task file mirrors its content onto the loop record — no run needed", async () => {
-  const { token, loop } = seedWithTaskFile();
+  const { token, loop } = (await seedWithTaskFile());
   const { gw } = gatewayWithStore();
   const content = "# Demo loop\n\n## Spec\nDo the thing daily.\n";
   const hash = sha256(content);
 
-  expect(store.getLoop(loop.id)!.taskFileContent).toBeNull();
+  expect((await store.getLoop(loop.id))!.taskFileContent).toBeNull();
   await gw.sync(token, {
     loopId: loop.id,
     manifest: [{ path: "README.md", hash, size: content.length }],
     blobs: [{ hash, encoding: "utf8", data: content }],
   });
-  const after = store.getLoop(loop.id)!;
+  const after = (await store.getLoop(loop.id))!;
   expect(after.taskFileContent).toBe(content);
   expect(after.taskFileSyncedAt).toBeTruthy();
 });
 
 test("task-file bytes arriving via PUT (over the inline cap path) also mirror onto the loop", async () => {
-  const { token, loop } = seedWithTaskFile();
+  const { token, loop } = (await seedWithTaskFile());
   const { gw } = gatewayWithStore();
   const content = "# Big spec\n" + "x".repeat(100);
   const hash = sha256(content);
@@ -455,15 +455,15 @@ test("task-file bytes arriving via PUT (over the inline cap path) also mirror on
   // Manifest only — bytes not in hand yet ⇒ no mirror (and no stale write).
   const r1 = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "README.md", hash, size: content.length }] });
   expect((r1.body as any).needHashes).toEqual([hash]);
-  expect(store.getLoop(loop.id)!.taskFileContent).toBeNull();
+  expect((await store.getLoop(loop.id))!.taskFileContent).toBeNull();
 
   // The PUT lands the bytes → the loop record catches up without another sync.
   await gw.putBlob(token, hash, Buffer.from(content));
-  expect(store.getLoop(loop.id)!.taskFileContent).toBe(content);
+  expect((await store.getLoop(loop.id))!.taskFileContent).toBe(content);
 });
 
 test("a non-task artifact never touches taskFileContent", async () => {
-  const { token, loop } = seedWithTaskFile();
+  const { token, loop } = (await seedWithTaskFile());
   const { gw } = gatewayWithStore();
   const content = "not the task file";
   const hash = sha256(content);
@@ -472,11 +472,11 @@ test("a non-task artifact never touches taskFileContent", async () => {
     manifest: [{ path: "notes.md", hash, size: content.length }],
     blobs: [{ hash, encoding: "utf8", data: content }],
   });
-  expect(store.getLoop(loop.id)!.taskFileContent).toBeNull();
+  expect((await store.getLoop(loop.id))!.taskFileContent).toBeNull();
 });
 
 test("best-match selection: root README wins over a nested one (same rule as the Files panel)", async () => {
-  const { token, loop } = seedWithTaskFile();
+  const { token, loop } = (await seedWithTaskFile());
   const { gw } = gatewayWithStore();
   const root = "# the real spec\n";
   const nested = "# archived copy\n";
@@ -491,11 +491,11 @@ test("best-match selection: root README wins over a nested one (same rule as the
       { hash: sha256(root), encoding: "utf8", data: root },
     ],
   });
-  expect(store.getLoop(loop.id)!.taskFileContent).toBe(root);
+  expect((await store.getLoop(loop.id))!.taskFileContent).toBe(root);
 });
 
 test("a loop without a taskFile is untouched by sync's mirror", async () => {
-  const { token, loop } = seed(); // no taskFile
+  const { token, loop } = (await seed()); // no taskFile
   const { gw } = gatewayWithStore();
   const content = "README.md content on a taskFile-less loop";
   const hash = sha256(content);
@@ -504,5 +504,5 @@ test("a loop without a taskFile is untouched by sync's mirror", async () => {
     manifest: [{ path: "README.md", hash, size: content.length }],
     blobs: [{ hash, encoding: "utf8", data: content }],
   });
-  expect(store.getLoop(loop.id)!.taskFileContent).toBeNull();
+  expect((await store.getLoop(loop.id))!.taskFileContent).toBeNull();
 });

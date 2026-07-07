@@ -24,7 +24,7 @@ function toSummary(c: NotificationChannel): ChannelSummary {
  *  missing OR (gate on) owned by another team, so existence never leaks. Mirrors
  *  loopApi's ownedLoop for the channel routes. */
 async function ownedChannel(id: string): Promise<NotificationChannel | undefined> {
-  const ch = store.getChannel(id)
+  const ch = await store.getChannel(id)
   if (!ch) return undefined
   const { enforce, teamId } = await requestScope()
   if (enforce && ch.teamId !== teamId) return undefined
@@ -33,17 +33,17 @@ async function ownedChannel(id: string): Promise<NotificationChannel | undefined
 
 /** GET — the team's channels (redacted summaries, newest first). */
 export const listChannels = createServerFn({ method: 'GET' }).handler(async (): Promise<ChannelSummary[]> => {
-  ensureServer()
+  await ensureServer()
   const { enforce, userId, teamId } = await requestScope()
   if (enforce && !userId) return []
-  return store.listChannels(teamId).map(toSummary)
+  return (await store.listChannels(teamId)).map(toSummary)
 })
 
 /** POST — create a channel in the team. Validates per-type required fields. */
 export const createChannel = createServerFn({ method: 'POST' })
   .validator((d: { type: ChannelType; name: string; config: ChannelConfig }) => d)
   .handler(async ({ data }): Promise<{ ok: boolean; id?: string; error?: string }> => {
-    ensureServer()
+    await ensureServer()
     const { enforce, userId, teamId } = await requestScope()
     if (enforce && !userId) return { ok: false, error: 'not signed in' }
     const name = data.name?.trim()
@@ -57,7 +57,7 @@ export const createChannel = createServerFn({ method: 'POST' })
     // leakage), trimmed.
     const keys = [...kind.required, ...(kind.optional ?? [])]
     const config: ChannelConfig = Object.fromEntries(keys.filter((k) => cfg[k]?.trim()).map((k) => [k, cfg[k]!.trim()]))
-    const ch = store.createChannel({ teamId, type: data.type, name, config })
+    const ch = await store.createChannel({ teamId, type: data.type, name, config })
     return { ok: true, id: ch.id }
   })
 
@@ -65,16 +65,16 @@ export const createChannel = createServerFn({ method: 'POST' })
 export const deleteChannel = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<{ ok: boolean; error?: string }> => {
-    ensureServer()
+    await ensureServer()
     if (!(await ownedChannel(id))) return { ok: false, error: 'channel not found' }
-    return { ok: store.deleteChannel(id) }
+    return { ok: await store.deleteChannel(id) }
   })
 
 /** POST — send a test message through a saved channel (verifies the secrets). */
 export const testChannel = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<{ ok: boolean; error?: string }> => {
-    ensureServer()
+    await ensureServer()
     const ch = await ownedChannel(id)
     if (!ch) return { ok: false, error: 'channel not found' }
     return CHANNELS[ch.type].send(ch.config, ch.name, 'Loopany test message — this channel is wired up. ✓')

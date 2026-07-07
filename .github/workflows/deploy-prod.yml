@@ -1,0 +1,38 @@
+# Deploy Loopany to PRODUCTION — app "loopany-prod", https://loopany.ai.
+#
+# Manual ONLY ON PURPOSE: the single-scheduler invariant makes an accidental
+# double-target dangerous, so prod is NOT auto-deployed on push to main (that's
+# staging's job, deploy.yml → loopany-testing) NOR on a `v*` tag (that tag is
+# publish-daemon.yml's npm-publish trigger — sharing it would deploy prod on every
+# daemon release). Trigger this from the Actions tab (workflow_dispatch) only.
+#
+# Migrations apply on container boot: scripts/prestart.mjs runs the postgres-js
+# migrator over the DIRECT Supabase URL (DIRECT_DATABASE_URL) whenever
+# DATABASE_URL is set, so a bad migration fails the deploy before it serves.
+name: Deploy Prod (Fly)
+
+on:
+  workflow_dispatch: {}
+
+# Distinct group from staging's `fly-deploy` so neither cancels the other's
+# in-flight deploy. Never cancel a prod deploy mid-flight.
+concurrency:
+  group: fly-deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: flyctl deploy → loopany-prod
+    runs-on: ubuntu-latest
+    # Add required reviewers to this GitHub Environment for a manual promote gate.
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy
+        # --ha=false: exactly ONE machine. Fly's default HA creates a second
+        # machine, which would run a second in-process scheduler → double-fire.
+        run: flyctl deploy --remote-only --ha=false -c fly.prod.toml -a loopany-prod
+        env:
+          # Separate token from staging's FLY_API_TOKEN (set it in repo secrets).
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}

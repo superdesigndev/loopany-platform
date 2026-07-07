@@ -35,9 +35,9 @@ export { machineInScope, tokenVisibleTo }
  *  set listMachines serves). Empty when the scope needs no team check (open
  *  mode, signed-out, or the admin "All teams" view — machineInScope settles
  *  those before ever invoking its team-set thunk). */
-function teamMachineIds(scope: RequestScope): ReadonlySet<string> {
+async function teamMachineIds(scope: RequestScope): Promise<ReadonlySet<string>> {
   if (!scope.enforce || !scope.userId || (scope.isAdmin && scope.allTeams)) return new Set()
-  return new Set(store.listMachinesForTeam(scope.teamId).map((m) => m.id))
+  return new Set((await store.listMachinesForTeam(scope.teamId)).map((m) => m.id))
 }
 
 /**
@@ -49,12 +49,15 @@ function teamMachineIds(scope: RequestScope): ReadonlySet<string> {
  */
 async function scopedMachine(id: string): Promise<{ scope: RequestScope; machine?: Machine }> {
   const scope = await requestScope()
-  const m = store.getMachine(id)
-  const machine = m && machineInScope(m, scope, () => teamMachineIds(scope)) ? m : undefined
+  const m = await store.getMachine(id)
+  // Pre-await the team-id Set so the pure machineInScope keeps its sync thunk
+  // contract (the DB join can't live inside a synchronous predicate).
+  const teamIds = await teamMachineIds(scope)
+  const machine = m && machineInScope(m, scope, () => teamIds) ? m : undefined
   return { scope, machine }
 }
 
-function toSummary(m: Machine, scope: RequestScope): MachineSummary {
+async function toSummary(m: Machine, scope: RequestScope): Promise<MachineSummary> {
   return {
     id: m.id,
     name: m.name,
@@ -67,35 +70,35 @@ function toSummary(m: Machine, scope: RequestScope): MachineSummary {
     // Same for every machine (cached npm latest); non-blocking + fail-silent.
     latestDaemonVersion: latestDaemonVersion.get(),
     token: tokenVisibleTo(m, scope) ? (m.token ?? null) : null,
-    loopCount: store.loopsForMachine(m.id).length,
+    loopCount: (await store.loopsForMachine(m.id)).length,
   }
 }
 
 /** Named machines only (pending/unnamed rows are mid-connect). Scoped to the
  *  signed-in owner when the gate is on; the full shared list in open mode. */
 export const listMachines = createServerFn({ method: 'GET' }).handler(async () => {
-  ensureServer()
+  await ensureServer()
   const scope = await requestScope()
   const { enforce, userId, teamId, allTeams } = scope
   if (enforce && !userId) return []
   // Membership-scoped: a machine shows in every team its owner belongs to (one
   // machine serves many teams, report §2.3). The admin "All teams" view + open
   // mode list everything.
-  const list = enforce && !allTeams ? store.listMachinesForTeam(teamId) : store.listMachines()
-  return list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope))
+  const list = enforce && !allTeams ? await store.listMachinesForTeam(teamId) : await store.listMachines()
+  return Promise.all(list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope)))
 })
 
 /** Act 1 — create a pending machine + token, owned by the signed-in user's team. */
 export const createMachine = createServerFn({ method: 'POST' }).handler(
   async (): Promise<{ id: string; token: string } | { error: string }> => {
-    ensureServer()
+    await ensureServer()
     const { enforce, userId, teamId } = await requestScope()
     if (enforce && !userId) return { error: 'not signed in' }
     const token = mintDeviceToken()
     const id = machineIdFromToken(token)
     const owner = userId ?? 'shared'
     setDeviceOwner(id, owner)
-    store.createMachine({ id, userId: owner, teamId, name: '', tokenHash: sha256(token), token, online: false })
+    await store.createMachine({ id, userId: owner, teamId, name: '', tokenHash: sha256(token), token, online: false })
     return { id, token }
   },
 )
@@ -105,7 +108,7 @@ export const createMachine = createServerFn({ method: 'POST' }).handler(
 export const machineStatus = createServerFn({ method: 'GET' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MachineSummary | null> => {
-    ensureServer()
+    await ensureServer()
     const { scope, machine } = await scopedMachine(id)
     return machine ? toSummary(machine, scope) : null
   })
@@ -114,12 +117,12 @@ export const machineStatus = createServerFn({ method: 'GET' })
 export const finalizeMachine = createServerFn({ method: 'POST' })
   .validator((d: { id: string; name: string }) => d)
   .handler(async ({ data }): Promise<{ ok: boolean }> => {
-    ensureServer()
+    await ensureServer()
     const name = data.name?.trim()
     if (!name) return { ok: false }
     const { machine } = await scopedMachine(data.id)
     if (!machine) return { ok: false }
-    return { ok: !!store.updateMachine(data.id, { name }) }
+    return { ok: !!(await store.updateMachine(data.id, { name })) }
   })
 
 /**
@@ -131,18 +134,18 @@ export const finalizeMachine = createServerFn({ method: 'POST' })
 export const deleteMachine = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<{ ok: boolean; error?: string }> => {
-    ensureServer()
+    await ensureServer()
     const { scope, machine } = await scopedMachine(id)
     // Distinct error shapes on purpose: a signed-out caller is "unauthorized",
     // an out-of-scope/missing machine is "machine not found".
     if (scope.enforce && !scope.userId) return { ok: false, error: 'unauthorized' }
     if (!machine) return { ok: false, error: 'machine not found' }
-    const loops = store.loopsForMachine(id)
+    const loops = await store.loopsForMachine(id)
     if (loops.length > 0) {
       return {
         ok: false,
         error: `This machine still has ${loops.length} loop${loops.length === 1 ? '' : 's'} — delete ${loops.length === 1 ? 'it' : 'them'} first.`,
       }
     }
-    return { ok: store.deleteMachine(id) }
+    return { ok: await store.deleteMachine(id) }
   })

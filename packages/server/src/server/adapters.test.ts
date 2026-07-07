@@ -19,7 +19,7 @@ beforeAll(async () => {
   process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
   process.env.LOOPANY_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
-  db.runMigrations();
+  await db.runMigrations();
   store = await import("../db/store.js");
   adapters = await import("./adapters.js");
 });
@@ -28,12 +28,12 @@ afterAll(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-beforeEach(() => {
-  db.sqlite.exec("DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+beforeEach(async () => {
+  await (db.client as { exec(q: string): Promise<unknown> }).exec("DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
-function seed(agent: "claude-code" | "codex") {
-  store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
+async function seed(agent: "claude-code" | "codex") {
+  await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
   return store.createLoop({
     userId: "u1",
     machineId: "m-a",
@@ -47,17 +47,17 @@ function seed(agent: "claude-code" | "codex") {
   });
 }
 
-test("an exec loop's recorded agent maps onto executor, JobFull.agent, and the kind chip", () => {
-  const loop = seed("codex");
-  const detail = adapters.toJobDetail(loop);
+test("an exec loop's recorded agent maps onto executor, JobFull.agent, and the kind chip", async () => {
+  const loop = await seed("codex");
+  const detail = await adapters.toJobDetail(loop);
   expect(detail.job.exec!.executor).toBe("codex");
   expect(detail.job.agent).toBe("codex");
   expect(detail.summary.kind).toBe("exec:codex");
 });
 
-test("a claude-code loop maps to exec:claude-code (no longer the hardcoded \"claude\")", () => {
-  const loop = seed("claude-code");
-  const detail = adapters.toJobDetail(loop);
+test("a claude-code loop maps to exec:claude-code (no longer the hardcoded \"claude\")", async () => {
+  const loop = await seed("claude-code");
+  const detail = await adapters.toJobDetail(loop);
   expect(detail.job.exec!.executor).toBe("claude-code");
   expect(detail.job.agent).toBe("claude-code");
   expect(detail.summary.kind).toBe("exec:claude-code");
@@ -65,38 +65,38 @@ test("a claude-code loop maps to exec:claude-code (no longer the hardcoded \"cla
 
 test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted split)", async () => {
   const { isCompleted, isClosed } = await import("../lib/format.js");
-  store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
+  await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
 
   // Open loop (no goal): not closed, not completed.
-  const open = store.createLoop({ userId: "u1", machineId: "m-a", name: "Open", cron: "0 8 * * *", taskFile: "loopany/x/README.md", enabled: true, notify: "auto" });
-  const openSum = adapters.toJobSummary(open);
+  const open = await store.createLoop({ userId: "u1", machineId: "m-a", name: "Open", cron: "0 8 * * *", taskFile: "loopany/x/README.md", enabled: true, notify: "auto" });
+  const openSum = await adapters.toJobSummary(open);
   expect(openSum.goal).toBeNull();
   expect(openSum.completedAt).toBeNull();
   expect(isClosed(openSum)).toBe(false);
   expect(isCompleted(openSum)).toBe(false);
 
   // Closed active loop (goal, no completion): closed, not completed.
-  const closed = store.createLoop({ userId: "u1", machineId: "m-a", name: "Closed", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "reach 100 signups", enabled: true, notify: "auto" });
-  const closedSum = adapters.toJobSummary(closed);
+  const closed = await store.createLoop({ userId: "u1", machineId: "m-a", name: "Closed", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "reach 100 signups", enabled: true, notify: "auto" });
+  const closedSum = await adapters.toJobSummary(closed);
   expect(closedSum.goal).toBe("reach 100 signups");
   expect(isClosed(closedSum)).toBe(true);
   expect(isCompleted(closedSum)).toBe(false);
-  expect(adapters.toJobDetail(closed).job.goal).toBe("reach 100 signups");
+  expect((await adapters.toJobDetail(closed)).job.goal).toBe("reach 100 signups");
 
   // Completed loop: completedAt set → isCompleted true (regardless of last run status).
-  const doneLoop = store.createLoop({
+  const doneLoop = await store.createLoop({
     userId: "u1", machineId: "m-a", name: "Done", cron: "0 8 * * *", taskFile: "loopany/x/README.md",
     goal: "ship v1", completedAt: "2026-07-01T00:00:00Z", completionReason: "v1 shipped", enabled: false, notify: "auto",
   });
-  const doneSum = adapters.toJobSummary(doneLoop);
+  const doneSum = await adapters.toJobSummary(doneLoop);
   expect(doneSum.completedAt).toBe("2026-07-01T00:00:00Z");
   expect(doneSum.completionReason).toBe("v1 shipped");
   expect(isCompleted(doneSum)).toBe(true);
 });
 
-test("a workflow loop keeps the workflow kind regardless of recorded agent", () => {
-  store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
-  const loop = store.createLoop({
+test("a workflow loop keeps the workflow kind regardless of recorded agent", async () => {
+  await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
+  const loop = await store.createLoop({
     userId: "u1",
     machineId: "m-a",
     name: "W",
@@ -106,5 +106,5 @@ test("a workflow loop keeps the workflow kind regardless of recorded agent", () 
     enabled: true,
     notify: "auto",
   });
-  expect(adapters.toJobSummary(loop).kind).toBe("workflow");
+  expect((await adapters.toJobSummary(loop)).kind).toBe("workflow");
 });

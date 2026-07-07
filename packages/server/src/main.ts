@@ -21,7 +21,7 @@ import { machineIdFromToken, sha256 } from "./gateway/tokens.js";
 const log = logger.child({ mod: "main" });
 const DEMO_USER = "demo-user";
 
-const { gateway, scheduler, abort } = ensureServer();
+const { gateway, scheduler, abort } = await ensureServer();
 
 function bearer(req: http.IncomingMessage): string | undefined {
   const h = req.headers["authorization"];
@@ -70,21 +70,21 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   if (m === "POST" && p === "/api/machine/poll") {
     const tok = bearer(req);
     if (!tok) return send(res, 401, { error: "missing device token" });
-    const r = gateway.poll(tok);
+    const r = await gateway.poll(tok);
     return send(res, r.status, r.body);
   }
   if (m === "POST" && p === "/agent-api/loop") {
     const tok = bearer(req);
     if (!tok) return send(res, 401, { text: "loopany: missing token", exitCode: 1 });
     const b = await json(req);
-    const r = gateway.agentApi(tok, Array.isArray(b.argv) ? b.argv : []);
+    const r = await gateway.agentApi(tok, Array.isArray(b.argv) ? b.argv : []);
     return send(res, r.status, r.body);
   }
   if (m === "POST" && p === "/machine/report") {
     const tok = bearer(req);
     if (!tok) return send(res, 401, { error: "missing token" });
     const b = await json(req);
-    const r = gateway.report(tok, b);
+    const r = await gateway.report(tok, b);
     return send(res, r.status, r.body);
   }
 
@@ -93,19 +93,19 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     const b = await json(req);
     if (!b.token || !b.name) return send(res, 400, { error: "token + name required" });
     const id = machineIdFromToken(b.token);
-    const existing = store.getMachine(id);
+    const existing = await store.getMachine(id);
     const machine = existing
-      ? store.updateMachine(id, { name: b.name, roots: b.roots ?? null })
-      : store.createMachine({ id, userId: b.userId ?? DEMO_USER, name: b.name, tokenHash: sha256(b.token), roots: b.roots ?? null, online: false });
+      ? await store.updateMachine(id, { name: b.name, roots: b.roots ?? null })
+      : await store.createMachine({ id, userId: b.userId ?? DEMO_USER, name: b.name, tokenHash: sha256(b.token), roots: b.roots ?? null, online: false });
     return send(res, 200, { machine });
   }
   if (m === "GET" && p === "/api/machines") {
-    return send(res, 200, store.listMachines());
+    return send(res, 200, await store.listMachines());
   }
   if (m === "POST" && p === "/api/loops") {
     const b = await json(req);
     if (!b.machineId || !b.cron) return send(res, 400, { error: "machineId + cron required" });
-    const loop = store.createLoop({
+    const loop = await store.createLoop({
       userId: b.userId ?? DEMO_USER,
       machineId: b.machineId,
       name: b.name ?? null,
@@ -125,19 +125,21 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     return send(res, 200, { loop });
   }
   if (m === "GET" && p === "/api/loops") {
-    return send(res, 200, store.listLoops().map((l) => ({ ...l, lastRun: store.lastRun(l.id) ?? null })));
+    const loops = await store.listLoops();
+    const withLastRun = await Promise.all(loops.map(async (l) => ({ ...l, lastRun: (await store.lastRun(l.id)) ?? null })));
+    return send(res, 200, withLastRun);
   }
   const runMatch = p.match(/^\/api\/loops\/([^/]+)\/run$/);
   if (m === "POST" && runMatch) {
     const id = decodeURIComponent(runMatch[1]!);
-    if (!store.getLoop(id)) return send(res, 404, { error: "not found" });
-    scheduler.runNow(id);
+    if (!(await store.getLoop(id))) return send(res, 404, { error: "not found" });
+    await scheduler.runNow(id);
     return send(res, 200, { ok: true });
   }
   const runsMatch = p.match(/^\/api\/loops\/([^/]+)\/runs$/);
   if (m === "GET" && runsMatch) {
     const id = decodeURIComponent(runsMatch[1]!);
-    return send(res, 200, store.listRuns(id, 50));
+    return send(res, 200, await store.listRuns(id, 50));
   }
 
   send(res, 404, { error: "not found" });

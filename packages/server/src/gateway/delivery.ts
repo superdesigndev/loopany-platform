@@ -37,14 +37,14 @@ export interface Delivery {
   task: string;
 }
 
-export function buildDelivery(loop: Loop, runId: string, runToken: string, roots: string[]): Delivery {
-  const raw = store.getRun(runId)?.role;
+export async function buildDelivery(loop: Loop, runId: string, runToken: string, roots: string[]): Promise<Delivery> {
+  const raw = (await store.getRun(runId))?.role;
   const role: Delivery["role"] = raw === "evolve" ? "evolve" : raw === "edit" ? "edit" : "exec";
   let systemPrompt: string;
   let task: string;
   switch (role) {
     case "evolve": {
-      const recentRuns = store.listRuns(loop.id, 13).filter((r) => r.id !== runId).slice(-12);
+      const recentRuns = (await store.listRuns(loop.id, 13)).filter((r) => r.id !== runId).slice(-12);
       systemPrompt = buildEvolvePrompt();
       task = buildEvolveTask(loop, recentRuns);
       break;

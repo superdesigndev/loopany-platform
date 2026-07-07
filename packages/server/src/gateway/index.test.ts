@@ -19,7 +19,7 @@ beforeAll(async () => {
   // at module load) so the cross-team superadmin-authorization test below works.
   process.env.LOOPANY_SUPERADMINS = "admin@example.com";
   db = await import("../db/index.js");
-  db.runMigrations();
+  await db.runMigrations();
   store = await import("../db/store.js");
   gatewayMod = await import("./index.js");
   tokens = await import("./tokens.js");
@@ -30,8 +30,8 @@ afterAll(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-beforeEach(() => {
-  db.sqlite.exec("DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+beforeEach(async () => {
+  await (db.client as any).exec("DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 function gateway(
@@ -62,31 +62,31 @@ function recordingNotify() {
 }
 
 /** Seed a loop with an exec run already RUNNING, ready for a report() call. */
-function seededExecRun(notify: "always" | "auto" | "never" = "auto") {
+async function seededExecRun(notify: "always" | "auto" | "never" = "auto") {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
   return { machineId, loop, run, rt };
 }
 
 /** Insert a team (+ optional member rows) directly, bypassing store.ensureTeam's
  *  memo/rename side effects so each test controls membership precisely. */
-function makeTeam(id: string, memberUserIds: string[] = []): void {
+async function makeTeam(id: string, memberUserIds: string[] = []): Promise<void> {
   const ts = new Date().toISOString();
-  db.sqlite.exec(`INSERT OR IGNORE INTO teams (id, name, owner_user_id, created_at) VALUES ('${id}', '${id}', NULL, '${ts}')`);
+  await (db.client as any).exec(`INSERT INTO teams (id, name, owner_user_id, created_at) VALUES ('${id}', '${id}', NULL, '${ts}') ON CONFLICT DO NOTHING`);
   for (const u of memberUserIds) {
-    db.sqlite.exec(
-      `INSERT OR IGNORE INTO team_members (id, team_id, user_id, role, created_at) VALUES ('${id}:${u}', '${id}', '${u}', 'member', '${ts}')`,
+    await (db.client as any).exec(
+      `INSERT INTO team_members (id, team_id, user_id, role, created_at) VALUES ('${id}:${u}', '${id}', '${u}', 'member', '${ts}') ON CONFLICT DO NOTHING`,
     );
   }
 }
 
-function seededLoop() {
-  const machine = store.createMachine({ id: "m-gateway", userId: "u1", name: "M", tokenHash: "h", online: true });
-  const loop = store.createLoop({
+async function seededLoop() {
+  const machine = (await store.createMachine({ id: "m-gateway", userId: "u1", name: "M", tokenHash: "h", online: true }));
+  const loop = (await store.createLoop({
     userId: "u1",
     machineId: machine.id,
     name: "L",
@@ -95,8 +95,8 @@ function seededLoop() {
     notify: "auto",
     stateSchema: [{ key: "mrr" }],
     ui: "<h3>{{latest.mrr}}</h3>",
-  });
-  const run = store.addRun({
+  }));
+  const run = (await store.addRun({
     loopId: loop.id,
     userId: loop.userId,
     machineId: machine.id,
@@ -104,12 +104,12 @@ function seededLoop() {
     role: "evolve",
     ts: new Date().toISOString(),
     state: { mrr: 10 },
-  });
+  }));
   return { machine, loop, run };
 }
 
-test("set-ui is only allowed for an evolution run token and is audited", () => {
-  const { loop, machine, run } = seededLoop();
+test("set-ui is only allowed for an evolution run token and is audited", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const execToken = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -117,7 +117,7 @@ test("set-ui is only allowed for an evolution run token and is audited", () => {
     role: "exec",
     allowControl: true,
   });
-  const rejected = gateway().agentApi(execToken, ["set-ui", "--file-content", "<h3>Denied</h3>"]);
+  const rejected = (await gateway().agentApi(execToken, ["set-ui", "--file-content", "<h3>Denied</h3>"]));
   expect(rejected.status).toBe(403);
 
   const evolveToken = tokens.registerRunLease({
@@ -128,33 +128,33 @@ test("set-ui is only allowed for an evolution run token and is audited", () => {
     allowControl: true,
     canSetUi: true,
   });
-  const ok = gateway().agentApi(evolveToken, ["set-ui", "--file-content", "<h3>{{latest.mrr}}</h3>"]);
+  const ok = (await gateway().agentApi(evolveToken, ["set-ui", "--file-content", "<h3>{{latest.mrr}}</h3>"]));
   expect(ok.status).toBe(200);
-  expect(store.getLoop(loop.id)!.ui).toBe("<h3>{{latest.mrr}}</h3>");
-  expect(store.getRun(run.id)!.control?.[0]?.command).toBe("set-ui");
-  expect(store.getRun(run.id)!.control?.[0]?.result).toBe("ok");
+  expect((await store.getLoop(loop.id))!.ui).toBe("<h3>{{latest.mrr}}</h3>");
+  expect((await store.getRun(run.id))!.control?.[0]?.command).toBe("set-ui");
+  expect((await store.getRun(run.id))!.control?.[0]?.result).toBe("ok");
 });
 
-test("show reports the run's effective self-schedule capability", () => {
-  const { loop, machine, run } = seededLoop();
+test("show reports the run's effective self-schedule capability", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const gw = gateway();
-  const showText = (allowControl: boolean, role: "exec" | "evolve" = "exec") => {
+  const showText = async (allowControl: boolean, role: "exec" | "evolve" = "exec") => {
     const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role, allowControl });
-    return (gw.agentApi(rt, ["show"]).body as { text: string }).text;
+    return ((await gw.agentApi(rt, ["show"])).body as { text: string }).text;
   };
   // A run that MAY self-schedule reads `allowed`; one that may not reads `off`.
-  const allowed = showText(true);
+  const allowed = (await showText(true));
   expect(allowed).toContain("selfSchedule: allowed");
   // cron carries spaces → TOON-quoted inside the envelope block.
   expect(allowed).toContain(`cron: "${loop.cron}"`);
-  const off = showText(false);
+  const off = (await showText(false));
   expect(off).toContain("selfSchedule: off");
   // An evolve/edit pass carries the effective (structural) capability, so it reads allowed.
-  expect(showText(true, "evolve")).toContain("selfSchedule: allowed");
+  expect((await showText(true, "evolve"))).toContain("selfSchedule: allowed");
 });
 
-test("help (and a bare/unknown-flag invocation) returns role-aware usage", () => {
-  const { loop, machine, run } = seededLoop();
+test("help (and a bare/unknown-flag invocation) returns role-aware usage", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const execToken = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -163,13 +163,13 @@ test("help (and a bare/unknown-flag invocation) returns role-aware usage", () =>
     allowControl: false,
   });
   const gw = gateway();
-  const helpText = (argv: string[]) => {
-    const res = gw.agentApi(execToken, argv);
+  const helpText = async (argv: string[]) => {
+    const res = (await gw.agentApi(execToken, argv));
     expect(res.status).toBe(200);
     return (res.body as { text: string }).text;
   };
   for (const argv of [["help"], ["--help"], []]) {
-    const text = helpText(argv);
+    const text = (await helpText(argv));
     // The §4.9 TOON: a `verbs:` top key with grouped, typed lists + a trailing help[].
     expect(text).toContain("verbs:");
     expect(text).toContain("always[3]{verb,syntax}:");
@@ -178,7 +178,7 @@ test("help (and a bare/unknown-flag invocation) returns role-aware usage", () =>
     expect(text).toContain("help[2]:");
   }
   // An exec run can't set-* or control → the availability TAGS say so, not "available".
-  const execHelp = helpText(["help"]);
+  const execHelp = (await helpText(["help"]));
   expect(execHelp).toContain('dashboard/gate: evolve/edit pass only — this run is "exec"');
   expect(execHelp).toContain("schedule[4]{verb,syntax}: needs allowControl (off for this loop)");
   expect(execHelp).toContain('finish: exec run on a goal (closed) loop only — this run is "exec"');
@@ -192,13 +192,13 @@ test("help (and a bare/unknown-flag invocation) returns role-aware usage", () =>
     allowControl: true,
     canSetUi: true,
   });
-  const evolveHelp = (gw.agentApi(evolveToken, ["help"]).body as { text: string }).text;
+  const evolveHelp = ((await gw.agentApi(evolveToken, ["help"])).body as { text: string }).text;
   expect(evolveHelp).toContain("dashboard/gate: available to this run");
   expect(evolveHelp).toContain("schedule[4]{verb,syntax}: available to this run");
 });
 
-test("set-schema rejects dropping keys still used by UI or recent runs", () => {
-  const { loop, machine, run } = seededLoop();
+test("set-schema rejects dropping keys still used by UI or recent runs", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -207,16 +207,16 @@ test("set-schema rejects dropping keys still used by UI or recent runs", () => {
     allowControl: true,
     canSetSchema: true,
   });
-  const res = gateway().agentApi(token, ["set-schema", "--file-content", JSON.stringify([{ key: "paid" }])]);
+  const res = (await gateway().agentApi(token, ["set-schema", "--file-content", JSON.stringify([{ key: "paid" }])]));
 
   expect(res.status).toBe(400);
-  expect(store.getLoop(loop.id)!.stateSchema).toEqual([{ key: "mrr" }]);
-  expect(store.getRun(run.id)!.control?.[0]?.command).toBe("set-schema");
-  expect(store.getRun(run.id)!.control?.[0]?.result).toBe("rejected");
+  expect((await store.getLoop(loop.id))!.stateSchema).toEqual([{ key: "mrr" }]);
+  expect((await store.getRun(run.id))!.control?.[0]?.command).toBe("set-schema");
+  expect((await store.getRun(run.id))!.control?.[0]?.result).toBe("rejected");
 });
 
-test("report persists the slimmed transcript, retrievable by session id", () => {
-  const { loop, machine, run } = seededLoop();
+test("report persists the slimmed transcript, retrievable by session id", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -224,7 +224,7 @@ test("report persists the slimmed transcript, retrievable by session id", () => 
     role: "exec",
     allowControl: false,
   });
-  const res = gateway().report(token, {
+  const res = (await gateway().report(token, {
     ok: true,
     durationMs: 1234,
     sessionId: "sess-abc",
@@ -234,10 +234,10 @@ test("report persists the slimmed transcript, retrievable by session id", () => 
       { kind: "result", text: "4g dispensed" },
       { kind: "bogus", text: "ignored" }, // invalid kind → filtered
     ],
-  });
+  }));
   expect(res.status).toBe(200);
 
-  const stored = store.getRun(run.id);
+  const stored = (await store.getRun(run.id));
   expect(stored?.sessionId).toBe("sess-abc");
   expect(stored?.transcript).toEqual([
     { kind: "text", text: "Checking the feeder…" },
@@ -246,8 +246,8 @@ test("report persists the slimmed transcript, retrievable by session id", () => 
   ]);
 });
 
-test("report persists the claude-reported cost (usd column + usage json), rejecting garbage fields", () => {
-  const { loop, machine, run } = seededLoop();
+test("report persists the claude-reported cost (usd column + usage json), rejecting garbage fields", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -255,7 +255,7 @@ test("report persists the claude-reported cost (usd column + usage json), reject
     role: "exec",
     allowControl: false,
   });
-  const res = gateway().report(token, {
+  const res = (await gateway().report(token, {
     ok: true,
     durationMs: 1000,
     cost: {
@@ -266,16 +266,16 @@ test("report persists the claude-reported cost (usd column + usage json), reject
       numTurns: 12,
       cacheCreationTokens: -5, // negative → dropped
     },
-  });
+  }));
   expect(res.status).toBe(200);
 
-  const stored = store.getRun(run.id);
+  const stored = (await store.getRun(run.id));
   expect(stored?.costUsd).toBe(0.4235);
   expect(stored?.usage).toEqual({ inputTokens: 120, outputTokens: 950, cacheReadTokens: 48000, numTurns: 12 });
 });
 
-test("report with an absent or wholly-garbage cost leaves the cost columns null", () => {
-  const { loop, machine, run } = seededLoop();
+test("report with an absent or wholly-garbage cost leaves the cost columns null", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -284,15 +284,15 @@ test("report with an absent or wholly-garbage cost leaves the cost columns null"
     allowControl: false,
   });
   // usd over the sanity ceiling + non-numeric tokens → everything dropped.
-  const res = gateway().report(token, { ok: true, durationMs: 5, cost: { usd: 99_999_999, inputTokens: "lots" } });
+  const res = (await gateway().report(token, { ok: true, durationMs: 5, cost: { usd: 99_999_999, inputTokens: "lots" } }));
   expect(res.status).toBe(200);
-  const stored = store.getRun(run.id);
+  const stored = (await store.getRun(run.id));
   expect(stored?.costUsd).toBeNull();
   expect(stored?.usage).toBeNull();
 });
 
-test("report syncs the machine's task file content onto the loop", () => {
-  const { loop, machine, run } = seededLoop();
+test("report syncs the machine's task file content onto the loop", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -300,87 +300,120 @@ test("report syncs the machine's task file content onto the loop", () => {
     role: "exec",
     allowControl: false,
   });
-  const res = gateway().report(token, {
+  const res = (await gateway().report(token, {
     ok: true,
     durationMs: 1000,
     taskFileContent: "# Breakfast log\n2026-06-19: 4g dispensed\n",
-  });
+  }));
   expect(res.status).toBe(200);
 
-  const stored = store.getLoop(loop.id);
+  const stored = (await store.getLoop(loop.id));
   expect(stored?.taskFileContent).toBe("# Breakfast log\n2026-06-19: 4g dispensed\n");
   expect(stored?.taskFileSyncedAt).toBeTruthy();
 });
 
-test("a machine's bound loops gate its deletion (loopsForMachine drains to empty)", () => {
-  const { machine, loop } = seededLoop();
-  // While a loop is bound, the delete guard sees it and must block.
-  expect(store.loopsForMachine(machine.id).map((l) => l.id)).toEqual([loop.id]);
-  // Remove the loop first → the machine is now free to delete.
-  store.deleteLoop(loop.id);
-  expect(store.loopsForMachine(machine.id)).toHaveLength(0);
-  expect(store.deleteMachine(machine.id)).toBe(true);
+test("report strips NUL (U+0000) from wire text so the Postgres write can't throw", async () => {
+  // Postgres text/jsonb columns REJECT U+0000 (SQLite tolerated it). A daemon-supplied
+  // transcript/message/taskFileContent/cursor carrying a NUL must persist with the byte
+  // removed rather than throwing mid-finalize (which the sweep later mis-reads as a timeout).
+  const { loop, machine, run } = (await seededLoop());
+  const token = tokens.registerRunLease({
+    runId: run.id,
+    loopId: loop.id,
+    machineId: machine.id,
+    role: "exec",
+    allowControl: false,
+  });
+  const res = (await gateway().report(token, {
+    ok: true,
+    durationMs: 1000,
+    sessionId: "sess\u0000abc",
+    message: "done\u0000ok",
+    taskFileContent: "# Log\u0000\n2026-06-19: ok\n",
+    transcript: [{ kind: "text", text: "step\u0000one" }],
+    cursor: { note: "cur\u0000sor", count: 3 },
+  }));
+  expect(res.status).toBe(200);
+
+  const storedRun = (await store.getRun(run.id));
+  expect(storedRun?.message).toBe("doneok");
+  expect(storedRun?.sessionId).toBe("sessabc");
+  expect(storedRun?.transcript).toEqual([{ kind: "text", text: "stepone" }]);
+
+  const storedLoop = (await store.getLoop(loop.id));
+  expect(storedLoop?.taskFileContent).toBe("# Log\n2026-06-19: ok\n");
+  expect(storedLoop?.state).toEqual({ note: "cursor", count: 3 });
 });
 
-test("createLoop persists a valid IANA timezone and rejects a bogus one", () => {
+test("a machine's bound loops gate its deletion (loopsForMachine drains to empty)", async () => {
+  const { machine, loop } = (await seededLoop());
+  // While a loop is bound, the delete guard sees it and must block.
+  expect((await store.loopsForMachine(machine.id)).map((l) => l.id)).toEqual([loop.id]);
+  // Remove the loop first → the machine is now free to delete.
+  (await store.deleteLoop(loop.id));
+  expect((await store.loopsForMachine(machine.id))).toHaveLength(0);
+  expect((await store.deleteMachine(machine.id))).toBe(true);
+});
+
+test("createLoop persists a valid IANA timezone and rejects a bogus one", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
-  const ok = gateway().createLoop(token, {
+  const ok = (await gateway().createLoop(token, {
     name: "Morning report",
     cron: "0 8 * * *",
     timezone: "Asia/Shanghai",
     taskFile: "loopany/x/README.md",
-  });
+  }));
   expect(ok.status).toBe(200);
-  expect(store.getLoop((ok.body as any).id)!.timezone).toBe("Asia/Shanghai");
+  expect((await store.getLoop((ok.body as any).id))!.timezone).toBe("Asia/Shanghai");
 
-  const bad = gateway().createLoop(token, {
+  const bad = (await gateway().createLoop(token, {
     name: "Bad tz",
     cron: "0 8 * * *",
     timezone: "Mars/Phobos",
     taskFile: "loopany/x/README.md",
-  });
+  }));
   expect(bad.status).toBe(400);
   expect((bad.body as any).error).toMatch(/invalid timezone/);
 });
 
-test("createLoop records the coding agent: codex when declared, claude-code by default, and degrades an unknown value", () => {
+test("createLoop records the coding agent: codex when declared, claude-code by default, and degrades an unknown value", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
   // Explicit codex (the daemon's measured env / --agent codex) is persisted verbatim.
-  const codex = gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "codex" });
+  const codex = (await gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "codex" }));
   expect(codex.status).toBe(200);
-  expect(store.getLoop((codex.body as any).id)!.agent).toBe("codex");
+  expect((await store.getLoop((codex.body as any).id))!.agent).toBe("codex");
 
   // Absent agent (older daemon) back-fills to claude-code via the column default.
-  const legacy = gateway().createLoop(token, { name: "Legacy loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  const legacy = (await gateway().createLoop(token, { name: "Legacy loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   expect(legacy.status).toBe(200);
-  expect(store.getLoop((legacy.body as any).id)!.agent).toBe("claude-code");
+  expect((await store.getLoop((legacy.body as any).id))!.agent).toBe("claude-code");
 
   // An unrecognized / "unknown" value degrades to the default rather than rejecting.
-  const weird = gateway().createLoop(token, { name: "Weird loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "unknown" });
+  const weird = (await gateway().createLoop(token, { name: "Weird loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "unknown" }));
   expect(weird.status).toBe(200);
-  expect(store.getLoop((weird.body as any).id)!.agent).toBe("claude-code");
+  expect((await store.getLoop((weird.body as any).id))!.agent).toBe("claude-code");
 });
 
-test("createLoop accepts an initial ui (day-one dashboard) — validated, persisted, presence-flagged in dry-run", () => {
+test("createLoop accepts an initial ui (day-one dashboard) — validated, persisted, presence-flagged in dry-run", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
   const ui = '<h3>React Doctor</h3><loop-chart series="score:Red Dot Score"></loop-chart><loop-kanban columns="open,merged"></loop-kanban>';
 
   // Real create — the ui persists on the loop row (same surface as set-ui/editLoop).
-  const created = gateway().createLoop(token, {
+  const created = (await gateway().createLoop(token, {
     name: "React Doctor", cron: "0 5 * * *", taskFile: "loopany/react-doctor/README.md",
     stateSchema: [{ key: "score", label: "Red Dot Score" }], ui,
-  });
+  }));
   expect(created.status).toBe(200);
-  const loop = store.getLoop((created.body as any).id)!;
+  const loop = (await store.getLoop((created.body as any).id))!;
   expect(loop.ui).toBe(ui);
   expect(loop.stateSchema).toEqual([{ key: "score", label: "Red Dot Score" }]);
   // The real create response echoes ui presence (like dry-run), no warning when applied.
@@ -388,321 +421,321 @@ test("createLoop accepts an initial ui (day-one dashboard) — validated, persis
   expect((created.body as any).warning).toBeUndefined();
 
   // Dry-run reports ui as a presence flag (like workflow), never the markup, and persists nothing.
-  const before = store.loopsForMachine(machineId).length;
-  const dry = gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", ui, dryRun: true });
+  const before = (await store.loopsForMachine(machineId)).length;
+  const dry = (await gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", ui, dryRun: true }));
   expect(dry.status).toBe(200);
   expect((dry.body as any).config.ui).toBe(true);
-  const withoutUi = gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", dryRun: true });
+  const withoutUi = (await gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", dryRun: true }));
   expect((withoutUi.body as any).config.ui).toBe(false);
-  expect(store.loopsForMachine(machineId).length).toBe(before);
+  expect((await store.loopsForMachine(machineId)).length).toBe(before);
 });
 
-test("createLoop surfaces a DROPPED ui loudly — provided but validated to nothing, never silent", () => {
+test("createLoop surfaces a DROPPED ui loudly — provided but validated to nothing, never silent", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
   // A whitespace-only ui coerces to null: the loop is still created, but the response
   // echoes ui:false AND a warning so a dropped dashboard is never a silent no-op.
-  const res = gateway().createLoop(token, { name: "NoDash", cron: "0 5 * * *", taskFile: "x", ui: "   " });
+  const res = (await gateway().createLoop(token, { name: "NoDash", cron: "0 5 * * *", taskFile: "x", ui: "   " }));
   expect(res.status).toBe(200);
   const b = res.body as any;
   expect(b.ui).toBe(false);
   expect(b.warning).toMatch(/not applied|without a dashboard/i);
-  expect(store.getLoop(b.id)!.ui).toBeNull();
+  expect((await store.getLoop(b.id))!.ui).toBeNull();
 
   // Same surfacing on the dry-run path (warning at top level).
-  const dry = gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", ui: "   ", dryRun: true });
+  const dry = (await gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", ui: "   ", dryRun: true }));
   expect((dry.body as any).config.ui).toBe(false);
   expect((dry.body as any).warning).toMatch(/not applied|without a dashboard/i);
 
   // No warning when no ui was provided at all (a blank loop is not a dropped dashboard).
-  const plain = gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x" });
+  const plain = (await gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x" }));
   expect((plain.body as any).warning).toBeUndefined();
   expect((plain.body as any).ui).toBe(false);
 });
 
-test("editLoop changes a loop's envelope from its machine's device token", () => {
+test("editLoop changes a loop's envelope from its machine's device token", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "Daily", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "Daily", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const id = (created.body as any).id as string;
 
-  const res = gateway().editLoop(token, id, { cron: "0 9 * * *", notify: "always", enabled: false });
+  const res = (await gateway().editLoop(token, id, { cron: "0 9 * * *", notify: "always", enabled: false }));
   expect(res.status).toBe(200);
   expect((res.body as any).applied).toEqual(expect.arrayContaining(["cron", "notify", "enabled"]));
-  const loop = store.getLoop(id)!;
+  const loop = (await store.getLoop(id))!;
   expect(loop.cron).toBe("0 9 * * *");
   expect(loop.notify).toBe("always");
   expect(loop.enabled).toBe(false);
 
   // A bogus cron is rejected and leaves the loop untouched.
-  const bad = gateway().editLoop(token, id, { cron: "not a cron" });
+  const bad = (await gateway().editLoop(token, id, { cron: "not a cron" }));
   expect(bad.status).toBe(400);
-  expect(store.getLoop(id)!.cron).toBe("0 9 * * *");
+  expect((await store.getLoop(id))!.cron).toBe("0 9 * * *");
 });
 
-test("editLoop repoints the task file and pushes workflow/ui/schema without a run", () => {
+test("editLoop repoints the task file and pushes workflow/ui/schema without a run", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "Migrate", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "Migrate", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const id = (created.body as any).id as string;
 
-  const res = gateway().editLoop(token, id, {
+  const res = (await gateway().editLoop(token, id, {
     taskFile: "/home/u/newproj/README.md",
     workflow: "return { state: prev };",
     ui: "<div id='dash'>hi</div>",
     stateSchema: [{ key: "mrr", label: "MRR", unit: "$" }],
-  });
+  }));
   expect(res.status).toBe(200);
   expect((res.body as any).applied).toEqual(expect.arrayContaining(["taskFile", "workflow", "ui", "stateSchema"]));
-  const loop = store.getLoop(id)!;
+  const loop = (await store.getLoop(id))!;
   expect(loop.taskFile).toBe("/home/u/newproj/README.md");
   expect(loop.workflow).toContain("return { state: prev }");
   expect(loop.ui).toContain("dash");
   expect(loop.stateSchema).toEqual([{ key: "mrr", label: "MRR", unit: "$" }]);
 });
 
-test("editLoop accepts stateSchema as a JSON string too (run-token parity)", () => {
+test("editLoop accepts stateSchema as a JSON string too (run-token parity)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const id = (created.body as any).id as string;
 
-  const res = gateway().editLoop(token, id, { stateSchema: '[{"key":"visits","label":"Visits"}]' } as any);
+  const res = (await gateway().editLoop(token, id, { stateSchema: '[{"key":"visits","label":"Visits"}]' } as any));
   expect(res.status).toBe(200);
-  expect(store.getLoop(id)!.stateSchema).toEqual([{ key: "visits", label: "Visits" }]);
+  expect((await store.getLoop(id))!.stateSchema).toEqual([{ key: "visits", label: "Visits" }]);
 });
 
-test("editLoop validates content fields (bad schema → 400, loop untouched)", () => {
+test("editLoop validates content fields (bad schema → 400, loop untouched)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const id = (created.body as any).id as string;
 
-  const bad = gateway().editLoop(token, id, { stateSchema: [{ notKey: 1 }] } as any);
+  const bad = (await gateway().editLoop(token, id, { stateSchema: [{ notKey: 1 }] } as any));
   expect(bad.status).toBe(400);
-  expect(store.getLoop(id)!.stateSchema).toBeNull();
+  expect((await store.getLoop(id))!.stateSchema).toBeNull();
 });
 
-test("editLoop clips an oversized workflow to the wire cap (same discipline as createLoop)", () => {
+test("editLoop clips an oversized workflow to the wire cap (same discipline as createLoop)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const id = (created.body as any).id as string;
 
-  const res = gateway().editLoop(token, id, { workflow: "x".repeat(600 * 1024), ui: "<div>ok</div>" });
+  const res = (await gateway().editLoop(token, id, { workflow: "x".repeat(600 * 1024), ui: "<div>ok</div>" }));
   expect(res.status).toBe(200);
-  const loop = store.getLoop(id)!;
+  const loop = (await store.getLoop(id))!;
   expect(loop.workflow!.length).toBe(512 * 1024); // WIRE_TEXT_CAP
   expect(loop.ui).toBe("<div>ok</div>");
 });
 
-test("editLoop rejects an unknown patch key with a clear 400 (never silent no-op)", () => {
+test("editLoop rejects an unknown patch key with a clear 400 (never silent no-op)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const id = (created.body as any).id as string;
 
   // A typo (or an attempt to patch an identity column) fails loudly.
-  const res = gateway().editLoop(token, id, { teamId: "other", croon: "0 9 * * *" } as any);
+  const res = (await gateway().editLoop(token, id, { teamId: "other", croon: "0 9 * * *" } as any));
   expect(res.status).toBe(400);
   expect((res.body as any).error).toMatch(/unknown field/);
   expect((res.body as any).error).toMatch(/teamId/);
   // Nothing changed.
-  expect(store.getLoop(id)!.cron).toBe("0 8 * * *");
+  expect((await store.getLoop(id))!.cron).toBe("0 8 * * *");
 });
 
-test("editLoop refuses a loop bound to a different machine (404, no change)", () => {
+test("editLoop refuses a loop bound to a different machine (404, no change)", async () => {
   const tokenA = tokens.mintDeviceToken();
   const machineA = tokens.machineIdFromToken(tokenA);
-  store.createMachine({ id: machineA, userId: "u1", name: "A", tokenHash: tokens.sha256(tokenA), online: true });
-  const created = gateway().createLoop(tokenA, { name: "Owned", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: machineA, userId: "u1", name: "A", tokenHash: tokens.sha256(tokenA), online: true }));
+  const created = (await gateway().createLoop(tokenA, { name: "Owned", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const id = (created.body as any).id as string;
 
   const tokenB = tokens.mintDeviceToken();
   const machineB = tokens.machineIdFromToken(tokenB);
-  store.createMachine({ id: machineB, userId: "u2", name: "B", tokenHash: tokens.sha256(tokenB), online: true });
+  (await store.createMachine({ id: machineB, userId: "u2", name: "B", tokenHash: tokens.sha256(tokenB), online: true }));
 
-  const res = gateway().editLoop(tokenB, id, { cron: "*/5 * * * *" });
+  const res = (await gateway().editLoop(tokenB, id, { cron: "*/5 * * * *" }));
   expect(res.status).toBe(404);
-  expect(store.getLoop(id)!.cron).toBe("0 8 * * *"); // untouched
+  expect((await store.getLoop(id))!.cron).toBe("0 8 * * *"); // untouched
 });
 
-test("poll stores live progress on this machine's running run; report clears it", () => {
+test("poll stores live progress on this machine's running run; report clears it", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
 
-  gateway().poll(token, undefined, [{ runId: run.id, step: 3, label: "Editing report.md" }]);
+  (await gateway().poll(token, undefined, [{ runId: run.id, step: 3, label: "Editing report.md" }]));
   // The signal carries a freshness stamp (`at`) alongside step/label — the sweep's
   // inactivity clock.
-  expect(store.getRun(run.id)!.progress).toMatchObject({ step: 3, label: "Editing report.md" });
-  expect((store.getRun(run.id)!.progress as { at?: string }).at).toBeTruthy();
+  expect((await store.getRun(run.id))!.progress).toMatchObject({ step: 3, label: "Editing report.md" });
+  expect(((await store.getRun(run.id))!.progress as { at?: string }).at).toBeTruthy();
 
   // A different machine can't write progress onto a run it doesn't own.
   const other = tokens.mintDeviceToken();
-  gateway().poll(other, undefined, [{ runId: run.id, step: 9, label: "hijack" }]);
-  expect(store.getRun(run.id)!.progress).toMatchObject({ step: 3, label: "Editing report.md" });
+  (await gateway().poll(other, undefined, [{ runId: run.id, step: 9, label: "hijack" }]));
+  expect((await store.getRun(run.id))!.progress).toMatchObject({ step: 3, label: "Editing report.md" });
 
   // Finalizing the run clears the live signal (the full transcript supersedes it).
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
-  gateway().report(rt, { ok: true, durationMs: 10 });
-  expect(store.getRun(run.id)!.progress).toBeNull();
+  (await gateway().report(rt, { ok: true, durationMs: 10 }));
+  expect((await store.getRun(run.id))!.progress).toBeNull();
 });
 
-test("set-tz applies the timezone through an allowControl run token", () => {
-  const { loop, machine, run } = seededLoop();
+test("set-tz applies the timezone through an allowControl run token", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "edit", allowControl: true });
-  const res = gateway().agentApi(token, ["set-tz", "Asia/Tokyo"]);
+  const res = (await gateway().agentApi(token, ["set-tz", "Asia/Tokyo"]));
   expect(res.status).toBe(200);
-  expect(store.getLoop(loop.id)!.timezone).toBe("Asia/Tokyo");
+  expect((await store.getLoop(loop.id))!.timezone).toBe("Asia/Tokyo");
 
-  const bad = gateway().agentApi(token, ["set-tz", "Mars/Phobos"]);
+  const bad = (await gateway().agentApi(token, ["set-tz", "Mars/Phobos"]));
   expect(bad.status).toBe(400);
-  expect(store.getLoop(loop.id)!.timezone).toBe("Asia/Tokyo"); // unchanged
+  expect((await store.getLoop(loop.id))!.timezone).toBe("Asia/Tokyo"); // unchanged
 });
 
-test("an edit run's report routes to finishEdit (the pending edit marker is cleared)", () => {
+test("an edit run's report routes to finishEdit (the pending edit marker is cleared)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", editRequest: "run at 9am" });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", ts: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", editRequest: "run at 9am" }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", ts: new Date().toISOString() }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "edit", allowControl: true });
 
   let finished = "";
   const gw = new gatewayMod.MachineGateway({
     maybeFlagEvolve(): void {},
     finishEvolution(): void {},
-    finishEdit(id: string): void {
+    async finishEdit(id: string): Promise<void> {
       finished = id;
-      store.updateLoop(id, { editRequest: null });
+      (await store.updateLoop(id, { editRequest: null }));
     },
     addLoop(): void {},
     removeLoop(): void {},
     runNow(): void {},
   } as any);
 
-  const res = gw.report(rt, { ok: true, durationMs: 5 });
+  const res = (await gw.report(rt, { ok: true, durationMs: 5 }));
   expect(res.status).toBe(200);
   expect(finished).toBe(loop.id);
-  expect(store.getLoop(loop.id)!.editRequest).toBeNull();
+  expect((await store.getLoop(loop.id))!.editRequest).toBeNull();
 });
 
 // ---- per-team connect-key: createLoop resolves the team from the claim intent ----
 
-test("createLoop lands the loop in the connect-key's team, not the machine's home team (existing-machine reuse)", () => {
-  makeTeam("team-reuse", ["u1"]);
+test("createLoop lands the loop in the connect-key's team, not the machine's home team (existing-machine reuse)", async () => {
+  (await makeTeam("team-reuse", ["u1"]));
   // The machine's durable identity (home team = its personal team).
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
   // Team B's fresh connect-key (a different token than the device identity), minted
   // under team B — this is the realistic "one machine, second team" capture path.
   const connectKey = tokens.mintDeviceToken();
   tokens.rememberClaimIntent(connectKey, { userId: "u1", teamId: "team-reuse" });
 
-  const res = gateway().createLoop(deviceToken, { name: "B loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: connectKey });
+  const res = (await gateway().createLoop(deviceToken, { name: "B loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: connectKey }));
   expect(res.status).toBe(200);
-  expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-reuse");
+  expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-reuse");
 });
 
-test("createLoop rejects (403) a claim minted by a different user — fail closed, nothing created", () => {
-  makeTeam("team-x", ["u2"]);
+test("createLoop rejects (403) a claim minted by a different user — fail closed, nothing created", async () => {
+  (await makeTeam("team-x", ["u2"]));
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   tokens.rememberClaimIntent(token, { userId: "u2", teamId: "team-x" }); // minted by someone else
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token });
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
   expect(res.status).toBe(403);
-  expect(store.listLoops().length).toBe(0); // never mis-filed
+  expect((await store.listLoops()).length).toBe(0); // never mis-filed
 });
 
-test("createLoop rejects (403) when the minter is no longer a member of the claim team", () => {
-  makeTeam("team-y", []); // team exists, u1 is NOT a member (and not an admin)
+test("createLoop rejects (403) when the minter is no longer a member of the claim team", async () => {
+  (await makeTeam("team-y", [])); // team exists, u1 is NOT a member (and not an admin)
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   tokens.rememberClaimIntent(token, { userId: "u1", teamId: "team-y" });
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token });
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
   expect(res.status).toBe(403);
-  expect(store.listLoops().length).toBe(0);
+  expect((await store.listLoops()).length).toBe(0);
 });
 
-test("createLoop authorizes a superadmin for any existing team even without a membership row", () => {
-  makeTeam("team-admin", []); // exists; admin is not a member
-  db.sqlite.exec(`INSERT OR IGNORE INTO user (id, name, email) VALUES ('admin1', 'Admin', 'admin@example.com')`);
+test("createLoop authorizes a superadmin for any existing team even without a membership row", async () => {
+  (await makeTeam("team-admin", [])); // exists; admin is not a member
+  await (db.client as any).exec(`INSERT INTO "user" (id, name, email) VALUES ('admin1', 'Admin', 'admin@example.com') ON CONFLICT DO NOTHING`);
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "admin1", teamId: "team-admin1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "admin1", teamId: "team-admin1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   tokens.rememberClaimIntent(token, { userId: "admin1", teamId: "team-admin" });
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token });
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
   expect(res.status).toBe(200);
-  expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-admin");
+  expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-admin");
 });
 
-test("createLoop with no claim falls back to the machine's home team (back-compat)", () => {
+test("createLoop with no claim falls back to the machine's home team (back-compat)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", teamId: "team-home", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", teamId: "team-home", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   expect(res.status).toBe(200);
-  expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-home");
+  expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-home");
 });
 
-test("createLoop with a claim for the machine's OWN home team needs no membership re-check (open-mode path)", () => {
+test("createLoop with a claim for the machine's OWN home team needs no membership re-check (open-mode path)", async () => {
   // Mirrors open mode: intent team === home team, so the cross-team gate is skipped
   // and no team_members row is required (there is none for the shared user).
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "shared", teamId: "team-shared", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "shared", teamId: "team-shared", name: "M", tokenHash: tokens.sha256(token), online: true }));
   tokens.rememberClaimIntent(token, { userId: "shared", teamId: "team-shared" });
 
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token });
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
   expect(res.status).toBe(200);
-  expect(store.getLoop((res.body as any).id)!.teamId).toBe("team-shared");
+  expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-shared");
 });
 
-test("claimStatus surfaces the MEASURED agent so the New-loop confirmation shows what actually ran", () => {
+test("claimStatus surfaces the MEASURED agent so the New-loop confirmation shows what actually ran", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const claim = "ck_confirm_agent";
 
   // The daemon measured Codex on the host and sent it on the create; the claim
   // result must carry that recorded value (not a removed dialog pre-selection).
-  const res = gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "codex", claim });
+  const res = (await gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "codex", claim }));
   expect(res.status).toBe(200);
   expect(gateway().claimStatus(claim)?.agent).toBe("codex");
 });
 
-test("listMachinesForTeam is membership-scoped — a machine shows in its owner's team regardless of its home team", () => {
-  makeTeam("team-lm", ["u1"]); // only u1 is a member
+test("listMachinesForTeam is membership-scoped — a machine shows in its owner's team regardless of its home team", async () => {
+  (await makeTeam("team-lm", ["u1"])); // only u1 is a member
   const t1 = tokens.mintDeviceToken();
   const m1 = tokens.machineIdFromToken(t1);
-  store.createMachine({ id: m1, userId: "u1", teamId: "team-u1", name: "Mine", tokenHash: tokens.sha256(t1), online: true });
+  (await store.createMachine({ id: m1, userId: "u1", teamId: "team-u1", name: "Mine", tokenHash: tokens.sha256(t1), online: true }));
   const t2 = tokens.mintDeviceToken();
-  store.createMachine({ id: tokens.machineIdFromToken(t2), userId: "u2", teamId: "team-u2", name: "Other", tokenHash: tokens.sha256(t2), online: true });
+  (await store.createMachine({ id: tokens.machineIdFromToken(t2), userId: "u2", teamId: "team-u2", name: "Other", tokenHash: tokens.sha256(t2), online: true }));
 
   // u1's machine (home team-u1) appears under team-lm via membership; u2's doesn't.
-  expect(store.listMachinesForTeam("team-lm").map((m) => m.id)).toEqual([m1]);
+  expect((await store.listMachinesForTeam("team-lm")).map((m) => m.id)).toEqual([m1]);
 });
 
-test("set-workflow updates only through an evolution token", () => {
-  const { loop, machine, run } = seededLoop();
+test("set-workflow updates only through an evolution token", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -711,11 +744,11 @@ test("set-workflow updates only through an evolution token", () => {
     allowControl: true,
     canSetWorkflow: true,
   });
-  const res = gateway().agentApi(token, ["set-workflow", "--file-content", "return { state: prev }"]);
+  const res = (await gateway().agentApi(token, ["set-workflow", "--file-content", "return { state: prev }"]));
 
   expect(res.status).toBe(200);
-  expect(store.getLoop(loop.id)!.workflow).toBe("return { state: prev }");
-  expect(store.getRun(run.id)!.control?.[0]?.command).toBe("set-workflow");
+  expect((await store.getLoop(loop.id))!.workflow).toBe("return { state: prev }");
+  expect((await store.getRun(run.id))!.control?.[0]?.command).toBe("set-workflow");
 });
 
 // ---- workflow syntax validation (write-time, zero-exec) across all three paths ----
@@ -727,12 +760,12 @@ const EXPORT_META = 'export const meta = { name: "x" };\nreturn { state: prev };
 const STATIC_IMPORT = 'import fs from "node:fs";\nreturn { state: prev };';
 const GOOD_WORKFLOW = 'const res = await tools.call("posthog.exec", { q: 1 });\nreturn { message: `${res.data?.length ?? 0} rows`, state: prev };';
 
-test("set-workflow rejects an `export const meta` body with a fix-teaching message; loop untouched", () => {
-  const { loop, machine, run } = seededLoop();
+test("set-workflow rejects an `export const meta` body with a fix-teaching message; loop untouched", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
   });
-  const res = gateway().agentApi(token, ["set-workflow", "--file-content", EXPORT_META]);
+  const res = (await gateway().agentApi(token, ["set-workflow", "--file-content", EXPORT_META]));
   expect(res.status).toBe(400);
   const text = (res.body as { text: string }).text;
   expect(text).toMatch(/syntax error/i);
@@ -740,55 +773,55 @@ test("set-workflow rejects an `export const meta` body with a fix-teaching messa
   expect(text).toMatch(/NOT an ES module/);
   expect(text).toMatch(/Claude Code Workflow tool/);
   // Nothing stored — the loop had no workflow and still has none.
-  expect(store.getLoop(loop.id)!.workflow ?? null).toBeNull();
+  expect((await store.getLoop(loop.id))!.workflow ?? null).toBeNull();
 });
 
-test("set-workflow rejects a static import body", () => {
-  const { loop, machine, run } = seededLoop();
+test("set-workflow rejects a static import body", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
   });
-  const res = gateway().agentApi(token, ["set-workflow", "--file-content", STATIC_IMPORT]);
+  const res = (await gateway().agentApi(token, ["set-workflow", "--file-content", STATIC_IMPORT]));
   expect(res.status).toBe(400);
   expect((res.body as { text: string }).text).toMatch(/import/i);
 });
 
-test("set-workflow accepts a real `await tools.call(...)` body unchanged", () => {
-  const { loop, machine, run } = seededLoop();
+test("set-workflow accepts a real `await tools.call(...)` body unchanged", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
   });
-  const res = gateway().agentApi(token, ["set-workflow", "--file-content", GOOD_WORKFLOW]);
+  const res = (await gateway().agentApi(token, ["set-workflow", "--file-content", GOOD_WORKFLOW]));
   expect(res.status).toBe(200);
-  expect(store.getLoop(loop.id)!.workflow).toBe(GOOD_WORKFLOW);
+  expect((await store.getLoop(loop.id))!.workflow).toBe(GOOD_WORKFLOW);
 });
 
-test("set-workflow accepts a body containing the literal word `export` inside a string (no false positive)", () => {
-  const { loop, machine, run } = seededLoop();
+test("set-workflow accepts a body containing the literal word `export` inside a string (no false positive)", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "evolve", allowControl: true, canSetWorkflow: true,
   });
   const body = 'return { message: "export const meta = not real" };';
-  const res = gateway().agentApi(token, ["set-workflow", "--file-content", body]);
+  const res = (await gateway().agentApi(token, ["set-workflow", "--file-content", body]));
   expect(res.status).toBe(200);
-  expect(store.getLoop(loop.id)!.workflow).toBe(body);
+  expect((await store.getLoop(loop.id))!.workflow).toBe(body);
 });
 
-test("editLoop rejects an `export const meta` workflow with a rejection entry; loop untouched", () => {
+test("editLoop rejects an `export const meta` workflow with a rejection entry; loop untouched", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const id = (created.body as any).id as string;
 
   // Non-dry-run editLoop surfaces the first rejection as body.error (400).
-  const res = gateway().editLoop(token, id, { workflow: EXPORT_META });
+  const res = (await gateway().editLoop(token, id, { workflow: EXPORT_META }));
   expect(res.status).toBe(400);
   expect((res.body as any).error).toMatch(/export const meta/);
-  expect(store.getLoop(id)!.workflow ?? null).toBeNull();
+  expect((await store.getLoop(id))!.workflow ?? null).toBeNull();
 
   // The dry-run path reports it as a per-key rejection entry instead.
-  const dry = gateway().editLoop(token, id, { workflow: EXPORT_META }, true);
+  const dry = (await gateway().editLoop(token, id, { workflow: EXPORT_META }, true));
   expect(dry.status).toBe(200);
   const reject = ((dry.body as any).rejections as Array<{ key: string; reason: string }>).find((r) => r.key === "workflow");
   expect(reject).toBeTruthy();
@@ -796,34 +829,34 @@ test("editLoop rejects an `export const meta` workflow with a rejection entry; l
   expect((dry.body as any).ok).toBe(false);
 });
 
-test("createLoop rejects an `export const meta` workflow before persisting (400, nothing created)", () => {
+test("createLoop rejects an `export const meta` workflow before persisting (400, nothing created)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const before = store.loopsForMachine(machineId).length;
-  const res = gateway().createLoop(token, { name: "C", cron: "0 8 * * *", workflow: EXPORT_META });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const before = (await store.loopsForMachine(machineId)).length;
+  const res = (await gateway().createLoop(token, { name: "C", cron: "0 8 * * *", workflow: EXPORT_META }));
   expect(res.status).toBe(400);
   expect((res.body as any).error).toMatch(/export const meta/);
-  expect(store.loopsForMachine(machineId).length).toBe(before);
+  expect((await store.loopsForMachine(machineId)).length).toBe(before);
 });
 
-test("createLoop --dry-run surfaces the workflow syntax error before persistence", () => {
+test("createLoop --dry-run surfaces the workflow syntax error before persistence", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const res = gateway().createLoop(token, { name: "C", cron: "0 8 * * *", workflow: EXPORT_META, dryRun: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const res = (await gateway().createLoop(token, { name: "C", cron: "0 8 * * *", workflow: EXPORT_META, dryRun: true }));
   expect(res.status).toBe(400);
   expect((res.body as any).error).toMatch(/NOT an ES module/);
-  expect(store.loopsForMachine(machineId).length).toBe(0);
+  expect((await store.loopsForMachine(machineId)).length).toBe(0);
 });
 
-test("createLoop accepts a legal `tools.call` workflow (no taskFile needed)", () => {
+test("createLoop accepts a legal `tools.call` workflow (no taskFile needed)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const res = gateway().createLoop(token, { name: "C", cron: "0 8 * * *", workflow: GOOD_WORKFLOW });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const res = (await gateway().createLoop(token, { name: "C", cron: "0 8 * * *", workflow: GOOD_WORKFLOW }));
   expect(res.status).toBe(200);
-  const loop = store.getLoop((res.body as any).id)!;
+  const loop = (await store.getLoop((res.body as any).id))!;
   expect(loop.workflow).toBe(GOOD_WORKFLOW);
 });
 
@@ -831,31 +864,31 @@ test("createLoop accepts a legal `tools.call` workflow (no taskFile needed)", ()
 
 /** A machine + a CLOSED loop (goal set unless goal:null) with an exec run RUNNING,
  *  its run token minted with the poll-derived canFinish. Ready for `finish`. */
-function seededClosedRun(opts: { notify?: "always" | "auto" | "never"; goal?: string | null } = {}) {
+async function seededClosedRun(opts: { notify?: "always" | "auto" | "never"; goal?: string | null } = {}) {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const goal = opts.goal === undefined ? "reach the goal" : opts.goal;
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: opts.notify ?? "auto", goal });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: opts.notify ?? "auto", goal }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true, canFinish: loop.goal != null });
   return { token, machineId, loop, run, rt };
 }
 
-test("finish completes a closed loop: run resolved, loop stamped terminal + disabled, notified", () => {
-  const { loop, run, rt } = seededClosedRun();
+test("finish completes a closed loop: run resolved, loop stamped terminal + disabled, notified", async () => {
+  const { loop, run, rt } = (await seededClosedRun());
   const { sent, fn } = recordingNotify();
 
-  const res = gateway(fn).agentApi(rt, ["finish", "--message", "hit 100 signups", "--reason", "target met"]);
+  const res = (await gateway(fn).agentApi(rt, ["finish", "--message", "hit 100 signups", "--reason", "target met"]));
   expect(res.status).toBe(200);
 
-  const r = store.getRun(run.id)!;
+  const r = (await store.getRun(run.id))!;
   expect(r.phase).toBe("done");
   expect(r.outcome).toBe("exec");
   expect(r.status).toBe("resolved");
   expect(r.message).toBe("hit 100 signups");
 
-  const l = store.getLoop(loop.id)!;
+  const l = (await store.getLoop(loop.id))!;
   expect(l.completedAt).toBeTruthy();
   expect(l.completionReason).toBe("target met");
   expect(l.enabled).toBe(false);
@@ -871,219 +904,219 @@ test("finish completes a closed loop: run resolved, loop stamped terminal + disa
 
   // The run token stays live for exactly ONE enriching post-run report (which then
   // revokes it) — so the daemon's report can add the precise durationMs/sessionId.
-  expect(gateway().agentApi(rt, ["show"]).status).toBe(200);
+  expect((await gateway().agentApi(rt, ["show"])).status).toBe(200);
 });
 
-test("finish leaves the token live for the daemon's enriching report (durationMs + sessionId), which then revokes it", () => {
-  const { loop, run, rt } = seededClosedRun();
+test("finish leaves the token live for the daemon's enriching report (durationMs + sessionId), which then revokes it", async () => {
+  const { loop, run, rt } = (await seededClosedRun());
   const gw = gateway();
-  expect(gw.agentApi(rt, ["finish", "--message", "done"]).status).toBe(200);
+  expect((await gw.agentApi(rt, ["finish", "--message", "done"])).status).toBe(200);
 
   // The daemon's normal post-run report arrives with the precise durationMs + sessionId.
-  const rep = gw.report(rt, { ok: true, durationMs: 4321, sessionId: "sess-xyz" });
+  const rep = (await gw.report(rt, { ok: true, durationMs: 4321, sessionId: "sess-xyz" }));
   expect(rep.status).toBe(200);
 
-  const r = store.getRun(run.id)!;
+  const r = (await store.getRun(run.id))!;
   expect(r.durationMs).toBe(4321);
   expect(r.sessionId).toBe("sess-xyz");
   // The loop stays completed (the enriching report never re-stamps).
-  expect(store.getLoop(loop.id)!.completedAt).toBeTruthy();
+  expect((await store.getLoop(loop.id))!.completedAt).toBeTruthy();
   // Enrichment revoked the token — a second report is now a no-op (401).
-  expect(gw.report(rt, { ok: true, durationMs: 9 }).status).toBe(401);
+  expect((await gw.report(rt, { ok: true, durationMs: 9 })).status).toBe(401);
 });
 
-test("finish TOCTOU: refuses (loop untouched) when the goal was cleared after the run started", () => {
-  const { token, loop, run, rt } = seededClosedRun();
+test("finish TOCTOU: refuses (loop untouched) when the goal was cleared after the run started", async () => {
+  const { token, loop, run, rt } = (await seededClosedRun());
   // Owner clears the goal mid-run (editLoop {goal:null}) — the run's canFinish was
   // minted at poll, so it's stale.
-  expect(gateway().editLoop(token, loop.id, { goal: null } as any).status).toBe(200);
+  expect((await gateway().editLoop(token, loop.id, { goal: null } as any)).status).toBe(200);
 
-  const res = gateway().agentApi(rt, ["finish", "--message", "x"]);
+  const res = (await gateway().agentApi(rt, ["finish", "--message", "x"]));
   expect(res.status).toBe(400);
   expect((res.body as { text: string }).text).toMatch(/no longer has a goal/i);
-  const l = store.getLoop(loop.id)!;
+  const l = (await store.getLoop(loop.id))!;
   expect(l.completedAt).toBeNull();
   expect(l.enabled).toBe(true);
-  expect(store.getRun(run.id)!.phase).toBe("running"); // untouched
+  expect((await store.getRun(run.id))!.phase).toBe("running"); // untouched
 });
 
-test("finish is single-shot: a second finish on the same still-live run refuses, no re-stamp/re-notify", () => {
-  const { loop, run, rt } = seededClosedRun();
+test("finish is single-shot: a second finish on the same still-live run refuses, no re-stamp/re-notify", async () => {
+  const { loop, run, rt } = (await seededClosedRun());
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
 
-  expect(gw.agentApi(rt, ["finish", "--message", "first", "--reason", "target met"]).status).toBe(200);
-  const first = store.getLoop(loop.id)!;
+  expect((await gw.agentApi(rt, ["finish", "--message", "first", "--reason", "target met"])).status).toBe(200);
+  const first = (await store.getLoop(loop.id))!;
   expect(first.completedAt).toBeTruthy();
   expect(sent).toHaveLength(1);
 
   // The token is still live (for the enriching report), so a second finish is attempted.
-  const res = gw.agentApi(rt, ["finish", "--message", "second", "--reason", "again"]);
+  const res = (await gw.agentApi(rt, ["finish", "--message", "second", "--reason", "again"]));
   expect(res.status).toBe(400);
   expect((res.body as { text: string }).text).toMatch(/already finished/i);
 
   // Loop stamps unchanged (no re-stamp), run message unchanged, no second notification.
-  const l = store.getLoop(loop.id)!;
+  const l = (await store.getLoop(loop.id))!;
   expect(l.completedAt).toBe(first.completedAt);
   expect(l.completionReason).toBe("target met");
-  expect(store.getRun(run.id)!.message).toBe("first");
+  expect((await store.getRun(run.id))!.message).toBe("first");
   expect(sent).toHaveLength(1);
 });
 
-test("finish alias `complete` works the same", () => {
-  const { loop, rt } = seededClosedRun();
-  const res = gateway().agentApi(rt, ["complete", "--reason", "done"]);
+test("finish alias `complete` works the same", async () => {
+  const { loop, rt } = (await seededClosedRun());
+  const res = (await gateway().agentApi(rt, ["complete", "--reason", "done"]));
   expect(res.status).toBe(200);
-  expect(store.getLoop(loop.id)!.completedAt).toBeTruthy();
+  expect((await store.getLoop(loop.id))!.completedAt).toBeTruthy();
 });
 
-test("finish validates --state against the loop schema like report", () => {
+test("finish validates --state against the loop schema like report", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "g", stateSchema: [{ key: "mrr" }] });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "g", stateSchema: [{ key: "mrr" }] }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true, canFinish: true });
 
   // An unknown key is rejected (400) and nothing completes.
-  const bad = gateway().agentApi(rt, ["finish", "--state", '{"nope":1}']);
+  const bad = (await gateway().agentApi(rt, ["finish", "--state", '{"nope":1}']));
   expect(bad.status).toBe(400);
-  expect(store.getLoop(loop.id)!.completedAt).toBeNull();
+  expect((await store.getLoop(loop.id))!.completedAt).toBeNull();
 
   // A schema-valid metric is recorded on the run and the loop completes.
-  const ok = gateway().agentApi(rt, ["finish", "--state", '{"mrr":9000}']);
+  const ok = (await gateway().agentApi(rt, ["finish", "--state", '{"mrr":9000}']));
   expect(ok.status).toBe(200);
-  expect(store.getRun(run.id)!.state).toEqual({ mrr: 9000 });
-  expect(store.getLoop(loop.id)!.completedAt).toBeTruthy();
+  expect((await store.getRun(run.id))!.state).toEqual({ mrr: 9000 });
+  expect((await store.getLoop(loop.id))!.completedAt).toBeTruthy();
 });
 
-test("finish on an OPEN loop (no goal) is refused 403 — nothing completes", () => {
-  const { loop, run, rt } = seededClosedRun({ goal: null });
-  const res = gateway().agentApi(rt, ["finish", "--message", "x"]);
+test("finish on an OPEN loop (no goal) is refused 403 — nothing completes", async () => {
+  const { loop, run, rt } = (await seededClosedRun({ goal: null }));
+  const res = (await gateway().agentApi(rt, ["finish", "--message", "x"]));
   expect(res.status).toBe(403);
   expect((res.body as { text: string }).text).toMatch(/no goal to finish/i);
-  const l = store.getLoop(loop.id)!;
+  const l = (await store.getLoop(loop.id))!;
   expect(l.completedAt).toBeNull();
   expect(l.enabled).toBe(true);
-  expect(store.getRun(run.id)!.phase).toBe("running"); // untouched
+  expect((await store.getRun(run.id))!.phase).toBe("running"); // untouched
 });
 
-test("evolve and edit runs never get canFinish — finish refused even on a closed loop", () => {
+test("evolve and edit runs never get canFinish — finish refused even on a closed loop", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "reach goal" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "reach goal" }));
   for (const role of ["evolve", "edit"] as const) {
-    const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() });
+    const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() }));
     // Mirrors poll: structural runs get canFinish false.
     const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true, canFinish: false });
-    const res = gateway().agentApi(rt, ["finish", "--message", "x"]);
+    const res = (await gateway().agentApi(rt, ["finish", "--message", "x"]));
     expect(res.status).toBe(403);
     expect((res.body as { text: string }).text).toMatch(/only an exec run/i);
   }
-  expect(store.getLoop(loop.id)!.completedAt).toBeNull();
+  expect((await store.getLoop(loop.id))!.completedAt).toBeNull();
 });
 
-test("finish honors notify:never (no completion push)", () => {
-  const { rt } = seededClosedRun({ notify: "never" });
+test("finish honors notify:never (no completion push)", async () => {
+  const { rt } = (await seededClosedRun({ notify: "never" }));
   const { sent, fn } = recordingNotify();
-  const res = gateway(fn).agentApi(rt, ["finish", "--reason", "done"]);
+  const res = (await gateway(fn).agentApi(rt, ["finish", "--reason", "done"]));
   expect(res.status).toBe(200);
   expect(sent).toHaveLength(0);
 });
 
-test("poll mints canFinish only for an exec run on a closed loop (via show self-finish line)", () => {
+test("poll mints canFinish only for an exec run on a closed loop (via show self-finish line)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const closed = store.createLoop({ userId: "u1", machineId, name: "C", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "g" });
-  store.addRun({ loopId: closed.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() });
-  const open = store.createLoop({ userId: "u1", machineId, name: "O", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
-  store.addRun({ loopId: open.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const closed = (await store.createLoop({ userId: "u1", machineId, name: "C", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "g" }));
+  (await store.addRun({ loopId: closed.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
+  const open = (await store.createLoop({ userId: "u1", machineId, name: "O", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  (await store.addRun({ loopId: open.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
 
   const gw = gateway();
-  const deliveries = (gw.poll(token).body as { deliveries: Array<{ loop: { id: string }; runToken: string }> }).deliveries;
+  const deliveries = ((await gw.poll(token)).body as { deliveries: Array<{ loop: { id: string }; runToken: string }> }).deliveries;
   const tokenFor = (loopId: string) => deliveries.find((d) => d.loop.id === loopId)!.runToken;
 
-  const closedShow = (gw.agentApi(tokenFor(closed.id), ["show"]).body as { text: string }).text;
+  const closedShow = ((await gw.agentApi(tokenFor(closed.id), ["show"])).body as { text: string }).text;
   expect(closedShow).toContain("goal: g");
   expect(closedShow).toContain("selfFinish: allowed");
 
-  const openShow = (gw.agentApi(tokenFor(open.id), ["show"]).body as { text: string }).text;
+  const openShow = ((await gw.agentApi(tokenFor(open.id), ["show"])).body as { text: string }).text;
   expect(openShow).toContain("goal: —");
   expect(openShow).toContain("selfFinish: off");
 });
 
-test("createLoop accepts a goal (closed loop); absent goal ⇒ open loop", () => {
+test("createLoop accepts a goal (closed loop); absent goal ⇒ open loop", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
-  const closed = gateway().createLoop(token, { name: "C", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "reach 100 users" });
-  expect(store.getLoop((closed.body as any).id)!.goal).toBe("reach 100 users");
+  const closed = (await gateway().createLoop(token, { name: "C", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "reach 100 users" }));
+  expect((await store.getLoop((closed.body as any).id))!.goal).toBe("reach 100 users");
 
-  const open = gateway().createLoop(token, { name: "O", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
-  expect(store.getLoop((open.body as any).id)!.goal).toBeNull();
+  const open = (await gateway().createLoop(token, { name: "O", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  expect((await store.getLoop((open.body as any).id))!.goal).toBeNull();
 });
 
-test("editLoop sets a goal, and clearing it (goal:null) also clears the completion stamps", () => {
+test("editLoop sets a goal, and clearing it (goal:null) also clears the completion stamps", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "G", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "G", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const id = (created.body as any).id as string;
 
-  expect(gateway().editLoop(token, id, { goal: "ship v1" }).status).toBe(200);
-  expect(store.getLoop(id)!.goal).toBe("ship v1");
+  expect((await gateway().editLoop(token, id, { goal: "ship v1" })).status).toBe(200);
+  expect((await store.getLoop(id))!.goal).toBe("ship v1");
 
   // Simulate a completed loop, then clear the goal → stamps drop (invariant held).
-  store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "shipped", enabled: false });
-  expect(gateway().editLoop(token, id, { goal: null } as any).status).toBe(200);
-  const l = store.getLoop(id)!;
+  (await store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "shipped", enabled: false }));
+  expect((await gateway().editLoop(token, id, { goal: null } as any)).status).toBe(200);
+  const l = (await store.getLoop(id))!;
   expect(l.goal).toBeNull();
   expect(l.completedAt).toBeNull();
   expect(l.completionReason).toBeNull();
 });
 
-test("reopen: editLoop enabled:true on a completed loop clears the stamps; a plain pause leaves them", () => {
+test("reopen: editLoop enabled:true on a completed loop clears the stamps; a plain pause leaves them", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const created = gateway().createLoop(token, { name: "R", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "g" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "R", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "g" }));
   const id = (created.body as any).id as string;
-  store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "met", enabled: false });
+  (await store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "met", enabled: false }));
 
   // Reopen: enabled:true drops the terminal stamps (goal survives).
-  expect(gateway().editLoop(token, id, { enabled: true }).status).toBe(200);
-  const reopened = store.getLoop(id)!;
+  expect((await gateway().editLoop(token, id, { enabled: true })).status).toBe(200);
+  const reopened = (await store.getLoop(id))!;
   expect(reopened.enabled).toBe(true);
   expect(reopened.completedAt).toBeNull();
   expect(reopened.completionReason).toBeNull();
   expect(reopened.goal).toBe("g");
 
   // A plain pause (enabled:false) on a completed loop leaves stamps untouched.
-  store.updateLoop(id, { completedAt: "2026-07-02T00:00:00Z", completionReason: "met2", enabled: false });
-  expect(gateway().editLoop(token, id, { enabled: false }).status).toBe(200);
-  expect(store.getLoop(id)!.completedAt).toBe("2026-07-02T00:00:00Z");
+  (await store.updateLoop(id, { completedAt: "2026-07-02T00:00:00Z", completionReason: "met2", enabled: false }));
+  expect((await gateway().editLoop(token, id, { enabled: false })).status).toBe(200);
+  expect((await store.getLoop(id))!.completedAt).toBe("2026-07-02T00:00:00Z");
 });
 
 // ---- --dry-run: validate-only preview for new + edit (no persistence) ----
 
 /** A connected machine + its device token, for the dry-run tests. */
-function seededMachine() {
+async function seededMachine() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   return { token, machineId };
 }
 
-test("createLoop --dry-run returns the normalized config + 3 fire times + closed classification, persists nothing", () => {
-  const { token, machineId } = seededMachine();
-  const before = store.loopsForMachine(machineId).length;
-  const res = gateway().createLoop(token, {
+test("createLoop --dry-run returns the normalized config + 3 fire times + closed classification, persists nothing", async () => {
+  const { token, machineId } = (await seededMachine());
+  const before = (await store.loopsForMachine(machineId)).length;
+  const res = (await gateway().createLoop(token, {
     name: "DryClosed", cron: "0 8 * * *", timezone: "America/New_York",
     taskFile: "loopany/x/README.md", goal: "ship v1", dryRun: true,
-  });
+  }));
   expect(res.status).toBe(200);
   const b = res.body as any;
   expect(b.dryRun).toBe(true);
@@ -1096,35 +1129,35 @@ test("createLoop --dry-run returns the normalized config + 3 fire times + closed
   expect(b.config.goal).toBe("ship v1");
   expect(b.config.workflow).toBe(false); // presence flag, not the source
   // Nothing was persisted (no loop row created).
-  expect(store.loopsForMachine(machineId).length).toBe(before);
+  expect((await store.loopsForMachine(machineId)).length).toBe(before);
 });
 
-test("createLoop --dry-run classifies a goal-less loop as open", () => {
-  const { token } = seededMachine();
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "x", dryRun: true });
+test("createLoop --dry-run classifies a goal-less loop as open", async () => {
+  const { token } = (await seededMachine());
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "x", dryRun: true }));
   expect((res.body as any).classification).toBe("open");
   expect((res.body as any).classificationText).toMatch(/runs until paused/i);
 });
 
-test("createLoop --dry-run still validates (bad cron → 400, nothing created)", () => {
-  const { token, machineId } = seededMachine();
-  const res = gateway().createLoop(token, { cron: "not a cron", taskFile: "x", dryRun: true });
+test("createLoop --dry-run still validates (bad cron → 400, nothing created)", async () => {
+  const { token, machineId } = (await seededMachine());
+  const res = (await gateway().createLoop(token, { cron: "not a cron", taskFile: "x", dryRun: true }));
   expect(res.status).toBe(400);
-  expect(store.loopsForMachine(machineId)).toHaveLength(0);
+  expect((await store.loopsForMachine(machineId))).toHaveLength(0);
 });
 
-test("createLoop --dry-run rejects a config with neither workflow nor taskFile", () => {
-  const { token } = seededMachine();
-  const res = gateway().createLoop(token, { cron: "0 8 * * *", dryRun: true });
+test("createLoop --dry-run rejects a config with neither workflow nor taskFile", async () => {
+  const { token } = (await seededMachine());
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", dryRun: true }));
   expect(res.status).toBe(400);
   expect((res.body as any).error).toMatch(/workflow.*taskFile/i);
 });
 
-test("editLoop --dry-run previews per-key before→after and persists nothing", () => {
-  const { token } = seededMachine();
-  const created = gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x" });
+test("editLoop --dry-run previews per-key before→after and persists nothing", async () => {
+  const { token } = (await seededMachine());
+  const created = (await gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x" }));
   const id = (created.body as any).id as string;
-  const res = gateway().editLoop(token, id, { cron: "0 9 * * *", notify: "always" }, true);
+  const res = (await gateway().editLoop(token, id, { cron: "0 9 * * *", notify: "always" }, true));
   expect(res.status).toBe(200);
   const b = res.body as any;
   expect(b.dryRun).toBe(true);
@@ -1133,15 +1166,15 @@ test("editLoop --dry-run previews per-key before→after and persists nothing", 
   expect(changes.find((c) => c.key === "cron")).toEqual({ key: "cron", from: "0 8 * * *", to: "0 9 * * *" });
   expect(changes.find((c) => c.key === "notify")?.to).toBe("always");
   // Not persisted.
-  expect(store.getLoop(id)!.cron).toBe("0 8 * * *");
-  expect(store.getLoop(id)!.notify).toBe("auto");
+  expect((await store.getLoop(id))!.cron).toBe("0 8 * * *");
+  expect((await store.getLoop(id))!.notify).toBe("auto");
 });
 
-test("editLoop --dry-run reports whitelist + invalid-value rejections (ok:false), changes nothing", () => {
-  const { token } = seededMachine();
-  const created = gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x" });
+test("editLoop --dry-run reports whitelist + invalid-value rejections (ok:false), changes nothing", async () => {
+  const { token } = (await seededMachine());
+  const created = (await gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x" }));
   const id = (created.body as any).id as string;
-  const res = gateway().editLoop(token, id, { croon: "x", cron: "not a cron" } as any, true);
+  const res = (await gateway().editLoop(token, id, { croon: "x", cron: "not a cron" } as any, true));
   expect(res.status).toBe(200);
   const b = res.body as any;
   expect(b.dryRun).toBe(true);
@@ -1149,81 +1182,81 @@ test("editLoop --dry-run reports whitelist + invalid-value rejections (ok:false)
   const keys = (b.rejections as Array<{ key: string }>).map((r) => r.key);
   expect(keys).toContain("croon"); // whitelist rejection
   expect(keys).toContain("cron"); // invalid-value rejection
-  expect(store.getLoop(id)!.cron).toBe("0 8 * * *");
+  expect((await store.getLoop(id))!.cron).toBe("0 8 * * *");
 });
 
-test("editLoop --dry-run reflects the reopen stamp-clear in the preview", () => {
-  const { token } = seededMachine();
-  const created = gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x", goal: "g" });
+test("editLoop --dry-run reflects the reopen stamp-clear in the preview", async () => {
+  const { token } = (await seededMachine());
+  const created = (await gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x", goal: "g" }));
   const id = (created.body as any).id as string;
-  store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "met", enabled: false });
-  const res = gateway().editLoop(token, id, { enabled: true }, true);
+  (await store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "met", enabled: false }));
+  const res = (await gateway().editLoop(token, id, { enabled: true }, true));
   const keys = ((res.body as any).changes as Array<{ key: string }>).map((c) => c.key);
   expect(keys).toContain("enabled");
   expect(keys).toContain("completedAt");
   expect(keys).toContain("completionReason");
   // Dry-run persisted nothing → the loop is still completed.
-  expect(store.getLoop(id)!.completedAt).toBe("2026-07-01T00:00:00Z");
+  expect((await store.getLoop(id))!.completedAt).toBe("2026-07-01T00:00:00Z");
 });
 
 // ---- self-schedule cadence floors (RUN path only; the owner's edit path is unlimited) ----
 
-test("set-cron floor: a run can't schedule more often than 15 min; the owner's edit can", () => {
-  const { loop, machine, run } = seededLoop();
+test("set-cron floor: a run can't schedule more often than 15 min; the owner's edit can", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: true });
 
   // Every 5 minutes is under the 15-min self floor → rejected, cron unchanged.
-  const denied = gateway().agentApi(rt, ["set-cron", "*/5 * * * *"]);
+  const denied = (await gateway().agentApi(rt, ["set-cron", "*/5 * * * *"]));
   expect(denied.status).toBe(400);
   expect((denied.body as { text: string }).text).toMatch(/15 min/);
-  expect(store.getLoop(loop.id)!.cron).toBe("0 0 1 1 *");
+  expect((await store.getLoop(loop.id))!.cron).toBe("0 0 1 1 *");
 
   // Every 20 minutes clears the floor.
-  expect(gateway().agentApi(rt, ["set-cron", "*/20 * * * *"]).status).toBe(200);
-  expect(store.getLoop(loop.id)!.cron).toBe("*/20 * * * *");
+  expect((await gateway().agentApi(rt, ["set-cron", "*/20 * * * *"])).status).toBe(200);
+  expect((await store.getLoop(loop.id))!.cron).toBe("*/20 * * * *");
 
   // The OWNER's editLoop path is unlimited — the same dense cron is accepted.
   const deviceToken = tokens.mintDeviceToken();
   const dm = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: dm, userId: "u2", name: "D", tokenHash: tokens.sha256(deviceToken), online: true });
-  const owned = gateway().createLoop(deviceToken, { name: "Owned", cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+  (await store.createMachine({ id: dm, userId: "u2", name: "D", tokenHash: tokens.sha256(deviceToken), online: true }));
+  const owned = (await gateway().createLoop(deviceToken, { name: "Owned", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
   const oid = (owned.body as any).id as string;
-  expect(gateway().editLoop(deviceToken, oid, { cron: "*/5 * * * *" }).status).toBe(200);
-  expect(store.getLoop(oid)!.cron).toBe("*/5 * * * *");
+  expect((await gateway().editLoop(deviceToken, oid, { cron: "*/5 * * * *" })).status).toBe(200);
+  expect((await store.getLoop(oid))!.cron).toBe("*/5 * * * *");
 });
 
-test("set-cron floor is timezone-aware (probes adjacent fires in the loop's tz)", () => {
+test("set-cron floor is timezone-aware (probes adjacent fires in the loop's tz)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", timezone: "Asia/Tokyo", enabled: true, notify: "auto" });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", timezone: "Asia/Tokyo", enabled: true, notify: "auto" }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   // A daily cron (adjacent fires 24h apart, well over the floor) is accepted.
-  expect(gateway().agentApi(rt, ["set-cron", "0 9 * * *"]).status).toBe(200);
+  expect((await gateway().agentApi(rt, ["set-cron", "0 9 * * *"])).status).toBe(200);
   // A 2-minute cron is under the floor → rejected.
-  expect(gateway().agentApi(rt, ["set-cron", "*/2 * * * *"]).status).toBe(400);
+  expect((await gateway().agentApi(rt, ["set-cron", "*/2 * * * *"])).status).toBe(400);
 });
 
-test("reschedule floor: a run can't reschedule sooner than 5 min out", () => {
-  const { loop, machine, run } = seededLoop();
+test("reschedule floor: a run can't reschedule sooner than 5 min out", async () => {
+  const { loop, machine, run } = (await seededLoop());
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: true });
 
   // 2 minutes out is under the 5-min floor → rejected, nextRunAt unchanged.
-  const denied = gateway().agentApi(rt, ["reschedule", "--next", "2m"]);
+  const denied = (await gateway().agentApi(rt, ["reschedule", "--next", "2m"]));
   expect(denied.status).toBe(400);
   expect((denied.body as { text: string }).text).toMatch(/5 min/);
-  expect(store.getLoop(loop.id)!.nextRunAt).toBeNull();
+  expect((await store.getLoop(loop.id))!.nextRunAt).toBeNull();
 
   // 30 minutes out clears the floor.
-  expect(gateway().agentApi(rt, ["reschedule", "--next", "30m"]).status).toBe(200);
-  expect(store.getLoop(loop.id)!.nextRunAt).toBeTruthy();
+  expect((await gateway().agentApi(rt, ["reschedule", "--next", "30m"])).status).toBe(200);
+  expect((await store.getLoop(loop.id))!.nextRunAt).toBeTruthy();
 });
 
-test("show reports the goal line and self-finish gating for a run", () => {
-  const { loop, rt } = seededClosedRun();
-  const text = (gateway().agentApi(rt, ["show"]).body as { text: string }).text;
+test("show reports the goal line and self-finish gating for a run", async () => {
+  const { loop, rt } = (await seededClosedRun());
+  const text = ((await gateway().agentApi(rt, ["show"])).body as { text: string }).text;
   expect(text).toContain('goal: "reach the goal"');
   expect(text).toContain("selfFinish: allowed");
   expect(loop.goal).toBe("reach the goal");
@@ -1232,15 +1265,15 @@ test("show reports the goal line and self-finish gating for a run", () => {
 // ---- failure visibility / alerting (notify on run failure + machine-offline) ----
 
 /** Add a finalized exec run with an explicit ts (deterministic streak ordering). */
-function addExecRun(loopId: string, machineId: string, phase: "done" | "error", ts: string) {
-  return store.addRun({ loopId, userId: "u1", machineId, phase, role: "exec", ts });
+async function addExecRun(loopId: string, machineId: string, phase: "done" | "error", ts: string) {
+  return (await store.addRun({ loopId, userId: "u1", machineId, phase, role: "exec", ts }));
 }
 
-test("a FAILED exec run notifies the user (first failure of a streak)", () => {
-  const { loop, rt } = seededExecRun();
+test("a FAILED exec run notifies the user (first failure of a streak)", async () => {
+  const { loop, rt } = (await seededExecRun());
   const { sent, fn } = recordingNotify();
 
-  const res = gateway(fn).report(rt, { ok: false, error: "claude exited 1", durationMs: 5 });
+  const res = (await gateway(fn).report(rt, { ok: false, error: "claude exited 1", durationMs: 5 }));
   expect(res.status).toBe(200);
   expect(sent).toHaveLength(1);
   expect(sent[0]!.loopId).toBe(loop.id);
@@ -1248,125 +1281,125 @@ test("a FAILED exec run notifies the user (first failure of a streak)", () => {
   expect(sent[0]!.message).toContain("claude exited 1");
 });
 
-test("a SUCCESSFUL exec run still notifies as before (unchanged success path)", () => {
-  const { loop, rt } = seededExecRun();
+test("a SUCCESSFUL exec run still notifies as before (unchanged success path)", async () => {
+  const { loop, rt } = (await seededExecRun());
   const { sent, fn } = recordingNotify();
 
-  const res = gateway(fn).report(rt, { ok: true, message: "Breakfast report ready", durationMs: 5 });
+  const res = (await gateway(fn).report(rt, { ok: true, message: "Breakfast report ready", durationMs: 5 }));
   expect(res.status).toBe(200);
   expect(sent).toHaveLength(1);
   expect(sent[0]!.loopId).toBe(loop.id);
   expect(sent[0]!.message).toBe("Breakfast report ready");
 });
 
-test("repeated consecutive failures are anti-spam'd: notify on the 1st and every Nth, not every tick", () => {
+test("repeated consecutive failures are anti-spam'd: notify on the 1st and every Nth, not every tick", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
 
   // 12 consecutive failing runs. With FAILURE_NOTIFY_EVERY === 5, the user is
   // alerted on streaks 1, 5, 10 → exactly 3 pushes (not 12).
   for (let i = 1; i <= 12; i++) {
-    const run = addExecRun(loop.id, machineId, "error", `2026-06-01T00:00:${String(i).padStart(2, "0")}Z`).id;
+    const run = (await addExecRun(loop.id, machineId, "error", `2026-06-01T00:00:${String(i).padStart(2, "0")}Z`)).id;
     // The run row is already error; drive report on a token for it to exercise the path.
     const rt = tokens.registerRunLease({ runId: run, loopId: loop.id, machineId, role: "exec", allowControl: false });
-    gw.report(rt, { ok: false, error: "boom", durationMs: 1 });
+    (await gw.report(rt, { ok: false, error: "boom", durationMs: 1 }));
   }
   expect(sent).toHaveLength(3);
 });
 
-test("a success between failures resets the streak so the next failure re-alerts (transition)", () => {
+test("a success between failures resets the streak so the next failure re-alerts (transition)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   const { sent, fn } = recordingNotify();
 
   // Prior history: a failure, then a success (the streak is broken at the success).
-  addExecRun(loop.id, machineId, "error", "2026-06-01T00:00:01Z");
-  addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:02Z");
+  (await addExecRun(loop.id, machineId, "error", "2026-06-01T00:00:01Z"));
+  (await addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:02Z"));
 
   // Now a fresh failure → streak is 1 again → it must re-alert.
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: "2026-06-01T00:00:03Z" });
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: "2026-06-01T00:00:03Z" }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
-  gateway(fn).report(rt, { ok: false, error: "boom", durationMs: 1 });
+  (await gateway(fn).report(rt, { ok: false, error: "boom", durationMs: 1 }));
 
   expect(sent).toHaveLength(1);
 });
 
-test("evolve and edit run failures never produce user-facing failure notifications", () => {
+test("evolve and edit run failures never produce user-facing failure notifications", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "always" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "always" }));
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
 
   for (const role of ["evolve", "edit"] as const) {
-    const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() });
+    const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() }));
     const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
-    gw.report(rt, { ok: false, error: "boom", durationMs: 1 });
+    (await gw.report(rt, { ok: false, error: "boom", durationMs: 1 }));
   }
   expect(sent).toHaveLength(0);
 });
 
-test("notify: 'never' suppresses failure alerts entirely", () => {
-  const { rt } = seededExecRun("never");
+test("notify: 'never' suppresses failure alerts entirely", async () => {
+  const { rt } = (await seededExecRun("never"));
   const { sent, fn } = recordingNotify();
-  gateway(fn).report(rt, { ok: false, error: "boom", durationMs: 1 });
+  (await gateway(fn).report(rt, { ok: false, error: "boom", durationMs: 1 }));
   expect(sent).toHaveLength(0);
 });
 
-test("sweep surfaces a machine-offline pending run once (anti-spam'd while it stays offline)", () => {
+test("sweep surfaces a machine-offline pending run once (anti-spam'd while it stays offline)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   // Machine offline + last seen long ago.
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false, lastSeen: "2000-01-01T00:00:00Z" });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false, lastSeen: "2000-01-01T00:00:00Z" }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
 
   // Two stale pending exec runs (older than the 60s grace) — both reclaim as
   // "machine offline". The first is streak 1 (alert); the second is streak 2 (silent).
-  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: "2026-06-01T00:00:01Z" });
-  gw.sweep();
-  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: "2026-06-01T00:00:02Z" });
-  gw.sweep();
+  (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: "2026-06-01T00:00:01Z" }));
+  (await gw.sweep());
+  (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: "2026-06-01T00:00:02Z" }));
+  (await gw.sweep());
 
   expect(sent).toHaveLength(1);
   expect(sent[0]!.loopId).toBe(loop.id);
   expect(sent[0]!.message).toMatch(/offline/i);
 });
 
-test("execFailureStreak counts only consecutive trailing exec errors, ignoring evolve/canceled/open", () => {
+test("execFailureStreak counts only consecutive trailing exec errors, ignoring evolve/canceled/open", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
 
-  addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:01Z");
-  addExecRun(loop.id, machineId, "error", "2026-06-01T00:00:02Z");
-  addExecRun(loop.id, machineId, "error", "2026-06-01T00:00:03Z");
+  (await addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:01Z"));
+  (await addExecRun(loop.id, machineId, "error", "2026-06-01T00:00:02Z"));
+  (await addExecRun(loop.id, machineId, "error", "2026-06-01T00:00:03Z"));
   // An interleaved evolve error must NOT count (internal role).
-  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "error", role: "evolve", ts: "2026-06-01T00:00:04Z" });
-  expect(store.execFailureStreak(loop.id)).toBe(2);
+  (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "error", role: "evolve", ts: "2026-06-01T00:00:04Z" }));
+  expect((await store.execFailureStreak(loop.id))).toBe(2);
 
   // A trailing success breaks the streak to 0.
-  addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:05Z");
-  expect(store.execFailureStreak(loop.id)).toBe(0);
+  (await addExecRun(loop.id, machineId, "done", "2026-06-01T00:00:05Z"));
+  expect((await store.execFailureStreak(loop.id))).toBe(0);
 });
 
 // ---- loopLog (device-token-scoped run-log read for `loopany log`) ----
 
 /** A machine + a loop on it, with `count` exec runs (newest ts last). */
-function seededLoopWithRuns(machineId: string, count: number) {
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h-" + machineId, online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+async function seededLoopWithRuns(machineId: string, count: number) {
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h-" + machineId, online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   for (let i = 0; i < count; i++) {
-    store.addRun({
+    (await store.addRun({
       loopId: loop.id,
       userId: "u1",
       machineId,
@@ -1380,17 +1413,17 @@ function seededLoopWithRuns(machineId: string, count: number) {
         { kind: "text", text: `run ${i} thinking` },
         { kind: "tool", name: "Bash", input: `{"cmd":"echo ${i}"}` },
       ],
-    });
+    }));
   }
   return loop;
 }
 
-test("loopLog returns the loop's recent runs newest-first with transcript text", () => {
+test("loopLog returns the loop's recent runs newest-first with transcript text", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  const loop = seededLoopWithRuns(machineId, 3);
+  const loop = (await seededLoopWithRuns(machineId, 3));
 
-  const res = gateway().loopLog(token, loop.id);
+  const res = (await gateway().loopLog(token, loop.id));
   expect(res.status).toBe(200);
   const body = res.body as { ok: boolean; loopId: string; runs: any[] };
   expect(body.ok).toBe(true);
@@ -1410,24 +1443,24 @@ test("loopLog returns the loop's recent runs newest-first with transcript text",
   expect(body.runs.every((r) => "state" in r)).toBe(true);
 });
 
-test("loopLog honors and caps the run limit", () => {
+test("loopLog honors and caps the run limit", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  const loop = seededLoopWithRuns(machineId, 5);
+  const loop = (await seededLoopWithRuns(machineId, 5));
 
-  expect((gateway().loopLog(token, loop.id, 2).body as { runs: any[] }).runs).toHaveLength(2);
+  expect(((await gateway().loopLog(token, loop.id, 2)).body as { runs: any[] }).runs).toHaveLength(2);
   // Limit is clamped to the max (20), so a huge value just returns everything.
-  expect((gateway().loopLog(token, loop.id, 9999).body as { runs: any[] }).runs).toHaveLength(5);
+  expect(((await gateway().loopLog(token, loop.id, 9999)).body as { runs: any[] }).runs).toHaveLength(5);
   // A non-positive / garbage limit falls back to the default (≥ all 5 here).
-  expect((gateway().loopLog(token, loop.id, -1).body as { runs: any[] }).runs).toHaveLength(5);
+  expect(((await gateway().loopLog(token, loop.id, -1)).body as { runs: any[] }).runs).toHaveLength(5);
 });
 
-test("loopLog truncates an over-cap transcript and flags it", () => {
+test("loopLog truncates an over-cap transcript and flags it", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
-  store.addRun({
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  (await store.addRun({
     loopId: loop.id,
     userId: "u1",
     machineId,
@@ -1435,66 +1468,66 @@ test("loopLog truncates an over-cap transcript and flags it", () => {
     role: "exec",
     ts: "2026-06-01T00:00:01Z",
     transcript: [{ kind: "text", text: "x".repeat(20_000) }],
-  });
-  const run = (gateway().loopLog(token, loop.id).body as { runs: any[] }).runs[0];
+  }));
+  const run = ((await gateway().loopLog(token, loop.id)).body as { runs: any[] }).runs[0];
   expect(run.transcriptTruncated).toBe(true);
   expect(run.transcript.length).toBeLessThan(20_000);
 });
 
-test("loopLog refuses a token whose machine does not own the loop (cross-device)", () => {
+test("loopLog refuses a token whose machine does not own the loop (cross-device)", async () => {
   const tokenA = tokens.mintDeviceToken();
   const machineA = tokens.machineIdFromToken(tokenA);
-  const loop = seededLoopWithRuns(machineA, 2);
+  const loop = (await seededLoopWithRuns(machineA, 2));
 
   // A different device with its own token cannot read machine A's loop's runs.
   const tokenB = tokens.mintDeviceToken();
   const machineB = tokens.machineIdFromToken(tokenB);
-  store.createMachine({ id: machineB, userId: "u2", name: "MB", tokenHash: "hb", online: true });
-  const res = gateway().loopLog(tokenB, loop.id);
+  (await store.createMachine({ id: machineB, userId: "u2", name: "MB", tokenHash: "hb", online: true }));
+  const res = (await gateway().loopLog(tokenB, loop.id));
   expect(res.status).toBe(404);
 });
 
-test("loopLog rejects an unknown loop id and an unregistered token", () => {
+test("loopLog rejects an unknown loop id and an unregistered token", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true }));
   // Loop that doesn't exist → 404 (existence never leaks).
-  expect(gateway().loopLog(token, "loop-nope").status).toBe(404);
+  expect((await gateway().loopLog(token, "loop-nope")).status).toBe(404);
   // Missing loop id → 400.
-  expect(gateway().loopLog(token, "").status).toBe(400);
+  expect((await gateway().loopLog(token, "")).status).toBe(400);
   // Token for a machine that was never registered → 401.
-  expect(gateway().loopLog(tokens.mintDeviceToken(), "loop-x").status).toBe(401);
+  expect((await gateway().loopLog(tokens.mintDeviceToken(), "loop-x")).status).toBe(401);
 });
 
 // ---- run-lifecycle hardening: canceled ordering, sweep inactivity/revocation ----
 
-test("a late report for a CANCELED run never advances the loop (cursor + task file untouched)", () => {
-  const { loop, run, rt } = seededExecRun();
-  store.updateRun(run.id, { phase: "canceled", error: "stopped by user" });
+test("a late report for a CANCELED run never advances the loop (cursor + task file untouched)", async () => {
+  const { loop, run, rt } = (await seededExecRun());
+  (await store.updateRun(run.id, { phase: "canceled", error: "stopped by user" }));
 
-  const res = gateway().report(rt, {
+  const res = (await gateway().report(rt, {
     ok: true,
     durationMs: 5,
     cursor: { seenIds: [1, 2, 3] },
     taskFileContent: "# advanced past what the user saw",
-  });
+  }));
   expect(res.status).toBe(200);
   // The workflow cursor was NOT advanced and the task file NOT synced — the next
   // run must re-process the data whose output the user never saw.
-  const stored = store.getLoop(loop.id)!;
+  const stored = (await store.getLoop(loop.id))!;
   expect(stored.state).toBeNull();
   expect(stored.taskFileContent).toBeNull();
-  expect(store.getRun(run.id)!.phase).toBe("canceled");
+  expect((await store.getRun(run.id))!.phase).toBe("canceled");
   // The token died with the report.
-  expect(gateway().agentApi(rt, ["show"]).status).toBe(401);
+  expect((await gateway().agentApi(rt, ["show"])).status).toBe(401);
 });
 
-test("a canceled EVOLVE run's report clears the evolve marker (finishEvolution), symmetric to edit", () => {
+test("a canceled EVOLVE run's report clears the evolve marker (finishEvolution), symmetric to edit", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", evolveDue: true });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "canceled", role: "evolve", ts: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", evolveDue: true }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "canceled", role: "evolve", ts: new Date().toISOString() }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "evolve", allowControl: true });
 
   let finished = "";
@@ -1509,181 +1542,181 @@ test("a canceled EVOLVE run's report clears the evolve marker (finishEvolution),
     runNow(): void {},
   } as any);
 
-  expect(gw.report(rt, { ok: true, durationMs: 5 }).status).toBe(200);
+  expect((await gw.report(rt, { ok: true, durationMs: 5 })).status).toBe(200);
   // Without this, evolveDue stays set and the canceled evolve re-fires next tick.
   expect(finished).toBe(loop.id);
 });
 
-test("sweep marks a reclaimed run's token reclaimed: agent-api mutations are refused (409), but the token survives for one wake-report", () => {
+test("sweep marks a reclaimed run's token reclaimed: agent-api mutations are refused (409), but the token survives for one wake-report", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" }));
   // Claimed 30min ago, no progress heard since → past the 20min inactivity window.
   const staleTs = new Date(Date.now() - 30 * 60_000).toISOString();
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: staleTs });
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: staleTs }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
 
   const gw = gateway();
-  expect(gw.agentApi(rt, ["show"]).status).toBe(200); // live before the sweep
-  gw.sweep();
-  expect(store.getRun(run.id)!.phase).toBe("error");
-  expect(store.getRun(run.id)!.error).toBe("machine timed out / disconnected");
+  expect((await gw.agentApi(rt, ["show"])).status).toBe(200); // live before the sweep
+  (await gw.sweep());
+  expect((await store.getRun(run.id))!.phase).toBe("error");
+  expect((await store.getRun(run.id))!.error).toBe("machine timed out / disconnected");
   // The orphaned agent can no longer MUTATE the loop (reclaimed → 409, not silent),
   // but the token is not revoked outright: it survives to accept one wake-report.
-  expect(gw.agentApi(rt, ["show"]).status).toBe(409);
+  expect((await gw.agentApi(rt, ["show"])).status).toBe(409);
   expect(tokens.resolveLease(rt)).toBeTruthy();
 });
 
-test("sweep is INACTIVITY-based: a >20min run with a fresh progress heartbeat is NOT reclaimed", () => {
+test("sweep is INACTIVITY-based: a >20min run with a fresh progress heartbeat is NOT reclaimed", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" }));
   const staleTs = new Date(Date.now() - 30 * 60_000).toISOString();
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: staleTs });
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: staleTs }));
 
   const gw = gateway();
   // The daemon's heartbeat just refreshed the progress stamp → healthy long run.
-  gw.poll(token, undefined, [{ runId: run.id, step: 7, label: "still working" }]);
-  gw.sweep();
-  expect(store.getRun(run.id)!.phase).toBe("running"); // never falsely failed
+  (await gw.poll(token, undefined, [{ runId: run.id, step: 7, label: "still working" }]));
+  (await gw.sweep());
+  expect((await store.getRun(run.id))!.phase).toBe("running"); // never falsely failed
 
   // Once the stamp itself goes stale (nothing heard for the full window) → reclaimed.
-  store.updateRun(run.id, { progress: { step: 7, label: "still working", at: staleTs } as { step: number; label: string } });
-  gw.sweep();
-  expect(store.getRun(run.id)!.phase).toBe("error");
-  expect(store.getRun(run.id)!.error).toBe("machine timed out / disconnected");
+  (await store.updateRun(run.id, { progress: { step: 7, label: "still working", at: staleTs } as { step: number; label: string } }));
+  (await gw.sweep());
+  expect((await store.getRun(run.id))!.phase).toBe("error");
+  expect((await store.getRun(run.id))!.error).toBe("machine timed out / disconnected");
 });
 
-test("execFailureStreak is exact past any cap, so the every-Nth reminder keeps firing", () => {
+test("execFailureStreak is exact past any cap, so the every-Nth reminder keeps firing", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
 
   // A success, then 70 consecutive failures — beyond the old capped scan (64),
   // which pinned the streak at 64 and silenced reminders forever.
-  addExecRun(loop.id, machineId, "done", "2026-05-31T23:59:59Z");
+  (await addExecRun(loop.id, machineId, "done", "2026-05-31T23:59:59Z"));
   for (let i = 1; i <= 70; i++) {
     const mm = String(Math.floor(i / 60)).padStart(2, "0");
     const ss = String(i % 60).padStart(2, "0");
-    addExecRun(loop.id, machineId, "error", `2026-06-01T00:${mm}:${ss}Z`);
+    (await addExecRun(loop.id, machineId, "error", `2026-06-01T00:${mm}:${ss}Z`));
   }
-  expect(store.execFailureStreak(loop.id)).toBe(70);
+  expect((await store.execFailureStreak(loop.id))).toBe(70);
   // 70 % FAILURE_NOTIFY_EVERY(5) === 0 → the "still broken" reminder fires.
   expect(notifyMod.shouldNotifyFailure("auto", 70)).toBe(true);
 });
 
-test("show computes `next` in the loop's timezone", () => {
+test("show computes `next` in the loop's timezone", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const gw = gateway();
-  const showNext = (timezone: string) => {
-    const loop = store.createLoop({ userId: "u1", machineId, name: `L-${timezone}`, cron: "0 8 * * *", timezone, enabled: true, notify: "auto" });
-    const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const showNext = async (timezone: string) => {
+    const loop = (await store.createLoop({ userId: "u1", machineId, name: `L-${timezone}`, cron: "0 8 * * *", timezone, enabled: true, notify: "auto" }));
+    const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
     const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
-    const text = (gw.agentApi(rt, ["show"]).body as { text: string }).text;
+    const text = ((await gw.agentApi(rt, ["show"])).body as { text: string }).text;
     return text.split("\n").find((l) => l.startsWith("nextFire:"))!;
   };
   // Same cron, timezones 25h apart — the derived nextFire, rendered IN the loop's own
   // timezone, must read differently for the two zones.
-  expect(showNext("Pacific/Kiritimati")).not.toBe(showNext("Pacific/Niue"));
+  expect((await showNext("Pacific/Kiritimati"))).not.toBe((await showNext("Pacific/Niue")));
 });
 
 // ---- wire-input bounds ----
 
-test("poll processes at most 32 progress entries (excess is dropped)", () => {
+test("poll processes at most 32 progress entries (excess is dropped)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
 
   // 32 junk entries pad the front; the real run's entry sits past the cap.
   const junk = Array.from({ length: 32 }, (_, i) => ({ runId: `nope-${i}`, step: 1, label: "x" }));
-  gateway().poll(token, undefined, [...junk, { runId: run.id, step: 5, label: "past the cap" }]);
-  expect(store.getRun(run.id)!.progress).toBeNull();
+  (await gateway().poll(token, undefined, [...junk, { runId: run.id, step: 5, label: "past the cap" }]));
+  expect((await store.getRun(run.id))!.progress).toBeNull();
 
   // Within the cap it lands normally.
-  gateway().poll(token, undefined, [{ runId: run.id, step: 5, label: "in the cap" }]);
-  expect(store.getRun(run.id)!.progress).toMatchObject({ step: 5, label: "in the cap" });
+  (await gateway().poll(token, undefined, [{ runId: run.id, step: 5, label: "in the cap" }]));
+  expect((await store.getRun(run.id))!.progress).toMatchObject({ step: 5, label: "in the cap" });
 });
 
-test("createLoop clips an oversized workflow to the 512KB wire cap", () => {
+test("createLoop clips an oversized workflow to the 512KB wire cap", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
-  const res = gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", workflow: "x".repeat(512 * 1024 + 100) });
+  const res = (await gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", workflow: "x".repeat(512 * 1024 + 100) }));
   expect(res.status).toBe(200);
-  expect(store.getLoop((res.body as any).id)!.workflow!.length).toBe(512 * 1024);
+  expect((await store.getLoop((res.body as any).id))!.workflow!.length).toBe(512 * 1024);
 });
 
-test("report ignores an over-cap workflow cursor but still finalizes the run", () => {
-  const { loop, run, rt } = seededExecRun();
-  const res = gateway().report(rt, { ok: true, durationMs: 5, cursor: { blob: "y".repeat(300 * 1024) } });
+test("report ignores an over-cap workflow cursor but still finalizes the run", async () => {
+  const { loop, run, rt } = (await seededExecRun());
+  const res = (await gateway().report(rt, { ok: true, durationMs: 5, cursor: { blob: "y".repeat(300 * 1024) } }));
   expect(res.status).toBe(200);
-  expect(store.getRun(run.id)!.phase).toBe("done"); // the run still records
-  expect(store.getLoop(loop.id)!.state).toBeNull(); // the runaway cursor does not
+  expect((await store.getRun(run.id))!.phase).toBe("done"); // the run still records
+  expect((await store.getLoop(loop.id))!.state).toBeNull(); // the runaway cursor does not
 
   // A sane cursor persists as before.
-  const again = seededExecRun();
-  gateway().report(again.rt, { ok: true, durationMs: 5, cursor: { seen: 3 } });
-  expect(store.getLoop(again.loop.id)!.state).toEqual({ seen: 3 });
+  const again = (await seededExecRun());
+  (await gateway().report(again.rt, { ok: true, durationMs: 5, cursor: { seen: 3 } }));
+  expect((await store.getLoop(again.loop.id))!.state).toEqual({ seen: 3 });
 });
 
-test("report whitelists the claimed outcome (unknown values fall back to the role default)", () => {
-  const bogus = seededExecRun();
-  gateway().report(bogus.rt, { ok: true, durationMs: 5, outcome: "hijack" as any });
-  expect(store.getRun(bogus.run.id)!.outcome).toBe("exec"); // role default, not "hijack"
+test("report whitelists the claimed outcome (unknown values fall back to the role default)", async () => {
+  const bogus = (await seededExecRun());
+  (await gateway().report(bogus.rt, { ok: true, durationMs: 5, outcome: "hijack" as any }));
+  expect((await store.getRun(bogus.run.id))!.outcome).toBe("exec"); // role default, not "hijack"
 
-  const direct = seededExecRun();
-  gateway().report(direct.rt, { ok: true, durationMs: 5, outcome: "direct" });
-  expect(store.getRun(direct.run.id)!.outcome).toBe("direct"); // known value passes
+  const direct = (await seededExecRun());
+  (await gateway().report(direct.rt, { ok: true, durationMs: 5, outcome: "direct" }));
+  expect((await store.getRun(direct.run.id))!.outcome).toBe("direct"); // known value passes
 });
 
-test("agent-api report clips --message to the 2000-char cap", () => {
-  const { run, rt } = seededExecRun();
-  const res = gateway().agentApi(rt, ["report", "--message", "m".repeat(5000)]);
+test("agent-api report clips --message to the 2000-char cap", async () => {
+  const { run, rt } = (await seededExecRun());
+  const res = (await gateway().agentApi(rt, ["report", "--message", "m".repeat(5000)]));
   expect(res.status).toBe(200);
-  expect(store.getRun(run.id)!.message!.length).toBe(2000);
+  expect((await store.getRun(run.id))!.message!.length).toBe(2000);
 });
 
-test("report clips sessionId and error (untrusted wire input, same discipline as message)", () => {
-  const { run, rt } = seededExecRun();
-  const res = gateway().report(rt, {
+test("report clips sessionId and error (untrusted wire input, same discipline as message)", async () => {
+  const { run, rt } = (await seededExecRun());
+  const res = (await gateway().report(rt, {
     ok: false,
     durationMs: 1,
     sessionId: "s".repeat(500),
     error: "e".repeat(5000),
-  });
+  }));
   expect(res.status).toBe(200);
-  const stored = store.getRun(run.id)!;
+  const stored = (await store.getRun(run.id))!;
   expect(stored.sessionId!.length).toBe(200); // SESSION_ID_CAP
   expect(stored.error!.length).toBe(2000); // MESSAGE_CAP
   // A non-string error degrades to the server's default reason.
-  const again = seededExecRun();
-  gateway().report(again.rt, { ok: false, durationMs: 1, error: 42 as never });
-  expect(store.getRun(again.run.id)!.error).toBe("run failed on machine");
+  const again = (await seededExecRun());
+  (await gateway().report(again.rt, { ok: false, durationMs: 1, error: 42 as never }));
+  expect((await store.getRun(again.run.id))!.error).toBe("run failed on machine");
 });
 
-test("poll persists the daemon version, updating only when it changes", () => {
+test("poll persists the daemon version, updating only when it changes", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   // First poll self-registers and records the reported version.
-  gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" });
-  expect(store.getMachine(machineId)!.daemonVersion).toBe("0.8.0");
+  (await gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" }));
+  expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.8.0");
   // A newer version on the next poll updates it.
-  gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" });
-  expect(store.getMachine(machineId)!.daemonVersion).toBe("0.9.0");
+  (await gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" }));
+  expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
   // A poll with no version leaves it as-is (older daemons don't report it).
-  gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64" });
-  expect(store.getMachine(machineId)!.daemonVersion).toBe("0.9.0");
+  (await gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64" }));
+  expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
   // An over-long version is clipped defensively (untrusted wire input).
-  gateway().poll(token, { host: "mac", version: "9".repeat(200) });
-  expect(store.getMachine(machineId)!.daemonVersion!.length).toBe(64);
+  (await gateway().poll(token, { host: "mac", version: "9".repeat(200) }));
+  expect((await store.getMachine(machineId))!.daemonVersion!.length).toBe(64);
 });
 
 // ---- /api/machine/cli — unified dispatch, verb × credential matrix (§4.1) ----
@@ -1691,11 +1724,11 @@ test("poll persists the daemon version, updating only when it changes", () => {
 /** A machine seeded from a REAL device token, an OPEN loop bound to it, and an exec
  *  run RUNNING with a fresh run token — so one setup drives both the device-credential
  *  and run-credential branches of `cli()` against the same loop. */
-function seededCli(opts: { allowControl?: boolean; goal?: string | null } = {}) {
+async function seededCli(opts: { allowControl?: boolean; goal?: string | null } = {}) {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
-  const loop = store.createLoop({
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
+  const loop = (await store.createLoop({
     userId: "u1",
     machineId,
     name: "L",
@@ -1703,8 +1736,8 @@ function seededCli(opts: { allowControl?: boolean; goal?: string | null } = {}) 
     enabled: true,
     notify: "auto",
     goal: opts.goal === undefined ? null : opts.goal,
-  });
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
   const runToken = tokens.registerRunLease({
     runId: run.id,
     loopId: loop.id,
@@ -1716,22 +1749,22 @@ function seededCli(opts: { allowControl?: boolean; goal?: string | null } = {}) 
   return { deviceToken, machineId, loop, run, runToken };
 }
 
-test("cli branches by credential: dk_ prefix → device path, bare-UUID → run path", () => {
-  const { deviceToken, runToken, loop } = seededCli();
+test("cli branches by credential: dk_ prefix → device path, bare-UUID → run path", async () => {
+  const { deviceToken, runToken, loop } = (await seededCli());
   const gw = gateway();
   // Device credential lists the machine's loops (owner authority).
-  const dev = gw.cli(deviceToken, ["loops"]);
+  const dev = (await gw.cli(deviceToken, ["loops"]));
   expect(dev.status).toBe(200);
   expect((dev.body as any).loops.map((l: any) => l.id)).toContain(loop.id);
   // The same `loops` verb on a RUN credential is owner-only → 403.
-  const run = gw.cli(runToken, ["loops"]);
+  const run = (await gw.cli(runToken, ["loops"]));
   expect(run.status).toBe(403);
 });
 
-test("cli run credential: log returns the run's OWN-loop history (closes the note.md seam)", () => {
-  const { runToken, loop, run } = seededCli();
-  store.updateRun(run.id, { status: "new", message: "did a thing", sessionId: "sess-abc" });
-  const res = gateway().cli(runToken, ["log"]);
+test("cli run credential: log returns the run's OWN-loop history (closes the note.md seam)", async () => {
+  const { runToken, loop, run } = (await seededCli());
+  (await store.updateRun(run.id, { status: "new", message: "did a thing", sessionId: "sess-abc" }));
+  const res = (await gateway().cli(runToken, ["log"]));
   expect(res.status).toBe(200);
   const body = res.body as any;
   expect(body.text).toContain(loop.id); // loopId is render-only (stripped); the survey text carries it
@@ -1739,106 +1772,106 @@ test("cli run credential: log returns the run's OWN-loop history (closes the not
   // Batch 4 wired a `log` case into dispatch, so the legacy `/agent-api/loop`
   // transport now yields the run's OWN-loop log too — the help that advertises
   // `log` is truthful on both transports (the seam is closed everywhere).
-  const legacy = gateway().agentApi(runToken, ["log"]);
+  const legacy = (await gateway().agentApi(runToken, ["log"]));
   expect(legacy.status).toBe(200);
   expect((legacy.body as { text: string }).text).toContain(loop.id);
 });
 
-test("cli run credential: show is scoped to the run's own loop with its caps", () => {
-  const { runToken, loop } = seededCli({ allowControl: true });
-  const res = gateway().cli(runToken, ["show"]);
+test("cli run credential: show is scoped to the run's own loop with its caps", async () => {
+  const { runToken, loop } = (await seededCli({ allowControl: true }));
+  const res = (await gateway().cli(runToken, ["show"]));
   expect(res.status).toBe(200);
   const text = (res.body as { text: string }).text;
   expect(text).toContain(`cron: "${loop.cron}"`);
   expect(text).toContain("selfSchedule: allowed");
 });
 
-test("cli run credential: owner-only verbs (new/edit/loops/status) are 403, not unknown-command", () => {
-  const { runToken } = seededCli();
+test("cli run credential: owner-only verbs (new/edit/loops/status) are 403, not unknown-command", async () => {
+  const { runToken } = (await seededCli());
   const gw = gateway();
   for (const argv of [["new"], ["edit"], ["loops"], ["status"]]) {
-    const res = gw.cli(runToken, argv);
+    const res = (await gw.cli(runToken, argv));
     expect(res.status).toBe(403);
     expect((res.body as { text: string }).text).toMatch(/device credential|own loop/);
   }
 });
 
-test("cli device credential: report/finish are run-only → 403", () => {
-  const { deviceToken } = seededCli();
+test("cli device credential: report/finish are run-only → 403", async () => {
+  const { deviceToken } = (await seededCli());
   const gw = gateway();
   for (const verb of ["report", "finish", "complete"]) {
-    const res = gw.cli(deviceToken, [verb]);
+    const res = (await gw.cli(deviceToken, [verb]));
     expect(res.status).toBe(403);
     expect((res.body as { text: string }).text).toMatch(/run-only verb/); // error → text (P6)
   }
 });
 
-test("cli run credential: a --loop naming another loop is 403 (never a silent retarget)", () => {
-  const { runToken, loop } = seededCli();
+test("cli run credential: a --loop naming another loop is 403 (never a silent retarget)", async () => {
+  const { runToken, loop } = (await seededCli());
   const gw = gateway();
   // Own loop id via --loop is accepted (it equals the slot's loop).
-  expect(gw.cli(runToken, ["log", "--loop", loop.id]).status).toBe(200);
-  expect(gw.cli(runToken, ["show", "--loop", loop.id]).status).toBe(200);
+  expect((await gw.cli(runToken, ["log", "--loop", loop.id])).status).toBe(200);
+  expect((await gw.cli(runToken, ["show", "--loop", loop.id])).status).toBe(200);
   // A different loop id → hard 403 on both the read verbs and a mutation.
-  expect(gw.cli(runToken, ["log", "--loop", "loop-other"]).status).toBe(403);
-  expect(gw.cli(runToken, ["show", "--loop", "loop-other"]).status).toBe(403);
-  expect(gw.cli(runToken, ["reschedule", "--loop", "loop-other", "--next", "30m"]).status).toBe(403);
+  expect((await gw.cli(runToken, ["log", "--loop", "loop-other"])).status).toBe(403);
+  expect((await gw.cli(runToken, ["show", "--loop", "loop-other"])).status).toBe(403);
+  expect((await gw.cli(runToken, ["reschedule", "--loop", "loop-other", "--next", "30m"])).status).toBe(403);
   // A positional loop id on a read verb is checked the same way.
-  expect(gw.cli(runToken, ["log", "loop-other"]).status).toBe(403);
-  expect(gw.cli(runToken, ["show", "loop-other"]).status).toBe(403);
+  expect((await gw.cli(runToken, ["log", "loop-other"])).status).toBe(403);
+  expect((await gw.cli(runToken, ["show", "loop-other"])).status).toBe(403);
   // The mismatch must not have touched the loop.
-  expect(store.getLoop(loop.id)!.nextRunAt).toBeNull();
+  expect((await store.getLoop(loop.id))!.nextRunAt).toBeNull();
 });
 
-test("cli run credential: the reschedule floor still applies through the unified dispatch", () => {
-  const { runToken, loop } = seededCli({ allowControl: true });
-  const denied = gateway().cli(runToken, ["reschedule", "--next", "2m"]);
+test("cli run credential: the reschedule floor still applies through the unified dispatch", async () => {
+  const { runToken, loop } = (await seededCli({ allowControl: true }));
+  const denied = (await gateway().cli(runToken, ["reschedule", "--next", "2m"]));
   expect(denied.status).toBe(400);
   expect((denied.body as { text: string }).text).toMatch(/5 min/);
-  expect(store.getLoop(loop.id)!.nextRunAt).toBeNull();
+  expect((await store.getLoop(loop.id))!.nextRunAt).toBeNull();
   // 30m clears the floor — the floor logic is identical to the agent-api path.
-  expect(gateway().cli(runToken, ["reschedule", "--next", "30m"]).status).toBe(200);
-  expect(store.getLoop(loop.id)!.nextRunAt).toBeTruthy();
+  expect((await gateway().cli(runToken, ["reschedule", "--next", "30m"])).status).toBe(200);
+  expect((await store.getLoop(loop.id))!.nextRunAt).toBeTruthy();
 });
 
-test("reschedule: --run-at (canonical) and --next (alias) both drive the pinned next fire, floors enforced", () => {
+test("reschedule: --run-at (canonical) and --next (alias) both drive the pinned next fire, floors enforced", async () => {
   // F4: the in-run help documents `--run-at` while the code historically only read
   // `--next` — following the help guaranteed a failure. Now BOTH parse.
-  const runAt = seededCli({ allowControl: true });
-  const viaRunAt = gateway().cli(runAt.runToken, ["reschedule", "--run-at", "30m"]);
+  const runAt = (await seededCli({ allowControl: true }));
+  const viaRunAt = (await gateway().cli(runAt.runToken, ["reschedule", "--run-at", "30m"]));
   expect(viaRunAt.status).toBe(200);
-  expect(store.getLoop(runAt.loop.id)!.nextRunAt).toBeTruthy();
+  expect((await store.getLoop(runAt.loop.id))!.nextRunAt).toBeTruthy();
 
-  const next = seededCli({ allowControl: true });
-  const viaNext = gateway().cli(next.runToken, ["reschedule", "--next", "30m"]);
+  const next = (await seededCli({ allowControl: true }));
+  const viaNext = (await gateway().cli(next.runToken, ["reschedule", "--next", "30m"]));
   expect(viaNext.status).toBe(200);
-  expect(store.getLoop(next.loop.id)!.nextRunAt).toBeTruthy();
+  expect((await store.getLoop(next.loop.id))!.nextRunAt).toBeTruthy();
 
   // The self-schedule floor applies to the canonical flag exactly as to the alias.
-  const floored = seededCli({ allowControl: true });
-  const denied = gateway().cli(floored.runToken, ["reschedule", "--run-at", "2m"]);
+  const floored = (await seededCli({ allowControl: true }));
+  const denied = (await gateway().cli(floored.runToken, ["reschedule", "--run-at", "2m"]));
   expect(denied.status).toBe(400);
   expect((denied.body as { text: string }).text).toMatch(/5 min/);
-  expect(store.getLoop(floored.loop.id)!.nextRunAt).toBeNull();
+  expect((await store.getLoop(floored.loop.id))!.nextRunAt).toBeNull();
 });
 
-test("the in-run help documents exactly what parses (no --run-at drift): its reschedule syntax succeeds verbatim", () => {
-  const { runToken } = seededCli({ allowControl: true });
+test("the in-run help documents exactly what parses (no --run-at drift): its reschedule syntax succeeds verbatim", async () => {
+  const { runToken } = (await seededCli({ allowControl: true }));
   const gw = gateway();
-  const help = (gw.agentApi(runToken, ["help"]).body as { text: string }).text;
+  const help = ((await gw.agentApi(runToken, ["help"])).body as { text: string }).text;
   // Help shows the canonical `--run-at` flag (not the retired `--next`).
   expect(help).toContain("--run-at <30m|2h|ISO>");
   // And the flag the help documents actually parses — following the help succeeds,
   // never the shipped drift where the documented flag was silently rejected.
-  const followed = gw.cli(runToken, ["reschedule", "--run-at", "2h"]);
+  const followed = (await gw.cli(runToken, ["reschedule", "--run-at", "2h"]));
   expect(followed.status).toBe(200);
 });
 
-test("per-verb --help (run credential): role-aware syntax + availability from the lease caps", () => {
-  const { runToken } = seededCli({ allowControl: true, goal: "reach the goal" });
+test("per-verb --help (run credential): role-aware syntax + availability from the lease caps", async () => {
+  const { runToken } = (await seededCli({ allowControl: true, goal: "reach the goal" }));
   const gw = gateway();
   // reschedule --help: syntax + the canonical flag + an availability line.
-  const resched = gw.cli(runToken, ["reschedule", "--help"]);
+  const resched = (await gw.cli(runToken, ["reschedule", "--help"]));
   expect(resched.status).toBe(200);
   const rt = (resched.body as { text: string }).text;
   expect(rt).toContain("verb: reschedule");
@@ -1848,29 +1881,29 @@ test("per-verb --help (run credential): role-aware syntax + availability from th
   expect(rt).toContain("help[");
 
   // report --help is always available regardless of caps.
-  const report = (gw.cli(runToken, ["report", "--help"]).body as { text: string }).text;
+  const report = ((await gw.cli(runToken, ["report", "--help"])).body as { text: string }).text;
   expect(report).toContain("verb: report");
   expect(report).toContain("--status new|resolved|nothing-new");
   expect(report).toContain('availability: "always available"');
 
   // finish --help flips its availability with canFinish: allowed on a closed exec run…
-  const finishClosed = (gw.cli(runToken, ["finish", "--help"]).body as { text: string }).text;
+  const finishClosed = ((await gw.cli(runToken, ["finish", "--help"])).body as { text: string }).text;
   expect(finishClosed).toContain('availability: "available — declare the goal met"');
   // …and unavailable on an open (goal-less) loop's exec run.
-  const open = seededCli({ allowControl: true, goal: null });
-  const finishOpen = (gateway().cli(open.runToken, ["finish", "--help"]).body as { text: string }).text;
+  const open = (await seededCli({ allowControl: true, goal: null }));
+  const finishOpen = ((await gateway().cli(open.runToken, ["finish", "--help"])).body as { text: string }).text;
   expect(finishOpen).toContain("goal (closed) loop only");
 
   // A structural set-* verb reflects the (missing) evolve/edit cap on an exec run.
-  const setUi = (gw.cli(runToken, ["set-ui", "--help"]).body as { text: string }).text;
+  const setUi = ((await gw.cli(runToken, ["set-ui", "--help"])).body as { text: string }).text;
   expect(setUi).toContain("verb: set-ui");
   expect(setUi).toContain("evolve/edit pass only");
 });
 
-test("per-verb --help (device credential): owner verbs print full syntax + templates, no availability line", () => {
-  const { deviceToken } = seededCli();
+test("per-verb --help (device credential): owner verbs print full syntax + templates, no availability line", async () => {
+  const { deviceToken } = (await seededCli());
   const gw = gateway();
-  const edit = gw.cli(deviceToken, ["edit", "--help"]);
+  const edit = (await gw.cli(deviceToken, ["edit", "--help"]));
   expect(edit.status).toBe(200);
   const et = (edit.body as { text: string }).text;
   expect(et).toContain("verb: edit");
@@ -1883,111 +1916,111 @@ test("per-verb --help (device credential): owner verbs print full syntax + templ
   expect(et).not.toContain("availability:");
 
   for (const verb of ["new", "loops", "show", "log"]) {
-    const text = (gw.cli(deviceToken, [verb, "--help"]).body as { text: string }).text;
+    const text = ((await gw.cli(deviceToken, [verb, "--help"])).body as { text: string }).text;
     expect(text).toContain(`verb: ${verb}`);
   }
 });
 
-test("--help on an unknown verb falls through to unknown-command (no fabricated help)", () => {
-  const { deviceToken, runToken } = seededCli();
+test("--help on an unknown verb falls through to unknown-command (no fabricated help)", async () => {
+  const { deviceToken, runToken } = (await seededCli());
   const gw = gateway();
   // Device: unknown verb + --help → the switch default 400 (unchanged behavior).
-  const dev = gw.cli(deviceToken, ["frobnicate", "--help"]);
+  const dev = (await gw.cli(deviceToken, ["frobnicate", "--help"]));
   expect(dev.status).toBe(400);
   // Run: an owner-only verb is still 403 even with --help (role-aware, not help).
-  expect(gw.cli(runToken, ["new", "--help"]).status).toBe(403);
+  expect((await gw.cli(runToken, ["new", "--help"])).status).toBe(403);
   // Run: a genuinely unknown verb + --help → dispatch's unknown-command 400.
-  expect(gw.cli(runToken, ["frobnicate", "--help"]).status).toBe(400);
+  expect((await gw.cli(runToken, ["frobnicate", "--help"])).status).toBe(400);
 });
 
-test("cli run credential: allowControl still gates schedule mutations through the unified dispatch", () => {
-  const { runToken, loop } = seededCli({ allowControl: false });
-  const res = gateway().cli(runToken, ["pause"]);
+test("cli run credential: allowControl still gates schedule mutations through the unified dispatch", async () => {
+  const { runToken, loop } = (await seededCli({ allowControl: false }));
+  const res = (await gateway().cli(runToken, ["pause"]));
   expect(res.status).toBe(403);
   expect((res.body as { text: string }).text).toMatch(/allowControl/);
-  expect(store.getLoop(loop.id)!.enabled).toBe(true);
+  expect((await store.getLoop(loop.id))!.enabled).toBe(true);
 });
 
-test("cli run credential: canFinish still gates finish (open loop refused, closed loop honored)", () => {
+test("cli run credential: canFinish still gates finish (open loop refused, closed loop honored)", async () => {
   // Open loop → the exec run's canFinish is false → finish 403.
-  const open = seededCli({ goal: null });
-  const refused = gateway().cli(open.runToken, ["finish", "--message", "done"]);
+  const open = (await seededCli({ goal: null }));
+  const refused = (await gateway().cli(open.runToken, ["finish", "--message", "done"]));
   expect(refused.status).toBe(403);
   expect((refused.body as { text: string }).text).toMatch(/open\/monitor loop/);
 
   // Closed loop → exec run carries canFinish → finish completes the loop.
-  const closed = seededCli({ goal: "reach the goal" });
-  const ok = gateway().cli(closed.runToken, ["finish", "--message", "goal met"]);
+  const closed = (await seededCli({ goal: "reach the goal" }));
+  const ok = (await gateway().cli(closed.runToken, ["finish", "--message", "goal met"]));
   expect(ok.status).toBe(200);
-  expect(store.getLoop(closed.loop.id)!.completedAt).toBeTruthy();
+  expect((await store.getLoop(closed.loop.id))!.completedAt).toBeTruthy();
 });
 
-test("cli device credential: new/edit/loops/log/show route to the existing gateway logic", () => {
-  const { deviceToken, machineId } = seededCli();
+test("cli device credential: new/edit/loops/log/show route to the existing gateway logic", async () => {
+  const { deviceToken, machineId } = (await seededCli());
   const gw = gateway();
   // new → createLoop
-  const created = gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "loopany/x/README.md" })]);
+  const created = (await gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "loopany/x/README.md" })]));
   expect(created.status).toBe(200);
   const newId = idIn(created);
-  expect(store.getLoop(newId)!.machineId).toBe(machineId);
+  expect((await store.getLoop(newId))!.machineId).toBe(machineId);
   // loops → listLoops (includes the just-created loop; the `loops` channel is retained)
-  const loops = gw.cli(deviceToken, ["loops"]);
+  const loops = (await gw.cli(deviceToken, ["loops"]));
   expect((loops.body as any).loops.map((l: any) => l.id)).toContain(newId);
   // edit → editLoop (positional loop id + --json patch)
-  const edited = gw.cli(deviceToken, ["edit", newId, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always" })]);
+  const edited = (await gw.cli(deviceToken, ["edit", newId, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always" })]));
   expect(edited.status).toBe(200);
-  expect(store.getLoop(newId)!.cron).toBe("0 9 * * *");
-  expect(store.getLoop(newId)!.notify).toBe("always");
+  expect((await store.getLoop(newId))!.cron).toBe("0 9 * * *");
+  expect((await store.getLoop(newId))!.notify).toBe("always");
   // log → loopLog for that loop
-  const log = gw.cli(deviceToken, ["log", newId]);
+  const log = (await gw.cli(deviceToken, ["log", newId]));
   expect(log.status).toBe(200);
   expect(textOf(log)).toContain(newId); // loopId is render-only; the survey text carries it
   // show → describe for that loop
-  const show = gw.cli(deviceToken, ["show", newId]);
+  const show = (await gw.cli(deviceToken, ["show", newId]));
   expect(show.status).toBe(200);
   expect((show.body as { text: string }).text).toContain('cron: "0 9 * * *"');
 });
 
-test("cli device credential: edit honors --dry-run (validate-only, no persistence)", () => {
-  const { deviceToken, loop } = seededCli();
-  const before = store.getLoop(loop.id)!.cron;
-  const dry = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *" }), "--dry-run"]);
+test("cli device credential: edit honors --dry-run (validate-only, no persistence)", async () => {
+  const { deviceToken, loop } = (await seededCli());
+  const before = (await store.getLoop(loop.id))!.cron;
+  const dry = (await gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *" }), "--dry-run"]));
   expect(dry.status).toBe(200);
   expect(textOf(dry)).toContain("dry-run:"); // the dry-run render (structured dryRun flag retired)
-  expect(store.getLoop(loop.id)!.cron).toBe(before); // unchanged
+  expect((await store.getLoop(loop.id))!.cron).toBe(before); // unchanged
 });
 
-test("cli device credential: log/show of a loop on ANOTHER machine is a flat 404 (existence never leaks)", () => {
-  const { deviceToken } = seededCli();
+test("cli device credential: log/show of a loop on ANOTHER machine is a flat 404 (existence never leaks)", async () => {
+  const { deviceToken } = (await seededCli());
   // A second machine + loop the first device does not own.
   const otherDevice = tokens.mintDeviceToken();
   const otherMachineId = tokens.machineIdFromToken(otherDevice);
-  store.createMachine({ id: otherMachineId, userId: "u2", name: "M2", tokenHash: tokens.sha256(otherDevice), online: true });
-  const otherLoop = store.createLoop({ userId: "u2", machineId: otherMachineId, name: "Other", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  (await store.createMachine({ id: otherMachineId, userId: "u2", name: "M2", tokenHash: tokens.sha256(otherDevice), online: true }));
+  const otherLoop = (await store.createLoop({ userId: "u2", machineId: otherMachineId, name: "Other", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   const gw = gateway();
-  expect(gw.cli(deviceToken, ["log", otherLoop.id]).status).toBe(404);
-  expect(gw.cli(deviceToken, ["show", otherLoop.id]).status).toBe(404);
+  expect((await gw.cli(deviceToken, ["log", otherLoop.id])).status).toBe(404);
+  expect((await gw.cli(deviceToken, ["show", otherLoop.id])).status).toBe(404);
 });
 
-test("cli device credential: bad --json for new is a legible 400", () => {
-  const { deviceToken } = seededCli();
-  const res = gateway().cli(deviceToken, ["new", "--json", "{not json"]);
+test("cli device credential: bad --json for new is a legible 400", async () => {
+  const { deviceToken } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["new", "--json", "{not json"]));
   expect(res.status).toBe(400);
   expect(textOf(res)).toMatch(/--json/); // error → text (P6)
 });
 
-test("cli rejects an unknown machine (unregistered device token) and a stale run token", () => {
+test("cli rejects an unknown machine (unregistered device token) and a stale run token", async () => {
   const gw = gateway();
   const unknown = tokens.mintDeviceToken();
-  expect(gw.cli(unknown, ["loops"]).status).toBe(401);
+  expect((await gw.cli(unknown, ["loops"])).status).toBe(401);
   // A bare-UUID that maps to no live run lease → run path 401.
-  expect(gw.cli("00000000-0000-0000-0000-000000000000", ["show"]).status).toBe(401);
+  expect((await gw.cli("00000000-0000-0000-0000-000000000000", ["show"])).status).toBe(401);
 });
 
-test("cli run credential: a reclaimed run refuses mutations (409), same as agent-api", () => {
-  const { runToken } = seededCli({ allowControl: true });
+test("cli run credential: a reclaimed run refuses mutations (409), same as agent-api", async () => {
+  const { runToken } = (await seededCli({ allowControl: true }));
   tokens.terminalizeLease(seededReclaimTarget(runToken));
-  const res = gateway().cli(runToken, ["reschedule", "--next", "30m"]);
+  const res = (await gateway().cli(runToken, ["reschedule", "--next", "30m"]));
   expect(res.status).toBe(409);
 });
 
@@ -2009,9 +2042,9 @@ const textOf = (res: { body: unknown }) => (res.body as { text?: string }).text 
  *  "X" (loop-abc)`, …) — for tests that used to read the now-stripped `body.id`. */
 const idIn = (res: { body: unknown }) => textOf(res).match(/\((loop-[a-z0-9-]+)\)/i)?.[1] ?? "";
 
-test("cli loops: text is a TOON list (count + typed header + help), the `loops` channel is retained", () => {
-  const { deviceToken, loop } = seededCli();
-  const res = gateway().cli(deviceToken, ["loops"]);
+test("cli loops: text is a TOON list (count + typed header + help), the `loops` channel is retained", async () => {
+  const { deviceToken, loop } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["loops"]));
   expect(res.status).toBe(200);
   const body = res.body as { loops: any[]; text: string; exitCode: number };
   // `loops` is a RETAINED data channel (client-side cwd→loop resolution); `ok` retired.
@@ -2024,26 +2057,26 @@ test("cli loops: text is a TOON list (count + typed header + help), the `loops` 
   expect(body.exitCode).toBe(0);
 });
 
-test("cli loops: an empty machine renders the definitive empty state (count: 0 + loops: [])", () => {
+test("cli loops: an empty machine renders the definitive empty state (count: 0 + loops: [])", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
-  const res = gateway().cli(deviceToken, ["loops"]);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
+  const res = (await gateway().cli(deviceToken, ["loops"]));
   const text = textOf(res);
   expect(text).toContain("count: 0");
   expect(text).toContain("loops: []");
   expect((res.body as { loops: any[] }).loops).toEqual([]);
 });
 
-test("cli log [D+R]: text is the TOON run survey (F2), structured runs intact", () => {
-  const { deviceToken, machineId } = seededCli();
-  const withRuns = store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
-  store.addRun({
+test("cli log [D+R]: text is the TOON run survey (F2), structured runs intact", async () => {
+  const { deviceToken, machineId } = (await seededCli());
+  const withRuns = (await store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  (await store.addRun({
     loopId: withRuns.id, userId: "u1", machineId, phase: "done", role: "exec",
     ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new", sessionId: "sess-abc",
     costUsd: 0.08, state: { drift: 0 }, message: "no drift since last sweep",
-  });
-  const res = gateway().cli(deviceToken, ["log", withRuns.id]);
+  }));
+  const res = (await gateway().cli(deviceToken, ["log", withRuns.id]));
   expect(res.status).toBe(200);
   const body = res.body as { ok: boolean; runs: any[]; text: string; exitCode: number };
   // Structured fields still there.
@@ -2059,26 +2092,26 @@ test("cli log [D+R]: text is the TOON run survey (F2), structured runs intact", 
   expect(body.exitCode).toBe(0);
 });
 
-test("cli log: an empty loop renders count: 0 of 0 total + runs: []", () => {
-  const { deviceToken, machineId } = seededCli();
-  const empty = store.createLoop({ userId: "u1", machineId, name: "Empty", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
-  const text = textOf(gateway().cli(deviceToken, ["log", empty.id]));
+test("cli log: an empty loop renders count: 0 of 0 total + runs: []", async () => {
+  const { deviceToken, machineId } = (await seededCli());
+  const empty = (await store.createLoop({ userId: "u1", machineId, name: "Empty", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  const text = textOf((await gateway().cli(deviceToken, ["log", empty.id])));
   expect(text).toContain("count: 0 of 0 total");
   expect(text).toContain("runs: []");
 });
 
-test("cli log [R]: the in-run run credential also gets the TOON survey text (F2 in-run)", () => {
-  const { runToken, run } = seededCli();
-  store.updateRun(run.id, { status: "new", message: "did a thing", sessionId: "sess-run" });
-  const res = gateway().cli(runToken, ["log"]);
+test("cli log [R]: the in-run run credential also gets the TOON survey text (F2 in-run)", async () => {
+  const { runToken, run } = (await seededCli());
+  (await store.updateRun(run.id, { status: "new", message: "did a thing", sessionId: "sess-run" }));
+  const res = (await gateway().cli(runToken, ["log"]));
   expect(res.status).toBe(200);
   expect(textOf(res)).toContain("runs[1]{");
   expect(textOf(res)).toContain("sess-run");
 });
 
-test("cli show [D]: text is the config detail with exitCode 0", () => {
-  const { deviceToken, loop } = seededCli();
-  const res = gateway().cli(deviceToken, ["show", loop.id]);
+test("cli show [D]: text is the config detail with exitCode 0", async () => {
+  const { deviceToken, loop } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["show", loop.id]));
   expect(res.status).toBe(200);
   expect(textOf(res)).toContain(`cron: "${loop.cron}"`);
   expect((res.body as { exitCode: number }).exitCode).toBe(0);
@@ -2088,12 +2121,12 @@ test("cli show [D]: text is the config detail with exitCode 0", () => {
 
 /** Create a richly-configured loop (every editable field non-default) so the
  *  roundtrip actually exercises each key, not just the defaults. */
-function seededRichLoop() {
+async function seededRichLoop() {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
   const gw = gateway();
-  const created = gw.cli(deviceToken, [
+  const created = (await gw.cli(deviceToken, [
     "new",
     "--json",
     JSON.stringify({
@@ -2107,19 +2140,19 @@ function seededRichLoop() {
       ui: "<div id=\"dash\">hello dashboard body that is comfortably over the size hint threshold</div>",
       stateSchema: [{ key: "drift", label: "Drift", unit: "files" }],
     }),
-  ]);
+  ]));
   const id = idIn(created);
   // model/allowControl aren't create fields; the pinned runAt override is edit-only.
   // Set them so the envelope carries non-default values for every editable key.
-  const edited = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify({ model: "opus", allowControl: false, runAt: "2h" })]);
+  const edited = (await gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify({ model: "opus", allowControl: false, runAt: "2h" })]));
   expect(edited.status).toBe(200);
   return { deviceToken, machineId, id, gw };
 }
 
-test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op patch (read/write identity)", () => {
-  const { deviceToken, id, gw } = seededRichLoop();
+test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op patch (read/write identity)", async () => {
+  const { deviceToken, id, gw } = (await seededRichLoop());
 
-  const show = gw.cli(deviceToken, ["show", id, "--json"]);
+  const show = (await gw.cli(deviceToken, ["show", id, "--json"]));
   expect(show.status).toBe(200);
   // The wire `text` IS the JSON envelope (what a text-sink daemon prints); the retired
   // structured `loop` field is gone, so parse the envelope out of `text` (§4.1 transport).
@@ -2136,7 +2169,7 @@ test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op
 
   // Drop id (identity, not editable); the rest fed verbatim to edit --dry-run changes nothing.
   const { id: _drop, ...patch } = env;
-  const dry = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify(patch), "--dry-run"]);
+  const dry = (await gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify(patch), "--dry-run"]));
   expect(dry.status).toBe(200);
   // Read/write identity via `text` (structured changes/rejections retired): a no-op dry-run
   // renders "nothing changed" + "changes: none" + "rejections: none", never a change/rejection block.
@@ -2149,20 +2182,20 @@ test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op
   expect(dryText).not.toMatch(/rejections\[\d+\]/);
 });
 
-test("show --json → edit roundtrip holds when the pinned runAt is stale (past): re-feeding it is a no-op, never a 400", () => {
-  const { deviceToken, id, gw } = seededRichLoop();
+test("show --json → edit roundtrip holds when the pinned runAt is stale (past): re-feeding it is a no-op, never a 400", async () => {
+  const { deviceToken, id, gw } = (await seededRichLoop());
   // A paused/completed loop keeps a stale (past) pin — the scheduler never clears
   // nextRunAt for a disabled loop, so `show --json` echoes a past ISO.
   const pastPin = "2020-01-01T00:00:00.000Z";
-  store.updateLoop(id, { nextRunAt: pastPin, enabled: false });
+  (await store.updateLoop(id, { nextRunAt: pastPin, enabled: false }));
 
-  const show = gw.cli(deviceToken, ["show", id, "--json"]);
+  const show = (await gw.cli(deviceToken, ["show", id, "--json"]));
   expect(show.status).toBe(200);
   const env = JSON.parse((show.body as { text: string }).text) as Record<string, unknown>;
   expect(env.runAt).toBe(pastPin);
 
   const { id: _drop, ...patch } = env;
-  const dry = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify(patch), "--dry-run"]);
+  const dry = (await gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify(patch), "--dry-run"]));
   expect(dry.status).toBe(200);
   expect(dry.body).toHaveProperty("exitCode", 0);
   const dryText = textOf(dry);
@@ -2171,26 +2204,26 @@ test("show --json → edit roundtrip holds when the pinned runAt is stale (past)
   expect(dryText).not.toMatch(/rejections\[\d+\]/);
 });
 
-test("show: large ui/workflow show a size hint by default and inline under --full", () => {
-  const { deviceToken, id, gw } = seededRichLoop();
+test("show: large ui/workflow show a size hint by default and inline under --full", async () => {
+  const { deviceToken, id, gw } = (await seededRichLoop());
 
-  const def = textOf(gw.cli(deviceToken, ["show", id]));
+  const def = textOf((await gw.cli(deviceToken, ["show", id])));
   // Presence + size hint, NOT the body (feedback #2 — never a char-clipped body).
   expect(def).toMatch(/ui: present, \d+ bytes — use --full to see/);
   expect(def).toMatch(/workflow: present, \d+ bytes — use --full to see/);
   expect(def).not.toContain("hello dashboard body");
   expect(def).not.toContain("return { state: prev }");
 
-  const full = textOf(gw.cli(deviceToken, ["show", id, "--full"]));
+  const full = textOf((await gw.cli(deviceToken, ["show", id, "--full"])));
   // --full inlines the complete bodies.
   expect(full).toContain("hello dashboard body");
   expect(full).toContain("return { state: prev }");
   expect(full).not.toContain("use --full to see");
 });
 
-test("show: runAt (pinned override) and nextFire (derived cron fire) are both present and distinct (F4)", () => {
-  const { deviceToken, id, gw } = seededRichLoop();
-  const text = textOf(gw.cli(deviceToken, ["show", id]));
+test("show: runAt (pinned override) and nextFire (derived cron fire) are both present and distinct (F4)", async () => {
+  const { deviceToken, id, gw } = (await seededRichLoop());
+  const text = textOf((await gw.cli(deviceToken, ["show", id])));
   const runAtLine = text.split("\n").find((l) => l.trim().startsWith("runAt:"))!;
   const nextFireLine = text.split("\n").find((l) => l.startsWith("nextFire:"))!;
   expect(runAtLine).toBeTruthy();
@@ -2201,18 +2234,18 @@ test("show: runAt (pinned override) and nextFire (derived cron fire) are both pr
   expect(runAtLine.replace("runAt:", "").trim()).not.toBe(nextFireLine.replace("nextFire:", "").trim());
 });
 
-test("show: derived aggregates (nextFire/classification/runs) accompany the envelope", () => {
-  const { deviceToken, id, gw } = seededRichLoop();
-  const text = textOf(gw.cli(deviceToken, ["show", id]));
+test("show: derived aggregates (nextFire/classification/runs) accompany the envelope", async () => {
+  const { deviceToken, id, gw } = (await seededRichLoop());
+  const text = textOf((await gw.cli(deviceToken, ["show", id])));
   expect(text).toMatch(/^nextFire: /m);
   // Closed loop (has a goal).
   expect(text).toContain("classification: closed (has goal");
   expect(text).toMatch(/^runs: \d+ total/m);
 });
 
-test("show --json [R]: the run credential emits the same envelope, scoped to its own loop", () => {
-  const { runToken, loop } = seededCli({ allowControl: true });
-  const res = gateway().cli(runToken, ["show", "--json"]);
+test("show --json [R]: the run credential emits the same envelope, scoped to its own loop", async () => {
+  const { runToken, loop } = (await seededCli({ allowControl: true }));
+  const res = (await gateway().cli(runToken, ["show", "--json"]));
   expect(res.status).toBe(200);
   const env = JSON.parse((res.body as { text: string }).text) as Record<string, unknown>;
   expect(env.id).toBe(loop.id);
@@ -2222,9 +2255,9 @@ test("show --json [R]: the run credential emits the same envelope, scoped to its
   expect(env).not.toHaveProperty("selfFinish");
 });
 
-test("cli new: text is the created-loop confirmation (id/name are render-only now, in `text`)", () => {
-  const { deviceToken } = seededCli();
-  const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" })]);
+test("cli new: text is the created-loop confirmation (id/name are render-only now, in `text`)", async () => {
+  const { deviceToken } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" })]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string; exitCode: number };
   const text = body.text;
@@ -2236,18 +2269,18 @@ test("cli new: text is the created-loop confirmation (id/name are render-only no
   expect(body.exitCode).toBe(0);
 });
 
-test("cli new: a closed loop reads classification closed; a provided-but-dropped ui warns loud", () => {
-  const { deviceToken } = seededCli();
-  const closed = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Ship v1", cron: "0 9 * * *", taskFile: "x", goal: "ship v1" })]);
+test("cli new: a closed loop reads classification closed; a provided-but-dropped ui warns loud", async () => {
+  const { deviceToken } = (await seededCli());
+  const closed = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Ship v1", cron: "0 9 * * *", taskFile: "x", goal: "ship v1" })]));
   expect(textOf(closed)).toContain("classification: closed — self-finishes when the goal is met");
   // A ui that sanitizes to nothing is surfaced as a warning line, not silently dropped.
-  const dropped = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "W", cron: "0 8 * * *", taskFile: "x", ui: "   " })]);
+  const dropped = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "W", cron: "0 8 * * *", taskFile: "x", ui: "   " })]));
   expect(textOf(dropped)).toContain("warning:"); // the dropped-dashboard warning rides in `text` (structured `warning` retired)
 });
 
-test("cli new --dry-run: text is the normalized config detail + fire preview (structured config retired)", () => {
-  const { deviceToken } = seededCli();
-  const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" }), "--dry-run"]);
+test("cli new --dry-run: text is the normalized config detail + fire preview (structured config retired)", async () => {
+  const { deviceToken } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" }), "--dry-run"]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string };
   expect(body.text).toContain("dry-run:");
@@ -2255,26 +2288,26 @@ test("cli new --dry-run: text is the normalized config detail + fire preview (st
   expect(body.text).toContain("nextRuns[3]:");
 });
 
-test("F9: cli new nextRuns renders in the loop's OWN timezone with a zone label, not raw UTC (matches show's nextFire)", () => {
-  const { deviceToken } = seededCli();
+test("F9: cli new nextRuns renders in the loop's OWN timezone with a zone label, not raw UTC (matches show's nextFire)", async () => {
+  const { deviceToken } = (await seededCli());
   // 0 5 * * * Asia/Shanghai → 05:00 local == 21:00Z. The OLD render showed the raw UTC
   // slice ("… 21:00", unlabeled); the fix shows the loop-local time + zone.
-  const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "SH", cron: "0 5 * * *", timezone: "Asia/Shanghai", taskFile: "x" })]);
+  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "SH", cron: "0 5 * * *", timezone: "Asia/Shanghai", taskFile: "x" })]));
   const nextRunsLine = textOf(res).split("\n").find((l) => l.startsWith("nextRuns[3]:"))!;
   expect(nextRunsLine).toBeTruthy();
   expect(nextRunsLine).toContain("05:00"); // loop-local hour, not the 21:00 UTC hour
   expect(nextRunsLine).not.toContain("21:00");
   expect(nextRunsLine).toMatch(/GMT\+8|GMT\+08/); // carries the zone label like show's nextFire
   // Dry-run shares the same zoned render.
-  const dry = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "SH", cron: "0 5 * * *", timezone: "Asia/Shanghai", taskFile: "x" }), "--dry-run"]);
+  const dry = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "SH", cron: "0 5 * * *", timezone: "Asia/Shanghai", taskFile: "x" }), "--dry-run"]));
   const dryLine = textOf(dry).split("\n").find((l) => l.startsWith("nextRuns[3]:"))!;
   expect(dryLine).toContain("05:00");
   expect(dryLine).toMatch(/GMT\+8|GMT\+08/);
 });
 
-test("F4: cli loops --json returns REAL JSON (the full records), not TOON", () => {
-  const { deviceToken, loop } = seededCli();
-  const res = gateway().cli(deviceToken, ["loops", "--json"]);
+test("F4: cli loops --json returns REAL JSON (the full records), not TOON", async () => {
+  const { deviceToken, loop } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["loops", "--json"]));
   expect(res.status).toBe(200);
   const text = textOf(res);
   // First non-space byte is `[` (a JSON array), NOT `c` (TOON's `count:`).
@@ -2285,16 +2318,16 @@ test("F4: cli loops --json returns REAL JSON (the full records), not TOON", () =
   // `--json` mirrors `show --json`: `runs`/`lastOutcome` are computed unconditionally,
   // never the lazy 0/null the TOON path uses without `--fields`.
   const rec = parsed.find((l: { id: string }) => l.id === loop.id) as { runs: number; lastOutcome: string | null };
-  expect(rec.runs).toBe(store.countRuns(loop.id));
+  expect(rec.runs).toBe(await store.countRuns(loop.id));
   expect(rec.runs).toBeGreaterThan(0);
   // The `loops` data channel still rides alongside (retained for client-side resolution).
   expect((res.body as { loops: unknown[] }).loops.length).toBeGreaterThan(0);
   expect((res.body as { exitCode: number }).exitCode).toBe(0);
 });
 
-test("F8: cli edit with an empty patch is a valid no-op reporting 'nothing to change' + the editable-key list (exit 0)", () => {
-  const { deviceToken, loop } = seededCli();
-  const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", "{}"]);
+test("F8: cli edit with an empty patch is a valid no-op reporting 'nothing to change' + the editable-key list (exit 0)", async () => {
+  const { deviceToken, loop } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["edit", loop.id, "--json", "{}"]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string; exitCode: number };
   expect(body.exitCode).toBe(0);
@@ -2303,9 +2336,9 @@ test("F8: cli edit with an empty patch is a valid no-op reporting 'nothing to ch
   expect(body.text).toContain("cron"); // the key list is present so the next attempt is well-formed
 });
 
-test("cli edit: text is the updated-loop confirmation with the applied keys inline", () => {
-  const { deviceToken, loop } = seededCli();
-  const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always" })]);
+test("cli edit: text is the updated-loop confirmation with the applied keys inline", async () => {
+  const { deviceToken, loop } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always" })]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string; exitCode: number };
   expect(body.text).toContain(`updated: L (${loop.id})`); // bare: "L" needs no quoting; `applied` now render-only in `text`
@@ -2313,69 +2346,69 @@ test("cli edit: text is the updated-loop confirmation with the applied keys inli
   expect(body.exitCode).toBe(0);
 });
 
-test("cli edit --dry-run: text renders the changes list; a rejection flips the header + adds a rejections block", () => {
-  const { deviceToken, loop } = seededCli();
-  const ok = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *" }), "--dry-run"]);
+test("cli edit --dry-run: text renders the changes list; a rejection flips the header + adds a rejections block", async () => {
+  const { deviceToken, loop } = (await seededCli());
+  const ok = (await gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *" }), "--dry-run"]));
   expect(textOf(ok)).toContain("nothing changed");
   expect(textOf(ok)).toContain("changes[1]{key,from,to}:");
   expect(textOf(ok)).toContain("rejections: none");
   // A bad notify value is a per-key rejection in dry-run.
-  const bad = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "sometimes" }), "--dry-run"]);
+  const bad = (await gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "sometimes" }), "--dry-run"]));
   const text = textOf(bad);
   expect(text).toContain("1 change valid, 1 rejected");
   expect(text).toContain("rejections[1]{key,reason}:");
   expect(text).toContain("notify,");
 });
 
-test("cli report [R]: success renders the compact TOON line; state metrics inline", () => {
-  const { runToken } = seededCli();
-  const res = gateway().cli(runToken, ["report", "--status", "nothing-new"]);
+test("cli report [R]: success renders the compact TOON line; state metrics inline", async () => {
+  const { runToken } = (await seededCli());
+  const res = (await gateway().cli(runToken, ["report", "--status", "nothing-new"]));
   expect(res.status).toBe(200);
   expect(textOf(res)).toBe("reported: status=nothing-new");
   expect((res.body as { exitCode: number }).exitCode).toBe(0);
 
-  const withMetrics = gateway().cli(runToken, ["report", "--status", "new", "--state", '{"drift":3}', "--message", "opened a PR"]);
+  const withMetrics = (await gateway().cli(runToken, ["report", "--status", "new", "--state", '{"drift":3}', "--message", "opened a PR"]));
   expect(textOf(withMetrics)).toBe("reported: status=new · metrics drift=3 · message recorded");
 });
 
-test("F5: cli report rejects an invalid --status with a 400 VALIDATION_ERROR (no silent drop)", () => {
-  const { runToken, run } = seededCli();
-  const res = gateway().cli(runToken, ["report", "--status", "wibble"]);
+test("F5: cli report rejects an invalid --status with a 400 VALIDATION_ERROR (no silent drop)", async () => {
+  const { runToken, run } = (await seededCli());
+  const res = (await gateway().cli(runToken, ["report", "--status", "wibble"]));
   expect(res.status).toBe(400);
   const text = textOf(res);
   expect(text).toContain('error: "status must be new|resolved|nothing-new (got \\"wibble\\")"');
   expect(text).toContain("code: VALIDATION_ERROR");
   expect((res.body as { exitCode: number }).exitCode).toBe(1);
   // Fail-loud: the run's status was NOT mutated (the old code dropped it, exit 0).
-  expect(store.getRun(run.id)!.status ?? null).toBeNull();
+  expect((await store.getRun(run.id))!.status ?? null).toBeNull();
 });
 
-test("F5: the same fail-loud guard applies through the raw agent-api transport too", () => {
-  const { rt, run } = seededExecRun();
-  const res = gateway().agentApi(rt, ["report", "--status", "bogus"]);
+test("F5: the same fail-loud guard applies through the raw agent-api transport too", async () => {
+  const { rt, run } = (await seededExecRun());
+  const res = (await gateway().agentApi(rt, ["report", "--status", "bogus"]));
   expect(res.status).toBe(400);
   expect((res.body as { text: string }).text).toContain("code: VALIDATION_ERROR");
-  expect(store.getRun(run.id)!.status ?? null).toBeNull();
+  expect((await store.getRun(run.id))!.status ?? null).toBeNull();
 });
 
-test("cli finish [R]: success renders the goal-met detail; a second finish is a CONFLICT", () => {
-  const closed = seededCli({ goal: "reach the goal" });
-  const ok = gateway().cli(closed.runToken, ["finish", "--message", "goal met", "--reason", "shipped"]);
+test("cli finish [R]: success renders the goal-met detail; a second finish is a CONFLICT", async () => {
+  const closed = (await seededCli({ goal: "reach the goal" }));
+  const ok = (await gateway().cli(closed.runToken, ["finish", "--message", "goal met", "--reason", "shipped"]));
   expect(ok.status).toBe(200);
   const text = textOf(ok);
   expect(text).toContain(`finished: L (${closed.loop.id}) — goal met`); // bare: "L" needs no quoting
   expect(text).toContain("completedAt:");
   expect(text).toContain("completionReason: shipped");
   // The lease stays live for one enriching report, so a second finish is a legible CONFLICT.
-  const again = gateway().cli(closed.runToken, ["finish", "--message", "again"]);
+  const again = (await gateway().cli(closed.runToken, ["finish", "--message", "again"]));
   expect(again.status).toBe(400);
   expect(textOf(again)).toContain("code: CONFLICT");
 });
 
-test("cli errors render as error:/code: TOON to stdout with exitCode 1", () => {
-  const { deviceToken } = seededCli();
+test("cli errors render as error:/code: TOON to stdout with exitCode 1", async () => {
+  const { deviceToken } = (await seededCli());
   // A createLoop validation error (bad --json) → structured error + rendered text.
-  const badJson = gateway().cli(deviceToken, ["new", "--json", "{not json"]);
+  const badJson = (await gateway().cli(deviceToken, ["new", "--json", "{not json"]));
   expect(badJson.status).toBe(400);
   expect(textOf(badJson)).toMatch(/--json/); // structured `error` → rendered into `text`
   expect(textOf(badJson)).toContain("error: ");
@@ -2383,7 +2416,7 @@ test("cli errors render as error:/code: TOON to stdout with exitCode 1", () => {
   expect((badJson.body as { exitCode: number }).exitCode).toBe(1);
 
   // The device-credential run-only denial surfaces as a FORBIDDEN error to stdout.
-  const denied = gateway().cli(deviceToken, ["report"]);
+  const denied = (await gateway().cli(deviceToken, ["report"]));
   expect(denied.status).toBe(403);
   expect(textOf(denied)).toContain("code: FORBIDDEN");
   expect(textOf(denied)).toContain("run-only verb");
@@ -2391,14 +2424,14 @@ test("cli errors render as error:/code: TOON to stdout with exitCode 1", () => {
 
 // ---- batch 3: list/create aggregates, edit no-op, error contract, `new` idempotency ----
 
-test("cli loops: count aggregate + nextFire on an enabled loop, — on a paused one", () => {
+test("cli loops: count aggregate + nextFire on an enabled loop, — on a paused one", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
   // An enabled loop that fires soon, and a paused one (no next fire).
-  const on = store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 6 * * 1", enabled: true, notify: "auto" });
-  const off = store.createLoop({ userId: "u1", machineId, name: "Ship v1", cron: "0 9 * * *", enabled: false, notify: "auto" });
-  const text = textOf(gateway().cli(deviceToken, ["loops"]));
+  const on = (await store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 6 * * 1", enabled: true, notify: "auto" }));
+  const off = (await store.createLoop({ userId: "u1", machineId, name: "Ship v1", cron: "0 9 * * *", enabled: false, notify: "auto" }));
+  const text = textOf((await gateway().cli(deviceToken, ["loops"])));
   expect(text).toContain("count: 2");
   expect(text).toContain("loops[2]{id,name,cron,enabled,nextFire}:");
   // The enabled loop shows a computed fire time; the paused loop shows the em-dash.
@@ -2411,13 +2444,13 @@ test("cli loops: count aggregate + nextFire on an enabled loop, — on a paused 
   expect(offRow.trimEnd().endsWith("—")).toBe(true); // paused ⇒ nextFire is —
 });
 
-test("cli loops --fields: extends the default columns from the optional set (in request order)", () => {
+test("cli loops --fields: extends the default columns from the optional set (in request order)", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 6 * * 1", enabled: true, notify: "always", goal: "ship it" });
-  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new" });
-  const text = textOf(gateway().cli(deviceToken, ["loops", "--fields", "notify,goal,runs,lastOutcome"]));
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 6 * * 1", enabled: true, notify: "always", goal: "ship it" }));
+  (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new" }));
+  const text = textOf((await gateway().cli(deviceToken, ["loops", "--fields", "notify,goal,runs,lastOutcome"])));
   expect(text).toContain("loops[1]{id,name,cron,enabled,nextFire,notify,goal,runs,lastOutcome}:");
   const row = text.split("\n").find((r) => r.includes(loop.id))!;
   expect(row).toContain("always");
@@ -2426,22 +2459,22 @@ test("cli loops --fields: extends the default columns from the optional set (in 
   expect(row).toMatch(/,1,/); // runs count = 1
 });
 
-test("cli loops --fields lastOutcome: tracks the last EXEC run, never masked by a later evolve/edit", () => {
+test("cli loops --fields lastOutcome: tracks the last EXEC run, never masked by a later evolve/edit", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
   // A loop whose newest run is a SUCCESSFUL evolve but whose last scheduled exec FAILED.
-  const masked = store.createLoop({ userId: "u1", machineId, name: "Masked", cron: "0 6 * * 1", enabled: true, notify: "auto" });
-  store.addRun({ loopId: masked.id, userId: "u1", machineId, phase: "error", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "error", status: null });
-  store.addRun({ loopId: masked.id, userId: "u1", machineId, phase: "done", role: "evolve", ts: "2026-07-05T07:00:00Z", outcome: "evolve", status: null });
+  const masked = (await store.createLoop({ userId: "u1", machineId, name: "Masked", cron: "0 6 * * 1", enabled: true, notify: "auto" }));
+  (await store.addRun({ loopId: masked.id, userId: "u1", machineId, phase: "error", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "error", status: null }));
+  (await store.addRun({ loopId: masked.id, userId: "u1", machineId, phase: "done", role: "evolve", ts: "2026-07-05T07:00:00Z", outcome: "evolve", status: null }));
   // A loop with only an exec run.
-  const execOnly = store.createLoop({ userId: "u1", machineId, name: "ExecOnly", cron: "0 6 * * 1", enabled: true, notify: "auto" });
-  store.addRun({ loopId: execOnly.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new" });
+  const execOnly = (await store.createLoop({ userId: "u1", machineId, name: "ExecOnly", cron: "0 6 * * 1", enabled: true, notify: "auto" }));
+  (await store.addRun({ loopId: execOnly.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new" }));
   // A loop with no exec runs at all (only an edit).
-  const noExec = store.createLoop({ userId: "u1", machineId, name: "NoExec", cron: "0 6 * * 1", enabled: true, notify: "auto" });
-  store.addRun({ loopId: noExec.id, userId: "u1", machineId, phase: "done", role: "edit", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: null });
+  const noExec = (await store.createLoop({ userId: "u1", machineId, name: "NoExec", cron: "0 6 * * 1", enabled: true, notify: "auto" }));
+  (await store.addRun({ loopId: noExec.id, userId: "u1", machineId, phase: "done", role: "edit", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: null }));
 
-  const text = textOf(gateway().cli(deviceToken, ["loops", "--fields", "lastOutcome"]));
+  const text = textOf((await gateway().cli(deviceToken, ["loops", "--fields", "lastOutcome"])));
   const rows = text.split("\n");
   const maskedRow = rows.find((r) => r.includes(masked.id))!;
   expect(maskedRow).toContain("failed"); // the failed exec, NOT the later successful evolve
@@ -2452,12 +2485,12 @@ test("cli loops --fields lastOutcome: tracks the last EXEC run, never masked by 
   expect(noExecRow.trimEnd().endsWith("—")).toBe(true); // no exec run ⇒ lastOutcome is —
 });
 
-test("cli loops --fields: an unknown field fails loud (VALIDATION_ERROR, exit 1, available set listed)", () => {
+test("cli loops --fields: an unknown field fails loud (VALIDATION_ERROR, exit 1, available set listed)", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
-  store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 6 * * 1", enabled: true, notify: "auto" });
-  const res = gateway().cli(deviceToken, ["loops", "--fields", "notify,bogus"]);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
+  (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 6 * * 1", enabled: true, notify: "auto" }));
+  const res = (await gateway().cli(deviceToken, ["loops", "--fields", "notify,bogus"]));
   expect(res.status).toBe(400);
   const text = textOf(res);
   expect(text).toContain("unknown field(s): bogus");
@@ -2466,90 +2499,90 @@ test("cli loops --fields: an unknown field fails loud (VALIDATION_ERROR, exit 1,
   expect((res.body as { exitCode: number }).exitCode).toBe(1);
 });
 
-test("cli loops --fields: a default column requested as an extra is rejected (only the optional set extends)", () => {
+test("cli loops --fields: a default column requested as an extra is rejected (only the optional set extends)", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
-  const res = gateway().cli(deviceToken, ["loops", "--fields", "name"]);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
+  const res = (await gateway().cli(deviceToken, ["loops", "--fields", "name"]));
   expect(res.status).toBe(400);
   expect(textOf(res)).toContain("unknown field(s): name");
 });
 
-test("cli new: an idempotent replay with the same key returns the SAME loop (never a twin)", () => {
-  const { deviceToken, machineId } = seededCli();
+test("cli new: an idempotent replay with the same key returns the SAME loop (never a twin)", async () => {
+  const { deviceToken, machineId } = (await seededCli());
   const gw = gateway();
   const cfg = JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md", ui: "<div id='dash'>hi</div>", idempotencyKey: "key-abc" });
-  const before = store.loopsForMachine(machineId).length;
-  const first = gw.cli(deviceToken, ["new", "--json", cfg]);
+  const before = (await store.loopsForMachine(machineId)).length;
+  const first = (await gw.cli(deviceToken, ["new", "--json", cfg]));
   expect(first.status).toBe(200);
   const firstId = idIn(first);
   expect(textOf(first)).not.toContain("idempotent replay"); // a genuine first create
-  expect(store.getLoop(firstId)!.ui).toBeTruthy(); // a dashboard was applied on the real create
-  expect(store.loopsForMachine(machineId).length).toBe(before + 1);
+  expect((await store.getLoop(firstId))!.ui).toBeTruthy(); // a dashboard was applied on the real create
+  expect((await store.loopsForMachine(machineId)).length).toBe(before + 1);
 
   // A retry with the SAME key returns the SAME loop — the §4.5 replay TOON, no twin.
-  const replay = gw.cli(deviceToken, ["new", "--json", cfg]);
+  const replay = (await gw.cli(deviceToken, ["new", "--json", cfg]));
   expect(replay.status).toBe(200);
   expect(idIn(replay)).toBe(firstId); // same loop, no twin
   expect(textOf(replay)).toContain("[idempotent replay — existing loop returned]");
   // The replayed loop still carries its dashboard (id/idempotent/ui are render-only now).
-  expect(store.getLoop(firstId)!.ui).toBeTruthy();
-  expect(store.loopsForMachine(machineId).length).toBe(before + 1); // still exactly one
+  expect((await store.getLoop(firstId))!.ui).toBeTruthy();
+  expect((await store.loopsForMachine(machineId)).length).toBe(before + 1); // still exactly one
 });
 
-test("cli new: an idempotent replay of a no-dashboard loop stays dashboard-less", () => {
-  const { deviceToken } = seededCli();
+test("cli new: an idempotent replay of a no-dashboard loop stays dashboard-less", async () => {
+  const { deviceToken } = (await seededCli());
   const gw = gateway();
   const cfg = JSON.stringify({ name: "Plain", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "key-noui" });
-  const first = gw.cli(deviceToken, ["new", "--json", cfg]);
-  expect(store.getLoop(idIn(first))!.ui ?? null).toBeNull(); // no dashboard applied
-  const replay = gw.cli(deviceToken, ["new", "--json", cfg]);
+  const first = (await gw.cli(deviceToken, ["new", "--json", cfg]));
+  expect((await store.getLoop(idIn(first)))!.ui ?? null).toBeNull(); // no dashboard applied
+  const replay = (await gw.cli(deviceToken, ["new", "--json", cfg]));
   expect(textOf(replay)).toContain("idempotent replay");
-  expect(store.getLoop(idIn(replay))!.ui ?? null).toBeNull();
+  expect((await store.getLoop(idIn(replay)))!.ui ?? null).toBeNull();
 });
 
-test("cli new: a different key (different config) does NOT collide — an intentional twin survives", () => {
-  const { deviceToken, machineId } = seededCli();
+test("cli new: a different key (different config) does NOT collide — an intentional twin survives", async () => {
+  const { deviceToken, machineId } = (await seededCli());
   const gw = gateway();
-  const a = gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "A", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "k-a" })]);
-  const b = gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "B", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "k-b" })]);
+  const a = (await gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "A", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "k-a" })]));
+  const b = (await gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "B", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "k-b" })]));
   expect(idIn(a)).not.toBe(idIn(b));
   expect(textOf(b)).not.toContain("idempotent replay"); // an intentional twin, not a replay
 });
 
-test("cli new: idempotency binds the machine — the same key from another machine is not a replay", () => {
+test("cli new: idempotency binds the machine — the same key from another machine is not a replay", async () => {
   const tokenA = tokens.mintDeviceToken();
   const machineA = tokens.machineIdFromToken(tokenA);
-  store.createMachine({ id: machineA, userId: "u1", name: "A", tokenHash: tokens.sha256(tokenA), online: true });
+  (await store.createMachine({ id: machineA, userId: "u1", name: "A", tokenHash: tokens.sha256(tokenA), online: true }));
   const tokenB = tokens.mintDeviceToken();
   const machineB = tokens.machineIdFromToken(tokenB);
-  store.createMachine({ id: machineB, userId: "u1", name: "B", tokenHash: tokens.sha256(tokenB), online: true });
+  (await store.createMachine({ id: machineB, userId: "u1", name: "B", tokenHash: tokens.sha256(tokenB), online: true }));
   const gw = gateway();
   const cfg = JSON.stringify({ name: "Shared", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "shared-key" });
-  const a = gw.cli(tokenA, ["new", "--json", cfg]);
-  const b = gw.cli(tokenB, ["new", "--json", cfg]);
+  const a = (await gw.cli(tokenA, ["new", "--json", cfg]));
+  const b = (await gw.cli(tokenB, ["new", "--json", cfg]));
   // Same content key, different machines ⇒ two distinct loops (no cross-machine replay).
   expect(idIn(a)).not.toBe(idIn(b));
   expect(textOf(b)).not.toContain("idempotent replay");
-  expect(store.getLoop(idIn(a))!.machineId).toBe(machineA);
-  expect(store.getLoop(idIn(b))!.machineId).toBe(machineB);
+  expect((await store.getLoop(idIn(a)))!.machineId).toBe(machineA);
+  expect((await store.getLoop(idIn(b)))!.machineId).toBe(machineB);
 });
 
-test("cli new: an EXPIRED idempotency key allows a genuine re-create (TTL window elapsed)", () => {
-  const { deviceToken, machineId } = seededCli();
+test("cli new: an EXPIRED idempotency key allows a genuine re-create (TTL window elapsed)", async () => {
+  const { deviceToken, machineId } = (await seededCli());
   // Seed a stale record (older than the 15-min window) for a known key, pointing at a
   // loop that no longer needs to be returned — the read must drop it and create fresh.
   tokens.recordNewIdempotency("stale-key", machineId, "loop-ancient", Date.now() - (tokens.NEW_IDEMPOTENCY_TTL_MS + 1000));
-  const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Fresh", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "stale-key" })]);
+  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Fresh", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "stale-key" })]));
   expect(res.status).toBe(200);
   expect(textOf(res)).not.toContain("idempotent replay"); // NOT a replay — the stale key expired
   expect(idIn(res)).not.toBe("loop-ancient");
-  expect(store.getLoop(idIn(res))!.machineId).toBe(machineId);
+  expect((await store.getLoop(idIn(res)))!.machineId).toBe(machineId);
 });
 
-test("cli edit --json '{}': an empty patch is a valid no-op (nothing to change + the editable keys), exit 0", () => {
-  const { deviceToken, loop } = seededCli();
-  const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", "{}"]);
+test("cli edit --json '{}': an empty patch is a valid no-op (nothing to change + the editable keys), exit 0", async () => {
+  const { deviceToken, loop } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["edit", loop.id, "--json", "{}"]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string; exitCode: number };
   expect(body.text).toContain("nothing to change:"); // ok/applied/nothingToChange retired → asserted via text
@@ -2558,9 +2591,9 @@ test("cli edit --json '{}': an empty patch is a valid no-op (nothing to change +
   expect(body.exitCode).toBe(0);
 });
 
-test("cli edit --dry-run: a rejection flips the header, lists changes + rejections, and exits 1", () => {
-  const { deviceToken, loop } = seededCli();
-  const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "sometimes" }), "--dry-run"]);
+test("cli edit --dry-run: a rejection flips the header, lists changes + rejections, and exits 1", async () => {
+  const { deviceToken, loop } = (await seededCli());
+  const res = (await gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "sometimes" }), "--dry-run"]));
   // A dry-run with a rejection is not ok → exit 1 (the error contract). ok/changes/
   // rejections are render-only now → the whole shape is asserted via `text`.
   const body = res.body as { text: string; exitCode: number };
@@ -2575,9 +2608,9 @@ test("cli edit --dry-run: a rejection flips the header, lists changes + rejectio
 
 // ---- content-first home (P8/§5.1, Batch 6) ----------------------------------
 
-test("cli home [device]: an unregistered machine renders the DEFINITIVE not-connected state (never a 401/empty)", () => {
+test("cli home [device]: an unregistered machine renders the DEFINITIVE not-connected state (never a 401/empty)", async () => {
   const deviceToken = tokens.mintDeviceToken();
-  const res = gateway().cli(deviceToken, ["home"]);
+  const res = (await gateway().cli(deviceToken, ["home"]));
   expect(res.status).toBe(200);
   const body = res.body as { ok: boolean; text: string; exitCode: number };
   expect(body.exitCode).toBe(0);
@@ -2588,14 +2621,14 @@ test("cli home [device]: an unregistered machine renders the DEFINITIVE not-conn
   expect(body.text).not.toContain("loops[");
 });
 
-test("cli home [device]: a registered machine shows presence + its loops + recent runs + help, with the daemon-passed context", () => {
+test("cli home [device]: a registered machine shows presence + its loops + recent runs + help, with the daemon-passed context", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 6 * * 1", enabled: true, notify: "auto" });
-  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", status: "nothing-new", outcome: "exec", ts: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 6 * * 1", enabled: true, notify: "auto" }));
+  (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", status: "nothing-new", outcome: "exec", ts: new Date().toISOString() }));
 
-  const res = gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/loopany", "--pid", "4821", "--server", "https://srv.example"]);
+  const res = (await gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/loopany", "--pid", "4821", "--server", "https://srv.example"]));
   expect(res.status).toBe(200);
   const text = (res.body as { text: string }).text;
   expect(text).toContain("bin: /Users/x/.local/bin/loopany");
@@ -2606,14 +2639,14 @@ test("cli home [device]: a registered machine shows presence + its loops + recen
   expect(text).toContain("help[");
 });
 
-test("cli home [device]: --cwd scopes 'loops here' to the loop rooted at the directory, counting the rest as elsewhere", () => {
+test("cli home [device]: --cwd scopes 'loops here' to the loop rooted at the directory, counting the rest as elsewhere", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() });
-  const here = store.createLoop({ userId: "u1", machineId, name: "Here", cron: "0 6 * * *", enabled: true, notify: "auto", taskFile: "/work/here/README.md" });
-  store.createLoop({ userId: "u1", machineId, name: "Elsewhere", cron: "0 7 * * *", enabled: true, notify: "auto", taskFile: "/work/other/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() }));
+  const here = (await store.createLoop({ userId: "u1", machineId, name: "Here", cron: "0 6 * * *", enabled: true, notify: "auto", taskFile: "/work/here/README.md" }));
+  (await store.createLoop({ userId: "u1", machineId, name: "Elsewhere", cron: "0 7 * * *", enabled: true, notify: "auto", taskFile: "/work/other/README.md" }));
 
-  const res = gateway().cli(deviceToken, ["home", "--cwd", "/work/here"]);
+  const res = (await gateway().cli(deviceToken, ["home", "--cwd", "/work/here"]));
   const text = (res.body as { text: string }).text;
   expect(text).toContain("Here");
   expect(text).not.toContain("Elsewhere,"); // not listed as a row
@@ -2625,41 +2658,41 @@ test("cli home [device]: --cwd scopes 'loops here' to the loop rooted at the dir
   expect(here.id).toBeTruthy();
 });
 
-test("cli home [device]: an UNSCOPED full-machine view keeps the plain `loops[N]` header (no 'here')", () => {
+test("cli home [device]: an UNSCOPED full-machine view keeps the plain `loops[N]` header (no 'here')", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() });
-  store.createLoop({ userId: "u1", machineId, name: "Only", cron: "0 6 * * *", enabled: true, notify: "auto", taskFile: "/work/only/README.md" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() }));
+  (await store.createLoop({ userId: "u1", machineId, name: "Only", cron: "0 6 * * *", enabled: true, notify: "auto", taskFile: "/work/only/README.md" }));
   // No --cwd (or a cwd matching nothing) ⇒ all loops are "here", elsewhere 0 ⇒ plain header.
-  const text = (gateway().cli(deviceToken, ["home"]).body as { text: string }).text;
+  const text = ((await gateway().cli(deviceToken, ["home"])).body as { text: string }).text;
   expect(text).toContain("loops[1]{name,cron,enabled,nextFire,lastOutcome}:");
   expect(text).not.toContain("loops here[");
   expect(text).not.toContain("loops elsewhere:");
 });
 
-test("F7: cli home [device] ALWAYS leads with a `bin:` line — the durable path when passed, else the honest not-on-PATH fallback", () => {
+test("F7: cli home [device] ALWAYS leads with a `bin:` line — the durable path when passed, else the honest not-on-PATH fallback", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() }));
   // Durable: the daemon passes --bin with the resolved shim/global path.
-  const withBin = (gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/loopany"]).body as { text: string }).text;
+  const withBin = ((await gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/loopany"])).body as { text: string }).text;
   expect(withBin.split("\n")[0]).toBe("bin: /Users/x/.local/bin/loopany");
   // Non-durable (npx-without-global): no --bin ⇒ the fallback line still leads (P8), never missing.
-  const noBin = (gateway().cli(deviceToken, ["home"]).body as { text: string }).text;
+  const noBin = ((await gateway().cli(deviceToken, ["home"])).body as { text: string }).text;
   expect(noBin.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
 });
 
-test("F7: the not-connected home also leads with the `bin:` fallback line", () => {
+test("F7: the not-connected home also leads with the `bin:` fallback line", async () => {
   const deviceToken = tokens.mintDeviceToken(); // unregistered → not-connected branch
-  const text = (gateway().cli(deviceToken, ["home"]).body as { text: string }).text;
+  const text = ((await gateway().cli(deviceToken, ["home"])).body as { text: string }).text;
   expect(text.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
   expect(text).toContain("machine: not connected — run `loopany up`");
 });
 
-test("cli home [run]: renders the run's OWN loop context (role + goal + recent) scoped to the lease's loop", () => {
-  const { runToken, loop } = seededCli({ goal: "ship v1" });
-  store.addRun({ loopId: loop.id, userId: "u1", machineId: loop.machineId, phase: "done", role: "exec", status: "new", outcome: "exec", message: "did a thing", ts: new Date().toISOString() });
-  const res = gateway().cli(runToken, ["home"]);
+test("cli home [run]: renders the run's OWN loop context (role + goal + recent) scoped to the lease's loop", async () => {
+  const { runToken, loop } = (await seededCli({ goal: "ship v1" }));
+  (await store.addRun({ loopId: loop.id, userId: "u1", machineId: loop.machineId, phase: "done", role: "exec", status: "new", outcome: "exec", message: "did a thing", ts: new Date().toISOString() }));
+  const res = (await gateway().cli(runToken, ["home"]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string; exitCode: number };
   expect(body.exitCode).toBe(0);

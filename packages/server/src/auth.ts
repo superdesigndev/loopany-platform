@@ -42,6 +42,23 @@ const allowlist = (process.env.LOOPANY_ALLOWED_LOGINS || "")
   .filter(Boolean);
 
 /**
+ * Whether an email may sign in. An empty allowlist means "allow anyone" (open
+ * mode). Each allowlist entry is either a full email (exact match) or a DOMAIN
+ * WILDCARD — `@example.com` or `*@example.com` — matching any address at that
+ * domain (so `*@superdesign.dev` admits the whole team without listing each one).
+ */
+export function emailAllowed(email: string | null | undefined): boolean {
+  if (!allowlist.length) return true;
+  const e = (email || "").toLowerCase();
+  const at = e.indexOf("@");
+  if (at < 0) return false;
+  const domain = e.slice(at); // includes the leading "@"
+  return allowlist.some(
+    (entry) => entry === e || entry === domain || (entry.startsWith("*@") && entry.slice(1) === domain),
+  );
+}
+
+/**
  * Superadmins see every team and every team's loops — the predicate lives in
  * `./superadmin.js` (env-driven, LOOPANY_SUPERADMINS) and is re-exported above so
  * the gateway can reuse it without importing this Better-Auth-initializing module.
@@ -107,7 +124,7 @@ export async function requestScope(): Promise<RequestScope> {
   if (!enforce) {
     // Open mode ⇒ the single shared workspace; no sign-in, no admin, no switching.
     const teamId = store.teamIdForUser(null);
-    store.ensureTeam(teamId, "Shared Workspace", null);
+    await store.ensureTeam(teamId, "Shared Workspace", null);
     return { enforce, userId: null, teamId, isAdmin: false, allTeams: false };
   }
 
@@ -116,7 +133,7 @@ export async function requestScope(): Promise<RequestScope> {
   const personalTeam = store.teamIdForUser(userId);
   // Ensure the personal/placeholder team exists (covers pre-hook users etc.) and
   // keep its name in sync with the email — also renames pre-existing teams.
-  store.ensureTeam(personalTeam, userId ? teamNameForEmail(user?.email) : "Shared Workspace", userId);
+  await store.ensureTeam(personalTeam, userId ? teamNameForEmail(user?.email) : "Shared Workspace", userId);
 
   const isAdmin = isSuperAdmin(user?.email);
   const sel = await selectedTeam();
@@ -125,7 +142,7 @@ export async function requestScope(): Promise<RequestScope> {
   }
   // A specific team: admins may pick any existing team; others only their own.
   if (sel && sel !== personalTeam && userId) {
-    const ok = isAdmin ? !!store.getTeam(sel) : store.isTeamMember(sel, userId);
+    const ok = isAdmin ? !!(await store.getTeam(sel)) : await store.isTeamMember(sel, userId);
     if (ok) return { enforce, userId, teamId: sel, isAdmin, allTeams: false };
   }
   return { enforce, userId, teamId: personalTeam, isAdmin, allTeams: false };
@@ -148,7 +165,7 @@ export function loopInScope(loopTeamId: string | null, scope: RequestScope): boo
 export const auth = betterAuth({
   baseURL: process.env.LOOPANY_BASE_URL || "http://127.0.0.1:3000",
   secret: authSecret || "dev-insecure-secret-change-in-prod",
-  database: drizzleAdapter(db, { provider: "sqlite" }),
+  database: drizzleAdapter(db, { provider: "pg" }),
   socialProviders: authEnabled
     ? { github: { clientId: clientId!, clientSecret: clientSecret! } }
     : {},
@@ -158,11 +175,10 @@ export const auth = betterAuth({
         before: async (user) => {
           // Login allowlist (empty ⇒ allow anyone). Closes the shared-workspace
           // RCE hole: only listed people can sign in and thus reach machines.
-          if (allowlist.length) {
+          // Entries may be full emails or domain wildcards (see `emailAllowed`).
+          if (!emailAllowed(user.email)) {
             const email = (user.email || "").toLowerCase();
-            if (!allowlist.includes(email)) {
-              throw new APIError("FORBIDDEN", { message: `${email} is not on the Loopany allowlist` });
-            }
+            throw new APIError("FORBIDDEN", { message: `${email} is not on the Loopany allowlist` });
           }
           return { data: user };
         },
@@ -170,7 +186,7 @@ export const auth = betterAuth({
         after: async (user) => {
           try {
             const teamId = store.teamIdForUser(user.id);
-            store.ensureTeam(teamId, teamNameForEmail(user.email), user.id);
+            await store.ensureTeam(teamId, teamNameForEmail(user.email), user.id);
           } catch {
             /* non-fatal: requestScope's lazy ensureTeam backstops this */
           }

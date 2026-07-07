@@ -22,7 +22,7 @@ export const Route = createFileRoute('/api/machine/cli')({
         if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
         const body = (parsed.kind === 'ok' ? parsed.body : {}) as { argv?: string[] }
         const { getGateway } = await import('../server/boot.js')
-        const r = getGateway().cli(token, Array.isArray(body.argv) ? body.argv : [])
+        const r = await (await getGateway()).cli(token, Array.isArray(body.argv) ? body.argv : [])
         return Response.json(r.body, { status: r.status })
       },
     },

@@ -18,7 +18,7 @@ let boot: typeof import("./boot.js");
 let tokens: typeof import("../gateway/tokens.js");
 let artifacts: typeof import("./artifactFiles.js");
 let auth: typeof import("../auth.js");
-let gw: ReturnType<typeof import("./boot.js")["getGateway"]>;
+let gw: Awaited<ReturnType<typeof import("./boot.js")["getGateway"]>>;
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-art2-"));
@@ -26,30 +26,30 @@ beforeAll(async () => {
   process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
   process.env.LOOPANY_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
-  db.runMigrations();
+  await db.runMigrations();
   store = await import("../db/store.js");
   boot = await import("./boot.js");
   tokens = await import("../gateway/tokens.js");
   artifacts = await import("./artifactFiles.js");
   auth = await import("../auth.js");
-  gw = boot.getGateway();
+  gw = await boot.getGateway();
 });
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-beforeEach(() => {
-  db.sqlite.exec("DELETE FROM artifact_files; DELETE FROM blobs; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+beforeEach(async () => {
+  await (db.client as { exec(q: string): Promise<unknown> }).exec("DELETE FROM artifact_files; DELETE FROM blobs; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 function sha256(s: string | Buffer): string {
   return createHash("sha256").update(s).digest("hex");
 }
 
-function seed() {
+async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = store.createLoop({ userId: "u1", teamId: "team-u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({ userId: "u1", teamId: "team-u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
   return { token, machineId, loop };
 }
 
@@ -65,7 +65,7 @@ async function syncFile(token: string, loopId: string, p: string, bytes: Buffer,
 }
 
 test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes text", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = await seed();
   // One full-manifest sync (each sync is a complete reconciliation, not append).
   const z = Buffer.from("# Z");
   const b = Buffer.from("hello");
@@ -81,7 +81,7 @@ test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes 
     ],
   });
 
-  const list = artifacts.listLoopArtifacts(loop.id);
+  const list = await artifacts.listLoopArtifacts(loop.id);
   expect(list.map((f) => f.path)).toEqual(["a/b.txt", "z.md"]); // path-sorted
   expect(list[0]).toMatchObject({ path: "a/b.txt", size: 5, binary: false, oversize: false });
   expect(typeof list[0]!.updatedAt).toBe("string");
@@ -91,14 +91,14 @@ test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes 
 });
 
 test("readLoopArtifact returns a binary marker for binary files (download-only)", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = await seed();
   await syncFile(token, loop.id, "logo.png", Buffer.from([0x89, 0x50, 0x00, 0x4e]), true);
   const content = await artifacts.readLoopArtifact(loop.id, "logo.png");
   expect(content).toEqual({ binary: true, size: 4, oversize: false });
 });
 
 test("readLoopArtifact marks oversize (metadata-only) files; no bytes are read", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = await seed();
   await gw.sync(token, {
     loopId: loop.id,
     manifest: [{ path: "big.bin", hash: sha256("x"), size: 20 * 1024 * 1024, oversize: true }],
@@ -108,7 +108,7 @@ test("readLoopArtifact marks oversize (metadata-only) files; no bytes are read",
 });
 
 test("readLoopArtifact reports not-found for unknown + tombstoned paths", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = await seed();
   await syncFile(token, loop.id, "keep.md", Buffer.from("a"));
   expect(await artifacts.readLoopArtifact(loop.id, "nope.md")).toEqual({ error: "file not found" });
 
@@ -118,7 +118,7 @@ test("readLoopArtifact reports not-found for unknown + tombstoned paths", async 
 });
 
 test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid bytes (200)", async () => {
-  const { token, loop } = seed();
+  const { token, loop } = await seed();
   const bytes = Buffer.from("downloadable");
   await syncFile(token, loop.id, "data/raw.json", bytes, false);
 

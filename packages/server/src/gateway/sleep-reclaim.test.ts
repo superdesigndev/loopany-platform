@@ -28,7 +28,7 @@ beforeAll(async () => {
   process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
   process.env.LOOPANY_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
-  db.runMigrations();
+  await db.runMigrations();
   store = await import("../db/store.js");
   gatewayMod = await import("./index.js");
   tokens = await import("./tokens.js");
@@ -38,8 +38,8 @@ afterAll(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-beforeEach(() => {
-  db.sqlite.exec("DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+beforeEach(async () => {
+  await (db.client as any).exec("DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 /** A recording notifier: captures every push instead of hitting a channel. */
@@ -71,26 +71,26 @@ const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
 const MIN = 60_000;
 
 /** Seed an online machine (with a backdated last poll) + a loop. */
-function seedMachineLoop(lastSeenAgoMs: number) {
+async function seedMachineLoop(lastSeenAgoMs: number) {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  store.createMachine({ id: machineId, userId: "u1", name: "Laptop", tokenHash: tokens.sha256(token), online: true });
-  store.updateMachine(machineId, { lastSeen: isoAgo(lastSeenAgoMs) });
-  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  (await store.createMachine({ id: machineId, userId: "u1", name: "Laptop", tokenHash: tokens.sha256(token), online: true }));
+  (await store.updateMachine(machineId, { lastSeen: isoAgo(lastSeenAgoMs) }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   return { machineId, loop };
 }
 
-test("(a) a running run reclaimed while asleep is reconciled to done by the late wake-report — message preserved", () => {
+test("(a) a running run reclaimed while asleep is reconciled to done by the late wake-report — message preserved", async () => {
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
   // Laptop slept mid-run: no heartbeat for 21 min, run was claimed 21 min ago.
-  const { machineId, loop } = seedMachineLoop(21 * MIN);
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
+  const { machineId, loop } = (await seedMachineLoop(21 * MIN));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   // Sweep reclaims the stuck run and pushes the (soft) offline alert.
-  gw.sweep();
-  const swept = store.getRun(run.id)!;
+  (await gw.sweep());
+  const swept = (await store.getRun(run.id))!;
   expect(swept.phase).toBe("error");
   expect(swept.error).toBe("machine timed out / disconnected");
   expect(sent).toHaveLength(1);
@@ -100,110 +100,110 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   expect(tokens.resolveLease(rt)?.state).toBe("terminal-grace");
 
   // Laptop wakes: claude finished successfully, daemon reports late.
-  const res = gw.report(rt, { ok: true, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42" });
+  const res = (await gw.report(rt, { ok: true, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42" }));
   expect(res.status).toBe(200);
-  const final = store.getRun(run.id)!;
+  const final = (await store.getRun(run.id))!;
   expect(final.phase).toBe("done");
   expect(final.error).toBeNull();
   expect(final.message).toBe("opened PR #42");
   expect(final.durationMs).toBe(1234);
   // The false failure no longer counts against the streak (derived from rows).
-  expect(store.execFailureStreak(loop.id)).toBe(0);
+  expect((await store.execFailureStreak(loop.id))).toBe(0);
   // A retraction push carried the real result.
   expect(sent).toHaveLength(2);
   expect(sent[1]!.message).toBe("opened PR #42");
   // Single-shot: the lease is now retired — a second late report is rejected.
   expect(tokens.resolveLease(rt)).toBeUndefined();
-  expect(gw.report(rt, { ok: true, finalText: "again" }).status).toBe(401);
+  expect((await gw.report(rt, { ok: true, finalText: "again" })).status).toBe(401);
 });
 
-test("(a') a late FAILURE report records the real error honestly, without a second push", () => {
+test("(a') a late FAILURE report records the real error honestly, without a second push", async () => {
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
-  const { machineId, loop } = seedMachineLoop(21 * MIN);
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
+  const { machineId, loop } = (await seedMachineLoop(21 * MIN));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
-  gw.sweep();
+  (await gw.sweep());
   expect(sent).toHaveLength(1); // the reclaim alert
-  const res = gw.report(rt, { ok: false, error: "claude reported an error" });
+  const res = (await gw.report(rt, { ok: false, error: "claude reported an error" }));
   expect(res.status).toBe(200);
-  const final = store.getRun(run.id)!;
+  const final = (await store.getRun(run.id))!;
   expect(final.phase).toBe("error");
   expect(final.error).toBe("claude reported an error"); // real reason replaces the generic reclaim reason
   // No double-alert: the reclaim already notified once for this run.
   expect(sent).toHaveLength(1);
 });
 
-test("(a'') a successful late reconcile advances loop.state and mirrors the scalar cursor onto run.state", () => {
+test("(a'') a successful late reconcile advances loop.state and mirrors the scalar cursor onto run.state", async () => {
   const gw = gateway(() => Promise.resolve());
-  const { machineId, loop } = seedMachineLoop(21 * MIN);
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
+  const { machineId, loop } = (await seedMachineLoop(21 * MIN));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
-  gw.sweep();
-  expect(store.getRun(run.id)!.phase).toBe("error");
+  (await gw.sweep());
+  expect((await store.getRun(run.id))!.phase).toBe("error");
 
   // A workflow-style run wakes and reports success with a cursor.
-  const res = gw.report(rt, { ok: true, message: "sweep done", cursor: { processed: 7, sha: "abc123" } });
+  const res = (await gw.report(rt, { ok: true, message: "sweep done", cursor: { processed: 7, sha: "abc123" } }));
   expect(res.status).toBe(200);
   // The workflow cursor advanced loop.state (next run's `prev` binding).
-  expect(store.getLoop(loop.id)!.state).toEqual({ processed: 7, sha: "abc123" });
+  expect((await store.getLoop(loop.id))!.state).toEqual({ processed: 7, sha: "abc123" });
   // The scalar cursor is mirrored onto run.state for {{latest.*}} / the trend chart.
-  expect(store.getRun(run.id)!.state).toEqual({ processed: 7, sha: "abc123" });
+  expect((await store.getRun(run.id))!.state).toEqual({ processed: 7, sha: "abc123" });
 });
 
-test("(a''') a FAILED late reconcile does NOT advance loop.state (no reprocess/skip hazard)", () => {
+test("(a''') a FAILED late reconcile does NOT advance loop.state (no reprocess/skip hazard)", async () => {
   const gw = gateway(() => Promise.resolve());
-  const { machineId, loop } = seedMachineLoop(21 * MIN);
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
+  const { machineId, loop } = (await seedMachineLoop(21 * MIN));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
-  gw.sweep();
-  const res = gw.report(rt, { ok: false, error: "workflow blew up", cursor: { processed: 7 } });
+  (await gw.sweep());
+  const res = (await gw.report(rt, { ok: false, error: "workflow blew up", cursor: { processed: 7 } }));
   expect(res.status).toBe(200);
-  expect(store.getRun(run.id)!.phase).toBe("error");
+  expect((await store.getRun(run.id))!.phase).toBe("error");
   // A failed run must never advance the cursor — same as the normal path.
-  expect(store.getLoop(loop.id)!.state ?? null).toBeNull();
-  expect(store.getRun(run.id)!.state ?? null).toBeNull();
+  expect((await store.getLoop(loop.id))!.state ?? null).toBeNull();
+  expect((await store.getRun(run.id))!.state ?? null).toBeNull();
 });
 
-test("(b) a pending run reclaimed as machine-offline is unchanged (no live token to reconcile)", () => {
+test("(b) a pending run reclaimed as machine-offline is unchanged (no live token to reconcile)", async () => {
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
   // Machine last polled 2 min ago (offline), pending run 2 min old.
-  const { machineId, loop } = seedMachineLoop(2 * MIN);
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: isoAgo(2 * MIN) });
+  const { machineId, loop } = (await seedMachineLoop(2 * MIN));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: isoAgo(2 * MIN) }));
 
-  gw.sweep();
-  const swept = store.getRun(run.id)!;
+  (await gw.sweep());
+  const swept = (await store.getRun(run.id))!;
   expect(swept.phase).toBe("error");
   expect(swept.error).toBe("machine offline");
   expect(sent).toHaveLength(1);
   expect(sent[0]!.message).toMatch(/asleep|skipped/i);
   // The machine itself was flipped offline by the sweep.
-  expect(store.getMachine(machineId)!.online).toBe(false);
+  expect((await store.getMachine(machineId))!.online).toBe(false);
 });
 
-test("(c) a long-running run with a fresh heartbeat survives the sweep", () => {
+test("(c) a long-running run with a fresh heartbeat survives the sweep", async () => {
   const gw = gateway();
-  const { machineId, loop } = seedMachineLoop(5_000); // machine polled 5s ago (online)
+  const { machineId, loop } = (await seedMachineLoop(5_000)); // machine polled 5s ago (online)
   // Claimed 30 min ago, but progress stamped 10s ago — still actively working.
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(30 * MIN) });
-  store.updateRun(run.id, { progress: { step: 5, label: "editing", at: isoAgo(10_000) } });
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(30 * MIN) }));
+  (await store.updateRun(run.id, { progress: { step: 5, label: "editing", at: isoAgo(10_000) } }));
 
-  gw.sweep();
-  expect(store.getRun(run.id)!.phase).toBe("running"); // inactivity timeout keyed off the fresh stamp
+  (await gw.sweep());
+  expect((await store.getRun(run.id))!.phase).toBe("running"); // inactivity timeout keyed off the fresh stamp
 });
 
-test("agent-api verbs are refused for a reclaimed run (only the final report reconciles)", () => {
+test("agent-api verbs are refused for a reclaimed run (only the final report reconciles)", async () => {
   const gw = gateway(() => Promise.resolve());
-  const { machineId, loop } = seedMachineLoop(21 * MIN);
-  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
+  const { machineId, loop } = (await seedMachineLoop(21 * MIN));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
   const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
-  gw.sweep();
-  const out = gw.agentApi(rt, ["reschedule", "1h"]);
+  (await gw.sweep());
+  const out = (await gw.agentApi(rt, ["reschedule", "1h"]));
   expect(out.status).toBe(409);
   expect(String((out.body as any).text)).toMatch(/reclaimed/i);
 });

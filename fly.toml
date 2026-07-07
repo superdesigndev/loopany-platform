@@ -1,5 +1,13 @@
-# Loopany on Fly.io — ONE always-on machine (the scheduler owns the cron loop;
-# never scale to >1 or you'd double-fire). SQLite on a mounted volume.
+# Loopany STAGING on Fly.io — app "loopany-testing". ONE always-on machine (the
+# scheduler owns the cron loop; never scale to >1 or you'd double-fire).
+# DB: embedded pglite on the mounted volume by default. The container runs with
+# NODE_ENV=production, where a missing/bad DATABASE_URL now FAILS the boot unless
+# LOOPANY_DB=pglite explicitly opts into the embedded tier — so staying on pglite
+# REQUIRES LOOPANY_DB=pglite (set in [env] below). To point staging at a (separate)
+# Supabase project instead, set the DATABASE_URL / DIRECT_DATABASE_URL secrets (and
+# drop LOOPANY_DB).
+# Production is a SEPARATE app + config — see fly.prod.toml. This app auto-deploys
+# on push to main (deploy.yml); prod is manual/gated (deploy-prod.yml).
 #
 # Setup:
 #   fly launch --no-deploy           # create the app (edit the name below)
@@ -21,6 +29,9 @@ primary_region = "nrt"
 [env]
   LOOPANY_DATA_DIR = "/data"
   PORT = "3000"
+  # Opt into the embedded pglite tier under NODE_ENV=production (without this a
+  # missing DATABASE_URL fails the boot). Drop this when moving to Supabase.
+  LOOPANY_DB = "pglite"
 
 [http_service]
   internal_port = 3000

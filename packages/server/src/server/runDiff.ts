@@ -34,7 +34,7 @@ function withinDiffCap(e: SnapshotEntry | undefined): boolean {
 /** Decode a snapshot entry's blob to text, or null when bytes are absent. */
 async function textOf(e: SnapshotEntry | undefined): Promise<string | null> {
   if (!e || !e.hash) return null;
-  const bytes = await getGateway().readBlob(e.hash);
+  const bytes = await (await getGateway()).readBlob(e.hash);
   return bytes ? bytes.toString("utf8") : null;
 }
 
@@ -44,14 +44,14 @@ function unified(path: string, oldText: string, newText: string): string {
 }
 
 export async function computeRunDiff(runId: string): Promise<RunDiffResult> {
-  const run = store.getRun(runId);
+  const run = await store.getRun(runId);
   if (!run) return { hasSnapshot: false, files: [] };
-  const snap = store.getRunSnapshot(runId);
+  const snap = await store.getRunSnapshot(runId);
   // No snapshot ⇒ the run predates the feature → degrade (not an empty diff).
   if (!snap) return { hasSnapshot: false, files: [] };
 
   const curr: SnapshotManifest = snap.manifest ?? {};
-  const prev: SnapshotManifest = store.prevRunSnapshot(run.loopId, run.ts)?.manifest ?? {};
+  const prev: SnapshotManifest = (await store.prevRunSnapshot(run.loopId, run.ts))?.manifest ?? {};
 
   const paths = [...new Set([...Object.keys(curr), ...Object.keys(prev)])].sort();
   const files: RunDiffFile[] = [];

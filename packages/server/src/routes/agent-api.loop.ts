@@ -14,7 +14,7 @@ export const Route = createFileRoute('/agent-api/loop')({
           return Response.json({ text: 'loopany: body too large', exitCode: 1 }, { status: 413 })
         const body = (parsed.kind === 'ok' ? parsed.body : {}) as { argv?: string[] }
         const { getGateway } = await import('../server/boot.js')
-        const r = getGateway().agentApi(token, Array.isArray(body.argv) ? body.argv : [])
+        const r = await (await getGateway()).agentApi(token, Array.isArray(body.argv) ? body.argv : [])
         return Response.json(r.body, { status: r.status })
       },
     },

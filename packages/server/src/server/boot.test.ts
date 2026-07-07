@@ -23,12 +23,12 @@ beforeAll(async () => {
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-test("ensureServer migrates + boots the scheduler, idempotently", () => {
-  const a = boot.ensureServer();
-  const b = boot.ensureServer();
+test("ensureServer migrates + boots the scheduler, idempotently", async () => {
+  const a = await boot.ensureServer();
+  const b = await boot.ensureServer();
   expect(a).toBe(b); // single instance
   expect(a.scheduler).toBeDefined();
   // Migrations ran: the tables exist and are queryable.
-  expect(store.listLoops()).toEqual([]);
-  expect(store.listMachines()).toEqual([]);
+  expect(await store.listLoops()).toEqual([]);
+  expect(await store.listMachines()).toEqual([]);
 });

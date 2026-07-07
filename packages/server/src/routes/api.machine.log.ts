@@ -15,7 +15,7 @@ export const Route = createFileRoute('/api/machine/log')({
         const loopId = url.searchParams.get('loopId') ?? ''
         const limit = url.searchParams.get('limit') ?? undefined
         const { getGateway } = await import('../server/boot.js')
-        const r = getGateway().loopLog(token, loopId, limit)
+        const r = await (await getGateway()).loopLog(token, loopId, limit)
         return Response.json(r.body, { status: r.status })
       },
     },

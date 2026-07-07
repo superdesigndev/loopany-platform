@@ -24,7 +24,7 @@ export const Route = createFileRoute('/api/machine/blob/$hash')({
         const buf = Buffer.from(await request.arrayBuffer())
         if (buf.length > BLOB_CAP) return Response.json({ error: 'blob exceeds size cap' }, { status: 413 })
         const { getGateway } = await import('../server/boot.js')
-        const r = await getGateway().putBlob(token, hash, buf)
+        const r = await (await getGateway()).putBlob(token, hash, buf)
         return Response.json(r.body, { status: r.status })
       },
     },

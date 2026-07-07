@@ -17,8 +17,8 @@ import type { ArtifactContent, ArtifactSummary } from "../types.js";
 
 /** The loop's current (non-deleted) file set as compact UI rows, path-sorted, each
  *  carrying its blob's front-matter meta (one indexed join, no per-file fetch). */
-export function listLoopArtifacts(loopId: string): ArtifactSummary[] {
-  return store.listArtifactsWithMeta(loopId).map(toArtifactSummary);
+export async function listLoopArtifacts(loopId: string): Promise<ArtifactSummary[]> {
+  return (await store.listArtifactsWithMeta(loopId)).map(toArtifactSummary);
 }
 
 /**
@@ -30,7 +30,7 @@ export function listLoopArtifacts(loopId: string): ArtifactSummary[] {
 export async function readLoopArtifact(loopId: string, rawPath: string): Promise<ArtifactContent> {
   const rel = safeRelPath(rawPath);
   if (!rel) return { error: "invalid path" };
-  const row = store.getArtifactFile(loopId, rel);
+  const row = await store.getArtifactFile(loopId, rel);
   if (!row || row.deleted) return { error: "file not found" };
   // Genuinely binary or oversize → download-only marker (the UI offers the route).
   if (row.binary || row.oversize) {
@@ -39,7 +39,7 @@ export async function readLoopArtifact(loopId: string, rawPath: string): Promise
   // A text file whose bytes haven't been recorded yet (transient mid-sync): a
   // distinct pending marker, not a binary dead-end with no download link.
   if (!row.hash) return { error: "file not synced yet" };
-  const bytes = await getGateway().readBlob(row.hash);
+  const bytes = await (await getGateway()).readBlob(row.hash);
   if (!bytes) return { error: "file not found" }; // blob bytes not (yet) stored
   return { text: bytes.toString("utf8") };
 }
@@ -61,9 +61,9 @@ export interface ArtifactBytes {
 export async function readLoopArtifactBytes(loopId: string, rawPath: string): Promise<ArtifactBytes> {
   const rel = safeRelPath(rawPath);
   if (!rel) return { status: 400 };
-  const row = store.getArtifactFile(loopId, rel);
+  const row = await store.getArtifactFile(loopId, rel);
   if (!row || row.deleted || !row.hash) return { status: 404 }; // tombstone/oversize ⇒ no bytes
-  const bytes = await getGateway().readBlob(row.hash);
+  const bytes = await (await getGateway()).readBlob(row.hash);
   if (!bytes) return { status: 404 };
   return { status: 200, bytes, binary: row.binary, filename: rel.split("/").pop() || "file" };
 }
