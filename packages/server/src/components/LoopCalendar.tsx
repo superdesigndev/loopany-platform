@@ -135,10 +135,11 @@ export function LoopCalendar({
   const [reviewing, setReviewing] = useState<Product | null>(null)
 
   // Repair the review pick when the product set changes (poll refresh): a
-  // vanished artifact's modal closes instead of pointing at stale data.
-  useEffect(() => {
-    if (reviewing && !products.some((p) => p.file.path === reviewing.file.path)) setReviewing(null)
-  }, [products, reviewing])
+  // vanished artifact's modal closes instead of pointing at stale data. Derived
+  // during render rather than mirrored into state via an effect - the effect
+  // would commit a stale frame before correcting. See react.dev "You Might Not
+  // Need an Effect".
+  const activeReview = reviewing && products.some((p) => p.file.path === reviewing.file.path) ? reviewing : null
 
   // The ref'd root wraps EVERY state (loading/empty/grid): the width observer
   // attaches once on mount, so the observed element must exist on the very
@@ -270,19 +271,19 @@ export function LoopCalendar({
       </div>
 
       {/* review - the picked product's full body in the shared Modal */}
-      {reviewing && (
+      {activeReview && (
         <Modal open onClose={() => setReviewing(null)}>
           <ModalHead
-            title={reviewing.file.meta?.title?.trim() || basename(reviewing.file.path)}
+            title={activeReview.file.meta?.title?.trim() || basename(activeReview.file.path)}
             sub={
               <span className="font-mono">
-                {reviewing.file.path} · {dateSourceLabel(reviewing.source)} · synced{' '}
-                {fmt(reviewing.file.updatedAt)}
+                {activeReview.file.path} · {dateSourceLabel(activeReview.source)} · synced{' '}
+                {fmt(activeReview.file.updatedAt)}
               </span>
             }
           />
           <div className="mt-4 min-w-0">
-            <ArtifactBody loopId={loopId} file={reviewing.file} />
+            <ArtifactBody loopId={loopId} file={activeReview.file} />
           </div>
         </Modal>
       )}

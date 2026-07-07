@@ -115,4 +115,31 @@ describe('LoopCalendar front-matter dating', () => {
     await act(async () => root.unmount())
     host.remove()
   })
+
+  it('drops the open review when its artifact vanishes on a poll refresh', async () => {
+    measuredWidth = 800
+    const arts = [file('reports/digest-2026-07-01.md', { title: 'Keep me' })]
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const props = { loopId: 'loop-1', match: 'reports/*.md' }
+    await act(async () => {
+      root.render(createElement(LoopCalendar, { ...props, artifacts: arts }))
+    })
+    // Open the product's review modal.
+    const chip = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('digest'))
+    if (!chip) throw new Error('no product chip')
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(document.body.innerHTML).toContain('hello from the product')
+    // A poll refresh drops that artifact → the modal closes instead of pointing
+    // at stale data (derived during render, no syncing effect).
+    await act(async () => {
+      root.render(createElement(LoopCalendar, { ...props, artifacts: [] }))
+    })
+    expect(document.body.innerHTML).not.toContain('hello from the product')
+    await act(async () => root.unmount())
+    host.remove()
+  })
 })
