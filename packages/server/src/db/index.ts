@@ -27,7 +27,8 @@ import { drizzle as drizzlePglite, type PgliteDatabase } from "drizzle-orm/pglit
 import { drizzle as drizzlePostgres, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres, { type Sql } from "postgres";
 
-import { dataDir, databaseUrl, directDatabaseUrl } from "../env.js";
+import { dataDir, databaseUrl } from "../env.js";
+import { logger } from "../logger.js";
 import { machines, loops, runs, teams, teamMembers, notificationChannels, blobs, artifactFiles } from "./schema.js";
 import { user, session, account, verification } from "./auth-schema.js";
 
@@ -57,6 +58,15 @@ type Client = Sql | PGlite;
 
 const g = globalThis as unknown as { __loopanyDb?: Db; __loopanyClient?: Client; __loopanyDriver?: Driver };
 
+/** Host (host:port, NEVER credentials) of a Postgres URL, for boot logging. */
+function pgHost(url: string): string {
+  try {
+    return new URL(url).host || "unknown";
+  } catch {
+    return "unparseable";
+  }
+}
+
 function open(): { db: Db; client: Client; driver: Driver } {
   if (g.__loopanyDb && g.__loopanyClient && g.__loopanyDriver) {
     return { db: g.__loopanyDb, client: g.__loopanyClient, driver: g.__loopanyDriver };
@@ -65,7 +75,18 @@ function open(): { db: Db; client: Client; driver: Driver } {
   if (url) {
     // Hosted tier: postgres-js against Supabase. `prepare:false` is mandatory for
     // the pgBouncer transaction pooler (:6543) — cached prepared statements break.
-    const client = postgres(url, { prepare: false });
+    // Log the HOST only — never the full URL (it carries the password).
+    logger.info({ tier: "postgres", host: pgHost(url) }, "database tier: postgres");
+    // A URL with no sslmode may negotiate a PLAINTEXT connection. A local dev
+    // Postgres is a legitimate no-SSL case, so warn loudly rather than hard-fail.
+    if (!/sslmode=/i.test(url)) {
+      logger.warn(
+        { host: pgHost(url) },
+        "DATABASE_URL has no sslmode — the connection may be plaintext; append ?sslmode=require",
+      );
+    }
+    // Conservative pool for one always-on machine against the pooler.
+    const client = postgres(url, { prepare: false, max: 10, idle_timeout: 30, connect_timeout: 15 });
     const db = drizzlePostgres(client, { schema });
     g.__loopanyClient = client;
     g.__loopanyDb = db;
@@ -73,7 +94,17 @@ function open(): { db: Db; client: Client; driver: Driver } {
     return { db, client, driver: "postgres" };
   }
   // Embedded tier: file-backed pglite (WASM Postgres) at <dataDir>/pgdata.
+  // Fail HARD in production unless the ephemeral embedded DB is opted into
+  // explicitly — a missing DATABASE_URL secret must NOT silently boot an empty
+  // pglite on ephemeral disk (data loss on the next redeploy).
+  if (process.env.NODE_ENV === "production" && process.env.LOOPANY_DB !== "pglite") {
+    throw new Error(
+      "refusing to boot the ephemeral embedded database in production — " +
+        "set DATABASE_URL, or LOOPANY_DB=pglite to opt in",
+    );
+  }
   const dir = path.join(dataDir(), "pgdata");
+  logger.info({ tier: "pglite", pgdata: dir }, "database tier: pglite");
   fs.mkdirSync(dataDir(), { recursive: true });
   const client = new PGlite(dir);
   const db = drizzlePglite(client, { schema }) as unknown as Db;
@@ -89,34 +120,50 @@ export const db: Db = opened.db;
  *  tests for low-level seeding/maintenance; app code always goes through `db`. */
 export const client: Client = opened.client;
 
-/** Migrations dir at the package root (resolved from this file: src/db → ../../drizzle). */
+/**
+ * Migrations dir. In DEV this file lives at `src/db`, so the folder is at the
+ * package root (`../../drizzle`). In the BUILT server the module is bundled under
+ * `.output/server/{_ssr,_libs}` and `copy-pglite-assets.mjs` lands the folder at
+ * `.output/server/drizzle` (`../drizzle`). Return the first candidate that exists
+ * so the embedded pglite tier migrates in-process from either layout.
+ */
 function migrationsDir(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "drizzle");
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const devDir = path.resolve(here, "..", "..", "drizzle"); // dev: src/db → package root
+  const builtDir = path.resolve(here, "..", "drizzle"); // built: .output/server/{_ssr,_libs} → .output/server/drizzle
+  if (fs.existsSync(devDir)) return devDir;
+  if (fs.existsSync(builtDir)) return builtDir;
+  return devDir;
 }
 
 /**
- * Apply generated migrations in-process (idempotent). The pglite tier's only
- * migration path; also dev boot + tests. The hosted tier ALSO applies them
- * out-of-process via `drizzle-kit migrate` on `start`, but this stays safe there
- * too — it runs DDL over a SEPARATE direct-URL client (never the pooler).
+ * Apply generated migrations IN-PROCESS (idempotent). This is the PGLITE tier's
+ * only migration path (also dev boot + tests). The HOSTED postgres tier is a
+ * NO-OP here: `prestart.mjs` (and `pnpm db:migrate`) own hosted migrations, run
+ * once out-of-process over the DIRECT (:5432) URL before serving — re-migrating
+ * over a second connection on every boot only risks a wedged connection hanging
+ * boot and double-running the advisory lock.
  */
 export async function runMigrations(): Promise<void> {
+  if (opened.driver === "postgres") return; // hosted tier migrates in prestart.mjs
   const dir = migrationsDir();
   if (!fs.existsSync(dir)) return; // not generated yet (pre-`db:generate`)
-  if (opened.driver === "postgres") {
-    const { migrate } = await import("drizzle-orm/postgres-js/migrator");
-    const direct = directDatabaseUrl() ?? databaseUrl()!;
-    // DDL + advisory lock must run over the DIRECT (:5432) connection, single-use.
-    const migrationClient = postgres(direct, { max: 1 });
-    try {
-      await migrate(drizzlePostgres(migrationClient), { migrationsFolder: dir });
-    } finally {
-      await migrationClient.end();
-    }
-    return;
-  }
   const { migrate } = await import("drizzle-orm/pglite/migrator");
   await migrate(opened.db as unknown as PgliteDatabase<typeof schema>, { migrationsFolder: dir });
+}
+
+/**
+ * Best-effort clean shutdown of the runtime postgres pool (called from the boot
+ * AbortController on SIGINT/SIGTERM). No-op for pglite (its file handle closes
+ * with the process). Never throws — shutdown must not wedge on a slow drain.
+ */
+export async function closeClient(): Promise<void> {
+  if (opened.driver !== "postgres") return;
+  try {
+    await (opened.client as Sql).end({ timeout: 5 });
+  } catch {
+    // ignore — process is exiting
+  }
 }
 
 export * from "./schema.js";

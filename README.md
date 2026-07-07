@@ -102,8 +102,11 @@ the database is an embedded, file-backed **pglite** Postgres at `~/.loopany/pgda
 (zero external DB — it migrates itself at boot), and artifact bytes are held in
 memory. Use the Quickstart above against `http://127.0.0.1:3000` to connect a machine.
 
-All configuration is env-based - copy [`.env.example`](.env.example) to
-`packages/server/.env` and uncomment what you need.
+All configuration is env-based. For **local development only**, copy
+[`.env.example`](.env.example) to `packages/server/.env` and uncomment what you
+need - vite loads that file for `pnpm dev`. **`pnpm start` and Docker do NOT read
+`.env`**: in production pass real environment variables instead (Fly secrets,
+`docker -e` / `--env-file`, or a systemd `Environment=`), never a committed `.env`.
 
 ### Production (any Node host)
 
@@ -128,8 +131,19 @@ For a real deployment, set at minimum:
 - `LOOPANY_R2_*` - an S3-compatible object store (e.g. Cloudflare R2) for
   artifact bytes. Unset, artifacts are stored in memory and lost on restart.
 
+> **Exposing a server publicly? Set the auth vars.** With `GITHUB_CLIENT_ID` /
+> `GITHUB_CLIENT_SECRET` / `LOOPANY_AUTH_SECRET` / `LOOPANY_BASE_URL` /
+> `LOOPANY_ALLOWED_LOGINS` unset the app runs **open, with no sign-in** - anyone
+> who can reach it is in. This applies equally to a bare Node host and the Docker
+> image below.
+
 > **Run exactly one server process.** The in-process scheduler owns the cron
 > loop; two processes against the same DB would double-fire every run.
+
+> **Backing up the embedded pglite tier.** `<LOOPANY_DATA_DIR>/pgdata` is a LIVE
+> Postgres data directory. Stop the server before copying it - a hot copy of a
+> running data dir is not crash-consistent. If you need real, online backups, run
+> the hosted tier instead (`DATABASE_URL`/Supabase gives you point-in-time backups).
 
 ### Docker
 

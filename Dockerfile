@@ -23,6 +23,6 @@ ENV LOOPANY_DATA_DIR=/data
 ENV PORT=3000
 EXPOSE 3000
 WORKDIR /app/packages/server
-# `start` = prestart.mjs (drizzle-kit migrate over DIRECT_DATABASE_URL when hosted;
+# `start` = prestart.mjs (postgres-js migrator over DIRECT_DATABASE_URL when hosted;
 # in-process pglite migration otherwise) → node .output/server/index.mjs
 CMD ["pnpm", "start"]

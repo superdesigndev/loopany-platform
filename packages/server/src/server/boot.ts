@@ -6,7 +6,7 @@
  * from any server-side entry (the standalone machine server / TanStack server
  * fns); the first call boots, the rest share the same instance.
  */
-import { runMigrations } from "../db/index.js";
+import { runMigrations, closeClient } from "../db/index.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
 import { gcIntervalMs } from "../env.js";
@@ -40,6 +40,9 @@ async function boot(): Promise<Booted> {
   await runMigrations();
 
   const abort = new AbortController();
+  // Drain the runtime postgres pool on clean shutdown (main.ts aborts on
+  // SIGINT/SIGTERM); no-op for the pglite tier.
+  abort.signal.addEventListener("abort", () => void closeClient(), { once: true });
   // Break the scheduler↔gateway cycle: the scheduler holds a thin dispatcher
   // that delegates to the gateway (assigned before any tick can fire).
   let gateway: MachineGateway;

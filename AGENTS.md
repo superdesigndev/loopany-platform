@@ -12,7 +12,8 @@ computes pure functions. Run instructions: `README.md`.
 
 - `packages/server` (`@loopany/server`) - TanStack Start UI + server fns +
   in-process Scheduler (croner) + machine routes + Better Auth + push notifications.
-  Drizzle/SQLite.
+  Drizzle over Postgres (tiered driver: embedded pglite when `DATABASE_URL` is
+  unset, postgres-js on Supabase when set).
   - `src/scheduler/` - cron engine (tick -> pending run -> Dispatcher).
   - `src/gateway/` - machine gateway (poll/agent-api/report/sync/blob), run tokens,
     delivery, prompt, notify, blobstore (R2/in-memory), artifacts, retention/GC.
@@ -34,8 +35,11 @@ computes pure functions. Run instructions: `README.md`.
   vitest; single file: append the path; single test: `vitest run -t "<name>"`.
 - `pnpm --filter @loopany/server db:generate` / `db:migrate` - Drizzle migrations.
 - `bash scripts/demo-cookie-unified.sh` - e2e demo loop through the unified server.
-- Prod: nitro build, then `pnpm start` = `drizzle-kit migrate` +
-  `node .output/server/index.mjs` (every deploy applies pending migrations).
+- Prod: nitro build, then `pnpm start` = `scripts/prestart.mjs` +
+  `node .output/server/index.mjs`. prestart applies pending migrations via the
+  postgres-js migrator over `DIRECT_DATABASE_URL` for the hosted Supabase tier
+  (when `DATABASE_URL` is set); the embedded pglite tier migrates in-process at
+  boot, so prestart is a no-op there.
 
 ## Core model
 
@@ -397,8 +401,14 @@ computes pure functions. Run instructions: `README.md`.
 - vite binds `127.0.0.1` (not IPv6 `localhost`) - see `vite.config.ts`.
 - `src/routeTree.gen.ts` is generated + gitignored; `typecheck` runs `tsr generate`
   first. Run `routes:generate` standalone if you need the file otherwise.
-- **Changed `db/schema.ts`? Migrate locally right away**: `db:generate` then
-  `db:migrate`. Dev does NOT auto-migrate on `pnpm dev`; prod applies on `pnpm start`.
+- **Changed `db/schema.ts`? Migrate locally right away**: `db:generate` (diffs
+  schema -> SQL, needs no DB) then `db:migrate`. `db:migrate` is the drizzle-kit CLI
+  and needs `DIRECT_DATABASE_URL`/`DATABASE_URL` set - it errors on an empty URL and
+  only targets a real Postgres; the embedded pglite tier has NO CLI migrate, it
+  applies the generated migrations IN-PROCESS at boot. `boot.ts` `ensureServer` calls
+  `runMigrations()` on every boot, so `pnpm dev` DOES auto-migrate the pglite tier in
+  process (you still run `db:generate` to author the SQL); prod applies on `pnpm start`
+  (`scripts/prestart.mjs`, postgres-js migrator over DIRECT for the hosted tier).
 - Drizzle `text(col, { enum })` is TS-only (no DB CHECK) - enum value changes need
   no migration and cannot break rows.
 - Server route files use `createFileRoute(path).server.handlers`; dynamic-import

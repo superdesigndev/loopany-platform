@@ -26,9 +26,25 @@ export function databaseUrl(): string | undefined {
  * Direct (session-mode, `:5432`) Postgres URL used ONLY for migrations — DDL and
  * the migrator's advisory lock must NOT go through the transaction pooler. Falls
  * back to `DATABASE_URL` when unset (e.g. a plain non-pooled Postgres).
+ *
+ * Fails LOUD when that fallback would silently route DDL/advisory-lock traffic
+ * over a Supabase transaction pooler: the pooler multiplexes connections and
+ * cannot hold the session-scoped advisory lock the migrator relies on, so a
+ * migration over `:6543` deadlocks or corrupts. A plain non-pooled Postgres URL
+ * as the fallback stays allowed.
  */
 export function directDatabaseUrl(): string | undefined {
-  return process.env.DIRECT_DATABASE_URL?.trim() || databaseUrl();
+  const explicit = process.env.DIRECT_DATABASE_URL?.trim();
+  if (explicit) return explicit;
+  const fallback = databaseUrl();
+  if (fallback && (fallback.includes(":6543") || fallback.includes("pooler.supabase.com"))) {
+    throw new Error(
+      "DIRECT_DATABASE_URL is unset but DATABASE_URL points at the Supabase transaction pooler " +
+        "(:6543 / pooler.supabase.com) — set DIRECT_DATABASE_URL to the direct (:5432, session-mode) " +
+        "connection so migrations run off the pooler",
+    );
+  }
+  return fallback;
 }
 
 /**

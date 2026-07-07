@@ -7,7 +7,7 @@
   "description": "Loopany server — TanStack Start UI + in-process scheduler + machine WS gateway + agent-api + Better Auth. Zero code-exec, zero LLM (execution is BYOA on user machines).",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "vite build && node scripts/copy-pglite-assets.mjs",
     "start": "node scripts/prestart.mjs && node .output/server/index.mjs",
     "routes:generate": "tsr generate",
     "typecheck": "tsr generate && tsc --noEmit",
