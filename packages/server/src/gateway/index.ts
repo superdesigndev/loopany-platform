@@ -417,6 +417,14 @@ export class MachineGateway {
         await store.updateRun(run.id, { phase: "error", outcome: "error", error: "loop removed", ts: nowIso() });
         continue;
       }
+      // ATOMIC claim (pending -> running, conditional on the phase): with an async
+      // session, two concurrent polls (an HTTP retry racing its timed-out original,
+      // or two daemons sharing one device token = the same machineId) could both
+      // read this run as pending and both deliver it - double execution. Under
+      // sync SQLite the whole handler was atomic, so the plain read-then-write was
+      // safe; now only the winner of the conditional UPDATE mints the lease and
+      // ships the delivery, and the loser skips.
+      if (!(await store.claimPendingRun(run.id))) continue;
       // Edit + evolve runs exist to change the loop, so they always get control
       // AND the structural edit caps (schedule, UI, schema, workflow).
       const structural = run.role === "evolve" || run.role === "edit";
@@ -433,7 +441,6 @@ export class MachineGateway {
         // of allowControl (like the structural caps). Evolve/edit never finish.
         canFinish: run.role === "exec" && loop.goal != null,
       });
-      await store.updateRun(run.id, { phase: "running", ts: nowIso() });
       deliveries.push(await buildDelivery(loop, run.id, token, machine.roots ?? []));
     }
 
