@@ -184,6 +184,17 @@ describe("runLog", () => {
     expect(cap.stdout()).not.toContain("recent run");
   });
 
+  test("--limit=5 (the --k=v form) parses like --limit 5 instead of erroring as an unknown flag", async () => {
+    const { fetchFn, calls } = stubFetch({
+      "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
+      "/api/machine/log": { body: { ok: true, name: "X", runs: [] } },
+    });
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["loop-x", "--limit=5"], cap)).toBe(0);
+    expect(cap.stderr()).not.toContain("unknown flag");
+    expect(calls.some((u) => u.includes("limit=5"))).toBe(true);
+  });
+
   test("--json before the loop id keeps the id positional (boolean flag, no swallow)", async () => {
     const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: null, error: null, message: null, transcript: "", transcriptTruncated: false }];
     const { fetchFn, calls } = stubFetch({

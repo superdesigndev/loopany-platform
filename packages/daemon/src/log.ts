@@ -89,14 +89,21 @@ const BOOL_FLAGS = new Set(["json", "transcript", "full"]);
  *  `help` is allowlisted so it never trips the unknown-flag guard. */
 const LOG_FLAGS = new Set(["json", "transcript", "full", "limit", "help", "server-url", "api-key"]);
 
-/** `--k v` pairs, bare/boolean `--flag` → true; everything else is positional. */
+/** `--k v` / `--k=v` pairs, bare/boolean `--flag` → true; everything else is positional. */
 function parseArgs(args: string[]): { positional: string[]; flags: Record<string, string | boolean> } {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a.startsWith("--")) {
-      const key = a.slice(2);
+      const body = a.slice(2);
+      const eq = body.indexOf("=");
+      if (eq >= 0) {
+        // `--limit=5` — the value rides on the same token.
+        flags[body.slice(0, eq)] = body.slice(eq + 1);
+        continue;
+      }
+      const key = body;
       const next = args[i + 1];
       if (!BOOL_FLAGS.has(key) && next !== undefined && !next.startsWith("--")) {
         flags[key] = next;
