@@ -7,7 +7,10 @@
  * for every loop bound to this machine, and `WatchManager.reconcile()` opens a
  * watcher for each (closing any that vanished). Each `LoopWatcher`:
  *   • resolves the loop's folder (dirname(taskFile) → workdir → scratch),
- *   • ignores .git/node_modules/.loopany/secrets/.DS_Store,
+ *   • ignores .git/node_modules/.worktrees/common caches/.loopany/secrets/.DS_Store
+ *     (never-syncable dirs — a loop folder is a synced CONTENT home, not a
+ *     scratch workspace, so a repo clone / git worktree / build tree dropped in
+ *     it is excluded at the source rather than flooding the sync),
  *   • debounces with chokidar's awaitWriteFinish + a coalescing flush window,
  *   • builds a FULL manifest of the folder (deletions = absence), hashing
  *     INCREMENTALLY: a stat cache (size+mtime+ctime, with a git-index-style
@@ -22,6 +25,12 @@
  *     re-reading and re-verifying bytes at send time.
  *
  * Files at/under BLOB_CAP sync their bytes; larger files sync as metadata only.
+ *
+ * Per-loop sync caps (`capManifest`) bound the manifest to a file-count and a
+ * cumulative-byte ceiling: over either, the loop folder is being misused as a
+ * scratch workspace, so the SMALLEST files (a run's real reports/state/ui) still
+ * sync while the overflow is dropped — one loud warning, no doomed giant POST
+ * hot-retrying forever.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -59,6 +68,12 @@ const PUT_CONCURRENCY = 4;
  *  of the file's mtime is distrusted and re-hashed — a same-size rewrite inside
  *  coarse mtime granularity would otherwise serve a stale hash forever. */
 const RACY_MS = 2000;
+/** Per-loop sync caps: a loop folder is a synced CONTENT home (reports, state,
+ *  ui, small artifacts), NOT a scratch workspace. Over either ceiling a run has
+ *  dumped a heavy work product (a repo clone / git worktree / build tree) into
+ *  it; `capManifest` sheds the overflow and keeps the real content syncing. */
+export const MAX_SYNC_FILES = Number(process.env.LOOPANY_SYNC_MAX_FILES || 5000);
+export const MAX_SYNC_BYTES = Number(process.env.LOOPANY_SYNC_MAX_BYTES || 256 * 1024 * 1024); // 256MB
 
 /** One loop folder the server asked this machine to watch. */
 export interface WatchSpec {
@@ -96,7 +111,33 @@ function sha256(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
 }
 
-const IGNORE_DIRS = new Set([".git", "node_modules", ".loopany"]);
+/** Directories that are NEVER a loop's syncable content — VCS metadata, dependency
+ *  trees, git worktrees, and build/tool caches. A loop folder is a synced content
+ *  home; a run that clones a repo or opens a worktree inside it (the exact prod
+ *  incident) would otherwise flood the sync. Excluded at the source so chokidar
+ *  never even watches them. */
+const IGNORE_DIRS = new Set([
+  ".git",
+  ".loopany",
+  "node_modules",
+  ".worktrees",
+  ".cache",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".turbo",
+  ".parcel-cache",
+  ".gradle",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".tox",
+  ".yarn",
+  ".pnpm-store",
+]);
 
 /** Should this loop-relative path (POSIX or OS separators) be excluded entirely? */
 function isIgnoredRel(rel: string): boolean {
@@ -249,6 +290,58 @@ function manifestDigest(entries: ManifestEntry[]): string {
   return createHash("sha256").update(canon).digest("hex");
 }
 
+export interface CapResult {
+  /** The bounded manifest to actually sync (identical to the input when under cap). */
+  kept: ManifestEntry[];
+  breached: boolean;
+  totalFiles: number;
+  totalBytes: number;
+  keptBytes: number;
+  droppedFiles: number;
+}
+
+/**
+ * Bound a manifest to the per-loop sync caps. Under BOTH ceilings the manifest is
+ * returned untouched (byte-identical to the un-capped behavior — the common case
+ * pays nothing). Over either ceiling the loop folder is being misused as a scratch
+ * workspace (a repo clone / git worktree / build tree dumped into the synced
+ * content home): keep the SHALLOWEST, then smallest, files first and DROP the
+ * overflow, up to the file-count and cumulative-byte caps. Depth-first is what
+ * protects a run's real products — the task file, reports, state, ui, and small
+ * artifacts live at the TOP of the loop folder, while a flood (a checkout, a
+ * worktree, a build tree) nests in subdirectories — so the content home always
+ * makes the cut regardless of how small the flood's files are. Dropping =
+ * manifest absence, so the overflow simply never syncs and the bounded POST can't
+ * 413/timeout; the sync degrades gracefully instead of hot-retrying a doomed giant
+ * forever. Selection is depth-then-size-then-path deterministic, so the SAME files
+ * stay dropped across flushes (no add/delete churn).
+ */
+export function capManifest(entries: ManifestEntry[], maxFiles = MAX_SYNC_FILES, maxBytes = MAX_SYNC_BYTES): CapResult {
+  const totalFiles = entries.length;
+  let totalBytes = 0;
+  for (const e of entries) totalBytes += e.size;
+  if (totalFiles <= maxFiles && totalBytes <= maxBytes) {
+    return { kept: entries, breached: false, totalFiles, totalBytes, keptBytes: totalBytes, droppedFiles: 0 };
+  }
+  const depth = (p: string): number => {
+    let d = 0;
+    for (let i = 0; i < p.length; i++) if (p[i] === "/") d++;
+    return d;
+  };
+  const ordered = [...entries].sort(
+    (a, b) => depth(a.path) - depth(b.path) || a.size - b.size || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
+  );
+  const kept: ManifestEntry[] = [];
+  let keptBytes = 0;
+  for (const e of ordered) {
+    if (kept.length >= maxFiles) break;
+    if (keptBytes + e.size > maxBytes) continue; // skip this one; a smaller later file may still fit
+    kept.push(e);
+    keptBytes += e.size;
+  }
+  return { kept, breached: true, totalFiles, totalBytes, keptBytes, droppedFiles: totalFiles - kept.length };
+}
+
 /** Read a file and confirm its bytes still hash to `hash` — the manifest may be
  *  moments stale, and bytes must never ship under a hash they don't have. */
 async function readVerified(abs: string, hash: string): Promise<Buffer | null> {
@@ -292,6 +385,9 @@ class LoopWatcher {
    *  re-upload the folder's whole small-file population for nothing. */
   private negotiated = false;
   private closed = false;
+  /** True while the folder is over the per-loop sync caps — dedups the loud
+   *  warning to ONE per breach (reset when the folder drops back under cap). */
+  private capWarned = false;
 
   constructor(
     private readonly loopId: string,
@@ -364,8 +460,36 @@ class LoopWatcher {
 
   private async runFlush(): Promise<void> {
     try {
-      const { entries, paths, cache } = await buildManifest(this.dir, this.hashCache);
+      const built = await buildManifest(this.dir, this.hashCache);
+      const { paths, cache } = built;
       this.hashCache = cache;
+
+      // Per-loop sync caps: over the file-count or byte ceiling, sync only the
+      // smallest files (the run's real content) and drop the overflow with ONE
+      // loud, actionable line — never hot-retry a doomed giant sync.
+      const capped = capManifest(built.entries);
+      const entries = capped.kept;
+      if (capped.breached) {
+        if (!this.capWarned) {
+          this.capWarned = true;
+          log.warn(
+            {
+              loopId: this.loopId,
+              dir: this.dir,
+              totalFiles: capped.totalFiles,
+              totalBytes: capped.totalBytes,
+              keptFiles: entries.length,
+              droppedFiles: capped.droppedFiles,
+              maxFiles: MAX_SYNC_FILES,
+              maxBytes: MAX_SYNC_BYTES,
+            },
+            `loop folder exceeds the sync cap (${capped.totalFiles} files / ${mib(capped.totalBytes)}, cap ${MAX_SYNC_FILES} files / ${mib(MAX_SYNC_BYTES)}) — syncing ${entries.length} top-level files, dropping ${capped.droppedFiles}. A loop folder is a synced content home for reports/state/ui/small artifacts, not a scratch workspace: keep heavy work products (repo clones, git worktrees, node_modules, build output, caches) OUTSIDE it.`,
+          );
+        }
+      } else {
+        this.capWarned = false;
+      }
+
       const digest = manifestDigest(entries);
       if (digest === this.lastAcked) return; // unchanged since the last acked sync — no network
       const runId = activeRuns.get(this.loopId) ?? null;
@@ -555,4 +679,9 @@ export class WatchManager {
 
 function msg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Human-readable MiB for the cap warning (integer MB is enough context). */
+function mib(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))}MB`;
 }
