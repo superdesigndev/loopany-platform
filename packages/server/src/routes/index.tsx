@@ -187,7 +187,7 @@ function Dashboard() {
         </div>
 
         {active.length ? (
-          active.map((j) => <LoopCard key={j.id} job={j} {...cardProps()} />)
+          active.map((j) => <LoopCard job={j} {...cardProps()} key={j.id} />)
         ) : (
           <div className="py-16 text-center">
             <div className="text-[15px] text-secondary">
@@ -208,7 +208,7 @@ function Dashboard() {
               <span className="text-label text-secondary">{completed.length} total</span>
             </div>
             {completed.map((j) => (
-              <LoopCard key={j.id} job={j} {...cardProps()} />
+              <LoopCard job={j} {...cardProps()} key={j.id} />
             ))}
           </>
         )}
