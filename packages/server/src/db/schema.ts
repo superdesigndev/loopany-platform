@@ -1,17 +1,19 @@
 /**
- * Loopany business schema (Drizzle, SQLite dialect).
+ * Loopany business schema (Drizzle, Postgres `pg-core` dialect).
  *
  * Three tables — machines / loops / runs — keyed off the Better Auth `user`
  * table (added in the auth step; `userId` here is the owning user's id). We use
- * Drizzle (not raw SQL) specifically so a later switch to Supabase/Postgres is a
- * dialect swap (`sqlite-core` → `pg-core` + driver), not a query rewrite.
+ * Drizzle (not raw SQL) so the store is single-sourced across the driver tiers
+ * (postgres-js on Supabase; embedded pglite for local/self-host + tests) — the
+ * query-builder API is identical, only `db/index.ts` branches the driver.
  *
- * Timestamps are ISO strings (text) for portability + to match the carried-over
- * c0 types. JSON columns use `{ mode: "json" }` with `$type<>()` for typed
- * (de)serialization. Booleans use `{ mode: "boolean" }` over INTEGER.
+ * Timestamps are ISO strings (`text`) for portability + to match the carried-over
+ * c0 types (no db-side defaults). JSON columns use `jsonb().$type<>()` for typed
+ * (de)serialization. Booleans use native `boolean()`. The per-run USD figure is a
+ * `doublePrecision` column so per-loop totals are one SUM.
  */
 import { sql } from "drizzle-orm";
-import { sqliteTable, text, integer, real, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, doublePrecision, boolean, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 import type { ArtifactMeta } from "../server/frontmatter.js";
 
@@ -89,7 +91,7 @@ export interface ChannelConfig {
 
 // ---- machines: a teammate's daemon (machine == identity unit) ----
 
-export const machines = sqliteTable(
+export const machines = pgTable(
   "machines",
   {
     /** m-sha256(deviceToken)[:16] */
@@ -118,11 +120,11 @@ export const machines = sqliteTable(
      */
     token: text("token"),
     /** Workdir allowlist the daemon enforces as cwd jail; null/[] = unrestricted. */
-    roots: text("roots", { mode: "json" }).$type<string[]>(),
+    roots: jsonb("roots").$type<string[]>(),
     /** Last WS contact (ISO). */
     lastSeen: text("last_seen"),
     /** Live WS connection state. */
-    online: integer("online", { mode: "boolean" }).notNull().default(false),
+    online: boolean("online").notNull().default(false),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("machines_user_idx").on(t.userId), index("machines_team_idx").on(t.teamId)],
@@ -130,7 +132,7 @@ export const machines = sqliteTable(
 
 // ---- loops: a scheduled behavior bound to one machine ----
 
-export const loops = sqliteTable(
+export const loops = pgTable(
   "loops",
   {
     id: text("id").primaryKey(),
@@ -162,13 +164,13 @@ export const loops = sqliteTable(
     /** Generative-UI template (authored by evolve; sanitized at render). */
     ui: text("ui"),
     /** Per-run metric schema. */
-    stateSchema: text("state_schema", { mode: "json" }).$type<StateField[]>(),
+    stateSchema: jsonb("state_schema").$type<StateField[]>(),
     notify: text("notify", { enum: ["always", "auto", "never"] }).notNull().default("auto"),
     /** May a run change its own schedule (reschedule/set-cron)? Default TRUE — a
      *  loop self-adjusts unless the owner PINS the schedule (allowControl=false =
      *  "don't self-adjust"). Run-path self-schedule is floor-guarded (see the
      *  cadence floors in gateway); the owner's edit path is unlimited. */
-    allowControl: integer("allow_control", { mode: "boolean" }).notNull().default(true),
+    allowControl: boolean("allow_control").notNull().default(true),
     /** CLOSED-loop setpoint: a one-line, checkable goal. Null ⇒ OPEN loop
      *  (monitor/digest — never self-terminates; "finish" is not a concept for it).
      *  Non-null ⇒ CLOSED loop: each exec run is the comparator (judges state vs the
@@ -186,18 +188,18 @@ export const loops = sqliteTable(
      *  as its host). Recording-only today: the daemon still executes every loop via
      *  Claude regardless of this value (Codex execution is a later phase). Measured
      *  from the creating CLI's env when detectable, else the declared/selected value;
-     *  TS-only enum (SQLite stores plain text), so widening the set later is a type
+     *  TS-only enum (stored as plain text), so widening the set later is a type
      *  change with no migration. Existing rows backfill to `claude-code` via default. */
     agent: text("agent", { enum: ["claude-code", "codex"] }).notNull().default("claude-code"),
-    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    enabled: boolean("enabled").notNull().default(true),
     /** One-shot override: run once at this time, then resume cron (ISO). */
     nextRunAt: text("next_run_at"),
     /** Workflow cursor: last returned state, passed back as `prev`. */
-    state: text("state", { mode: "json" }).$type<unknown>(),
+    state: jsonb("state").$type<unknown>(),
     /** runs count at last evolution (drives the periodic evolve trigger). */
     evolvedRunCount: integer("evolved_run_count"),
     /** Marker: next tick runs the evolution pass as its sole work. */
-    evolveDue: integer("evolve_due", { mode: "boolean" }),
+    evolveDue: boolean("evolve_due"),
     /** Pending owner edit: the next tick runs an `edit` agent that applies this
      *  instruction (schedule via `loopany edit`, content via the loop's README.md) then clears it. */
     editRequest: text("edit_request"),
@@ -213,7 +215,7 @@ export const loops = sqliteTable(
 
 // ---- runs: one execution record (own table, not embedded) ----
 
-export const runs = sqliteTable(
+export const runs = pgTable(
   "runs",
   {
     id: text("id").primaryKey(),
@@ -230,28 +232,28 @@ export const runs = sqliteTable(
     error: text("error"),
     /** This run's observation snapshot — numeric metrics (chart points) plus scalar
      *  values the generative UI binds via {{latest.*}} (strings ok; chart ignores them). */
-    state: text("state", { mode: "json" }).$type<Record<string, number | string>>(),
+    state: jsonb("state").$type<Record<string, number | string>>(),
     /** Control actions this run issued (audit). */
-    control: text("control", { mode: "json" }).$type<ControlAction[]>(),
+    control: jsonb("control").$type<ControlAction[]>(),
     /** claude session id on the machine (locates the transcript; MVP doesn't read it). */
     sessionId: text("session_id"),
     /** Claude's own USD estimate for this run (the CLI's `total_cost_usd`). A real
      *  column (not JSON) so per-loop totals are one SUM. Null: workflow-only run,
      *  older daemon, or the run never reached a terminal result event. */
-    costUsd: real("cost_usd"),
+    costUsd: doublePrecision("cost_usd"),
     /** Token-count breakdown reported with the cost (display-only detail). */
-    usage: text("usage", { mode: "json" }).$type<RunUsage>(),
+    usage: jsonb("usage").$type<RunUsage>(),
     /** Files the run's claude session created/edited (parsed from its transcript). */
-    artifacts: text("artifacts", { mode: "json" }).$type<RunArtifact[]>(),
+    artifacts: jsonb("artifacts").$type<RunArtifact[]>(),
     /** Slimmed execution trace (text/tool/result steps the daemon parsed from the
      *  machine's claude transcript). Null for workflow-only runs (no claude). */
-    transcript: text("transcript", { mode: "json" }).$type<TranscriptStep[]>(),
+    transcript: jsonb("transcript").$type<TranscriptStep[]>(),
     /** Live "what's it doing" signal while running — a slim current-activity line
      *  the daemon pushes on its poll heartbeat (NOT the full transcript). Cleared
      *  when the run finalizes (the complete transcript supersedes it). `at` is the
      *  freshness stamp the sweep reads as last-heard-from (optional: rows written
      *  by older daemons lack it). TS-only shape; no migration. */
-    progress: text("progress", { mode: "json" }).$type<{ step: number; label: string; at?: string }>(),
+    progress: jsonb("progress").$type<{ step: number; label: string; at?: string }>(),
   },
   (t) => [
     index("runs_loop_idx").on(t.loopId),
@@ -262,7 +264,7 @@ export const runs = sqliteTable(
 
 // ---- teams: the ownership/scope unit (every user gets a personal team) ----
 
-export const teams = sqliteTable("teams", {
+export const teams = pgTable("teams", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   /** The user whose personal team this is (null for the open-mode shared team). */
@@ -270,7 +272,7 @@ export const teams = sqliteTable("teams", {
   createdAt: text("created_at").notNull(),
 });
 
-export const teamMembers = sqliteTable(
+export const teamMembers = pgTable(
   "team_members",
   {
     id: text("id").primaryKey(),
@@ -284,7 +286,7 @@ export const teamMembers = sqliteTable(
 
 // ---- notification channels: per-team push targets a loop can route to ----
 
-export const notificationChannels = sqliteTable(
+export const notificationChannels = pgTable(
   "notification_channels",
   {
     id: text("id").primaryKey(),
@@ -293,7 +295,7 @@ export const notificationChannels = sqliteTable(
     type: text("type", { enum: ["telegram", "slack", "feishu"] }).notNull(),
     name: text("name").notNull(),
     /** Transport secrets (shape per `type`). Stored as JSON; never sent to the client raw. */
-    config: text("config", { mode: "json" }).$type<ChannelConfig>().notNull(),
+    config: jsonb("config").$type<ChannelConfig>().notNull(),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("notification_channels_team_idx").on(t.teamId)],
@@ -303,26 +305,26 @@ export const notificationChannels = sqliteTable(
 //
 // The daemon watches each loop's folder and live-syncs changed files. Blob BYTES
 // live in external object storage (Cloudflare R2), keyed by sha256 content hash —
-// NOT in the DB (no `content` column), keeping the business DB lean + Postgres-
-// portable and preserving the server's zero-exec invariant (it only stores/reads
-// bytes, never interprets them). These two tables hold only metadata.
+// NOT in the DB (no `content` column), keeping the business DB lean and preserving
+// the server's zero-exec invariant (it only stores/reads bytes, never interprets
+// them). These two tables hold only metadata.
 
 /**
  * One content-addressed blob (deduped across every loop/run). The bytes live in
  * R2 under the hash; this row records that the server has them + their shape.
  */
-export const blobs = sqliteTable("blobs", {
+export const blobs = pgTable("blobs", {
   /** sha256 hex of the bytes (the R2 object key). */
   hash: text("hash").primaryKey(),
   size: integer("size").notNull(),
   /** Heuristic: the bytes contain a NUL (download-only; no inline text render). */
-  binary: integer("binary", { mode: "boolean" }).notNull().default(false),
+  binary: boolean("binary").notNull().default(false),
   /** Parsed front-matter subset ({type?,title?,date?}) for a non-binary markdown
    *  product, or null (untyped / binary / no usable front matter). Front matter is
    *  a pure function of content, so this is parsed ONCE where the bytes first
    *  arrive (sync inline / putBlob) and reused on every content-addressed dedup
    *  re-reference. Old blobs keep it null — zero migration/backfill. */
-  meta: text("meta", { mode: "json" }).$type<ArtifactMeta>(),
+  meta: jsonb("meta").$type<ArtifactMeta>(),
   createdAt: text("created_at").notNull(),
 });
 
@@ -332,7 +334,7 @@ export const blobs = sqliteTable("blobs", {
  * is deleted (tombstone) or oversize (metadata-only, no bytes synced). The
  * unique (loopId, path) index is the upsert key the sync reconciliation drives.
  */
-export const artifactFiles = sqliteTable(
+export const artifactFiles = pgTable(
   "artifact_files",
   {
     id: text("id").primaryKey(),
@@ -343,11 +345,11 @@ export const artifactFiles = sqliteTable(
     hash: text("hash"),
     size: integer("size"),
     /** Bytes contain a NUL (mirrors blobs.binary; set even for oversize files). */
-    binary: integer("binary", { mode: "boolean" }).notNull().default(false),
+    binary: boolean("binary").notNull().default(false),
     /** File exceeds the per-file byte cap → metadata-only (path + size), no blob. */
-    oversize: integer("oversize", { mode: "boolean" }).notNull().default(false),
+    oversize: boolean("oversize").notNull().default(false),
     /** Tombstone: the file vanished from the loop's manifest (kept for future diffs). */
-    deleted: integer("deleted", { mode: "boolean" }).notNull().default(false),
+    deleted: boolean("deleted").notNull().default(false),
     updatedAt: text("updated_at").notNull(),
     /** The run in-flight when this change synced (null for idle-time human edits). */
     lastRunId: text("last_run_id"),
@@ -384,12 +386,12 @@ export type SnapshotManifest = Record<string, SnapshotEntry>;
  * One row per run (runId PK); runs predating the feature simply have no row
  * (the diff view degrades to its "no recorded changes" copy).
  */
-export const runSnapshots = sqliteTable(
+export const runSnapshots = pgTable(
   "run_snapshots",
   {
     runId: text("run_id").primaryKey(),
     loopId: text("loop_id").notNull(),
-    manifest: text("manifest", { mode: "json" }).$type<SnapshotManifest>().notNull(),
+    manifest: jsonb("manifest").$type<SnapshotManifest>().notNull(),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("run_snapshots_loop_idx").on(t.loopId)],

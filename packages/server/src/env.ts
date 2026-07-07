@@ -2,17 +2,33 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * Loopany server data directory — holds the SQLite database (and any other
- * server-side state). On Fly this is the mounted volume; locally it defaults to
- * `~/.loopany`. Override with `LOOPANY_DATA_DIR`.
+ * Loopany server data directory — server-side file state, and (for the embedded
+ * pglite tier) the on-disk Postgres data dir at `<dataDir>/pgdata`. Locally it
+ * defaults to `~/.loopany`. Override with `LOOPANY_DATA_DIR`. The HOSTED tier
+ * (DATABASE_URL set) is stateless and never touches this.
  */
 export function dataDir(): string {
   return process.env.LOOPANY_DATA_DIR?.trim() || path.join(os.homedir(), ".loopany");
 }
 
-/** Absolute path to the SQLite database file. */
-export function dbPath(): string {
-  return process.env.LOOPANY_DB_PATH?.trim() || path.join(dataDir(), "loopany.db");
+/**
+ * Supabase (or any Postgres) connection string for the RUNTIME app process. When
+ * set, the server uses the postgres-js driver (hosted prod/staging) — point it at
+ * the Supabase TRANSACTION POOLER (`:6543`); the driver forces `prepare:false`.
+ * When UNSET, the server falls back to the embedded, file-backed pglite database
+ * at `<dataDir>/pgdata` (local dev + light self-host + tests) — zero external DB.
+ */
+export function databaseUrl(): string | undefined {
+  return process.env.DATABASE_URL?.trim() || undefined;
+}
+
+/**
+ * Direct (session-mode, `:5432`) Postgres URL used ONLY for migrations — DDL and
+ * the migrator's advisory lock must NOT go through the transaction pooler. Falls
+ * back to `DATABASE_URL` when unset (e.g. a plain non-pooled Postgres).
+ */
+export function directDatabaseUrl(): string | undefined {
+  return process.env.DIRECT_DATABASE_URL?.trim() || databaseUrl();
 }
 
 /**

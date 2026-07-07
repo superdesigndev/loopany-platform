@@ -1,1 +1,0 @@
-ALTER TABLE `machines` ADD `daemon_version` text;
