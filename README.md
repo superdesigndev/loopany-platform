@@ -120,8 +120,12 @@ For a real deployment, set at minimum:
 
 - **Database** - either point `DATABASE_URL` at a Postgres (e.g. Supabase; set
   it to the transaction pooler `:6543`, plus `DIRECT_DATABASE_URL` at the direct
-  `:5432` URL for migrations), or leave both unset and give `LOOPANY_DATA_DIR` a
-  persistent directory - the embedded pglite database lives at `<dir>/pgdata`.
+  `:5432` URL for migrations), or leave both unset and set **`LOOPANY_DB=pglite`**
+  plus a persistent `LOOPANY_DATA_DIR` - the embedded pglite database lives at
+  `<dir>/pgdata`. The built server treats a missing `DATABASE_URL` as a config
+  error unless `LOOPANY_DB=pglite` explicitly opts into the embedded tier (so a
+  lost database secret fails the deploy loudly instead of silently booting an
+  empty ephemeral DB); only `pnpm dev` runs pglite without the opt-in.
   `pnpm start` applies pending migrations before serving (over the direct URL for
   the hosted tier; in-process for the pglite tier).
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` + `LOOPANY_AUTH_SECRET` (a long
@@ -147,14 +151,17 @@ For a real deployment, set at minimum:
 
 ### Docker
 
-The included [`Dockerfile`](Dockerfile) builds the server. With no `DATABASE_URL`
-it runs the embedded pglite database on a volume at `/data`; with a `DATABASE_URL`
-(Supabase/any Postgres) the container is stateless and needs no volume:
+The included [`Dockerfile`](Dockerfile) builds the server. For the embedded
+pglite database, opt in with `LOOPANY_DB=pglite` and persist `/data` on a volume;
+with a `DATABASE_URL` (Supabase/any Postgres) the container is stateless and
+needs no volume. (The opt-in is deliberate: without it a container that LOST its
+`DATABASE_URL` would silently boot an empty ephemeral database - instead it
+refuses to start.)
 
 ```bash
 docker build -t loopany .
-# Embedded pglite (persist the DB on a volume):
-docker run -p 3000:3000 -v loopany-data:/data loopany
+# Embedded pglite (opt in + persist the DB on a volume):
+docker run -p 3000:3000 -e LOOPANY_DB=pglite -v loopany-data:/data loopany
 # Or against Postgres (stateless):
 docker run -p 3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... loopany
 ```

@@ -38,8 +38,10 @@ computes pure functions. Run instructions: `README.md`.
 - Prod: nitro build, then `pnpm start` = `scripts/prestart.mjs` +
   `node .output/server/index.mjs`. prestart applies pending migrations via the
   postgres-js migrator over `DIRECT_DATABASE_URL` for the hosted Supabase tier
-  (when `DATABASE_URL` is set); the embedded pglite tier migrates in-process at
-  boot, so prestart is a no-op there.
+  (when `DATABASE_URL` is set; fails loud if that would route DDL over the :6543
+  pooler); the embedded pglite tier migrates in-process at boot - prestart just
+  gates it (no `DATABASE_URL` requires the explicit `LOOPANY_DB=pglite` opt-in,
+  exit 1 otherwise, so a lost DB secret can't silently boot an empty pglite).
 
 ## Core model
 
@@ -404,7 +406,10 @@ computes pure functions. Run instructions: `README.md`.
 - **Changed `db/schema.ts`? Migrate locally right away**: `db:generate` (diffs
   schema -> SQL, needs no DB) then `db:migrate`. `db:migrate` is the drizzle-kit CLI
   and needs `DIRECT_DATABASE_URL`/`DATABASE_URL` set - it errors on an empty URL and
-  only targets a real Postgres; the embedded pglite tier has NO CLI migrate, it
+  only targets a real Postgres (`drizzle.config.ts` routes it through `env.ts`
+  `directDatabaseUrl()`, which THROWS when only a Supabase pooler `DATABASE_URL` is
+  set with no `DIRECT_DATABASE_URL`, so DDL never runs over the `:6543` pooler);
+  the embedded pglite tier has NO CLI migrate, it
   applies the generated migrations IN-PROCESS at boot. `boot.ts` `ensureServer` calls
   `runMigrations()` on every boot, so `pnpm dev` DOES auto-migrate the pglite tier in
   process (you still run `db:generate` to author the SQL); prod applies on `pnpm start`

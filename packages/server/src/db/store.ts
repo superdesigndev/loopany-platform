@@ -178,6 +178,21 @@ export async function updateRun(id: string, patch: Partial<NewRun>): Promise<Run
   return getRun(id);
 }
 
+/** ATOMICALLY claim a PENDING run for delivery (pending -> running, stamping ts).
+ *  Conditional on the current phase, so two concurrent claimers can never both win:
+ *  the async session opened a read-check -> write window in poll() that the old
+ *  sync-SQLite handler never had. Returns the claimed row, or undefined when the
+ *  run is gone / already claimed / no longer pending (the caller skips delivery). */
+export async function claimPendingRun(id: string): Promise<Run | undefined> {
+  return (
+    await db
+      .update(runs)
+      .set({ phase: "running", ts: nowIso() })
+      .where(and(eq(runs.id, id), eq(runs.phase, "pending")))
+      .returning()
+  )[0];
+}
+
 /** Newest-last run history for a loop (chronological), capped. */
 export async function listRuns(loopId: string, limit = 30): Promise<Run[]> {
   const rows = await db

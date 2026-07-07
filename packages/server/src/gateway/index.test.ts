@@ -592,6 +592,28 @@ test("poll stores live progress on this machine's running run; report clears it"
   expect((await store.getRun(run.id))!.progress).toBeNull();
 });
 
+test("concurrent polls deliver a pending run exactly once (atomic pending->running claim)", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
+
+  // Two polls in flight at once (an HTTP retry racing its timed-out original, or
+  // two daemons sharing one device token = the same machineId). The conditional
+  // pending->running claim must let exactly ONE of them deliver the run - the old
+  // unconditional read-then-write let both, double-executing it on the machine.
+  const gw = gateway();
+  const results = await Promise.all([gw.poll(token), gw.poll(token)]);
+  const delivered = results.flatMap((r) => (r.body as { deliveries: Array<{ runId: string }> }).deliveries);
+  expect(delivered.filter((d) => d.runId === run.id)).toHaveLength(1);
+  expect((await store.getRun(run.id))!.phase).toBe("running");
+
+  // A later poll sees the run as already claimed - no re-delivery, no error.
+  const again = ((await gw.poll(token)).body as { deliveries: unknown[] }).deliveries;
+  expect(again).toHaveLength(0);
+});
+
 test("set-tz applies the timezone through an allowControl run token", async () => {
   const { loop, machine, run } = (await seededLoop());
   const token = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "edit", allowControl: true });
@@ -1682,6 +1704,26 @@ test("agent-api report clips --message to the 2000-char cap", async () => {
   const res = (await gateway().agentApi(rt, ["report", "--message", "m".repeat(5000)]));
   expect(res.status).toBe(200);
   expect((await store.getRun(run.id))!.message!.length).toBe(2000);
+});
+
+test("agent-api flags are NUL-stripped before any pg write (report/state)", async () => {
+  // Postgres text/jsonb REJECT U+0000 (SQLite tolerated it) - a flag value
+  // carrying one (e.g. --file-content inlining a file with a stray NUL) must be
+  // sanitized at the parseFlags chokepoint, not 500 the verb mid-run.
+  const { run, rt } = (await seededExecRun());
+  const res = (await gateway().agentApi(rt, [
+    "report",
+    "--status",
+    "new",
+    "--message",
+    "before\u0000after",
+    "--state",
+    '{"note":"a\\u0000b"}',
+  ]));
+  expect(res.status).toBe(200);
+  const stored = (await store.getRun(run.id))!;
+  expect(stored.message).toBe("beforeafter");
+  expect((stored.state as Record<string, unknown>).note).toBe("ab");
 });
 
 test("report clips sessionId and error (untrusted wire input, same discipline as message)", async () => {

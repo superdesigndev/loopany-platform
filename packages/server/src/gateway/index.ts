@@ -213,6 +213,15 @@ export class MachineGateway {
    *  running a second pass concurrently (idempotent but wasteful + double-counts). */
   private maintenanceRunning = false;
 
+  /** Fire-and-forget push through the injected notifier, rejection-guarded: the
+   *  real dispatchNotification never lets its network call throw, but its leading
+   *  store read can reject (transient DB error) - and every caller is a bare
+   *  fire-and-forget off a hot path, where an escaped rejection is process-fatal
+   *  under Node's default unhandled-rejection policy. */
+  private pushNotify(loop: Loop, message: string): void {
+    void this.notify(loop, message).catch((err) => log.warn({ loop: loop.id, err: String(err) }, "notify failed"));
+  }
+
   /**
    * Alert the user that an exec run FAILED (error / timeout / machine-offline),
    * through the loop's chosen channel, gated by the anti-spam streak policy
@@ -227,7 +236,7 @@ export class MachineGateway {
     if (!loop) return;
     const streak = await store.execFailureStreak(loopId);
     if (shouldNotifyFailure(loop.notify, streak)) {
-      void this.notify(loop, failureMessage(reason));
+      this.pushNotify(loop, failureMessage(reason));
     }
   }
 
@@ -417,6 +426,14 @@ export class MachineGateway {
         await store.updateRun(run.id, { phase: "error", outcome: "error", error: "loop removed", ts: nowIso() });
         continue;
       }
+      // ATOMIC claim (pending -> running, conditional on the phase): with an async
+      // session, two concurrent polls (an HTTP retry racing its timed-out original,
+      // or two daemons sharing one device token = the same machineId) could both
+      // read this run as pending and both deliver it - double execution. Under
+      // sync SQLite the whole handler was atomic, so the plain read-then-write was
+      // safe; now only the winner of the conditional UPDATE mints the lease and
+      // ships the delivery, and the loser skips.
+      if (!(await store.claimPendingRun(run.id))) continue;
       // Edit + evolve runs exist to change the loop, so they always get control
       // AND the structural edit caps (schedule, UI, schema, workflow).
       const structural = run.role === "evolve" || run.role === "edit";
@@ -433,7 +450,6 @@ export class MachineGateway {
         // of allowControl (like the structural caps). Evolve/edit never finish.
         canFinish: run.role === "exec" && loop.goal != null,
       });
-      await store.updateRun(run.id, { phase: "running", ts: nowIso() });
       deliveries.push(await buildDelivery(loop, run.id, token, machine.roots ?? []));
     }
 
@@ -1383,7 +1399,7 @@ export class MachineGateway {
         // (a cheap, honest correction), gated by the loop's normal notify policy.
         const loop = await store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
-          void this.notify(loop, finalized.message);
+          this.pushNotify(loop, finalized.message);
         }
       }
       // A genuine late FAILURE is recorded honestly but does NOT re-notify: the
@@ -1491,7 +1507,7 @@ export class MachineGateway {
         // Success: gate on the loop's notify policy + the run's content status.
         const loop = await store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
-          void this.notify(loop, finalized.message);
+          this.pushNotify(loop, finalized.message);
         }
       } else {
         // Failure: surface it (silent failure is the BYOA default failure mode),
@@ -1570,7 +1586,7 @@ export class MachineGateway {
     // Completion is a distinct terminal event — notify unless the user opted out
     // of all pushes (notify: "never"). Best-effort (void), like the report path.
     if (loop && loop.notify !== "never") {
-      void this.notify(loop, completionMessage(reason, message));
+      this.pushNotify(loop, completionMessage(reason, message));
     }
     log.info({ runId: lease.runId, loopId: lease.loopId }, "finish: loop completed");
     return { ok: true, detail: "loop finished — goal met, loop completed" };
@@ -3416,29 +3432,36 @@ function validateState(
     if (allowed && !allowed.has(k)) return { ok: false, error: `--state has unknown key "${k}". Allowed: ${[...allowed].join(", ")}` };
     // Finite number (chart point) or non-empty string (the UI binds it; chart ignores)
     // — same contract as the widened run.state column + the workflow mirror path.
-    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
-    else if (typeof v === "string" && v) out[k] = v;
+    // NUL-strip string keys/values: a JSON-escaped \u0000 in the raw flag survives
+    // parseFlags (no literal NUL yet) and only materializes at JSON.parse here -
+    // and pg jsonb rejects it where SQLite tolerated it.
+    if (typeof v === "number" && Number.isFinite(v)) out[stripNul(k)] = v;
+    else if (typeof v === "string" && v) out[stripNul(k)] = stripNul(v);
     else return { ok: false, error: `--state.${k} must be a finite number or a non-empty string` };
   }
   return { ok: true, value: out };
 }
 
-/** Tiny flag parser: `--k v` pairs, bare `--flag` → true, first positional under `_`. */
+/** Tiny flag parser: `--k v` pairs, bare `--flag` → true, first positional under `_`.
+ *  Every key/value is NUL-stripped HERE - flags are wire input by definition, and
+ *  several dispatch verbs (`report --message`, `finish --reason`, `set-name`, state
+ *  values) write flag strings straight into pg text/jsonb columns, which REJECT
+ *  NUL (SQLite tolerated it). One chokepoint covers every verb at once. */
 function parseFlags(args: string[]): Flags {
   const out: Flags = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a.startsWith("--")) {
-      const key = a.slice(2);
+      const key = stripNul(a.slice(2));
       const next = args[i + 1];
       if (next !== undefined && !next.startsWith("--")) {
-        out[key] = next;
+        out[key] = stripNul(next);
         i++;
       } else {
         out[key] = true;
       }
     } else if (out["_"] === undefined) {
-      out["_"] = a;
+      out["_"] = stripNul(a);
     }
   }
   return out;

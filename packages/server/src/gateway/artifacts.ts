@@ -31,11 +31,15 @@ export function looksBinary(bytes: Buffer): boolean {
 
 /**
  * Normalize an untrusted, loop-folder-relative path. Returns the cleaned POSIX
- * relative path, or null if it is absolute, escapes the folder (`..`), or is empty.
+ * relative path, or null if it is absolute, escapes the folder (`..`), is empty,
+ * or carries a NUL (no real filesystem produces one, so it is hostile wire input
+ * by definition - and Postgres text columns reject it, so letting it through
+ * would 500 the whole sync on the artifact_files write).
  * Backslashes are normalized to `/` so a Windows daemon's paths land consistently.
  */
 export function safeRelPath(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw.trim()) return null;
+  if (raw.includes("\u0000")) return null; // NUL: impossible on a real FS, rejected by pg
   const unix = raw.replace(/\\/g, "/").trim();
   if (unix.startsWith("/")) return null; // absolute
   // Normalize `./` and collapse, then reject any remaining traversal.
