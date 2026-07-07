@@ -1706,6 +1706,26 @@ test("agent-api report clips --message to the 2000-char cap", async () => {
   expect((await store.getRun(run.id))!.message!.length).toBe(2000);
 });
 
+test("agent-api flags are NUL-stripped before any pg write (report/state)", async () => {
+  // Postgres text/jsonb REJECT U+0000 (SQLite tolerated it) - a flag value
+  // carrying one (e.g. --file-content inlining a file with a stray NUL) must be
+  // sanitized at the parseFlags chokepoint, not 500 the verb mid-run.
+  const { run, rt } = (await seededExecRun());
+  const res = (await gateway().agentApi(rt, [
+    "report",
+    "--status",
+    "new",
+    "--message",
+    "before\u0000after",
+    "--state",
+    '{"note":"a\\u0000b"}',
+  ]));
+  expect(res.status).toBe(200);
+  const stored = (await store.getRun(run.id))!;
+  expect(stored.message).toBe("beforeafter");
+  expect((stored.state as Record<string, unknown>).note).toBe("ab");
+});
+
 test("report clips sessionId and error (untrusted wire input, same discipline as message)", async () => {
   const { run, rt } = (await seededExecRun());
   const res = (await gateway().report(rt, {

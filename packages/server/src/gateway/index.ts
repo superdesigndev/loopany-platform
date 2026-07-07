@@ -3423,29 +3423,36 @@ function validateState(
     if (allowed && !allowed.has(k)) return { ok: false, error: `--state has unknown key "${k}". Allowed: ${[...allowed].join(", ")}` };
     // Finite number (chart point) or non-empty string (the UI binds it; chart ignores)
     // — same contract as the widened run.state column + the workflow mirror path.
-    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
-    else if (typeof v === "string" && v) out[k] = v;
+    // NUL-strip string keys/values: a JSON-escaped \u0000 in the raw flag survives
+    // parseFlags (no literal NUL yet) and only materializes at JSON.parse here -
+    // and pg jsonb rejects it where SQLite tolerated it.
+    if (typeof v === "number" && Number.isFinite(v)) out[stripNul(k)] = v;
+    else if (typeof v === "string" && v) out[stripNul(k)] = stripNul(v);
     else return { ok: false, error: `--state.${k} must be a finite number or a non-empty string` };
   }
   return { ok: true, value: out };
 }
 
-/** Tiny flag parser: `--k v` pairs, bare `--flag` → true, first positional under `_`. */
+/** Tiny flag parser: `--k v` pairs, bare `--flag` → true, first positional under `_`.
+ *  Every key/value is NUL-stripped HERE - flags are wire input by definition, and
+ *  several dispatch verbs (`report --message`, `finish --reason`, `set-name`, state
+ *  values) write flag strings straight into pg text/jsonb columns, which REJECT
+ *  NUL (SQLite tolerated it). One chokepoint covers every verb at once. */
 function parseFlags(args: string[]): Flags {
   const out: Flags = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a.startsWith("--")) {
-      const key = a.slice(2);
+      const key = stripNul(a.slice(2));
       const next = args[i + 1];
       if (next !== undefined && !next.startsWith("--")) {
-        out[key] = next;
+        out[key] = stripNul(next);
         i++;
       } else {
         out[key] = true;
       }
     } else if (out["_"] === undefined) {
-      out["_"] = a;
+      out["_"] = stripNul(a);
     }
   }
   return out;
