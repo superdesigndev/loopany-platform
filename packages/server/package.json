@@ -2,6 +2,7 @@
   "name": "@loopany/server",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "Loopany server — TanStack Start UI + in-process scheduler + machine WS gateway + agent-api + Better Auth. Zero code-exec, zero LLM (execution is BYOA on user machines).",
   "scripts": {

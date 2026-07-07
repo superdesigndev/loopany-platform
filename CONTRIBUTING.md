@@ -69,7 +69,19 @@ Please keep tests and `typecheck` green before opening a PR.
   (`.github/workflows/publish-daemon.yml`, via npm OIDC trusted publishing). The
   tag must match the version in `packages/daemon/package.json`.
 
-## License
+## Licensing & CLA
 
-By contributing, you agree that your contributions are licensed under the
-project's [MIT License](LICENSE).
+Loopany is licensed per package (see the root [`LICENSE`](LICENSE) for the
+full map):
+
+- **`packages/daemon`** (`@crewlet/loopany`) — [MIT](packages/daemon/LICENSE).
+- **`packages/server`** (`@loopany/server`) —
+  [AGPL-3.0-only](packages/server/LICENSE). The skill files under
+  `packages/server/src/skill/` that are bundled into the daemon npm package
+  are MIT, so the published daemon stays MIT in its entirety.
+
+Before your first pull request is merged you'll be asked to sign our
+[Contributor License Agreement](.github/CLA.md) — a bot comments on the PR
+and signing is a one-time, one-comment step. You keep the copyright to your
+contributions; the CLA grants Superdesign the license rights described in
+the document.

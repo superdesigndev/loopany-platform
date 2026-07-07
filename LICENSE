@@ -1,21 +1,21 @@
-MIT License
+Loopany is a monorepo whose packages are licensed separately:
+
+- packages/daemon (@crewlet/loopany, the machine-side daemon published to npm):
+  MIT License — see packages/daemon/LICENSE
+
+- packages/server (@loopany/server, the Loopany platform server):
+  GNU Affero General Public License v3.0 only (AGPL-3.0-only) —
+  see packages/server/LICENSE
+
+  Exception: the contents of packages/server/src/skill/ that are bundled into
+  the daemon npm package by packages/daemon/scripts/sync-skill.mjs (SKILL.md and
+  the references/ files) are licensed under the MIT License, so the published
+  daemon package is MIT in its entirety.
+
+Everything else in this repository (root configuration, scripts, docs) is
+licensed under AGPL-3.0-only unless a file or directory states otherwise.
 
 Copyright (c) 2026 Superdesign
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Contributions are accepted under the Contributor License Agreement in
+.github/CLA.md (enforced automatically on pull requests).

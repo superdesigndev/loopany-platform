@@ -159,4 +159,12 @@ releases, PR flow) and [`AGENTS.md`](AGENTS.md) for architecture notes.
 
 ## License
 
-[MIT](LICENSE) © 2026 Superdesign
+Licensed per package — see [`LICENSE`](LICENSE) for the full map:
+
+- The machine-side daemon [`@crewlet/loopany`](packages/daemon) is
+  [MIT](packages/daemon/LICENSE).
+- The platform server [`@loopany/server`](packages/server) is
+  [AGPL-3.0-only](packages/server/LICENSE).
+
+© 2026 Superdesign. Contributions require a one-time
+[CLA sign-off](.github/CLA.md) on your first pull request.
