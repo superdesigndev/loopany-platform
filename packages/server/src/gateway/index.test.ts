@@ -2371,6 +2371,32 @@ test("cli loops --fields: extends the default columns from the optional set (in 
   expect(row).toMatch(/,1,/); // runs count = 1
 });
 
+test("cli loops --fields lastOutcome: tracks the last EXEC run, never masked by a later evolve/edit", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  // A loop whose newest run is a SUCCESSFUL evolve but whose last scheduled exec FAILED.
+  const masked = store.createLoop({ userId: "u1", machineId, name: "Masked", cron: "0 6 * * 1", enabled: true, notify: "auto" });
+  store.addRun({ loopId: masked.id, userId: "u1", machineId, phase: "error", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "error", status: null });
+  store.addRun({ loopId: masked.id, userId: "u1", machineId, phase: "done", role: "evolve", ts: "2026-07-05T07:00:00Z", outcome: "evolve", status: null });
+  // A loop with only an exec run.
+  const execOnly = store.createLoop({ userId: "u1", machineId, name: "ExecOnly", cron: "0 6 * * 1", enabled: true, notify: "auto" });
+  store.addRun({ loopId: execOnly.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new" });
+  // A loop with no exec runs at all (only an edit).
+  const noExec = store.createLoop({ userId: "u1", machineId, name: "NoExec", cron: "0 6 * * 1", enabled: true, notify: "auto" });
+  store.addRun({ loopId: noExec.id, userId: "u1", machineId, phase: "done", role: "edit", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: null });
+
+  const text = textOf(gateway().cli(deviceToken, ["loops", "--fields", "lastOutcome"]));
+  const rows = text.split("\n");
+  const maskedRow = rows.find((r) => r.includes(masked.id))!;
+  expect(maskedRow).toContain("failed"); // the failed exec, NOT the later successful evolve
+  expect(maskedRow).not.toContain("evolve");
+  const execRow = rows.find((r) => r.includes(execOnly.id))!;
+  expect(execRow).toContain("ok/nothing-new");
+  const noExecRow = rows.find((r) => r.includes(noExec.id))!;
+  expect(noExecRow.trimEnd().endsWith("—")).toBe(true); // no exec run ⇒ lastOutcome is —
+});
+
 test("cli loops --fields: an unknown field fails loud (VALIDATION_ERROR, exit 1, available set listed)", () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);

@@ -730,7 +730,9 @@ export class MachineGateway {
       // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
       // paused loop shows no next fire (— in the cell), matching §4.2.
       const nextFire = l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null;
-      const last = wantLastOutcome ? store.lastRun(l.id) : undefined;
+      // The last-outcome cell tracks the newest EXEC (scheduled) run, aligning with
+      // `show` — a later successful evolve/edit must never mask a failed scheduled run.
+      const last = wantLastOutcome ? store.lastExecRun(l.id) : undefined;
       return {
         id: l.id,
         name: l.name ?? l.id,

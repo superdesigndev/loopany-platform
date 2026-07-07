@@ -198,6 +198,18 @@ export function lastRun(loopId: string): Run | undefined {
   return db.select().from(runs).where(eq(runs.loopId, loopId)).orderBy(desc(runs.ts)).limit(1).get();
 }
 
+/** Newest scheduled (exec) run for a loop — the last-outcome anchor that a later
+ *  evolve/edit must never mask. Null ⇒ no exec run yet. */
+export function lastExecRun(loopId: string): Run | undefined {
+  return db
+    .select()
+    .from(runs)
+    .where(and(eq(runs.loopId, loopId), eq(runs.role, "exec")))
+    .orderBy(desc(runs.ts))
+    .limit(1)
+    .get();
+}
+
 /** Timestamp of this loop's most recent evolve run (any phase) — gates the
  *  once-per-day auto-evolve cap. Null ⇒ never evolved. */
 export function lastEvolveAt(loopId: string): string | null {
