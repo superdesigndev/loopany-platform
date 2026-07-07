@@ -55,9 +55,42 @@ export class Scheduler {
 
   /** Load enabled loops and run until `signal` aborts. */
   async start(signal: AbortSignal): Promise<void> {
-    for (const loop of await store.listEnabledLoops()) this.schedule(loop);
+    for (const loop of await store.listEnabledLoops()) {
+      this.schedule(loop);
+      await this.catchUpMissedFire(loop);
+    }
     signal.addEventListener("abort", () => this.stopAll(), { once: true });
     log.info({ loops: this.crons.size }, "scheduler started");
+  }
+
+  /**
+   * Boot-time misfire catch-up: croner only computes FUTURE fires, so a cron
+   * occurrence that fell inside a deploy/restart window (no scheduler alive)
+   * would otherwise vanish silently — a daily loop would skip a whole day
+   * because of a 30s deploy. Detect it by reconstruction: the loop's most
+   * recent PAST occurrence, if it lies after both the loop's creation and its
+   * newest run, was never ticked — fire one compensating tick now. Coalesces by
+   * construction (ONE previous occurrence = one tick, however long the outage).
+   * The machine-offline case needs nothing here: that fire DID tick and left a
+   * deferred pending run (which `newest run ts >= prev` correctly covers). A
+   * past-due `nextRunAt` one-shot is already caught up by `armNextRunAt`, so we
+   * stand down when one is present rather than double-firing into a supersede.
+   */
+  private async catchUpMissedFire(loop: Loop): Promise<void> {
+    try {
+      if (loop.nextRunAt && Date.parse(loop.nextRunAt) <= Date.now()) return;
+      const prev = new Cron(loop.cron, loop.timezone ? { timezone: loop.timezone } : {}).previousRuns(1)[0];
+      if (!prev) return;
+      const prevMs = prev.getTime();
+      if (prevMs <= Date.parse(loop.createdAt)) return; // the loop didn't exist yet at that occurrence
+      const newest = (await store.listRuns(loop.id, 1))[0];
+      if (newest && Date.parse(newest.ts) >= prevMs) return; // that fire happened (or later activity covers it)
+      log.info({ id: loop.id, missed: prev.toISOString() }, "boot: firing missed cron occurrence (catch-up)");
+      await this.runLoop(loop.id);
+    } catch (err) {
+      // An invalid cron was already surfaced by schedule(); never block boot.
+      log.warn({ id: loop.id, err: msg(err) }, "misfire catch-up probe failed");
+    }
   }
 
   /** Validate a cron expression; returns the next fire time or throws. */

@@ -406,6 +406,14 @@ computes pure functions. Run instructions: `README.md`.
   (>20min) still reclaims as an error ("run never claimed"). Supersede is
   exec→exec only: evolve/edit fires (or a pending evolve/edit) keep the old
   skip-this-tick behavior.
+- **Boot misfire catch-up** (`scheduler.catchUpMissedFire`): croner only computes
+  future fires, so a cron occurrence inside a deploy/restart window would vanish
+  silently. `start()` reconstructs each enabled loop's most recent PAST occurrence
+  (`previousRuns(1)`, loop tz); if it postdates both the loop's creation and its
+  newest run, ONE compensating tick fires (coalesced by construction). Stands down
+  when a past-due `nextRunAt` one-shot is present (armNextRunAt already catches
+  those up). The machine-offline case needs nothing here - that fire DID tick and
+  left a deferred pending run.
 - **Machine presence is THREE-state** (`lib/machinePresence.ts`, shared by server
   `adapters.toJobDetail` + client `MachinesModal`): `online` (polled < 30s),
   `asleep` (seen < `MACHINE_ASLEEP_TTL_MS` = 6h — calm, "resumes automatically"),
