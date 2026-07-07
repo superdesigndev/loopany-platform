@@ -31,29 +31,38 @@ loopany up --server-url <url> --connect-key <dk_…>
 
 `up` is idempotent: it registers this machine (first time), stores the
 credentials under `~/.loopany/`, and spawns a detached daemon if none is
-running. After that, `loopany up` alone reconnects.
+running. It also refreshes the user-scope loopany skill, the SessionStart hook,
+and the `loopany` PATH shim. After that, `loopany up` alone reconnects.
 
 ## Commands
 
 ```
-loopany                 Run the daemon in the foreground. Ctrl-C to stop.
+loopany                 Show the content-first HOME: this machine's live loops +
+                        recent runs (the poll loop moved to `up --foreground`).
 
 Setup
-  up                      Connect this machine / ensure its daemon is running;
-                          refreshes the user-scope loopany skill.
+  up [--foreground]       Connect this machine / ensure its daemon is running
+                          (idempotent; refreshes the loopany skill, the SessionStart
+                          hook, and the `loopany` PATH shim). --foreground runs the
+                          poll loop attached in this terminal instead of detached.
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
                           stdin). --dry-run validates + previews, creates nothing.
+  setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
+                          view as ambient context each session (--remove uninstalls).
   skill [status|install]  Manage the loopany agent skill install (user scope by
                           default; --project installs into the current directory).
   update                  Update this machine's daemon to the version you invoked
                           (run via npx @crewlet/loopany@latest update): stops the
-                          running daemon, starts the new one, refreshes the skill.
+                          running daemon, starts the new one, refreshes the
+                          skill/hook/shim.
 
 Management
   status                  Is the daemon running? Show pid + server connection.
   down                    Stop the detached daemon started with `up`.
+  show [<id>]             Show a loop's full editable config + recent state (the
+                          device credential inspects any loop on this machine).
   log [<loop>]            Show a loop's recent runs (status, metrics, session id).
-                          --transcript inlines transcripts; --json for machines.
+                          --transcript/--full inlines transcripts; --json for machines.
 
 Interactive
   loops [--fields a,b]    List your loops (default columns id/name/cron/enabled/

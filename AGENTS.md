@@ -271,10 +271,13 @@ computes pure functions. Run instructions: `README.md`.
 - **Unified CLI dispatch `POST /api/machine/cli`** (`gateway.cli(token, argv)`) is a
   ROUTER in front of the existing gateway logic, keying authority on CREDENTIAL TYPE
   first: a `dk_`-prefixed **device** token → owner verbs (`new`→createLoop,
-  `loops`→listLoops, `edit`→editLoop, `log`→loopLog, `show`→describe; `report`/`finish`
-  are run-only → 403); a **run** credential (an `rk_`-prefixed run lease, or a
-  pre-Batch-6 bare UUID over a deploy) → the per-run `dispatch()` verbs PLUS a read
-  branch (`log`/`show`) scoped to the lease's OWN loop (this closes the historical
+  `loops`→listLoops, `edit`→editLoop, `log`→loopLog, `show`→describe, `home`→homeDevice —
+  bare `loopany`'s content-first home, handled BEFORE the unknown-machine 401 guard so an
+  unregistered machine renders a DEFINITIVE not-connected state, never a 401/empty;
+  `report`/`finish` are run-only → 403); a **run** credential (an `rk_`-prefixed run lease,
+  or a pre-Batch-6 bare UUID over a deploy) → the per-run `dispatch()` verbs PLUS a read
+  branch (`log`/`show`/`home`→homeRun, the lease's OWN loop context) scoped to the lease's
+  OWN loop (this closes the historical
   in-run `loopany log` 400 seam; batch 4 also wired a `log` case into `dispatch`
   itself, so run-credential `log` now works on BOTH the unified `/api/machine/cli`
   and the legacy `/agent-api/loop` transports — keeping the in-run help that
@@ -418,13 +421,38 @@ computes pure functions. Run instructions: `README.md`.
 
 ## Daemon gotchas
 
-- `cli.ts` dispatch order: in-run callback (`LOOPANY_RUN_TOKEN`+args) FIRST, then
-  help/version/up/new/skill/status/down/log/update/interactive verbs. `-v`/`--version`
-  (like `--help`/`-h`/`help`) is a light fast-path handled BEFORE the daemon fallback -
-  it prints just the version (`help.ts` `printVersion`, reusing `daemonVersion()`) and
-  never launches a daemon; the usage screen also leads with that version. The daemon
-  fallback is guarded: an unknown leading verb errors exit 2, never silently
-  backgrounds a daemon.
+- **Routing lives in the pure `route.ts` `classify(argv, env)`** (batch 6, unit-tested
+  without hanging a subprocess); `cli.ts` maps the returned `Route` to its lazily-imported
+  handler. The in-run callback (`LOOPANY_RUN_TOKEN`+args) still wins FIRST; `-v`/`--version`
+  (like `--help`/`-h`/`help`) is a light fast-path that prints just the version (`help.ts`
+  `printVersion`, reusing `daemonVersion()`) and never launches a daemon (the usage screen
+  also leads with that version). **Bare `loopany` is now the content-first HOME**, not the
+  foreground daemon: device out-of-run posts `home` on the device credential, in-run bare
+  posts `home` on the run credential (fixes the old `argv.length > 0` guard). The
+  foreground poll loop MOVED to `loopany up --foreground`; the `--server-url`/`--api-key`
+  detached re-exec path is PRESERVED (still classifies as a `daemon` launch). An unknown
+  leading verb still errors exit 2, never silently backgrounds a daemon.
+  `report`/`finish`/`complete` typed OUT of a run are FORWARDED to the server so its
+  crafted run-only 403 reaches the agent (F3); `loopany show` out-of-run (F1) resolves the
+  loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
+- **`loopany setup hooks [--remove]`** (`setup.ts`): idempotent SessionStart hook install
+  per `SKILL_TARGET_AGENTS` (only Claude Code has a concrete installer today — a
+  `~/.claude/settings.json` SessionStart command hook running `loopany`, whose stdout lands
+  as ambient context; other agents reported `skipped`). `up`/`update` call the best-effort
+  `refreshHooks` (never blocks). The ambient hook installs ONLY with a DURABLE on-PATH
+  `loopany` (`resolveDurableCommand`: our shim OR a PATH-resolvable global install) — the
+  automatic path SKIPS it with `npm i -g` guidance when only a bare, non-PATH `loopany`
+  would result; the explicit verb still installs but warns.
+- **PATH shim** (`bin-shim.ts`): `up`/`update` write a version-consistent `loopany`
+  re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
+  (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance. It lands ONLY
+  from a durable install (`isEphemeralEntry` skips an npx/npm-cache re-exec) and NEVER
+  clobbers a foreign `loopany` (refreshes only our own shim, detected by `SHIM_MARKER`).
+  `ensureBinShim` returns `{path,onPath,written}` so callers/tests assert skipped-vs-written.
+  **TEST HAZARD**: `ensureBinShim`/`refreshHooks` write the REAL `~/.claude/settings.json`
+  + `~/.local/bin` unless injected — `ensure.test.ts`'s `seams()` no-ops both, and every
+  setup/bin-shim test injects fs/env seams. See `packages/server/AGENTS.md` for the server
+  `home` verb + full text-sink notes.
 - Pidfile `~/.loopany/daemon.pid` records `<pid>:<startTime>` so a pid reused after
   an unclean crash is never mistaken for the daemon (or SIGTERMed by `down`).
   `loopany up` consults the pidfile first (never spawns a second daemon); the device
@@ -433,8 +461,10 @@ computes pure functions. Run instructions: `README.md`.
   is JSON-only (`--json '<obj>'`) plus the content-file trio (`--workflow-file`,
   `--ui-file`, `--schema-file`). Unknown flags reject loudly. The server is the sole
   validator.
-- `loopany log [<loop>]` - concise run survey (session ids + metrics; `--transcript`
-  for full text; `--json` structured). Backed by `GET /api/machine/log` (device token).
+- `loopany log [<loop>]` - concise run survey (session ids + metrics; `--transcript`/
+  `--full` for full text; `--json` structured). Backed by `GET /api/machine/log` (device
+  token). `--json`/`--transcript` keep the structured render (the text-sink server survey
+  is concise, no `--full` inline yet).
 - `loopany update` hands the running daemon over to the invoking (new) CLI version:
   `down` then `runEnsure({force:true})` - force skips the still-reported-online
   short-circuit (server `ONLINE_TTL` 30s outlives the local pidfile clear).
@@ -452,9 +482,12 @@ computes pure functions. Run instructions: `README.md`.
   it invokes the per-credential `legacy` fallback — `legacyRun` → `/agent-api/loop` for
   a run token; the caller-supplied device fallback (`/api/machine/loop` GET/POST/PATCH,
   `/api/machine/log`) for owner verbs — one release of back-compat. `callback.ts` /
-  `interactive.ts` / `log.ts` / `create.ts` all converge onto it; the LOCAL verbs
-  (up/down/update/skill/status/help/version/bare-daemon) keep their own fast-paths and
-  never touch the server. `log`'s cwd→loop resolution stays CLIENT-side (lists loops,
+  `interactive.ts` / `log.ts` / `create.ts` all converge onto it (batch 6 adds
+  `show`/`home` to the convergence, and every server-verb path now PREFERS the server's
+  `body.text`+`exitCode` via `cli-client.ts` `printText`, keeping the structured renders
+  as a one-release old-server fallback); the LOCAL verbs
+  (up/down/update/skill/status/setup/help/version + the `--foreground`/detached daemon
+  launch) keep their own fast-paths and never touch the server. `log`'s cwd→loop resolution stays CLIENT-side (lists loops,
   then posts `log <id>`) because the server's `log` dispatch needs an explicit id.
   This ships in the npm daemon package, so it needs a coordinated `@crewlet/loopany`
   release. (The daemon still forwards whatever token its env carries — the `rk_` run
