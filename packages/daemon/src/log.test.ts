@@ -6,8 +6,12 @@
  *
  * The `runLog` describe below uses a fetch stub that 404s any path but the two legacy
  * routes (`/api/machine/loop`, `/api/machine/log`), so it exercises the **404 → legacy
- * fallback** half of the compat matrix (an OLD server). The `runLog — unified
- * /api/machine/cli` describe at the bottom covers the **NEW server** primary path.
+ * fallback** half of the compat matrix (a pre-unified server). Batch 7 made the daemon a
+ * pure text sink, so a realistic batch-1+ legacy server returns `text` on its endpoints
+ * (the methods render it); the legacy stubs below carry `text` accordingly, and the
+ * default render is the server's `text`. A legacy response WITHOUT `text` (a truly
+ * ancient pre-text server) surfaces the definitive SERVER_TOO_OLD error. The `runLog —
+ * unified /api/machine/cli` describe at the bottom covers the **NEW server** primary path.
  */
 import os from "node:os";
 import path from "node:path";
@@ -60,7 +64,8 @@ describe("runLog", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("resolves the loop for the current workdir and prints its runs", async () => {
+  test("resolves the loop for the current workdir and prints the server survey (text sink over the legacy fallback)", async () => {
+    const survey = `loop: "Here" (loop-here)\ncount: 1 of 1 total\nruns[1]{ts,role,outcome,cost,metrics,session,message}:\n  2026-06-01 00:00,exec,exec,—,mrr=42,sess-r1,"did the thing"\nsummary: showing 1 of 1`;
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": {
         body: { loops: [{ id: "loop-here", name: "Here", workdir: loopDir, taskFile: null }] },
@@ -72,6 +77,8 @@ describe("runLog", () => {
           runs: [
             { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, transcript: "$ Bash echo hi", transcriptTruncated: false },
           ],
+          text: survey,
+          exitCode: 0,
         },
       },
     });
@@ -80,11 +87,8 @@ describe("runLog", () => {
     expect(code).toBe(0);
     // Listed loops, then queried the resolved loop id.
     expect(calls.some((u) => u.includes("/api/machine/log?") && u.includes("loopId=loop-here"))).toBe(true);
-    expect(cap.stdout()).toContain("did the thing");
-    // The compact human render surfaces the session id so the reader can find the JSONL.
-    expect(cap.stdout()).toContain("session: sess-r1");
-    // …and the metrics the run reported, as a compact k=v line.
-    expect(cap.stdout()).toContain("metrics: mrr=42");
+    // Text sink: the server's rendered survey is printed verbatim, not a daemon render.
+    expect(cap.stdout()).toBe(survey + "\n");
     // The default survey is CONCISE — the verbose transcript is NOT inlined.
     expect(cap.stdout()).not.toContain("$ Bash");
   });
@@ -116,14 +120,15 @@ describe("runLog", () => {
   });
 
   test("a subdirectory of the loop workdir still resolves to that loop", async () => {
+    const survey = `loop: "Here" (loop-here)\ncount: 0 of 0 total\nruns: []`;
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-here", name: "Here", workdir: loopDir, taskFile: null }] } },
-      "/api/machine/log": { body: { ok: true, name: "Here", runs: [] } },
+      "/api/machine/log": { body: { ok: true, name: "Here", runs: [], text: survey, exitCode: 0 } },
     });
     const cap = capture({ cwd: () => path.join(loopDir, "nested", "deep"), fetchFn });
     expect(await runLog([], cap)).toBe(0);
     expect(calls.some((u) => u.includes("loopId=loop-here"))).toBe(true);
-    expect(cap.stdout()).toContain("no runs yet");
+    expect(cap.stdout()).toBe(survey + "\n");
   });
 
   test("no folder match → exit 2 with a hint to pass a loop id", async () => {
@@ -160,7 +165,7 @@ describe("runLog", () => {
   test("an explicit loop id is forwarded without needing a workdir match", async () => {
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
-      "/api/machine/log": { body: { ok: true, name: "X", runs: [] } },
+      "/api/machine/log": { body: { ok: true, name: "X", runs: [], text: "runs: []", exitCode: 0 } },
     });
     const cap = capture({ cwd: () => "/unrelated/dir", fetchFn });
     expect(await runLog(["loop-x"], cap)).toBe(0);
@@ -187,7 +192,7 @@ describe("runLog", () => {
   test("--limit=5 (the --k=v form) parses like --limit 5 instead of erroring as an unknown flag", async () => {
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
-      "/api/machine/log": { body: { ok: true, name: "X", runs: [] } },
+      "/api/machine/log": { body: { ok: true, name: "X", runs: [], text: "runs: []", exitCode: 0 } },
     });
     const cap = capture({ cwd: () => "/unrelated", fetchFn });
     expect(await runLog(["loop-x", "--limit=5"], cap)).toBe(0);
@@ -210,14 +215,29 @@ describe("runLog", () => {
     expect(cap.stdout()).not.toContain("recent run");
   });
 
-  test("a server error on the log call surfaces and exits 1", async () => {
+  test("a server error on the log call surfaces its rendered `text` and exits 1", async () => {
+    // A real server renders the error as `error:`/`code:` TOON in `text` (finalizeCli on
+    // the unified path; the methods on the legacy path). The daemon text-sinks it.
+    const errText = `error: "no such loop on this machine"\ncode: NOT_FOUND`;
     const { fetchFn } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
-      "/api/machine/log": { ok: false, status: 404, body: { error: "no such loop on this machine" } },
+      "/api/machine/log": { ok: false, status: 404, body: { error: "no such loop on this machine", text: errText, exitCode: 1 } },
     });
     const cap = capture({ cwd: () => "/unrelated", fetchFn });
     expect(await runLog(["loop-x"], cap)).toBe(1);
-    expect(cap.stderr()).toContain("no such loop");
+    expect(cap.stdout()).toContain("no such loop");
+    expect(cap.stdout()).toContain("code: NOT_FOUND");
+  });
+
+  test("a too-old server (a log reply with NO `text`) surfaces the definitive SERVER_TOO_OLD error, exit 1", async () => {
+    const { fetchFn } = stubFetch({
+      "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
+      "/api/machine/log": { body: { ok: true, name: "X", runs: [] } }, // no `text`
+    });
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["loop-x"], cap)).toBe(1);
+    expect(cap.stdout()).toContain("code: SERVER_TOO_OLD");
+    expect(cap.stdout()).toContain("too old for this CLI");
   });
 });
 
@@ -250,9 +270,10 @@ describe("runLog — unified /api/machine/cli (new server)", () => {
   const oneRun = [{ id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, transcript: "$ Bash echo hi", transcriptTruncated: false }];
 
   test("resolves the workdir loop and posts `loops` then `log <id>` to the unified endpoint", async () => {
+    const survey = `loop: "Here" (loop-here)\ncount: 1 of 1 total\nsummary: showing 1 of 1`;
     const { fetchFn, calls } = stubUnified(
       [{ id: "loop-here", name: "Here", workdir: loopDir, taskFile: null }],
-      () => ({ ok: true, body: { ok: true, name: "Here", runs: oneRun } }),
+      () => ({ ok: true, body: { ok: true, name: "Here", runs: oneRun, text: survey, exitCode: 0 } }),
     );
     const cap = capture({ cwd: () => loopDir, fetchFn });
     expect(await runLog([], cap)).toBe(0);
@@ -260,19 +281,20 @@ describe("runLog — unified /api/machine/cli (new server)", () => {
     expect(calls.every((c) => c.url.includes("/api/machine/cli"))).toBe(true);
     expect(calls[0]!.argv).toEqual(["loops"]);
     expect(calls[1]!.argv).toEqual(["log", "loop-here"]);
-    expect(cap.stdout()).toContain("did the thing");
-    expect(cap.stdout()).toContain("session: sess-r1");
+    // Text sink: the server survey prints verbatim.
+    expect(cap.stdout()).toBe(survey + "\n");
   });
 
   test("an explicit loop id + --limit forwards through the unified `log` argv", async () => {
+    const survey = `loop: "X" (loop-x)\ncount: 0 of 0 total\nruns: []`;
     const { fetchFn, calls } = stubUnified(
       [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }],
-      () => ({ ok: true, body: { ok: true, name: "X", runs: [] } }),
+      () => ({ ok: true, body: { ok: true, name: "X", runs: [], text: survey, exitCode: 0 } }),
     );
     const cap = capture({ cwd: () => "/unrelated", fetchFn });
     expect(await runLog(["loop-x", "--limit", "3"], cap)).toBe(0);
     expect(calls[1]!.argv).toEqual(["log", "loop-x", "--limit", "3"]);
-    expect(cap.stdout()).toContain("no runs yet");
+    expect(cap.stdout()).toBe(survey + "\n");
   });
 
   test("text sink: the default (non-transcript) log prints the server `text` verbatim, not its own render", async () => {

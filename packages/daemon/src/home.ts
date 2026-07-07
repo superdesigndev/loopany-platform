@@ -6,10 +6,10 @@
  * whole TOON render (`renderHomeText`). The daemon just prints `body.text`.
  *
  * Never empty (P5/P8): when this machine has no stored credential/server the post
- * short-circuits to a DEFINITIVE local "not connected — run `loopany up`" view; on an
- * OLD server (no `home` verb → the legacy loops fallback) a minimal home is rendered
- * from the structured loop list. The in-run bare `loopany` is handled separately
- * (cli.ts routes it to the callback as `home` on the run credential).
+ * short-circuits to a DEFINITIVE local "not connected — run `loopany up`" view; on a
+ * too-old server (no `home` verb → no rendered `text`) a DEFINITIVE "server too old"
+ * home is rendered (no structured-render fallback anymore). The in-run bare `loopany`
+ * is handled separately (cli.ts routes it to the callback as `home` on the run cred).
  *
  * Bounded on the hot path (feedback follow-up): batch 6 runs this home view on EVERY
  * SessionStart via the installed hook, so the network round-trip must degrade fast. The
@@ -52,13 +52,6 @@ export interface HomeDeps {
   err?: (s: string) => void;
 }
 
-interface LoopRow {
-  id: string;
-  name: string;
-  cron: string;
-  enabled: boolean;
-}
-
 export async function runHome(injected: HomeDeps = {}): Promise<number> {
   const out = injected.out ?? ((s: string) => void process.stdout.write(s));
   const cwd = (injected.cwd ?? (() => process.cwd()))();
@@ -83,8 +76,10 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
     ...("token" in injected ? { deviceToken: injected.token } : {}),
   };
 
-  // Old-server (no /api/machine/cli) fallback: the loops list, so a minimal home can
-  // still be rendered from the structured rows.
+  // postCli 404-fallback (a server without /api/machine/cli): the legacy loops list. On
+  // a batch-1+ server its GET carries `text` (printed as a degraded home); a truly
+  // ancient server yields no `text` → the definitive `tooOldHome` below. Retained here
+  // (its own upgrade-window gate) even though the render fallback is gone.
   const legacy: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
     const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
     return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
@@ -110,9 +105,11 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   const code = printText(r.body, r.status, out);
   if (code !== null) return code;
 
-  // Old server, no `text` — render a minimal home from the loops list (one release).
-  const loops = (r.body as { loops?: LoopRow[] }).loops ?? [];
-  out(fallbackHome(bin, loops, serverDisplay));
+  // A too-old server (no `text` — predates the axi home verb). The home must stay
+  // never-empty/never-alarm on the SessionStart hot path, so render a DEFINITIVE
+  // "server too old" home (exit 0) rather than the SERVER_TOO_OLD error other verbs
+  // print — no structured-render fallback anymore.
+  out(tooOldHome(bin, serverDisplay));
   return 0;
 }
 
@@ -149,19 +146,16 @@ function degradedHome(bin: string | null, server: string, reason: string): strin
   );
 }
 
-/** Minimal home from an OLD server's loops list (no `home` verb). Never empty. */
-function fallbackHome(bin: string | null, loops: LoopRow[], server: string): string {
-  const lines = [
-    binLine(bin),
-    "description: Run your scheduled Loopany agent loops on this machine with your own coding agent.",
-    `machine: connected${server ? ` · ${server}` : ""}`,
-  ];
-  if (loops.length) {
-    lines.push(`loops[${loops.length}]{id,name,cron,enabled}:`);
-    for (const l of loops) lines.push(`  ${l.id},${l.name},${l.cron},${l.enabled ? "on" : "paused"}`);
-  } else {
-    lines.push("loops: []");
-  }
-  lines.push("help[1]:", "  Run `loopany loops` to list every loop on this machine");
-  return lines.join("\n") + "\n";
+/** The definitive home when the server predates the axi `home` verb (no rendered
+ *  `text`). The machine IS configured, so this isn't the not-connected view; it names
+ *  the too-old server + the fix. Never empty; exits 0 so the SessionStart hook never
+ *  surfaces as a failure. */
+function tooOldHome(bin: string | null, server: string): string {
+  return (
+    `${binLine(bin)}\n` +
+    "description: Run your scheduled Loopany agent loops on this machine with your own coding agent.\n" +
+    `machine: configured${server ? ` · ${server}` : ""} — server too old for this CLI; update the Loopany server\n` +
+    "help[1]:\n" +
+    "  Run `loopany loops` after updating the server to list this machine's loops\n"
+  );
 }

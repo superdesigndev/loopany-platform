@@ -137,16 +137,17 @@ describe("runInteractive — text sink (new server renders TOON in `text`)", () 
     expect(cap.stdout()).toBe(toon + "\n");
   });
 
-  test("a pre-`text` unified server (200, no text) falls back to the retained structured render", async () => {
+  test("a too-old unified server (200, no `text`) surfaces the definitive SERVER_TOO_OLD error", async () => {
+    // Batch 7 retired the structured-render fallback: no `text` → a definitive error.
     const { fetchFn } = stub(({ url, argv }) =>
       url.includes("/api/machine/cli") && argv[0] === "loops"
-        ? { ok: true, body: { ok: true, loops: [{ id: "loop-1", name: "Cookie", cron: "0 8 * * *", timezone: "UTC", enabled: true, notify: "smart", nextRunAt: null }] } }
+        ? { ok: true, body: { ok: true, loops: [{ id: "loop-1", name: "Cookie" }] } }
         : { ok: false, status: 404, body: {} },
     );
     const cap = capture({ fetchImpl: fetchFn });
-    expect(await runInteractive(["loops"], cap)).toBe(0);
-    expect(cap.stdout()).toContain("loop-1");
-    expect(cap.stdout()).toContain("Cookie");
+    expect(await runInteractive(["loops"], cap)).toBe(1);
+    expect(cap.stdout()).toContain("code: SERVER_TOO_OLD");
+    expect(cap.stdout()).toContain("too old for this CLI");
   });
 });
 
@@ -189,14 +190,17 @@ describe("runInteractive — loops forwards its flags (F1–F4: the old bug hard
     expect(calls).toHaveLength(0);
   });
 
-  test("old-server fallback honors --json locally (prints JSON from the structured loops)", async () => {
+  test("over the 404→legacy fallback, `loops --json` prints the legacy endpoint's rendered `text` (text sink)", async () => {
+    // Batch 7: the daemon no longer renders JSON client-side. On the 404→legacy path it
+    // just prints whatever `text` the legacy GET rendered (which ignores `--json` and
+    // returns TOON) — so `--json` degrades to TOON against a pre-unified server.
+    const legacyToon = "count: 1\nloops[1]{id,name,cron,enabled,nextFire}:\n  loop-1,Cookie,\"0 8 * * *\",on,—";
     const { fetchFn } = stub(({ url }) =>
-      url.includes("/api/machine/cli") ? { ok: false, status: 404, body: {} } : { ok: true, body: { loops: [{ id: "loop-1", name: "Cookie", cron: "0 8 * * *", timezone: null, enabled: true, notify: "auto", nextRunAt: null }] } },
+      url.includes("/api/machine/cli") ? { ok: false, status: 404, body: {} } : { ok: true, body: { ok: true, loops: [{ id: "loop-1" }], text: legacyToon } },
     );
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runInteractive(["loops", "--json"], cap)).toBe(0);
-    expect(cap.stdout().trimStart()[0]).toBe("[");
-    expect(cap.stdout()).toContain('"id": "loop-1"');
+    expect(cap.stdout()).toBe(legacyToon + "\n");
   });
 });
 
@@ -222,33 +226,36 @@ describe("runInteractive — edit no-op (F8) + input-required guard", () => {
 });
 
 describe("runInteractive — legacy fallback (old server 404s the unified dispatch)", () => {
-  test("loops falls back to GET /api/machine/loop", async () => {
+  test("loops falls back to GET /api/machine/loop, text-sinking its rendered `text`", async () => {
+    // A batch-1+ legacy endpoint renders `text` (its methods do), so the daemon prints
+    // that verbatim over the 404→legacy path — the routing is what this pins.
+    const legacyToon = "count: 1\nloops[1]{id,name,cron,enabled,nextFire}:\n  loop-1,Cookie,\"0 8 * * *\",paused,—";
     const { fetchFn, calls } = stub(({ url }) =>
       url.includes("/api/machine/cli")
         ? { ok: false, status: 404, body: { error: "not found" } }
-        : { ok: true, body: { loops: [{ id: "loop-1", name: "Cookie", cron: "0 8 * * *", timezone: null, enabled: false, notify: "smart", nextRunAt: null }] } },
+        : { ok: true, body: { ok: true, loops: [{ id: "loop-1" }], text: legacyToon } },
     );
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runInteractive(["loops"], cap)).toBe(0);
     expect(calls[0]!.url).toContain("/api/machine/cli");
     expect(calls[1]!.url).toBe("https://srv.test/api/machine/loop");
     expect(calls[1]!.method).toBe("GET");
-    expect(cap.stdout()).toContain("loop-1");
-    expect(cap.stdout()).toContain("paused"); // enabled:false
+    expect(cap.stdout()).toBe(legacyToon + "\n");
   });
 
-  test("edit falls back to PATCH /api/machine/loop with the {id, patch, dryRun} body", async () => {
+  test("edit falls back to PATCH /api/machine/loop with the {id, patch, dryRun} body, text-sinking `text`", async () => {
+    const legacyToon = 'updated: "Cookie" (loop-1)\napplied[1]: goal';
     const { fetchFn, calls } = stub(({ url }) =>
       url.includes("/api/machine/cli")
         ? { ok: false, status: 404, body: { error: "not found" } }
-        : { ok: true, body: { ok: true, name: "Cookie", applied: ["goal"] } },
+        : { ok: true, body: { ok: true, name: "Cookie", applied: ["goal"], text: legacyToon } },
     );
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runInteractive(["edit", "loop-1", "--json", '{"goal":"ship v1"}'], cap)).toBe(0);
     const patchCall = calls.find((c) => c.method === "PATCH")!;
     expect(patchCall.url).toBe("https://srv.test/api/machine/loop");
     expect(patchCall.parsedBody).toEqual({ id: "loop-1", patch: { goal: "ship v1" }, dryRun: false });
-    expect(cap.stdout()).toContain("updated Cookie");
+    expect(cap.stdout()).toBe(legacyToon + "\n");
   });
 });
 

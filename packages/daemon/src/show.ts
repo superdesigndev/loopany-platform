@@ -13,7 +13,7 @@
 import path from "node:path";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
-import { postCli, printText } from "./cli-client.js";
+import { postCli, printTextOrTooOld } from "./cli-client.js";
 import { type LoopRow, renderResolveError, resolveLoopId } from "./log.js";
 
 export type ShowDeps = {
@@ -100,8 +100,8 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   if (got.kind === "not-configured") return notConnected(), 2;
   if (got.kind === "read-error") return err(`loopany: cannot read ${got.path}\n`), 1;
   if (got.kind === "network-error") return err(`loopany: ${got.message}\n`), 1;
-  const code = printText(got.body, got.status, out);
-  if (code !== null) return code;
-  err(`loopany: ${(got.body as { error?: string }).error || `show failed (${got.status})`}\n`);
-  return 1;
+  // Text-sink: the server renders the envelope TOON (or the JSON envelope under
+  // `--json`); we just print it. A too-old server (no device `show`, no `text`) → a
+  // definitive SERVER_TOO_OLD error.
+  return printTextOrTooOld(got.body, got.status, out);
 }

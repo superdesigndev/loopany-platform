@@ -121,7 +121,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
       return { ok: true, line: "loopany skill: installed → ~/.claude/skills/loopany" };
     };
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
-      fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie" }),
+      fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie", text: "created: Cookie (loop-1)", exitCode: 0 }),
       installer,
       stdout: () => {},
     });
@@ -138,7 +138,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
       return { ok: true, line: "" };
     };
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
-      fetchImpl: async () => okResponse({ ok: true, name: "Cookie" }), // no id
+      fetchImpl: async () => okResponse({ ok: true, name: "Cookie", text: "created: Cookie (loop-1)", exitCode: 0 }), // no id
       installer,
       stdout: () => {},
     });
@@ -169,12 +169,12 @@ describe("runCreate — skill install fires only after a confirmed create, never
     };
     const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
-      fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie" }),
+      fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie", text: "created: Cookie (loop-1)", exitCode: 0 }),
       installer,
       stdout: (s) => out.push(s),
     });
     expect(code).toBe(0);
-    expect(out.join("")).toContain("created loop Cookie");
+    expect(out.join("")).toContain("created: Cookie (loop-1)");
   });
 
   test("text sink: a new server's `text` is printed verbatim (not the structured line), and the skill still installs", async () => {
@@ -207,22 +207,22 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(out.join("")).toContain(toon);
   });
 
-  test("--dry-run renders the preview (config + fire times + classification) and does NOT create/install", async () => {
+  test("--dry-run text-sinks the server's preview and does NOT create/install", async () => {
     const workdir = tmpWorkdir();
     const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir, goal: "ship v1" });
+    // The server renders the whole preview into `text` (config + fire times +
+    // classification); the daemon is a pure text sink now.
+    const toon = [
+      "dry-run:",
+      "  cron: 0 8 * * *",
+      "  goal: ship v1",
+      "classification: closed (has goal): will self-finish when the goal is met",
+      'nextRuns[3]: "2026-07-03 08:00" · "2026-07-04 08:00" · "2026-07-05 08:00"',
+    ].join("\n");
     let installed = false;
     const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
-      fetchImpl: async () =>
-        okResponse({
-          ok: true,
-          dryRun: true,
-          config: { name: null, cron: "0 8 * * *", taskFile: "loopany/x/README.md", workflow: false, goal: "ship v1" },
-          timezone: "UTC",
-          nextRuns: ["2026-07-03T08:00:00.000Z", "2026-07-04T08:00:00.000Z", "2026-07-05T08:00:00.000Z"],
-          classification: "closed",
-          classificationText: "closed (has goal): will self-finish when the goal is met",
-        }),
+      fetchImpl: async () => okResponse({ ok: true, dryRun: true, text: toon, exitCode: 0 }),
       installer: async () => {
         installed = true;
         return { ok: true, line: "" };
@@ -232,10 +232,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(code).toBe(0);
     expect(installed).toBe(false); // dry-run never creates → never installs
     expect(fs.existsSync(workdir)).toBe(false); // touches nothing
-    const text = out.join("");
-    expect(text).toContain("dry-run");
-    expect(text).toContain("self-finish"); // the classification line
-    expect(text).toContain("2026-07-03T08:00:00.000Z"); // first of the 3 fire times
+    expect(out.join("")).toBe(toon + "\n"); // the server preview, verbatim
   });
 
   test("posts the whole config (including `ui`) to the unified /api/machine/cli as `new --json`", async () => {
@@ -248,7 +245,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
       fetchImpl: async (url: any, init: any) => {
         sentUrl = String(url);
         sentBody = JSON.parse(init.body as string);
-        return okResponse({ ok: true, id: "loop-1", name: "React Doctor", ui: true });
+        return okResponse({ ok: true, id: "loop-1", name: "React Doctor", ui: true, text: "created: React Doctor (loop-1)\ndashboard: applied", exitCode: 0 });
       },
       installer: async () => ({ ok: true, line: "" }),
       stdout: (s) => out.push(s),
@@ -260,8 +257,8 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(sentBody.argv[1]).toBe("--json");
     // The whole config — including ui — rides inside the --json payload (no whitelist drops it).
     expect(JSON.parse(sentBody.argv[2]).ui).toBe(ui);
-    // The real create echoes the dashboard presence (like dry-run).
-    expect(out.join("")).toContain("dashboard ui: applied");
+    // The real create echoes the dashboard presence in the server-rendered `text`.
+    expect(out.join("")).toContain("dashboard: applied");
   });
 
   test("falls back to legacy POST /api/machine/loop with the raw config when the server 404s the unified dispatch", async () => {
@@ -274,9 +271,10 @@ describe("runCreate — skill install fires only after a confirmed create, never
       fetchImpl: async (url: any, init: any) => {
         urls.push(String(url));
         if (String(url).includes("/api/machine/cli")) return errResponse(404, { error: "not found" });
-        // Legacy path: the body is the raw config object (ui present at top level).
+        // Legacy path: the body is the raw config object (ui present at top level). A
+        // batch-1+ legacy `createLoop` renders `text` too, which the daemon text-sinks.
         legacyBody = JSON.parse(init.body as string);
-        return okResponse({ ok: true, id: "loop-1", name: "React Doctor", ui: true });
+        return okResponse({ ok: true, id: "loop-1", name: "React Doctor", ui: true, text: "created: React Doctor (loop-1)\ndashboard: applied", exitCode: 0 });
       },
       installer: async () => ({ ok: true, line: "" }),
       stdout: (s) => out.push(s),
@@ -286,49 +284,35 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(urls.some((u) => u.includes("/api/machine/cli"))).toBe(true);
     expect(urls.some((u) => u.includes("/api/machine/loop"))).toBe(true);
     expect(legacyBody.ui).toBe(ui); // legacy body is the raw config
-    expect(out.join("")).toContain("dashboard ui: applied");
+    expect(out.join("")).toContain("dashboard: applied");
   });
 
-  test("a DROPPED ui is loud: echoes 'not applied' + warns on stderr, create still succeeds", async () => {
+  test("a DROPPED ui is loud in the server-rendered `text`, create still succeeds", async () => {
+    // The server folds the dropped-dashboard warning into `text` (renderCreatedText); the
+    // daemon text-sinks it (Batch 7 dropped the separate structured `warning`→stderr shout).
     const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md", ui: "   " });
+    const toon = "created: NoDash (loop-1)\ndashboard: not applied\nwarning: the provided ui was empty after validation and was NOT applied — the loop was created without a dashboard";
     const out: string[] = [];
-    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    try {
-      const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
-        fetchImpl: async () =>
-          okResponse({ ok: true, id: "loop-1", name: "NoDash", ui: false, warning: "the provided ui was empty after validation and was NOT applied — the loop was created without a dashboard" }),
-        installer: async () => ({ ok: true, line: "" }),
-        stdout: (s) => out.push(s),
-      });
-      expect(code).toBe(0); // create still succeeds
-      expect(out.join("")).toContain("dashboard ui: not applied");
-      const errText = errSpy.mock.calls.map((c) => String(c[0])).join("");
-      expect(errText).toContain("loopany: warning:");
-      expect(errText).toContain("without a dashboard");
-    } finally {
-      errSpy.mockRestore();
-    }
+    const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
+      fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "NoDash", ui: false, warning: "dropped", text: toon, exitCode: 0 }),
+      installer: async () => ({ ok: true, line: "" }),
+      stdout: (s) => out.push(s),
+    });
+    expect(code).toBe(0); // create still succeeds
+    expect(out.join("")).toContain("dashboard: not applied");
+    expect(out.join("")).toContain("without a dashboard");
   });
 
-  test("--dry-run preview shows the ui presence line (yes when present, no when absent)", async () => {
+  test("--dry-run preview text-sinks the ui presence line (present when a ui was given)", async () => {
     const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md" });
     const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
-      fetchImpl: async () =>
-        okResponse({
-          ok: true,
-          dryRun: true,
-          config: { name: null, cron: "0 5 * * *", taskFile: "loopany/x/README.md", workflow: false, ui: true, goal: null },
-          timezone: "UTC",
-          nextRuns: [],
-          classification: "open",
-          classificationText: "open: runs until paused",
-        }),
+      fetchImpl: async () => okResponse({ ok: true, dryRun: true, text: "dry-run:\n  ui: present\nclassification: open: runs until paused", exitCode: 0 }),
       installer: async () => ({ ok: true, line: "" }),
       stdout: (s) => out.push(s),
     });
     expect(code).toBe(0);
-    expect(out.join("")).toContain("ui: yes");
+    expect(out.join("")).toContain("ui: present");
   });
 
   test("`new` without --json prints usage (exit 2), makes no request", async () => {
@@ -422,7 +406,7 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
       runCreate(["--json", json, "--server-url", "http://test"], {
         fetchImpl: async (_url: any, init: any) => {
           sent.push(JSON.parse((init as any).body as string));
-          return okResponse({ ok: true, id: "loop-1", name: "X" });
+          return okResponse({ ok: true, id: "loop-1", name: "X", text: "created: X (loop-1)", exitCode: 0 });
         },
         installer: async () => ({ ok: true, line: "" }),
         stdout: () => {},
@@ -443,7 +427,7 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
     const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
       fetchImpl: async (_url: any, init: any) => {
         payload = JSON.parse(JSON.parse((init as any).body as string).argv[2]);
-        return okResponse({ ok: true, dryRun: true, config: { cron: "0 5 * * *" }, nextRuns: [] });
+        return okResponse({ ok: true, dryRun: true, text: "dry-run:\n  cron: 0 5 * * *", exitCode: 0 });
       },
       installer: async () => ({ ok: true, line: "" }),
       stdout: () => {},

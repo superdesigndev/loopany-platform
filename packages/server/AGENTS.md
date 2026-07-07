@@ -267,6 +267,39 @@ server (deploys) vs daemon (rides the NEXT `@crewlet/loopany` npm release):
   when there IS an elsewhere count (`elsewhere > 0`); an unscoped full-machine view stays
   the plain `loops[N]`.
 
+## axi-conformance CLI (batch 7 — retire the superset scaffolding)
+
+The final axi batch: the daemon is a PURE text sink, so the transitional "superset" render
+fields are retired. Ships server-first (deploys); the daemon changes ride the next
+`@crewlet/loopany` npm release (0.13.0) with PR #80's daemon fixes.
+- **Server strips at the cli boundary.** `finalizeCli` (wraps `cli()` ONLY) now reduces
+  every `/api/machine/cli` body to `CLI_RETAINED_KEYS` = `{text, exitCode, loops, runs}`
+  after filling `text`/`exitCode` — dropping the render-only `ok`/`id`/`name`/`loop`/
+  `loopId`/`changes`/`rejections`/`applied`/`config`/`nextRuns`/`classification`/`ui`/
+  `warning`/`idempotent`/`dryRun`. `loops` (client-side cwd→loop resolution) and `runs`
+  (`log --json` + `--transcript` escape hatch) are RETAINED data channels, not scaffolding
+  — the daemon reads them as data, and the server's `log`/`show` dispatch needs an explicit
+  id (design §3), so resolution must stay client-side. The verb HANDLERS still construct the
+  full structured bodies (createLoop/editLoop/listLoops/renderLoopLog) because the LEGACY
+  endpoints (`/api/machine/loop|log`, `/agent-api/loop`) call the methods DIRECTLY (not
+  through `finalizeCli`) and their bodies are UNCHANGED — a pre-0.12 daemon on the postCli
+  404-fallback still renders. `--json` is unaffected: it renders JSON into `text`
+  (`show`/`loops`) which the daemon prints verbatim.
+- **Daemon has no structured-render fallback.** `cli-client.ts` `printTextOrTooOld` replaces
+  the per-verb `printText`-null → `printLoops`/`printEditDryRun`/`printCreateDryRun`/
+  `formatRun` fallback: when `text` is ABSENT (a pre-0.12 server) it prints a definitive
+  `error:`/`code: SERVER_TOO_OLD` to stdout, exit 1, never blank. `home` is the ONE
+  exception — it stays never-empty/never-alarm on the SessionStart hot path, rendering a
+  definitive `tooOldHome` (exit 0). `log --transcript` KEEPS its client render from the
+  retained `runs` (+ the loop name from `resolveLoopId`, now `{id,name}`); `log --json`
+  keeps `JSON.stringify(runs)`.
+- **Compat:** the 0.12 daemon (already a text sink) keeps working — it reads `text`/
+  `exitCode` + the retained `loops`/`runs`. Daemons **≤ 0.11** (which render the structured
+  fields) get EMPTY device-verb output against the new server; mitigation: `npx @latest`
+  users auto-upgrade, global installs run `loopany update`. The in-run path keeps working on
+  ≤ 0.11 (it prints `text`, which stays). The postCli 404-fallback + legacy endpoint aliases
+  are OUT of scope here (separate `rexp-b7`, its own upgrade-window gate).
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

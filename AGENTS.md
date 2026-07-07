@@ -296,18 +296,22 @@ computes pure functions. Run instructions: `README.md`.
   `/api/machine/log` routes stay as thin aliases onto the same gateway methods (no
   behavior change for existing daemons); `/machine/report` is untouched (daemon
   finalize, not a user verb). Same 2MB `readJsonBody` cap as every machine route.
-  Every `/api/machine/cli` verb now returns a **superset body**: its axi-shaped TOON in
-  a `text` field (plus an `exitCode`) ALONGSIDE the existing structured JSON fields,
-  never replacing them (the axi-conformance spine, batch 1 - `gateway/toon.ts`, detailed
-  in `packages/server/AGENTS.md`). The 0.11 daemon ignores `text` and renders the
-  structured fields, so this ships server-first with no daemon release; the in-run
-  callback already prints `body.text`, so `renderLoopLog` gaining `text` is what finally
-  makes in-run `loopany log` print (the F2 fix). `finalizeCli` wraps `cli()` to fill
-  `text` from any structured `{error}` and ensure `exitCode` (idempotent + additive),
-  and errors render as `error:`/`code:` TOON. Two behavior changes ride along: `report`
-  and `finish` now reject an invalid `--status` with a 400 `VALIDATION_ERROR` instead of
-  silently dropping it (F5), and a second `finish` on an already-finished loop pins
-  `CONFLICT`. `describe()` (`show`) now emits the FULL editable envelope (batch 2):
+  Every `/api/machine/cli` verb returns an axi-shaped TOON `text` field (plus an
+  `exitCode`); the daemon is a pure text sink that prints `body.text`. Batch 1 shipped this
+  as a **superset body** (TOON ALONGSIDE the structured JSON) so the 0.11 daemon could keep
+  rendering structured server-first; **batch 7 retired that scaffolding** — `finalizeCli`
+  (wraps `cli()`) now STRIPS the body to `{text, exitCode}` plus the retained data channels
+  `{loops, runs}` (client-side loop resolution + the `log --json`/`--transcript` escape
+  hatch), and the daemon dropped its structured-render fallback (a `text`-less server →
+  `SERVER_TOO_OLD`). The LEGACY endpoints (`/api/machine/loop|log`, `/agent-api/loop`) call
+  the gateway methods DIRECTLY, not through `finalizeCli`, so their full structured bodies
+  are unchanged. The axi-conformance spine lives in `gateway/toon.ts`; details +
+  batch-7 compat matrix in `packages/server/AGENTS.md`. The in-run callback prints
+  `body.text`, so `renderLoopLog` carrying `text` is what makes in-run `loopany log` print
+  (the F2 fix). `finalizeCli` fills `text` from any structured `{error}` and ensures
+  `exitCode`; errors render as `error:`/`code:` TOON. Two behavior changes ride along:
+  `report` and `finish` reject an invalid `--status` with a 400 `VALIDATION_ERROR` (F5) and
+  a second `finish` pins `CONFLICT`. `describe()` (`show`) now emits the FULL editable envelope (batch 2):
   every `EDITABLE_LOOP_FIELDS` key keyed EXACTLY as `edit --json` accepts (`runAt` is
   the writable pinned override; the DB column stays `nextRunAt`) PLUS derived read-only
   aggregates (`nextFire`/`classification`/`runs`). `show --json` emits the envelope

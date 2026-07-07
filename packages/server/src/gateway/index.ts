@@ -763,6 +763,9 @@ export class MachineGateway {
     // `--json` escape hatch: emit the full records as real JSON in `text` (the daemon
     // prints it verbatim), the exact counterpart to `show --json`. TOON is the default.
     const text = json ? JSON.stringify(loops, null, 2) : renderLoopsText(loops, fields);
+    // `loops` is a RETAINED data channel (`CLI_RETAINED_KEYS`): the daemon resolves
+    // cwd→loop CLIENT-side (`log`/`show`/`home`) from these rows. `ok` is render-only and
+    // stripped at the cli boundary; the legacy `/api/machine/loop` GET route keeps it.
     return { status: 200, body: { ok: true, loops, text } };
   }
 
@@ -826,9 +829,12 @@ export class MachineGateway {
         transcriptTruncated: truncated,
       };
     });
-    // F2: the in-run callback prints `text`, so an empty text is why in-run `loopany
-    // log` shows nothing today. Carry the TOON survey ALONGSIDE the structured `runs`
-    // (superset body) — an old daemon ignores `text` and renders `runs` unchanged.
+    // The TOON survey is the default render (`text`, prints in-run — the F2 fix); the
+    // structured `runs` rides ALONGSIDE it as a RETAINED data channel (`CLI_RETAINED_KEYS`)
+    // — the `log --json` escape hatch and the `log --transcript` inline render read it,
+    // since the survey `text` stays concise. `ok`/`loopId`/`name` are render-only and
+    // stripped at the cli boundary; the LEGACY `/api/machine/log` route (not finalized)
+    // still carries them for a pre-0.12 daemon on the postCli 404-fallback.
     const survey = renderLogText(loop.name ?? loop.id, loop.id, runs, store.countRuns(loopId));
     return { status: 200, body: { ok: true, loopId: loop.id, name: loop.name ?? loop.id, runs, text: survey } };
   }
@@ -2425,11 +2431,25 @@ function derr(code: number, message: string, slug?: string): { code: number; tex
   return { code, text: errorBlock(message, slug ?? codeForStatus(code)) };
 }
 
-/** Ensure a `/api/machine/cli` body carries `text` + `exitCode` (P1/P6). A body that
- *  already rendered its own `text` (every success + the dispatch errors) is left
- *  alone; a structured `{error}` (createLoop/editLoop validation, the deviceCli
- *  denials) is rendered to `error:`/`code:` TOON here so the daemon prints it to
- *  stdout. Idempotent + additive: structured fields are never removed. */
+/** The ONLY structured keys a `/api/machine/cli` body carries after Batch 7. The daemon
+ *  is a pure text sink — it renders `text` (+ exits `exitCode`) for every verb — so the
+ *  transitional "superset" render fields (`ok`/`id`/`loop`/`changes`/`config`/… that let
+ *  a pre-0.12 daemon render structured, design §3) are RETIRED at this boundary. Two
+ *  structured channels survive because the current daemon reads them as DATA, not to
+ *  render:
+ *   - `loops`: the daemon resolves cwd→loop CLIENT-side (`log`/`show`/`home`) from this
+ *     list — the server's `log`/`show` dispatch needs an explicit id (design §3).
+ *   - `runs`: the `log --json` escape hatch (OQ4, permanent) and the `log --transcript`
+ *     inline render read the structured runs — the server survey `text` stays concise.
+ *  The LEGACY endpoints (`/api/machine/loop|log`, `/agent-api/loop`) do NOT pass through
+ *  `finalizeCli`, so their full structured bodies are unchanged (a pre-0.12 daemon on the
+ *  postCli 404-fallback still renders — retired separately, its own upgrade-window gate). */
+const CLI_RETAINED_KEYS = new Set(["text", "exitCode", "loops", "runs"]);
+
+/** Finalize a `/api/machine/cli` body: ensure it carries `text` + `exitCode` (P1/P6) and
+ *  strip every non-retained structured field (Batch 7 — retire the superset scaffolding).
+ *  A structured `{error}` (createLoop/editLoop validation, the deviceCli denials) is first
+ *  rendered to `error:`/`code:` TOON so the daemon prints it to stdout. */
 function finalizeCli(res: HttpResult): HttpResult {
   const b = res.body;
   if (b && typeof b === "object" && !Array.isArray(b)) {
@@ -2439,6 +2459,12 @@ function finalizeCli(res: HttpResult): HttpResult {
     }
     if (typeof body.exitCode !== "number") {
       body.exitCode = res.status >= 200 && res.status < 300 ? 0 : 1;
+    }
+    // Drop the retired render-only fields, but only once a `text` render exists (every
+    // cli path either renders `text` or set `error` above → text is now present; the
+    // guard is defensive so a hypothetical text-less body is never silently blanked).
+    if (typeof body.text === "string") {
+      for (const k of Object.keys(body)) if (!CLI_RETAINED_KEYS.has(k)) delete body[k];
     }
   }
   return res;
@@ -2452,8 +2478,9 @@ const LIST_DEFAULT_FIELDS: string[] = ["id", "name", "cron", "enabled", "nextFir
 const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "goal", "taskFile", "runs", "lastOutcome"];
 
 /** A loop's row for `loopany loops`: every renderable cell precomputed once (so the
- *  `--fields` selection is a pure column pick). The structured `loops` body carries
- *  the whole record (superset — an old daemon reads the fields it knows). */
+ *  `--fields` selection is a pure column pick). The structured `loops` body carries the
+ *  whole record — a RETAINED data channel the daemon reads to resolve cwd→loop
+ *  client-side (id/name/workdir/taskFile), not for rendering. */
 interface LoopListRecord {
   id: string;
   name: string;

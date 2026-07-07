@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
-import { postCli, printText } from "./cli-client.js";
+import { postCli, printTextOrTooOld } from "./cli-client.js";
 
 type Flags = Record<string, string | boolean>;
 
@@ -22,16 +22,6 @@ export interface InteractiveDeps {
   out?: (s: string) => void;
   err?: (s: string) => void;
 }
-
-type LoopRow = {
-  id: string;
-  name: string;
-  cron: string;
-  timezone: string | null;
-  enabled: boolean;
-  notify: string;
-  nextRunAt: string | null;
-};
 
 /** `--k v` / `--k=v` pairs, bare `--flag` → true; everything else is positional. */
 export function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
@@ -118,54 +108,6 @@ export function buildPatch(flags: Flags): Record<string, unknown> {
   return patch;
 }
 
-/** The PATCH /api/machine/loop response (real edit or `--dry-run` preview). */
-interface EditResponse {
-  ok?: boolean;
-  dryRun?: boolean;
-  applied?: string[];
-  name?: string;
-  error?: string;
-  changes?: Array<{ key: string; from: unknown; to: unknown }>;
-  rejections?: Array<{ key: string; reason: string }>;
-}
-
-/** Render a value for the before→after preview (null/undefined → em-dash). */
-function fmtPreview(v: unknown): string {
-  if (v === null || v === undefined) return "—";
-  return typeof v === "string" ? v : JSON.stringify(v);
-}
-
-/** Print the `--dry-run` edit preview (per-key before→after + rejections). Exit 0
- *  when valid, 1 when the server flagged rejections (a removed field / bad value). */
-function printEditDryRun(data: EditResponse, out: (s: string) => void = (s) => void process.stdout.write(s)): number {
-  out(`dry-run · ${data.name ?? "loop"} — nothing changed\n`);
-  const changes = data.changes ?? [];
-  if (changes.length) {
-    out("changes:\n");
-    for (const c of changes) out(`  ${c.key}: ${fmtPreview(c.from)} -> ${fmtPreview(c.to)}\n`);
-  } else {
-    out("changes: (none)\n");
-  }
-  const rejections = data.rejections ?? [];
-  if (rejections.length) {
-    out("rejected:\n");
-    for (const r of rejections) out(`  ${r.key}: ${r.reason}\n`);
-  }
-  return data.ok === false || rejections.length > 0 ? 1 : 0;
-}
-
-function printLoops(loops: LoopRow[], out: (s: string) => void = (s) => void process.stdout.write(s)): void {
-  if (loops.length === 0) {
-    out("no loops on this machine yet\n");
-    return;
-  }
-  for (const l of loops) {
-    const state = l.enabled ? "on" : "paused";
-    const tz = l.timezone ? ` ${l.timezone}` : "";
-    out(`${l.id}  ${state.padEnd(6)}  ${l.cron}${tz}  ${l.name}\n`);
-  }
-}
-
 const USAGE =
   "loopany: usage: loopany edit <loop-id> [options]\n" +
   "  --json '<json-object>'      the whole patch — e.g. '{\"cron\":\"0 9 * * *\",\"goal\":\"ship v1\"}'\n" +
@@ -221,20 +163,10 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     if (r.kind === "not-configured") return notConnected(), 2;
     if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
     if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
-    // Text-sink primary: the server renders the TOON list, the JSON escape hatch (under
-    // `--json`), and the empty/error states; we just print `text`. `printText` returns
-    // null only for an OLD server (no `text`) → the retained structured render below.
-    const code = printText(r.body, r.status, out);
-    if (code !== null) return code;
-    const data = r.body as { loops?: LoopRow[]; error?: string };
-    if (r.status >= 400 || !data.loops) {
-      err(`loopany: ${data.error || `list failed (${r.status})`}\n`);
-      return 1;
-    }
-    // Old-server fallback (one release): honor `--json` locally, else the padded list.
-    if (flags["json"] === true || flags["json"] === "true") return out(`${JSON.stringify(data.loops, null, 2)}\n`), 0;
-    printLoops(data.loops, out);
-    return 0;
+    // Text-sink: the server renders the TOON list, the JSON escape hatch (`--json`), and
+    // the empty/error states; we just print `text`. A too-old server (no `text`) → a
+    // definitive SERVER_TOO_OLD error, never blank output.
+    return printTextOrTooOld(r.body, r.status, out);
   }
 
   if (verb === "edit") {
@@ -270,19 +202,10 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     if (r.kind === "not-configured") return notConnected(), 2;
     if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
     if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
-    // Text-sink primary: the server renders the apply / dry-run / rejection / error
-    // TOON (and pins exit 1 for rejections via `exitCode`); we just print it.
-    const code = printText(r.body, r.status, out);
-    if (code !== null) return code;
-    // Old-server structured fallback (one release).
-    const data = r.body as EditResponse;
-    if (dryRun && data.dryRun) return printEditDryRun(data, out);
-    if (r.status >= 400 || !data.ok) {
-      err(`loopany: ${data.error || `edit failed (${r.status})`}\n`);
-      return 1;
-    }
-    out(`updated ${data.name ?? id} — ${(data.applied ?? []).join(", ")}\n`);
-    return 0;
+    // Text-sink: the server renders the apply / dry-run / rejection / error TOON (and
+    // pins exit 1 for rejections via `exitCode`); we just print it. A too-old server
+    // (no `text`) → a definitive SERVER_TOO_OLD error.
+    return printTextOrTooOld(r.body, r.status, out);
   }
 
   err(`loopany: unknown command "${verb ?? ""}" (try: loops, edit)\n`);
