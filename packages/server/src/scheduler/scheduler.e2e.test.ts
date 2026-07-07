@@ -134,22 +134,42 @@ test("transport-agnostic: a no-op dispatcher leaves the run pending (for poll to
   expect(runs[0]!.phase).toBe("pending"); // engine never decides offline; reclaim does
 });
 
-test("overlap guard: a second due tick is skipped while a run is open", async () => {
+test("overlap guard: a RUNNING run blocks the tick; a deferred PENDING one is superseded (skipped)", async () => {
   const loop = await dueLoop("overlap");
-  // No-op dispatcher leaves the run open (pending) — simulates an in-flight run.
+  // No-op dispatcher leaves the run open (pending) — simulates a machine that
+  // hasn't claimed it (asleep/offline at fire time).
   const dispatcher = { dispatch(): void {} };
   const ac = new AbortController();
   const s = new sched.Scheduler(dispatcher);
   await s.start(ac.signal);
 
   await waitFor(async () => (await store.listRuns(loop.id)).length === 1);
-  // Force a second immediate tick; it must be skipped (open run exists).
+  const first = (await store.listRuns(loop.id))[0]!;
+
+  // A second exec fire SUPERSEDES the still-pending first: the old slot retires
+  // as `skipped` (neither success nor failure) and exactly ONE fresh pending run
+  // takes its place — the coalesced catch-up queue stays depth-1.
+  await s.runNow(loop.id);
+  await waitFor(async () => (await store.listRuns(loop.id)).length === 2);
+  const superseded = (await store.getRun(first.id))!;
+  expect(superseded.phase).toBe("canceled");
+  expect(superseded.outcome).toBe("skipped");
+  const open1 = await store.openRunsForLoop(loop.id);
+  expect(open1).toHaveLength(1);
+  expect(open1[0]!.phase).toBe("pending");
+
+  // A RUNNING run still blocks the tick outright (never two agents on one loop).
+  await store.updateRun(open1[0]!.id, { phase: "running" });
   await s.runNow(loop.id);
   await new Promise((r) => setTimeout(r, 100));
   ac.abort();
 
-  expect((await store.listRuns(loop.id)).length).toBe(1);
-  expect((await store.openRuns()).length).toBe(1);
+  expect((await store.listRuns(loop.id)).length).toBe(2);
+  expect((await store.openRunsForLoop(loop.id))[0]!.phase).toBe("running");
+
+  // The supersede is phase-guarded: a run that got claimed (running) in the same
+  // instant is left alone — the guard is what makes the race safe.
+  expect(await store.supersedePendingRun(open1[0]!.id, "x")).toBe(false);
 });
 
 test("maybeFlagEvolve bootstraps on the first run (no run-count wait)", async () => {

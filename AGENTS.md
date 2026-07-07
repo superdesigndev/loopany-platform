@@ -390,8 +390,22 @@ computes pure functions. Run instructions: `README.md`.
   real failure replaces the generic reclaim reason (no second push). Single-shot
   (lease retired after). While terminal-grace, `agentApi`/`runCli` refuse mutations
   with 409 (only the final report reconciles). The daemon's `runner.ts` `report()`
-  logs a clear line on a 401 (already retired) instead of silently dropping it. A
-  pending run has no lease yet, so its reclaim (`machine offline`) is unchanged.
+  logs a clear line on a 401 (already retired) instead of silently dropping it.
+- **A pending run on an unreachable machine is DEFERRED, never failed.** The
+  pending row IS the durable inbox: the sweep holds it (no 60s "machine offline"
+  reclaim anymore), the daemon's next poll claims it on reconnect (catch-up), and
+  the NEXT cron fire supersedes a still-waiting one — the old slot retires as
+  outcome `skipped` (phase `canceled`; neither success nor failure, excluded from
+  the failure streak, quiet gray in the UI) via the phase-guarded
+  `store.supersedePendingRun` (a run claimed in the same instant is left alone).
+  Misfire grace = one cron period by construction, bounded by `DEFERRED_MAX_MS`
+  (7d backstop → `skipped`). Alarm policy mirrors presence: asleep (<6h) is fully
+  silent; a genuinely OFFLINE machine gets ONE calm `deferredMessage` per
+  deferred exec run (dedup = the `DEFERRED_LABEL` progress stamp, which doubles
+  as the UI "waiting" hint). Only a pending run an ONLINE machine never claims
+  (>20min) still reclaims as an error ("run never claimed"). Supersede is
+  exec→exec only: evolve/edit fires (or a pending evolve/edit) keep the old
+  skip-this-tick behavior.
 - **Machine presence is THREE-state** (`lib/machinePresence.ts`, shared by server
   `adapters.toJobDetail` + client `MachinesModal`): `online` (polled < 30s),
   `asleep` (seen < `MACHINE_ASLEEP_TTL_MS` = 6h — calm, "resumes automatically"),

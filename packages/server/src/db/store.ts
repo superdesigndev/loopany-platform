@@ -317,6 +317,23 @@ export async function pendingRunsForMachine(machineId: string): Promise<Run[]> {
 }
 
 /** Is a run for this loop still open (drives the "skip overlapping tick" guard)? */
+export async function openRunsForLoop(loopId: string): Promise<Run[]> {
+  return db.select().from(runs).where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])));
+}
+
+/** Atomically retire a still-PENDING run as superseded (`skipped`): the
+ *  phase-guard means a run the daemon claimed in the same instant is left
+ *  alone (the caller then backs off — never two agents on one loop). Returns
+ *  whether the run was actually superseded. */
+export async function supersedePendingRun(runId: string, message: string): Promise<boolean> {
+  const updated = await db
+    .update(runs)
+    .set({ phase: "canceled", outcome: "skipped", message, ts: nowIso() })
+    .where(and(eq(runs.id, runId), eq(runs.phase, "pending")))
+    .returning({ id: runs.id });
+  return updated.length > 0;
+}
+
 export async function hasOpenRun(loopId: string): Promise<boolean> {
   const r = (
     await db

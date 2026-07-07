@@ -68,7 +68,11 @@ export interface TranscriptStep {
 export type NotifyPolicy = "always" | "auto" | "never";
 export type RunPhase = "pending" | "running" | "done" | "error" | "canceled";
 export type RunRole = "exec" | "evolve" | "edit";
-export type RunOutcome = "silent" | "direct" | "exec" | "error" | "evolve";
+/** `skipped`: a deferred pending run retired without executing (machine offline
+ *  at fire time; superseded by the next fire or the catch-up window elapsed).
+ *  Neither success nor failure — excluded from the failure streak (it rides
+ *  phase `canceled`, and the streak counts only phase `error`). */
+export type RunOutcome = "silent" | "direct" | "exec" | "error" | "evolve" | "skipped";
 export type RunStatus = "new" | "resolved" | "nothing-new";
 
 export type ChannelType = "telegram" | "slack" | "feishu";
@@ -225,7 +229,7 @@ export const runs = pgTable(
     phase: text("phase", { enum: ["pending", "running", "done", "error", "canceled"] }).notNull(),
     role: text("role", { enum: ["exec", "evolve", "edit"] }).notNull(),
     ts: text("ts").notNull(),
-    outcome: text("outcome", { enum: ["silent", "direct", "exec", "error", "evolve"] }),
+    outcome: text("outcome", { enum: ["silent", "direct", "exec", "error", "evolve", "skipped"] }),
     status: text("status", { enum: ["new", "resolved", "nothing-new"] }),
     message: text("message"),
     durationMs: integer("duration_ms"),

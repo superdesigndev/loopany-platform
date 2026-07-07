@@ -23,7 +23,7 @@ import * as store from "../db/store.js";
 import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, Run, RunArtifact, RunRole, RunStatus, RunUsage, StateField, TranscriptStep } from "../db/schema.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
-import { completionMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
+import { completionMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
@@ -69,8 +69,14 @@ import {
 const log = logger.child({ mod: "gateway" });
 
 export const ONLINE_TTL_MS = 30_000;
-/** A pending run no machine claims within this window is reclaimed as "machine offline". */
-const PENDING_GRACE_MS = 60_000;
+/** How long a DEFERRED pending run (machine asleep/offline at fire time) stays
+ *  claimable before it retires as `skipped`. Generous on purpose — the next cron
+ *  fire usually supersedes it long before this; the horizon only bounds a loop
+ *  whose machine never comes back (or that can't fire again, e.g. paused). */
+const DEFERRED_MAX_MS = 7 * 86_400_000;
+/** Progress label stamped on a deferred pending run — doubles as the one-shot
+ *  dedup marker for the offline note and as a "waiting" hint in the UI. */
+const DEFERRED_LABEL = "deferred - machine offline";
 /** A claimed run that never reports within this window is reclaimed as timed out. */
 const RUN_TIMEOUT_MS = Number(process.env.LOOPANY_RUN_TIMEOUT_MS || 20 * 60_000);
 const MAX_NEXT_MS = 30 * 86_400_000;
@@ -317,10 +323,12 @@ export class MachineGateway {
   }
 
   /**
-   * Periodic maintenance: mark stale machines offline, and reclaim stuck runs —
-   * a pending run no machine claimed within the grace window ("machine offline"),
-   * or a claimed run that never reported ("timed out"). Best-effort delivery
-   * with no inbox/catch-up, so stuck runs become errors rather than lingering.
+   * Periodic maintenance: mark stale machines offline, and reclaim stuck runs.
+   * A RUNNING run that went silent is reclaimed as timed out; a PENDING run on
+   * an OFFLINE machine is NOT failed — it is held as a deferred catch-up (the
+   * pending row is the durable inbox; the daemon's next poll claims it, and the
+   * next cron fire supersedes it as `skipped`), bounded by DEFERRED_MAX_MS.
+   * Only a pending run a healthy ONLINE machine never claims becomes an error.
    */
   async sweep(): Promise<void> {
     const now = Date.now();
@@ -332,16 +340,30 @@ export class MachineGateway {
     for (const run of await store.openRuns()) {
       const age = now - Date.parse(run.ts);
       if (run.phase === "pending") {
-        // Don't kill a queued run just because its machine is busy: only reclaim
-        // as "machine offline" when the machine is actually offline. An online
-        // daemon claims pending runs on its next poll (seconds), so a healthy
-        // machine clears the queue itself. The long fallback catches a delivery
-        // that's wedged (e.g. never claimable) so it can't linger forever.
-        const online = (await store.getMachine(run.machineId))?.online ?? false;
-        if (!online && age > PENDING_GRACE_MS) {
-          await this.reclaimRun(run, "machine offline");
-        } else if (age > RUN_TIMEOUT_MS) {
-          await this.reclaimRun(run, "run never claimed");
+        const machine = await store.getMachine(run.machineId);
+        if (machine?.online) {
+          // An online daemon claims pending runs on its next poll (seconds) —
+          // and a busy machine clears its own queue — so age here means the
+          // delivery is wedged (never claimable), a real anomaly.
+          if (age > RUN_TIMEOUT_MS) await this.reclaimRun(run, "run never claimed");
+        } else if (age > DEFERRED_MAX_MS) {
+          // The machine never came back inside the catch-up horizon — retire
+          // the queue slot honestly: skipped, not failed, no alert.
+          await store.supersedePendingRun(run.id, "skipped - the machine stayed offline past the catch-up window");
+        } else {
+          // DEFERRED, not failed: the pending row IS the durable inbox — the
+          // daemon's next poll claims it on reconnect (catch-up), and the next
+          // cron fire supersedes it (scheduler), so the queue stays depth-1.
+          // Alarm policy mirrors presence: asleep (<6h) is the common calm case
+          // and stays fully silent; a genuinely OFFLINE machine gets ONE calm
+          // note per deferred exec run (the progress label doubles as the
+          // dedup stamp and as a "waiting" hint in the UI).
+          const presence = machinePresence(machine?.online ?? false, machine?.lastSeen ?? null, now);
+          if (presence === "offline" && run.role === "exec" && run.progress?.label !== DEFERRED_LABEL) {
+            await store.updateRun(run.id, { progress: { step: 0, label: DEFERRED_LABEL, at: nowIso() } });
+            const loop = await store.getLoop(run.loopId);
+            if (loop && loop.notify !== "never") void this.notify(loop, deferredMessage());
+          }
         }
       } else if (run.phase === "running") {
         // INACTIVITY-based timeout, not since-claim: a healthy run keeps its
@@ -2710,6 +2732,7 @@ function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
  *  (from the phase) suffixed with the content status (`ok/nothing-new`). */
 function runOutcomeToken(r: { phase: string; outcome: string | null; status: string | null }): string {
   if (r.outcome === "evolve") return "evolve";
+  if (r.outcome === "skipped") return "skipped";
   const base = r.phase === "error" ? "failed" : r.phase === "done" ? "ok" : r.phase;
   return r.status ? `${base}/${r.status}` : base;
 }

@@ -143,6 +143,9 @@ export function dotColor(r: RunSummary): string {
 
 export function dotLabel(r: RunSummary): string {
   if (r.running) return r.role === 'evolve' ? 'Evolving…' : 'Running…'
+  // A deferred run retired without executing (machine offline at fire time) -
+  // it rides phase `canceled`, so this check must come first for the honest label.
+  if (r.outcome === 'skipped') return 'Skipped'
   if (r.canceled) return 'Canceled'
   if (r.outcome === 'error') return ST.error.label
   if (r.outcome === 'evolve') return ST.evolve.label

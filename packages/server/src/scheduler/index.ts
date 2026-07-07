@@ -4,9 +4,12 @@
  *
  * P0 scope: a tick creates a *pending* run and hands it to a `Dispatcher` (the
  * machine WS gateway in P1). The server itself executes nothing — no workflow
- * JS, no claude. If the bound machine isn't reachable, the run is recorded as an
- * error ("machine offline") and the next cron tick retries (best-effort, no
- * inbox/catch-up). Overlapping ticks for a loop with an open run are skipped.
+ * JS, no claude. The pending run row IS a durable inbox: if the bound machine
+ * isn't reachable it simply waits (the gateway sweep holds, never fails, an
+ * offline machine's pending run), the daemon's next poll claims it on
+ * reconnect (catch-up), and the NEXT cron fire supersedes a still-waiting one
+ * (`skipped`) so the queue coalesces to exactly one catch-up run however long
+ * the sleep lasted. Overlapping ticks for a loop with a RUNNING run are skipped.
  *
  * Evolution and timeout-reclaim land in later phases; the run
  * lifecycle (pending → running → done/error) and the Dispatcher seam are shaped
@@ -218,7 +221,27 @@ export class Scheduler {
         return;
       }
       if (!loop.enabled) return;
-      if (await store.hasOpenRun(id)) return; // a prior run is still open — skip this tick
+      // A RUNNING run always blocks the tick (never two agents on one loop). A
+      // PENDING one is the machine-unreachable deferred case — handled below
+      // once this tick's role is known.
+      const open = await store.openRunsForLoop(id);
+      if (open.some((r) => r.phase === "running")) return;
+      const pending = open.filter((r) => r.phase === "pending");
+      // Edit takes precedence over a scheduled run: the owner asked for a change.
+      const role = loop.editRequest ? "edit" : loop.evolveDue ? "evolve" : "exec";
+      if (pending.length) {
+        // Only an exec fire supersedes an exec pending (the fresh run does the
+        // same work, so the old slot retires as `skipped` — neither success nor
+        // failure — and the queue stays depth-1). Evolve/edit passes, and a
+        // pending evolve/edit, keep the old skip-this-tick behavior.
+        if (role !== "exec" || pending.some((r) => r.role !== "exec")) return;
+        for (const r of pending) {
+          // Atomic phase-guard: if the daemon claimed it in this same instant,
+          // back off — the claimed run is executing, this tick is redundant.
+          if (!(await store.supersedePendingRun(r.id, "skipped - the machine was unreachable at the scheduled time; superseded by the next scheduled run"))) return;
+        }
+        log.info({ id, superseded: pending.length }, "tick: superseded deferred pending run(s)");
+      }
 
       // Consume a due one-shot override so it doesn't re-fire.
       if (loop.nextRunAt && Date.parse(loop.nextRunAt) <= Date.now() + 1500) {
@@ -230,8 +253,6 @@ export class Scheduler {
         return;
       }
 
-      // Edit takes precedence over a scheduled run: the owner asked for a change.
-      const role = loop.editRequest ? "edit" : loop.evolveDue ? "evolve" : "exec";
       const run = await store.addRun({
         loopId: loop.id,
         userId: loop.userId,

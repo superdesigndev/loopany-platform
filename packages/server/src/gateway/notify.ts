@@ -95,6 +95,18 @@ export function failureMessage(reason?: string | null): string {
 }
 
 /**
+ * The calm FYI for a scheduled run WAITING on an offline machine. Nothing
+ * failed: the run is deferred (the pending row is the queue) and executes when
+ * the machine reconnects; meanwhile each newer fire supersedes the older one,
+ * so at most one catch-up run is waiting. Sent ONCE per deferred run (the sweep
+ * stamps a dedup marker), and only once the machine reads as genuinely OFFLINE
+ * (>6h) — a merely asleep machine stays silent.
+ */
+export function deferredMessage(): string {
+  return "\u23f8 Your machine looks offline, so a scheduled run is waiting. It runs automatically when the machine reconnects; only the newest missed run is kept.";
+}
+
+/**
  * The user-facing message for a CLOSED loop that reached its goal (`loopany
  * finish`). A distinct, positive terminal event — surfaced unless notify=never
  * (the caller gates that). Prefers the finishing run's reason, then its message.

@@ -5,8 +5,8 @@
  * investigation's repro (report §3):
  *   (a) a running run reclaimed as timed-out, then a late SUCCESS wake-report →
  *       the run ends `done` with its message preserved and the false failure gone;
- *   (b) a pending run reclaimed as "machine offline" (behavior unchanged — no live
- *       token, so nothing to reconcile);
+ *   (b) a pending run on an unreachable machine is DEFERRED (held claimable for
+ *       catch-up), never failed and never alerted;
  *   (c) a long (>20min) run with a FRESH heartbeat survives the sweep.
  * Plus: a late FAILURE report records the real error honestly, and only ONE late
  * report is honored (single-shot).
@@ -168,19 +168,22 @@ test("(a''') a FAILED late reconcile does NOT advance loop.state (no reprocess/s
   expect((await store.getRun(run.id))!.state ?? null).toBeNull();
 });
 
-test("(b) a pending run reclaimed as machine-offline is unchanged (no live token to reconcile)", async () => {
+test("(b) a pending run on an unreachable machine is DEFERRED — held claimable, no error, no alert", async () => {
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
-  // Machine last polled 2 min ago (offline), pending run 2 min old.
+  // Machine last polled 2 min ago (asleep presence), pending run 2 min old. The
+  // old sweep failed this as "machine offline" after 60s; now the pending row is
+  // the durable inbox — it waits for the machine's next poll (catch-up).
   const { machineId, loop } = (await seedMachineLoop(2 * MIN));
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: isoAgo(2 * MIN) }));
 
   (await gw.sweep());
-  const swept = (await store.getRun(run.id))!;
-  expect(swept.phase).toBe("error");
-  expect(swept.error).toBe("machine offline");
-  expect(sent).toHaveLength(1);
-  expect(sent[0]!.message).toMatch(/asleep|skipped/i);
+  const held = (await store.getRun(run.id))!;
+  expect(held.phase).toBe("pending");
+  expect(held.error).toBeNull();
+  // An asleep machine is the common calm case — fully silent (the one-shot
+  // offline note fires only past the 6h presence threshold; see index.test.ts).
+  expect(sent).toHaveLength(0);
   // The machine itself was flipped offline by the sweep.
   expect((await store.getMachine(machineId))!.online).toBe(false);
 });

@@ -1375,25 +1375,57 @@ test("notify: 'never' suppresses failure alerts entirely", async () => {
   expect(sent).toHaveLength(0);
 });
 
-test("sweep surfaces a machine-offline pending run once (anti-spam'd while it stays offline)", async () => {
+test("a deferred pending run on an OFFLINE machine gets ONE calm note, stays claimable, and is delivered on the next poll (catch-up)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  // Machine offline + last seen long ago.
+  // Machine offline + last seen long ago (past the 6h asleep window ⇒ presence "offline").
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false, lastSeen: "2000-01-01T00:00:00Z" }));
   const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
 
-  // Two stale pending exec runs (older than the 60s grace) — both reclaim as
-  // "machine offline". The first is streak 1 (alert); the second is streak 2 (silent).
-  (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: "2026-06-01T00:00:01Z" }));
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date(Date.now() - 3_600_000).toISOString() }));
   (await gw.sweep());
-  (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: "2026-06-01T00:00:02Z" }));
-  (await gw.sweep());
+  (await gw.sweep()); // second sweep must not re-notify (progress label = dedup stamp)
 
+  // Deferred, not failed: the run is still pending (the durable inbox slot),
+  // stamped with the waiting hint, and exactly ONE calm note went out.
+  const held = (await store.getRun(run.id))!;
+  expect(held.phase).toBe("pending");
+  expect(held.progress?.label).toMatch(/deferred/);
   expect(sent).toHaveLength(1);
   expect(sent[0]!.loopId).toBe(loop.id);
   expect(sent[0]!.message).toMatch(/offline/i);
+  expect(sent[0]!.message).not.toMatch(/fail/i);
+
+  // CATCH-UP: the machine's next poll claims the deferred run — nothing was lost.
+  const res = (await gw.poll(token));
+  expect(res.status).toBe(200);
+  const deliveries = (res.body as { deliveries: Array<{ runId: string }> }).deliveries;
+  expect(deliveries.map((d) => d.runId)).toContain(run.id);
+  expect((await store.getRun(run.id))!.phase).toBe("running");
+});
+
+test("a deferred pending run past the catch-up horizon retires as `skipped` — no error, no alert", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false, lastSeen: "2000-01-01T00:00:00Z" }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  const { sent, fn } = recordingNotify();
+  const gw = gateway(fn);
+
+  // Pending for 8 days — the machine never came back inside the 7-day horizon.
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date(Date.now() - 8 * 86_400_000).toISOString() }));
+  (await gw.sweep());
+
+  const retired = (await store.getRun(run.id))!;
+  expect(retired.phase).toBe("canceled");
+  expect(retired.outcome).toBe("skipped");
+  expect(retired.error).toBeNull();
+  // Skipped is neither success nor failure: no push, and the failure streak
+  // stays untouched (it counts only phase `error`).
+  expect(sent).toHaveLength(0);
+  expect(await store.execFailureStreak(loop.id)).toBe(0);
 });
 
 test("execFailureStreak counts only consecutive trailing exec errors, ignoring evolve/canceled/open", async () => {
