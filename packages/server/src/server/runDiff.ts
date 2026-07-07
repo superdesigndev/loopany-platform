@@ -9,7 +9,7 @@
 import { createTwoFilesPatch } from "diff";
 
 import * as store from "../db/store.js";
-import { getGateway } from "./boot.js";
+import { getArtifactSync } from "./boot.js";
 import type { SnapshotEntry, SnapshotManifest } from "../db/schema.js";
 import type { RunDiffFile, RunDiffResult } from "../types.js";
 
@@ -34,7 +34,7 @@ function withinDiffCap(e: SnapshotEntry | undefined): boolean {
 /** Decode a snapshot entry's blob to text, or null when bytes are absent. */
 async function textOf(e: SnapshotEntry | undefined): Promise<string | null> {
   if (!e || !e.hash) return null;
-  const bytes = await (await getGateway()).readBlob(e.hash);
+  const bytes = await (await getArtifactSync()).readBlob(e.hash);
   return bytes ? bytes.toString("utf8") : null;
 }
 

@@ -11,7 +11,7 @@
  */
 import * as store from "../db/store.js";
 import { safeRelPath } from "../gateway/artifacts.js";
-import { getGateway } from "./boot.js";
+import { getArtifactSync } from "./boot.js";
 import { toArtifactSummary } from "./adapters.js";
 import type { ArtifactContent, ArtifactSummary } from "../types.js";
 
@@ -39,7 +39,7 @@ export async function readLoopArtifact(loopId: string, rawPath: string): Promise
   // A text file whose bytes haven't been recorded yet (transient mid-sync): a
   // distinct pending marker, not a binary dead-end with no download link.
   if (!row.hash) return { error: "file not synced yet" };
-  const bytes = await (await getGateway()).readBlob(row.hash);
+  const bytes = await (await getArtifactSync()).readBlob(row.hash);
   if (!bytes) return { error: "file not found" }; // blob bytes not (yet) stored
   return { text: bytes.toString("utf8") };
 }
@@ -63,7 +63,7 @@ export async function readLoopArtifactBytes(loopId: string, rawPath: string): Pr
   if (!rel) return { status: 400 };
   const row = await store.getArtifactFile(loopId, rel);
   if (!row || row.deleted || !row.hash) return { status: 404 }; // tombstone/oversize ⇒ no bytes
-  const bytes = await (await getGateway()).readBlob(row.hash);
+  const bytes = await (await getArtifactSync()).readBlob(row.hash);
   if (!bytes) return { status: 404 };
   return { status: 200, bytes, binary: row.binary, filename: rel.split("/").pop() || "file" };
 }

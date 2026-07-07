@@ -15,8 +15,10 @@ computes pure functions. Run instructions: `README.md`.
   Drizzle over Postgres (tiered driver: embedded pglite when `DATABASE_URL` is
   unset, postgres-js on Supabase when set).
   - `src/scheduler/` - cron engine (tick -> pending run -> Dispatcher).
-  - `src/gateway/` - machine gateway (poll/agent-api/report/sync/blob), run tokens,
-    delivery, prompt, notify, blobstore (R2/in-memory), artifacts, retention/GC.
+  - `src/gateway/` - machine gateway (`index.ts`: poll/agent-api/report/CLI +
+    retention/GC; `sync.ts`: `ArtifactSync`, the sync/blob byte ingress - boot
+    shares ONE blob store between both), run tokens, delivery, prompt, notify,
+    blobstore (R2/in-memory), artifacts.
   - `src/db/` - Drizzle schema
     (machines/loops/runs/blobs/artifact_files/run_snapshots/run_leases/connect_keys)
     + store + auth-schema.
