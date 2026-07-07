@@ -437,12 +437,15 @@ computes pure functions. Run instructions: `README.md`.
   loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **`loopany setup hooks [--remove]`** (`setup.ts`): idempotent SessionStart hook install
   per `SKILL_TARGET_AGENTS` (only Claude Code has a concrete installer today — a
-  `~/.claude/settings.json` SessionStart command hook running `loopany`, whose stdout lands
-  as ambient context; other agents reported `skipped`). `up`/`update` call the best-effort
+  `~/.claude/settings.json` SessionStart command hook running the durable ABSOLUTE
+  `loopany` path (our shim or a PATH global), whose stdout lands as ambient context;
+  other agents reported `skipped`). `up`/`update` call the best-effort
   `refreshHooks` (never blocks). The ambient hook installs ONLY with a DURABLE on-PATH
-  `loopany` (`resolveDurableCommand`: our shim OR a PATH-resolvable global install) — the
-  automatic path SKIPS it with `npm i -g` guidance when only a bare, non-PATH `loopany`
-  would result; the explicit verb still installs but warns.
+  `loopany` (`resolveDurableCommand`: our shim OR a NON-ephemeral PATH global, returned as
+  an absolute path - the transient `npx`/`_npx` PATH entry is filtered out, so it gates
+  exactly like the bin shim, F6) — the automatic path SKIPS it with `npm i -g` guidance
+  when only a bare, non-PATH (or ephemeral npx) `loopany` would result; the explicit verb
+  still installs but warns.
 - **PATH shim** (`bin-shim.ts`): `up`/`update` write a version-consistent `loopany`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance. It lands ONLY
