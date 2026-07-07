@@ -216,3 +216,61 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   test injects fs/env seams and NEVER touches the real home. Batch 6 is the one
   behavior-changing daemon batch — ships in the next `@crewlet/loopany` npm release
   (release note: bare `loopany` = home, foreground → `up --foreground`).
+
+## axi-conformance CLI (prod-E2E fixes — gate for batch 7)
+
+Conformance/polish fixes from the 0.12.0 production E2E (`e2e-axi-prod-v1`). Split
+server (deploys) vs daemon (rides the NEXT `@crewlet/loopany` npm release):
+- **`loops` flag cluster (F1–F4), ONE root cause: the daemon `interactive.ts` loops
+  path HARDCODED `postCli(["loops"])`, dropping every user flag** — the server never
+  saw `--fields`/`--json`/unknown flags. Fix is BOTH sides: the daemon now forwards
+  `--fields`/`--json` (+ `--help`), rejects an unknown loops flag CLIENT-side (exit 2,
+  same as an unknown VERB — exit 2 is a client concern, `route.ts`), and `parseFlags`
+  learned the `--k=v` form; the server `listLoops(token, fields?, json?)` gained
+  `--json` → `text = JSON.stringify(records)` (real JSON, mirroring `show --json`;
+  `--fields` validation was already correct). **`log`/`show` had the lesser variant**
+  (they honored known flags but silently IGNORED unknown ones) — now they reject an
+  unknown flag client-side too (uniform exit 2). `new`/`edit` already rejected unknowns.
+- **NOT_FOUND (F5)**: `log`/`show` resolve the loop id CLIENT-side (`resolveLoopId`,
+  `log.ts`), so a nonexistent explicit id never reaches the server. It used to print a
+  prose `loopany:` line at exit 2 (a usage failure). Now `resolveLoopId` tags the
+  explicit-not-found case `code: "NOT_FOUND"` and the shared `renderResolveError`
+  emits `error:`/`code: NOT_FOUND` to STDOUT at exit 1 (message quoted via
+  `JSON.stringify`, keeping the actionable "run `loopany loops`" guidance). Other
+  resolve failures (no-folder-match, ambiguous) STAY prose/exit-2 usage errors.
+- **Hook gating (F6)**: the automatic `up`/`update` refresh (`refreshHooks`) and the
+  explicit `setup hooks` BOTH derive from `resolveDurableCommand` — but `npx …`
+  PREPENDS a throwaway `…/_npx/…/.bin` onto PATH, so the durability probe counted that
+  transient `loopany` as durable and installed a bin-dependent SessionStart hook while
+  the bin shim was (correctly) skipped as ephemeral. Fix: `resolveDurableCommand`'s
+  PATH scan (`loopanyPathBin`) now SKIPS ephemeral dirs (`isEphemeralEntry`), so the
+  npx-only case resolves to null → the automatic path skips the hook, parity with the
+  skipped shim. `resolveDurableCommand` now returns the ABSOLUTE path (not bare
+  `loopany`) for a PATH global — a more robust hook command; `isOurHookCommand` still
+  matches it (`endsWith("/loopany")`).
+- **`bin:` line always (F7, P8)**: the home MUST lead with `bin:`. The daemon `home.ts`
+  now resolves the durable bin via `resolveDurableBinPath` (shim OR non-ephemeral PATH
+  global, real path) and passes `--bin` when known; the server `renderHomeText` renders
+  the honest `bin: (not on PATH — run \`npm i -g @crewlet/loopany\`)` fallback when
+  `--bin` is absent (both the connected and not-connected branches). The daemon-local
+  homes (`notConnectedHome`/`degradedHome`/`fallbackHome`) lead with the same
+  `binLine(bin)`.
+- **`edit --json '{}'` no-op (F8)**: the SERVER already renders the `nothing to change:`
+  + editable-key list (batch 3). The daemon short-circuited an empty patch to the usage
+  screen (exit 2) BEFORE the server. Fix: only show usage when NO input flag was given
+  (`--json`/`--*-file` absent); an explicit `--json '{}'` forwards → the server no-op.
+- **`nextRuns` tz (F9)**: `new`'s `nextRuns` rendered raw unlabeled UTC while `show`'s
+  `nextFire` renders loop-tz. New shared `fmtTimeZoned(iso, tz, {seconds?})` (Intl, zone
+  label) backs BOTH — `nextFireDisplay` (seconds) and the create/dry-run `nextRuns`
+  (minute granularity + zone label).
+- **home header (F11)**: the cwd-scoped list block is `loops here[N]` (design §5.1) only
+  when there IS an elsewhere count (`elsewhere > 0`); an unscoped full-machine view stays
+  the plain `loops[N]`.
+
+## Maintaining this file
+
+Keep entries durable and project-intrinsic (build/test/release, architecture, sharp
+edges) — not task narration. Prefer a pointer to the authoritative file/command/test
+over copying detail. Update or prune an entry when the code it describes changes; delete
+what no longer holds rather than letting it drift. `CLAUDE.md` symlinks here, so one edit
+serves both. English only, tight prose.

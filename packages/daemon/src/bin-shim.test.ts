@@ -167,11 +167,22 @@ describe("resolveDurableCommand", () => {
     expect(resolveDurableCommand({ env: {}, homedir: () => "/home/u", exists: (p) => p === shim })).toBe(shim);
   });
 
-  test("no candidate shim but a `loopany` on PATH → bare `loopany`", () => {
+  test("no candidate shim but a `loopany` on PATH → that absolute path", () => {
     const onPath = path.join("/usr/local/bin", "loopany");
     expect(
       resolveDurableCommand({ env: { PATH: `/usr/bin${path.delimiter}/usr/local/bin` }, homedir: () => "/home/u", exists: (p) => p === onPath }),
-    ).toBe("loopany");
+    ).toBe(onPath);
+  });
+
+  test("an EPHEMERAL npx PATH entry is NOT durable → null (F6 hook-gating parity)", () => {
+    // `npx @crewlet/loopany …` prepends its throwaway `…/_npx/…/.bin` onto PATH; a
+    // `loopany` there must NOT count as durable, or the hook installs against a bin that
+    // vanishes once the cache is pruned (the exact F6 disagreement: shim skipped, hook not).
+    const npxBin = "/home/u/.npm/_npx/abc123/node_modules/.bin";
+    const ephemeral = path.join(npxBin, "loopany");
+    expect(
+      resolveDurableCommand({ env: { PATH: npxBin }, homedir: () => "/home/u", exists: (p) => p === ephemeral }),
+    ).toBeNull();
   });
 
   test("nothing durable (npx-without-global) → null", () => {

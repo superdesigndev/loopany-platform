@@ -33,20 +33,26 @@ type LoopRow = {
   nextRunAt: string | null;
 };
 
-/** `--k v` pairs, bare `--flag` → true; everything else is positional. */
+/** `--k v` / `--k=v` pairs, bare `--flag` → true; everything else is positional. */
 export function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
   const flags: Flags = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a.startsWith("--")) {
-      const key = a.slice(2);
+      const body = a.slice(2);
+      const eq = body.indexOf("=");
+      if (eq >= 0) {
+        // `--fields=timezone,notify` — the value rides on the same token.
+        flags[body.slice(0, eq)] = body.slice(eq + 1);
+        continue;
+      }
       const next = args[i + 1];
       if (next !== undefined && !next.startsWith("--")) {
-        flags[key] = next;
+        flags[body] = next;
         i++;
       } else {
-        flags[key] = true;
+        flags[body] = true;
       }
     } else {
       positional.push(a);
@@ -69,6 +75,11 @@ function readFileFlag(flags: Flags, flag: string): string | undefined {
  *  (workflow JS / UI HTML / schema JSON) via the file flags. `dry-run` is a mode,
  *  `server-url`/`api-key` are global daemon flags — allowed here, not patch keys. */
 const EDIT_FLAGS = new Set(["json", "workflow-file", "ui-file", "schema-file", "dry-run", "server-url", "api-key"]);
+
+/** The flags `loopany loops` accepts: `--fields <set>`, the `--json` escape hatch,
+ *  `--help`, plus the global daemon flags (consumed separately). An unknown flag is a
+ *  usage error (exit 2) — the server validates unknown `--fields` VALUES separately. */
+const LOOPS_FLAGS = new Set(["fields", "json", "help", "server-url", "api-key"]);
 
 /**
  * Assemble the `loopany edit` patch body from the surviving flags. `--json '<obj>'`
@@ -191,18 +202,28 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     err("loopany: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set LOOPANY_SERVER_URL / LOOPANY_TOKEN)\n");
 
   if (verb === "loops") {
+    // Forward the user's flags so the server can honor `--fields`/`--json` and reject
+    // unknown fields — the old bug HARDCODED `["loops"]`, silently dropping every flag
+    // (help promised `--fields` that never shipped; `--json` returned TOON). An unknown
+    // FLAG is a usage error (exit 2), mirroring how an unknown VERB exits 2 client-side.
+    const unknown = Object.keys(flags).filter((k) => !LOOPS_FLAGS.has(k));
+    if (unknown.length) return err(`loopany: unknown flag --${unknown[0]} — try \`loopany loops --help\`\n`), 2;
+    const cliArgv = ["loops"];
+    if (typeof flags["fields"] === "string") cliArgv.push("--fields", flags["fields"]);
+    if (flags["json"] === true || flags["json"] === "true") cliArgv.push("--json");
+    if (flags["help"] === true) cliArgv.push("--help");
     // Legacy fallback (old server, no /api/machine/cli): GET /api/machine/loop.
     const legacy: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
       const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
       return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
     };
-    const r = await postCli(["loops"], legacy, cliDeps);
+    const r = await postCli(cliArgv, legacy, cliDeps);
     if (r.kind === "not-configured") return notConnected(), 2;
     if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
     if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
-    // Text-sink primary: the server renders the TOON list (and empty/error states)
-    // and we just print it. `printText` returns null only for an OLD server (no
-    // `text`), where we fall back to the retained structured render for one release.
+    // Text-sink primary: the server renders the TOON list, the JSON escape hatch (under
+    // `--json`), and the empty/error states; we just print `text`. `printText` returns
+    // null only for an OLD server (no `text`) → the retained structured render below.
     const code = printText(r.body, r.status, out);
     if (code !== null) return code;
     const data = r.body as { loops?: LoopRow[]; error?: string };
@@ -210,6 +231,8 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
       err(`loopany: ${data.error || `list failed (${r.status})`}\n`);
       return 1;
     }
+    // Old-server fallback (one release): honor `--json` locally, else the padded list.
+    if (flags["json"] === true || flags["json"] === "true") return out(`${JSON.stringify(data.loops, null, 2)}\n`), 0;
     printLoops(data.loops, out);
     return 0;
   }
@@ -225,7 +248,12 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
       // A removed/unknown flag or an unreadable file/JSON — fail loudly with guidance.
       return err(`loopany: ${e instanceof Error ? e.message : String(e)}\n`), 2;
     }
-    if (Object.keys(patch).length === 0) return err(USAGE), 2;
+    // Bare `loopany edit <id>` with no edit inputs is a usage error. But `--json '{}'`
+    // (or any explicit input flag that resolves to an empty patch) is a VALID no-op:
+    // forward it so the server reports "nothing to change" + the allowed-key list (F8),
+    // instead of short-circuiting to the usage screen client-side.
+    const gaveInput = flags["json"] !== undefined || flags["workflow-file"] !== undefined || flags["ui-file"] !== undefined || flags["schema-file"] !== undefined;
+    if (!gaveInput) return err(USAGE), 2;
     // The whole edit travels as one unified verb: `edit <id> --json <patch> [--dry-run]`.
     const cliArgv = ["edit", id, "--json", JSON.stringify(patch), ...(dryRun ? ["--dry-run"] : [])];
     // Legacy fallback: PATCH /api/machine/loop with the {id, patch, dryRun} body the

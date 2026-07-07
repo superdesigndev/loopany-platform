@@ -14,7 +14,7 @@ import path from "node:path";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printText } from "./cli-client.js";
-import { type LoopRow, resolveLoopId } from "./log.js";
+import { type LoopRow, renderResolveError, resolveLoopId } from "./log.js";
 
 export type ShowDeps = {
   cwd?: () => string;
@@ -25,23 +25,32 @@ export type ShowDeps = {
   token?: string;
 };
 
-/** Bare boolean `--json`/`--full` → true; any other `--flag` (e.g. `--server-url
- *  <url>`) is value-taking and CONSUMES its following token, so the value is never
- *  mistaken for the positional loop id; everything else is positional. */
-function parseArgs(args: string[]): { positional: string[]; json: boolean; full: boolean } {
+/** The value-taking flags `loopany show` tolerates (consumed separately) — anything
+ *  else that isn't a bare `--json`/`--full` is an unknown flag (exit 2). */
+const SHOW_VALUE_FLAGS = new Set(["server-url", "api-key"]);
+
+/** Bare boolean `--json`/`--full` → true; the known value-taking flags (e.g.
+ *  `--server-url <url>`) CONSUME their following token so it is never mistaken for the
+ *  positional loop id; everything else is positional. An unknown `--flag` is surfaced. */
+function parseArgs(args: string[]): { positional: string[]; json: boolean; full: boolean; unknown: string[] } {
   const positional: string[] = [];
+  const unknown: string[] = [];
   let json = false;
   let full = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "--json") json = true;
     else if (a === "--full") full = true;
+    else if (a === "--help") { /* allowlisted (no client-side help surface yet) — never an unknown flag */ }
     else if (a.startsWith("--")) {
-      const next = args[i + 1];
-      if (next !== undefined && !next.startsWith("--")) i++; // skip the flag's value
+      const key = a.slice(2).split("=")[0]!;
+      if (SHOW_VALUE_FLAGS.has(key)) {
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith("--") && !a.includes("=")) i++; // skip the value
+      } else unknown.push(key);
     } else positional.push(a);
   }
-  return { positional, json, full };
+  return { positional, json, full, unknown };
 }
 
 export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<number> {
@@ -59,7 +68,8 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
     ...("token" in injected ? { deviceToken: injected.token } : {}),
   };
 
-  const { positional, json, full } = parseArgs(argv);
+  const { positional, json, full, unknown } = parseArgs(argv);
+  if (unknown.length) return err(`loopany: unknown flag --${unknown[0]} — try \`loopany show --help\`\n`), 2;
   const notConnected = () =>
     err("loopany: this machine isn't connected yet — start the daemon once with `loopany up`\n");
 
@@ -79,7 +89,7 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
     return 1;
   }
   const resolved = resolveLoopId(listData.loops, positional[0], path.resolve(cwd()));
-  if ("error" in resolved) return err(`loopany: ${resolved.error}\n`), 2;
+  if ("error" in resolved) return renderResolveError(resolved, out, err);
 
   // 2. Forward `show <id> [--json] [--full]` — the server renders the envelope TOON
   //    (or the JSON envelope under --json). Old server (no /api/machine/cli): there is

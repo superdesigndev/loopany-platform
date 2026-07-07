@@ -2247,6 +2247,55 @@ test("cli new --dry-run: text is the normalized config detail + fire preview, st
   expect(body.text).toContain("nextRuns[3]:");
 });
 
+test("F9: cli new nextRuns renders in the loop's OWN timezone with a zone label, not raw UTC (matches show's nextFire)", () => {
+  const { deviceToken } = seededCli();
+  // 0 5 * * * Asia/Shanghai → 05:00 local == 21:00Z. The OLD render showed the raw UTC
+  // slice ("… 21:00", unlabeled); the fix shows the loop-local time + zone.
+  const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "SH", cron: "0 5 * * *", timezone: "Asia/Shanghai", taskFile: "x" })]);
+  const nextRunsLine = textOf(res).split("\n").find((l) => l.startsWith("nextRuns[3]:"))!;
+  expect(nextRunsLine).toBeTruthy();
+  expect(nextRunsLine).toContain("05:00"); // loop-local hour, not the 21:00 UTC hour
+  expect(nextRunsLine).not.toContain("21:00");
+  expect(nextRunsLine).toMatch(/GMT\+8|GMT\+08/); // carries the zone label like show's nextFire
+  // Dry-run shares the same zoned render.
+  const dry = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "SH", cron: "0 5 * * *", timezone: "Asia/Shanghai", taskFile: "x" }), "--dry-run"]);
+  const dryLine = textOf(dry).split("\n").find((l) => l.startsWith("nextRuns[3]:"))!;
+  expect(dryLine).toContain("05:00");
+  expect(dryLine).toMatch(/GMT\+8|GMT\+08/);
+});
+
+test("F4: cli loops --json returns REAL JSON (the full records), not TOON", () => {
+  const { deviceToken, loop } = seededCli();
+  const res = gateway().cli(deviceToken, ["loops", "--json"]);
+  expect(res.status).toBe(200);
+  const text = textOf(res);
+  // First non-space byte is `[` (a JSON array), NOT `c` (TOON's `count:`).
+  expect(text.trimStart()[0]).toBe("[");
+  const parsed = JSON.parse(text);
+  expect(Array.isArray(parsed)).toBe(true);
+  expect(parsed.map((l: { id: string }) => l.id)).toContain(loop.id);
+  // `--json` mirrors `show --json`: `runs`/`lastOutcome` are computed unconditionally,
+  // never the lazy 0/null the TOON path uses without `--fields`.
+  const rec = parsed.find((l: { id: string }) => l.id === loop.id) as { runs: number; lastOutcome: string | null };
+  expect(rec.runs).toBe(store.countRuns(loop.id));
+  expect(rec.runs).toBeGreaterThan(0);
+  // Structured `loops` still rides alongside (superset body).
+  expect((res.body as { loops: unknown[] }).loops.length).toBeGreaterThan(0);
+  expect((res.body as { exitCode: number }).exitCode).toBe(0);
+});
+
+test("F8: cli edit with an empty patch is a valid no-op reporting 'nothing to change' + the editable-key list (exit 0)", () => {
+  const { deviceToken, loop } = seededCli();
+  const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", "{}"]);
+  expect(res.status).toBe(200);
+  const body = res.body as { nothingToChange: boolean; text: string; exitCode: number };
+  expect(body.nothingToChange).toBe(true);
+  expect(body.exitCode).toBe(0);
+  expect(body.text).toContain(`nothing to change: L (${loop.id})`);
+  expect(body.text).toContain("editable[");
+  expect(body.text).toContain("cron"); // the key list is present so the next attempt is well-formed
+});
+
 test("cli edit: text is the updated-loop confirmation with the applied keys inline", () => {
   const { deviceToken, loop } = seededCli();
   const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always" })]);
@@ -2570,8 +2619,43 @@ test("cli home [device]: --cwd scopes 'loops here' to the loop rooted at the dir
   const text = (res.body as { text: string }).text;
   expect(text).toContain("Here");
   expect(text).not.toContain("Elsewhere,"); // not listed as a row
+  // F11: the cwd-scoped block header is `loops here[N]` (design §5.1), against the
+  // `loops elsewhere: N more` count — the "here" only makes sense with an "elsewhere".
+  expect(text).toContain("loops here[1]{name,cron,enabled,nextFire,lastOutcome}:");
+  expect(text).not.toContain("\nloops[1]{"); // NOT the plain unscoped header
   expect(text).toContain("loops elsewhere: 1 more on this machine");
   expect(here.id).toBeTruthy();
+});
+
+test("cli home [device]: an UNSCOPED full-machine view keeps the plain `loops[N]` header (no 'here')", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() });
+  store.createLoop({ userId: "u1", machineId, name: "Only", cron: "0 6 * * *", enabled: true, notify: "auto", taskFile: "/work/only/README.md" });
+  // No --cwd (or a cwd matching nothing) ⇒ all loops are "here", elsewhere 0 ⇒ plain header.
+  const text = (gateway().cli(deviceToken, ["home"]).body as { text: string }).text;
+  expect(text).toContain("loops[1]{name,cron,enabled,nextFire,lastOutcome}:");
+  expect(text).not.toContain("loops here[");
+  expect(text).not.toContain("loops elsewhere:");
+});
+
+test("F7: cli home [device] ALWAYS leads with a `bin:` line — the durable path when passed, else the honest not-on-PATH fallback", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() });
+  // Durable: the daemon passes --bin with the resolved shim/global path.
+  const withBin = (gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/loopany"]).body as { text: string }).text;
+  expect(withBin.split("\n")[0]).toBe("bin: /Users/x/.local/bin/loopany");
+  // Non-durable (npx-without-global): no --bin ⇒ the fallback line still leads (P8), never missing.
+  const noBin = (gateway().cli(deviceToken, ["home"]).body as { text: string }).text;
+  expect(noBin.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
+});
+
+test("F7: the not-connected home also leads with the `bin:` fallback line", () => {
+  const deviceToken = tokens.mintDeviceToken(); // unregistered → not-connected branch
+  const text = (gateway().cli(deviceToken, ["home"]).body as { text: string }).text;
+  expect(text.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
+  expect(text).toContain("machine: not connected — run `loopany up`");
 });
 
 test("cli home [run]: renders the run's OWN loop context (role + goal + recent) scoped to the lease's loop", () => {

@@ -72,4 +72,22 @@ describe("runShow", () => {
     expect(calls).toHaveLength(0);
     expect(cap.stderr()).toContain("isn't connected");
   });
+
+  test("F5: an explicit nonexistent loop id → structured NOT_FOUND to STDOUT, exit 1", async () => {
+    const { fetchFn } = stub([{ id: "loop-real", name: "Real", workdir: "/elsewhere", taskFile: null }], () => ({ ok: true, body: {} }));
+    const cap = capture({ fetchFn });
+    const code = await runShow(["loop-zzzz-00000000"], cap.deps);
+    expect(code).toBe(1);
+    expect(cap.stdout()).toContain("code: NOT_FOUND");
+    expect(cap.stdout()).toContain('error: "no loop \\"loop-zzzz-00000000\\" on this machine');
+    expect(cap.stderr()).toBe("");
+  });
+
+  test("an unknown flag on show → exit 2 (uniform with loops/log/edit)", async () => {
+    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }], () => ({ ok: true, body: {} }));
+    const cap = capture({ fetchFn });
+    expect(await runShow(["loop-x", "--bogus"], cap.deps)).toBe(2);
+    expect(cap.stderr()).toContain("unknown flag --bogus");
+    expect(calls).toHaveLength(0); // rejected before any fetch
+  });
 });

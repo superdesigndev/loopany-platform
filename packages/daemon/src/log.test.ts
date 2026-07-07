@@ -136,6 +136,27 @@ describe("runLog", () => {
     expect(cap.stderr()).toContain("loop id");
   });
 
+  test("F5: an explicit nonexistent loop id → structured NOT_FOUND to STDOUT, exit 1 (not prose/exit 2)", async () => {
+    const { fetchFn } = stubFetch({
+      "/api/machine/loop": { body: { loops: [{ id: "loop-real", name: "Real", workdir: "/elsewhere", taskFile: null }] } },
+    });
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    const code = await runLog(["loop-zzzz-00000000"], cap);
+    expect(code).toBe(1); // an error, not a usage failure
+    // P6: `error:`/`code:` to STDOUT (never a prose `loopany:` line on stderr).
+    expect(cap.stdout()).toContain("code: NOT_FOUND");
+    expect(cap.stdout()).toContain('error: "no loop \\"loop-zzzz-00000000\\" on this machine');
+    expect(cap.stdout()).toContain("run `loopany loops`"); // actionable guidance kept
+    expect(cap.stderr()).toBe("");
+  });
+
+  test("an unknown flag on log → exit 2 (uniform with loops/edit), no server fetch for the log call", async () => {
+    const { fetchFn } = stubFetch({});
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["--bogus"], cap)).toBe(2);
+    expect(cap.stderr()).toContain("unknown flag --bogus");
+  });
+
   test("an explicit loop id is forwarded without needing a workdir match", async () => {
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
@@ -161,6 +182,17 @@ describe("runLog", () => {
     // Metrics flow through verbatim in --json output too.
     expect(cap.stdout()).toContain('"mrr": 42');
     expect(cap.stdout()).not.toContain("recent run");
+  });
+
+  test("--limit=5 (the --k=v form) parses like --limit 5 instead of erroring as an unknown flag", async () => {
+    const { fetchFn, calls } = stubFetch({
+      "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
+      "/api/machine/log": { body: { ok: true, name: "X", runs: [] } },
+    });
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["loop-x", "--limit=5"], cap)).toBe(0);
+    expect(cap.stderr()).not.toContain("unknown flag");
+    expect(calls.some((u) => u.includes("limit=5"))).toBe(true);
   });
 
   test("--json before the loop id keeps the id positional (boolean flag, no swallow)", async () => {

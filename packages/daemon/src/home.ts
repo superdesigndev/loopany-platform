@@ -23,7 +23,7 @@
  */
 import os from "node:os";
 
-import { existingBinShim } from "./bin-shim.js";
+import { resolveDurableBinPath } from "./bin-shim.js";
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printText } from "./cli-client.js";
 import { resolveServerUrl } from "./config.js";
@@ -64,7 +64,10 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   const cwd = (injected.cwd ?? (() => process.cwd()))();
   const homedir = (injected.homedir ?? os.homedir)();
   const pid = (injected.localPid ?? (() => verifiedRunningPid()))();
-  const bin = (injected.binPath ?? (() => existingBinShim()))();
+  // The durable `loopany` path (our shim OR a real global on PATH) for the home's
+  // `bin:` line (P8). Null ⇒ npx-without-global; the SERVER then renders the honest
+  // "not on PATH — npm i -g" fallback so the line ALWAYS leads the home (F7).
+  const bin = (injected.binPath ?? (() => resolveDurableBinPath()))();
   const serverDisplay = (injected.serverDisplay ?? (() => resolveServerUrl(undefined)))();
 
   // Context the SERVER can't know — the render is still entirely server-side, we just
@@ -91,7 +94,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   // Not connected: no credential/server on this machine yet — render the DEFINITIVE
   // local state (never empty output), telling the owner exactly how to connect.
   if (r.kind === "not-configured") {
-    out(notConnectedHome());
+    out(notConnectedHome(bin));
     return 0;
   }
   if (r.kind === "read-error") return out(`error: "cannot read ${r.path}"\ncode: ERROR\n`), 1;
@@ -99,7 +102,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   // path): render a DEFINITIVE degraded home — never hang, never empty, never a raw
   // error line that would surface the ambient hook as a failure.
   if (r.kind === "network-error") {
-    out(degradedHome(serverDisplay, r.message));
+    out(degradedHome(bin, serverDisplay, r.message));
     return 0;
   }
 
@@ -109,14 +112,22 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
 
   // Old server, no `text` — render a minimal home from the loops list (one release).
   const loops = (r.body as { loops?: LoopRow[] }).loops ?? [];
-  out(fallbackHome(loops, serverDisplay));
+  out(fallbackHome(bin, loops, serverDisplay));
   return 0;
+}
+
+/** The `bin:` line that leads EVERY home view (P8): the real durable path when known,
+ *  else the honest "not on PATH" fallback with the fix. Mirrors the server's
+ *  `renderHomeText` so the local and server-rendered homes agree. */
+export function binLine(bin: string | null): string {
+  return bin ? `bin: ${bin}` : "bin: (not on PATH — run `npm i -g @crewlet/loopany`)";
 }
 
 /** The definitive not-connected home rendered locally (no server round-trip possible
  *  — there is no credential/server). Mirrors the server's not-connected shape. */
-function notConnectedHome(): string {
+function notConnectedHome(bin: string | null): string {
   return (
+    `${binLine(bin)}\n` +
     "description: Run your scheduled Loopany agent loops on this machine with your own coding agent.\n" +
     "machine: not connected — run `loopany up`\n" +
     "help[2]:\n" +
@@ -128,8 +139,9 @@ function notConnectedHome(): string {
 /** The definitive DEGRADED home when the server is unreachable or hung (the machine IS
  *  configured, so this isn't the not-connected view). Never empty; exits 0 so the
  *  SessionStart hook never surfaces as a failure. */
-function degradedHome(server: string, reason: string): string {
+function degradedHome(bin: string | null, server: string, reason: string): string {
   return (
+    `${binLine(bin)}\n` +
     "description: Run your scheduled Loopany agent loops on this machine with your own coding agent.\n" +
     `machine: configured${server ? ` · ${server}` : ""} — server unreachable right now (${reason})\n` +
     "help[1]:\n" +
@@ -138,8 +150,9 @@ function degradedHome(server: string, reason: string): string {
 }
 
 /** Minimal home from an OLD server's loops list (no `home` verb). Never empty. */
-function fallbackHome(loops: LoopRow[], server: string): string {
+function fallbackHome(bin: string | null, loops: LoopRow[], server: string): string {
   const lines = [
+    binLine(bin),
     "description: Run your scheduled Loopany agent loops on this machine with your own coding agent.",
     `machine: connected${server ? ` · ${server}` : ""}`,
   ];

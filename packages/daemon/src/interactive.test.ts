@@ -150,6 +150,77 @@ describe("runInteractive — text sink (new server renders TOON in `text`)", () 
   });
 });
 
+describe("runInteractive — loops forwards its flags (F1–F4: the old bug hardcoded ['loops'])", () => {
+  test("--fields is forwarded verbatim so the server can honor it (F1)", async () => {
+    const toon = "count: 1\nloops[1]{id,name,cron,enabled,nextFire,notify,goal}:\n  loop-1,Cookie,\"0 8 * * *\",on,—,auto,—";
+    const { fetchFn, calls } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "loops" ? { ok: true, body: { ok: true, loops: [{ id: "loop-1" }], text: toon, exitCode: 0 } } : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["loops", "--fields", "notify,goal"], cap)).toBe(0);
+    expect(calls[0]!.argv).toEqual(["loops", "--fields", "notify,goal"]);
+  });
+
+  test("--fields=… (equals form) is parsed and forwarded", async () => {
+    const { fetchFn, calls } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "loops" ? { ok: true, body: { ok: true, loops: [], text: "count: 0\nloops: []", exitCode: 0 } } : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["loops", "--fields=notify,goal"], cap)).toBe(0);
+    expect(calls[0]!.argv).toEqual(["loops", "--fields", "notify,goal"]);
+  });
+
+  test("--json is forwarded and its (JSON) text printed verbatim (F4)", async () => {
+    const json = JSON.stringify([{ id: "loop-1", name: "Cookie" }], null, 2);
+    const { fetchFn, calls } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv.includes("--json") ? { ok: true, body: { ok: true, loops: [{ id: "loop-1" }], text: json, exitCode: 0 } } : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["loops", "--json"], cap)).toBe(0);
+    expect(calls[0]!.argv).toEqual(["loops", "--json"]);
+    expect(cap.stdout().trimStart()[0]).toBe("["); // real JSON, not TOON
+  });
+
+  test("an unknown flag on loops → exit 2, no fetch (F3)", async () => {
+    const { fetchFn, calls } = stub(() => ({ ok: true, body: {} }));
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["loops", "--bogusflag"], cap)).toBe(2);
+    expect(cap.stderr()).toContain("unknown flag --bogusflag");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("old-server fallback honors --json locally (prints JSON from the structured loops)", async () => {
+    const { fetchFn } = stub(({ url }) =>
+      url.includes("/api/machine/cli") ? { ok: false, status: 404, body: {} } : { ok: true, body: { loops: [{ id: "loop-1", name: "Cookie", cron: "0 8 * * *", timezone: null, enabled: true, notify: "auto", nextRunAt: null }] } },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["loops", "--json"], cap)).toBe(0);
+    expect(cap.stdout().trimStart()[0]).toBe("[");
+    expect(cap.stdout()).toContain('"id": "loop-1"');
+  });
+});
+
+describe("runInteractive — edit no-op (F8) + input-required guard", () => {
+  test("edit --json '{}' is forwarded (NOT short-circuited to usage), server reports the no-op", async () => {
+    const toon = "nothing to change: Cookie (loop-1)\neditable[13]: name, cron, timezone";
+    const { fetchFn, calls } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "edit" ? { ok: true, body: { ok: true, nothingToChange: true, text: toon, exitCode: 0 } } : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["edit", "loop-1", "--json", "{}"], cap)).toBe(0);
+    expect(calls[0]!.argv).toEqual(["edit", "loop-1", "--json", "{}"]);
+    expect(cap.stdout()).toBe(toon + "\n");
+  });
+
+  test("edit <id> with NO input flags is still a usage error (exit 2, no fetch)", async () => {
+    const { fetchFn, calls } = stub(() => ({ ok: true, body: {} }));
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["edit", "loop-1"], cap)).toBe(2);
+    expect(cap.stderr()).toContain("usage");
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("runInteractive — legacy fallback (old server 404s the unified dispatch)", () => {
   test("loops falls back to GET /api/machine/loop", async () => {
     const { fetchFn, calls } = stub(({ url }) =>

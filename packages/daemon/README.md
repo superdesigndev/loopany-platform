@@ -67,7 +67,7 @@ Management
 Interactive
   loops [--fields a,b]    List your loops (default columns id/name/cron/enabled/
                           nextFire; --fields adds timezone/notify/model/goal/
-                          taskFile/runs/lastOutcome).
+                          taskFile/runs/lastOutcome; --json for machines).
   edit <id> --json '<obj>'  Edit a loop (JSON-only + --workflow-file/--ui-file/
                           --schema-file; --dry-run previews before/after).
 ```

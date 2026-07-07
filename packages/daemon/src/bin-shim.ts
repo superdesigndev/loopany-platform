@@ -174,27 +174,47 @@ export function existingBinShim(injected: { env?: NodeJS.ProcessEnv; homedir?: (
   return null;
 }
 
-/** Is a `loopany` executable resolvable in any `PATH` directory (a real global
- *  install that isn't in our own candidate dirs)? */
-function loopanyOnPath(pathVar: string | undefined, exists: (p: string) => boolean): boolean {
-  if (!pathVar) return false;
-  return pathVar.split(path.delimiter).some((dir) => dir !== "" && exists(path.join(dir, "loopany")));
+/** The absolute path of a `loopany` in a DURABLE PATH directory (a real global
+ *  install), or null. EPHEMERAL PATH dirs are skipped: `npx @crewlet/loopany …`
+ *  PREPENDS its own throwaway `…/_npx/…/.bin` onto PATH for the duration of the
+ *  invocation, so a naive PATH scan would count that transient entry as "durable" and
+ *  wrongly conclude a durable `loopany` exists (the F6 hook-gating false positive — the
+ *  bin shim was correctly skipped as ephemeral while the bin-dependent hook installed
+ *  anyway). Filtering ephemeral dirs keeps the hook gate and the shim gate consistent. */
+function loopanyPathBin(pathVar: string | undefined, exists: (p: string) => boolean): string | null {
+  if (!pathVar) return null;
+  for (const dir of pathVar.split(path.delimiter)) {
+    if (dir === "" || isEphemeralEntry(dir)) continue;
+    const p = path.join(dir, "loopany");
+    if (exists(p)) return p;
+  }
+  return null;
 }
 
 /**
- * Resolve a DURABLE `loopany` command for the ambient SessionStart hook: our installed
- * shim (`existingBinShim`) or any `loopany` executable resolvable on PATH (a real
- * global install). Returns null when only a BARE, non-PATH `loopany` would result —
- * the common `npx @crewlet/loopany@latest up` flow where the shim was skipped as
- * ephemeral and there is no global install. The caller then SKIPS the hook (the
- * automatic up/update path) or warns before falling back to bare (the explicit verb),
- * so we never install a SessionStart hook that fails every session with
- * `loopany: command not found`.
+ * The absolute path of a DURABLE `loopany` executable: our installed shim
+ * (`existingBinShim`) else the first non-ephemeral PATH directory that holds a
+ * `loopany`. Null when only a BARE, non-PATH (or ephemeral npx) `loopany` would result.
+ * Drives the home view's `bin:` line (P8) — a real path when known.
  */
-export function resolveDurableCommand(injected: { env?: NodeJS.ProcessEnv; homedir?: () => string; exists?: (p: string) => boolean } = {}): string | null {
+export function resolveDurableBinPath(injected: { env?: NodeJS.ProcessEnv; homedir?: () => string; exists?: (p: string) => boolean } = {}): string | null {
   const shim = existingBinShim(injected);
   if (shim) return shim;
   const env = injected.env ?? process.env;
   const exists = injected.exists ?? ((p: string) => fs.existsSync(p));
-  return loopanyOnPath(env.PATH, exists) ? "loopany" : null;
+  return loopanyPathBin(env.PATH, exists);
+}
+
+/**
+ * Resolve a DURABLE `loopany` command for the ambient SessionStart hook: our installed
+ * shim or a real global install on PATH (both are absolute paths — a full path is the
+ * most robust hook command). Returns null when only a BARE, non-PATH `loopany` would
+ * result — the common `npx @crewlet/loopany@latest up` flow where the shim was skipped
+ * as ephemeral and there is no global install (the transient npx PATH entry is filtered
+ * out by `resolveDurableBinPath`). The caller then SKIPS the hook (the automatic
+ * up/update path) or warns before falling back to bare (the explicit verb), so we never
+ * install a SessionStart hook that fails every session with `loopany: command not found`.
+ */
+export function resolveDurableCommand(injected: { env?: NodeJS.ProcessEnv; homedir?: () => string; exists?: (p: string) => boolean } = {}): string | null {
+  return resolveDurableBinPath(injected);
 }

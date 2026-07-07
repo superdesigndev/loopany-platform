@@ -46,6 +46,20 @@ describe("runHome", () => {
     expect(cap.stdout()).toContain("description:");
   });
 
+  test("F7: the local not-connected home LEADS with `bin:` — the durable path when known", async () => {
+    const { fetchFn } = stub(() => ({ ok: true, body: {} }));
+    const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined, binPath: () => "/home/u/.local/bin/loopany" });
+    await runHome(cap.deps);
+    expect(cap.stdout().split("\n")[0]).toBe("bin: /home/u/.local/bin/loopany");
+  });
+
+  test("F7: the local not-connected home LEADS with the honest bin fallback when non-durable (npx-without-global)", async () => {
+    const { fetchFn } = stub(() => ({ ok: true, body: {} }));
+    const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined, binPath: () => null });
+    await runHome(cap.deps);
+    expect(cap.stdout().split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
+  });
+
   test("posts `home` with the daemon-supplied context and prints the server `text` verbatim", async () => {
     const toon = "bin: /home/u/.local/bin/loopany\nmachine: online · daemon pid 4821 · https://srv.test\nloops[1]{name,cron,enabled,nextFire,lastOutcome}:\n  Docs Sweep,\"0 6 * * 1\",on,—,—";
     const { fetchFn, calls } = stub((url, argv) =>

@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
+import { resolveDurableCommand } from "./bin-shim.js";
 import { refreshHooks, runSetup } from "./setup.js";
 
 /** An in-memory settings file keyed by absolute path, backing the fs seams. */
@@ -139,5 +140,51 @@ describe("refreshHooks (automatic up/update path)", () => {
     expect(ss).toHaveLength(1);
     expect(ss[0].hooks[0].command).toBe("/opt/node/bin/loopany");
     expect(f.out()).toContain("SessionStart home view");
+  });
+});
+
+// ---- F6: hook-gating parity via the REAL resolveDurableCommand -----------------
+// The automatic (`refreshHooks`) and explicit (`runSetup(["hooks"])`) paths BOTH derive
+// the hook command from the same `resolveDurableCommand`. The E2E bug: `npx …` PREPENDS
+// its throwaway `…/_npx/…/.bin` onto PATH, so the durability probe saw a `loopany` there
+// and wrongly concluded "durable" — the bin shim was skipped (ephemeral, correct) while
+// the bin-dependent hook installed anyway. These pin that the two paths now AGREE.
+describe("F6: hook-gating parity — the npx-ephemeral case gates BOTH paths", () => {
+  // `resolveDurableCommand` wired to an npx-only PATH (the exact E2E scenario): the only
+  // `loopany` lives in an ephemeral `/_npx/` bin dir, and there is no durable shim.
+  const npxBin = "/home/u/.npm/_npx/abc123/node_modules/.bin";
+  const ephemeralResolve = () =>
+    resolveDurableCommand({ env: { PATH: npxBin }, homedir: () => "/home/u", exists: (p) => p === path.join(npxBin, "loopany") });
+
+  test("resolveDurableCommand treats the npx-only PATH as NOT durable (null)", () => {
+    expect(ephemeralResolve()).toBeNull();
+  });
+
+  test("the AUTOMATIC path skips the hook (no settings.json written) — matches the skipped bin shim", async () => {
+    const f = fakeFs();
+    await refreshHooks({ ...f.deps, command: undefined, resolveCommand: ephemeralResolve });
+    expect(f.files.size).toBe(0);
+    expect(f.out()).toContain("skipped the SessionStart hook");
+  });
+
+  test("the EXPLICIT path installs (user asked) but WARNS before the bare fallback — parity of decision", async () => {
+    const f = fakeFs();
+    await runSetup(["hooks"], { ...f.deps, command: undefined, resolveCommand: ephemeralResolve });
+    // Explicit verb honors the ask (bare fallback) but never silently — it warns.
+    expect(f.err()).toContain("no durable `loopany` on PATH");
+    expect(sessionStart(f.files.get(f.settingsPath)!)[0].hooks[0].command).toBe("loopany");
+  });
+
+  test("a DURABLE global on a real PATH gates BOTH paths ON (parity in the healthy case)", async () => {
+    const realResolve = () =>
+      resolveDurableCommand({ env: { PATH: "/usr/local/bin" }, homedir: () => "/home/u", exists: (p) => p === "/usr/local/bin/loopany" });
+    expect(realResolve()).toBe("/usr/local/bin/loopany");
+    const auto = fakeFs();
+    await refreshHooks({ ...auto.deps, command: undefined, resolveCommand: realResolve });
+    expect(sessionStart(auto.files.get(auto.settingsPath)!)[0].hooks[0].command).toBe("/usr/local/bin/loopany");
+    const explicit = fakeFs();
+    await runSetup(["hooks"], { ...explicit.deps, command: undefined, resolveCommand: realResolve });
+    expect(explicit.err()).toBe(""); // no warning — it IS durable
+    expect(sessionStart(explicit.files.get(explicit.settingsPath)!)[0].hooks[0].command).toBe("/usr/local/bin/loopany");
   });
 });

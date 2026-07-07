@@ -706,8 +706,10 @@ export class MachineGateway {
 
   /** List the loops bound to this machine, for `loopany loops`. The default columns
    *  are the minimal `{id,name,cron,enabled,nextFire}` (P2); `--fields` extends them
-   *  from the optional set, and an unknown field fails loud (P6, VALIDATION_ERROR). */
-  listLoops(deviceToken: string, fieldsFlag?: string): HttpResult {
+   *  from the optional set, and an unknown field fails loud (P6, VALIDATION_ERROR).
+   *  `--json` (OQ4) is the escape hatch: the full structured records as real JSON
+   *  (first byte `[`), mirroring `show --json` — the daemon prints `text` either way. */
+  listLoops(deviceToken: string, fieldsFlag?: string, json?: boolean): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
     if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
 
@@ -724,10 +726,13 @@ export class MachineGateway {
       for (const f of requested) if (!extras.includes(f)) extras.push(f);
     }
     const fields = [...LIST_DEFAULT_FIELDS, ...extras];
-    // The derived cells cost an extra query per loop; only pay for them when the
-    // column is actually selected (the default `loopany loops` computes neither).
-    const wantRuns = fields.includes("runs");
-    const wantLastOutcome = fields.includes("lastOutcome");
+    // The derived cells cost an extra query per loop; the TOON path pays for them only
+    // when the column is actually selected (the default `loopany loops` computes
+    // neither). The `--json` escape hatch mirrors `show --json`, which ALWAYS computes
+    // both, so force them on for JSON — a plain `loopany loops --json` must report the
+    // real `runs`/`lastOutcome` per loop, never a lazy 0/null.
+    const wantRuns = json || fields.includes("runs");
+    const wantLastOutcome = json || fields.includes("lastOutcome");
 
     const loops: LoopListRecord[] = store.loopsForMachine(machineId).map((l) => {
       // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
@@ -755,7 +760,10 @@ export class MachineGateway {
         lastOutcome: last ? runOutcomeToken(last) : null,
       };
     });
-    return { status: 200, body: { ok: true, loops, text: renderLoopsText(loops, fields) } };
+    // `--json` escape hatch: emit the full records as real JSON in `text` (the daemon
+    // prints it verbatim), the exact counterpart to `show --json`. TOON is the default.
+    const text = json ? JSON.stringify(loops, null, 2) : renderLoopsText(loops, fields);
+    return { status: 200, body: { ok: true, loops, text } };
   }
 
   /**
@@ -1122,7 +1130,7 @@ export class MachineGateway {
         return this.createLoop(deviceToken, config);
       }
       case "loops":
-        return this.listLoops(deviceToken, typeof flags["fields"] === "string" ? (flags["fields"] as string) : undefined);
+        return this.listLoops(deviceToken, typeof flags["fields"] === "string" ? (flags["fields"] as string) : undefined, flags["json"] === true);
       case "edit": {
         const parsed = parseJsonFlag(flags["json"]);
         if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
@@ -2384,6 +2392,32 @@ function fmtTime(iso: string): string {
   return iso.slice(0, 16).replace("T", " ");
 }
 
+/** Format an instant in a loop's OWN timezone with a short zone name
+ *  (`2026-07-08 05:00 GMT+8`), so cadence previews read in the schedule the owner set
+ *  rather than raw UTC (F9). `seconds` adds `:SS` for the single `show` nextFire; the
+ *  multi-item `nextRuns` list stays minute-granular. Falls back to the bare `fmtTime`
+ *  slice if the tz is invalid/absent. */
+function fmtTimeZoned(iso: string, timezone: string | null, opts: { seconds?: boolean } = {}): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone ?? undefined,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      ...(opts.seconds ? { second: "2-digit" } : {}),
+      hour12: false,
+      timeZoneName: "short",
+    }).formatToParts(new Date(iso));
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const sec = opts.seconds ? `:${get("second")}` : "";
+    return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}${sec} ${get("timeZoneName")}`;
+  } catch {
+    return fmtTime(iso);
+  }
+}
+
 /** A structured error result to STDOUT (P6): `error:`/`code:` TOON as the verb `text`.
  *  Mirrors the `{code, text}` shape `dispatch` returns; the slug defaults from the
  *  HTTP status but a caller may pin it (e.g. CONFLICT). */
@@ -2565,7 +2599,9 @@ function renderCreatedText(
   uiApplied: boolean,
   warning: string | undefined,
 ): string {
-  const nextRuns = nextFires(cron, timezone, 3).map(fmtTime);
+  // Render the fire preview in the loop's OWN tz with a zone label (F9), matching
+  // `show`'s `nextFire` — not raw, unlabeled UTC.
+  const nextRuns = nextFires(cron, timezone, 3).map((iso) => fmtTimeZoned(iso, timezone));
   return doc(
     `created: ${scalar(name)} (${loopId})`,
     `classification: ${goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
@@ -2607,7 +2643,7 @@ function renderCreateDryRunText(
       ["goal", config.goal],
       ["notify", config.notify],
     ]),
-    nextRuns.length ? inlineArray("nextRuns", nextRuns.map(fmtTime), " · ") : null,
+    nextRuns.length ? inlineArray("nextRuns", nextRuns.map((iso) => fmtTimeZoned(iso, config.timezone)), " · ") : null,
     `classification: ${config.goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
     warning ? kvLine("warning", warning) : null,
     helpBlock(["Run `loopany new --json '{...}'` (drop --dry-run) to create the loop"]),
@@ -2910,23 +2946,7 @@ function schemaField(schema: StateField[] | null): { key: string; value: Scalar 
 function nextFireDisplay(cron: string, timezone: string | null): string {
   const iso = nextFires(cron, timezone, 1)[0];
   if (!iso) return "(never)";
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: timezone ?? undefined,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-      timeZoneName: "short",
-    }).formatToParts(new Date(iso));
-    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-    return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")} ${get("timeZoneName")}`;
-  } catch {
-    return fmtTime(iso);
-  }
+  return fmtTimeZoned(iso, timezone, { seconds: true });
 }
 
 /**
@@ -3093,11 +3113,15 @@ function renderHomeText(
     presence === null
       ? "machine: not connected — run `loopany up`"
       : `machine: ${[presence, ctx.pid ? `daemon pid ${ctx.pid}` : null, ctx.server].filter(Boolean).join(" · ")}`;
+  // P8 requires the home to LEAD with `bin:` (every reference axi tool does). The daemon
+  // sends the durable path via `--bin` when it has one; absent (npx-without-global), we
+  // render the honest fallback so the line is NEVER missing (F7).
+  const binLineText = ctx.bin ? kvLine("bin", ctx.bin) : "bin: (not on PATH — run `npm i -g @crewlet/loopany`)";
   // Not connected: the header + the definitive state + how to connect. No loop/run
   // blocks (there's nothing to show), but never empty output (P5/P8).
   if (presence === null) {
     return doc(
-      ctx.bin ? kvLine("bin", ctx.bin) : null,
+      binLineText,
       kvLine("description", HOME_DESCRIPTION),
       machineLine,
       helpBlock([
@@ -3106,18 +3130,22 @@ function renderHomeText(
       ]),
     );
   }
+  // Header wording (F11, §5.1): when the list is cwd-SCOPED (some loops live elsewhere)
+  // the block is `loops here[N]` — the "here" only makes sense against an "elsewhere".
+  // An unscoped full-machine view stays the plain `loops[N]`.
+  const loopsName = elsewhere > 0 ? "loops here" : "loops";
   const loopsBlock = here.length
     ? listBlock(
-        "loops",
+        loopsName,
         ["name", "cron", "enabled", "nextFire", "lastOutcome"],
         here.map((l) => [l.name, l.cron, l.enabled ? "on" : "paused", l.nextFire ? fmtTime(l.nextFire) : null, l.lastOutcome]),
       )
-    : emptyList("loops");
+    : emptyList(loopsName);
   const recentBlock = recent.length
     ? listBlock("recent", ["ts", "loop", "outcome"], recent.map((r) => [fmtTime(r.ts), r.loop, r.outcome]))
     : null;
   return doc(
-    ctx.bin ? kvLine("bin", ctx.bin) : null,
+    binLineText,
     kvLine("description", HOME_DESCRIPTION),
     machineLine,
     loopsBlock,

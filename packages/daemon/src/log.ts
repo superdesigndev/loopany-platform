@@ -85,14 +85,25 @@ function seams(d: LogDeps): Seams {
  *  as a positional instead of swallowing it as `--json`'s argument. */
 const BOOL_FLAGS = new Set(["json", "transcript", "full"]);
 
-/** `--k v` pairs, bare/boolean `--flag` → true; everything else is positional. */
+/** The flags `loopany log` accepts (plus the global daemon flags consumed separately).
+ *  `help` is allowlisted so it never trips the unknown-flag guard. */
+const LOG_FLAGS = new Set(["json", "transcript", "full", "limit", "help", "server-url", "api-key"]);
+
+/** `--k v` / `--k=v` pairs, bare/boolean `--flag` → true; everything else is positional. */
 function parseArgs(args: string[]): { positional: string[]; flags: Record<string, string | boolean> } {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a.startsWith("--")) {
-      const key = a.slice(2);
+      const body = a.slice(2);
+      const eq = body.indexOf("=");
+      if (eq >= 0) {
+        // `--limit=5` — the value rides on the same token.
+        flags[body.slice(0, eq)] = body.slice(eq + 1);
+        continue;
+      }
+      const key = body;
       const next = args[i + 1];
       if (!BOOL_FLAGS.has(key) && next !== undefined && !next.startsWith("--")) {
         flags[key] = next;
@@ -109,19 +120,24 @@ function parseArgs(args: string[]): { positional: string[]; flags: Record<string
 
 /** Resolve the loop to read: an explicit id (matched by id, else name) wins;
  *  otherwise pick the loop whose folder contains the current directory (the most
- *  specific match if several nest). Returns the id, or an error explaining why. */
+ *  specific match if several nest). Returns the id, or an error explaining why. A
+ *  `code` marks a structured P6 error (rendered `error:`/`code:` to stdout, exit 1);
+ *  an uncoded error is a usage failure (prose to stderr, exit 2). */
+export type ResolveError = { error: string; code?: "NOT_FOUND" };
 export function resolveLoopId(
   loops: LoopRow[],
   explicit: string | undefined,
   cwd: string,
-): { id: string } | { error: string } {
+): { id: string } | ResolveError {
   if (explicit) {
     const byId = loops.find((l) => l.id === explicit);
     if (byId) return { id: byId.id };
     const byName = loops.filter((l) => l.name === explicit);
     if (byName.length === 1) return { id: byName[0]!.id };
     if (byName.length > 1) return { error: `"${explicit}" matches multiple loops — pass the loop id instead` };
-    return { error: `no loop "${explicit}" on this machine — run \`loopany loops\` to list them` };
+    // An explicitly-named loop that doesn't exist is the P6 NOT_FOUND case (exit 1,
+    // structured to stdout) — NOT a usage error. Keep the actionable guidance.
+    return { error: `no loop "${explicit}" on this machine — run \`loopany loops\` to list them`, code: "NOT_FOUND" };
   }
   if (loops.length === 0) return { error: "no loops on this machine yet" };
   const here = path.resolve(cwd);
@@ -134,6 +150,23 @@ export function resolveLoopId(
     return { error: "no loop folder matches this directory — pass a loop id, e.g. `loopany log <loop-id>` (`loopany loops` lists them)" };
   }
   return { id: matches[0]!.l.id };
+}
+
+/** Render a `resolveLoopId` failure. A coded error (NOT_FOUND) is a P6 structured
+ *  error to STDOUT at exit 1 (`error: "<msg>"` / `code: <SLUG>`, the message quoted via
+ *  JSON so backticks/quotes survive); an uncoded error stays a prose usage failure to
+ *  stderr at exit 2. Shared by `loopany log` and `loopany show`. */
+export function renderResolveError(
+  e: ResolveError,
+  out: (s: string) => void,
+  err: (s: string) => void,
+): number {
+  if (e.code) {
+    out(`error: ${JSON.stringify(e.error)}\ncode: ${e.code}\n`);
+    return 1;
+  }
+  err(`loopany: ${e.error}\n`);
+  return 2;
 }
 
 /** One run rendered for humans: a concise header + session id + metrics + message
@@ -175,6 +208,10 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   };
 
   const { positional, flags } = parseArgs(argv);
+  // Reject an unknown flag (exit 2) instead of silently ignoring it — uniform with the
+  // `loops`/`edit` flag discipline and the unknown-verb exit code.
+  const unknown = Object.keys(flags).filter((k) => !LOG_FLAGS.has(k));
+  if (unknown.length) return d.err(`loopany: unknown flag --${unknown[0]} — try \`loopany log --help\`\n`), 2;
   const json = flags["json"] === true || flags["json"] === "true";
   const showTranscript = flags["transcript"] === true || flags["full"] === true;
   const limit = typeof flags["limit"] === "string" ? flags["limit"] : undefined;
@@ -198,10 +235,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
     return 1;
   }
   const resolved = resolveLoopId(listData.loops, positional[0], d.cwd());
-  if ("error" in resolved) {
-    d.err(`loopany: ${resolved.error}\n`);
-    return 2;
-  }
+  if ("error" in resolved) return renderResolveError(resolved, d.out, d.err);
 
   // 2. Fetch the resolved loop's recent runs.
   const logArgv = ["log", resolved.id, ...(limit ? ["--limit", limit] : [])];
