@@ -579,6 +579,14 @@ computes pure functions. Run instructions: `README.md`.
   trailing `_` un-nests it). Never render Base UI `Dialog.*` parts (e.g. `ModalHead`)
   without a `Dialog.Root` ancestor - it throws at runtime; bare-page edit modes use
   `EditHead`.
+- **Run detail live Activity card** (`RunView.tsx` `LiveActivity`): rendered ONLY when
+  `run.running`, it mirrors the loop page's Runs-list live line (pulsing dot via the
+  shared `runPulseStyle` + `step N` + `run.progress.label`) plus a ticking elapsed
+  clock (a local 1s timer, since `durationMs` is null mid-flight). It refreshes off the
+  page's existing 3s self-poll (`getJobDetail`, no new realtime mechanism); missing
+  `run.progress` falls back to a "waiting for the first heartbeat" line. Gated on
+  `run.running` so terminal runs (ok/failed/skipped) never mount it and their pages stay
+  byte-identical. Guarded by `runDetailLiveActivity.test.ts`.
 - **Loop-detail Edit composer (`editVia`)** offers TWO paths: (1) **Dispatch** -
   `requestEdit({id, instruction})` runs ONE agent pass on the owner's machine
   (spends credits, no conversation); (2) **Copy prompt** - `copyEditPrompt` copies a
