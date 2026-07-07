@@ -23,7 +23,7 @@ import * as store from "../db/store.js";
 import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, Run, RunArtifact, RunRole, RunStatus, RunUsage, StateField, TranscriptStep } from "../db/schema.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
-import { completionMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
+import { autopauseMessage, completionMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
@@ -69,8 +69,21 @@ import {
 const log = logger.child({ mod: "gateway" });
 
 export const ONLINE_TTL_MS = 30_000;
-/** A pending run no machine claims within this window is reclaimed as "machine offline". */
-const PENDING_GRACE_MS = 60_000;
+/** Circuit breaker: auto-pause a loop after this many CONSECUTIVE failed exec
+ *  runs (`skipped` is transparent — the streak counts only phase `error`). A
+ *  loop failing every tick burns credits and attention until a human notices
+ *  (the anti-spam alert cadence means most failures are silent); past this bar
+ *  the honest move is to stop the bleeding and say so once. 0 disables. */
+const AUTOPAUSE_STREAK = Math.max(0, Number(process.env.LOOPANY_FAILURE_AUTOPAUSE_STREAK ?? 10));
+
+/** How long a DEFERRED pending run (machine asleep/offline at fire time) stays
+ *  claimable before it retires as `skipped`. Generous on purpose — the next cron
+ *  fire usually supersedes it long before this; the horizon only bounds a loop
+ *  whose machine never comes back (or that can't fire again, e.g. paused). */
+const DEFERRED_MAX_MS = 7 * 86_400_000;
+/** Progress label stamped on a deferred pending run — doubles as the one-shot
+ *  dedup marker for the offline note and as a "waiting" hint in the UI. */
+const DEFERRED_LABEL = "deferred - machine offline";
 /** A claimed run that never reports within this window is reclaimed as timed out. */
 const RUN_TIMEOUT_MS = Number(process.env.LOOPANY_RUN_TIMEOUT_MS || 20 * 60_000);
 const MAX_NEXT_MS = 30 * 86_400_000;
@@ -182,6 +195,9 @@ function coerceCost(raw: unknown): { costUsd?: number; usage?: RunUsage } {
   tok("cacheReadTokens", c.cacheReadTokens);
   tok("cacheCreationTokens", c.cacheCreationTokens);
   tok("numTurns", c.numTurns);
+  // Resume-recovery attempt count (daemon batch: transient-failure resume). Rides
+  // the wire OUTSIDE `cost` (a body-level field), so callers pass it explicitly.
+  tok("attempts", c.attempts);
   const costUsd = num(c.usd, COST_USD_MAX);
   return {
     ...(costUsd !== undefined ? { costUsd } : {}),
@@ -258,6 +274,17 @@ export class MachineGateway {
     const loop = await store.getLoop(loopId);
     if (!loop) return;
     const streak = await store.execFailureStreak(loopId);
+    // Circuit breaker BEFORE the alert: at the threshold the loop is paused
+    // (enabled=false, unscheduled) and the single autopause note SUBSUMES the
+    // failure alert — pausing stops the run stream, so this is the last push
+    // until a human re-enables it. A plain pause: re-enabling resumes as usual.
+    if (AUTOPAUSE_STREAK > 0 && streak >= AUTOPAUSE_STREAK && loop.enabled) {
+      await store.updateLoop(loopId, { enabled: false });
+      this.scheduler.removeLoop(loopId);
+      log.warn({ loopId, streak }, "circuit breaker: auto-paused after consecutive exec failures");
+      if (loop.notify !== "never") this.pushNotify(loop, autopauseMessage(streak));
+      return;
+    }
     if (shouldNotifyFailure(loop.notify, streak)) {
       this.pushNotify(loop, failureMessage(reason));
     }
@@ -317,10 +344,12 @@ export class MachineGateway {
   }
 
   /**
-   * Periodic maintenance: mark stale machines offline, and reclaim stuck runs —
-   * a pending run no machine claimed within the grace window ("machine offline"),
-   * or a claimed run that never reported ("timed out"). Best-effort delivery
-   * with no inbox/catch-up, so stuck runs become errors rather than lingering.
+   * Periodic maintenance: mark stale machines offline, and reclaim stuck runs.
+   * A RUNNING run that went silent is reclaimed as timed out; a PENDING run on
+   * an OFFLINE machine is NOT failed — it is held as a deferred catch-up (the
+   * pending row is the durable inbox; the daemon's next poll claims it, and the
+   * next cron fire supersedes it as `skipped`), bounded by DEFERRED_MAX_MS.
+   * Only a pending run a healthy ONLINE machine never claims becomes an error.
    */
   async sweep(): Promise<void> {
     const now = Date.now();
@@ -332,16 +361,30 @@ export class MachineGateway {
     for (const run of await store.openRuns()) {
       const age = now - Date.parse(run.ts);
       if (run.phase === "pending") {
-        // Don't kill a queued run just because its machine is busy: only reclaim
-        // as "machine offline" when the machine is actually offline. An online
-        // daemon claims pending runs on its next poll (seconds), so a healthy
-        // machine clears the queue itself. The long fallback catches a delivery
-        // that's wedged (e.g. never claimable) so it can't linger forever.
-        const online = (await store.getMachine(run.machineId))?.online ?? false;
-        if (!online && age > PENDING_GRACE_MS) {
-          await this.reclaimRun(run, "machine offline");
-        } else if (age > RUN_TIMEOUT_MS) {
-          await this.reclaimRun(run, "run never claimed");
+        const machine = await store.getMachine(run.machineId);
+        if (machine?.online) {
+          // An online daemon claims pending runs on its next poll (seconds) —
+          // and a busy machine clears its own queue — so age here means the
+          // delivery is wedged (never claimable), a real anomaly.
+          if (age > RUN_TIMEOUT_MS) await this.reclaimRun(run, "run never claimed");
+        } else if (age > DEFERRED_MAX_MS) {
+          // The machine never came back inside the catch-up horizon — retire
+          // the queue slot honestly: skipped, not failed, no alert.
+          await store.supersedePendingRun(run.id, "skipped - the machine stayed offline past the catch-up window");
+        } else {
+          // DEFERRED, not failed: the pending row IS the durable inbox — the
+          // daemon's next poll claims it on reconnect (catch-up), and the next
+          // cron fire supersedes it (scheduler), so the queue stays depth-1.
+          // Alarm policy mirrors presence: asleep (<6h) is the common calm case
+          // and stays fully silent; a genuinely OFFLINE machine gets ONE calm
+          // note per deferred exec run (the progress label doubles as the
+          // dedup stamp and as a "waiting" hint in the UI).
+          const presence = machinePresence(machine?.online ?? false, machine?.lastSeen ?? null, now);
+          if (presence === "offline" && run.role === "exec" && run.progress?.label !== DEFERRED_LABEL) {
+            await store.updateRun(run.id, { progress: { step: 0, label: DEFERRED_LABEL, at: nowIso() } });
+            const loop = await store.getLoop(run.loopId);
+            if (loop && loop.notify !== "never") this.pushNotify(loop, deferredMessage());
+          }
         }
       } else if (run.phase === "running") {
         // INACTIVITY-based timeout, not since-claim: a healthy run keeps its
@@ -359,7 +402,7 @@ export class MachineGateway {
       }
     }
     // Drop terminal-grace leases whose wake-report window has elapsed (bounded memory).
-    pruneExpiredLeases(now);
+    await pruneExpiredLeases(now);
   }
 
   /** Finalize one stuck run as an error (the sweep's reclaim path): persist the
@@ -379,7 +422,7 @@ export class MachineGateway {
    *  yet) is unaffected — the terminalize is a no-op there. */
   private async reclaimRun(run: Run, reason: string): Promise<void> {
     await store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
-    terminalizeLease(run.id);
+    await terminalizeLease(run.id);
     if (run.role === "evolve") await this.scheduler.finishEvolution(run.loopId);
     await this.notifyRunFailure(run.loopId, run.role, reason);
   }
@@ -426,7 +469,7 @@ export class MachineGateway {
       // web-side pre-creation needed. Personal/low-security (BYOA §8).
       // Owner remembered at mint time (AI-First claim) when the gate is on;
       // "shared" otherwise (open mode, or a token minted out-of-band).
-      const owner = getDeviceOwner(machineId) ?? "shared";
+      const owner = (await getDeviceOwner(machineId)) ?? "shared";
       // Home/default team for this machine: ALWAYS the owner's personal team (the
       // no-claim fallback for loops created on it later). A loop's actual team comes
       // from the validated claim intent at createLoop time, never from this home
@@ -511,7 +554,7 @@ export class MachineGateway {
       // Edit + evolve runs exist to change the loop, so they always get control
       // AND the structural edit caps (schedule, UI, schema, workflow).
       const structural = run.role === "evolve" || run.role === "edit";
-      const token = registerRunLease({
+      const token = await registerRunLease({
         runId: run.id,
         loopId: loop.id,
         machineId,
@@ -778,7 +821,7 @@ export class MachineGateway {
     // direct path) we fall back to the machine's home team, exactly as before.
     const homeTeam = machine.teamId ?? store.teamIdForUser(machine.userId);
     let teamId = homeTeam;
-    const intent = readClaimIntent(str(body.claim));
+    const intent = await readClaimIntent(str(body.claim));
     if (intent && intent.teamId !== homeTeam) {
       // CROSS-TEAM create. SECURITY (report §4) — fail CLOSED, never silently
       // mis-file into the home team (the original bug):
@@ -1218,7 +1261,7 @@ export class MachineGateway {
   // ---- POST /agent-api/loop ----
 
   async agentApi(runToken: string, argv: string[]): Promise<HttpResult> {
-    const lease = resolveLease(runToken);
+    const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
     // The run was already reclaimed by the server (the machine was likely asleep).
     // Its lease is terminal-grace: it lives on only to accept ONE reconciling
@@ -1320,7 +1363,7 @@ export class MachineGateway {
   /** RUN-credential branch of the unified CLI: the existing per-run `dispatch()`
    *  verbs, plus the read branch (`log`/`show`) scoped to the lease's own loop. */
   private async runCli(runToken: string, argv: string[]): Promise<HttpResult> {
-    const lease = resolveLease(runToken);
+    const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
     // Reclaimed (machine likely asleep) — terminal-grace accepts only the reconciling
     // /machine/report, never further CLI mutations. Same rule agentApi enforces.
@@ -1407,9 +1450,12 @@ export class MachineGateway {
       cursor?: unknown;
       /** Claude-reported cost/usage for this run (usd + token counts). */
       cost?: unknown;
+      /** Total claude invocations (present only when the daemon's transient-
+       *  failure recovery resumed the session at least once). */
+      attempts?: unknown;
     },
   ): Promise<HttpResult> {
-    const lease = resolveLease(runToken);
+    const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
     const ok = !!body.ok;
 
@@ -1419,7 +1465,7 @@ export class MachineGateway {
     // advance the workflow cursor / task file (the next run would silently skip
     // data whose output the user never saw), nor flip the phase to done/error.
     if (run?.phase === "canceled") {
-      retireLease(runToken);
+      await retireLease(runToken);
       // Clear a pending edit even if its run was canceled, so it doesn't re-fire —
       // and symmetrically clear an evolve marker (evolveDue), or the canceled
       // evolve pass re-fires on the very next tick.
@@ -1445,7 +1491,7 @@ export class MachineGateway {
         ...(enrichArtifacts ? { artifacts: enrichArtifacts } : {}),
         ...(enrichTranscript ? { transcript: enrichTranscript } : {}),
         // Cost, like durationMs, is only known post-run — enrich the finished row.
-        ...coerceCost(body.cost),
+        ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
       });
       if (typeof body.taskFileContent === "string") {
         await store.updateLoop(lease.loopId, {
@@ -1453,7 +1499,7 @@ export class MachineGateway {
           taskFileSyncedAt: nowIso(),
         });
       }
-      retireLease(runToken);
+      await retireLease(runToken);
       log.info({ runId: lease.runId }, "report: enriched a finished run (durationMs/sessionId)");
       return { status: 200, body: { ok: true } };
     }
@@ -1515,7 +1561,7 @@ export class MachineGateway {
         ts: nowIso(),
       });
       // Single-shot: no second late report may re-flip this run.
-      retireLease(runToken);
+      await retireLease(runToken);
       // Re-capture the end-state snapshot (best-effort), same as the normal path.
       try {
         await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
@@ -1595,14 +1641,14 @@ export class MachineGateway {
       sessionId: typeof body.sessionId === "string" ? clipText(body.sessionId, SESSION_ID_CAP) : null,
       ...(artifacts ? { artifacts } : {}),
       ...(transcript ? { transcript } : {}),
-      ...coerceCost(body.cost),
+      ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
       ...(runState ? { state: runState } : {}),
       ...(message !== undefined ? { message } : {}),
       ...(ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
       progress: null, // live signal done — the full transcript supersedes it
       ts: nowIso(),
     });
-    retireLease(runToken);
+    await retireLease(runToken);
 
     // Capture the loop's full file set as THIS run's snapshot (Phase 3 diff
     // baseline). Cheap: just record the manifest from the already-synced
@@ -2710,6 +2756,7 @@ function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
  *  (from the phase) suffixed with the content status (`ok/nothing-new`). */
 function runOutcomeToken(r: { phase: string; outcome: string | null; status: string | null }): string {
   if (r.outcome === "evolve") return "evolve";
+  if (r.outcome === "skipped") return "skipped";
   const base = r.phase === "error" ? "failed" : r.phase === "done" ? "ok" : r.phase;
   return r.status ? `${base}/${r.status}` : base;
 }

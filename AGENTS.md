@@ -17,7 +17,8 @@ computes pure functions. Run instructions: `README.md`.
   - `src/scheduler/` - cron engine (tick -> pending run -> Dispatcher).
   - `src/gateway/` - machine gateway (poll/agent-api/report/sync/blob), run tokens,
     delivery, prompt, notify, blobstore (R2/in-memory), artifacts, retention/GC.
-  - `src/db/` - Drizzle schema (machines/loops/runs/blobs/artifact_files/run_snapshots)
+  - `src/db/` - Drizzle schema
+    (machines/loops/runs/blobs/artifact_files/run_snapshots/run_leases/connect_keys)
     + store + auth-schema.
   - `src/server/` - boot (`ensureServer`), adapters (Loop/Run -> JobSummary/JobDetail),
     loopApi server fns.
@@ -268,7 +269,7 @@ computes pure functions. Run instructions: `README.md`.
   data loss). Per-loop 500MB cap enforced at `sync()` AND authoritatively at
   `putBlob` (real byte length; also handshake-gated - only accepts hashes the sync
   asked THIS machine for, so a device token is not an uncapped write channel).
-  `store.deleteLoop` cascades runs/artifact_files/run_snapshots.
+  `store.deleteLoop` cascades runs/run_leases/artifact_files/run_snapshots.
 
 ## Security / hardening invariants
 
@@ -332,10 +333,14 @@ computes pure functions. Run instructions: `README.md`.
   `packages/server/AGENTS.md` for the durable notes.
 - `auth.ts` THROWS at boot when the GitHub gate is on but `LOOPANY_AUTH_SECRET` is
   unset. Set the Fly secret before deploying with the gate on.
-- Per-team connect-key: the claim carries the team (`rememberClaimIntent`, in-memory,
-  24h TTL). A cross-team create is fail-closed: claim minter must be the machine
-  owner AND membership is re-validated at `createLoop` time. A machine's home team
-  is always the owner's personal team; a loop's team comes from the validated claim.
+- Per-team connect-key: the claim carries the team (`rememberConnectKey` ->
+  `connect_keys` table, keyed by the DERIVED machine id so the key itself is never
+  stored; 24h TTL, durable across deploys). One row serves BOTH consumers: the
+  self-register owner lookup (`getDeviceOwner`) and the createLoop team binding
+  (`readClaimIntent`) - the old `deviceOwners`/`claimIntents` maps are gone. A
+  cross-team create is fail-closed: claim minter must be the machine owner AND
+  membership is re-validated at `createLoop` time. A machine's home team is always
+  the owner's personal team; a loop's team comes from the validated claim.
 - Daemon jail: `LOOPANY_ROOTS` is an always-applied local jail (`roots.ts`) -
   server-sent roots can only NARROW it, paths are resolve-normalized before the
   prefix check. Child env is allowlisted everywhere (`spawn.ts`); the workflow
@@ -357,7 +362,12 @@ computes pure functions. Run instructions: `README.md`.
   daemon release is NOT required for this batch — the daemon forwards whatever token
   its env carries, opaque to shape). `resolveLease` lazily drops a lease past
   `expiresAt` (active leases carry `Infinity`, so a live run never times out here — the
-  server's inactivity sweep is the vanished-machine guard).
+  server's inactivity sweep is the vanished-machine guard). Leases are DURABLE
+  (`run_leases` table, keyed by sha256(wire token) — hash only, a DB leak never
+  hands out live credentials; `expiresAt` null encodes active/Infinity): a deploy
+  is invisible to an in-flight run, and a long-sleep wake-report survives a
+  restart inside its grace window. `store.deleteLoop` cascades the loop's leases
+  (active ones have no expiry, so the prune alone would never collect them).
 - **The old revoke/reclaim scatter collapses to ONE terminalize transition +
   retire + prune.** `registerRunLease` mints `active`. `terminalizeLease(runId)`
   flips `active` → `terminal-grace` with `expiresAt = now + TERMINAL_GRACE_MS` (24h,
@@ -381,10 +391,30 @@ computes pure functions. Run instructions: `README.md`.
   real failure replaces the generic reclaim reason (no second push). Single-shot
   (lease retired after). While terminal-grace, `agentApi`/`runCli` refuse mutations
   with 409 (only the final report reconciles). The daemon's `runner.ts` `report()`
-  logs a clear line on a 401 (already retired) instead of silently dropping it. A
-  pending run has no lease yet, so its reclaim (`machine offline`) is unchanged.
-  Leases stay IN-MEMORY for v1 (owner-settled §10: a deploy during a long sleep drops
-  the lease → a wake-report 401s even inside grace; accepted known gap, no DB table).
+  logs a clear line on a 401 (already retired) instead of silently dropping it.
+- **A pending run on an unreachable machine is DEFERRED, never failed.** The
+  pending row IS the durable inbox: the sweep holds it (no 60s "machine offline"
+  reclaim anymore), the daemon's next poll claims it on reconnect (catch-up), and
+  the NEXT cron fire supersedes a still-waiting one — the old slot retires as
+  outcome `skipped` (phase `canceled`; neither success nor failure, excluded from
+  the failure streak, quiet gray in the UI) via the phase-guarded
+  `store.supersedePendingRun` (a run claimed in the same instant is left alone).
+  Misfire grace = one cron period by construction, bounded by `DEFERRED_MAX_MS`
+  (7d backstop → `skipped`). Alarm policy mirrors presence: asleep (<6h) is fully
+  silent; a genuinely OFFLINE machine gets ONE calm `deferredMessage` per
+  deferred exec run (dedup = the `DEFERRED_LABEL` progress stamp, which doubles
+  as the UI "waiting" hint). Only a pending run an ONLINE machine never claims
+  (>20min) still reclaims as an error ("run never claimed"). Supersede is
+  exec→exec only: evolve/edit fires (or a pending evolve/edit) keep the old
+  skip-this-tick behavior.
+- **Boot misfire catch-up** (`scheduler.catchUpMissedFire`): croner only computes
+  future fires, so a cron occurrence inside a deploy/restart window would vanish
+  silently. `start()` reconstructs each enabled loop's most recent PAST occurrence
+  (`previousRuns(1)`, loop tz); if it postdates both the loop's creation and its
+  newest run, ONE compensating tick fires (coalesced by construction). Stands down
+  when a past-due `nextRunAt` one-shot is present (armNextRunAt already catches
+  those up). The machine-offline case needs nothing here - that fire DID tick and
+  left a deferred pending run.
 - **Machine presence is THREE-state** (`lib/machinePresence.ts`, shared by server
   `adapters.toJobDetail` + client `MachinesModal`): `online` (polled < 30s),
   `asleep` (seen < `MACHINE_ASLEEP_TTL_MS` = 6h — calm, "resumes automatically"),
@@ -394,6 +424,11 @@ computes pure functions. Run instructions: `README.md`.
   distinguishing an interrupted running run from a skipped scheduled one (no more
   "📵 appears offline"). Banner/string edits in `LoopDetailView`: entities in JS
   STRING literals are not decoded — write `&`, not `&amp;` (only JSX text decodes).
+- **Circuit breaker**: `notifyRunFailure` auto-pauses a loop at
+  `LOOPANY_FAILURE_AUTOPAUSE_STREAK` (default 10, 0=off) consecutive exec
+  failures - `enabled=false` + unschedule + ONE autopause note that SUBSUMES the
+  failure alert (silent under `notify:"never"`; a plain pause, re-enable resumes).
+  `skipped` runs are transparent to the streak (it counts only phase `error`).
 - Failure alerting: notifications fire on failure too (`report()` !ok + sweep
   reclaim). Anti-spam streak derives from persisted run rows (exact, deploy-safe):
   notify at streak 1, then every 5th; a success resets. Only exec failures notify;
@@ -519,6 +554,20 @@ computes pure functions. Run instructions: `README.md`.
   This ships in the npm daemon package, so it needs a coordinated `@crewlet/loopany`
   release. (The daemon still forwards whatever token its env carries — the `rk_` run
   lease is batch 6, not here.)
+- **Transient-failure resume (`runner.ts`)**: a claude crash is CLASSIFIED
+  (`classifyFailure`, precedence auth/quota > poisoned > transient > task) and only
+  `transient` (API error / connection closed / ECONNRESET / stream closed /
+  overloaded / rate limit / 5xx) retries - `claude --resume <sessionId>` with a
+  short continuation prompt (`buildResumeTask`: trust prior progress, end with
+  exactly ONE report/finish), up to `LOOPANY_TRANSIENT_RETRIES` (default 2) with
+  `LOOPANY_TRANSIENT_RETRY_BASE_MS` backoff (15s, x4, jitter; consts read at
+  module load - tests re-import). `--resume` FORKS the session id: track the
+  latest for the next resume + transcript recovery. Timeouts never retry (our
+  wall-clock guard, not a provider blip); no captured session = nothing to
+  resume; abort stops immediately. Spend is SUMMED across attempts (`addCost`);
+  the report carries `attempts` only when > 1, and the server folds it into
+  `runs.usage.attempts` (TS-only jsonb field, no migration). A progress label
+  keeps the sweep fed during the backoff window.
 - **`runner.ts` skips the sys file + `--append-system-prompt-file` when the delivery's
   `systemPrompt` is empty** (batches 1-2 make it empty; an OLD server that still
   populates it keeps working — the flag path is preserved when the string is non-empty).

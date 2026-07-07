@@ -21,6 +21,7 @@ import {
   blobs,
   artifactFiles,
   runSnapshots,
+  runLeases,
   type ArtifactFile,
   type ArtifactMeta,
   type Loop,
@@ -155,6 +156,9 @@ export async function deleteLoop(id: string): Promise<boolean> {
       // loop's R2 bytes would never be reclaimed. The bytes themselves fall out on
       // the next periodic GC pass once nothing references them.
       await tx.delete(runs).where(eq(runs.loopId, id));
+      // A live lease for a deleted loop would otherwise linger forever (active
+      // leases have no expiry, so the prune never collects them).
+      await tx.delete(runLeases).where(eq(runLeases.loopId, id));
       await tx.delete(artifactFiles).where(eq(artifactFiles.loopId, id));
       await tx.delete(runSnapshots).where(eq(runSnapshots.loopId, id));
     }
@@ -313,6 +317,23 @@ export async function pendingRunsForMachine(machineId: string): Promise<Run[]> {
 }
 
 /** Is a run for this loop still open (drives the "skip overlapping tick" guard)? */
+export async function openRunsForLoop(loopId: string): Promise<Run[]> {
+  return db.select().from(runs).where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])));
+}
+
+/** Atomically retire a still-PENDING run as superseded (`skipped`): the
+ *  phase-guard means a run the daemon claimed in the same instant is left
+ *  alone (the caller then backs off — never two agents on one loop). Returns
+ *  whether the run was actually superseded. */
+export async function supersedePendingRun(runId: string, message: string): Promise<boolean> {
+  const updated = await db
+    .update(runs)
+    .set({ phase: "canceled", outcome: "skipped", message, ts: nowIso() })
+    .where(and(eq(runs.id, runId), eq(runs.phase, "pending")))
+    .returning({ id: runs.id });
+  return updated.length > 0;
+}
+
 export async function hasOpenRun(loopId: string): Promise<boolean> {
   const r = (
     await db

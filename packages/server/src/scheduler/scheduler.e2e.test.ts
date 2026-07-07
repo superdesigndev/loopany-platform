@@ -2,8 +2,9 @@
  * Scheduler engine e2e — drives the real cron/timer + real store end to end
  * against a temp database. Verifies the P0 run lifecycle:
  *   - online machine → tick creates a run and hands it to the dispatcher
- *   - offline machine → tick records an error run ("machine offline")
- *   - overlapping ticks are skipped while a run is open
+ *   - unreachable machine → the pending run defers; the next fire supersedes it
+ *   - overlapping ticks: running blocks, deferred pending is superseded
+ *   - boot misfire catch-up: a fire missed while no scheduler was alive ticks once
  *
  * Env (db path) must be set before importing the db singleton, so the modules
  * are loaded dynamically inside beforeAll.
@@ -134,22 +135,96 @@ test("transport-agnostic: a no-op dispatcher leaves the run pending (for poll to
   expect(runs[0]!.phase).toBe("pending"); // engine never decides offline; reclaim does
 });
 
-test("overlap guard: a second due tick is skipped while a run is open", async () => {
+test("boot misfire catch-up: a cron fire that fell inside a deploy window ticks once at start()", async () => {
+  const m = await store.createMachine({ id: "m-misfire", userId: "u1", name: "M", tokenHash: "h", online: true });
+  // Every-minute cron; the loop existed for 10 minutes but its newest run is 5
+  // minutes old — the most recent occurrence (<1 min ago) fired while no
+  // scheduler was alive. start() must compensate with exactly one tick.
+  const loop = await store.createLoop({
+    userId: "u1",
+    machineId: m.id,
+    name: "missed",
+    cron: "* * * * *",
+    enabled: true,
+    notify: "auto",
+  });
+  await store.updateLoop(loop.id, { createdAt: new Date(Date.now() - 10 * 60_000).toISOString() });
+  await store.addRun({
+    loopId: loop.id, userId: "u1", machineId: m.id, phase: "done", role: "exec",
+    ts: new Date(Date.now() - 5 * 60_000).toISOString(),
+  });
+
+  const ac = new AbortController();
+  const s = new sched.Scheduler({ dispatch(): void {} });
+  await s.start(ac.signal);
+  await waitFor(async () => (await store.openRunsForLoop(loop.id)).length === 1);
+  ac.abort();
+
+  const open = await store.openRunsForLoop(loop.id);
+  expect(open).toHaveLength(1);
+  expect(open[0]!.phase).toBe("pending");
+  expect(open[0]!.role).toBe("exec");
+});
+
+test("boot misfire catch-up: covered or too-young loops do NOT re-fire", async () => {
+  const m = await store.createMachine({ id: "m-nomiss", userId: "u1", name: "M", tokenHash: "h", online: true });
+  // Hourly cron pinned to the PREVIOUS minute: its latest occurrence is ~1 min
+  // ago (a recent past fire to probe) while the next is ~an hour away, so the
+  // live cron can never fire mid-test (no minute-boundary flake).
+  const cron = `${new Date(Date.now() - 60_000).getMinutes()} * * * *`;
+  // (a) newest run AFTER the latest occurrence — covered, no tick.
+  const covered = await store.createLoop({ userId: "u1", machineId: m.id, name: "covered", cron, enabled: true, notify: "auto" });
+  await store.updateLoop(covered.id, { createdAt: new Date(Date.now() - 10 * 60_000).toISOString() });
+  await store.addRun({ loopId: covered.id, userId: "u1", machineId: m.id, phase: "done", role: "exec", ts: new Date().toISOString() });
+  // (b) created AFTER the latest occurrence (fresh loop, no runs yet) — nothing missed.
+  const young = await store.createLoop({ userId: "u1", machineId: m.id, name: "young", cron, enabled: true, notify: "auto" });
+
+  const ac = new AbortController();
+  const s = new sched.Scheduler({ dispatch(): void {} });
+  await s.start(ac.signal);
+  await new Promise((r) => setTimeout(r, 200));
+  ac.abort();
+
+  expect(await store.openRunsForLoop(covered.id)).toHaveLength(0);
+  expect(await store.openRunsForLoop(young.id)).toHaveLength(0);
+});
+
+test("overlap guard: a RUNNING run blocks the tick; a deferred PENDING one is superseded (skipped)", async () => {
   const loop = await dueLoop("overlap");
-  // No-op dispatcher leaves the run open (pending) — simulates an in-flight run.
+  // No-op dispatcher leaves the run open (pending) — simulates a machine that
+  // hasn't claimed it (asleep/offline at fire time).
   const dispatcher = { dispatch(): void {} };
   const ac = new AbortController();
   const s = new sched.Scheduler(dispatcher);
   await s.start(ac.signal);
 
   await waitFor(async () => (await store.listRuns(loop.id)).length === 1);
-  // Force a second immediate tick; it must be skipped (open run exists).
+  const first = (await store.listRuns(loop.id))[0]!;
+
+  // A second exec fire SUPERSEDES the still-pending first: the old slot retires
+  // as `skipped` (neither success nor failure) and exactly ONE fresh pending run
+  // takes its place — the coalesced catch-up queue stays depth-1.
+  await s.runNow(loop.id);
+  await waitFor(async () => (await store.listRuns(loop.id)).length === 2);
+  const superseded = (await store.getRun(first.id))!;
+  expect(superseded.phase).toBe("canceled");
+  expect(superseded.outcome).toBe("skipped");
+  const open1 = await store.openRunsForLoop(loop.id);
+  expect(open1).toHaveLength(1);
+  expect(open1[0]!.phase).toBe("pending");
+
+  // A RUNNING run still blocks the tick outright (never two agents on one loop).
+  await store.updateRun(open1[0]!.id, { phase: "running" });
   await s.runNow(loop.id);
   await new Promise((r) => setTimeout(r, 100));
   ac.abort();
 
-  expect((await store.listRuns(loop.id)).length).toBe(1);
-  expect((await store.openRuns()).length).toBe(1);
+  expect((await store.listRuns(loop.id)).length).toBe(2);
+  expect((await store.openRunsForLoop(loop.id))[0]!.phase).toBe("running");
+
+  // The supersede is phase-guarded: a run that got claimed (running) in the same
+  // instant is left alone — the guard is what makes the race safe.
+  expect(await store.supersedePendingRun(open1[0]!.id, "x")).toBe(false);
 });
 
 test("maybeFlagEvolve bootstraps on the first run (no run-count wait)", async () => {

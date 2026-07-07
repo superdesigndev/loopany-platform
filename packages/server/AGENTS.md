@@ -316,7 +316,8 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   no longer a no-op: `dispatch(loop)` -> `wakeMachine(loop.machineId)` resolves the
   parked waiter, so a new pending run is claimed near-instantly. The waiter is
   armed BEFORE the first claim pass (no slip-past race); waiters are IN-MEMORY
-  like run leases - a deploy drops them and the daemon just re-polls. Old daemons
+  (unlike run leases, which are durable rows) - a deploy drops them and the
+  daemon just re-polls. Old daemons
   never send `wait` and keep the classic instant response; `main.ts` still calls
   bare `poll()`.
 - Daemon side (`daemon.ts`): `buildPollBody` opts into `wait:true` ONLY while

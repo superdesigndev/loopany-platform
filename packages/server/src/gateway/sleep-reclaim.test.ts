@@ -5,8 +5,8 @@
  * investigation's repro (report §3):
  *   (a) a running run reclaimed as timed-out, then a late SUCCESS wake-report →
  *       the run ends `done` with its message preserved and the false failure gone;
- *   (b) a pending run reclaimed as "machine offline" (behavior unchanged — no live
- *       token, so nothing to reconcile);
+ *   (b) a pending run on an unreachable machine is DEFERRED (held claimable for
+ *       catch-up), never failed and never alerted;
  *   (c) a long (>20min) run with a FRESH heartbeat survives the sweep.
  * Plus: a late FAILURE report records the real error honestly, and only ONE late
  * report is honored (single-shot).
@@ -39,7 +39,7 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
-  await (db.client as any).exec("DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+  await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 /** A recording notifier: captures every push instead of hitting a channel. */
@@ -86,7 +86,7 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   // Laptop slept mid-run: no heartbeat for 21 min, run was claimed 21 min ago.
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   // Sweep reclaims the stuck run and pushes the (soft) offline alert.
   (await gw.sweep());
@@ -97,7 +97,7 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   expect(sent[0]!.message).toMatch(/asleep|interrupted/i);
   // The lease was NOT retired (terminalized to grace for the wake-report) — it still
   // resolves, now in terminal-grace.
-  expect(tokens.resolveLease(rt)?.state).toBe("terminal-grace");
+  expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
 
   // Laptop wakes: claude finished successfully, daemon reports late.
   const res = (await gw.report(rt, { ok: true, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42" }));
@@ -113,7 +113,7 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   expect(sent).toHaveLength(2);
   expect(sent[1]!.message).toBe("opened PR #42");
   // Single-shot: the lease is now retired — a second late report is rejected.
-  expect(tokens.resolveLease(rt)).toBeUndefined();
+  expect(await tokens.resolveLease(rt)).toBeUndefined();
   expect((await gw.report(rt, { ok: true, finalText: "again" })).status).toBe(401);
 });
 
@@ -122,7 +122,7 @@ test("(a') a late FAILURE report records the real error honestly, without a seco
   const gw = gateway(fn);
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   (await gw.sweep());
   expect(sent).toHaveLength(1); // the reclaim alert
@@ -139,7 +139,7 @@ test("(a'') a successful late reconcile advances loop.state and mirrors the scal
   const gw = gateway(() => Promise.resolve());
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   (await gw.sweep());
   expect((await store.getRun(run.id))!.phase).toBe("error");
@@ -157,7 +157,7 @@ test("(a''') a FAILED late reconcile does NOT advance loop.state (no reprocess/s
   const gw = gateway(() => Promise.resolve());
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   (await gw.sweep());
   const res = (await gw.report(rt, { ok: false, error: "workflow blew up", cursor: { processed: 7 } }));
@@ -168,19 +168,22 @@ test("(a''') a FAILED late reconcile does NOT advance loop.state (no reprocess/s
   expect((await store.getRun(run.id))!.state ?? null).toBeNull();
 });
 
-test("(b) a pending run reclaimed as machine-offline is unchanged (no live token to reconcile)", async () => {
+test("(b) a pending run on an unreachable machine is DEFERRED — held claimable, no error, no alert", async () => {
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
-  // Machine last polled 2 min ago (offline), pending run 2 min old.
+  // Machine last polled 2 min ago (asleep presence), pending run 2 min old. The
+  // old sweep failed this as "machine offline" after 60s; now the pending row is
+  // the durable inbox — it waits for the machine's next poll (catch-up).
   const { machineId, loop } = (await seedMachineLoop(2 * MIN));
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: isoAgo(2 * MIN) }));
 
   (await gw.sweep());
-  const swept = (await store.getRun(run.id))!;
-  expect(swept.phase).toBe("error");
-  expect(swept.error).toBe("machine offline");
-  expect(sent).toHaveLength(1);
-  expect(sent[0]!.message).toMatch(/asleep|skipped/i);
+  const held = (await store.getRun(run.id))!;
+  expect(held.phase).toBe("pending");
+  expect(held.error).toBeNull();
+  // An asleep machine is the common calm case — fully silent (the one-shot
+  // offline note fires only past the 6h presence threshold; see index.test.ts).
+  expect(sent).toHaveLength(0);
   // The machine itself was flipped offline by the sweep.
   expect((await store.getMachine(machineId))!.online).toBe(false);
 });
@@ -200,7 +203,7 @@ test("agent-api verbs are refused for a reclaimed run (only the final report rec
   const gw = gateway(() => Promise.resolve());
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   (await gw.sweep());
   const out = (await gw.agentApi(rt, ["reschedule", "1h"]));
