@@ -2274,6 +2274,11 @@ test("F4: cli loops --json returns REAL JSON (the full records), not TOON", () =
   const parsed = JSON.parse(text);
   expect(Array.isArray(parsed)).toBe(true);
   expect(parsed.map((l: { id: string }) => l.id)).toContain(loop.id);
+  // `--json` mirrors `show --json`: `runs`/`lastOutcome` are computed unconditionally,
+  // never the lazy 0/null the TOON path uses without `--fields`.
+  const rec = parsed.find((l: { id: string }) => l.id === loop.id) as { runs: number; lastOutcome: string | null };
+  expect(rec.runs).toBe(store.countRuns(loop.id));
+  expect(rec.runs).toBeGreaterThan(0);
   // Structured `loops` still rides alongside (superset body).
   expect((res.body as { loops: unknown[] }).loops.length).toBeGreaterThan(0);
   expect((res.body as { exitCode: number }).exitCode).toBe(0);

@@ -726,10 +726,13 @@ export class MachineGateway {
       for (const f of requested) if (!extras.includes(f)) extras.push(f);
     }
     const fields = [...LIST_DEFAULT_FIELDS, ...extras];
-    // The derived cells cost an extra query per loop; only pay for them when the
-    // column is actually selected (the default `loopany loops` computes neither).
-    const wantRuns = fields.includes("runs");
-    const wantLastOutcome = fields.includes("lastOutcome");
+    // The derived cells cost an extra query per loop; the TOON path pays for them only
+    // when the column is actually selected (the default `loopany loops` computes
+    // neither). The `--json` escape hatch mirrors `show --json`, which ALWAYS computes
+    // both, so force them on for JSON — a plain `loopany loops --json` must report the
+    // real `runs`/`lastOutcome` per loop, never a lazy 0/null.
+    const wantRuns = json || fields.includes("runs");
+    const wantLastOutcome = json || fields.includes("lastOutcome");
 
     const loops: LoopListRecord[] = store.loopsForMachine(machineId).map((l) => {
       // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
