@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "stonexer",
+      "id": 6255130,
+      "comment_id": 4901330353,
+      "created_at": "2026-07-07T07:39:24Z",
+      "repoId": 1276552174,
+      "pullRequestNo": 82
+    }
+  ]
 }
