@@ -31,7 +31,9 @@ First find the loop id (only loops bound to THIS machine are listed):
 
 The default columns are `id`/`name`/`cron`/`enabled`/`nextFire`; add more with
 `--fields` (comma-separated, from `timezone`,`notify`,`model`,`goal`,`taskFile`,
-`runs`,`lastOutcome`) — an unknown field fails loud.
+`runs`,`lastOutcome`) — an unknown field fails loud. `--json` emits the full records
+as a raw JSON array (every field, `runs`/`lastOutcome` always computed) when you need
+to parse the list instead of read it.
 
 Before reshaping a loop, see how its recent runs actually went with
 `<loopany-cli> log` (the loop for the current directory) or
