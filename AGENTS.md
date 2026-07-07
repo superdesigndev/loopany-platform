@@ -332,10 +332,14 @@ computes pure functions. Run instructions: `README.md`.
   `packages/server/AGENTS.md` for the durable notes.
 - `auth.ts` THROWS at boot when the GitHub gate is on but `LOOPANY_AUTH_SECRET` is
   unset. Set the Fly secret before deploying with the gate on.
-- Per-team connect-key: the claim carries the team (`rememberClaimIntent`, in-memory,
-  24h TTL). A cross-team create is fail-closed: claim minter must be the machine
-  owner AND membership is re-validated at `createLoop` time. A machine's home team
-  is always the owner's personal team; a loop's team comes from the validated claim.
+- Per-team connect-key: the claim carries the team (`rememberConnectKey` ->
+  `connect_keys` table, keyed by the DERIVED machine id so the key itself is never
+  stored; 24h TTL, durable across deploys). One row serves BOTH consumers: the
+  self-register owner lookup (`getDeviceOwner`) and the createLoop team binding
+  (`readClaimIntent`) - the old `deviceOwners`/`claimIntents` maps are gone. A
+  cross-team create is fail-closed: claim minter must be the machine owner AND
+  membership is re-validated at `createLoop` time. A machine's home team is always
+  the owner's personal team; a loop's team comes from the validated claim.
 - Daemon jail: `LOOPANY_ROOTS` is an always-applied local jail (`roots.ts`) -
   server-sent roots can only NARROW it, paths are resolve-normalized before the
   prefix check. Child env is allowlisted everywhere (`spawn.ts`); the workflow
@@ -357,7 +361,12 @@ computes pure functions. Run instructions: `README.md`.
   daemon release is NOT required for this batch — the daemon forwards whatever token
   its env carries, opaque to shape). `resolveLease` lazily drops a lease past
   `expiresAt` (active leases carry `Infinity`, so a live run never times out here — the
-  server's inactivity sweep is the vanished-machine guard).
+  server's inactivity sweep is the vanished-machine guard). Leases are DURABLE
+  (`run_leases` table, keyed by sha256(wire token) — hash only, a DB leak never
+  hands out live credentials; `expiresAt` null encodes active/Infinity): a deploy
+  is invisible to an in-flight run, and a long-sleep wake-report survives a
+  restart inside its grace window. `store.deleteLoop` cascades the loop's leases
+  (active ones have no expiry, so the prune alone would never collect them).
 - **The old revoke/reclaim scatter collapses to ONE terminalize transition +
   retire + prune.** `registerRunLease` mints `active`. `terminalizeLease(runId)`
   flips `active` → `terminal-grace` with `expiresAt = now + TERMINAL_GRACE_MS` (24h,
@@ -383,8 +392,6 @@ computes pure functions. Run instructions: `README.md`.
   with 409 (only the final report reconciles). The daemon's `runner.ts` `report()`
   logs a clear line on a 401 (already retired) instead of silently dropping it. A
   pending run has no lease yet, so its reclaim (`machine offline`) is unchanged.
-  Leases stay IN-MEMORY for v1 (owner-settled §10: a deploy during a long sleep drops
-  the lease → a wake-report 401s even inside grace; accepted known gap, no DB table).
 - **Machine presence is THREE-state** (`lib/machinePresence.ts`, shared by server
   `adapters.toJobDetail` + client `MachinesModal`): `online` (polled < 30s),
   `asleep` (seen < `MACHINE_ASLEEP_TTL_MS` = 6h — calm, "resumes automatically"),

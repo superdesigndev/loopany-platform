@@ -359,7 +359,7 @@ export class MachineGateway {
       }
     }
     // Drop terminal-grace leases whose wake-report window has elapsed (bounded memory).
-    pruneExpiredLeases(now);
+    await pruneExpiredLeases(now);
   }
 
   /** Finalize one stuck run as an error (the sweep's reclaim path): persist the
@@ -379,7 +379,7 @@ export class MachineGateway {
    *  yet) is unaffected — the terminalize is a no-op there. */
   private async reclaimRun(run: Run, reason: string): Promise<void> {
     await store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
-    terminalizeLease(run.id);
+    await terminalizeLease(run.id);
     if (run.role === "evolve") await this.scheduler.finishEvolution(run.loopId);
     await this.notifyRunFailure(run.loopId, run.role, reason);
   }
@@ -426,7 +426,7 @@ export class MachineGateway {
       // web-side pre-creation needed. Personal/low-security (BYOA §8).
       // Owner remembered at mint time (AI-First claim) when the gate is on;
       // "shared" otherwise (open mode, or a token minted out-of-band).
-      const owner = getDeviceOwner(machineId) ?? "shared";
+      const owner = (await getDeviceOwner(machineId)) ?? "shared";
       // Home/default team for this machine: ALWAYS the owner's personal team (the
       // no-claim fallback for loops created on it later). A loop's actual team comes
       // from the validated claim intent at createLoop time, never from this home
@@ -511,7 +511,7 @@ export class MachineGateway {
       // Edit + evolve runs exist to change the loop, so they always get control
       // AND the structural edit caps (schedule, UI, schema, workflow).
       const structural = run.role === "evolve" || run.role === "edit";
-      const token = registerRunLease({
+      const token = await registerRunLease({
         runId: run.id,
         loopId: loop.id,
         machineId,
@@ -778,7 +778,7 @@ export class MachineGateway {
     // direct path) we fall back to the machine's home team, exactly as before.
     const homeTeam = machine.teamId ?? store.teamIdForUser(machine.userId);
     let teamId = homeTeam;
-    const intent = readClaimIntent(str(body.claim));
+    const intent = await readClaimIntent(str(body.claim));
     if (intent && intent.teamId !== homeTeam) {
       // CROSS-TEAM create. SECURITY (report §4) — fail CLOSED, never silently
       // mis-file into the home team (the original bug):
@@ -1218,7 +1218,7 @@ export class MachineGateway {
   // ---- POST /agent-api/loop ----
 
   async agentApi(runToken: string, argv: string[]): Promise<HttpResult> {
-    const lease = resolveLease(runToken);
+    const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
     // The run was already reclaimed by the server (the machine was likely asleep).
     // Its lease is terminal-grace: it lives on only to accept ONE reconciling
@@ -1320,7 +1320,7 @@ export class MachineGateway {
   /** RUN-credential branch of the unified CLI: the existing per-run `dispatch()`
    *  verbs, plus the read branch (`log`/`show`) scoped to the lease's own loop. */
   private async runCli(runToken: string, argv: string[]): Promise<HttpResult> {
-    const lease = resolveLease(runToken);
+    const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
     // Reclaimed (machine likely asleep) — terminal-grace accepts only the reconciling
     // /machine/report, never further CLI mutations. Same rule agentApi enforces.
@@ -1409,7 +1409,7 @@ export class MachineGateway {
       cost?: unknown;
     },
   ): Promise<HttpResult> {
-    const lease = resolveLease(runToken);
+    const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
     const ok = !!body.ok;
 
@@ -1419,7 +1419,7 @@ export class MachineGateway {
     // advance the workflow cursor / task file (the next run would silently skip
     // data whose output the user never saw), nor flip the phase to done/error.
     if (run?.phase === "canceled") {
-      retireLease(runToken);
+      await retireLease(runToken);
       // Clear a pending edit even if its run was canceled, so it doesn't re-fire —
       // and symmetrically clear an evolve marker (evolveDue), or the canceled
       // evolve pass re-fires on the very next tick.
@@ -1453,7 +1453,7 @@ export class MachineGateway {
           taskFileSyncedAt: nowIso(),
         });
       }
-      retireLease(runToken);
+      await retireLease(runToken);
       log.info({ runId: lease.runId }, "report: enriched a finished run (durationMs/sessionId)");
       return { status: 200, body: { ok: true } };
     }
@@ -1515,7 +1515,7 @@ export class MachineGateway {
         ts: nowIso(),
       });
       // Single-shot: no second late report may re-flip this run.
-      retireLease(runToken);
+      await retireLease(runToken);
       // Re-capture the end-state snapshot (best-effort), same as the normal path.
       try {
         await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
@@ -1602,7 +1602,7 @@ export class MachineGateway {
       progress: null, // live signal done — the full transcript supersedes it
       ts: nowIso(),
     });
-    retireLease(runToken);
+    await retireLease(runToken);
 
     // Capture the loop's full file set as THIS run's snapshot (Phase 3 diff
     // baseline). Cheap: just record the manifest from the already-synced

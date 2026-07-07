@@ -344,21 +344,19 @@ export const cancelRun = createServerFn({ method: 'POST' })
 export const mintClaim = createServerFn({ method: 'POST' }).handler(
   async (): Promise<{ token: string } | { error: string }> => {
     await backend()
-    const { mintDeviceToken, machineIdFromToken, setDeviceOwner, rememberClaimIntent } = await import(
-      '../gateway/tokens.js'
-    )
+    const { mintDeviceToken, rememberConnectKey } = await import('../gateway/tokens.js')
     const { userId, teamId, allTeams } = await requestScope()
     // Fail SAFE in the admin "All teams" aggregate view (mirrors createJob).
     if (allTeams) return { error: PICK_TEAM_ERROR }
     const owner = userId ?? 'shared'
     const token = mintDeviceToken()
-    // Remember the owner so the machine that self-registers with this token (and
-    // the loop Claude Code creates on it) belong to the signed-in user.
-    setDeviceOwner(machineIdFromToken(token), owner)
-    // Bind the VALIDATED active team to this connect-key so a loop captured from
-    // team B's dashboard lands in team B — one machine can then serve many teams.
-    // The team is taken server-side from the authenticated session, never the client.
-    rememberClaimIntent(token, { userId: owner, teamId })
+    // Bind the minter (so the machine that self-registers with this token — and
+    // the loop Claude Code creates on it — belongs to the signed-in user) AND the
+    // VALIDATED active team (so a loop captured from team B's dashboard lands in
+    // team B — one machine can then serve many teams). The team is taken
+    // server-side from the authenticated session, never the client. Durable: a
+    // deploy between mint and paste no longer mis-files the loop.
+    await rememberConnectKey(token, { userId: owner, teamId })
     return { token }
   },
 )

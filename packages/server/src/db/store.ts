@@ -21,6 +21,7 @@ import {
   blobs,
   artifactFiles,
   runSnapshots,
+  runLeases,
   type ArtifactFile,
   type ArtifactMeta,
   type Loop,
@@ -155,6 +156,9 @@ export async function deleteLoop(id: string): Promise<boolean> {
       // loop's R2 bytes would never be reclaimed. The bytes themselves fall out on
       // the next periodic GC pass once nothing references them.
       await tx.delete(runs).where(eq(runs.loopId, id));
+      // A live lease for a deleted loop would otherwise linger forever (active
+      // leases have no expiry, so the prune never collects them).
+      await tx.delete(runLeases).where(eq(runLeases.loopId, id));
       await tx.delete(artifactFiles).where(eq(artifactFiles.loopId, id));
       await tx.delete(runSnapshots).where(eq(runSnapshots.loopId, id));
     }

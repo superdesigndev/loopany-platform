@@ -21,7 +21,7 @@ import { createServerFn } from '@tanstack/react-start'
 import * as store from '../db/store.js'
 import type { Machine } from '../db/schema.js'
 import { requestScope, type RequestScope } from '../auth.js'
-import { machineIdFromToken, mintDeviceToken, setDeviceOwner, sha256 } from '../gateway/tokens.js'
+import { machineIdFromToken, mintDeviceToken, rememberConnectKey, sha256 } from '../gateway/tokens.js'
 import { machineInScope, tokenVisibleTo } from './machineScope.js'
 import { latestDaemonVersion } from './daemonVersion.js'
 import { ensureServer } from './boot.js'
@@ -97,7 +97,10 @@ export const createMachine = createServerFn({ method: 'POST' }).handler(
     const token = mintDeviceToken()
     const id = machineIdFromToken(token)
     const owner = userId ?? 'shared'
-    setDeviceOwner(id, owner)
+    // Belt-and-braces: the machine row below already carries the owner, but the
+    // connect-key binding also covers a daemon that first polls AFTER this row
+    // was deleted/recreated (self-register falls back to the key's minter).
+    await rememberConnectKey(token, { userId: owner, teamId })
     await store.createMachine({ id, userId: owner, teamId, name: '', tokenHash: sha256(token), token, online: false })
     return { id, token }
   },

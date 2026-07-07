@@ -8,6 +8,13 @@
       "when": 1783393995571,
       "tag": "0000_round_marauders",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783417162251,
+      "tag": "0001_naive_silver_fox",
+      "breakpoints": true
     }
   ]
 }

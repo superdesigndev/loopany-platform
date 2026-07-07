@@ -262,6 +262,64 @@ export const runs = pgTable(
   ],
 );
 
+// ---- run_leases: the per-run credential (durable across deploys) ----
+//
+// A RUN LEASE is minted per delivery and authorizes every in-run `loopany` verb
+// plus the final `/machine/report`. It was an in-process Map through v1, which
+// meant EVERY deploy broke every in-flight run's finalize (the report 401'd and
+// the run was falsely failed by the sweep ~20min later) and a long-sleep
+// wake-report died the same way. Durable rows make a restart invisible to a
+// running run. Only the sha256 of the wire token is stored — a DB leak must not
+// hand out live run credentials (unlike `machines.token`, there is no re-show
+// need). Lifecycle: `active` (expiresAt null = no expiry; the inactivity sweep
+// is the vanished-machine guard) → `terminal-grace` (bounded expiry, exactly one
+// reconciling wake-report) → deleted.
+
+export const runLeases = pgTable(
+  "run_leases",
+  {
+    /** sha256 hex of the full wire token (`rk_…`, or a pre-Batch-6 bare UUID). */
+    tokenHash: text("token_hash").primaryKey(),
+    runId: text("run_id").notNull(),
+    loopId: text("loop_id").notNull(),
+    machineId: text("machine_id").notNull(),
+    role: text("role", { enum: ["exec", "evolve", "edit"] }).notNull(),
+    allowControl: boolean("allow_control").notNull().default(false),
+    canSetUi: boolean("can_set_ui").notNull().default(false),
+    canSetSchema: boolean("can_set_schema").notNull().default(false),
+    canSetWorkflow: boolean("can_set_workflow").notNull().default(false),
+    canFinish: boolean("can_finish").notNull().default(false),
+    state: text("state", { enum: ["active", "terminal-grace"] }).notNull().default("active"),
+    /** Null while active (never expires); ISO once terminalized (grace window). */
+    expiresAt: text("expires_at"),
+    createdAt: text("created_at").notNull(),
+  },
+  // terminalizeLease targets by runId; the loop cascade deletes by loopId.
+  (t) => [index("run_leases_run_idx").on(t.runId), index("run_leases_loop_idx").on(t.loopId)],
+);
+
+// ---- connect_keys: a minted connect-key's owner + team binding (durable) ----
+//
+// One row per minted connect-key/claim token, keyed by the machine id DERIVED
+// from it (`m-sha256(token)[:16]`) so both consumers resolve without storing the
+// key itself: the self-register owner lookup (by machine id) and the createLoop
+// team binding (derives the id from the presented claim). Replaces the two
+// in-process maps (`deviceOwners` + `claimIntents`) whose loss on deploy made a
+// post-restart paste silently mis-file the loop into the machine's home team.
+// Rows expire after CONNECT_KEY_TTL_MS (lazy on read + pruned on write).
+
+export const connectKeys = pgTable("connect_keys", {
+  /** m-sha256(connectKey)[:16] — the machine id this key self-registers as. */
+  machineId: text("machine_id").primaryKey(),
+  /** The user who minted the key (the authenticated dashboard session). */
+  userId: text("user_id").notNull(),
+  /** The validated active team the key was minted under (null: no team bound —
+   *  e.g. the pre-created-machine path, where the machine row carries the team). */
+  teamId: text("team_id"),
+  /** Mint time (ISO) — drives the TTL. */
+  mintedAt: text("minted_at").notNull(),
+});
+
 // ---- teams: the ownership/scope unit (every user gets a personal team) ----
 
 export const teams = pgTable("teams", {
@@ -415,9 +473,11 @@ export type ArtifactFile = typeof artifactFiles.$inferSelect;
 export type NewArtifactFile = typeof artifactFiles.$inferInsert;
 export type RunSnapshot = typeof runSnapshots.$inferSelect;
 export type NewRunSnapshot = typeof runSnapshots.$inferInsert;
+export type RunLeaseRow = typeof runLeases.$inferSelect;
+export type ConnectKeyRow = typeof connectKeys.$inferSelect;
 
 /** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, notificationChannels, blobs, artifactFiles, runSnapshots };
+export const businessSchema = { machines, loops, runs, teams, teamMembers, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, connectKeys };
 
 // Keep a default no-op SQL reference so `sql` import isn't flagged before use.
 export const _schemaVersion = sql`1`;
