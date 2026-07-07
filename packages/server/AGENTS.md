@@ -306,6 +306,38 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   ≤ 0.11 (it prints `text`, which stays). The postCli 404-fallback + legacy endpoint aliases
   are OUT of scope here (separate `rexp-b7`, its own upgrade-window gate).
 
+## Poll transport (long-poll + hot-path budget)
+
+- `/api/machine/poll` is `gateway.pollWait()` wrapping the sync-shaped `poll()`:
+  an idle daemon sends `wait:true` and the request PARKS on a per-machine waiter
+  (`armPollWaiter`, held <= `LONG_POLL_WAIT_MS` 20s - under the daemon's 30s fetch
+  timeout AND `ONLINE_TTL_MS` 30s; an empty timeout re-stamps lastSeen before
+  returning so a parked poll never looks offline). The Scheduler's Dispatcher is
+  no longer a no-op: `dispatch(loop)` -> `wakeMachine(loop.machineId)` resolves the
+  parked waiter, so a new pending run is claimed near-instantly. The waiter is
+  armed BEFORE the first claim pass (no slip-past race); waiters are IN-MEMORY
+  like run leases - a deploy drops them and the daemon just re-polls. Old daemons
+  never send `wait` and keep the classic instant response; `main.ts` still calls
+  bare `poll()`.
+- Daemon side (`daemon.ts`): `buildPollBody` opts into `wait:true` ONLY while
+  `inFlight` is empty (a running run needs the ~3s progress-heartbeat cadence);
+  the sleep is `nextPollDelayMs(elapsed)` - a response that consumed the interval
+  was a server hold => re-poll after a 250ms breather, a fast answer sleeps out
+  POLL_MS. Zero protocol coupling: against an old server this degrades to the
+  classic 3s cadence by construction. Both helpers are exported + unit-tested.
+- Poll hot-path DB budget: `machines.lastSeen` re-stamps only when the flag must
+  flip or the stamp is older than `LAST_SEEN_REFRESH_MS` (10s) - an idle poll is
+  read-only. The claim scan is `store.pendingRunsForMachine(machineId)` (targeted,
+  `runs_phase_idx`), never the all-open `openRuns()` scan (that stays sweep-only).
+- Watch set: served from a per-machine cache (`WATCH_CACHE_TTL_MS` 15s), response
+  always carries `watchDigest`; when the daemon echoes a matching digest the
+  `watch` array is OMITTED. Omission requires the echo (proof the client speaks
+  the protocol) - an old daemon always gets the full list, and an ABSENT `watch`
+  means "unchanged", never "empty" (`daemon.ts` only reconciles on `Array.isArray`).
+  Any delivery forces a recompute (the run may belong to a brand-new loop whose
+  folder must be watched before it writes); gateway `createLoop`/`editLoop` call
+  `invalidateWatch`; store-direct write paths (web loopApi) are covered by the TTL.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

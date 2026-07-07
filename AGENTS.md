@@ -43,8 +43,12 @@ computes pure functions. Run instructions: `README.md`.
 
 ## Core model
 
-- Scheduler tick creates a pending run; the bound machine's **HTTP short-poll**
-  (~3s, not WS) claims it; the daemon spawns claude; the agent talks back via
+- Scheduler tick creates a pending run; the bound machine's **HTTP poll** claims
+  it (stateless, not WS: an IDLE daemon opts into a server-held long-poll -
+  `wait:true`, ~20s hold, the Dispatcher wakes it on a new pending run for
+  near-zero dispatch latency; with a run in flight it stays the classic ~3s
+  short poll so the progress heartbeat flows; old daemons/servers degrade to
+  plain short-poll on both sides); the daemon spawns claude; the agent talks back via
   run-token verbs (`loopany report/show/set-*/reschedule/finish`, `/agent-api/loop`);
   the final `report()` persists transcript/metrics/artifacts and retires the run lease.
 - Run roles: `exec` (scheduled run), `evolve` (self-improvement pass), `edit`

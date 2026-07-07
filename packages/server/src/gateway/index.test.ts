@@ -2700,3 +2700,123 @@ test("cli home [run]: renders the run's OWN loop context (role + goal + recent) 
   expect(body.text).toContain("recent[");
   expect(body.text).toContain("Run `loopany report --status nothing-new` to close this run");
 });
+
+// ---- poll transport optimizations (throttled stamp / targeted claim / watch digest / long-poll) ----
+
+test("poll throttles the lastSeen stamp: fresh ⇒ read-only, stale ⇒ re-stamped, offline ⇒ flipped", async () => {
+  const token = tokens.mintDeviceToken();
+  const gw = gateway();
+  (await gw.poll(token, { host: "mac" })); // self-registers + stamps
+  const machineId = tokens.machineIdFromToken(token);
+  const first = (await store.getMachine(machineId))!.lastSeen;
+  expect(first).toBeTruthy();
+
+  // An immediate re-poll must NOT rewrite the stamp (the hot path is read-only).
+  (await gw.poll(token));
+  expect((await store.getMachine(machineId))!.lastSeen).toBe(first);
+
+  // A stale stamp (older than the refresh window) is re-written.
+  const stale = new Date(Date.now() - 15_000).toISOString();
+  (await store.updateMachine(machineId, { lastSeen: stale }));
+  (await gw.poll(token));
+  expect(Date.parse((await store.getMachine(machineId))!.lastSeen!)).toBeGreaterThan(Date.parse(stale));
+
+  // A machine the sweep flipped offline comes back online on its next poll,
+  // even when the (stale-flag) stamp math would otherwise skip the write.
+  (await store.updateMachine(machineId, { online: false }));
+  (await gw.poll(token));
+  expect((await store.getMachine(machineId))!.online).toBe(true);
+});
+
+test("poll claims only THIS machine's pending runs (targeted query, cross-machine isolation)", async () => {
+  const tokenA = tokens.mintDeviceToken();
+  const tokenB = tokens.mintDeviceToken();
+  const mA = tokens.machineIdFromToken(tokenA);
+  const mB = tokens.machineIdFromToken(tokenB);
+  (await store.createMachine({ id: mA, userId: "u1", name: "A", tokenHash: tokens.sha256(tokenA), online: true }));
+  (await store.createMachine({ id: mB, userId: "u1", name: "B", tokenHash: tokens.sha256(tokenB), online: true }));
+  const loopB = (await store.createLoop({ userId: "u1", machineId: mB, name: "LB", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  (await store.addRun({ loopId: loopB.id, userId: "u1", machineId: mB, phase: "pending", role: "exec", ts: new Date().toISOString() }));
+
+  const gw = gateway();
+  const a = ((await gw.poll(tokenA)).body as { deliveries: unknown[] }).deliveries;
+  expect(a).toHaveLength(0); // B's queue is invisible to A
+  const b = ((await gw.poll(tokenB)).body as { deliveries: unknown[] }).deliveries;
+  expect(b).toHaveLength(1);
+});
+
+test("poll watch digest: matching echo omits the array; a delivery recomputes and resends", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/w/a/TASK.md" }));
+
+  const gw = gateway();
+  const r1 = (await gw.poll(token)).body as { watch?: Array<{ loopId: string }>; watchDigest: string };
+  expect(r1.watch).toHaveLength(1);
+  expect(r1.watchDigest).toBeTruthy();
+
+  // Echoing the digest back ⇒ the unchanged watch array is omitted (digest still present).
+  const r2 = (await gw.poll(token, undefined, undefined, r1.watchDigest)).body as { watch?: unknown[]; watchDigest: string };
+  expect(r2.watch).toBeUndefined();
+  expect(r2.watchDigest).toBe(r1.watchDigest);
+
+  // No echo (old daemon) ⇒ always the full list.
+  const r3 = (await gw.poll(token)).body as { watch?: unknown[] };
+  expect(r3.watch).toHaveLength(1);
+
+  // A delivery forces a recompute: a NEW loop's pending run arrives together with
+  // the updated watch set (its folder must be watched before the run writes).
+  const loop2 = (await store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/w/b/TASK.md" }));
+  (await store.addRun({ loopId: loop2.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
+  const r4 = (await gw.poll(token, undefined, undefined, r1.watchDigest)).body as {
+    deliveries: unknown[];
+    watch?: Array<{ loopId: string }>;
+    watchDigest: string;
+  };
+  expect(r4.deliveries).toHaveLength(1);
+  expect(r4.watch?.map((w) => w.loopId).sort()).toEqual([loop.id, loop2.id].sort());
+  expect(r4.watchDigest).not.toBe(r1.watchDigest);
+});
+
+test("pollWait parks an idle long-poll and the dispatcher wake delivers the new run immediately", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+
+  const gw = gateway();
+  const parked = gw.pollWait(token, undefined, undefined, { wait: true, waitMs: 5000 });
+  // Let the first (empty) claim pass complete so the request is genuinely parked.
+  await new Promise((r) => setTimeout(r, 50));
+
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
+  const t0 = Date.now();
+  gw.dispatcher.dispatch(loop);
+  const res = await parked;
+  expect(Date.now() - t0).toBeLessThan(1000); // woken, not timed out
+  const body = res.body as { deliveries: Array<{ runId: string }> };
+  expect(body.deliveries.map((d) => d.runId)).toEqual([run.id]);
+  expect((await store.getRun(run.id))!.phase).toBe("running");
+});
+
+test("pollWait with pending work returns immediately; an empty wait times out with no deliveries", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
+
+  const gw = gateway();
+  // Work already queued ⇒ the first pass claims it, no parking.
+  const t0 = Date.now();
+  const quick = (await gw.pollWait(token, undefined, undefined, { wait: true, waitMs: 5000 })).body as { deliveries: unknown[] };
+  expect(quick.deliveries).toHaveLength(1);
+  expect(Date.now() - t0).toBeLessThan(1000);
+
+  // Nothing queued ⇒ parked until the bounded window elapses, then empty.
+  const t1 = Date.now();
+  const empty = (await gw.pollWait(token, undefined, undefined, { wait: true, waitMs: 120 })).body as { deliveries: unknown[] };
+  expect(empty.deliveries).toHaveLength(0);
+  expect(Date.now() - t1).toBeGreaterThanOrEqual(100);
+});

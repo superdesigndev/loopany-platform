@@ -17,9 +17,16 @@ export const Route = createFileRoute('/api/machine/poll')({
           arch?: string
           version?: string
           progress?: Array<{ runId: string; step: number; label: string }>
+          /** Long-poll opt-in: hold the request until work arrives (bounded server-side). */
+          wait?: boolean
+          /** Echo of the last applied watch digest — matching ⇒ `watch` omitted. */
+          watchDigest?: string
         }
         const { getGateway } = await import('../server/boot.js')
-        const r = await (await getGateway()).poll(token, body, body.progress)
+        const r = await (await getGateway()).pollWait(token, body, body.progress, {
+          wait: body.wait === true,
+          watchDigest: typeof body.watchDigest === 'string' ? body.watchDigest : undefined,
+        })
         return Response.json(r.body, { status: r.status })
       },
     },

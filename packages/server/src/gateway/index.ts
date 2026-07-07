@@ -1,5 +1,6 @@
 /**
- * Machine gateway — the HTTP surface the daemon talks to (short-poll transport).
+ * Machine gateway — the HTTP surface the daemon talks to (poll transport:
+ * short-poll while a run is in flight, opt-in server-held long-poll while idle).
  * Three endpoints, all framework-agnostic (return `{ status, body }` so they can
  * be mounted on a plain http server or, later, TanStack server routes):
  *
@@ -117,6 +118,21 @@ const MAX_PROGRESS_ENTRIES = 32;
  *  step/label signal itself hasn't moved — throttled so the ~3s poll hot path isn't
  *  a per-heartbeat UPDATE, but the sweep still sees minute-fresh activity. */
 const PROGRESS_STAMP_REFRESH_MS = 60_000;
+/** How often the poll hot path re-stamps `machines.lastSeen`. Only the sweep
+ *  (ONLINE_TTL_MS granularity) and presence reads consume the stamp, so an
+ *  every-poll UPDATE is pure write amplification on Postgres — refresh at 10s
+ *  and an idle poll becomes read-only, with worst-case staleness well inside
+ *  the 30s TTL (max stamp gap = refresh + one poll interval). */
+const LAST_SEEN_REFRESH_MS = 10_000;
+/** How long an opted-in poll (`wait:true`) is held open for work before returning
+ *  empty. Bounded under the daemon's 30s fetch timeout AND under ONLINE_TTL_MS
+ *  (with the end-of-wait re-stamp) so a parked long-poll never looks offline. */
+const LONG_POLL_WAIT_MS = 20_000;
+/** Watch-set cache TTL: the per-poll `loopsForMachine` rebuild is served from a
+ *  short per-machine cache. Any delivery (the run may belong to a brand-new loop)
+ *  and every gateway create/edit invalidates early, so a new or re-pathed loop
+ *  folder is watched promptly; slower write paths are covered by the TTL. */
+const WATCH_CACHE_TTL_MS = 15_000;
 /** The run outcomes a report may claim (untrusted wire input; anything else falls
  *  back to the role default). Mirrors the runs.outcome enum minus "error", which
  *  only the server assigns. */
@@ -198,6 +214,13 @@ export interface HttpResult {
   body: unknown;
 }
 
+/** One entry of the poll response's watch set (the daemon resolves the folder). */
+interface WatchEntry {
+  loopId: string;
+  workdir: string | null;
+  taskFile: string | null;
+}
+
 export class MachineGateway {
   constructor(
     private readonly scheduler: Scheduler,
@@ -232,13 +255,57 @@ export class MachineGateway {
   }
 
   /**
-   * Dispatcher for the Scheduler. Short-poll transport: a no-op — the pending
-   * run row IS the queue, and the daemon's next poll claims it. (A future WS
-   * gateway would push here instead.)
+   * Dispatcher for the Scheduler. The pending run row IS the queue (the daemon's
+   * next poll claims it, so nothing is ever lost); dispatch additionally WAKES
+   * the machine's parked long-poll, so an opted-in idle daemon claims the run
+   * immediately instead of on its next cadence tick.
    */
   readonly dispatcher = {
-    dispatch: (): void => {},
+    dispatch: (loop: Loop): void => this.wakeMachine(loop.machineId),
   };
+
+  /** One parked long-poll waiter per machine (the pidfile enforces one daemon).
+   *  The stored settle fn resolves `true` on wake (new pending run) and `false`
+   *  on timeout / supersede / cancel, then disarms itself. In-memory like the
+   *  run-lease table: a deploy drops parked waiters, and the daemon just re-polls. */
+  private readonly pollWaiters = new Map<string, (woken: boolean) => void>();
+
+  /** Per-machine watch-set cache (TTL + explicit invalidation) — the poll hot
+   *  path serves the watch list from here instead of rebuilding it every poll. */
+  private readonly watchCache = new Map<string, { at: number; digest: string; watch: WatchEntry[] }>();
+
+  /** Resolve (and disarm) a machine's parked long-poll waiter, if any. */
+  private wakeMachine(machineId: string): void {
+    this.pollWaiters.get(machineId)?.(true);
+  }
+
+  /** Drop a machine's cached watch set (its loop bindings/paths just changed). */
+  private invalidateWatch(machineId: string): void {
+    this.watchCache.delete(machineId);
+  }
+
+  /** Arm this machine's long-poll waiter: the promise resolves `true` when
+   *  `wakeMachine` fires (a run went pending), `false` on timeout or cancel.
+   *  A pre-existing waiter is superseded (woken) first — a dangling held
+   *  request must never strand a newer one. */
+  private armPollWaiter(machineId: string, waitMs: number): { promise: Promise<boolean>; cancel: () => void } {
+    this.pollWaiters.get(machineId)?.(true);
+    let settle!: (woken: boolean) => void;
+    const promise = new Promise<boolean>((resolve) => {
+      let done = false;
+      const timer = setTimeout(() => settle(false), waitMs);
+      timer.unref?.();
+      settle = (woken: boolean): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (this.pollWaiters.get(machineId) === settle) this.pollWaiters.delete(machineId);
+        resolve(woken);
+      };
+      this.pollWaiters.set(machineId, settle);
+    });
+    return { promise, cancel: () => settle(false) };
+  }
 
   /**
    * Periodic maintenance: mark stale machines offline, and reclaim stuck runs —
@@ -338,6 +405,9 @@ export class MachineGateway {
     deviceToken: string,
     info?: { host?: string; platform?: string; arch?: string; version?: string },
     progress?: Array<{ runId: string; step: number; label: string }>,
+    /** The daemon's echo of the last watch digest it applied — matching ⇒ the
+     *  watch array is omitted from the response (an old daemon never echoes). */
+    watchDigest?: string,
   ): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
     let machine = await store.getMachine(machineId);
@@ -369,7 +439,12 @@ export class MachineGateway {
       });
       log.info({ machineId, host: info?.host }, "poll: self-registered machine");
     }
-    await store.setMachineOnline(machineId, true); // stamps online + lastSeen (TTL) every poll
+    // Stamp online + lastSeen — THROTTLED: only when the flag must flip or the
+    // stamp is older than LAST_SEEN_REFRESH_MS. Only the sweep (ONLINE_TTL_MS)
+    // and presence reads consume it, so the hot path stays read-only.
+    if (!machine.online || !machine.lastSeen || Date.now() - Date.parse(machine.lastSeen) > LAST_SEEN_REFRESH_MS) {
+      await store.setMachineOnline(machineId, true);
+    }
     // Identity rarely changes after the first poll — only write it when a field
     // actually differs, so the hot path (every ~3s/machine) isn't a 2nd UPDATE.
     if (info) {
@@ -410,8 +485,7 @@ export class MachineGateway {
     }
 
     const deliveries: Delivery[] = [];
-    for (const run of await store.openRuns()) {
-      if (run.machineId !== machineId || run.phase !== "pending") continue;
+    for (const run of await store.pendingRunsForMachine(machineId)) {
       const loop = await store.getLoop(run.loopId);
       if (!loop) {
         await store.updateRun(run.id, { phase: "error", outcome: "error", error: "loop removed", ts: nowIso() });
@@ -439,16 +513,69 @@ export class MachineGateway {
 
     // Watch set: every loop bound to this machine (not just those with a pending
     // run) so the daemon watches each loop's folder continuously — between runs
-    // and across restarts (the set is re-learned each poll, server-authoritative).
-    // The daemon resolves the actual folder per loop (dirname(taskFile) → workdir).
-    const watch = (await store.loopsForMachine(machineId)).map((l) => ({
-      loopId: l.id,
-      workdir: l.workdir ?? null,
-      taskFile: l.taskFile ?? null,
-    }));
+    // and across restarts (the set stays server-authoritative). Served from a
+    // short-TTL cache; any delivery recomputes (the run may belong to a brand-new
+    // loop whose folder must be watched before it writes). The daemon resolves
+    // the actual folder per loop (dirname(taskFile) → workdir).
+    let cached = this.watchCache.get(machineId);
+    if (!cached || deliveries.length || Date.now() - cached.at > WATCH_CACHE_TTL_MS) {
+      const watch: WatchEntry[] = (await store.loopsForMachine(machineId)).map((l) => ({
+        loopId: l.id,
+        workdir: l.workdir ?? null,
+        taskFile: l.taskFile ?? null,
+      }));
+      cached = { at: Date.now(), digest: sha256(JSON.stringify(watch)), watch };
+      this.watchCache.set(machineId, cached);
+    }
 
     if (deliveries.length) log.info({ machineId, exec: deliveries.length }, "poll: delivered");
-    return { status: 200, body: { deliveries, watch } };
+    // A matching digest echo means the daemon already holds this exact watch set —
+    // omit the array. An old daemon never echoes, so it always gets the full list
+    // (omission requires proof the client speaks the digest protocol, never a default).
+    return {
+      status: 200,
+      body: {
+        deliveries,
+        watchDigest: cached.digest,
+        ...(watchDigest === cached.digest ? {} : { watch: cached.watch }),
+      },
+    };
+  }
+
+  /**
+   * Long-poll wrapper over `poll()`: when the daemon opted in (`wait:true`) and
+   * the immediate pass claimed nothing, park the request on the machine's waiter
+   * until the Dispatcher wakes it (a run went pending) or the bounded window
+   * elapses, then re-claim. Old daemons never send `wait` and keep the classic
+   * instant response. The waiter is armed BEFORE the first claim pass, so a run
+   * that goes pending while the pass is in flight can never slip past the park.
+   */
+  async pollWait(
+    deviceToken: string,
+    info?: { host?: string; platform?: string; arch?: string; version?: string },
+    progress?: Array<{ runId: string; step: number; label: string }>,
+    opts?: { wait?: boolean; watchDigest?: string; waitMs?: number },
+  ): Promise<HttpResult> {
+    if (!opts?.wait) return this.poll(deviceToken, info, progress, opts?.watchDigest);
+    const machineId = machineIdFromToken(deviceToken);
+    const waitMs = Math.min(Math.max(opts.waitMs ?? LONG_POLL_WAIT_MS, 0), LONG_POLL_WAIT_MS);
+    const waiter = this.armPollWaiter(machineId, waitMs);
+    try {
+      const first = await this.poll(deviceToken, info, progress, opts.watchDigest);
+      if (first.status !== 200) return first;
+      if ((first.body as { deliveries: Delivery[] }).deliveries.length) return first;
+      const woken = await waiter.promise;
+      if (!woken) {
+        // Timed out empty: re-stamp before returning so the ~20s hold never eats
+        // into the 30s ONLINE_TTL budget (the first pass's stamp is now that old).
+        await store.setMachineOnline(machineId, true);
+        return first;
+      }
+      // Woken: re-run the claim pass (identity/progress were already applied).
+      return await this.poll(deviceToken, undefined, undefined, opts.watchDigest);
+    } finally {
+      waiter.cancel();
+    }
   }
 
   // ---- GET /api/machine/status ----
@@ -676,6 +803,7 @@ export class MachineGateway {
       enabled: true,
     });
     this.scheduler.addLoop(loop);
+    this.invalidateWatch(machineId); // a new loop folder must be watched promptly
     // Run once immediately so a freshly-created loop produces output without
     // waiting for its first cron tick (gated on `enabled`).
     if (loop.enabled) await this.scheduler.runNow(loop.id);
@@ -948,6 +1076,7 @@ export class MachineGateway {
     // Re-arm the scheduler: an enabled flip toggles add/remove, any other change re-adds.
     if (updated.enabled) this.scheduler.addLoop(updated);
     else this.scheduler.removeLoop(updated.id);
+    this.invalidateWatch(machineId); // taskFile may have moved the watched folder
     log.info({ machineId, loopId: id, fields: Object.keys(update) }, "editLoop: applied");
     const applied = Object.keys(update);
     return {

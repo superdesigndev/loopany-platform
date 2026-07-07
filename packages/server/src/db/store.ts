@@ -287,6 +287,16 @@ export async function openRuns(): Promise<Run[]> {
   return db.select().from(runs).where(inArray(runs.phase, ["pending", "running"]));
 }
 
+/** Pending runs queued for ONE machine — the poll's claim query. Hot path (every
+ *  poll from every machine), so it stays a targeted indexed lookup
+ *  (`runs_phase_idx`; pending rows are always a handful), never an all-open scan. */
+export async function pendingRunsForMachine(machineId: string): Promise<Run[]> {
+  return db
+    .select()
+    .from(runs)
+    .where(and(eq(runs.machineId, machineId), eq(runs.phase, "pending")));
+}
+
 /** Is a run for this loop still open (drives the "skip overlapping tick" guard)? */
 export async function hasOpenRun(loopId: string): Promise<boolean> {
   const r = (

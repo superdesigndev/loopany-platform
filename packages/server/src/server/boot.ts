@@ -46,7 +46,7 @@ async function boot(): Promise<Booted> {
   // Break the scheduler↔gateway cycle: the scheduler holds a thin dispatcher
   // that delegates to the gateway (assigned before any tick can fire).
   let gateway: MachineGateway;
-  const dispatcher: Dispatcher = { dispatch: () => gateway.dispatcher.dispatch() };
+  const dispatcher: Dispatcher = { dispatch: (loop) => gateway.dispatcher.dispatch(loop) };
   const scheduler = new Scheduler(dispatcher);
   gateway = new MachineGateway(scheduler);
 

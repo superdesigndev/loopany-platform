@@ -53,3 +53,33 @@ describe("runDaemon", () => {
     expect(pidfile.readPidFile()?.pid).toBe(process.pid);
   }, 15000);
 });
+
+describe("poll transport helpers", () => {
+  test("buildPollBody: idle ⇒ long-poll opt-in; in-flight ⇒ classic short poll (no wait)", async () => {
+    const { buildPollBody } = await import("./daemon.js");
+    const info = { host: "mac", platform: "darwin" };
+
+    const idle = buildPollBody(info, [], true, undefined);
+    expect(idle).toEqual({ host: "mac", platform: "darwin", wait: true });
+
+    // A run in flight: no wait flag (progress heartbeat needs the short cadence),
+    // progress rides along, and the last-seen digest is echoed.
+    const busy = buildPollBody(info, [{ runId: "r1", step: 2, label: "editing" }], false, "d1");
+    expect(busy).toEqual({
+      host: "mac",
+      platform: "darwin",
+      progress: [{ runId: "r1", step: 2, label: "editing" }],
+      watchDigest: "d1",
+    });
+  });
+
+  test("nextPollDelayMs: a held long-poll re-polls immediately; a fast answer keeps the cadence", async () => {
+    const { nextPollDelayMs } = await import("./daemon.js");
+    // Old server / short mode: instant answer ⇒ sleep out the remaining interval.
+    expect(nextPollDelayMs(200, 3000)).toBe(2800);
+    // Server-held long-poll consumed the interval ⇒ only the small breather.
+    expect(nextPollDelayMs(20_000, 3000)).toBe(250);
+    // Exactly on the boundary still floors at the breather.
+    expect(nextPollDelayMs(3000, 3000)).toBe(250);
+  });
+});

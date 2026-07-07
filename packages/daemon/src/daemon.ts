@@ -1,8 +1,12 @@
 /**
- * Daemon mode — connect to a Loopany server and short-poll for deliveries. On
- * each poll the server claims this machine's pending runs and returns them; we
- * run each locally (workflow gate + claude) and report back. Foreground, no
- * keep-alive (BYOA §6); Ctrl-C stops cleanly.
+ * Daemon mode — connect to a Loopany server and poll for deliveries. On each
+ * poll the server claims this machine's pending runs and returns them; we run
+ * each locally (workflow gate + claude) and report back. While idle the poll
+ * opts into a server-held LONG-poll (`wait:true`, ~20s hold, near-zero dispatch
+ * latency); with a run in flight it stays the classic ~3s short poll so the
+ * progress heartbeat keeps flowing. Either way plain stateless HTTP — a deploy
+ * or dropped request just re-polls. Foreground, no keep-alive (BYOA §6); Ctrl-C
+ * stops cleanly.
  *
  * Machine identity + workdir roots are the daemon's local config: the device
  * token (env) identifies the machine; LOOPANY_ROOTS is the cwd jail (empty ⇒
@@ -22,8 +26,12 @@ import { daemonVersion, writeRunningVersion } from "./version.js";
 
 const POLL_MS = Number(process.env.LOOPANY_POLL_MS || 3000);
 /** Per-poll fetch timeout — a hung connection must not stall the heartbeat
- *  (the machine would look offline and get swept). */
+ *  (the machine would look offline and get swept). Must comfortably exceed the
+ *  server's long-poll hold (~20s) so a held request is never aborted client-side. */
 const POLL_TIMEOUT_MS = 30_000;
+/** Breather between long-polls: when the server held the request (idle machine,
+ *  no work), re-poll almost immediately — the hold WAS the interval. */
+const REPOLL_MS = 250;
 /** On SIGTERM/`down`, wait at most this long for in-flight runs to settle (the
  *  abort SIGTERMs their claude children; KILL_GRACE is 5s, so 10s covers it). */
 const DRAIN_MS = 10_000;
@@ -32,6 +40,32 @@ const DRAIN_MS = 10_000;
 function flag(name: string): string | undefined {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+/** Poll request body: machine identity + optional progress + long-poll opt-in
+ *  (idle only — with a run in flight the short cadence keeps the progress
+ *  heartbeat fresh) + the last watch digest echo (absent until a server sent one). */
+export function buildPollBody(
+  info: Record<string, unknown>,
+  progress: Array<{ runId: string; step: number; label: string }>,
+  idle: boolean,
+  watchDigest: string | undefined,
+): Record<string, unknown> {
+  return {
+    ...info,
+    ...(progress.length ? { progress } : {}),
+    ...(idle ? { wait: true } : {}),
+    ...(watchDigest ? { watchDigest } : {}),
+  };
+}
+
+/** Elapsed-based cadence: a response that consumed the poll interval was a
+ *  server-held long-poll — re-poll almost immediately (the hold WAS the wait).
+ *  A fast response (work delivered, old server, short mode, or an error) keeps
+ *  the classic POLL_MS cadence, so this self-regulates with zero protocol
+ *  coupling: against a pre-long-poll server it degrades to today's behavior. */
+export function nextPollDelayMs(elapsedMs: number, pollMs = POLL_MS): number {
+  return Math.max(REPOLL_MS, pollMs - elapsedMs);
 }
 
 /**
@@ -108,7 +142,12 @@ export async function runDaemon(): Promise<number> {
   // same delivery is ever returned twice.
   const inFlight = new Set<string>();
 
+  // Last watch digest the server sent (echoed on the next poll so an unchanged
+  // watch set is omitted from the response — old servers never send one).
+  let watchDigest: string | undefined;
+
   while (!ac.signal.aborted) {
+    const started = Date.now();
     try {
       // Heartbeat carries live progress for any in-flight run (slim activity line,
       // not the transcript) so the dashboard shows "what's it doing" without WS.
@@ -117,12 +156,15 @@ export async function runDaemon(): Promise<number> {
       const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(progress.length ? { ...info, progress } : info),
+        body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest)),
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
-        const data = (await res.json()) as { deliveries?: Delivery[]; watch?: WatchSpec[] };
+        const data = (await res.json()) as { deliveries?: Delivery[]; watch?: WatchSpec[]; watchDigest?: string };
         // Reconcile the loop-folder watchers against the server's current set.
-        watchManager.reconcile(data.watch ?? []);
+        // An ABSENT `watch` means "unchanged since the digest you echoed" (the
+        // server omits it only after a matching echo) — never an empty set.
+        if (Array.isArray(data.watch)) watchManager.reconcile(data.watch);
+        if (typeof data.watchDigest === "string") watchDigest = data.watchDigest;
         for (const d of data.deliveries ?? []) {
           if (inFlight.has(d.runId)) continue;
           inFlight.add(d.runId);
@@ -143,7 +185,7 @@ export async function runDaemon(): Promise<number> {
         logger.error({ err: err instanceof Error ? err.message : String(err) }, "poll failed");
       }
     }
-    await sleep(POLL_MS, ac.signal);
+    await sleep(nextPollDelayMs(Date.now() - started), ac.signal);
   }
   // Brief drain: the abort above already SIGTERMed in-flight claude children
   // (plumbed through runDelivery → runProcess); give them a bounded window to
