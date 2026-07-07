@@ -42,6 +42,23 @@ const allowlist = (process.env.LOOPANY_ALLOWED_LOGINS || "")
   .filter(Boolean);
 
 /**
+ * Whether an email may sign in. An empty allowlist means "allow anyone" (open
+ * mode). Each allowlist entry is either a full email (exact match) or a DOMAIN
+ * WILDCARD — `@example.com` or `*@example.com` — matching any address at that
+ * domain (so `*@superdesign.dev` admits the whole team without listing each one).
+ */
+export function emailAllowed(email: string | null | undefined): boolean {
+  if (!allowlist.length) return true;
+  const e = (email || "").toLowerCase();
+  const at = e.indexOf("@");
+  if (at < 0) return false;
+  const domain = e.slice(at); // includes the leading "@"
+  return allowlist.some(
+    (entry) => entry === e || entry === domain || (entry.startsWith("*@") && entry.slice(1) === domain),
+  );
+}
+
+/**
  * Superadmins see every team and every team's loops — the predicate lives in
  * `./superadmin.js` (env-driven, LOOPANY_SUPERADMINS) and is re-exported above so
  * the gateway can reuse it without importing this Better-Auth-initializing module.
@@ -158,11 +175,10 @@ export const auth = betterAuth({
         before: async (user) => {
           // Login allowlist (empty ⇒ allow anyone). Closes the shared-workspace
           // RCE hole: only listed people can sign in and thus reach machines.
-          if (allowlist.length) {
+          // Entries may be full emails or domain wildcards (see `emailAllowed`).
+          if (!emailAllowed(user.email)) {
             const email = (user.email || "").toLowerCase();
-            if (!allowlist.includes(email)) {
-              throw new APIError("FORBIDDEN", { message: `${email} is not on the Loopany allowlist` });
-            }
+            throw new APIError("FORBIDDEN", { message: `${email} is not on the Loopany allowlist` });
           }
           return { data: user };
         },
