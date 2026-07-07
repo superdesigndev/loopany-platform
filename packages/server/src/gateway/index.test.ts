@@ -2525,3 +2525,63 @@ test("cli edit --dry-run: a rejection flips the header, lists changes + rejectio
   expect(text).toContain("changes[1]{key,from,to}:");
   expect(text).toContain("rejections[1]{key,reason}:");
 });
+
+// ---- content-first home (P8/§5.1, Batch 6) ----------------------------------
+
+test("cli home [device]: an unregistered machine renders the DEFINITIVE not-connected state (never a 401/empty)", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const res = gateway().cli(deviceToken, ["home"]);
+  expect(res.status).toBe(200);
+  const body = res.body as { ok: boolean; text: string; exitCode: number };
+  expect(body.exitCode).toBe(0);
+  expect(body.text).toContain("machine: not connected — run `loopany up`");
+  expect(body.text).toContain("description:");
+  expect(body.text).toContain("help[");
+  // No loops/recent blocks when not connected, but never empty output.
+  expect(body.text).not.toContain("loops[");
+});
+
+test("cli home [device]: a registered machine shows presence + its loops + recent runs + help, with the daemon-passed context", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 6 * * 1", enabled: true, notify: "auto" });
+  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", status: "nothing-new", outcome: "exec", ts: new Date().toISOString() });
+
+  const res = gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/loopany", "--pid", "4821", "--server", "https://srv.example"]);
+  expect(res.status).toBe(200);
+  const text = (res.body as { text: string }).text;
+  expect(text).toContain("bin: /Users/x/.local/bin/loopany");
+  expect(text).toContain("machine: online · daemon pid 4821 · https://srv.example");
+  expect(text).toContain("loops[1]{name,cron,enabled,nextFire,lastOutcome}:");
+  expect(text).toContain("Docs Sweep");
+  expect(text).toContain("recent[1]{ts,loop,outcome}:");
+  expect(text).toContain("help[");
+});
+
+test("cli home [device]: --cwd scopes 'loops here' to the loop rooted at the directory, counting the rest as elsewhere", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() });
+  const here = store.createLoop({ userId: "u1", machineId, name: "Here", cron: "0 6 * * *", enabled: true, notify: "auto", taskFile: "/work/here/README.md" });
+  store.createLoop({ userId: "u1", machineId, name: "Elsewhere", cron: "0 7 * * *", enabled: true, notify: "auto", taskFile: "/work/other/README.md" });
+
+  const res = gateway().cli(deviceToken, ["home", "--cwd", "/work/here"]);
+  const text = (res.body as { text: string }).text;
+  expect(text).toContain("Here");
+  expect(text).not.toContain("Elsewhere,"); // not listed as a row
+  expect(text).toContain("loops elsewhere: 1 more on this machine");
+  expect(here.id).toBeTruthy();
+});
+
+test("cli home [run]: renders the run's OWN loop context (role + goal + recent) scoped to the lease's loop", () => {
+  const { runToken, loop } = seededCli({ goal: "ship v1" });
+  store.addRun({ loopId: loop.id, userId: "u1", machineId: loop.machineId, phase: "done", role: "exec", status: "new", outcome: "exec", message: "did a thing", ts: new Date().toISOString() });
+  const res = gateway().cli(runToken, ["home"]);
+  expect(res.status).toBe(200);
+  const body = res.body as { text: string; exitCode: number };
+  expect(body.exitCode).toBe(0);
+  expect(body.text).toContain(`loop: L (${loop.id}) · role exec · goal ${JSON.stringify("ship v1")}`);
+  expect(body.text).toContain("recent[");
+  expect(body.text).toContain("Run `loopany report --status nothing-new` to close this run");
+});

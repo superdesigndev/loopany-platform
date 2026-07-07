@@ -177,6 +177,36 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(out.join("")).toContain("created loop Cookie");
   });
 
+  test("text sink: a new server's `text` is printed verbatim (not the structured line), and the skill still installs", async () => {
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+    const toon = "created: Cookie (loop-1)\nclassification: open — runs until paused\ndashboard: not applied";
+    const installed: InstallOpts[] = [];
+    const out: string[] = [];
+    const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
+      fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie", text: toon, exitCode: 0 }),
+      installer: async (opts) => { installed.push(opts); return { ok: true, line: "loopany skill: installed" }; },
+      stdout: (s) => out.push(s),
+    });
+    expect(code).toBe(0);
+    const text = out.join("");
+    expect(text).toContain(toon); // the server render, verbatim
+    expect(text).not.toContain("created loop Cookie"); // NOT the old structured line
+    expect(installed).toEqual([{ global: true }]); // still runs after a confirmed create
+  });
+
+  test("text sink: a --dry-run new server prints its `text` preview (no structured fallback)", async () => {
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+    const toon = "dry-run:\n  name: —\n  cron: 0 8 * * *\nclassification: open — runs until paused";
+    const out: string[] = [];
+    const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
+      fetchImpl: async () => okResponse({ ok: true, dryRun: true, text: toon, exitCode: 0 }),
+      installer: async () => { throw new Error("should not install on dry-run"); },
+      stdout: (s) => out.push(s),
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).toContain(toon);
+  });
+
   test("--dry-run renders the preview (config + fire times + classification) and does NOT create/install", async () => {
     const workdir = tmpWorkdir();
     const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir, goal: "ship v1" });

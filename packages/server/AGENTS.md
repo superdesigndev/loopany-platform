@@ -153,3 +153,53 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - These `.md` edits compile into the server bundle via `?raw`, so this batch DEPLOYS
   server-side AND rides the next `@crewlet/loopany` npm tarball for the installed skill
   (`sync-skill.mjs` whitelist is untouched — still SKILL.md + the 4 references).
+
+## axi-conformance CLI (batch 6 — daemon text sink + content-first home)
+
+- **Server `home` verb** (`gateway/index.ts`): bare `loopany` posts `["home", …ctx]`.
+  DEVICE branch (`homeDevice`) is handled in `deviceCli` BEFORE the unknown-machine 401
+  guard, so an unregistered machine renders the DEFINITIVE `machine: not connected — run
+  \`loopany up\`` state (never a 401/empty, P5/P8). A registered machine → `machinePresence`
+  (`lib/machinePresence.ts`) line + cwd-scoped loop list + `recentMachineRuns` across the
+  machine + help. RUN branch (`homeRun`, in `runCli` before the read branch) → the lease's
+  OWN loop context (`renderRunHomeText`: identity + role + goal + recent), scoped to
+  `lease.loopId`. Both render via pure helpers (`renderHomeText`/`renderRunHomeText`).
+- **Text-sink render is server-side; local facts ride as flags.** The daemon can't have
+  the server render `bin:`/`daemon pid`/cwd-scoping, so it passes them as `home` argv
+  flags: `--bin`/`--pid`/`--server` (header) + `--cwd`/`--home` (scoping). `scopeLoopsByCwd`
+  replicates the daemon's `resolveLoopDir` (dirname(taskFile)→workdir, tilde-expanded
+  against the passed `--home` since the SERVER's home is irrelevant) to split loops into
+  "here" vs an `elsewhere` count; no cwd (or none matching) ⇒ ALL loops are "here". This
+  is the one place `gateway/index.ts` imports `node:path` (pure, no I/O).
+- **Daemon is a text sink** (`packages/daemon/src`): every server-verb path PREFERS
+  `body.text`+`body.exitCode` via the shared `cli-client.ts` `printText` (returns null
+  only when `text` is absent → an OLD server, one-release structured fallback via the
+  RETAINED `printLoops`/`printEditDryRun`/`formatRun`/`printCreateDryRun`). `--json`
+  (log/show) stays the escape hatch; `loopany log --transcript` keeps the structured
+  render (the server survey is concise, no `--full` inline yet). Converged on
+  `callback`/`interactive`/`log`/`create`/`show`/`home`.
+- **Routing lives in the pure `route.ts` `classify(argv, env)`** (unit-tested; `cli.ts`
+  maps a `Route` to its lazily-imported handler). The Batch-6 behavior change (OQ1): bare
+  `loopany` = the content-first HOME (device out-of-run; in-run bare posts `home` on the
+  run cred — fixes the old `argv.length > 0` guard). The foreground poll loop moved to
+  `loopany up --foreground`; the `--server-url`/`--api-key` detached re-exec path is
+  PRESERVED (still `{kind:"daemon"}`). `report`/`finish`/`complete` OUT of a run are
+  FORWARDED to the server (device cred → the crafted run-only 403, F3), never a generic
+  unknown-command. `loopany show` out-of-run (F1) resolves the loop client-side (like
+  `log`, reusing `log.ts` `resolveLoopId`) then forwards.
+- **`loopany setup hooks [--remove]`** (`setup.ts`, P7): idempotent SessionStart hook
+  install per `SKILL_TARGET_AGENTS` (only Claude Code has a concrete installer today —
+  `~/.claude/settings.json`, a `{hooks:[{type:"command",command:"loopany"}]}` SessionStart
+  entry whose stdout lands as ambient context; other agents reported `skipped`). Matches
+  gh-axi UX (integrations report + restart hint). `loopany up`/`update` call the
+  best-effort `refreshHooks` (one line, never blocks — like the skill install).
+- **PATH shim** (`bin-shim.ts`, feedback #4): `loopany up`/`update` write a `loopany`
+  re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
+  (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance when the dir
+  isn't on PATH. `home` reports the shim as `bin:` via `existingBinShim`.
+- **TEST HAZARD**: the `up`/`update` integration refreshers (`ensureBinShim`,
+  `refreshHooks`) write the REAL `~/.claude/settings.json` + `~/.local/bin` if not
+  injected. `ensure.test.ts`'s `seams()` MUST no-op both (it does); every setup/bin-shim
+  test injects fs/env seams and NEVER touches the real home. Batch 6 is the one
+  behavior-changing daemon batch — ships in the next `@crewlet/loopany` npm release
+  (release note: bare `loopany` = home, foreground → `up --foreground`).

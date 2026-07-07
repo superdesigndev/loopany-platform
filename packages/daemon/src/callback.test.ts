@@ -136,6 +136,14 @@ describe("runCallback — unified dispatch", () => {
     expect(stdout()).toContain("summary:");
   });
 
+  test("a body with no `text` (pre-Batch-1 server) exits by HTTP status, printing nothing", async () => {
+    stubFetch(() => ({ status: 200, body: { ok: true } }));
+    expect(await runCallback(["report"])).toBe(0);
+    expect(stdout()).toBe("");
+    stubFetch(() => ({ status: 400, body: { error: "nope" } }));
+    expect(await runCallback(["report"])).toBe(1);
+  });
+
   test("no server url → control channel not configured (exit 2, no fetch)", async () => {
     delete process.env.LOOPANY_SERVER_URL;
     const calls = stubFetch(() => ({ status: 200, body: {} }));

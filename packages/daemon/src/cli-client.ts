@@ -132,6 +132,27 @@ export async function postCli(argv: string[], legacy: LegacyFallback, deps: Post
   }
 }
 
+/**
+ * The text-sink primary path (Batch 6): print the server's pre-rendered `text` and
+ * return its `exitCode`. This is the ONE render every verb path now prefers — the
+ * server owns the TOON, the daemon is a dumb sink. Returns null when `text` is absent
+ * (an OLD server, pre-Batch-1), so the caller runs its one-release structured
+ * fallback. Never used for the not-configured/read-error/network-error results (those
+ * carry no server body) — callers handle those first.
+ */
+export function printText(
+  body: Record<string, unknown>,
+  status: number,
+  out: (s: string) => void,
+): number | null {
+  const text = body.text;
+  if (typeof text === "string" && text.length > 0) {
+    out(text.endsWith("\n") ? text : text + "\n");
+    return typeof body.exitCode === "number" ? body.exitCode : status >= 200 && status < 300 ? 0 : 1;
+  }
+  return null;
+}
+
 /** Run-token legacy fallback: the pre-batch-4 `/agent-api/loop` verb endpoint. The
  *  body shape (`{argv}`) and reply shape (`{text, exitCode}`) match the unified run
  *  branch, so callback rendering is identical whether we hit new or old. */

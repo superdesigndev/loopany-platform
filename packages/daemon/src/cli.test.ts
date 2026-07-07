@@ -12,6 +12,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { legacyRun, postCli, resolveCredential } from "./cli-client.js";
+import { classify } from "./route.js";
 import { daemonVersion } from "./version.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -96,6 +97,71 @@ describe("loopany CLI dispatch", () => {
     const r = await runCli(["update"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("not connected");
+  });
+
+  test("bare `loopany` (no args) → the content-first home, NOT the poll loop (exit 0)", async () => {
+    // The Batch-6 behavior change: bare `loopany` no longer blocks on the daemon. With
+    // an isolated LOOPANY_HOME (no credential/server) it renders the definitive
+    // not-connected home and exits, rather than hanging on a poll loop.
+    const r = await runCli([]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("not connected — run `loopany up`");
+  });
+
+  test("help lists the new surface (bare = home, up --foreground, setup, device show)", async () => {
+    const r = await runCli(["--help"]);
+    expect(r.stdout).toContain("content-first HOME");
+    expect(r.stdout).toContain("up [--foreground]");
+    expect(r.stdout).toContain("setup hooks");
+    expect(r.stdout).toContain("show [<id>]");
+  });
+});
+
+/**
+ * The pure routing table (`classify`) — the Batch-6 dispatch is unit-tested here so we
+ * cover the daemon-launch paths (which would hang a subprocess) deterministically.
+ */
+describe("classify — CLI routing table (Batch 6)", () => {
+  test("bare `loopany` OUT of a run → the content-first home (device cred), never the daemon", () => {
+    expect(classify([], {})).toEqual({ kind: "home" });
+  });
+
+  test("bare `loopany` IN a run (zero args) → the callback posts `home` on the run cred (fixes the argv>0 guard)", () => {
+    expect(classify([], { LOOPANY_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: ["home"] });
+  });
+
+  test("any verb IN a run funnels through the callback (run cred)", () => {
+    expect(classify(["report", "--status", "new"], { LOOPANY_RUN_TOKEN: "rk_x" })).toEqual({
+      kind: "callback",
+      argv: ["report", "--status", "new"],
+    });
+  });
+
+  test("the foreground poll loop moved: `up --foreground` → daemon, plain `up` → ensure", () => {
+    expect(classify(["up", "--foreground"], {})).toEqual({ kind: "daemon" });
+    expect(classify(["up"], {})).toEqual({ kind: "ensure", args: [] });
+    expect(classify(["up", "--server-url", "http://x"], {})).toEqual({ kind: "ensure", args: ["--server-url", "http://x"] });
+  });
+
+  test("the `--server-url` re-exec path still launches the daemon (preserved)", () => {
+    expect(classify(["--server-url", "http://x", "--api-key", "dk_y"], {})).toEqual({ kind: "daemon" });
+    expect(classify(["--api-key", "dk_y"], {})).toEqual({ kind: "daemon" });
+  });
+
+  test("run-only verbs OUTSIDE a run are FORWARDED (device cred → server 403), not unknown", () => {
+    expect(classify(["report", "--status", "new"], {})).toEqual({ kind: "forward", argv: ["report", "--status", "new"] });
+    expect(classify(["finish"], {})).toEqual({ kind: "forward", argv: ["finish"] });
+    expect(classify(["complete"], {})).toEqual({ kind: "forward", argv: ["complete"] });
+  });
+
+  test("setup + device show route to their handlers", () => {
+    expect(classify(["setup", "hooks"], {})).toEqual({ kind: "setup", args: ["hooks"] });
+    expect(classify(["show", "loop-1"], {})).toEqual({ kind: "show", args: ["loop-1"] });
+  });
+
+  test("an unknown verb is still `unknown` (→ exit 2), never a silent daemon launch", () => {
+    expect(classify(["bogus"], {})).toEqual({ kind: "unknown", verb: "bogus" });
+    expect(classify(["--frobnicate"], {})).toEqual({ kind: "unknown", verb: "--frobnicate" });
   });
 });
 

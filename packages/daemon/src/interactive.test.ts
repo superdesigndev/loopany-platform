@@ -109,45 +109,44 @@ function stub(handler: (req: { url: string; method: string; argv: string[]; pars
   return { fetchFn, calls };
 }
 
-describe("runInteractive — unified /api/machine/cli (new server)", () => {
-  test("loops → posts {argv:['loops']} with the device token and prints the loops", async () => {
+describe("runInteractive — text sink (new server renders TOON in `text`)", () => {
+  test("loops → posts {argv:['loops']} and prints the server's `text` verbatim, exit `exitCode`", async () => {
+    const toon = "count: 1\nloops[1]{id,name,cron,enabled,nextFire}:\n  loop-1,Cookie,\"0 8 * * *\",on,—";
     const { fetchFn, calls } = stub(({ url, argv }) =>
       url.includes("/api/machine/cli") && argv[0] === "loops"
-        ? { ok: true, body: { ok: true, loops: [{ id: "loop-1", name: "Cookie", cron: "0 8 * * *", timezone: "UTC", enabled: true, notify: "smart", nextRunAt: null }] } }
+        ? { ok: true, body: { ok: true, loops: [{ id: "loop-1" }], text: toon, exitCode: 0 } }
         : { ok: false, status: 404, body: {} },
     );
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runInteractive(["loops"], cap)).toBe(0);
     expect(calls[0]!.url).toBe("https://srv.test/api/machine/cli");
     expect(calls[0]!.argv).toEqual(["loops"]);
+    // The daemon is a dumb sink: it prints the server's `text`, not its own render.
+    expect(cap.stdout()).toBe(toon + "\n");
+  });
+
+  test("edit → prints the server `text` and honors its `exitCode` (a rejection dry-run exits 1)", async () => {
+    const toon = "dry-run: Cookie — 0 changes valid, 1 rejected\nrejections[1]{key,reason}:\n  notify,bad";
+    const { fetchFn } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "edit"
+        ? { ok: false, body: { text: toon, exitCode: 1 } }
+        : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["edit", "loop-1", "--json", '{"notify":"x"}', "--dry-run"], cap)).toBe(1);
+    expect(cap.stdout()).toBe(toon + "\n");
+  });
+
+  test("a pre-`text` unified server (200, no text) falls back to the retained structured render", async () => {
+    const { fetchFn } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "loops"
+        ? { ok: true, body: { ok: true, loops: [{ id: "loop-1", name: "Cookie", cron: "0 8 * * *", timezone: "UTC", enabled: true, notify: "smart", nextRunAt: null }] } }
+        : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["loops"], cap)).toBe(0);
     expect(cap.stdout()).toContain("loop-1");
     expect(cap.stdout()).toContain("Cookie");
-  });
-
-  test("edit → posts {argv:['edit',id,'--json',<patch>]} and prints the applied summary", async () => {
-    const { fetchFn, calls } = stub(({ url, argv }) =>
-      url.includes("/api/machine/cli") && argv[0] === "edit"
-        ? { ok: true, body: { ok: true, name: "Cookie", applied: ["cron"] } }
-        : { ok: false, status: 404, body: {} },
-    );
-    const cap = capture({ fetchImpl: fetchFn });
-    expect(await runInteractive(["edit", "loop-1", "--json", '{"cron":"0 9 * * *"}'], cap)).toBe(0);
-    expect(calls[0]!.argv).toEqual(["edit", "loop-1", "--json", '{"cron":"0 9 * * *"}']);
-    expect(cap.stdout()).toContain("updated Cookie");
-    expect(cap.stdout()).toContain("cron");
-  });
-
-  test("edit --dry-run → the unified endpoint's dryRun preview renders", async () => {
-    const { fetchFn, calls } = stub(({ url, argv }) =>
-      url.includes("/api/machine/cli") && argv[0] === "edit"
-        ? { ok: true, body: { dryRun: true, name: "Cookie", changes: [{ key: "cron", from: "0 8 * * *", to: "0 9 * * *" }], rejections: [] } }
-        : { ok: false, status: 404, body: {} },
-    );
-    const cap = capture({ fetchImpl: fetchFn });
-    expect(await runInteractive(["edit", "loop-1", "--json", '{"cron":"0 9 * * *"}', "--dry-run"], cap)).toBe(0);
-    expect(calls[0]!.argv).toContain("--dry-run");
-    expect(cap.stdout()).toContain("dry-run");
-    expect(cap.stdout()).toContain("0 9 * * *");
   });
 });
 

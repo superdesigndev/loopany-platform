@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import type { CliResponse, LegacyFallback } from "./cli-client.js";
-import { postCli } from "./cli-client.js";
+import { postCli, printText } from "./cli-client.js";
 import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
 import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
 
@@ -247,18 +247,26 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     }
     const data = r.body as CreateResponse;
     if (r.status >= 400 || !data.ok) {
-      process.stderr.write(`loopany: ${data.error || `create failed (${r.status})`}\n`);
-      return 1;
+      // Text-sink: the server renders the error TOON (`error:`/`code:`) to stdout via
+      // finalizeCli; print it, else fall back to the structured error line (old server).
+      const errCode = printText(r.body, r.status, write);
+      if (errCode === null) process.stderr.write(`loopany: ${data.error || `create failed (${r.status})`}\n`);
+      return errCode ?? 1;
     }
+    // Text-sink primary: the server renders the created / dry-run / idempotent-replay
+    // TOON (incl. classification, nextRuns, dashboard applied/not, and the dropped-
+    // dashboard `warning:` line). `printText` returns null only for an OLD server.
+    const printed = printText(r.body, r.status, write) !== null;
     if (dryRun) {
-      printCreateDryRun(write, data, timezone);
+      if (!printed) printCreateDryRun(write, data, timezone);
       return 0;
     }
-    write(`created loop ${data.name ?? data.id} — ${config.cron} ${timezone}\n`);
-    // Echo whether the dashboard ui landed (only when one was authored), and shout a
-    // warning if a provided dashboard was dropped — a missing dashboard is never silent.
-    if (config.ui !== undefined) write(`  dashboard ui: ${data.ui ? "applied" : "not applied"}\n`);
-    if (data.warning) process.stderr.write(`loopany: warning: ${data.warning}\n`);
+    if (!printed) {
+      // Old-server structured fallback (one release).
+      write(`created loop ${data.name ?? data.id} — ${config.cron} ${timezone}\n`);
+      if (config.ui !== undefined) write(`  dashboard ui: ${data.ui ? "applied" : "not applied"}\n`);
+      if (data.warning) process.stderr.write(`loopany: warning: ${data.warning}\n`);
+    }
     // Best-effort: now that the loop exists, install/refresh the loopany skill at
     // USER scope (`~/.claude/skills/loopany`), so the coding agent discovers the
     // references from ANY loop workdir. Announced, never blocks — any failure

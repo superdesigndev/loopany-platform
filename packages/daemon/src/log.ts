@@ -24,10 +24,10 @@
 import path from "node:path";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
-import { postCli } from "./cli-client.js";
+import { postCli, printText } from "./cli-client.js";
 import { resolveLoopDir } from "./loopdir.js";
 
-interface LoopRow {
+export interface LoopRow {
   id: string;
   name: string;
   workdir: string | null;
@@ -110,7 +110,7 @@ function parseArgs(args: string[]): { positional: string[]; flags: Record<string
 /** Resolve the loop to read: an explicit id (matched by id, else name) wins;
  *  otherwise pick the loop whose folder contains the current directory (the most
  *  specific match if several nest). Returns the id, or an error explaining why. */
-function resolveLoopId(
+export function resolveLoopId(
   loops: LoopRow[],
   explicit: string | undefined,
   cwd: string,
@@ -216,14 +216,29 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   if (got.kind === "read-error") return d.err(`loopany: cannot read ${got.path}\n`), 1;
   if (got.kind === "network-error") return d.err(`loopany: ${got.message}\n`), 1;
   const data = got.body as { ok?: boolean; name?: string; runs?: RunRow[]; error?: string };
+
+  // `--json` is the escape hatch (§4.3): emit the full structured runs the server
+  // carries alongside the TOON (superset body), unchanged for existing consumers.
+  if (json) {
+    if (got.status >= 400 || !data.runs) {
+      d.err(`loopany: ${data.error || `log failed (${got.status})`}\n`);
+      return 1;
+    }
+    d.out(`${JSON.stringify(data.runs, null, 2)}\n`);
+    return 0;
+  }
+
+  // TOON default: text-sink — the server renders the concise survey (incl. the empty
+  // state). `--transcript`/`--full` keeps the structured render, which inlines each
+  // run's transcript from the structured `runs` (the server survey stays concise);
+  // and `printText` returns null for an OLD server → the same structured fallback.
+  if (!showTranscript) {
+    const code = printText(got.body, got.status, d.out);
+    if (code !== null) return code;
+  }
   if (got.status >= 400 || !data.ok || !data.runs) {
     d.err(`loopany: ${data.error || `log failed (${got.status})`}\n`);
     return 1;
-  }
-
-  if (json) {
-    d.out(`${JSON.stringify(data.runs, null, 2)}\n`);
-    return 0;
   }
   d.out(`${data.name ?? resolved.id} — ${data.runs.length} recent run${data.runs.length === 1 ? "" : "s"}\n`);
   if (data.runs.length === 0) {

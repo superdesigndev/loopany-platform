@@ -5,7 +5,7 @@
  * `/api/machine/cli`, falling back to the legacy `/agent-api/loop` on a 404 (old
  * server). This module just renders the `{text, exitCode}` reply for the agent.
  */
-import { legacyRun, postCli } from "./cli-client.js";
+import { legacyRun, postCli, printText } from "./cli-client.js";
 
 export async function runCallback(argv: string[]): Promise<number> {
   const r = await postCli(argv, legacyRun);
@@ -21,7 +21,9 @@ export async function runCallback(argv: string[]): Promise<number> {
     process.stderr.write(`loopany: ${r.message}\n`);
     return 1;
   }
-  const data = r.body as { text?: string; exitCode?: number };
-  if (data.text) process.stdout.write(data.text.endsWith("\n") ? data.text : data.text + "\n");
-  return typeof data.exitCode === "number" ? data.exitCode : r.status >= 200 && r.status < 300 ? 0 : 1;
+  // Text-sink: print the server's rendered `text` + exit its `exitCode`. An old
+  // server (no `text`) leaves nothing to render — the callback has no structured
+  // fallback (the run verbs always came back as `{text}`), so a blank exit-by-status.
+  const code = printText(r.body, r.status, (s) => process.stdout.write(s));
+  return code ?? (r.status >= 200 && r.status < 300 ? 0 : 1);
 }

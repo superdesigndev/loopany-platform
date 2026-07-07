@@ -13,6 +13,8 @@
  * allowControl schedule mutations, plus set-ui/schema/workflow gated to the
  * evolution pass (the evolve run-token carries the canSet* caps).
  */
+import path from "node:path";
+
 import { Cron } from "croner";
 
 import { logger } from "../logger.js";
@@ -26,6 +28,7 @@ import { maintainStorage, type MaintainResult } from "./retention.js";
 import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
 import { artifactMeta } from "../server/frontmatter.js";
 import { pickTaskPath } from "../lib/fileEntries.js";
+import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
 import { loopBytesCap, selfCronFloorMinutes, selfRescheduleFloorMinutes, snapshotRetention } from "../env.js";
 import {
   machineIdFromToken,
@@ -1092,8 +1095,13 @@ export class MachineGateway {
   /** DEVICE-credential branch of the unified CLI. */
   private deviceCli(deviceToken: string, argv: string[]): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
-    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     const verb = argv[0] ?? "";
+    // The content-first home (P8): bare `loopany` posts `["home"]`. It renders a
+    // DEFINITIVE state for an unregistered machine ("not connected — run `loopany
+    // up`") rather than a 401, so the ambient dashboard is never an error/empty —
+    // handled BEFORE the unknown-machine guard the other verbs sit behind.
+    if (verb === "home") return { status: 200, body: { ok: true, text: this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
+    if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     const flags = parseFlags(argv.slice(1));
     const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
 
@@ -1182,6 +1190,13 @@ export class MachineGateway {
     if (flags["help"] === true) {
       const h = verbHelpText(verb, lease);
       if (h) return { status: 200, body: { text: h, exitCode: 0 } };
+    }
+
+    // Content-first home (P8), in-run: bare `loopany` inside a run posts `["home"]`
+    // and gets the run's OWN loop context (identity + role + goal + recent runs),
+    // scoped strictly to the lease's loop (no cross-loop leak).
+    if (verb === "home") {
+      return { status: 200, body: { text: this.homeRun(lease), exitCode: 0 } };
     }
 
     // Read branch — the seam fix. `log` gains a run-credential path (it has no case
@@ -2207,6 +2222,53 @@ export class MachineGateway {
     return renderShowText(loop, loopEnvelope(loop), store.countRuns(loop.id), lastExec, opts);
   }
 
+  /**
+   * `loopany` (bare) — the content-first home for a DEVICE credential (P8/§5.1). The
+   * daemon passes the local facts it alone knows as context flags (`--cwd`/`--home`
+   * for directory scoping, `--bin`/`--pid`/`--server` for the header); the server owns
+   * the whole TOON render (text-sink). An unregistered machine renders a DEFINITIVE
+   * "not connected" state (never empty, never an error). This same text is what the
+   * SessionStart hook emits every session, so it self-heals when a machine is asleep.
+   */
+  private homeDevice(machineId: string, flags: Flags): string {
+    const machine = store.getMachine(machineId);
+    const ctx: HomeContext = {
+      bin: typeof flags["bin"] === "string" ? (flags["bin"] as string) : null,
+      pid: typeof flags["pid"] === "string" ? (flags["pid"] as string) : null,
+      server: typeof flags["server"] === "string" ? (flags["server"] as string) : null,
+      cwd: typeof flags["cwd"] === "string" ? (flags["cwd"] as string) : null,
+      home: typeof flags["home"] === "string" ? (flags["home"] as string) : null,
+    };
+    if (!machine) return renderHomeText(ctx, null, [], 0, []);
+    const presence = machinePresence(machine.online, machine.lastSeen);
+    const loops = store.loopsForMachine(machineId);
+    const scoped = scopeLoopsByCwd(loops, ctx.cwd, ctx.home);
+    const here: HomeLoop[] = scoped.here.map((l) => ({
+      id: l.id,
+      name: l.name ?? l.id,
+      cron: l.cron,
+      enabled: l.enabled,
+      nextFire: l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null,
+      lastOutcome: (() => {
+        const last = store.lastExecRun(l.id);
+        return last ? runOutcomeToken(last) : null;
+      })(),
+    }));
+    return renderHomeText(ctx, presence, here, scoped.elsewhere, recentMachineRuns(loops, 3));
+  }
+
+  /** `loopany` (bare) inside a run — the RUN credential's own-loop home (§5.1). */
+  private homeRun(lease: RunLease): string {
+    const loop = store.getLoop(lease.loopId);
+    if (!loop) return errorBlock("loop not found", "NOT_FOUND");
+    const recent = store.listRuns(loop.id, 2).slice().reverse().map((r) => ({
+      ts: r.ts,
+      outcome: runOutcomeToken(r),
+      message: r.message ?? null,
+    }));
+    return renderRunHomeText(loop.name ?? loop.id, loop.id, lease.role, loop.goal ?? null, recent);
+  }
+
   private audit(lease: RunLease, command: string, args: Record<string, string>, r: Applied): void {
     const run = store.getRun(lease.runId);
     const control: ControlAction[] = [
@@ -2932,6 +2994,166 @@ function renderShowText(
     opts.allowControl !== undefined ? kvLine("selfSchedule", opts.allowControl ? "allowed" : "off") : null,
     opts.canFinish !== undefined ? kvLine("selfFinish", opts.canFinish ? "allowed" : "off") : null,
     helpBlock(help),
+  );
+}
+
+// ---- content-first home (P8/§5.1) --------------------------------------------
+// Bare `loopany` renders a live machine dashboard (device) or the run's own-loop
+// context (run). The server owns the whole TOON render (text-sink); the daemon
+// passes the local facts it alone knows (`--bin`/`--pid`/`--server`/`--cwd`/`--home`)
+// as context flags. Everything below is pure so it's exercised in the verb tests.
+
+/** The daemon-supplied local context for the device home header + cwd scoping. */
+interface HomeContext {
+  bin: string | null;
+  pid: string | null;
+  server: string | null;
+  cwd: string | null;
+  home: string | null;
+}
+
+/** One loop row in the device home (a minimal, scan-friendly subset of `loops`). */
+interface HomeLoop {
+  id: string;
+  name: string;
+  cron: string;
+  enabled: boolean;
+  nextFire: string | null;
+  lastOutcome: string | null;
+}
+
+/** The static one-line description in the home header (mirrors the reference axi
+ *  tools' `description:` line — what this bin is for). */
+const HOME_DESCRIPTION = "Run your scheduled Loopany agent loops on this machine with your own coding agent.";
+
+/** Expand a leading `~/` against the daemon-supplied home dir (the SERVER's own home
+ *  is irrelevant — a loop's paths are the daemon machine's). Absent home ⇒ unchanged. */
+function expandHome(p: string, home: string | null): string {
+  return home && p.startsWith("~/") ? path.join(home, p.slice(2)) : p;
+}
+
+/** A loop's folder on the daemon machine — mirrors the daemon's `resolveLoopDir`
+ *  (dirname(taskFile) → workdir), minus the scratch fallback (which never matches a
+ *  real cwd). Returns null when neither path is known (⇒ never "here"). */
+function scopeLoopDir(workdir: string | null, taskFile: string | null, home: string | null): string | null {
+  if (taskFile) {
+    const tf = expandHome(taskFile, home);
+    if (path.isAbsolute(tf)) return path.dirname(path.resolve(tf));
+    if (workdir) return path.dirname(path.resolve(expandHome(workdir, home), tf));
+  }
+  if (workdir) return path.resolve(expandHome(workdir, home));
+  return null;
+}
+
+/**
+ * Partition a machine's loops into the ones rooted at (or under) `cwd` — the
+ * directory-scoped ambient context P8 wants — and a count of the rest. With no cwd
+ * (or none matching), ALL loops are "here" (elsewhere 0): a home run from an
+ * unrelated directory still shows the whole machine rather than nothing.
+ */
+export function scopeLoopsByCwd(
+  loops: Loop[],
+  cwd: string | null,
+  home: string | null,
+): { here: Loop[]; elsewhere: number } {
+  if (!cwd) return { here: loops, elsewhere: 0 };
+  const here = path.resolve(cwd);
+  const matched = loops.filter((l) => {
+    const dir = scopeLoopDir(l.workdir ?? null, l.taskFile ?? null, home);
+    return dir !== null && (here === dir || here.startsWith(dir + path.sep));
+  });
+  if (matched.length === 0) return { here: loops, elsewhere: 0 };
+  return { here: matched, elsewhere: loops.length - matched.length };
+}
+
+/** The most recent runs across ALL of a machine's loops, newest-first, for the home
+ *  `recent[]` block. Merges each loop's newest few then globally sorts by ts. */
+function recentMachineRuns(loops: Loop[], n: number): Array<{ ts: string; loop: string; outcome: string }> {
+  const rows: Array<{ ts: string; loop: string; outcome: string }> = [];
+  for (const l of loops) {
+    for (const r of store.listRuns(l.id, n)) {
+      rows.push({ ts: r.ts, loop: l.name ?? l.id, outcome: runOutcomeToken(r) });
+    }
+  }
+  rows.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+  return rows.slice(0, n);
+}
+
+/** The device home (P8/§5.1): `bin:`/`description:`/`machine:` header, the cwd-scoped
+ *  loop list, recent runs, and a `help[]`. `presence` null ⇒ the machine is not
+ *  registered → a DEFINITIVE "not connected" state (never empty, never an error). */
+function renderHomeText(
+  ctx: HomeContext,
+  presence: MachinePresence | null,
+  here: HomeLoop[],
+  elsewhere: number,
+  recent: Array<{ ts: string; loop: string; outcome: string }>,
+): string {
+  const machineLine =
+    presence === null
+      ? "machine: not connected — run `loopany up`"
+      : `machine: ${[presence, ctx.pid ? `daemon pid ${ctx.pid}` : null, ctx.server].filter(Boolean).join(" · ")}`;
+  // Not connected: the header + the definitive state + how to connect. No loop/run
+  // blocks (there's nothing to show), but never empty output (P5/P8).
+  if (presence === null) {
+    return doc(
+      ctx.bin ? kvLine("bin", ctx.bin) : null,
+      kvLine("description", HOME_DESCRIPTION),
+      machineLine,
+      helpBlock([
+        "Run `loopany up --server-url <url> --connect-key <dk_…>` to connect this machine",
+        "Run `loopany --help` to see every command",
+      ]),
+    );
+  }
+  const loopsBlock = here.length
+    ? listBlock(
+        "loops",
+        ["name", "cron", "enabled", "nextFire", "lastOutcome"],
+        here.map((l) => [l.name, l.cron, l.enabled ? "on" : "paused", l.nextFire ? fmtTime(l.nextFire) : null, l.lastOutcome]),
+      )
+    : emptyList("loops");
+  const recentBlock = recent.length
+    ? listBlock("recent", ["ts", "loop", "outcome"], recent.map((r) => [fmtTime(r.ts), r.loop, r.outcome]))
+    : null;
+  return doc(
+    ctx.bin ? kvLine("bin", ctx.bin) : null,
+    kvLine("description", HOME_DESCRIPTION),
+    machineLine,
+    loopsBlock,
+    elsewhere > 0 ? `loops elsewhere: ${elsewhere} more on this machine` : null,
+    recentBlock,
+    helpBlock([
+      "Run `loopany loops` to list every loop on this machine",
+      "Run `loopany show <id>` to inspect a loop, `loopany log <id>` for its runs",
+      "Run `loopany new --json '{...}'` to create a loop",
+    ]),
+  );
+}
+
+/** The run-credential home (§5.1): the run's own loop identity + role + goal, its
+ *  recent runs, and run-appropriate help — scoped to the lease's loop. */
+function renderRunHomeText(
+  name: string,
+  loopId: string,
+  role: RunRole,
+  goal: string | null,
+  recent: Array<{ ts: string; outcome: string; message: string | null }>,
+): string {
+  const recentBlock = recent.length
+    ? listBlock(
+        "recent",
+        ["ts", "outcome", "message"],
+        recent.map((r) => [fmtTime(r.ts), r.outcome, r.message ? truncate(r.message, LOG_MESSAGE_CELL_CAP, "use --full").value : null]),
+      )
+    : emptyList("recent");
+  return doc(
+    `loop: ${scalar(name)} (${loopId}) · role ${role} · goal ${goal != null ? scalar(goal) : "none"}`,
+    recentBlock,
+    helpBlock([
+      "Run `loopany show` for the full config, `loopany log` for the run survey",
+      "Run `loopany report --status nothing-new` to close this run",
+    ]),
   );
 }
 

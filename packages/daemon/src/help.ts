@@ -20,24 +20,29 @@ server and runs your scheduled agent loops locally with your own coding agent.
 
 Usage: loopany [command] [options]
 
-  loopany                 Run the daemon in the foreground (poll this machine's
-                          server for loops and execute them). Ctrl-C to stop.
+  loopany                 Show the content-first HOME: this machine's live loops +
+                          recent runs (the poll loop moved to \`up --foreground\`).
 
 Setup
-  up                      Connect this machine / ensure its daemon is running
-                          (idempotent; spawns a detached daemon if none is live;
-                          refreshes the user-scope loopany skill).
+  up [--foreground]       Connect this machine / ensure its daemon is running
+                          (idempotent; refreshes the loopany skill, the SessionStart
+                          hook, and the \`loopany\` PATH shim). --foreground runs the
+                          poll loop attached in this terminal instead of detached.
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
     [--dry-run]           stdin). --dry-run validates + previews, creates nothing.
+  setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
+                          view as ambient context each session (--remove uninstalls).
   skill [status|install]  Manage the loopany agent skill install (user scope by
     [--project]           default; --project installs into the current directory).
   update                  Update this machine's daemon to the version you invoked
                           (run via npx @crewlet/loopany@latest update): stops the
-                          running daemon, starts the new one, refreshes the skill.
+                          running daemon, starts the new one, refreshes the skill/hook/shim.
 
 Management
   status                  Is this machine's daemon running? Show pid + connection.
   down                    Stop the detached daemon this machine started with up.
+  show [<id>]             Show a loop's full editable config + recent state (the
+                          device credential inspects any loop on this machine).
   log [<loop>]            Show a loop's recent runs (concise: status + metrics +
     [--transcript]        session id; --transcript/--full adds the transcript).
                           Defaults to the loop for the current directory (--json,

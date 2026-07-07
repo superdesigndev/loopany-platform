@@ -33,6 +33,10 @@ function seams(extra: EnsureDeps = {}): Cap {
     persist: () => {},
     readToken: () => "dk_stored",
     installSkill: async (opts) => { skillInstalls.push(opts); return { ok: true, line: "loopany skill: installed → ~/.claude/skills/loopany" }; },
+    // No-op the integration refreshers so no test ever writes the real ~/.claude
+    // settings or ~/.local/bin (the real defaults are exercised in their own tests).
+    ensureBinShim: () => {},
+    refreshHooks: async () => {},
     out: (s) => { out += s; },
     err: (s) => { err += s; },
     stdout: () => out,

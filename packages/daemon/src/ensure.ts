@@ -26,9 +26,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+import { ensureBinShim } from "./bin-shim.js";
 import { DEVICE_FILE, LOOPANY_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
 import { fetchMachineStatus, type MachineStatus } from "./control.js";
 import { verifiedRunningPid } from "./pidfile.js";
+import { refreshHooks } from "./setup.js";
 import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -80,6 +82,10 @@ export type EnsureDeps = {
   readToken?: () => string | undefined;
   /** Refresh the user-scope skill (best-effort, announced). Injected in tests. */
   installSkill?: (opts: InstallOpts) => Promise<InstallOutcome>;
+  /** Install/refresh the `loopany` PATH shim (best-effort, feedback #4). Injected in tests. */
+  ensureBinShim?: () => void;
+  /** Install/refresh the SessionStart hooks (best-effort, P7). Injected in tests. */
+  refreshHooks?: () => Promise<void>;
   out?: (s: string) => void;
   err?: (s: string) => void;
 };
@@ -104,13 +110,17 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
     persist: injected.persist ?? persist,
     readToken: injected.readToken ?? (() => readStored(DEVICE_FILE)),
     installSkill: injected.installSkill ?? installSkill,
+    ensureBinShim: injected.ensureBinShim ?? (() => void ensureBinShim()),
+    refreshHooks: injected.refreshHooks ?? (() => refreshHooks()),
     out: injected.out ?? ((s: string) => process.stdout.write(s)),
     err: injected.err ?? ((s: string) => process.stderr.write(s)),
   };
 
-  /** Best-effort user-scope skill refresh — announced in one line, never throws,
-   *  never fails up (it is awaited, so it can delay up's return on a cold npx, but
-   *  never changes the up outcome). Called on every success path. */
+  /** Best-effort integration refresh — the user-scope skill, the `loopany` PATH shim
+   *  (feedback #4), and the SessionStart hooks (P7) — each announced in one line, none
+   *  ever throwing/failing `up`. Called on every success path. Mirrors how the skill
+   *  install has always been best-effort + awaited (may delay `up` on a cold npx, but
+   *  never changes the outcome). */
   const refreshSkill = async (): Promise<void> => {
     try {
       const r = await d.installSkill({ global: true });
@@ -118,6 +128,12 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
     } catch {
       /* never let a skill refresh fail `up` */
     }
+    try {
+      d.ensureBinShim();
+    } catch {
+      /* never let the PATH shim fail `up` */
+    }
+    await d.refreshHooks();
   };
 
   const server = resolveServerUrl(flag(args, "server-url"));

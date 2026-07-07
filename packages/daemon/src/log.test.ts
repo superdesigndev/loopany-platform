@@ -242,4 +242,30 @@ describe("runLog — unified /api/machine/cli (new server)", () => {
     expect(calls[1]!.argv).toEqual(["log", "loop-x", "--limit", "3"]);
     expect(cap.stdout()).toContain("no runs yet");
   });
+
+  test("text sink: the default (non-transcript) log prints the server `text` verbatim, not its own render", async () => {
+    const toon = "loop: X (loop-x)\ncount: 1 of 1 total\nruns[1]{ts,role,outcome,cost,metrics,session,message}:\n  2026-06-01 00:00,exec,ok,—,mrr=42,sess-r1,\"did the thing\"\nsummary: showing 1 of 1 · 1 ok";
+    const { fetchFn } = stubUnified(
+      [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }],
+      () => ({ ok: true, body: { ok: true, name: "X", runs: oneRun, text: toon, exitCode: 0 } }),
+    );
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["loop-x"], cap)).toBe(0);
+    expect(cap.stdout()).toBe(toon + "\n");
+    // NOT the structured concise render (that is the old-server fallback only).
+    expect(cap.stdout()).not.toContain("● ");
+  });
+
+  test("--transcript keeps the structured render (server survey stays concise) even when `text` is present", async () => {
+    const toon = "loop: X (loop-x)\ncount: 1 of 1 total";
+    const { fetchFn } = stubUnified(
+      [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }],
+      () => ({ ok: true, body: { ok: true, name: "X", runs: oneRun, text: toon, exitCode: 0 } }),
+    );
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["loop-x", "--transcript"], cap)).toBe(0);
+    // The transcript render inlines the run body from the structured runs.
+    expect(cap.stdout()).toContain("$ Bash echo hi");
+    expect(cap.stdout()).not.toBe(toon + "\n");
+  });
 });

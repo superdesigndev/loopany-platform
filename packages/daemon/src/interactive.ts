@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
-import { postCli } from "./cli-client.js";
+import { postCli, printText } from "./cli-client.js";
 
 type Flags = Record<string, string | boolean>;
 
@@ -200,6 +200,11 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     if (r.kind === "not-configured") return notConnected(), 2;
     if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
     if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
+    // Text-sink primary: the server renders the TOON list (and empty/error states)
+    // and we just print it. `printText` returns null only for an OLD server (no
+    // `text`), where we fall back to the retained structured render for one release.
+    const code = printText(r.body, r.status, out);
+    if (code !== null) return code;
     const data = r.body as { loops?: LoopRow[]; error?: string };
     if (r.status >= 400 || !data.loops) {
       err(`loopany: ${data.error || `list failed (${r.status})`}\n`);
@@ -237,6 +242,11 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     if (r.kind === "not-configured") return notConnected(), 2;
     if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
     if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
+    // Text-sink primary: the server renders the apply / dry-run / rejection / error
+    // TOON (and pins exit 1 for rejections via `exitCode`); we just print it.
+    const code = printText(r.body, r.status, out);
+    if (code !== null) return code;
+    // Old-server structured fallback (one release).
     const data = r.body as EditResponse;
     if (dryRun && data.dryRun) return printEditDryRun(data, out);
     if (r.status >= 400 || !data.ok) {
