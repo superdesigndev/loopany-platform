@@ -629,10 +629,26 @@ computes pure functions. Run instructions: `README.md`.
 ## CI/CD (`.github/workflows/`)
 
 - `deploy.yml`: push to `main` -> `flyctl deploy --remote-only` (Fly app
-  `loopany-testing`). Migrations apply on container boot (forward-only).
+  `loopany-testing`). Migrations apply on container boot (forward-only). Both deploy
+  workflows bake `--build-arg GIT_SHA`/`BUILT_AT` into the image; `/api/health` returns
+  `{ok, sha, builtAt}` (baked ENV, `"unknown"` in local dev) and a post-deploy smoke
+  step asserts the served `sha` == the pushed `github.sha`.
+- `deploy-prod.yml`: **manual `workflow_dispatch` ONLY** -> `loopany-prod` / loopany.ai,
+  `--ha=false` single machine (single-scheduler invariant; never auto-deploy prod). A
+  preflight step fails loud if `FLY_API_TOKEN_PROD` is empty. **Runbook + rollback +
+  migration backward-compat checklist: `docs/prod-release.md`** (migrations are
+  forward-only, so an image rollback does NOT roll back schema; check the
+  `machines.daemon_version` fleet before removing legacy endpoints).
 - `publish-daemon.yml`: tag `v*` -> `npm publish` of the daemon ONLY, via **npm OIDC
   trusted publishing** - no `NPM_TOKEN`, and `setup-node` deliberately omits
   `registry-url` (setting it writes a dummy-token `.npmrc` that breaks OIDC; that was
   a real publish failure). Needs npm >= 11.5 (installed in-workflow). The tag must
   match `packages/daemon/package.json` version. pnpm version comes solely from the
   root `packageManager` field (do not also pass `version:` to `pnpm/action-setup`).
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

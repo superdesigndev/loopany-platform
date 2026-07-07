@@ -27,12 +27,52 @@ jobs:
     # Add required reviewers to this GitHub Environment for a manual promote gate.
     environment: production
     steps:
+      # Fail LOUD before flyctl if the prod token is empty. GitHub interpolates a
+      # missing/rotted secret to the empty string (no error), which flyctl then
+      # rejects with an opaque "no access token available" — this turns that silent
+      # secret rot into an actionable failure at the very first step.
+      - name: Preflight — require FLY_API_TOKEN_PROD
+        env:
+          FLY_API_TOKEN_PROD: ${{ secrets.FLY_API_TOKEN_PROD }}
+        run: |
+          if [ -z "$FLY_API_TOKEN_PROD" ]; then
+            echo "::error::FLY_API_TOKEN_PROD is empty or unset — set the prod Fly token in repo secrets before deploying." >&2
+            exit 1
+          fi
       - uses: actions/checkout@v7
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy
         # --ha=false: exactly ONE machine. Fly's default HA creates a second
         # machine, which would run a second in-process scheduler → double-fire.
-        run: flyctl deploy --remote-only --ha=false -c fly.prod.toml -a loopany-prod
+        # GIT_SHA / BUILT_AT bake the pushed commit into the image so /api/health
+        # can report it (smoke check below asserts it matches).
+        run: |
+          flyctl deploy --remote-only --ha=false -c fly.prod.toml -a loopany-prod \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         env:
           # Separate token from staging's FLY_API_TOKEN (set it in repo secrets).
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}
+      # Post-deploy smoke: prove the promoted image actually serves loopany.ai AND
+      # is the commit we just pushed. A container that boots green but 500s, or a
+      # promote that silently didn't take, fails the run here instead of passing.
+      - name: Smoke — /api/health serves the pushed SHA
+        run: |
+          expected='${{ github.sha }}'
+          got=''
+          for attempt in 1 2 3 4 5; do
+            if body="$(curl -fsS --max-time 15 https://loopany.ai/api/health)"; then
+              echo "health: $body"
+              got="$(printf '%s' "$body" | sed -n 's/.*"sha":"\([^"]*\)".*/\1/p')"
+              [ "$got" = "$expected" ] && break
+              echo "health served sha=$got, want $expected (attempt $attempt) — old container likely still draining, retrying in 10s…" >&2
+            else
+              echo "health not ready (attempt $attempt), retrying in 10s…" >&2
+            fi
+            sleep 10
+          done
+          if [ "$got" != "$expected" ]; then
+            echo "::error::prod /api/health sha=$got but pushed sha=$expected — the deploy did not take (or /api/health never returned 2xx)." >&2
+            exit 1
+          fi
+          echo "prod is serving $got ✔"
