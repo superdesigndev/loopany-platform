@@ -52,6 +52,9 @@ export interface RunUsage {
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   numTurns?: number;
+  /** Total claude invocations for the run — present only when > 1 (the daemon's
+   *  transient-failure recovery resumed the session; cost/tokens are the sum). */
+  attempts?: number;
 }
 
 /** One slimmed step of a claude run's execution trace (daemon parses it from the

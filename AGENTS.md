@@ -553,6 +553,20 @@ computes pure functions. Run instructions: `README.md`.
   This ships in the npm daemon package, so it needs a coordinated `@crewlet/loopany`
   release. (The daemon still forwards whatever token its env carries — the `rk_` run
   lease is batch 6, not here.)
+- **Transient-failure resume (`runner.ts`)**: a claude crash is CLASSIFIED
+  (`classifyFailure`, precedence auth/quota > poisoned > transient > task) and only
+  `transient` (API error / connection closed / ECONNRESET / stream closed /
+  overloaded / rate limit / 5xx) retries - `claude --resume <sessionId>` with a
+  short continuation prompt (`buildResumeTask`: trust prior progress, end with
+  exactly ONE report/finish), up to `LOOPANY_TRANSIENT_RETRIES` (default 2) with
+  `LOOPANY_TRANSIENT_RETRY_BASE_MS` backoff (15s, x4, jitter; consts read at
+  module load - tests re-import). `--resume` FORKS the session id: track the
+  latest for the next resume + transcript recovery. Timeouts never retry (our
+  wall-clock guard, not a provider blip); no captured session = nothing to
+  resume; abort stops immediately. Spend is SUMMED across attempts (`addCost`);
+  the report carries `attempts` only when > 1, and the server folds it into
+  `runs.usage.attempts` (TS-only jsonb field, no migration). A progress label
+  keeps the sweep fed during the backoff window.
 - **`runner.ts` skips the sys file + `--append-system-prompt-file` when the delivery's
   `systemPrompt` is empty** (batches 1-2 make it empty; an OLD server that still
   populates it keeps working — the flag path is preserved when the string is non-empty).

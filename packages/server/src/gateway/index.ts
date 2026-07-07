@@ -195,6 +195,9 @@ function coerceCost(raw: unknown): { costUsd?: number; usage?: RunUsage } {
   tok("cacheReadTokens", c.cacheReadTokens);
   tok("cacheCreationTokens", c.cacheCreationTokens);
   tok("numTurns", c.numTurns);
+  // Resume-recovery attempt count (daemon batch: transient-failure resume). Rides
+  // the wire OUTSIDE `cost` (a body-level field), so callers pass it explicitly.
+  tok("attempts", c.attempts);
   const costUsd = num(c.usd, COST_USD_MAX);
   return {
     ...(costUsd !== undefined ? { costUsd } : {}),
@@ -1447,6 +1450,9 @@ export class MachineGateway {
       cursor?: unknown;
       /** Claude-reported cost/usage for this run (usd + token counts). */
       cost?: unknown;
+      /** Total claude invocations (present only when the daemon's transient-
+       *  failure recovery resumed the session at least once). */
+      attempts?: unknown;
     },
   ): Promise<HttpResult> {
     const lease = await resolveLease(runToken);
@@ -1485,7 +1491,7 @@ export class MachineGateway {
         ...(enrichArtifacts ? { artifacts: enrichArtifacts } : {}),
         ...(enrichTranscript ? { transcript: enrichTranscript } : {}),
         // Cost, like durationMs, is only known post-run — enrich the finished row.
-        ...coerceCost(body.cost),
+        ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
       });
       if (typeof body.taskFileContent === "string") {
         await store.updateLoop(lease.loopId, {
@@ -1635,7 +1641,7 @@ export class MachineGateway {
       sessionId: typeof body.sessionId === "string" ? clipText(body.sessionId, SESSION_ID_CAP) : null,
       ...(artifacts ? { artifacts } : {}),
       ...(transcript ? { transcript } : {}),
-      ...coerceCost(body.cost),
+      ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
       ...(runState ? { state: runState } : {}),
       ...(message !== undefined ? { message } : {}),
       ...(ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),

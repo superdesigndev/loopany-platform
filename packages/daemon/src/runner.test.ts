@@ -17,7 +17,7 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { buildWorkflowFallbackTask, costFromResult, dateStamp, foldEscalation, makeStreamConsumer, runDelivery, type Delivery } from "./runner.js";
+import { addCost, buildResumeTask, buildWorkflowFallbackTask, classifyFailure, costFromResult, dateStamp, foldEscalation, makeStreamConsumer, runDelivery, type Delivery } from "./runner.js";
 
 describe("dateStamp", () => {
   test("formats YYYY-MM-DD (UTC)", () => {
@@ -167,6 +167,68 @@ describe("costFromResult", () => {
       cacheReadTokens: undefined,
       cacheCreationTokens: undefined,
       numTurns: 3,
+    });
+  });
+});
+
+describe("classifyFailure", () => {
+  test("transient: provider/network blips that a session resume can recover", () => {
+    for (const t of [
+      "API Error: Connection closed mid-response. The response above may be incomplete.",
+      "read ECONNRESET",
+      "socket hang up",
+      "fetch failed",
+      "stream closed before response completed",
+      "Overloaded (529)",
+      "rate limit exceeded, retry later",
+      "HTTP 503 service unavailable",
+      "Request timed out talking to the API",
+    ]) {
+      expect(classifyFailure(t), t).toBe("transient");
+    }
+  });
+  test("auth/quota outranks transient — never spin on a dead credential or spent budget", () => {
+    for (const t of [
+      "API Error: 401 unauthorized",
+      "authentication_error: invalid api key",
+      "usage limit reached — resets at 5pm",
+      "Your credit balance is too low",
+    ]) {
+      expect(classifyFailure(t), t).toBe("auth");
+    }
+  });
+  test("poisoned outranks transient — a resume would deterministically re-fail", () => {
+    for (const t of [
+      'API Error: 400 {"type":"invalid_request_error","message":"prompt is too long"}',
+      "prompt is too long: 250000 tokens > context window",
+    ]) {
+      expect(classifyFailure(t), t).toBe("poisoned");
+    }
+  });
+  test("anything unrecognized is a plain task failure — no retry", () => {
+    expect(classifyFailure("error_max_turns")).toBe("task");
+    expect(classifyFailure("claude exited with code 1")).toBe("task");
+    expect(classifyFailure("")).toBe("task");
+  });
+});
+
+describe("buildResumeTask", () => {
+  test("names the interruption, trusts prior progress, re-pins the one-report contract", () => {
+    const t = buildResumeTask("API Error: Connection closed mid-response");
+    expect(t).toContain("Connection closed mid-response");
+    expect(t).toContain("do not redo completed work");
+    expect(t).toContain("exactly ONE `loopany report");
+  });
+});
+
+describe("addCost", () => {
+  test("sums per-attempt spend, treating an absent side as identity", () => {
+    expect(addCost(undefined, { usd: 1 })).toEqual({ usd: 1 });
+    expect(addCost({ usd: 1, inputTokens: 10 }, undefined)).toEqual({ usd: 1, inputTokens: 10 });
+    expect(addCost({ usd: 1, inputTokens: 10 }, { usd: 0.5, outputTokens: 5 })).toEqual({
+      usd: 1.5,
+      inputTokens: 10,
+      outputTokens: 5,
     });
   });
 });
@@ -375,6 +437,117 @@ function writeArgvClaude(): string {
   fs.chmodSync(p, 0o755);
   return p;
 }
+
+describe("runDelivery — transient failure resumes the session (bounded retry)", () => {
+  test("an API-error crash retries with --resume, sums the spend, and reports one success", async () => {
+    // Fresh import so a tiny LOOPANY_TRANSIENT_RETRY_BASE_MS (module-load const) applies.
+    vi.resetModules();
+    process.env.LOOPANY_TRANSIENT_RETRY_BASE_MS = "10";
+    const { runDelivery: run } = await import("./runner.js");
+
+    // Fake claude: attempt 1 dies with the canonical mid-response API error;
+    // attempt 2 (the resume) records its argv and succeeds under a FORKED
+    // session id (what a real `--resume` does).
+    const bin = path.join(root, "flaky-claude.sh");
+    fs.writeFileSync(
+      bin,
+      [
+        "#!/bin/sh",
+        "if [ ! -f attempted ]; then",
+        "  touch attempted",
+        `  echo '{"type":"result","is_error":true,"subtype":"error_during_execution","result":"API Error: Connection closed mid-response. The response above may be incomplete.","session_id":"sess-1","total_cost_usd":0.5}'`,
+        "  exit 1",
+        "fi",
+        'printf "%s" "$*" > resume-args.txt',
+        `echo '{"type":"result","is_error":false,"subtype":"success","result":"delivered","session_id":"sess-2","total_cost_usd":0.25}'`,
+        "exit 0",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(bin, 0o755);
+    process.env.LOOPANY_CLAUDE_BIN = bin;
+
+    const reports: any[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        reports.push(JSON.parse(body));
+        res.end("{}");
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    try {
+      const port = (srv.address() as AddressInfo).port;
+      await run(delivery({ loop: { ...delivery().loop, workflow: null } }), `http://127.0.0.1:${port}`, []);
+    } finally {
+      srv.close();
+      delete process.env.LOOPANY_TRANSIENT_RETRY_BASE_MS;
+    }
+
+    // The resume invocation targeted the FIRST session and carried the
+    // continuation prompt, not the original task.
+    const args = fs.readFileSync(path.join(workdir, "resume-args.txt"), "utf8");
+    expect(args).toContain("--resume sess-1");
+    expect(args).toContain("interrupted by a transient infrastructure error");
+    expect(args).not.toContain("ORIGINAL TASK");
+
+    const rep = reports.find((r) => r.runId === "run-1");
+    expect(rep).toBeTruthy();
+    expect(rep.ok).toBe(true);
+    expect(rep.attempts).toBe(2); // one resume — surfaced for observability
+    expect(rep.sessionId).toBe("sess-2"); // the fork is the live transcript pointer
+    expect(rep.cost.usd).toBeCloseTo(0.75); // both attempts' spend, summed
+  }, 30000);
+
+  test("a NON-transient failure does not retry (task-level errors are final)", async () => {
+    vi.resetModules();
+    process.env.LOOPANY_TRANSIENT_RETRY_BASE_MS = "10";
+    const { runDelivery: run } = await import("./runner.js");
+
+    // Fails every time with a task-level subtype; a retry would leave a marker.
+    const bin = path.join(root, "maxturns-claude.sh");
+    fs.writeFileSync(
+      bin,
+      [
+        "#!/bin/sh",
+        "if [ -f attempted ]; then touch retried; fi",
+        "touch attempted",
+        `echo '{"type":"result","is_error":true,"subtype":"error_max_turns","result":"ran out of turns","session_id":"sess-x"}'`,
+        "exit 1",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(bin, 0o755);
+    process.env.LOOPANY_CLAUDE_BIN = bin;
+
+    const reports: any[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        reports.push(JSON.parse(body));
+        res.end("{}");
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    try {
+      const port = (srv.address() as AddressInfo).port;
+      await run(delivery({ loop: { ...delivery().loop, workflow: null } }), `http://127.0.0.1:${port}`, []);
+    } finally {
+      srv.close();
+      delete process.env.LOOPANY_TRANSIENT_RETRY_BASE_MS;
+    }
+
+    expect(fs.existsSync(path.join(workdir, "retried"))).toBe(false);
+    const rep = reports.find((r) => r.runId === "run-1");
+    expect(rep.ok).toBe(false);
+    expect(rep.error).toBe("error_max_turns");
+    expect(rep.attempts).toBeUndefined(); // no resume happened — no noise field
+  }, 30000);
+});
 
 describe("runDelivery — the system prompt file is skipped when empty (batches 1-2)", () => {
   test("an EMPTY systemPrompt → no sys file, no --append-system-prompt-file flag", async () => {

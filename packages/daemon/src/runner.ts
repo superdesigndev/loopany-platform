@@ -64,6 +64,9 @@ interface ReportBody {
   sessionId?: string;
   /** Claude-reported cost/usage for this run (absent for workflow-only runs). */
   cost?: RunCost;
+  /** Total claude invocations for this run (present only when > 1 — i.e. the
+   *  transient-failure recovery resumed the session at least once). */
+  attempts?: number;
   /** Files this run's claude session created/edited (parsed from its transcript). */
   artifacts?: RunArtifact[];
   /** Slimmed execution trace (text/tool/result steps) for the run-detail view. */
@@ -88,6 +91,96 @@ const rawExecTimeout = Number(process.env.LOOPANY_EXEC_TIMEOUT_MS);
 const TIMEOUT_MS = Number.isFinite(rawExecTimeout) && rawExecTimeout > 0 ? rawExecTimeout : 0;
 /** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
 const FLUSH_TIMEOUT_MS = 2500;
+
+// Transient-failure recovery: when claude dies mid-run on an infrastructure
+// error (an API "Connection closed mid-response", ECONNRESET, overloaded/5xx,
+// a rate limit), the session on disk still holds all paid-for progress — so we
+// RESUME it (`claude --resume <sessionId>`) with a short continuation prompt
+// instead of failing the run or restarting from zero. Bounded + classified:
+// only `transient` failures retry (auth/quota must not spin — BYOA decision 8 —
+// and a poisoned request would deterministically re-fail on resume); backoff
+// between attempts (base, then 4x) keeps a wobbly provider from being hammered.
+const rawRetries = Number(process.env.LOOPANY_TRANSIENT_RETRIES);
+const TRANSIENT_RETRIES = Number.isFinite(rawRetries) && rawRetries >= 0 ? Math.floor(rawRetries) : 2;
+const rawRetryBase = Number(process.env.LOOPANY_TRANSIENT_RETRY_BASE_MS);
+const RETRY_BASE_MS = Number.isFinite(rawRetryBase) && rawRetryBase > 0 ? rawRetryBase : 15_000;
+
+export type FailureClass = "transient" | "poisoned" | "auth" | "task";
+
+/**
+ * Classify a failed claude run from its combined error text (error + final text
+ * + stderr). Precedence matters: auth/quota outranks everything (a 401 body may
+ * also say "API Error" — retrying spins), poisoned outranks transient (a
+ * too-long prompt resumes into the same 400). Anything unrecognized is a plain
+ * `task` failure — never retried. Pure + exported for tests.
+ */
+export function classifyFailure(text: string): FailureClass {
+  if (
+    /\b(401|403)\b/.test(text) ||
+    /unauthoriz|forbidden|authentication_error|invalid api key|oauth/i.test(text) ||
+    /usage limit|quota exceeded|credit balance|out of credits|billing/i.test(text)
+  ) {
+    return "auth";
+  }
+  if (/invalid_request_error|prompt is too long|context (window|length)|request too large|\b400\b/i.test(text)) {
+    return "poisoned";
+  }
+  if (
+    /api error/i.test(text) ||
+    /connection (closed|reset|error|refused)/i.test(text) ||
+    /econnreset|etimedout|econnrefused|enotfound|eai_again|epipe/i.test(text) ||
+    /socket hang ?up|fetch failed|network error|request timed out/i.test(text) ||
+    /stream (closed|error|ended|disconnected)/i.test(text) ||
+    /overloaded|rate.?limit|too many requests/i.test(text) ||
+    /\b(429|500|502|503|504|529)\b/.test(text)
+  ) {
+    return "transient";
+  }
+  return "task";
+}
+
+/** The continuation prompt for a resumed session: the prior progress is already
+ *  in the conversation, so the only jobs are "trust it" and "finish per the
+ *  original instructions" (exactly one report/finish). Pure + exported for tests. */
+export function buildResumeTask(reason: string): string {
+  return [
+    `Your previous attempt at this run was interrupted by a transient infrastructure error (${reason}).`,
+    "You have been RESUMED in the same session: everything above this message is your own prior progress — trust it, do not redo completed work.",
+    "Continue from where you left off and finish normally: end with exactly ONE `loopany report ...` (or `loopany finish` when the goal is genuinely met), exactly as the original instructions specify.",
+  ].join("\n");
+}
+
+/** Sum two attempts' cost/usage (a resumed run pays for each invocation). */
+export function addCost(a: RunCost | undefined, b: RunCost | undefined): RunCost | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  const keys: (keyof RunCost)[] = ["usd", "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens", "numTurns"];
+  const out: RunCost = {};
+  for (const k of keys) {
+    const sum = (a[k] ?? 0) + (b[k] ?? 0);
+    if (a[k] !== undefined || b[k] !== undefined) out[k] = sum;
+  }
+  return out;
+}
+
+/** Backoff before resume attempt N (1-based): base, then 4x, ±10% jitter. */
+function retryDelayMs(attempt: number): number {
+  const base = RETRY_BASE_MS * 4 ** (attempt - 1);
+  return Math.round(base * (0.9 + Math.random() * 0.2));
+}
+
+/** Abortable sleep — a daemon shutdown must not hold the delivery hostage. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(t);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const t = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
 
 interface ClaudeJson {
   is_error?: boolean;
@@ -202,6 +295,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   let error: string | undefined;
   let finalText: string | undefined;
   let cost: RunCost | undefined;
+  let attempts = 0;
   // System prompt goes in ~/.loopany/runs (passed to claude by absolute path), not
   // the workdir — keeps the run's cwd clean. Removed in `finally`. Batches 1-2 move
   // the full run instructions into the first user turn, so `systemPrompt` is now empty
@@ -229,50 +323,83 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       : escalation
         ? `${d.task}\n\nworkflow signal:\n${escalation}`
         : d.task;
-    // stream-json (JSONL) so we can derive a live progress signal as claude works;
-    // the terminal `result` event carries the same fields the single-JSON mode did.
-    const args = [
-      "-p", task,
-      "--output-format", "stream-json",
-      "--verbose",
-      "--permission-mode", "bypassPermissions",
-      ...(hasSystemPrompt ? ["--append-system-prompt-file", sysFile] : []),
-      "--disallowed-tools", SELF_SCHEDULING_TOOLS,
-    ];
-    if (d.loop.model) args.push("--model", d.loop.model);
-
-    const stream = makeStreamConsumer((p) => setProgress(d.runId, p));
     const bin = process.env.LOOPANY_CLAUDE_BIN || "claude";
-    const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: stream.feed, signal });
-    clearProgress(d.runId);
-    const final = stream.result();
-    if (r.timedOut) {
-      error = `claude timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
-      // The stream captured the session id early — keep the pointer so exactly
-      // the runs that need debugging (timeouts) still get the transcript/artifact
-      // recovery below instead of losing their session.
-      sessionId = final.sessionId;
-    } else if (final.json) {
-      ok = !final.json.is_error && r.code === 0;
-      sessionId = final.sessionId ?? final.json.session_id;
-      finalText = final.json.result?.trim() || undefined;
-      cost = costFromResult(final.json);
-      if (!ok) {
-        // A non-zero exit can arrive WITH a clean result event (subtype "success") —
-        // recording "success" as the error reads as nonsense; name the exit instead.
-        const subtype = final.json.subtype;
-        error =
-          subtype && subtype !== "success"
-            ? subtype
-            : r.code !== 0
-              ? `claude exited with code ${r.code}`
-              : "claude reported an error";
+
+    // Attempt loop: the first pass runs the task; each further pass RESUMES the
+    // same session after a transient infrastructure failure (see the constants
+    // block above). Timeouts never retry (our own wall-clock guard, not a
+    // provider blip), a failure with no captured session has nothing to resume,
+    // and an abort (daemon shutdown / cancel) stops immediately.
+    for (;;) {
+      attempts += 1;
+      const resuming = attempts > 1;
+      const prompt = resuming ? buildResumeTask(error ?? "transient API error") : task;
+      // stream-json (JSONL) so we can derive a live progress signal as claude works;
+      // the terminal `result` event carries the same fields the single-JSON mode did.
+      const args = [
+        "-p", prompt,
+        ...(resuming && sessionId ? ["--resume", sessionId] : []),
+        "--output-format", "stream-json",
+        "--verbose",
+        "--permission-mode", "bypassPermissions",
+        ...(hasSystemPrompt ? ["--append-system-prompt-file", sysFile] : []),
+        "--disallowed-tools", SELF_SCHEDULING_TOOLS,
+      ];
+      if (d.loop.model) args.push("--model", d.loop.model);
+
+      const stream = makeStreamConsumer((p) => setProgress(d.runId, p));
+      const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: stream.feed, signal });
+      clearProgress(d.runId);
+      const final = stream.result();
+      error = undefined;
+      finalText = undefined;
+      if (r.timedOut) {
+        error = `claude timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
+        // The stream captured the session id early — keep the pointer so exactly
+        // the runs that need debugging (timeouts) still get the transcript/artifact
+        // recovery below instead of losing their session.
+        sessionId = final.sessionId ?? sessionId;
+        break;
+      } else if (final.json) {
+        ok = !final.json.is_error && r.code === 0;
+        // `--resume` forks a NEW session id — track the latest so a further
+        // resume (and the transcript/artifact recovery below) follow the fork.
+        sessionId = final.sessionId ?? final.json.session_id ?? sessionId;
+        finalText = final.json.result?.trim() || undefined;
+        cost = addCost(cost, costFromResult(final.json));
+        if (!ok) {
+          // A non-zero exit can arrive WITH a clean result event (subtype "success") —
+          // recording "success" as the error reads as nonsense; name the exit instead.
+          const subtype = final.json.subtype;
+          error =
+            subtype && subtype !== "success"
+              ? subtype
+              : r.code !== 0
+                ? `claude exited with code ${r.code}`
+                : "claude reported an error";
+        }
+      } else if (r.code === 0) {
+        ok = true;
+        sessionId = final.sessionId ?? sessionId;
+      } else {
+        error = (r.stderr || r.stdout || "claude produced no output").trim().slice(0, 500);
+        sessionId = final.sessionId ?? sessionId;
       }
-    } else if (r.code === 0) {
-      ok = true;
-      sessionId = final.sessionId;
-    } else {
-      error = (r.stderr || r.stdout || "claude produced no output").trim().slice(0, 500);
+
+      if (ok || attempts > TRANSIENT_RETRIES || !sessionId || signal?.aborted) break;
+      const failureClass = classifyFailure([error, finalText, r.stderr].filter(Boolean).join("\n"));
+      if (failureClass !== "transient") break;
+      const wait = retryDelayMs(attempts);
+      logger.warn(
+        { runId: d.runId, attempt: attempts, waitMs: wait, error },
+        "transient claude failure — resuming the session after backoff",
+      );
+      // Keep the live signal honest during the wait (and the server's inactivity
+      // sweep fed — the progress stamp rides the poll heartbeat).
+      setProgress(d.runId, { step: attempts, label: `retrying after a transient API error (attempt ${attempts + 1})` });
+      await sleep(wait, signal);
+      clearProgress(d.runId);
+      if (signal?.aborted) break;
     }
   } catch (err) {
     error = `failed to run claude: ${msg(err)}`;
@@ -300,6 +427,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     outcome: d.role === "evolve" ? "evolve" : "exec",
     sessionId,
     cost,
+    ...(attempts > 1 ? { attempts } : {}),
     artifacts,
     transcript,
     taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
