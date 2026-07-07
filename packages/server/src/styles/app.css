@@ -433,3 +433,57 @@
 @media (prefers-reduced-motion: reduce) {
   .loop-cube { animation: none; transform: rotateX(-20deg) rotateY(-32deg); }
 }
+
+/*
+ * Brand mark v2 (RingLogo) - the cube flattened to one face: the letter O's
+ * sticker map is a ring of 8 stickers, the interactive-blue "runner" sticker
+ * marks the next scheduled pass. `--ring-base` is the sticker plastic: #ededed
+ * on the dark plate, currentColor when bare (nav / inline inherits the text
+ * ink). Trail fills mix the interactive hue into the base so they hold up on
+ * either variant.
+ */
+.ring-logo {
+  --ring-base: currentColor;
+  display: inline-block;
+  vertical-align: middle;
+}
+.ring-logo-plate {
+  --ring-base: #ededed;
+}
+.ring-logo .ring-cell {
+  fill: var(--ring-base);
+}
+.ring-logo .ring-runner {
+  fill: var(--color-interactive);
+}
+.ring-logo .ring-trail-1 {
+  fill: color-mix(in srgb, var(--color-interactive) 55%, var(--ring-base));
+}
+.ring-logo .ring-trail-2 {
+  fill: color-mix(in srgb, var(--color-interactive) 25%, var(--ring-base));
+}
+/*
+ * Chase: every cell shares one keyframe track; the negative delays stagger it
+ * so exactly one sticker is lit at a time, running clockwise (rc order). The
+ * animation owns `fill` while active, so runner/trail classes only matter for
+ * the static variants.
+ */
+.ring-logo-animated .ring-cell {
+  animation: ringChase 4s linear infinite;
+}
+.ring-logo-animated .rc0 { animation-delay: -4s; }
+.ring-logo-animated .rc1 { animation-delay: -3.5s; }
+.ring-logo-animated .rc2 { animation-delay: -3s; }
+.ring-logo-animated .rc3 { animation-delay: -2.5s; }
+.ring-logo-animated .rc4 { animation-delay: -2s; }
+.ring-logo-animated .rc5 { animation-delay: -1.5s; }
+.ring-logo-animated .rc6 { animation-delay: -1s; }
+.ring-logo-animated .rc7 { animation-delay: -0.5s; }
+@keyframes ringChase {
+  0%, 9% { fill: var(--color-interactive); }
+  16%, 100% { fill: var(--ring-base); }
+}
+/* The runner parks at its home sticker instead of chasing. */
+@media (prefers-reduced-motion: reduce) {
+  .ring-logo-animated .ring-cell { animation: none; }
+}
