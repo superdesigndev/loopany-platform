@@ -31,4 +31,4 @@ jobs:
           path-to-signatures: '.github/cla/signatures.json'
           path-to-document: 'https://github.com/superdesigndev/loopany-platform/blob/main/.github/CLA.md'
           branch: 'cla-signatures'
-          allowlist: 'SToneX,dependabot[bot],renovate[bot],*[bot]'
+          allowlist: 'stonexer,dependabot[bot],renovate[bot],*[bot]'
