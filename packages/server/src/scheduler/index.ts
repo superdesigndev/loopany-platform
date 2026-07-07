@@ -45,8 +45,8 @@ export class Scheduler {
   constructor(private readonly dispatcher: Dispatcher) {}
 
   /** Load enabled loops and run until `signal` aborts. */
-  start(signal: AbortSignal): void {
-    for (const loop of store.listEnabledLoops()) this.schedule(loop);
+  async start(signal: AbortSignal): Promise<void> {
+    for (const loop of await store.listEnabledLoops()) this.schedule(loop);
     signal.addEventListener("abort", () => this.stopAll(), { once: true });
     log.info({ loops: this.crons.size }, "scheduler started");
   }
@@ -72,53 +72,53 @@ export class Scheduler {
   }
 
   /** Make a loop due immediately (run-now), via the one-shot timer path. */
-  runNow(id: string): void {
-    const loop = store.updateLoop(id, { nextRunAt: new Date().toISOString() });
+  async runNow(id: string): Promise<void> {
+    const loop = await store.updateLoop(id, { nextRunAt: new Date().toISOString() });
     if (loop) this.armNextRunAt(loop);
   }
 
   /** Manually schedule a dedicated evolution pass as the next tick. */
-  evolveNow(id: string): boolean {
-    const loop = store.getLoop(id);
+  async evolveNow(id: string): Promise<boolean> {
+    const loop = await store.getLoop(id);
     if (!loop || !store.canEvolve(loop)) return false;
-    const updated = store.updateLoop(id, { evolveDue: true, nextRunAt: new Date().toISOString() });
+    const updated = await store.updateLoop(id, { evolveDue: true, nextRunAt: new Date().toISOString() });
     if (updated) this.armNextRunAt(updated);
     return !!updated;
   }
 
   /** Queue an owner edit: the next tick runs an `edit` agent that applies the
    *  instruction (Agent-First — even cron goes through the machine's claude). */
-  requestEdit(id: string, instruction: string): boolean {
-    const updated = store.updateLoop(id, { editRequest: instruction, nextRunAt: new Date().toISOString() });
+  async requestEdit(id: string, instruction: string): Promise<boolean> {
+    const updated = await store.updateLoop(id, { editRequest: instruction, nextRunAt: new Date().toISOString() });
     if (updated) this.armNextRunAt(updated);
     return !!updated;
   }
 
   /** Clear the edit marker after the edit run ends (mirrors finishEvolution). */
-  finishEdit(id: string): void {
-    const updated = store.updateLoop(id, { editRequest: null, ...spentNextRunAt(id) });
+  async finishEdit(id: string): Promise<void> {
+    const updated = await store.updateLoop(id, { editRequest: null, ...(await spentNextRunAt(id)) });
     if (updated) this.addLoop(updated);
   }
 
   /** Flag evolution after the first run (to shape the loop from real data ASAP),
    *  then at the slower of "every N runs" and "once a day". */
-  maybeFlagEvolve(id: string): void {
-    const loop = store.getLoop(id);
+  async maybeFlagEvolve(id: string): Promise<void> {
+    const loop = await store.getLoop(id);
     if (!loop || loop.evolveDue || !store.canEvolve(loop)) return;
-    const runCount = store.countRuns(id);
+    const runCount = await store.countRuns(id);
     if (runCount < 1) return; // nothing to shape the loop from yet
     const evolved = loop.evolvedRunCount ?? 0;
     // `lastEvolveAt` counts manual evolves too, so a recent hand-triggered
     // "Evolve now" also defers the automatic one. Null ⇒ never evolved → bootstrap
     // now, so the first evolve fires as soon as run #1 lands.
-    const last = store.lastEvolveAt(id);
+    const last = await store.lastEvolveAt(id);
     if (last) {
       // Steady state: both gates must clear — every EVOLVE_EVERY runs AND at most
       // once per EVOLVE_MIN_INTERVAL_MS (= max(N runs, 1 day), the slower cadence).
       if (runCount - evolved < EVOLVE_EVERY) return;
       if (Date.now() - Date.parse(last) < EVOLVE_MIN_INTERVAL_MS) return;
     }
-    const updated = store.updateLoop(id, {
+    const updated = await store.updateLoop(id, {
       evolveDue: true,
       nextRunAt: new Date(Date.now() + EVOLVE_DELAY_MS).toISOString(),
     });
@@ -127,18 +127,18 @@ export class Scheduler {
   }
 
   /** Clear an evolution marker and advance the watermark after the evolve run ends. */
-  finishEvolution(id: string): void {
-    const updated = store.updateLoop(id, {
+  async finishEvolution(id: string): Promise<void> {
+    const updated = await store.updateLoop(id, {
       evolveDue: null,
-      evolvedRunCount: store.countRuns(id),
-      ...spentNextRunAt(id),
+      evolvedRunCount: await store.countRuns(id),
+      ...(await spentNextRunAt(id)),
     });
     if (updated) this.addLoop(updated);
   }
 
   /** Loop ids with an open (pending/running) run — for a live "running" indicator. */
-  runningIds(): string[] {
-    return store.openRuns().map((r) => r.loopId);
+  async runningIds(): Promise<string[]> {
+    return (await store.openRuns()).map((r) => r.loopId);
   }
 
   // ---- internals ----
@@ -180,7 +180,7 @@ export class Scheduler {
       return;
     }
     if (delay > MAX_TIMER_MS) {
-      const t = setTimeout(() => this.armNextRunAt(store.getLoop(loop.id) ?? loop), MAX_TIMER_MS);
+      const t = setTimeout(async () => this.armNextRunAt((await store.getLoop(loop.id)) ?? loop), MAX_TIMER_MS);
       t.unref?.();
       this.nextTimers.set(loop.id, t);
       return;
@@ -192,27 +192,27 @@ export class Scheduler {
 
   /** Execute one tick: create a pending run and dispatch it to the loop's machine. */
   private async runLoop(id: string): Promise<void> {
-    let loop = store.getLoop(id);
+    let loop = await store.getLoop(id);
     if (!loop) {
       this.unschedule(id);
       return;
     }
     if (!loop.enabled) return;
-    if (store.hasOpenRun(id)) return; // a prior run is still open — skip this tick
+    if (await store.hasOpenRun(id)) return; // a prior run is still open — skip this tick
 
     // Consume a due one-shot override so it doesn't re-fire.
     if (loop.nextRunAt && Date.parse(loop.nextRunAt) <= Date.now() + 1500) {
-      loop = store.updateLoop(id, { nextRunAt: null }) ?? loop;
+      loop = (await store.updateLoop(id, { nextRunAt: null })) ?? loop;
     }
 
     if (loop.evolveDue && !store.canEvolve(loop)) {
-      this.finishEvolution(id);
+      await this.finishEvolution(id);
       return;
     }
 
     // Edit takes precedence over a scheduled run: the owner asked for a change.
     const role = loop.editRequest ? "edit" : loop.evolveDue ? "evolve" : "exec";
-    const run = store.addRun({
+    const run = await store.addRun({
       loopId: loop.id,
       userId: loop.userId,
       machineId: loop.machineId,
@@ -225,12 +225,12 @@ export class Scheduler {
       await this.dispatcher.dispatch(loop, run);
       log.info({ id, runId: run.id, role, machine: loop.machineId }, "tick: run pending");
     } catch (err) {
-      store.updateRun(run.id, { phase: "error", outcome: "error", error: msg(err), ts: new Date().toISOString() });
-      if (role === "evolve") this.finishEvolution(id);
-      else if (role === "edit") this.finishEdit(id); // clear the marker so a failed dispatch doesn't re-fire forever
+      await store.updateRun(run.id, { phase: "error", outcome: "error", error: msg(err), ts: new Date().toISOString() });
+      if (role === "evolve") await this.finishEvolution(id);
+      else if (role === "edit") await this.finishEdit(id); // clear the marker so a failed dispatch doesn't re-fire forever
       log.error({ id, runId: run.id, err: msg(err) }, "tick: dispatch failed");
     } finally {
-      const fresh = store.getLoop(id);
+      const fresh = await store.getLoop(id);
       if (fresh) this.armNextRunAt(fresh);
     }
   }
@@ -250,7 +250,7 @@ function msg(err: unknown): string {
  *  this very run). A FUTURE value is the edit/evolve run's OWN work — it may have
  *  applied `reschedule` — and unconditionally nulling it would silently undo the
  *  change the run just made. */
-function spentNextRunAt(id: string): { nextRunAt: null } | Record<string, never> {
-  const next = store.getLoop(id)?.nextRunAt;
+async function spentNextRunAt(id: string): Promise<{ nextRunAt: null } | Record<string, never>> {
+  const next = (await store.getLoop(id))?.nextRunAt;
   return next && Date.parse(next) > Date.now() ? {} : { nextRunAt: null };
 }

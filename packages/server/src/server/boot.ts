@@ -18,11 +18,26 @@ interface Booted {
   abort: AbortController;
 }
 
-const g = globalThis as unknown as { __loopanyBooted?: Booted };
+// Cache the in-flight boot PROMISE (not the resolved value): async migrations +
+// scheduler.start mean two concurrent first-requests would otherwise each run
+// `boot()` → double scheduler → double-fire every run. Assigning the promise
+// synchronously (before the first await) makes concurrent callers share it.
+const g = globalThis as unknown as { __loopanyBooted?: Promise<Booted> };
 
-export function ensureServer(): Booted {
+export function ensureServer(): Promise<Booted> {
   if (g.__loopanyBooted) return g.__loopanyBooted;
-  runMigrations();
+  const p = boot();
+  g.__loopanyBooted = p;
+  // If boot fails, clear the cache so a later call can retry (mirrors the old
+  // sync behavior where a throw left `__loopanyBooted` unset).
+  p.catch(() => {
+    if (g.__loopanyBooted === p) g.__loopanyBooted = undefined;
+  });
+  return p;
+}
+
+async function boot(): Promise<Booted> {
+  await runMigrations();
 
   const abort = new AbortController();
   // Break the scheduler↔gateway cycle: the scheduler holds a thin dispatcher
@@ -32,7 +47,7 @@ export function ensureServer(): Booted {
   const scheduler = new Scheduler(dispatcher);
   gateway = new MachineGateway(scheduler);
 
-  scheduler.start(abort.signal);
+  await scheduler.start(abort.signal);
 
   const sweep = setInterval(() => gateway.sweep(), ONLINE_TTL_MS);
   sweep.unref?.();
@@ -45,15 +60,14 @@ export function ensureServer(): Booted {
   gc.unref?.();
   abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
 
-  g.__loopanyBooted = { scheduler, gateway, abort };
   logger.info("loopany server booted");
-  return g.__loopanyBooted;
+  return { scheduler, gateway, abort };
 }
 
-export function getScheduler(): Scheduler {
-  return ensureServer().scheduler;
+export async function getScheduler(): Promise<Scheduler> {
+  return (await ensureServer()).scheduler;
 }
 
-export function getGateway(): MachineGateway {
-  return ensureServer().gateway;
+export async function getGateway(): Promise<MachineGateway> {
+  return (await ensureServer()).gateway;
 }
