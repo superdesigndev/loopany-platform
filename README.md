@@ -66,7 +66,7 @@ talking to your local coding agent.
 │                  /machine/report · /api/machine/sync · /api/machine/blob/:hash    │
 │                  /agent-api/loop · /api/machine/loop|log (legacy CLI aliases)     │
 │  Postgres (Drizzle; embedded pglite by default) · artifact bytes in object store │
-└───────────▲ HTTP short-poll ────────────────────────────────────────────────────┘
+└───────────▲ HTTP poll (idle long-poll) ────────────────────────────────────────┘
             │
 ┌───────────┴── @crewlet/loopany (your machine · `npx`) ──────────────────────────┐
 │  polls for due runs → runs the task with your local coding agent                 │

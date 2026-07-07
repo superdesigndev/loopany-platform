@@ -76,7 +76,9 @@ Run `loopany --help` for the full usage text.
 
 ## How it works
 
-The daemon short-polls the server over HTTPS - no inbound ports, no websockets.
+The daemon polls the server over HTTPS - no inbound ports, no websockets. While
+idle it opts into a bounded server-held long-poll so a due run dispatches almost
+instantly; with a run in flight it keeps a short poll so progress keeps flowing.
 When a run is due it executes claude-code in the loop's own folder, live-syncs
 that folder's files back to the server (secrets and junk like `.env*`,
 `node_modules`, `.git` are never sent), and reports the outcome. Your code and
