@@ -12,7 +12,8 @@
     "dev": "pnpm --filter @loopany/server dev",
     "build": "pnpm --filter @loopany/server build",
     "start": "pnpm --filter @loopany/server start",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @loopany/server test && pnpm --filter @crewlet/loopany test"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

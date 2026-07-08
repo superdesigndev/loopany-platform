@@ -79,9 +79,35 @@ describe('LoopKanban width containment', () => {
 
   it('reviews a card body in the shared Modal (its own scroll container), never inline', () => {
     // The card body renders in the portal-mounted Modal (overflow-auto, viewport
-    // capped) — an inline expansion inside a 248px column can't clip/scroll sanely.
+    // capped) - an inline expansion inside a 248px column can't clip/scroll sanely.
     expect(src).toMatch(/<Modal open onClose/)
     expect(src).not.toMatch(/CollapsibleBody/)
+  })
+})
+
+describe('LoopView default grid layout', () => {
+  const css = readFileSync(fileURLToPath(new URL('../styles/app.css', import.meta.url)), 'utf8')
+  const view = read('./LoopView.tsx')
+
+  it('drives .loopview as a responsive auto-fit grid (side-by-side panels, stack when narrow)', () => {
+    const block = /\.loopview\s*\{[^}]*\}/.exec(css)?.[0]
+    expect(block, 'a .loopview grid rule should exist').toBeTruthy()
+    expect(block).toMatch(/display:\s*grid/)
+    // auto-fit collapses to one full-width column for a single panel (no
+    // regression); min(100%, …) keeps a panel from overflowing a narrow box.
+    expect(block).toMatch(/repeat\(auto-fit,\s*minmax\(min\(100%/)
+  })
+
+  it('spans headings/prose full width so only block panels tile', () => {
+    // A top-level heading or paragraph must not become a lone narrow column.
+    expect(css).toMatch(/\.loopview >\s*h2[\s\S]*?grid-column:\s*1 \/ -1/)
+  })
+
+  it('the LoopView container no longer force-stacks with space-y', () => {
+    // The grid gap owns spacing now; a leftover space-y-* would fight the grid.
+    const container = /className="loopview[^"]*"/.exec(view)?.[0]
+    expect(container).toBeTruthy()
+    expect(container).not.toMatch(/space-y-/)
   })
 })
 

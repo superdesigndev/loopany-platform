@@ -172,49 +172,52 @@ export function LoopCalendar({
   const monthCount = products.filter((p) => monthOf(p.date) === month).length
 
   const navBtn =
-    'inline-flex h-6 w-[26px] cursor-pointer items-center justify-center rounded-control border border-wire bg-transparent text-body text-primary transition-colors hover:border-display hover:text-display disabled:cursor-default disabled:opacity-35'
+    'inline-flex size-7 cursor-pointer items-center justify-center rounded-control border border-hairline bg-surface text-body leading-none text-secondary transition-colors hover:border-wire hover:bg-raised hover:text-display disabled:cursor-default disabled:opacity-30 disabled:hover:border-hairline disabled:hover:bg-surface'
 
   return (
     <div ref={rootRef} className="min-w-0">
-      {/* month header */}
-      <div className="mb-3 flex flex-wrap items-center gap-x-3.5 gap-y-2">
-        <button
-          type="button"
-          className={navBtn}
-          disabled={mi <= 0}
-          onClick={() => setShown(months[mi - 1]!)}
-          aria-label="previous month"
-        >
-          ‹
-        </button>
-        <button
-          type="button"
-          className={navBtn}
-          disabled={mi >= months.length - 1}
-          onClick={() => setShown(months[mi + 1]!)}
-          aria-label="next month"
-        >
-          ›
-        </button>
-        <span className="text-body font-semibold text-primary">{monthLabel(month)}</span>
-        <span className="ml-auto text-caption font-medium text-disabled">
+      {/* month header - the label anchors, chevrons + the day count flank it */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            className={navBtn}
+            disabled={mi <= 0}
+            onClick={() => setShown(months[mi - 1]!)}
+            aria-label="previous month"
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            className={navBtn}
+            disabled={mi >= months.length - 1}
+            onClick={() => setShown(months[mi + 1]!)}
+            aria-label="next month"
+          >
+            ›
+          </button>
+        </div>
+        <span className="text-body font-semibold tracking-tight text-display">{monthLabel(month)}</span>
+        <span className="ml-auto rounded-full bg-raised px-2.5 py-0.5 text-caption font-medium text-secondary">
           {monthCount} product{monthCount === 1 ? '' : 's'}
         </span>
       </div>
 
       {/* month grid - 7 minmax(0,1fr) tracks; cells own min-w-0 so a long chip
-          truncates inside its cell instead of widening the row/page */}
-      <div className="grid min-w-0 grid-cols-7 border-l border-t border-hairline">
+          truncates inside its cell instead of widening the row/page. Rounded +
+          clipped so the interior hairlines read as one clean table. */}
+      <div className="grid min-w-0 grid-cols-7 overflow-hidden rounded-card border-l border-t border-hairline">
         {DOW.map((d) => (
           <div
             key={d}
-            className="border-b border-r border-hairline px-2 py-1 text-right text-micro font-medium text-disabled"
+            className="border-b border-r border-hairline bg-raised/50 px-2 py-1.5 text-right text-micro font-semibold uppercase tracking-wide text-disabled"
           >
             {d}
           </div>
         ))}
         {Array.from({ length: lead }, (_, i) => (
-          <div key={`lead${i}`} className="border-b border-r border-hairline" />
+          <div key={`lead${i}`} className="border-b border-r border-hairline bg-raised/20" />
         ))}
         {Array.from({ length: dayCount }, (_, i) => {
           const day = `${month}-${String(i + 1).padStart(2, '0')}`
@@ -223,13 +226,17 @@ export function LoopCalendar({
           return (
             <div
               key={day}
-              className={`relative min-w-0 border-b border-r border-hairline bg-surface px-1.5 pb-1.5 ${
-                dotMode ? 'min-h-[46px] pt-5' : 'min-h-[74px] pt-6'
-              }`}
+              className={`relative min-w-0 border-b border-r border-hairline px-1.5 pb-1.5 transition-colors ${
+                dotMode ? 'min-h-[48px] pt-5' : 'min-h-[76px] pt-6'
+              } ${isToday ? 'bg-interactive-soft/40' : 'bg-surface'}`}
             >
               <span
-                className={`absolute right-1.5 top-1 font-mono text-micro ${
-                  isToday ? 'rounded-full bg-display px-1 text-paper' : 'text-disabled'
+                className={`absolute right-1.5 top-1 inline-flex h-[15px] min-w-[15px] items-center justify-center font-mono text-micro ${
+                  isToday
+                    ? 'rounded-full bg-display px-1 font-semibold text-paper'
+                    : fs.length
+                      ? 'text-secondary'
+                      : 'text-disabled'
                 }`}
               >
                 {i + 1}
@@ -246,21 +253,21 @@ export function LoopCalendar({
                 <button
                   type="button"
                   onClick={() => setReviewing(fs[CHIPS_PER_DAY]!)}
-                  className="mt-0.5 block cursor-pointer border-none bg-transparent p-0 px-1 font-mono text-[9.5px] text-disabled transition-colors hover:text-display"
+                  className="mt-1 block cursor-pointer border-none bg-transparent p-0 px-1 font-mono text-[9.5px] font-medium text-disabled transition-colors hover:text-display"
                 >
-                  +{fs.length - CHIPS_PER_DAY}
+                  +{fs.length - CHIPS_PER_DAY} more
                 </button>
               )}
             </div>
           )
         })}
         {Array.from({ length: trail }, (_, i) => (
-          <div key={`trail${i}`} className="border-b border-r border-hairline" />
+          <div key={`trail${i}`} className="border-b border-r border-hairline bg-raised/20" />
         ))}
       </div>
 
       {/* legend */}
-      <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5">
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
         <span className="inline-flex items-center gap-1.5 text-caption font-medium text-secondary">
           <span className="inline-block h-2.5 w-3.5 rounded-[3px] border border-hairline bg-raised" /> Dated by filename
         </span>
@@ -310,8 +317,8 @@ function ProductChip({
         onClick={onPick}
         title={title}
         aria-label={product.file.path}
-        className={`mr-1 mt-1 inline-block size-2 cursor-pointer rounded-full border-none p-0 ${
-          fallback ? 'bg-disabled' : 'bg-secondary'
+        className={`mr-1 mt-1 inline-block size-2 cursor-pointer rounded-full border-none p-0 transition-transform hover:scale-125 ${
+          fallback ? 'bg-disabled' : 'bg-interactive'
         }`}
       />
     )
@@ -320,7 +327,7 @@ function ProductChip({
       type="button"
       onClick={onPick}
       title={title}
-      className={`mt-1 block w-full min-w-0 cursor-pointer truncate rounded-full border border-hairline bg-raised px-1.5 py-0.5 text-left font-mono text-micro text-primary transition-colors hover:border-display ${
+      className={`mt-1 block w-full min-w-0 cursor-pointer truncate rounded-full border border-hairline bg-raised px-2 py-0.5 text-left font-mono text-micro text-secondary transition-colors hover:border-wire hover:bg-surface hover:text-display ${
         fallback ? 'border-dashed' : ''
       }`}
     >

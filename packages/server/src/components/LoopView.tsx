@@ -154,5 +154,8 @@ export function LoopView({
     [data, loopId, taskFile, artifacts],
   )
 
-  return <div className="loopview space-y-2 text-[14px] leading-relaxed">{parse(clean, options)}</div>
+  // `.loopview` is a responsive grid (app.css): independent top-level panels sit
+  // side by side on desktop (e.g. calendar left, document right) and stack on
+  // narrow viewports; headings/prose span the full width so only panels tile.
+  return <div className="loopview text-[14px] leading-relaxed">{parse(clean, options)}</div>
 }

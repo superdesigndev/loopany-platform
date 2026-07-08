@@ -226,6 +226,50 @@
 }
 
 /*
+ * Agent-authored dashboard (generative UI, `LoopView`). DEFAULT layout is a
+ * responsive grid so independent top-level panels sit side by side on desktop
+ * (the motivating case: calendar left, rendered document right) and stack on
+ * narrow viewports. `auto-fit` collapses to a single full-width column when
+ * there is one panel (no regression for chart-only or single-embed dashboards);
+ * `minmax(min(100%, 22rem), 1fr)` keeps a panel from overflowing a container
+ * narrower than its min track. `align-items: start` stops a short panel (a
+ * calendar) from stretching to a tall neighbour's (a long document) height.
+ *
+ * Headings, prose, AND content blocks (lists, tables, code, quotes, figures,
+ * images) span the full width so ONLY block panels (the custom loop-* elements +
+ * their div wrappers) tile - a top-level intro line, list, or table never becomes
+ * a lone narrow column. A top-level <section> joins header/footer as a full-width
+ * semantic container; explicit <div> wrappers still tile (the intended two-column
+ * panel mechanism).
+ */
+.loopview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 1.25rem;
+  align-items: start;
+}
+.loopview > h1,
+.loopview > h2,
+.loopview > h3,
+.loopview > h4,
+.loopview > h5,
+.loopview > h6,
+.loopview > p,
+.loopview > hr,
+.loopview > header,
+.loopview > footer,
+.loopview > section,
+.loopview > ul,
+.loopview > ol,
+.loopview > table,
+.loopview > pre,
+.loopview > blockquote,
+.loopview > figure,
+.loopview > img {
+  grid-column: 1 / -1;
+}
+
+/*
  * Rendered task-file markdown - a calm document inside the app. Sans body for
  * prose, ink headings, mono ONLY for code; no card/box. Prose wraps naturally,
  * so the raw file's runaway horizontal scroll is gone - only fenced code may

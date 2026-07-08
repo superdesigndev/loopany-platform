@@ -1,14 +1,25 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { safeDecode } from '../lib/url'
+import { imageMime } from '../lib/artifactKind'
 
 /**
- * GET /api/artifact/:loopId/:path — stream one of a loop's live-synced artifact
- * blobs (the download affordance for binary/oversize files; text is shown inline
- * via getArtifact). Authed via the WEB SESSION (not a machine token) and scoped
- * to the loop's team, mirroring the server fns' `ownedLoop` gate. Path-safe: the
- * relative path is normalized + traversal-rejected before it ever reaches a blob,
- * and blob keys are content hashes, never the user path. Reads stream from the
- * BlobStore (in-memory in dev/tests, R2 in prod); the route never writes.
+ * GET /api/artifact/:loopId/:path - stream one of a loop's live-synced artifact
+ * blobs. Two dispositions:
+ *  - default: `attachment` (the download affordance for binary/oversize files;
+ *    text is shown inline via getArtifact).
+ *  - `?view=inline`: for a KNOWN image type only (the `imageMime` allowlist),
+ *    served `inline` with the real image content-type so an <img> can render it.
+ *    Hardened against a direct navigation turning the byte stream into a scripted
+ *    document on the app origin: `X-Content-Type-Options: nosniff` pins the type
+ *    and `Content-Security-Policy: sandbox` loads it in an opaque origin with no
+ *    scripts - so an inline SVG can't run script against the session even if the
+ *    URL is opened directly. Non-image inline requests fall back to attachment.
+ *
+ * Authed via the WEB SESSION (not a machine token) and scoped to the loop's team,
+ * mirroring the server fns' `ownedLoop` gate. Path-safe: the relative path is
+ * normalized + traversal-rejected before it ever reaches a blob, and blob keys
+ * are content hashes, never the user path. Reads stream from the BlobStore
+ * (in-memory in dev/tests, R2 in prod); the route never writes.
  */
 const PREFIX = '/api/artifact/'
 
@@ -47,6 +58,24 @@ export const Route = createFileRoute('/api/artifact/$loopId/$')({
           return Response.json({ error: 'not found' }, { status: r.status })
 
         const filename = (r.filename || 'file').replace(/["\\\r\n]/g, '_')
+        // Inline image render (the viewer's <img>): only for the KNOWN image
+        // allowlist, and only hardened so a direct hit can't script the origin.
+        const inline = new URL(request.url).searchParams.get('view') === 'inline'
+        const mime = inline ? imageMime(relPath) : null
+        if (mime) {
+          return new Response(new Uint8Array(r.bytes), {
+            status: 200,
+            headers: {
+              'content-type': mime,
+              'content-length': String(r.bytes.length),
+              'content-disposition': `inline; filename="${filename}"`,
+              // Pin the type + neuter any scripted document (SVG) served inline.
+              'x-content-type-options': 'nosniff',
+              'content-security-policy': 'sandbox',
+              'cache-control': 'private, no-store',
+            },
+          })
+        }
         return new Response(new Uint8Array(r.bytes), {
           status: 200,
           headers: {

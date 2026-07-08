@@ -3,12 +3,12 @@ import type { ArtifactContent, ArtifactSummary } from '../types'
 import { fmt, humanBytes } from '../lib/format'
 import { getArtifact } from '../server/loopApi'
 
-/** Human byte size — "1.8 KB", "3.4 MB" ("" when unknown). */
+/** Human byte size - "1.8 KB", "3.4 MB" ("" when unknown). */
 export function fmtBytes(n: number | null): string {
   return n == null ? '' : humanBytes(n)
 }
 
-/** Download URL for one artifact — the path is segment-encoded so a nested path
+/** Download URL for one artifact - the path is segment-encoded so a nested path
  *  (`data/raw.json`) round-trips and can't be mistaken for extra route segments. */
 export function downloadHref(loopId: string, path: string): string {
   const enc = path
@@ -16,6 +16,13 @@ export function downloadHref(loopId: string, path: string): string {
     .map(encodeURIComponent)
     .join('/')
   return `/api/artifact/${encodeURIComponent(loopId)}/${enc}`
+}
+
+/** Inline render URL for an image artifact - the same bytes as `downloadHref`
+ *  but served with the real image content-type + `inline` disposition (see the
+ *  route). Used as an <img> src; never for a document the browser navigates to. */
+export function inlineHref(loopId: string, path: string): string {
+  return `${downloadHref(loopId, path)}?view=inline`
 }
 
 type Loaded = ArtifactContent | { loading: true }
@@ -31,7 +38,7 @@ export function ArtifactFileRow({ loopId, file }: { loopId: string; file: Artifa
   const downloadable = file.binary && !file.oversize
 
   async function toggle() {
-    // Binary/oversize are download-only — no inline expand.
+    // Binary/oversize are download-only - no inline expand.
     if (file.binary || file.oversize) return
     if (loaded) {
       setLoaded(null)
@@ -93,7 +100,7 @@ export function ArtifactFileRow({ loopId, file }: { loopId: string; file: Artifa
   )
 }
 
-/** A recorded artifact whose blob is no longer synced — non-clickable, with a
+/** A recorded artifact whose blob is no longer synced - non-clickable, with a
  *  subtle hint rather than a dead link. */
 export function UnavailableFileRow({ path }: { path: string }) {
   return (

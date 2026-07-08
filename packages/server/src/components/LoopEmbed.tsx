@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { ArtifactSummary } from '../types'
+import { artifactKind } from '../lib/artifactKind'
 import { isTaskPath } from '../lib/fileEntries'
 import { fmt } from '../lib/format'
 import { matchArtifacts, newestMatch } from '../lib/productDate'
@@ -84,6 +85,13 @@ export function LoopEmbed({
   const resolution = match ? `newest of ${matchArtifacts(matchable, match).length} matching ${match} · ` : ''
   const meta = `${resolution}synced ${fmt(target.updatedAt)}`
 
+  // HTML (sandboxed iframe) and images render at a bounded height and scroll
+  // internally, so the pixel-collapse (built for tall markdown/text) doesn't
+  // apply - only text-prose bodies collapse. Binary/oversize are short notices.
+  const kind = artifactKind(target.path)
+  const selfBounded = kind === 'html' || kind === 'image'
+  const collapse = !full && !selfBounded && !target.binary && !target.oversize
+
   return (
     <div className={shell}>
       <ViewerHead
@@ -98,7 +106,7 @@ export function LoopEmbed({
           </a>
         }
       />
-      <CollapsibleBody collapse={!full && !target.binary && !target.oversize}>
+      <CollapsibleBody collapse={collapse}>
         <ArtifactBody loopId={loopId} file={target} />
       </CollapsibleBody>
     </div>

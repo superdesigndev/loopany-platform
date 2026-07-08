@@ -270,6 +270,16 @@ computes pure functions. Run instructions: `README.md`.
   `references/run.md` §1 + `create.md` §3 + the worktree templates).
 - `run_snapshots` capture the manifest at `report()`; `getRunDiff` diffs run N vs
   the prior snapshot (jsdiff) for the run page's "Changes".
+- **Byte serving** (`routes/api.artifact.$loopId.$.ts`, session-authed, `loopInScope`):
+  default disposition is `attachment` (download); `?view=inline` on a KNOWN image
+  (`lib/artifactKind.ts` `imageMime` allowlist) serves the real image content-type
+  `inline` + `X-Content-Type-Options: nosniff` + `Content-Security-Policy: sandbox`
+  (so a direct hit on an inline SVG can't script the origin). **DEV GOTCHA: `pnpm dev`
+  (vite) intercepts asset-extension paths (`.png/.svg/.md/...`) BEFORE the SSR route
+  and 404s them** ("Cannot GET …"), so image rendering only works against a nitro
+  PROD build (`pnpm build && pnpm start`, `PORT=…` not `LOOPANY_PORT`); markdown is
+  unaffected (it reads via the `getArtifact` server fn, not this route). Verify image
+  serving against prod, not dev.
 - **Front-matter convention** (migration `0018`, `blobs.meta`): markdown products
   MAY open with a fenced `---` block of flat `key: value` scalars; the indexed
   subset `{type?, title?, date?}` is parsed once at byte ingress (both `sync()`
@@ -644,6 +654,23 @@ computes pure functions. Run instructions: `README.md`.
   `taskFileContent` from the loop record, not the blob fetch.
 - Dashboard refresh is fetch-then-set, never `router.invalidate` (its loader re-run
   throws on a transient blip; keep stale data instead).
+- **Artifact viewer** (`components/artifactView.tsx` `ArtifactBody`, one source for
+  the Files panel + every dashboard primitive's detail): dispatch by
+  `lib/artifactKind.ts` (extension only). HTML renders in a STRICT sandboxed iframe
+  (`srcDoc` + `sandbox="allow-scripts"`, NEVER `allow-same-origin` → opaque origin;
+  scripts run but can't read the app's cookies/session or reach `parent` - this is
+  the stored-XSS containment, load-bearing; a Preview/Source toggle exposes raw
+  markup). Images (incl. SVG - scriptable, so NEVER inlined into the app DOM) render
+  via `<img src=inlineHref>` off the hardened `?view=inline` route. Markdown → the
+  shared pipeline; oversize → a metadata-only note (no synced bytes). `LoopEmbed`
+  disables the pixel-collapse for html/image (they self-bound + scroll internally).
+- **The dashboard is a DEFAULT responsive grid** (`.loopview` in `styles/app.css`,
+  `auto-fit minmax(min(100%,22rem),1fr)`): independent top-level panels tile side by
+  side on desktop (calendar left, document right) and stack when narrow; headings/
+  prose/`hr`/`section` AND content blocks (`ul`/`ol`/`table`/`pre`/`blockquote`/
+  `figure`/`img`) all span full width, so ONLY the custom `loop-*` panels + their
+  explicit `div` wrappers tile. A single panel fills the row (no regression).
+  `LoopView` dropped `space-y-*` so the grid gap owns spacing.
 
 ## CI/CD (`.github/workflows/`)
 
