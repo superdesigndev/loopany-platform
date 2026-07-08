@@ -96,6 +96,13 @@ export async function listEnabledLoops(): Promise<Loop[]> {
   return db.select().from(loops).where(eq(loops.enabled, true));
 }
 
+/** Count a team's loops without materializing their (large) rows — the
+ *  delete-block guard + settings-detail badge only need the tally. */
+export async function countLoopsForTeam(teamId: string): Promise<number> {
+  const r = (await db.select({ n: sql<number>`count(*)` }).from(loops).where(eq(loops.teamId, teamId)))[0];
+  return Number(r?.n ?? 0);
+}
+
 export async function getLoop(id: string): Promise<Loop | undefined> {
   return (await db.select().from(loops).where(eq(loops.id, id)))[0];
 }
@@ -542,14 +549,16 @@ export async function removeTeamMemberGuarded(
     )[0];
     if (!m) return "not-member";
     if (m.role === "owner") {
-      const owners = Number(
-        (
-          await tx
-            .select({ n: sql<number>`count(*)` })
-            .from(teamMembers)
-            .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.role, "owner")))
-        )[0]?.n ?? 0,
-      );
+      // Lock the team's owner rows so two concurrent owner removals serialize:
+      // the second txn blocks here until the first commits, then sees the reduced
+      // set and is refused — the plain count(*) alone would let both win.
+      const owners = (
+        await tx
+          .select({ id: teamMembers.id })
+          .from(teamMembers)
+          .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.role, "owner")))
+          .for("update")
+      ).length;
       if (owners <= 1) return "last-owner";
     }
     await tx.delete(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)));
@@ -573,14 +582,15 @@ export async function setTeamMemberRoleGuarded(
     )[0];
     if (!m) return "not-member";
     if (m.role === "owner" && role === "member") {
-      const owners = Number(
-        (
-          await tx
-            .select({ n: sql<number>`count(*)` })
-            .from(teamMembers)
-            .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.role, "owner")))
-        )[0]?.n ?? 0,
-      );
+      // Lock the owner rows so a concurrent demote/removal serializes (see
+      // removeTeamMemberGuarded) — a bare count(*) would let both zero the set.
+      const owners = (
+        await tx
+          .select({ id: teamMembers.id })
+          .from(teamMembers)
+          .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.role, "owner")))
+          .for("update")
+      ).length;
       if (owners <= 1) return "last-owner";
     }
     await tx
@@ -642,8 +652,20 @@ export async function listPendingInvites(teamId: string): Promise<TeamInvite[]> 
     .orderBy(desc(teamInvites.createdAt));
 }
 
-export async function markInviteRedeemed(token: string, userId: string): Promise<void> {
-  await db.update(teamInvites).set({ redeemedAt: nowIso(), redeemedByUserId: userId }).where(eq(teamInvites.token, token));
+/**
+ * Atomically claim a single-use invite: stamp `redeemedAt`/`redeemedByUserId`
+ * ONLY if it is still unredeemed, and report whether THIS call won the claim.
+ * The `redeemed_at IS NULL` guard makes the stamp the single-use chokepoint, so
+ * two concurrent redeems can't both add a member. Returns false when the invite
+ * was already spent (a losing race, or a stale re-redeem).
+ */
+export async function markInviteRedeemedIfUnused(token: string, userId: string): Promise<boolean> {
+  const won = await db
+    .update(teamInvites)
+    .set({ redeemedAt: nowIso(), redeemedByUserId: userId })
+    .where(and(eq(teamInvites.token, token), isNull(teamInvites.redeemedAt)))
+    .returning({ token: teamInvites.token });
+  return won.length > 0;
 }
 
 /** Revoke a pending invite (owner action). */

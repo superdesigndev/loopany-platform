@@ -112,7 +112,7 @@ export async function getTeamDetail(userId: string, teamId: string): Promise<Tea
   const myRole = await roleOf(teamId, userId);
   if (!myRole) return null;
   const members = await store.listTeamMembers(teamId);
-  const loopCount = (await store.listLoops(teamId)).length;
+  const loopCount = await store.countLoopsForTeam(teamId);
   const invites = myRole === "owner" ? await store.listPendingInvites(teamId) : [];
   return {
     id: team.id,
@@ -170,11 +170,11 @@ export async function deleteTeam(userId: string, teamId: string): Promise<Result
   if (store.isPersonalTeam(team)) return { ok: false, error: "Your personal team can't be deleted." };
   // Decision 1: block while the team still owns loops — never silently cascade
   // a loop's run/artifact history away.
-  const loops = await store.listLoops(teamId);
-  if (loops.length > 0) {
+  const loopCount = await store.countLoopsForTeam(teamId);
+  if (loopCount > 0) {
     return {
       ok: false,
-      error: `This team still owns ${loops.length} loop${loops.length === 1 ? "" : "s"} — move or delete ${loops.length === 1 ? "it" : "them"} first.`,
+      error: `This team still owns ${loopCount} loop${loopCount === 1 ? "" : "s"} — move or delete ${loopCount === 1 ? "it" : "them"} first.`,
     };
   }
   await store.deleteTeamCascade(teamId);
@@ -306,9 +306,13 @@ export async function redeemInvite(
   const team = await store.getTeam(invite.teamId);
   if (!team) return { ok: false, error: "The team for this invite no longer exists." };
   const already = !!(await store.getTeamMember(invite.teamId, userId));
+  // Claim the single-use link ATOMICALLY before granting membership: the
+  // conditional stamp (`redeemed_at IS NULL`) is the chokepoint, so two
+  // concurrent redeems can't both add a member off one link. Only the winner
+  // adds membership; a loser sees the invite already spent. An already-member
+  // redeem still burns the link (so it can't later add someone else).
+  const won = await store.markInviteRedeemedIfUnused(token, userId);
+  if (!won) return { ok: false, error: "This invite link has already been used." };
   if (!already) await store.addTeamMember(invite.teamId, userId, invite.role);
-  // Single-use: stamp it spent regardless (an already-member redeem still burns
-  // the link, so it can't be reused to add someone else).
-  await store.markInviteRedeemed(token, userId);
   return { ok: true, teamId: invite.teamId, teamName: team.name, alreadyMember: already };
 }
