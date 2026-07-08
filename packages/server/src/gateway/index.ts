@@ -59,6 +59,7 @@ import {
   type Scalar,
 } from "./toon.js";
 import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
+import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 
 const log = logger.child({ mod: "gateway" });
 
@@ -107,10 +108,6 @@ const MIN_INTERVAL_MS = 60_000;
 const MAX_ARTIFACTS = 200;
 const MAX_TRANSCRIPT_STEPS = 200;
 const STEP_FIELD_MAX = 4000;
-/** Cap for free-text wire fields (task / workflow / taskFileContent) — one shared
- *  clipping discipline for every large string the daemon can send. Exported for
- *  `sync.ts` (the task-file mirror clips with the same budget). */
-export const WIRE_TEXT_CAP = 512 * 1024;
 /** A workflow cursor bigger than this (serialized) is ignored rather than persisted
  *  onto the loop row — the run itself still records normally. */
 const CURSOR_CAP = 256 * 1024;
@@ -223,11 +220,6 @@ function coerceTranscript(raw: unknown): TranscriptStep[] | undefined {
     if (out.length >= MAX_TRANSCRIPT_STEPS) break;
   }
   return out.length ? out : undefined;
-}
-
-export interface HttpResult {
-  status: number;
-  body: unknown;
 }
 
 /** One entry of the poll response's watch set (the daemon resolves the folder). */
@@ -1625,10 +1617,6 @@ export interface Applied {
   code?: string;
 }
 
-export function nowIso(): string {
-  return new Date().toISOString();
-}
-
 /** Flatten a run's slimmed transcript steps into plain text for `loopany log`,
  *  clipped to LOG_TRANSCRIPT_CAP (the agent wants recent history, not a dump).
  *  Tool steps render as `$ <name> <input>`; text/result steps as their text. */
@@ -1947,23 +1935,6 @@ function scalarState(cursor: unknown): Record<string, number | string> | undefin
     else if (typeof v === "string" && v) out[k] = v;
   }
   return Object.keys(out).length ? out : undefined;
-}
-
-/** Strip NUL (U+0000) from a wire string: Postgres text/jsonb columns REJECT the
- *  NUL byte (SQLite tolerated it), so a daemon-supplied string carrying one would
- *  throw mid-finalize on the DB write. The single sanitizing primitive shared by
- *  `str`, `clipText`, and `stripNulDeep` - and by `cli.ts` (parseFlags/validateState,
- *  the same one-chokepoint discipline). */
-export function stripNul(s: string): string {
-  return s.replace(/\u0000/g, "");
-}
-
-/** Clip a free-text wire field to its byte-budget cap AND strip NUL — the shared
- *  chokepoint for every capped daemon string (message / transcript / taskFileContent
- *  / sessionId / error / …). Caps are unchanged; NUL is removed so the DB write can't
- *  throw. Exported for `sync.ts` (same discipline for the mirrored task file). */
-export function clipText(s: string, cap: number): string {
-  return stripNul(s.slice(0, cap));
 }
 
 /** Recursively strip NUL from a free-form JSON value's string keys + values — for the

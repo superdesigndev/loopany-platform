@@ -369,10 +369,12 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   in-memory store: two instances would mean retention/GC deleting bytes
   ArtifactSync never wrote (and vice versa). Tests mirror the sharing
   (`retention.test.ts` `gatewayWithStore`).
-- Import direction: `sync.ts` and `cli.ts` import the shared wire helpers from
-  `index.ts` (`clipText`, `nowIso`, `WIRE_TEXT_CAP`, `HttpResult`, the validators'
-  caps, ...) - one clipping/NUL-stripping discipline, no fork; `index.ts` never
-  imports `sync.ts` or `cli.ts`, so there is no cycle.
+- Import direction: the generic wire plumbing (`HttpResult`, `WIRE_TEXT_CAP`,
+  `clipText`/`stripNul`, `nowIso`) lives in the leaf module `gateway/http.ts`,
+  imported by index/cli/sync alike - one clipping/NUL-stripping discipline, no
+  fork; domain helpers (caps, renders) still flow `index.ts` -> `cli.ts`/`sync.ts`,
+  and `index.ts` never imports its satellites, so there is no cycle. The whole
+  shape is pinned by `gateway/layout.test.ts`.
 - The legacy `/api/machine/loop` + `/api/machine/log` routes call the owner-verb
   methods on `MachineGateway` directly; `/api/machine/cli` + `/agent-api/loop`
   route through `getCliGateway()`.

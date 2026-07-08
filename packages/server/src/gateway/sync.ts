@@ -20,7 +20,7 @@ import { artifactMeta } from "../server/frontmatter.js";
 import { pickTaskPath } from "../lib/fileEntries.js";
 import { loopBytesCap } from "../env.js";
 import { machineIdFromToken } from "./tokens.js";
-import { clipText, nowIso, WIRE_TEXT_CAP, type HttpResult } from "./index.js";
+import { clipText, nowIso, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 
 // Same `mod` tag as the rest of the gateway - these log lines predate the split.
 const log = logger.child({ mod: "gateway" });

@@ -42,3 +42,40 @@ export async function readJsonBody(request: Request, maxBytes: number): Promise<
     return { kind: "invalid" };
   }
 }
+
+// ---- shared wire-egress shape + string discipline ----
+// Generic plumbing shared by every gateway module (index / cli / sync). It lives
+// here - a leaf module with no gateway imports - so index.ts stays pure
+// run-lifecycle core instead of doubling as the toolbox (pinned by layout.test.ts).
+
+/** Transport-free HTTP result: gateway methods decide status + body; the thin
+ *  route shells just `Response.json(r.body, { status: r.status })`. */
+export interface HttpResult {
+  status: number;
+  body: unknown;
+}
+
+/** Cap for free-text wire fields (task / workflow / taskFileContent) — one shared
+ *  clipping discipline for every large string the daemon can send. */
+export const WIRE_TEXT_CAP = 512 * 1024;
+
+export function nowIso(): string {
+  return new Date().toISOString();
+}
+
+/** Strip NUL (U+0000) from a wire string: Postgres text/jsonb columns REJECT the
+ *  NUL byte (SQLite tolerated it), so a daemon-supplied string carrying one would
+ *  throw mid-finalize on the DB write. The single sanitizing primitive behind
+ *  `clipText` and index.ts's `str`/`stripNulDeep` - and used directly by `cli.ts`
+ *  (parseFlags/validateState, the same one-chokepoint discipline). */
+export function stripNul(s: string): string {
+  return s.replace(/\u0000/g, "");
+}
+
+/** Clip a free-text wire field to its byte-budget cap AND strip NUL — the shared
+ *  chokepoint for every capped daemon string (message / transcript / taskFileContent
+ *  / sessionId / error / …). Caps are unchanged; NUL is removed so the DB write can't
+ *  throw. */
+export function clipText(s: string, cap: number): string {
+  return stripNul(s.slice(0, cap));
+}
