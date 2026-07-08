@@ -17,7 +17,6 @@
 #       GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
 #       LOOPANY_BASE_URL=https://loopany.ai \
 #       LOOPANY_ALLOWED_LOGINS=you@example.com \
-#       LOOPANY_SUPERADMINS=you@example.com \
 #       LOOPANY_R2_ACCOUNT_ID=... LOOPANY_R2_BUCKET=... \
 #       LOOPANY_R2_ACCESS_KEY_ID=... LOOPANY_R2_SECRET_ACCESS_KEY=...
 #   fly certs add loopany.ai -a loopany-prod   # then add the DNS records Fly prints

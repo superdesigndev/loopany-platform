@@ -6,10 +6,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 /**
  * `requestScope`'s explicit-team resolution (Phase 2 of the team-URL work). The
  * `/t/<teamId>` route hands requestScope an EXPLICIT team that must take precedence
- * over the last-used cookie yet still be membership/admin-validated — never trusted
- * blind. A rejected explicit team falls through to the personal team exactly like a
- * stale cookie, which is how `canViewTeam` detects "no access" without leaking that
- * the team exists.
+ * over the last-used cookie yet still be membership-validated — never trusted blind.
+ * A rejected explicit team falls through to the personal team exactly like a stale
+ * cookie, which is how `canViewTeam` detects "no access" without leaking that the
+ * team exists.
  *
  * requestScope needs the Start request runtime (cookie header) + a Better Auth
  * session, so we mock `getRequest` (cookie source) and spy on `auth.api.getSession`
@@ -28,7 +28,6 @@ let store: typeof import('./db/store.js')
 let authMod: typeof import('./auth.js')
 
 const MEMBER = 'u_member'
-const ADMIN = 'u_admin'
 let TEAM_PERSONAL: string // MEMBER's own team (owner)
 const TEAM_B = 'team-b' // MEMBER is a member (not owner)
 const TEAM_C = 'team-c' // MEMBER is NOT a member
@@ -50,11 +49,10 @@ beforeAll(async () => {
   process.env.LOOPANY_DATA_DIR = tmp
   process.env.LOOPANY_DB_PATH = path.join(tmp, 'test.db')
   process.env.LOOPANY_LOG_LEVEL = 'silent'
-  // Turn the gate ON (enforce) + register the admin, both read at module load.
+  // Turn the gate ON (enforce), read at module load.
   process.env.GITHUB_CLIENT_ID = 'gh-id'
   process.env.GITHUB_CLIENT_SECRET = 'gh-secret'
   process.env.LOOPANY_AUTH_SECRET = 'test-secret'
-  process.env.LOOPANY_SUPERADMINS = 'admin@example.com'
 
   db = await import('./db/index.js')
   await db.runMigrations()
@@ -93,7 +91,6 @@ describe('requestScope explicit team (the /t/<teamId> route)', () => {
     setCookie(TEAM_PERSONAL) // last-used cookie points elsewhere
     const scope = await authMod.requestScope(TEAM_B)
     expect(scope.teamId).toBe(TEAM_B)
-    expect(scope.allTeams).toBe(false)
   })
 
   it('an explicit team the user is NOT in falls back to the personal team (no leak)', async () => {
@@ -115,23 +112,5 @@ describe('requestScope explicit team (the /t/<teamId> route)', () => {
     signInAs(MEMBER, 'member@example.com')
     const scope = await authMod.requestScope(TEAM_PERSONAL)
     expect(scope.teamId).toBe(TEAM_PERSONAL)
-  })
-
-  it('a non-admin cannot select the __all__ aggregate (falls back, allTeams stays false)', async () => {
-    signInAs(MEMBER, 'member@example.com')
-    const scope = await authMod.requestScope(authMod.ALL_TEAMS)
-    expect(scope.allTeams).toBe(false)
-    expect(scope.teamId).toBe(TEAM_PERSONAL)
-  })
-
-  it('an admin may select __all__ (aggregate) or ANY existing team explicitly', async () => {
-    signInAs(ADMIN, 'admin@example.com')
-    const all = await authMod.requestScope(authMod.ALL_TEAMS)
-    expect(all.isAdmin).toBe(true)
-    expect(all.allTeams).toBe(true)
-    // An admin can pin a team they don't belong to (cross-team visibility).
-    const other = await authMod.requestScope(TEAM_C)
-    expect(other.teamId).toBe(TEAM_C)
-    expect(other.allTeams).toBe(false)
   })
 })

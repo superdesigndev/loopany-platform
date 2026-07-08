@@ -254,11 +254,11 @@ non-exported `nowIso`). `teamIdForUser` is a plain `team-${userId}` string on ho
 
 - **Single-row getters** (`.get()` → `(await q)[0]`): getLoop, getRun, lastRun,
   lastExecRun, getMachine, getTeam, getChannel, getRunSnapshot, getArtifactFile,
-  prevRunSnapshot, lastEvolveAt (`?? null`), userEmail (`?? null`).
+  prevRunSnapshot, lastEvolveAt (`?? null`).
 - **Existence checks** (`!!(await q)[0]`): hasOpenRun, isTeamMember, blobExists,
   machineReferencesBlob, artifactFileReferencesHash.
 - **List getters** (drop `.all()`, just `await`): listLoops, listEnabledLoops,
-  loopsForMachine, openRuns, listMachines, listAllTeams, listChannels, listArtifacts,
+  loopsForMachine, openRuns, listMachines, listChannels, listArtifacts,
   listAllArtifactFiles; `.reverse()` moves after await → listRuns, listRunsBefore;
   `.map(r=>r.x)` after await → listMachinesForTeam, listTeamsForUser,
   loopIdsWithSnapshots, blobHashesOlderThan, loopsReferencingHash, listArtifactsWithMeta.
@@ -429,7 +429,7 @@ accidental double-target dangerous.
       (NEW; set BEFORE first gated deploy — `auth.ts` THROWS at boot if the GitHub gate
       is on but this is unset → crash-loop); `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET`
       (NEW prod OAuth app); `LOOPANY_BASE_URL=https://loopany.ai`; `LOOPANY_ALLOWED_LOGINS`
-      (prod allowlist); `LOOPANY_SUPERADMINS`; R2 keys (`LOOPANY_R2_*` — bytes stay on R2;
+      (prod allowlist); R2 keys (`LOOPANY_R2_*` — bytes stay on R2;
       consider a separate prod bucket). **Do NOT set `LOOPANY_DATA_DIR`.**
 - [ ] **GitHub prod OAuth app:** Homepage `https://loopany.ai`; callback exactly
       `https://loopany.ai/api/auth/callback/github` (Better Auth mounts under

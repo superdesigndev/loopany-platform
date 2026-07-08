@@ -16,9 +16,6 @@ beforeAll(async () => {
   process.env.LOOPANY_DATA_DIR = tmp;
   process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
   process.env.LOOPANY_LOG_LEVEL = "silent";
-  // Must be set BEFORE importing the gateway (which loads superadmin.ts, read once
-  // at module load) so the cross-team superadmin-authorization test below works.
-  process.env.LOOPANY_SUPERADMINS = "admin@example.com";
   db = await import("../db/index.js");
   await db.runMigrations();
   store = await import("../db/store.js");
@@ -695,7 +692,7 @@ test("createLoop rejects (403) a claim minted by a different user — fail close
 });
 
 test("createLoop rejects (403) when the minter is no longer a member of the claim team", async () => {
-  (await makeTeam("team-y", [])); // team exists, u1 is NOT a member (and not an admin)
+  (await makeTeam("team-y", [])); // team exists, u1 is NOT a member
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
@@ -704,19 +701,6 @@ test("createLoop rejects (403) when the minter is no longer a member of the clai
   const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
   expect(res.status).toBe(403);
   expect((await store.listLoops()).length).toBe(0);
-});
-
-test("createLoop authorizes a superadmin for any existing team even without a membership row", async () => {
-  (await makeTeam("team-admin", [])); // exists; admin is not a member
-  await (db.client as any).exec(`INSERT INTO "user" (id, name, email) VALUES ('admin1', 'Admin', 'admin@example.com') ON CONFLICT DO NOTHING`);
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "admin1", teamId: "team-admin1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  await tokens.rememberConnectKey(token, { userId: "admin1", teamId: "team-admin" });
-
-  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
-  expect(res.status).toBe(200);
-  expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-admin");
 });
 
 test("createLoop with no claim falls back to the machine's home team (back-compat)", async () => {

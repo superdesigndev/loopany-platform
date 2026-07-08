@@ -611,11 +611,11 @@ computes pure functions. Run instructions: `README.md`.
   teams at once. The cookie is now ONLY the bare-`/` redirect's last-used hint, never an
   auth key. Gated `/` redirects to `/t/<last-used|personal>` (`getDefaultTeam`); the
   signed-out CTA + open mode render at `/`. Non-member `/t/<x>` throws the same generic
-  not-found as a missing loop (`canViewTeam`, enumeration-safe). Admin aggregate is
-  `/t/all` (`lib/teamUrl.ts` maps `all`⇄`__all__`). The `/t/$teamId` route mounts
-  `DashboardView` with `key={teamId}` so a switcher `/t/A`→`/t/B` navigation re-seeds its
-  fetch-then-set poll state (same route, new param ⇒ no natural remount). Guards:
-  `-index.regression.test.ts`, `auth.test.ts` (requestScope precedence), `teamUrl.test.ts`.
+  not-found as a missing loop (`canViewTeam`, enumeration-safe). A team id rides the URL
+  verbatim (`params.teamId`). The `/t/$teamId` route mounts `DashboardView` with
+  `key={teamId}` so a switcher `/t/A`→`/t/B` navigation re-seeds its fetch-then-set poll
+  state (same route, new param ⇒ no natural remount). Guards:
+  `-index.regression.test.ts`, `auth.test.ts` (requestScope precedence).
 - Loop detail and run detail are PAGES, not modals: `/loops/$loopId` and
   `/loops/$loopId/runs/$runId` (route file `loops.$loopId_.runs.$runId.tsx` - the
   trailing `_` un-nests it). Never render Base UI `Dialog.*` parts (e.g. `ModalHead`)

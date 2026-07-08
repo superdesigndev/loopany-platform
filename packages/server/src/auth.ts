@@ -13,11 +13,6 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 import { db } from "./db/index.js";
 import * as store from "./db/store.js";
-import { isSuperAdmin } from "./superadmin.js";
-
-// Re-export so callers keep importing the superadmin check from `auth` while the
-// pure predicate lives in a standalone module the gateway can use too.
-export { isSuperAdmin };
 
 const clientId = process.env.GITHUB_CLIENT_ID?.trim();
 const clientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
@@ -58,12 +53,6 @@ export function emailAllowed(email: string | null | undefined): boolean {
   );
 }
 
-/**
- * Superadmins see every team and every team's loops — the predicate lives in
- * `./superadmin.js` (env-driven, LOOPANY_SUPERADMINS) and is re-exported above so
- * the gateway can reuse it without importing this Better-Auth-initializing module.
- */
-
 /** A user's personal-team display name from their email's local part:
  *  "you@example.com" → "you's Team". Falls back when no email. */
 export function teamNameForEmail(email: string | null | undefined): string {
@@ -73,8 +62,6 @@ export function teamNameForEmail(email: string | null | undefined): string {
 
 /** Cookie (client-set, server-validated) carrying the active team selection. */
 const TEAM_COOKIE = "loopany.team";
-/** Sentinel selection: the admin "All teams" aggregate read view. */
-export const ALL_TEAMS = "__all__";
 
 /**
  * The signed-in user (id + email) for the current server-fn request, or null when
@@ -107,10 +94,6 @@ export interface RequestScope {
   userId: string | null;
   /** The active team — what reads filter and writes authorize against. */
   teamId: string;
-  /** This user is a superadmin (cross-team visibility). */
-  isAdmin: boolean;
-  /** Admin "All teams" aggregate read mode (the cookie sentinel was selected). */
-  allTeams: boolean;
 }
 
 /**
@@ -118,9 +101,8 @@ export interface RequestScope {
  * The active team is resolved from (in precedence order) an EXPLICIT team — the
  * `/t/<teamId>` route param, so a tab/bookmark pins its own team independent of
  * any cookie (Phase 2) — else the `loopany.team` cookie (now only a last-used
- * default hint). Either source is VALIDATED here against membership (or admin),
- * never trusted blind, and falls back to the user's personal team. Admins may
- * select any team, or the `ALL_TEAMS` aggregate view.
+ * default hint). Either source is VALIDATED here against membership, never
+ * trusted blind, and falls back to the user's personal team.
  *
  * `explicitTeam` (when a non-empty string) wins over the cookie. An unauthorized
  * value falls through to the personal team exactly like a stale cookie, so the
@@ -130,11 +112,11 @@ export interface RequestScope {
 export async function requestScope(explicitTeam?: string | null): Promise<RequestScope> {
   const enforce = authEnabled;
   if (!enforce) {
-    // Open mode ⇒ the single shared workspace; no sign-in, no admin, no switching.
+    // Open mode ⇒ the single shared workspace; no sign-in, no switching.
     // An explicit team from a /t/<id> URL is cosmetic here (nothing to scope to).
     const teamId = store.teamIdForUser(null);
     await store.ensureTeam(teamId, "Shared Workspace", null);
-    return { enforce, userId: null, teamId, isAdmin: false, allTeams: false };
+    return { enforce, userId: null, teamId };
   }
 
   const user = await currentUser();
@@ -144,19 +126,15 @@ export async function requestScope(explicitTeam?: string | null): Promise<Reques
   // keep its name in sync with the email — also renames pre-existing teams.
   await store.ensureTeam(personalTeam, userId ? teamNameForEmail(user?.email) : "Shared Workspace", userId);
 
-  const isAdmin = isSuperAdmin(user?.email);
   // Explicit team (route param) takes precedence over the cookie; both are
-  // membership/admin-validated below, so an explicit choice is no more trusted.
+  // membership-validated below, so an explicit choice is no more trusted.
   const sel = explicitTeam != null && explicitTeam !== "" ? explicitTeam : await selectedTeam();
-  if (sel === ALL_TEAMS && isAdmin) {
-    return { enforce, userId, teamId: personalTeam, isAdmin, allTeams: true };
-  }
-  // A specific team: admins may pick any existing team; others only their own.
+  // A specific team is honored only when the user is a MEMBER of it; otherwise
+  // fall back to the personal team.
   if (sel && sel !== personalTeam && userId) {
-    const ok = isAdmin ? !!(await store.getTeam(sel)) : await store.isTeamMember(sel, userId);
-    if (ok) return { enforce, userId, teamId: sel, isAdmin, allTeams: false };
+    if (await store.isTeamMember(sel, userId)) return { enforce, userId, teamId: sel };
   }
-  return { enforce, userId, teamId: personalTeam, isAdmin, allTeams: false };
+  return { enforce, userId, teamId: personalTeam };
 }
 
 /**
@@ -169,7 +147,6 @@ export async function requestScope(explicitTeam?: string | null): Promise<Reques
  * direct link to a team-B loop while their active team is A, instead of getting a
  * spurious "not found" (the cross-team-link bug). Rules:
  *  - open mode ⇒ the single shared workspace, everything visible;
- *  - a superadmin ⇒ cross-team visibility (any team's loop);
  *  - the active team is a no-DB fast path (requestScope already membership-
  *    validated the active-team cookie);
  *  - otherwise the user must be a MEMBER of the loop's team.
@@ -177,9 +154,8 @@ export async function requestScope(explicitTeam?: string | null): Promise<Reques
  * signed-out request) is denied, indistinguishable from a nonexistent loop.
  */
 export async function canAccessLoop(loopTeamId: string | null, scope: RequestScope): Promise<boolean> {
-  const { enforce, teamId, userId, isAdmin } = scope;
+  const { enforce, teamId, userId } = scope;
   if (!enforce) return true; // open mode: no gate
-  if (isAdmin) return true; // superadmin sees every team
   if (loopTeamId === teamId) return true; // active team (already validated by requestScope)
   if (!loopTeamId || !userId) return false;
   return store.isTeamMember(loopTeamId, userId); // membership in the loop's own team

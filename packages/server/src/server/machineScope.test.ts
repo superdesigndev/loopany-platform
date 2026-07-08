@@ -21,11 +21,9 @@ const neverQueried = () => {
   throw new Error("team set should not be queried on this path");
 };
 
-const scope = (over: Partial<{ enforce: boolean; userId: string | null; isAdmin: boolean; allTeams: boolean }> = {}) => ({
+const scope = (over: Partial<{ enforce: boolean; userId: string | null }> = {}) => ({
   enforce: true,
   userId: "u_other" as string | null,
-  isAdmin: false,
-  allTeams: false,
   ...over,
 });
 
@@ -48,13 +46,6 @@ describe("machineInScope", () => {
     expect(machineInScope(machine, scope(), teamSet("m_1"))).toBe(true);
     expect(machineInScope(machine, scope(), teamSet("m_2"))).toBe(false);
     expect(machineInScope(machine, scope(), none)).toBe(false);
-  });
-
-  test('admin "All teams" view sees everything; admin on a specific team is member-scoped', () => {
-    expect(machineInScope(machine, scope({ isAdmin: true, allTeams: true }), neverQueried)).toBe(true);
-    // A specific team selected ⇒ same membership rule as anyone (mirrors listMachines).
-    expect(machineInScope(machine, scope({ isAdmin: true }), none)).toBe(false);
-    expect(machineInScope(machine, scope({ isAdmin: true }), teamSet("m_1"))).toBe(true);
   });
 });
 

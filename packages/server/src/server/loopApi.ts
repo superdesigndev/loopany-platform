@@ -26,7 +26,7 @@ import type {
   TranscriptStep,
 } from '../types'
 import * as store from '../db/store.js'
-import { ALL_TEAMS, canAccessLoop, requestScope } from '../auth.js'
+import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
 import { TEMPLATES } from './templates.js'
@@ -34,12 +34,6 @@ import { TEMPLATES } from './templates.js'
 function backend() {
   return ensureServer()
 }
-
-/** Fail-safe error for creation from the admin "All teams" aggregate view: there
- *  is no concrete team to file a new loop (or bind a connect-key) under, and
- *  proceeding would silently fall back to the personal team — the very bug the
- *  per-team claim work fixed. Shared by createJob + mintClaim. */
-const PICK_TEAM_ERROR = 'pick a specific team before creating a loop'
 
 /**
  * Resolve a loop and authorize the request against its owner. Returns the loop,
@@ -57,7 +51,7 @@ async function ownedLoop(id: string) {
   if (!(await canAccessLoop(loop.teamId, scope))) return undefined
   // Hand back the scope too — callers that mutate (e.g. patchJob) need `enforce`
   // and would otherwise re-run requestScope() (a second session decrypt).
-  return { loop, enforce: scope.enforce, teamId: scope.teamId, allTeams: scope.allTeams }
+  return { loop, enforce: scope.enforce, teamId: scope.teamId }
 }
 
 /** Whether the auth gate is active (a GitHub OAuth app is configured). */
@@ -85,28 +79,27 @@ export const getConfig = createServerFn({ method: 'GET' }).handler(() => {
 })
 
 /** GET — the teams this user may view (for the header switcher) + the active
- *  selection. Admins get every team plus the `__all__` aggregate; a regular user
- *  gets only their memberships (usually one ⇒ no dropdown). Open mode ⇒ empty.
- *  An explicit `teamId` (the `/t/<id>` route) pins the active selection for THIS
- *  request — so the switcher highlights the tab's own team, not the cookie's. */
+ *  selection. A user gets only their memberships (usually one ⇒ no dropdown).
+ *  Open mode ⇒ empty. An explicit `teamId` (the `/t/<id>` route) pins the active
+ *  selection for THIS request — so the switcher highlights the tab's own team,
+ *  not the cookie's. */
 export const listMyTeams = createServerFn({ method: 'GET' })
   .validator((teamId?: string) => teamId)
   .handler(async ({ data: teamId }): Promise<TeamsView> => {
     await backend()
-    const { enforce, userId, teamId: active, isAdmin, allTeams } = await requestScope(teamId)
-    if (!enforce || !userId) return { teams: [], activeTeamId: active, isAdmin: false, allTeams: false }
-    const teams = (isAdmin ? await store.listAllTeams() : await store.listTeamsForUser(userId)).map((t) => ({
+    const { enforce, userId, teamId: active } = await requestScope(teamId)
+    if (!enforce || !userId) return { teams: [], activeTeamId: active }
+    const teams = (await store.listTeamsForUser(userId)).map((t) => ({
       id: t.id,
       name: t.name,
     }))
-    return { teams, activeTeamId: allTeams ? ALL_TEAMS : active, isAdmin, allTeams }
+    return { teams, activeTeamId: active }
   })
 
 /** GET — whether the caller may view the given dashboard team (`/t/<id>` loader
  *  gate). Enumeration-safe: a team the caller isn't a member of returns false, so
  *  the loader throws the same generic not-found as a missing loop — never
- *  confirming the team exists. `__all__` is honored only for admins. Open mode ⇒
- *  always true (single shared workspace). */
+ *  confirming the team exists. Open mode ⇒ always true (single shared workspace). */
 export const canViewTeam = createServerFn({ method: 'GET' })
   .validator((teamId: string) => teamId)
   .handler(async ({ data: teamId }): Promise<boolean> => {
@@ -114,19 +107,17 @@ export const canViewTeam = createServerFn({ method: 'GET' })
     const scope = await requestScope(teamId)
     if (!scope.enforce) return true // open mode: single workspace
     if (!scope.userId) return false // signed out under the gate
-    if (scope.allTeams) return true // admin aggregate (requestScope validated isAdmin)
-    // requestScope honored the requested team ⇒ member (or admin picking it);
-    // a rejected team fell through to the personal team, so this won't match.
+    // requestScope honored the requested team ⇒ member; a rejected team fell
+    // through to the personal team, so this won't match.
     return scope.teamId === teamId
   })
 
-/** GET — the caller's default dashboard team as an id (or the `__all__` sentinel):
- *  the last-used cookie, validated, else the personal team. Backs the `/` → `/t/<id>`
- *  redirect. The route translates the id to its `/t/<param>` URL form. */
+/** GET — the caller's default dashboard team as an id: the last-used cookie,
+ *  validated, else the personal team. Backs the `/` → `/t/<id>` redirect. */
 export const getDefaultTeam = createServerFn({ method: 'GET' }).handler(async (): Promise<string> => {
   await backend()
   const scope = await requestScope()
-  return scope.allTeams ? ALL_TEAMS : scope.teamId
+  return scope.teamId
 })
 
 /** GET — the signed-in user's loops as compact summaries (newest first).
@@ -137,11 +128,11 @@ export const listJobs = createServerFn({ method: 'GET' })
   .validator((teamId?: string) => teamId)
   .handler(async ({ data: teamId }) => {
     await backend()
-    const { enforce, userId, teamId: active, allTeams } = await requestScope(teamId)
+    const { enforce, userId, teamId: active } = await requestScope(teamId)
     if (enforce && !userId) return [] as JobSummary[]
-    // Scope to the resolved active team — except an admin's "All teams" view, which
-    // lists every loop (undefined ⇒ no team filter), same as open mode.
-    const loops = (await store.listLoops(enforce && !allTeams ? active : undefined)).sort((a, b) =>
+    // Scope to the resolved active team (open mode ⇒ no team filter, the single
+    // shared workspace).
+    const loops = (await store.listLoops(enforce ? active : undefined)).sort((a, b) =>
       a.createdAt < b.createdAt ? 1 : -1,
     )
     return (await Promise.all(loops.map(toJobSummary))) as JobSummary[]
@@ -159,12 +150,10 @@ export const getJobDetail = createServerFn({ method: 'GET' })
     if (!owned) throw new Error('This loop does not exist, or you do not have access to it.')
     const detail = await toJobDetail(owned.loop)
     // Team context for the header: which team owns the loop and whether it's the
-    // caller's active team. Only under the gate (open mode is a single workspace),
-    // and NOT in the admin "All teams" aggregate view — there the admin deliberately
-    // chose the cross-team overview, so every loop would otherwise show a spurious
-    // "switch to this team" banner. When it isn't the active team (a member opened a
-    // cross-team link), the header offers a "switch to this team" affordance.
-    if (owned.enforce && !owned.allTeams && owned.loop.teamId) {
+    // caller's active team. Only under the gate (open mode is a single workspace).
+    // When it isn't the active team (a member opened a cross-team link), the header
+    // offers a "switch to this team" affordance.
+    if (owned.enforce && owned.loop.teamId) {
       const team = await store.getTeam(owned.loop.teamId)
       detail.team = { id: owned.loop.teamId, name: team?.name ?? 'Unknown team', isActive: owned.loop.teamId === owned.teamId }
     }
@@ -244,10 +233,8 @@ export const createJob = createServerFn({ method: 'POST' })
   .validator((d: JobPayload & { machineId?: string }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {
     const { scheduler } = await backend()
-    const { enforce, userId, teamId, allTeams } = await requestScope()
+    const { enforce, userId, teamId } = await requestScope()
     if (enforce && !userId) return { error: 'not signed in' }
-    // Fail SAFE in the admin "All teams" aggregate view (mirrors mintClaim).
-    if (allTeams) return { error: PICK_TEAM_ERROR }
     const owner = userId ?? 'shared'
     // Membership-scoped machine pick: any machine whose owner belongs to the active
     // team (one machine serves all of its owner's teams, report §2.3). Open mode has
@@ -399,9 +386,7 @@ export const mintClaim = createServerFn({ method: 'POST' })
     const { mintDeviceToken, rememberConnectKey } = await import('../gateway/tokens.js')
     // Honor the tab's explicit team (the `/t/<id>` dashboard) so a loop captured
     // from team B's dashboard binds to team B even if the cookie's last-used is A.
-    const { userId, teamId: active, allTeams } = await requestScope(teamId)
-    // Fail SAFE in the admin "All teams" aggregate view (mirrors createJob).
-    if (allTeams) return { error: PICK_TEAM_ERROR }
+    const { userId, teamId: active } = await requestScope(teamId)
     const owner = userId ?? 'shared'
     const token = mintDeviceToken()
     // Bind the minter (so the machine that self-registers with this token — and

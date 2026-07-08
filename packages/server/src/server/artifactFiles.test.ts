@@ -150,10 +150,10 @@ test("canAccessLoop authorizes by MEMBERSHIP, not the active team (cross-team-li
   await store.ensureTeam("team-cas-b", "B", "u1"); // other team u1 belongs to
   await store.ensureTeam("team-cas-c", "C", "u2"); // a team u1 is NOT in
 
-  const open = { enforce: false, userId: null, teamId: "team-shared", isAdmin: false, allTeams: false };
+  const open = { enforce: false, userId: null, teamId: "team-shared" };
   expect(await auth.canAccessLoop("team-x", open)).toBe(true); // open mode ⇒ all visible
 
-  const scoped = { enforce: true, userId: "u1", teamId: "team-cas-a", isAdmin: false, allTeams: false };
+  const scoped = { enforce: true, userId: "u1", teamId: "team-cas-a" };
   expect(await auth.canAccessLoop("team-cas-a", scoped)).toBe(true); // active team (fast path)
   // The reported bug: a loop in team B, opened while active team = A. u1 IS a member
   // of B, so it must OPEN — not return not-found.
@@ -162,10 +162,6 @@ test("canAccessLoop authorizes by MEMBERSHIP, not the active team (cross-team-li
   expect(await auth.canAccessLoop("team-cas-c", scoped)).toBe(false); // non-member
 
   // A signed-out request (no userId) can't fall through to a membership check.
-  const anon = { enforce: true, userId: null, teamId: "team-cas-a", isAdmin: false, allTeams: false };
+  const anon = { enforce: true, userId: null, teamId: "team-cas-a" };
   expect(await auth.canAccessLoop("team-cas-b", anon)).toBe(false);
-
-  // Superadmins retain cross-team visibility for any team.
-  const admin = { enforce: true, userId: "a", teamId: "team-a", isAdmin: true, allTeams: false };
-  expect(await auth.canAccessLoop("team-anything", admin)).toBe(true);
 });

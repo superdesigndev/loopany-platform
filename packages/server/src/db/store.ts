@@ -37,7 +37,6 @@ import {
   type StateField,
   type Team,
 } from "./schema.js";
-import { user } from "./auth-schema.js";
 
 // ---- coercion helpers (carried from c0 store.ts) ----
 
@@ -436,17 +435,6 @@ export async function listTeamsForUser(userId: string): Promise<Team[]> {
     .where(eq(teamMembers.userId, userId))
     .orderBy(desc(teams.createdAt));
   return rows.map((r) => r.t);
-}
-
-/** Every team — superadmin-only cross-team visibility. */
-export async function listAllTeams(): Promise<Team[]> {
-  return db.select().from(teams).orderBy(desc(teams.createdAt));
-}
-
-/** A user's email (Better Auth `user` row), or null. Used by the gateway to
- *  re-check superadmin authorization at loop-create time without an auth import. */
-export async function userEmail(userId: string): Promise<string | null> {
-  return (await db.select({ email: user.email }).from(user).where(eq(user.id, userId)))[0]?.email ?? null;
 }
 
 /** Whether the user is a member of the team (authorizes a team-switch request). */

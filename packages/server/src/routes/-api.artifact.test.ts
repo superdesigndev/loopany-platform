@@ -51,7 +51,7 @@ const bytes = Buffer.from([1, 2, 3, 4])
 const readBytes = vi.fn()
 
 vi.mock('../db/store.js', () => ({ getLoop: vi.fn(async () => ({ id: 'loop-1', teamId: 'team-1' })) }))
-vi.mock('../auth.js', () => ({ requestScope: vi.fn(async () => ({})), loopInScope: vi.fn(() => true) }))
+vi.mock('../auth.js', () => ({ requestScope: vi.fn(async () => ({})), canAccessLoop: vi.fn(async () => true) }))
 vi.mock('../server/artifactFiles.js', () => ({ readLoopArtifactBytes: (...a: unknown[]) => readBytes(...a) }))
 
 describe('/api/artifact/$loopId/$ dispositions', () => {
