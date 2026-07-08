@@ -1,13 +1,14 @@
 import type { TeamsView } from '../types'
+import { setActiveTeamCookie } from '../lib/teamCookie'
 
 /** Sentinel matching auth.ALL_TEAMS — the admin "All teams" aggregate view. */
 const ALL_TEAMS = '__all__'
 
-/** Persist the active-team choice as a cookie the server validates in
- *  requestScope, then refresh the host page's data. Client-set is fine: the
- *  server never trusts it blind (membership/admin is re-checked each request). */
+/** Persist the active-team choice (the shared cookie writer), then refresh the
+ *  host page's data. The server validates the cookie in requestScope, so a
+ *  client-set is fine (membership/admin is re-checked each request). */
 function selectTeam(id: string, refresh: () => void) {
-  document.cookie = `loopany.team=${encodeURIComponent(id)}; path=/; max-age=31536000; samesite=lax`
+  setActiveTeamCookie(id)
   refresh()
 }
 

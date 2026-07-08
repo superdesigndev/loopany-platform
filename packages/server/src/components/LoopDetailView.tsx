@@ -5,6 +5,7 @@ import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../type
 import { buildEditPrompt, loopDir } from '../lib/editPrompt'
 import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, money, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
+import { setActiveTeamCookie } from '../lib/teamCookie'
 import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { LoopFilesPanel } from './LoopFilesPanel'
@@ -537,7 +538,7 @@ export function LoopDetailView({ id }: { id: string }) {
   // switch explicit so the dashboard/back-nav can follow if the user wants it.
   const crossTeam = detail.team && !detail.team.isActive ? detail.team : null
   const switchTeam = (teamId: string) => {
-    document.cookie = `loopany.team=${encodeURIComponent(teamId)}; path=/; max-age=31536000; samesite=lax`
+    setActiveTeamCookie(teamId)
     window.location.reload()
   }
   const crossTeamEl = crossTeam && (

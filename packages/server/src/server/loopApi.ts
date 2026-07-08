@@ -57,7 +57,7 @@ async function ownedLoop(id: string) {
   if (!(await canAccessLoop(loop.teamId, scope))) return undefined
   // Hand back the scope too — callers that mutate (e.g. patchJob) need `enforce`
   // and would otherwise re-run requestScope() (a second session decrypt).
-  return { loop, enforce: scope.enforce, teamId: scope.teamId }
+  return { loop, enforce: scope.enforce, teamId: scope.teamId, allTeams: scope.allTeams }
 }
 
 /** Whether the auth gate is active (a GitHub OAuth app is configured). */
@@ -124,10 +124,12 @@ export const getJobDetail = createServerFn({ method: 'GET' })
     if (!owned) throw new Error('This loop does not exist, or you do not have access to it.')
     const detail = await toJobDetail(owned.loop)
     // Team context for the header: which team owns the loop and whether it's the
-    // caller's active team. Only under the gate (open mode is a single workspace).
-    // When it isn't the active team (a member opened a cross-team link), the header
-    // offers a "switch to this team" affordance.
-    if (owned.enforce && owned.loop.teamId) {
+    // caller's active team. Only under the gate (open mode is a single workspace),
+    // and NOT in the admin "All teams" aggregate view — there the admin deliberately
+    // chose the cross-team overview, so every loop would otherwise show a spurious
+    // "switch to this team" banner. When it isn't the active team (a member opened a
+    // cross-team link), the header offers a "switch to this team" affordance.
+    if (owned.enforce && !owned.allTeams && owned.loop.teamId) {
       const team = await store.getTeam(owned.loop.teamId)
       detail.team = { id: owned.loop.teamId, name: team?.name ?? 'Unknown team', isActive: owned.loop.teamId === owned.teamId }
     }
