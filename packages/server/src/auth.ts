@@ -115,14 +115,23 @@ export interface RequestScope {
 
 /**
  * Per-request data scope. Machines / loops / channels are scoped by `teamId`.
- * The active team comes from the `loopany.team` cookie — VALIDATED here against
- * membership (or admin), never trusted blind — and falls back to the user's
- * personal team. Admins may select any team, or the `ALL_TEAMS` aggregate view.
+ * The active team is resolved from (in precedence order) an EXPLICIT team — the
+ * `/t/<teamId>` route param, so a tab/bookmark pins its own team independent of
+ * any cookie (Phase 2) — else the `loopany.team` cookie (now only a last-used
+ * default hint). Either source is VALIDATED here against membership (or admin),
+ * never trusted blind, and falls back to the user's personal team. Admins may
+ * select any team, or the `ALL_TEAMS` aggregate view.
+ *
+ * `explicitTeam` (when a non-empty string) wins over the cookie. An unauthorized
+ * value falls through to the personal team exactly like a stale cookie, so the
+ * caller can detect rejection by comparing the returned `teamId` to what it asked
+ * for (see `canViewTeam` in loopApi) without this ever leaking another team's data.
  */
-export async function requestScope(): Promise<RequestScope> {
+export async function requestScope(explicitTeam?: string | null): Promise<RequestScope> {
   const enforce = authEnabled;
   if (!enforce) {
     // Open mode ⇒ the single shared workspace; no sign-in, no admin, no switching.
+    // An explicit team from a /t/<id> URL is cosmetic here (nothing to scope to).
     const teamId = store.teamIdForUser(null);
     await store.ensureTeam(teamId, "Shared Workspace", null);
     return { enforce, userId: null, teamId, isAdmin: false, allTeams: false };
@@ -136,7 +145,9 @@ export async function requestScope(): Promise<RequestScope> {
   await store.ensureTeam(personalTeam, userId ? teamNameForEmail(user?.email) : "Shared Workspace", userId);
 
   const isAdmin = isSuperAdmin(user?.email);
-  const sel = await selectedTeam();
+  // Explicit team (route param) takes precedence over the cookie; both are
+  // membership/admin-validated below, so an explicit choice is no more trusted.
+  const sel = explicitTeam != null && explicitTeam !== "" ? explicitTeam : await selectedTeam();
   if (sel === ALL_TEAMS && isAdmin) {
     return { enforce, userId, teamId: personalTeam, isAdmin, allTeams: true };
   }

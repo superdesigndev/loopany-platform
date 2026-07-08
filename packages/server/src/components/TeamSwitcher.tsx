@@ -1,16 +1,10 @@
+import { useNavigate } from '@tanstack/react-router'
 import type { TeamsView } from '../types'
 import { setActiveTeamCookie } from '../lib/teamCookie'
+import { teamParamFromId } from '../lib/teamUrl'
 
 /** Sentinel matching auth.ALL_TEAMS — the admin "All teams" aggregate view. */
 const ALL_TEAMS = '__all__'
-
-/** Persist the active-team choice (the shared cookie writer), then refresh the
- *  host page's data. The server validates the cookie in requestScope, so a
- *  client-set is fine (membership/admin is re-checked each request). */
-function selectTeam(id: string, refresh: () => void) {
-  setActiveTeamCookie(id)
-  refresh()
-}
 
 /**
  * Header team entry. Always visible when team data exists: a single-team user
@@ -18,12 +12,22 @@ function selectTeam(id: string, refresh: () => void) {
  * invisible); anyone who can reach more than one team (or an admin, who also
  * gets the "All teams" aggregate) gets the select.
  *
- * `onSwitch` is the host page's own refetch — NOT router.invalidate: the
- * dashboard renders from its fetch-then-set poll state (seeded once from the
- * loader), so a loader re-run alone would leave the visible data stale.
+ * Switching NAVIGATES to `/t/<id>` (the explicit team URL — bookmarkable, and
+ * each tab keeps its own team). The cookie is still written, now only as the
+ * last-used default that the bare `/` redirect falls back to (no longer an
+ * authorization key). The navigation (and the route's `key={teamId}` remount) is
+ * what re-scopes the dashboard, so no refresh callback is needed.
  */
-export function TeamSwitcher({ data, onSwitch }: { data?: TeamsView; onSwitch: () => void }) {
+export function TeamSwitcher({ data }: { data?: TeamsView }) {
+  const navigate = useNavigate()
   if (!data || data.teams.length === 0) return null
+
+  const selectTeam = (id: string) => {
+    // Persist the last-used default (the `/` redirect hint), then navigate to the
+    // team's explicit dashboard URL — the loader re-scopes every list fn to it.
+    setActiveTeamCookie(id)
+    void navigate({ to: '/t/$teamId', params: { teamId: teamParamFromId(id) } })
+  }
 
   if (data.teams.length === 1 && !data.isAdmin)
     return (
@@ -39,7 +43,7 @@ export function TeamSwitcher({ data, onSwitch }: { data?: TeamsView; onSwitch: (
     <select
       aria-label="Active team"
       value={data.activeTeamId}
-      onChange={(e) => selectTeam(e.target.value, onSwitch)}
+      onChange={(e) => selectTeam(e.target.value)}
       className="lp-select cursor-pointer rounded-full bg-raised py-1 pl-3 text-label font-medium text-secondary outline-none transition-colors hover:text-display"
     >
       {data.isAdmin && <option value={ALL_TEAMS}>All teams</option>}

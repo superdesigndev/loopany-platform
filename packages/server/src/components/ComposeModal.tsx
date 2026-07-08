@@ -80,11 +80,15 @@ export function ComposeModal({
   onClose,
   onCreated,
   template = null,
+  teamId,
 }: {
   open: boolean
   onClose: () => void
   onCreated: () => void
   template?: TemplateInfo | null
+  /** The dashboard's explicit team (the `/t/<id>` route) so a captured loop binds
+   *  to the tab's team, not the shared last-used cookie. Undefined in open mode. */
+  teamId?: string
 }) {
   // Step 1 picks where the loop runs. null = chooser screen; 'local' advances to
   // the capture-from-Claude-Code paste flow. A template skips the chooser (host is
@@ -145,10 +149,10 @@ export function ComposeModal({
   useEffect(() => {
     if (!open || host !== 'local') return
     void getConfig().then(setConfig)
-    void mintClaim()
+    void mintClaim({ data: teamId })
       .then((r) => ('token' in r ? setToken(r.token) : setError(r.error)))
       .catch(() => setError('could not mint a connect key'))
-  }, [open, host])
+  }, [open, host, teamId])
 
   // Wait on the claim: Claude Code POSTs the loop with this token as `claim`.
   // If nothing lands within SLOW_WAIT_MS the paste likely didn't reach us

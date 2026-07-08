@@ -75,24 +75,31 @@ async function toSummary(m: Machine, scope: RequestScope): Promise<MachineSummar
 }
 
 /** Named machines only (pending/unnamed rows are mid-connect). Scoped to the
- *  signed-in owner when the gate is on; the full shared list in open mode. */
-export const listMachines = createServerFn({ method: 'GET' }).handler(async () => {
-  await ensureServer()
-  const scope = await requestScope()
-  const { enforce, userId, teamId, allTeams } = scope
-  if (enforce && !userId) return []
-  // Membership-scoped: a machine shows in every team its owner belongs to (one
-  // machine serves many teams, report §2.3). The admin "All teams" view + open
-  // mode list everything.
-  const list = enforce && !allTeams ? await store.listMachinesForTeam(teamId) : await store.listMachines()
-  return Promise.all(list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope)))
-})
-
-/** Act 1 — create a pending machine + token, owned by the signed-in user's team. */
-export const createMachine = createServerFn({ method: 'POST' }).handler(
-  async (): Promise<{ id: string; token: string } | { error: string }> => {
+ *  given/active team when the gate is on; the full shared list in open mode. An
+ *  explicit `teamId` (the `/t/<id>` route) scopes this request independent of the
+ *  cookie, so a tab on /t/A and one on /t/B list different machines at once. */
+export const listMachines = createServerFn({ method: 'GET' })
+  .validator((teamId?: string) => teamId)
+  .handler(async ({ data: teamId }) => {
     await ensureServer()
-    const { enforce, userId, teamId } = await requestScope()
+    const scope = await requestScope(teamId)
+    const { enforce, userId, teamId: active, allTeams } = scope
+    if (enforce && !userId) return []
+    // Membership-scoped: a machine shows in every team its owner belongs to (one
+    // machine serves many teams, report §2.3). The admin "All teams" view + open
+    // mode list everything.
+    const list = enforce && !allTeams ? await store.listMachinesForTeam(active) : await store.listMachines()
+    return Promise.all(list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope)))
+  })
+
+/** Act 1 — create a pending machine + token, owned by the signed-in user's team.
+ *  An explicit `teamId` (the `/t/<id>` route) binds the machine to that tab's team
+ *  independent of the last-used cookie, mirroring `mintClaim`/`listMachines`. */
+export const createMachine = createServerFn({ method: 'POST' })
+  .validator((teamId?: string) => teamId)
+  .handler(async ({ data: teamId }): Promise<{ id: string; token: string } | { error: string }> => {
+    await ensureServer()
+    const { enforce, userId, teamId: active } = await requestScope(teamId)
     if (enforce && !userId) return { error: 'not signed in' }
     const token = mintDeviceToken()
     const id = machineIdFromToken(token)
@@ -100,11 +107,10 @@ export const createMachine = createServerFn({ method: 'POST' }).handler(
     // Belt-and-braces: the machine row below already carries the owner, but the
     // connect-key binding also covers a daemon that first polls AFTER this row
     // was deleted/recreated (self-register falls back to the key's minter).
-    await rememberConnectKey(token, { userId: owner, teamId })
-    await store.createMachine({ id, userId: owner, teamId, name: '', tokenHash: sha256(token), token, online: false })
+    await rememberConnectKey(token, { userId: owner, teamId: active })
+    await store.createMachine({ id, userId: owner, teamId: active, name: '', tokenHash: sha256(token), token, online: false })
     return { id, token }
-  },
-)
+  })
 
 /** Poll while the connect dialog is open. Scoped like listMachines; the token
  *  rides along only for the machine's owner (the connect dialog's minter). */

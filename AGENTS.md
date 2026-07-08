@@ -159,7 +159,7 @@ computes pure functions. Run instructions: `README.md`.
   `listTemplates` returns it. Drop a new folder; the registry test (a non-empty
   `desc`/`description` per entry) covers it automatically.
 - **Dashboard entry**: the template cards render directly beside "New Loop"
-  (`routes/index.tsx`, `templates.map`). One click opens `ComposeModal` with that
+  (`components/DashboardView.tsx`, `templates.map`). One click opens `ComposeModal` with that
   `template` - it skips the host chooser, goes straight to the snippet, and appends the
   template's `description` under the config lines. `ComposeModal` handles BOTH blank
   loops (`template = null`, the two-step rail) and templates (`template` set) - there is
@@ -603,6 +603,19 @@ computes pure functions. Run instructions: `README.md`.
 
 ## Web UI gotchas
 
+- **The dashboard's team lives in the URL** (`/t/$teamId`, `routes/t.$teamId.tsx`;
+  Phase 2 of the team-URL design). The shared `DashboardView` renders it AND bare `/`
+  (open mode); the list server fns (`listJobs`/`listMachines`/`listMyTeams`) + `mintClaim`
+  take an EXPLICIT `teamId`, membership-validated via `requestScope(explicitTeam?)` (route
+  param wins over the `loopany.team` cookie), so tabs on `/t/A` and `/t/B` show different
+  teams at once. The cookie is now ONLY the bare-`/` redirect's last-used hint, never an
+  auth key. Gated `/` redirects to `/t/<last-used|personal>` (`getDefaultTeam`); the
+  signed-out CTA + open mode render at `/`. Non-member `/t/<x>` throws the same generic
+  not-found as a missing loop (`canViewTeam`, enumeration-safe). Admin aggregate is
+  `/t/all` (`lib/teamUrl.ts` maps `all`⇄`__all__`). The `/t/$teamId` route mounts
+  `DashboardView` with `key={teamId}` so a switcher `/t/A`→`/t/B` navigation re-seeds its
+  fetch-then-set poll state (same route, new param ⇒ no natural remount). Guards:
+  `-index.regression.test.ts`, `auth.test.ts` (requestScope precedence), `teamUrl.test.ts`.
 - Loop detail and run detail are PAGES, not modals: `/loops/$loopId` and
   `/loops/$loopId/runs/$runId` (route file `loops.$loopId_.runs.$runId.tsx` - the
   trailing `_` un-nests it). Never render Base UI `Dialog.*` parts (e.g. `ModalHead`)

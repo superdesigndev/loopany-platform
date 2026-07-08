@@ -6,6 +6,7 @@ import { buildEditPrompt, loopDir } from '../lib/editPrompt'
 import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, money, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { setActiveTeamCookie } from '../lib/teamCookie'
+import { teamParamFromId } from '../lib/teamUrl'
 import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { LoopFilesPanel } from './LoopFilesPanel'
@@ -538,8 +539,10 @@ export function LoopDetailView({ id }: { id: string }) {
   // switch explicit so the dashboard/back-nav can follow if the user wants it.
   const crossTeam = detail.team && !detail.team.isActive ? detail.team : null
   const switchTeam = (teamId: string) => {
+    // Persist the last-used default, then open that team's explicit dashboard
+    // (`/t/<id>`) — the Phase 2 home for a team, instead of a full reload.
     setActiveTeamCookie(teamId)
-    window.location.reload()
+    void navigate({ to: '/t/$teamId', params: { teamId: teamParamFromId(teamId) } })
   }
   const crossTeamEl = crossTeam && (
     <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border border-hairline bg-raised px-4 py-2.5">

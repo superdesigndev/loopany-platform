@@ -46,7 +46,15 @@ function CopyButton({ text }: { text: string }) {
 
 type Pending = { id: string; token: string }
 
-export function MachinesModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function MachinesModal({
+  open,
+  onClose,
+  teamId,
+}: {
+  open: boolean
+  onClose: () => void
+  teamId?: string
+}) {
   const [machines, setMachines] = useState<MachineSummary[]>([])
   const [pending, setPending] = useState<Pending | null>(null)
   const [status, setStatus] = useState<MachineSummary | null>(null)
@@ -62,11 +70,13 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
 
   const load = useCallback(async () => {
     try {
-      setMachines(await listMachines())
+      // Scope to the tab's explicit team (the `/t/<id>` route) so the modal lists
+      // the same machines the header count reflects, independent of the cookie.
+      setMachines(await listMachines({ data: teamId }))
     } catch {
       /* ignore */
     }
-  }, [])
+  }, [teamId])
 
   // Poll the machine list (online dots) while idle.
   const openRef = useRef(open)
@@ -102,7 +112,7 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
     setBusy(true)
     setDelErr(null)
     try {
-      const r = await createMachine()
+      const r = await createMachine({ data: teamId })
       if ('error' in r) {
         setDelErr(r.error)
         return
