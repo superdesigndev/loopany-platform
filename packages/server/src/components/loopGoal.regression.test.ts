@@ -12,7 +12,9 @@ import { describe, expect, it } from 'vitest'
  * Reopen + Run-once disabled) — so a refactor can't silently drop one.
  */
 const read = (p: string) => readFileSync(fileURLToPath(new URL(p, import.meta.url)), 'utf8')
-const dashboard = read('../routes/index.tsx')
+// The dashboard BODY (the open/completed split) lives in the shared DashboardView,
+// rendered by both `/` (open mode) and `/t/$teamId`.
+const dashboard = read('./DashboardView.tsx')
 const card = read('./LoopCard.tsx')
 const detail = read('./LoopDetailView.tsx')
 const format = read('../lib/format.ts')

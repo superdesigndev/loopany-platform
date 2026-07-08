@@ -75,18 +75,22 @@ async function toSummary(m: Machine, scope: RequestScope): Promise<MachineSummar
 }
 
 /** Named machines only (pending/unnamed rows are mid-connect). Scoped to the
- *  signed-in owner when the gate is on; the full shared list in open mode. */
-export const listMachines = createServerFn({ method: 'GET' }).handler(async () => {
-  await ensureServer()
-  const scope = await requestScope()
-  const { enforce, userId, teamId, allTeams } = scope
-  if (enforce && !userId) return []
-  // Membership-scoped: a machine shows in every team its owner belongs to (one
-  // machine serves many teams, report §2.3). The admin "All teams" view + open
-  // mode list everything.
-  const list = enforce && !allTeams ? await store.listMachinesForTeam(teamId) : await store.listMachines()
-  return Promise.all(list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope)))
-})
+ *  given/active team when the gate is on; the full shared list in open mode. An
+ *  explicit `teamId` (the `/t/<id>` route) scopes this request independent of the
+ *  cookie, so a tab on /t/A and one on /t/B list different machines at once. */
+export const listMachines = createServerFn({ method: 'GET' })
+  .validator((teamId?: string) => teamId)
+  .handler(async ({ data: teamId }) => {
+    await ensureServer()
+    const scope = await requestScope(teamId)
+    const { enforce, userId, teamId: active, allTeams } = scope
+    if (enforce && !userId) return []
+    // Membership-scoped: a machine shows in every team its owner belongs to (one
+    // machine serves many teams, report §2.3). The admin "All teams" view + open
+    // mode list everything.
+    const list = enforce && !allTeams ? await store.listMachinesForTeam(active) : await store.listMachines()
+    return Promise.all(list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope)))
+  })
 
 /** Act 1 — create a pending machine + token, owned by the signed-in user's team. */
 export const createMachine = createServerFn({ method: 'POST' }).handler(
