@@ -239,8 +239,10 @@ export function ArtifactBody({ loopId, file }: { loopId: string; file: ArtifactS
   // Oversize is metadata-only regardless of type: no synced bytes to render.
   if (file.oversize) return <BinaryNotice loopId={loopId} path={file.path} oversize />
   // Images (incl. SVG) render via the inline route, never inlined into the DOM.
-  // Key by path so a new file resets the inner view state (failed / mode).
-  if (kind === 'image') return <ImageView key={file.path} loopId={loopId} file={file} />
+  // Key by path AND updatedAt so a new file resets the inner state (failed) and a
+  // re-synced same-path image (no-store, unchanged src URL) remounts to refetch.
+  if (kind === 'image')
+    return <ImageView key={`${file.path}:${file.updatedAt ?? ''}`} loopId={loopId} file={file} />
   // A genuinely binary non-image (NUL bytes, no renderer) → download only.
   if (file.binary) return <BinaryNotice loopId={loopId} path={file.path} oversize={false} />
   // html / markdown / plain text.

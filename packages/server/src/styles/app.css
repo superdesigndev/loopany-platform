@@ -235,8 +235,10 @@
  * narrower than its min track. `align-items: start` stops a short panel (a
  * calendar) from stretching to a tall neighbour's (a long document) height.
  *
- * Headings, prose, and rules span the full width so ONLY block panels tile - a
- * top-level intro line never becomes a lone narrow column.
+ * Headings, prose, AND content blocks (lists, tables, code, quotes, figures,
+ * images) span the full width so ONLY block panels (the custom loop-* elements +
+ * their div wrappers) tile - a top-level intro line, list, or table never becomes
+ * a lone narrow column.
  */
 .loopview {
   display: grid;
@@ -253,7 +255,14 @@
 .loopview > p,
 .loopview > hr,
 .loopview > header,
-.loopview > footer {
+.loopview > footer,
+.loopview > ul,
+.loopview > ol,
+.loopview > table,
+.loopview > pre,
+.loopview > blockquote,
+.loopview > figure,
+.loopview > img {
   grid-column: 1 / -1;
 }
 
