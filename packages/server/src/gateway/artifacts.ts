@@ -54,8 +54,34 @@ export function safeRelPath(raw: unknown): string | null {
   return cleaned.length <= 1024 ? cleaned : null;
 }
 
-// Directory names whose entire subtree is excluded from sync.
-const IGNORE_DIRS = new Set([".git", "node_modules", ".loopany", ".DS_Store"]);
+// Directory names whose entire subtree is excluded from sync — VCS metadata,
+// dependency trees, git worktrees, and build/tool caches. A loop folder is a
+// synced CONTENT home, not a scratch workspace, so a repo clone / worktree /
+// build tree dropped in it is rejected even if a daemon transmits it (defense in
+// depth; the daemon's own watcher excludes the same set — keep the two in sync).
+const IGNORE_DIRS = new Set([
+  ".git",
+  ".loopany",
+  ".DS_Store",
+  "node_modules",
+  ".worktrees",
+  ".cache",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".turbo",
+  ".parcel-cache",
+  ".gradle",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".tox",
+  ".yarn",
+  ".pnpm-store",
+]);
 
 /**
  * Should this (already loop-relative, normalized) path be ignored entirely?

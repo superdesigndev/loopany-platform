@@ -249,9 +249,22 @@ computes pure functions. Run instructions: `README.md`.
   PUT path), and the FIRST flush after watcher start inlines nothing
   (post-restart the server already has almost everything). Bytes live in R2
   (`LOOPANY_R2_*`; in-memory store when unset - the test/dev
-  default), metadata in `blobs`/`artifact_files`. The ignore list (`.git`,
-  `node_modules`, `.env*`, key files, ...) is enforced on BOTH daemon and server.
-  Per-file cap 10MB (larger = metadata-only `oversize`).
+  default), metadata in `blobs`/`artifact_files`. The **never-syncable dir** list
+  (`.git`, `node_modules`, `.worktrees`, common build/tool caches, `.loopany`) +
+  `.env*`/key files is enforced on BOTH daemon (`watcher.ts` `IGNORE_DIRS`) and
+  server (`gateway/artifacts.ts` `IGNORE_DIRS`) - keep the two in sync. Per-file
+  cap 10MB (larger = metadata-only `oversize`).
+- **A loop folder is a synced CONTENT home, not a scratch workspace** (the
+  2026-07-07 prod incident: a run dropped a 1.3GB/125k-file git worktree in the
+  loop dir and flooded sync). Two defenses: (1) the never-syncable dirs above
+  exclude a checkout/worktree/build tree at the source; (2) `watcher.ts`
+  `capManifest` bounds every sync to a per-loop file-count + byte ceiling
+  (`LOOPANY_SYNC_MAX_FILES` 5000 / `LOOPANY_SYNC_MAX_BYTES` 256MB) - over either,
+  it keeps the shallowest-then-smallest files (the top-level content home always
+  survives) and DROPS the overflow with ONE loud warning, so the bounded POST
+  can't 413/timeout into an endless retry storm. The SKILL teaches runs to keep
+  heavy work OUT of the loop folder (`skill/run/exec-core.md` non-negotiable +
+  `references/run.md` §1 + `create.md` §3 + the worktree templates).
 - `run_snapshots` capture the manifest at `report()`; `getRunDiff` diffs run N vs
   the prior snapshot (jsdiff) for the run page's "Changes".
 - **Front-matter convention** (migration `0018`, `blobs.meta`): markdown products

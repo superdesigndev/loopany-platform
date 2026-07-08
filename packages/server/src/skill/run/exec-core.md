@@ -16,6 +16,7 @@ loopany report --status new --message "<one short message to the user>"
 loopany finish --message "<what was achieved>" --reason "<why the goal is met>"   # goal loops only
 
   `--status` is `new` (something appeared or changed worth surfacing), `resolved` (a previously-reported issue is gone), or `nothing-new`. Always report — even `nothing-new` — so the run is on record; keep `--message` short and human (long bodies → `--message-file <path>`). `finish` is terminal and completes the loop, so hold a strict bar: end that way only when the goal is genuinely met from real evidence this run. When unsure, `report`.
+- **Keep the loop folder a content home, not a workspace.** This loop's folder ({{taskFile}}'s directory) is continuously synced to the server — only the task file, reports, state, dashboard `ui`, and small artifacts belong in it. NEVER create heavy work products inside it: a repo clone, a git worktree, `node_modules`, build output, or caches. When a task needs a checkout or scratch space, do that work OUTSIDE the loop folder (e.g. a sibling dir or a temp dir like `$(mktemp -d)`) and write only the resulting report/artifact back into the loop folder.
 - **One pass, then stop.** You'll be woken again on schedule. Do not poll, sleep, or wait.
 
 Run now.

@@ -14,7 +14,7 @@ Read the task file first. It is this loop's single source of truth and persists 
 - `## Timeline` — append-only log of prior runs
 If it does not exist yet, create it from the instruction you were given.
 
-The task file lives in this loop's own folder (`loopany/<slug>/`). That folder is the loop's home: write any artifacts you produce — reports, exports, scratch — inside it by default, so the loop's output stays self-contained. When you write a markdown product, open it with the front-matter block the Spec defines — a fenced `---` block of simple `type: … / title: … / date: …` scalars, reusing the Spec's `type` vocabulary — so it's typed and dated on the dashboard.
+The task file lives in this loop's own folder (`loopany/<slug>/`). That folder is the loop's home AND a synced content home: write your lightweight products — reports, exports, dashboard `ui`, small artifacts — inside it by default, so the loop's output stays self-contained. But NEVER create heavy work products in it (a repo clone, a git worktree, `node_modules`, build output, caches) — the daemon syncs this folder continuously, so do that work OUTSIDE it (a sibling or temp dir) and write only the finished artifact back in. When you write a markdown product, open it with the front-matter block the Spec defines — a fenced `---` block of simple `type: … / title: … / date: …` scalars, reusing the Spec's `type` vocabulary — so it's typed and dated on the dashboard.
 
 ## 2. Do the work, surface only what changed
 - Carry out the Spec against the current state of the system.

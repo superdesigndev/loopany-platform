@@ -164,6 +164,8 @@ test("ignore rules keep .git / node_modules / secrets out entirely (server defen
       { path: "report.md", hash: h("ok"), size: 2 },
       { path: ".git/config", hash: h("g"), size: 1 },
       { path: "node_modules/dep/index.js", hash: h("n"), size: 1 },
+      { path: ".worktrees/2026-07-07-fix/src/App.jsx", hash: h("w"), size: 1 },
+      { path: ".next/cache/blob", hash: h("c"), size: 1 },
       { path: ".env", hash: h("e"), size: 1 },
       { path: "secrets/server.pem", hash: h("p"), size: 1 },
       { path: "nested/id_rsa", hash: h("k"), size: 1 },

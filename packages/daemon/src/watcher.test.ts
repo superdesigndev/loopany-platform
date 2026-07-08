@@ -17,10 +17,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { LOOPANY_DIR } from "./config.js";
-import { buildManifest, flushLoop, INLINE_TOTAL_CAP, WatchManager, type HashCacheEntry, type SyncFetch } from "./watcher.js";
+import { buildManifest, capManifest, flushLoop, INLINE_TOTAL_CAP, WatchManager, type HashCacheEntry, type SyncFetch } from "./watcher.js";
 
 const sha256 = (buf: Buffer): string => createHash("sha256").update(buf).digest("hex");
 
@@ -146,6 +146,82 @@ describe("buildManifest — incremental stat cache", () => {
     ]);
     expect(second.cache.has("b.txt")).toBe(false);
   });
+
+  test("never-syncable dirs (.worktrees, node_modules, .git, caches) are excluded — a repo/worktree dropped in the loop folder never floods the manifest", async () => {
+    fs.writeFileSync(path.join(root, "report.md"), "content");
+    for (const d of [".worktrees", "node_modules", ".git", ".cache", "__pycache__", ".venv"]) {
+      const sub = path.join(root, d, "deep");
+      fs.mkdirSync(sub, { recursive: true });
+      fs.writeFileSync(path.join(sub, "junk.js"), "junk");
+    }
+    const b = await buildManifest(root);
+    expect(b.entries.map((e) => e.path)).toEqual(["report.md"]);
+  });
+});
+
+describe("capManifest — per-loop sync caps", () => {
+  const entry = (p: string, size: number) => ({ path: p, hash: sha256(Buffer.from(p)), size, binary: false, oversize: false });
+  const oversize = (p: string, size: number) => ({ path: p, hash: null, size, binary: false, oversize: true });
+
+  test("under both caps the manifest is returned untouched (zero-cost common case)", () => {
+    const entries = [entry("a", 10), entry("b", 20)];
+    const r = capManifest(entries, 100, 1000);
+    expect(r.breached).toBe(false);
+    expect(r.kept).toBe(entries); // same reference — un-capped behavior is byte-identical
+    expect(r.droppedFiles).toBe(0);
+  });
+
+  test("over the file-count cap keeps the smallest files (the run's real content) and drops the overflow", () => {
+    const entries = [entry("big", 5000), entry("report.md", 10), entry("state.json", 20), entry("mid", 3000)];
+    const r = capManifest(entries, 2, 1_000_000);
+    expect(r.breached).toBe(true);
+    expect(r.droppedFiles).toBe(2);
+    expect(r.kept.map((e) => e.path).sort()).toEqual(["report.md", "state.json"]);
+  });
+
+  test("over the byte cap sheds the large files while the small content still fits", () => {
+    const entries = [entry("report.md", 100), entry("huge", 10_000), entry("state.json", 200)];
+    const r = capManifest(entries, 100, 1000); // 1000-byte budget
+    expect(r.breached).toBe(true);
+    expect(r.kept.map((e) => e.path).sort()).toEqual(["report.md", "state.json"]);
+    expect(r.keptBytes).toBe(300);
+  });
+
+  test("top-level content is kept over a deeper flood of even-smaller files (depth beats size — the content home survives)", () => {
+    // The real content (report.md, 200 bytes) lives at the top; a flood of tiny
+    // 1-byte files nests in a checkout subdir. Pure smallest-first would evict
+    // report.md; depth-first keeps it.
+    const flood = Array.from({ length: 20 }, (_, i) => entry(`checkout/src/f${i}.js`, 1));
+    const r = capManifest([entry("report.md", 200), ...flood], 3, 1_000_000);
+    expect(r.breached).toBe(true);
+    expect(r.kept.map((e) => e.path)).toContain("report.md");
+  });
+
+  test("an oversize (metadata-only) entry is byte-cap-exempt but still counts toward the file-count cap", () => {
+    // A single legitimate huge artifact (500MB) syncs as metadata only — zero bytes
+    // transferred — so it must NOT trip the byte cap alongside normal small content.
+    const entries = [oversize("big.zip", 500 * 1024 * 1024), entry("report.md", 100), entry("state.json", 200)];
+    const r = capManifest(entries, 100, 1000); // 1000-byte budget, well under 500MB
+    expect(r.breached).toBe(false);
+    expect(r.kept).toBe(entries); // untouched — byte tally excludes the oversize entry
+    expect(r.totalBytes).toBe(300);
+
+    // ...but a genuine file-count flood still trips even when the overflow is oversize.
+    const flood = Array.from({ length: 20 }, (_, i) => oversize(`checkout/f${i}.zip`, 500 * 1024 * 1024));
+    const capped = capManifest([entry("report.md", 100), ...flood], 3, 1_000_000);
+    expect(capped.breached).toBe(true);
+    expect(capped.kept.map((e) => e.path)).toContain("report.md");
+    expect(capped.kept).toHaveLength(3);
+    expect(capped.keptBytes).toBe(100); // oversize kept entries add nothing to keptBytes
+  });
+
+  test("selection is deterministic across calls (same files stay dropped — no add/delete churn between flushes)", () => {
+    const entries = Array.from({ length: 50 }, (_, i) => entry(`f${i}`, 100 - i));
+    const a = capManifest(entries, 10, 1_000_000);
+    const b = capManifest(entries, 10, 1_000_000);
+    expect(a.kept.map((e) => e.path)).toEqual(b.kept.map((e) => e.path));
+    expect(a.kept).toHaveLength(10);
+  });
 });
 
 // ---- flush pipeline against an injected in-memory sync server ----
@@ -225,5 +301,48 @@ describe("LoopWatcher flush pipeline (injected sync server)", () => {
     }
     // …yet every byte still converges (the overflow took the PUT path).
     for (const buf of files) expect(srv.store.get(sha256(buf))?.equals(buf)).toBe(true);
+  });
+});
+
+describe("LoopWatcher sync caps — graceful degradation of a flooded loop folder", () => {
+  test("over the file-count cap: the smallest real-content files keep syncing, the bulk work product is dropped, and the sync converges in ONE bounded POST (no doomed retry)", async () => {
+    // Re-import with a tiny cap so the test doesn't need thousands of files. The
+    // caps are read at module load (like the transient-retry consts), so a fresh
+    // module instance picks up the env — the static-import tests are unaffected.
+    vi.resetModules();
+    process.env.LOOPANY_SYNC_MAX_FILES = "3";
+    const w = await import("./watcher.js");
+    try {
+      const dir = path.join(root, "loop");
+      fs.mkdirSync(dir);
+      // The loop's real content: two tiny files a run legitimately writes.
+      fs.writeFileSync(path.join(dir, "report.md"), "r");
+      fs.writeFileSync(path.join(dir, "state.json"), "s");
+      // A run misbehaved and dropped a repo-checkout-like tree into the folder.
+      const checkout = path.join(dir, "checkout");
+      fs.mkdirSync(checkout);
+      for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(checkout, `f${i}.js`), Buffer.alloc(1000, `x${i}`));
+
+      const srv = fakeSyncServer();
+      const m = new w.WatchManager("https://srv.test", "dk_x", [], srv.fetchImpl);
+      m.reconcile([{ loopId: "l1", workdir: dir, taskFile: null }]);
+      await w.flushLoop("l1");
+      await m.closeAll();
+
+      // Exactly ONE bounded sync POST — never a doomed giant that 413s and hot-retries.
+      expect(srv.syncs).toHaveLength(1);
+      const synced = srv.syncs[0].manifest.map((e) => e.path);
+      expect(synced).toHaveLength(3); // capped at MAX_SYNC_FILES
+      // The two tiny real-content files are the smallest → always kept and synced.
+      expect(synced).toContain("report.md");
+      expect(synced).toContain("state.json");
+      expect(srv.store.get(sha256(Buffer.from("r")))?.toString()).toBe("r");
+      expect(srv.store.get(sha256(Buffer.from("s")))?.toString()).toBe("s");
+      // The bulk checkout is shed (only the single file that fit under the cap remains).
+      expect(synced.filter((p) => p.startsWith("checkout/"))).toHaveLength(1);
+    } finally {
+      delete process.env.LOOPANY_SYNC_MAX_FILES;
+      vi.resetModules();
+    }
   });
 });

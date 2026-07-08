@@ -44,8 +44,20 @@ three standing sections:
   timestamped entry per run.
 
 If the file does not exist yet, a run creates it from its Spec. That folder is the
-loop's home: any artifacts a run produces — reports, exports, scratch — go inside it
-by default, so the loop's output stays self-contained.
+loop's home: a run's real products — the task file, reports, exports, dashboard `ui`,
+small artifacts — go inside it by default, so the loop's output stays self-contained.
+
+**The loop folder is a synced content home, not a scratch workspace.** The daemon
+continuously syncs this folder to the server, so it must hold only lightweight content
+(reports, state, ui, small artifacts) — never a heavy work product. If a run needs to
+clone a repo, open a git worktree, install dependencies (`node_modules`), or produce
+build output or caches, it does that work **outside** the loop folder — a sibling
+directory next to the loop folder, or a throwaway temp dir (`mktemp -d`) — and writes
+only the finished report or artifact back into the loop folder. A repo checkout or a
+`.worktrees/` tree dumped inside the loop folder floods the sync and degrades it for
+every loop on the machine; keep bulk out. (The daemon defensively caps how much it will
+sync per loop and excludes never-syncable dirs like `node_modules`/`.git`/`.worktrees`,
+but the run should not rely on that — put heavy work in the right place to begin with.)
 
 **Compress, don't append forever.** The Timeline is bounded, not an ever-growing log.
 As a run adds its entry, it folds older, now-stale entries up into

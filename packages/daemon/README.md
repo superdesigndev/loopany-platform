@@ -81,8 +81,13 @@ idle it opts into a bounded server-held long-poll so a due run dispatches almost
 instantly; with a run in flight it keeps a short poll so progress keeps flowing.
 When a run is due it executes claude-code in the loop's own folder, live-syncs
 that folder's files back to the server (secrets and junk like `.env*`,
-`node_modules`, `.git` are never sent), and reports the outcome. Your code and
-credentials stay on your machine.
+`node_modules`, `.git`, `.worktrees`, and build/tool caches are never sent), and
+reports the outcome. The loop folder is a synced **content home** (reports,
+state, ui, small artifacts) - not a scratch workspace: heavy work products (a
+repo clone, a git worktree, build output) belong outside it, and the daemon
+defensively caps how much it syncs per loop (`LOOPANY_SYNC_MAX_FILES` /
+`LOOPANY_SYNC_MAX_BYTES`) so a stray checkout can never flood the sync. Your code
+and credentials stay on your machine.
 
 The package also bundles the **loopany agent skill**, which teaches a coding
 agent how to author and evolve loops; `loopany up` (and `loopany new`) install
