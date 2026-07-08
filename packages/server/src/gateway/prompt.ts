@@ -221,6 +221,6 @@ export function buildEvolveTask(loop: Loop, runs: Run[]): string {
     "Current ui:\n" + (loop.ui ? "```html\n" + loop.ui + "\n```" : "(none yet — author one if the data warrants it)"),
     "Current workflow:\n" + (loop.workflow ? "```js\n" + loop.workflow + "\n```" : "(none)"),
     renderRecentRuns(runs),
-    "Evolve this loop per your instructions: review the recent runs' log to sharpen the task (its brief) and distil/refine the workflow, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `loopany report --message '<one line: which levers you pulled and why, or \"no change\" and why>'` — an internal run-log line; evolution never notifies the user.",
+    "Evolve this loop per your instructions: review the recent runs' log to sharpen AND distill the task file, distil/refine the workflow, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `loopany report --message '<one line: which levers you pulled and why, or \"no change\" and why>'` — an internal run-log line; evolution never notifies the user.",
   ].join("\n\n");
 }
