@@ -238,7 +238,9 @@
  * Headings, prose, AND content blocks (lists, tables, code, quotes, figures,
  * images) span the full width so ONLY block panels (the custom loop-* elements +
  * their div wrappers) tile - a top-level intro line, list, or table never becomes
- * a lone narrow column.
+ * a lone narrow column. A top-level <section> joins header/footer as a full-width
+ * semantic container; explicit <div> wrappers still tile (the intended two-column
+ * panel mechanism).
  */
 .loopview {
   display: grid;
@@ -256,6 +258,7 @@
 .loopview > hr,
 .loopview > header,
 .loopview > footer,
+.loopview > section,
 .loopview > ul,
 .loopview > ol,
 .loopview > table,
