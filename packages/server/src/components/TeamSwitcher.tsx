@@ -15,10 +15,10 @@ const ALL_TEAMS = '__all__'
  * Switching NAVIGATES to `/t/<id>` (the explicit team URL — bookmarkable, and
  * each tab keeps its own team). The cookie is still written, now only as the
  * last-used default that the bare `/` redirect falls back to (no longer an
- * authorization key). `onSwitch` is retained for the caller's own refresh needs
- * but the navigation is what re-scopes the dashboard.
+ * authorization key). The navigation (and the route's `key={teamId}` remount) is
+ * what re-scopes the dashboard, so no refresh callback is needed.
  */
-export function TeamSwitcher({ data, onSwitch: _onSwitch }: { data?: TeamsView; onSwitch: () => void }) {
+export function TeamSwitcher({ data }: { data?: TeamsView }) {
   const navigate = useNavigate()
   if (!data || data.teams.length === 0) return null
 

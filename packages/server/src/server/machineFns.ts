@@ -92,11 +92,14 @@ export const listMachines = createServerFn({ method: 'GET' })
     return Promise.all(list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope)))
   })
 
-/** Act 1 — create a pending machine + token, owned by the signed-in user's team. */
-export const createMachine = createServerFn({ method: 'POST' }).handler(
-  async (): Promise<{ id: string; token: string } | { error: string }> => {
+/** Act 1 — create a pending machine + token, owned by the signed-in user's team.
+ *  An explicit `teamId` (the `/t/<id>` route) binds the machine to that tab's team
+ *  independent of the last-used cookie, mirroring `mintClaim`/`listMachines`. */
+export const createMachine = createServerFn({ method: 'POST' })
+  .validator((teamId?: string) => teamId)
+  .handler(async ({ data: teamId }): Promise<{ id: string; token: string } | { error: string }> => {
     await ensureServer()
-    const { enforce, userId, teamId } = await requestScope()
+    const { enforce, userId, teamId: active } = await requestScope(teamId)
     if (enforce && !userId) return { error: 'not signed in' }
     const token = mintDeviceToken()
     const id = machineIdFromToken(token)
@@ -104,11 +107,10 @@ export const createMachine = createServerFn({ method: 'POST' }).handler(
     // Belt-and-braces: the machine row below already carries the owner, but the
     // connect-key binding also covers a daemon that first polls AFTER this row
     // was deleted/recreated (self-register falls back to the key's minter).
-    await rememberConnectKey(token, { userId: owner, teamId })
-    await store.createMachine({ id, userId: owner, teamId, name: '', tokenHash: sha256(token), token, online: false })
+    await rememberConnectKey(token, { userId: owner, teamId: active })
+    await store.createMachine({ id, userId: owner, teamId: active, name: '', tokenHash: sha256(token), token, online: false })
     return { id, token }
-  },
-)
+  })
 
 /** Poll while the connect dialog is open. Scoped like listMachines; the token
  *  rides along only for the machine's owner (the connect dialog's minter). */

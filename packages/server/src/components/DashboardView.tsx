@@ -117,7 +117,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         <div className="mx-auto flex max-w-[1180px] items-center gap-3 px-8 py-2.5">
           <LoopLogo size={30} />
           <span className="text-[18px] font-semibold tracking-[-0.015em] text-display">Loopany</span>
-          <TeamSwitcher data={teams} onSwitch={refresh} />
+          <TeamSwitcher data={teams} />
           <div className="flex-1" />
           <button onClick={() => setNotifyOpen(true)} className={headerBtn}>
             Notifications
@@ -202,7 +202,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         onCreated={refresh}
       />
 
-      <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} />
+      <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} teamId={teamId} />
 
       <NotificationsModal open={notifyOpen} onClose={() => setNotifyOpen(false)} />
     </Tooltip.Provider>

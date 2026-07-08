@@ -55,7 +55,7 @@ describe('dashboard poll resilience', () => {
     // the loader), so router.invalidate would leave the visible data stale. Phase
     // 2: switching NAVIGATES to the team's explicit URL (the loader re-scopes),
     // and the /t/$teamId route re-seeds via key={teamId}.
-    expect(view).toContain('<TeamSwitcher data={teams} onSwitch={refresh} />')
+    expect(view).toContain('<TeamSwitcher data={teams} />')
     expect(teamRoute).toContain('key={loaded!.teamId}')
     expect(switcher).toContain("to: '/t/$teamId'")
     expect(switcher).not.toContain('useRouter')
