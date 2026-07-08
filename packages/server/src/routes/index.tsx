@@ -2,7 +2,6 @@ import { createFileRoute, redirect, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
 import { getAuthState, getDefaultTeam, listTemplates } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
-import { teamParamFromId } from '../lib/teamUrl'
 import { DashboardView, fetchLiveData, type DashboardData } from '../components/DashboardView'
 import { SignIn } from '../components/SignIn'
 import { LoadErrorCard } from '../components/actionUi'
@@ -26,7 +25,7 @@ export const Route = createFileRoute('/')({
       // last-used cookie (else the personal team) server-side; a single-team user
       // lands on their only team with zero friction.
       const teamId = await getDefaultTeam()
-      throw redirect({ to: '/t/$teamId', params: { teamId: teamParamFromId(teamId) } })
+      throw redirect({ to: '/t/$teamId', params: { teamId } })
     }
     // Open mode: one shared workspace, no team segment. Render the dashboard here.
     const initial = { ...(await fetchLiveData()), templates: await listTemplates() }

@@ -2,7 +2,6 @@ import { createFileRoute, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
 import { canViewTeam, getAuthState, listTemplates } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
-import { teamIdFromParam } from '../lib/teamUrl'
 import { DashboardView, fetchLiveData, type DashboardData } from '../components/DashboardView'
 import { SignIn } from '../components/SignIn'
 import { LoadErrorCard } from '../components/actionUi'
@@ -11,8 +10,7 @@ import { LoadErrorCard } from '../components/actionUi'
  * The explicit-team dashboard (`/t/<teamId>`, Phase 2): the same dashboard scoped
  * to the team in the PATH, so a view is bookmarkable and each browser tab keeps
  * its own team (the list server fns take an explicit `teamId`, independent of the
- * shared last-used cookie). The admin "All teams" aggregate is `/t/all` (the `all`
- * segment maps to the `__all__` sentinel).
+ * shared last-used cookie). A team id rides the URL verbatim.
  *
  * The loader validates membership (`canViewTeam`) and, on failure, throws the SAME
  * generic not-found as a missing loop — never confirming a team exists to a
@@ -24,7 +22,7 @@ export const Route = createFileRoute('/t/$teamId')({
   loader: async ({
     params,
   }): Promise<{ mode: 'signin' | 'dashboard'; auth: { enabled: boolean }; teamId: string; initial?: DashboardData }> => {
-    const teamId = teamIdFromParam(params.teamId)
+    const teamId = params.teamId
     const auth = await getAuthState()
     if (auth.enabled) {
       const { data: session } = await authClient.getSession()

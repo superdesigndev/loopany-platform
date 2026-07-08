@@ -44,7 +44,6 @@ import {
   type ClaimResult,
   type RunLease,
 } from "./tokens.js";
-import { isSuperAdmin } from "../superadmin.js";
 import {
   countLine,
   detailBlock,
@@ -825,14 +824,12 @@ export class MachineGateway {
       //  - bind the claim to its minter: the same human who minted it under a
       //    validated team session must be the one creating the loop;
       //  - RE-VALIDATE authorization NOW (membership can change after mint),
-      //    mirroring requestScope: a current team member, or a superadmin on an
-      //    existing team. The team value itself is server-minted, never client input.
+      //    mirroring requestScope: a current team member. The team value itself
+      //    is server-minted, never client input.
       if (machine.userId !== intent.userId) {
         return { status: 403, body: { error: "connect-key was minted by a different user" } };
       }
-      const authorized =
-        (await store.isTeamMember(intent.teamId, machine.userId)) ||
-        (!!(await store.getTeam(intent.teamId)) && isSuperAdmin(await store.userEmail(machine.userId)));
+      const authorized = await store.isTeamMember(intent.teamId, machine.userId);
       if (!authorized) {
         return { status: 403, body: { error: "not authorized to create loops in that team" } };
       }

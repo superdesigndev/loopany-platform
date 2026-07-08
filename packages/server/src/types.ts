@@ -327,8 +327,6 @@ export interface TemplateInfo {
 /** The team switcher's data: the teams this user may view + the active selection. */
 export interface TeamsView {
   teams: { id: string; name: string }[]
-  /** The active team id, or the `__all__` sentinel for an admin's aggregate view. */
+  /** The active team id. */
   activeTeamId: string
-  isAdmin: boolean
-  allTeams: boolean
 }

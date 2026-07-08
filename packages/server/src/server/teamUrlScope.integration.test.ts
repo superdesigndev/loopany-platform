@@ -29,7 +29,6 @@ let store: typeof import('../db/store.js')
 let authMod: typeof import('../auth.js')
 
 const MEMBER = 'u_member'
-const ADMIN = 'u_admin'
 let TEAM_A = '' // MEMBER's personal team (owner)
 const TEAM_B = 'team-b' // MEMBER joined as a plain member
 const TEAM_C = 'team-c' // MEMBER is NOT a member
@@ -50,11 +49,11 @@ async function seedLoop(teamId: string, name: string) {
 }
 
 /** listJobs' body, verbatim: resolve the explicit team, then list that team's
- *  loops (admin "all" ⇒ no filter). Returns loop names for readable evidence. */
+ *  loops. Returns loop names for readable evidence. */
 async function listJobsFor(explicitTeam?: string): Promise<string[]> {
-  const { enforce, userId, teamId: active, allTeams } = await authMod.requestScope(explicitTeam)
+  const { enforce, userId, teamId: active } = await authMod.requestScope(explicitTeam)
   if (enforce && !userId) return []
-  const loops = await store.listLoops(enforce && !allTeams ? active : undefined)
+  const loops = await store.listLoops(enforce ? active : undefined)
   return loops.map((l) => l.name ?? '(unnamed)').sort()
 }
 
@@ -63,14 +62,13 @@ async function canViewTeam(explicitTeam: string): Promise<boolean> {
   const scope = await authMod.requestScope(explicitTeam)
   if (!scope.enforce) return true
   if (!scope.userId) return false
-  if (scope.allTeams) return true
   return scope.teamId === explicitTeam
 }
 
 /** getDefaultTeam's body, verbatim: the bare-"/" redirect target. */
 async function getDefaultTeam(): Promise<string> {
   const scope = await authMod.requestScope()
-  return scope.allTeams ? authMod.ALL_TEAMS : scope.teamId
+  return scope.teamId
 }
 
 beforeAll(async () => {
@@ -81,7 +79,6 @@ beforeAll(async () => {
   process.env.GITHUB_CLIENT_ID = 'gh-id'
   process.env.GITHUB_CLIENT_SECRET = 'gh-secret'
   process.env.LOOPANY_AUTH_SECRET = 'test-secret'
-  process.env.LOOPANY_SUPERADMINS = 'admin@example.com'
 
   db = await import('../db/index.js')
   await db.runMigrations()
@@ -154,16 +151,5 @@ describe('two tabs on /t/A and /t/B render different teams at once (explicit tea
     console.log('\n=== bare "/" redirect target (getDefaultTeam) ===')
     console.log(`  cookie loopany.team=${TEAM_B} -> redirect /t/${target}`)
     expect(target).toBe(TEAM_B)
-  })
-
-  it('an admin may pin /t/all (aggregate) and see every team’s loops', async () => {
-    signInAs(ADMIN, 'admin@example.com')
-    const canAll = await canViewTeam(authMod.ALL_TEAMS)
-    const names = await listJobsFor(authMod.ALL_TEAMS)
-    console.log('\n=== admin /t/all aggregate ===')
-    console.log('  canViewTeam("__all__") ->', canAll)
-    console.log('  listJobs("__all__") ->', names)
-    expect(canAll).toBe(true)
-    expect(names).toEqual(['Alpha loop (team A)', 'Bravo loop (team B)'])
   })
 })

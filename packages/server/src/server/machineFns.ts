@@ -33,10 +33,10 @@ export { machineInScope, tokenVisibleTo }
 
 /** Ids of the machines membership-visible in the scope's active team (the same
  *  set listMachines serves). Empty when the scope needs no team check (open
- *  mode, signed-out, or the admin "All teams" view — machineInScope settles
- *  those before ever invoking its team-set thunk). */
+ *  mode or signed-out — machineInScope settles those before ever invoking its
+ *  team-set thunk). */
 async function teamMachineIds(scope: RequestScope): Promise<ReadonlySet<string>> {
-  if (!scope.enforce || !scope.userId || (scope.isAdmin && scope.allTeams)) return new Set()
+  if (!scope.enforce || !scope.userId) return new Set()
   return new Set((await store.listMachinesForTeam(scope.teamId)).map((m) => m.id))
 }
 
@@ -83,12 +83,11 @@ export const listMachines = createServerFn({ method: 'GET' })
   .handler(async ({ data: teamId }) => {
     await ensureServer()
     const scope = await requestScope(teamId)
-    const { enforce, userId, teamId: active, allTeams } = scope
+    const { enforce, userId, teamId: active } = scope
     if (enforce && !userId) return []
     // Membership-scoped: a machine shows in every team its owner belongs to (one
-    // machine serves many teams, report §2.3). The admin "All teams" view + open
-    // mode list everything.
-    const list = enforce && !allTeams ? await store.listMachinesForTeam(active) : await store.listMachines()
+    // machine serves many teams, report §2.3). Open mode lists everything.
+    const list = enforce ? await store.listMachinesForTeam(active) : await store.listMachines()
     return Promise.all(list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope)))
   })
 
