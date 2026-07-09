@@ -6,14 +6,15 @@ executes your scheduled agent loops locally via your own coding agent.
 Loopany is **BYOA** (bring your own agent): the server schedules, stores, and
 notifies, but never runs an LLM or executes your code. This daemon is the
 execution half - it polls the server for due runs, spawns the loop's coding agent
-(Claude Code, or the grok CLI for a `grok` loop) in the loop's working directory,
-and reports the results back.
+(Claude Code, `codex exec` for a `codex` loop, or the grok CLI for a `grok` loop)
+in the loop's working directory, and reports the results back.
 
 ## Requirements
 
 - Node.js >= 22
 - [Claude Code](https://claude.com/claude-code) installed (`claude` on your PATH),
-  or the xAI grok CLI (`grok` on your PATH) for a `grok` loop
+  the OpenAI Codex CLI (`codex` on your PATH) for a `codex` loop, or the xAI grok
+  CLI (`grok` on your PATH) for a `grok` loop
 - A Loopany server - its dashboard gives you the `server-url` and one-time
   `connect-key` used below
 
