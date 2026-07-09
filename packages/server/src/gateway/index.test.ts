@@ -12,10 +12,10 @@ let tokens: typeof import("./tokens.js");
 let notifyMod: typeof import("./notify.js");
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-gateway-"));
-  process.env.LOOPANY_DATA_DIR = tmp;
-  process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
-  process.env.LOOPANY_LOG_LEVEL = "silent";
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-gateway-"));
+  process.env.ADSCAILE_DATA_DIR = tmp;
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, "test.db");
+  process.env.ADSCAILE_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
   store = await import("../db/store.js");
@@ -372,7 +372,7 @@ test("createLoop persists a valid IANA timezone and rejects a bogus one", async 
     name: "Morning report",
     cron: "0 8 * * *",
     timezone: "Asia/Shanghai",
-    taskFile: "loopany/x/README.md",
+    taskFile: "adscaile/x/README.md",
   }));
   expect(ok.status).toBe(200);
   expect((await store.getLoop((ok.body as any).id))!.timezone).toBe("Asia/Shanghai");
@@ -381,7 +381,7 @@ test("createLoop persists a valid IANA timezone and rejects a bogus one", async 
     name: "Bad tz",
     cron: "0 8 * * *",
     timezone: "Mars/Phobos",
-    taskFile: "loopany/x/README.md",
+    taskFile: "adscaile/x/README.md",
   }));
   expect(bad.status).toBe(400);
   expect((bad.body as any).error).toMatch(/invalid timezone/);
@@ -393,17 +393,17 @@ test("createLoop records the coding agent: codex when declared, claude-code by d
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
   // Explicit codex (the daemon's measured env / --agent codex) is persisted verbatim.
-  const codex = (await gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "codex" }));
+  const codex = (await gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "adscaile/x/README.md", agent: "codex" }));
   expect(codex.status).toBe(200);
   expect((await store.getLoop((codex.body as any).id))!.agent).toBe("codex");
 
   // Absent agent (older daemon) back-fills to claude-code via the column default.
-  const legacy = (await gateway().createLoop(token, { name: "Legacy loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const legacy = (await gateway().createLoop(token, { name: "Legacy loop", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   expect(legacy.status).toBe(200);
   expect((await store.getLoop((legacy.body as any).id))!.agent).toBe("claude-code");
 
   // An unrecognized / "unknown" value degrades to the default rather than rejecting.
-  const weird = (await gateway().createLoop(token, { name: "Weird loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "unknown" }));
+  const weird = (await gateway().createLoop(token, { name: "Weird loop", cron: "0 8 * * *", taskFile: "adscaile/x/README.md", agent: "unknown" }));
   expect(weird.status).toBe(200);
   expect((await store.getLoop((weird.body as any).id))!.agent).toBe("claude-code");
 });
@@ -417,7 +417,7 @@ test("createLoop accepts an initial ui (day-one dashboard) — validated, persis
 
   // Real create — the ui persists on the loop row (same surface as set-ui/editLoop).
   const created = (await gateway().createLoop(token, {
-    name: "React Doctor", cron: "0 5 * * *", taskFile: "loopany/react-doctor/README.md",
+    name: "React Doctor", cron: "0 5 * * *", taskFile: "adscaile/react-doctor/README.md",
     stateSchema: [{ key: "score", label: "Red Dot Score" }], ui,
   }));
   expect(created.status).toBe(200);
@@ -467,7 +467,7 @@ test("editLoop changes a loop's envelope from its machine's device token", async
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "Daily", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "Daily", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   const res = (await gateway().editLoop(token, id, { cron: "0 9 * * *", notify: "always", enabled: false }));
@@ -488,7 +488,7 @@ test("editLoop changes the coding agent to a known enum value", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "A", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "A", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
   // Defaults to claude-code at create (no agent on the create body).
   expect((await store.getLoop(id))!.agent).toBe("claude-code");
@@ -503,7 +503,7 @@ test("editLoop rejects an unknown coding agent with a clear per-key message (loo
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "A", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "A", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   const bad = (await gateway().editLoop(token, id, { agent: "emacs" } as any));
@@ -517,7 +517,7 @@ test("cli edit --json '{\"agent\":...}' changes the loop's recorded agent (the C
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().cli(token, ["new", "--json", JSON.stringify({ name: "A", cron: "0 8 * * *", taskFile: "loopany/x/README.md" })]));
+  const created = (await gateway().cli(token, ["new", "--json", JSON.stringify({ name: "A", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" })]));
   const id = idIn(created);
 
   const res = (await gateway().cli(token, ["edit", id, "--json", JSON.stringify({ agent: "codex" })]));
@@ -534,7 +534,7 @@ test("editLoop repoints the task file and pushes workflow/ui/schema without a ru
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "Migrate", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "Migrate", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   const res = (await gateway().editLoop(token, id, {
@@ -556,7 +556,7 @@ test("editLoop accepts stateSchema as a JSON string too (run-token parity)", asy
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   const res = (await gateway().editLoop(token, id, { stateSchema: '[{"key":"visits","label":"Visits"}]' } as any));
@@ -568,7 +568,7 @@ test("editLoop validates content fields (bad schema → 400, loop untouched)", a
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   const bad = (await gateway().editLoop(token, id, { stateSchema: [{ notKey: 1 }] } as any));
@@ -580,7 +580,7 @@ test("editLoop clips an oversized workflow to the wire cap (same discipline as c
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "Big", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   const res = (await gateway().editLoop(token, id, { workflow: "x".repeat(600 * 1024), ui: "<div>ok</div>" }));
@@ -594,7 +594,7 @@ test("editLoop rejects an unknown patch key with a clear 400 (never silent no-op
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   // A typo (or an attempt to patch an identity column) fails loudly.
@@ -610,7 +610,7 @@ test("editLoop refuses a loop bound to a different machine (404, no change)", as
   const tokenA = tokens.mintDeviceToken();
   const machineA = tokens.machineIdFromToken(tokenA);
   (await store.createMachine({ id: machineA, userId: "u1", name: "A", tokenHash: tokens.sha256(tokenA), online: true }));
-  const created = (await gateway().createLoop(tokenA, { name: "Owned", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(tokenA, { name: "Owned", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   const tokenB = tokens.mintDeviceToken();
@@ -720,7 +720,7 @@ test("createLoop lands the loop in the connect-key's team, not the machine's hom
   const connectKey = tokens.mintDeviceToken();
   await tokens.rememberConnectKey(connectKey, { userId: "u1", teamId: "team-reuse" });
 
-  const res = (await gateway().createLoop(deviceToken, { name: "B loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: connectKey }));
+  const res = (await gateway().createLoop(deviceToken, { name: "B loop", cron: "0 8 * * *", taskFile: "adscaile/x/README.md", claim: connectKey }));
   expect(res.status).toBe(200);
   expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-reuse");
 });
@@ -732,7 +732,7 @@ test("createLoop rejects (403) a claim minted by a different user — fail close
   (await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   await tokens.rememberConnectKey(token, { userId: "u2", teamId: "team-x" }); // minted by someone else
 
-  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "adscaile/x/README.md", claim: token }));
   expect(res.status).toBe(403);
   expect((await store.listLoops()).length).toBe(0); // never mis-filed
 });
@@ -744,7 +744,7 @@ test("createLoop rejects (403) when the minter is no longer a member of the clai
   (await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   await tokens.rememberConnectKey(token, { userId: "u1", teamId: "team-y" });
 
-  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "adscaile/x/README.md", claim: token }));
   expect(res.status).toBe(403);
   expect((await store.listLoops()).length).toBe(0);
 });
@@ -754,7 +754,7 @@ test("createLoop with no claim falls back to the machine's home team (back-compa
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", teamId: "team-home", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
-  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   expect(res.status).toBe(200);
   expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-home");
 });
@@ -767,7 +767,7 @@ test("createLoop with a claim for the machine's OWN home team needs no membershi
   (await store.createMachine({ id: machineId, userId: "shared", teamId: "team-shared", name: "M", tokenHash: tokens.sha256(token), online: true }));
   await tokens.rememberConnectKey(token, { userId: "shared", teamId: "team-shared" });
 
-  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "adscaile/x/README.md", claim: token }));
   expect(res.status).toBe(200);
   expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-shared");
 });
@@ -780,7 +780,7 @@ test("claimStatus surfaces the MEASURED agent so the New-loop confirmation shows
 
   // The daemon measured Codex on the host and sent it on the create; the claim
   // result must carry that recorded value (not a removed dialog pre-selection).
-  const res = (await gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", agent: "codex", claim }));
+  const res = (await gateway().createLoop(token, { name: "Codex loop", cron: "0 8 * * *", taskFile: "adscaile/x/README.md", agent: "codex", claim }));
   expect(res.status).toBe(200);
   expect(gateway().claimStatus(claim)?.agent).toBe("codex");
 });
@@ -874,7 +874,7 @@ test("editLoop rejects an `export const meta` workflow with a rejection entry; l
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   // Non-dry-run editLoop surfaces the first rejection as body.error (400).
@@ -1115,10 +1115,10 @@ test("createLoop accepts a goal (closed loop); absent goal ⇒ open loop", async
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
 
-  const closed = (await gateway().createLoop(token, { name: "C", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "reach 100 users" }));
+  const closed = (await gateway().createLoop(token, { name: "C", cron: "0 8 * * *", taskFile: "adscaile/x/README.md", goal: "reach 100 users" }));
   expect((await store.getLoop((closed.body as any).id))!.goal).toBe("reach 100 users");
 
-  const open = (await gateway().createLoop(token, { name: "O", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const open = (await gateway().createLoop(token, { name: "O", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   expect((await store.getLoop((open.body as any).id))!.goal).toBeNull();
 });
 
@@ -1126,7 +1126,7 @@ test("editLoop sets a goal, and clearing it (goal:null) also clears the completi
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "G", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const created = (await gateway().createLoop(token, { name: "G", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const id = (created.body as any).id as string;
 
   expect((await gateway().editLoop(token, id, { goal: "ship v1" })).status).toBe(200);
@@ -1145,7 +1145,7 @@ test("reopen: editLoop enabled:true on a completed loop clears the stamps; a pla
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "R", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "g" }));
+  const created = (await gateway().createLoop(token, { name: "R", cron: "0 8 * * *", taskFile: "adscaile/x/README.md", goal: "g" }));
   const id = (created.body as any).id as string;
   (await store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "met", enabled: false }));
 
@@ -1178,7 +1178,7 @@ test("createLoop --dry-run returns the normalized config + 3 fire times + closed
   const before = (await store.loopsForMachine(machineId)).length;
   const res = (await gateway().createLoop(token, {
     name: "DryClosed", cron: "0 8 * * *", timezone: "America/New_York",
-    taskFile: "loopany/x/README.md", goal: "ship v1", dryRun: true,
+    taskFile: "adscaile/x/README.md", goal: "ship v1", dryRun: true,
   }));
   expect(res.status).toBe(200);
   const b = res.body as any;
@@ -1188,7 +1188,7 @@ test("createLoop --dry-run returns the normalized config + 3 fire times + closed
   expect(b.classificationText).toMatch(/self-finish/i);
   expect(b.nextRuns).toHaveLength(3);
   expect(b.timezone).toBe("America/New_York");
-  expect(b.config.taskFile).toBe("loopany/x/README.md");
+  expect(b.config.taskFile).toBe("adscaile/x/README.md");
   expect(b.config.goal).toBe("ship v1");
   expect(b.config.workflow).toBe(false); // presence flag, not the source
   // Nothing was persisted (no loop row created).
@@ -1282,7 +1282,7 @@ test("set-cron floor: a run can't schedule more often than 15 min; the owner's e
   const deviceToken = tokens.mintDeviceToken();
   const dm = tokens.machineIdFromToken(deviceToken);
   (await store.createMachine({ id: dm, userId: "u2", name: "D", tokenHash: tokens.sha256(deviceToken), online: true }));
-  const owned = (await gateway().createLoop(deviceToken, { name: "Owned", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const owned = (await gateway().createLoop(deviceToken, { name: "Owned", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }));
   const oid = (owned.body as any).id as string;
   expect((await gateway().editLoop(deviceToken, oid, { cron: "*/5 * * * *" })).status).toBe(200);
   expect((await store.getLoop(oid))!.cron).toBe("*/5 * * * *");
@@ -1534,7 +1534,7 @@ test("execFailureStreak counts only consecutive trailing exec errors, ignoring e
   expect((await store.execFailureStreak(loop.id))).toBe(0);
 });
 
-// ---- loopLog (device-token-scoped run-log read for `loopany log`) ----
+// ---- loopLog (device-token-scoped run-log read for `adscaile log`) ----
 
 /** A machine + a loop on it, with `count` exec runs (newest ts last). */
 async function seededLoopWithRuns(machineId: string, count: number) {
@@ -2121,7 +2121,7 @@ test("cli device credential: new/edit/loops/log/show route to the existing gatew
   const { deviceToken, machineId } = (await seededCli());
   const gw = gateway();
   // new → createLoop
-  const created = (await gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "loopany/x/README.md" })]));
+  const created = (await gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "adscaile/x/README.md" })]));
   expect(created.status).toBe(200);
   const newId = idIn(created);
   expect((await store.getLoop(newId))!.machineId).toBe(machineId);
@@ -2296,7 +2296,7 @@ async function seededRichLoop() {
       cron: "0 6 * * 1",
       timezone: "America/Los_Angeles",
       notify: "always",
-      taskFile: "loopany/docs-sweep/README.md",
+      taskFile: "adscaile/docs-sweep/README.md",
       goal: "ship v1",
       workflow: "return { state: prev };",
       ui: "<div id=\"dash\">hello dashboard body that is comfortably over the size hint threshold</div>",
@@ -2421,7 +2421,7 @@ test("show --json [R]: the run credential emits the same envelope, scoped to its
 
 test("cli new: text is the created-loop confirmation (id/name are render-only now, in `text`)", async () => {
   const { deviceToken } = (await seededCli());
-  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" })]));
+  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "adscaile/x/README.md" })]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string; exitCode: number };
   const text = body.text;
@@ -2444,7 +2444,7 @@ test("cli new: a closed loop reads classification closed; a provided-but-dropped
 
 test("cli new --dry-run: text is the normalized config detail + fire preview (structured config retired)", async () => {
   const { deviceToken } = (await seededCli());
-  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md" }), "--dry-run"]));
+  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "adscaile/x/README.md" }), "--dry-run"]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string };
   expect(body.text).toContain("dry-run:");
@@ -2675,7 +2675,7 @@ test("cli loops --fields: a default column requested as an extra is rejected (on
 test("cli new: an idempotent replay with the same key returns the SAME loop (never a twin)", async () => {
   const { deviceToken, machineId } = (await seededCli());
   const gw = gateway();
-  const cfg = JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md", ui: "<div id='dash'>hi</div>", idempotencyKey: "key-abc" });
+  const cfg = JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "adscaile/x/README.md", ui: "<div id='dash'>hi</div>", idempotencyKey: "key-abc" });
   const before = (await store.loopsForMachine(machineId)).length;
   const first = (await gw.cli(deviceToken, ["new", "--json", cfg]));
   expect(first.status).toBe(200);
@@ -2778,7 +2778,7 @@ test("cli home [device]: an unregistered machine renders the DEFINITIVE not-conn
   expect(res.status).toBe(200);
   const body = res.body as { ok: boolean; text: string; exitCode: number };
   expect(body.exitCode).toBe(0);
-  expect(body.text).toContain("machine: not connected — run `loopany up`");
+  expect(body.text).toContain("machine: not connected — run `adscaile up`");
   expect(body.text).toContain("description:");
   expect(body.text).toContain("help[");
   // No loops/recent blocks when not connected, but never empty output.
@@ -2792,10 +2792,10 @@ test("cli home [device]: a registered machine shows presence + its loops + recen
   const loop = (await store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 6 * * 1", enabled: true, notify: "auto" }));
   (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", status: "nothing-new", outcome: "exec", ts: new Date().toISOString() }));
 
-  const res = (await gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/loopany", "--pid", "4821", "--server", "https://srv.example"]));
+  const res = (await gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/adscaile", "--pid", "4821", "--server", "https://srv.example"]));
   expect(res.status).toBe(200);
   const text = (res.body as { text: string }).text;
-  expect(text).toContain("bin: /Users/x/.local/bin/loopany");
+  expect(text).toContain("bin: /Users/x/.local/bin/adscaile");
   expect(text).toContain("machine: online · daemon pid 4821 · https://srv.example");
   expect(text).toContain("loops[1]{name,cron,enabled,nextFire,lastOutcome}:");
   expect(text).toContain("Docs Sweep");
@@ -2839,18 +2839,18 @@ test("F7: cli home [device] ALWAYS leads with a `bin:` line — the durable path
   const machineId = tokens.machineIdFromToken(deviceToken);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true, lastSeen: new Date().toISOString() }));
   // Durable: the daemon passes --bin with the resolved shim/global path.
-  const withBin = ((await gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/loopany"])).body as { text: string }).text;
-  expect(withBin.split("\n")[0]).toBe("bin: /Users/x/.local/bin/loopany");
+  const withBin = ((await gateway().cli(deviceToken, ["home", "--bin", "/Users/x/.local/bin/adscaile"])).body as { text: string }).text;
+  expect(withBin.split("\n")[0]).toBe("bin: /Users/x/.local/bin/adscaile");
   // Non-durable (npx-without-global): no --bin ⇒ the fallback line still leads (P8), never missing.
   const noBin = ((await gateway().cli(deviceToken, ["home"])).body as { text: string }).text;
-  expect(noBin.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
+  expect(noBin.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/adscaile`)");
 });
 
 test("F7: the not-connected home also leads with the `bin:` fallback line", async () => {
   const deviceToken = tokens.mintDeviceToken(); // unregistered → not-connected branch
   const text = ((await gateway().cli(deviceToken, ["home"])).body as { text: string }).text;
-  expect(text.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
-  expect(text).toContain("machine: not connected — run `loopany up`");
+  expect(text.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/adscaile`)");
+  expect(text).toContain("machine: not connected — run `adscaile up`");
 });
 
 test("cli home [run]: renders the run's OWN loop context (role + goal + recent) scoped to the lease's loop", async () => {
@@ -2862,7 +2862,7 @@ test("cli home [run]: renders the run's OWN loop context (role + goal + recent) 
   expect(body.exitCode).toBe(0);
   expect(body.text).toContain(`loop: L (${loop.id}) · role exec · goal ${JSON.stringify("ship v1")}`);
   expect(body.text).toContain("recent[");
-  expect(body.text).toContain("Run `loopany report --status nothing-new` to close this run");
+  expect(body.text).toContain("Run `adscaile report --status nothing-new` to close this run");
 });
 
 // ---- poll transport optimizations (throttled stamp / targeted claim / watch digest / long-poll) ----

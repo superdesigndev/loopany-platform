@@ -395,7 +395,7 @@ export function TeamsModal({
                       </button>
                     </div>
                     <div className="mt-1.5 text-label text-secondary">
-                      Adds an existing Loopany account immediately. No account yet? Generate an invite link below.
+                      Adds an existing adScaile account immediately. No account yet? Generate an invite link below.
                     </div>
                   </div>
 

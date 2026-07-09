@@ -7,7 +7,7 @@
  * for every loop bound to this machine, and `WatchManager.reconcile()` opens a
  * watcher for each (closing any that vanished). Each `LoopWatcher`:
  *   • resolves the loop's folder (dirname(taskFile) → workdir → scratch),
- *   • ignores .git/node_modules/.worktrees/common caches/.loopany/secrets/.DS_Store
+ *   • ignores .git/node_modules/.worktrees/common caches/.adscaile/secrets/.DS_Store
  *     (never-syncable dirs — a loop folder is a synced CONTENT home, not a
  *     scratch workspace, so a repo clone / git worktree / build tree dropped in
  *     it is excluded at the source rather than flooding the sync),
@@ -55,9 +55,9 @@ const INLINE_CAP = 64 * 1024; // 64KB
  *  needHashes → PUT path instead. */
 export const INLINE_TOTAL_CAP = 1024 * 1024; // 1MB
 /** Coalesce a burst of file events into a single sync push. */
-const COALESCE_MS = Number(process.env.LOOPANY_SYNC_COALESCE_MS || 1500);
+const COALESCE_MS = Number(process.env.ADSCAILE_SYNC_COALESCE_MS || 1500);
 /** After a transient sync failure, re-arm one flush after this delay (no hot-loop). */
-const RETRY_MS = Number(process.env.LOOPANY_SYNC_RETRY_MS || 5000);
+const RETRY_MS = Number(process.env.ADSCAILE_SYNC_RETRY_MS || 5000);
 /** Bounded sync POST — a hung connection must not wedge the flush pipeline. */
 const SYNC_TIMEOUT_MS = 30_000;
 /** Bounded blob PUT — generous (a 10MB blob on a slow uplink), but never ~5min. */
@@ -72,8 +72,8 @@ const RACY_MS = 2000;
  *  ui, small artifacts), NOT a scratch workspace. Over either ceiling a run has
  *  dumped a heavy work product (a repo clone / git worktree / build tree) into
  *  it; `capManifest` sheds the overflow and keeps the real content syncing. */
-export const MAX_SYNC_FILES = Number(process.env.LOOPANY_SYNC_MAX_FILES || 5000);
-export const MAX_SYNC_BYTES = Number(process.env.LOOPANY_SYNC_MAX_BYTES || 256 * 1024 * 1024); // 256MB
+export const MAX_SYNC_FILES = Number(process.env.ADSCAILE_SYNC_MAX_FILES || 5000);
+export const MAX_SYNC_BYTES = Number(process.env.ADSCAILE_SYNC_MAX_BYTES || 256 * 1024 * 1024); // 256MB
 
 /** One loop folder the server asked this machine to watch. */
 export interface WatchSpec {
@@ -118,7 +118,7 @@ function sha256(buf: Buffer): string {
  *  never even watches them. */
 const IGNORE_DIRS = new Set([
   ".git",
-  ".loopany",
+  ".adscaile",
   "node_modules",
   ".worktrees",
   ".cache",
@@ -621,7 +621,7 @@ class LoopWatcher {
  */
 export class WatchManager {
   private readonly watchers = new Map<string, LoopWatcher>();
-  /** The daemon's LOCAL roots jail (LOOPANY_ROOTS), pre-resolved ONCE — reconcile
+  /** The daemon's LOCAL roots jail (ADSCAILE_ROOTS), pre-resolved ONCE — reconcile
    *  runs on every ~3s poll and must not re-resolve the same fixed list per loop.
    *  Empty ⇒ unrestricted. */
   private readonly roots: string[];
@@ -651,12 +651,12 @@ export class WatchManager {
     // folder never sync and the server's view goes permanently stale).
     for (const [id, spec] of want) {
       const dir = resolveLoopDir(spec);
-      // LOCAL jail: workdir/taskFile are SERVER-SENT, so when LOOPANY_ROOTS is
+      // LOCAL jail: workdir/taskFile are SERVER-SENT, so when ADSCAILE_ROOTS is
       // set we never watch (and therefore never sync out) a folder outside it —
       // a hostile server must not be able to exfiltrate e.g. ~/.ssh. The
       // daemon's own scratch dir stays allowed (its location is fixed locally).
       if (this.roots.length && !isWithinResolvedRoots(dir, this.roots) && !isScratchDir(dir)) {
-        log.warn({ loopId: id, dir }, "loop folder is outside LOOPANY_ROOTS — not watching");
+        log.warn({ loopId: id, dir }, "loop folder is outside ADSCAILE_ROOTS — not watching");
         continue;
       }
       const existing = this.watchers.get(id);

@@ -4,7 +4,7 @@
  * its exit would delete it while daemon #1 still runs (invisible to `status`,
  * unkillable by `down`, double-polling the server).
  *
- * Uses a temp LOOPANY_HOME and records THIS test process's pid as "the running
+ * Uses a temp ADSCAILE_HOME and records THIS test process's pid as "the running
  * daemon" — it's alive and its `ps` start-time matches, so the verified check
  * treats it exactly like a live daemon, with no child process to manage.
  */
@@ -16,17 +16,17 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 describe("runDaemon", () => {
   const saved = {
-    home: process.env.LOOPANY_HOME,
-    token: process.env.LOOPANY_TOKEN,
-    server: process.env.LOOPANY_SERVER_URL,
+    home: process.env.ADSCAILE_HOME,
+    token: process.env.ADSCAILE_TOKEN,
+    server: process.env.ADSCAILE_SERVER_URL,
   };
   let home: string | undefined;
 
   afterEach(() => {
     for (const [k, v] of [
-      ["LOOPANY_HOME", saved.home],
-      ["LOOPANY_TOKEN", saved.token],
-      ["LOOPANY_SERVER_URL", saved.server],
+      ["ADSCAILE_HOME", saved.home],
+      ["ADSCAILE_TOKEN", saved.token],
+      ["ADSCAILE_SERVER_URL", saved.server],
     ] as const) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
@@ -37,11 +37,11 @@ describe("runDaemon", () => {
   });
 
   test("refuses to boot when a verified daemon already owns the pidfile", async () => {
-    home = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-daemon-"));
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-daemon-"));
     vi.resetModules();
-    process.env.LOOPANY_HOME = home;
-    process.env.LOOPANY_TOKEN = "dk_test";
-    process.env.LOOPANY_SERVER_URL = "http://127.0.0.1:1";
+    process.env.ADSCAILE_HOME = home;
+    process.env.ADSCAILE_TOKEN = "dk_test";
+    process.env.ADSCAILE_SERVER_URL = "http://127.0.0.1:1";
 
     const pidfile = await import("./pidfile.js");
     pidfile.writePidFile(process.pid); // alive + matching start-time: a "live daemon"

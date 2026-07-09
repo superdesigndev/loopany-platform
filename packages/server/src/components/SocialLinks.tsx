@@ -1,6 +1,6 @@
 /** The project's community surfaces, shared by the header, the sign-in card
  *  and the playbook's closing band. */
-export const GITHUB_URL = 'https://github.com/superdesigndev/loopany-platform'
+export const GITHUB_URL = 'https://github.com/maphilipps/adscaile-platform'
 export const DISCORD_URL = 'https://discord.gg/6mQYYfFMAn'
 
 export function GitHubIcon({ className }: { className?: string }) {

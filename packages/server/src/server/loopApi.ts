@@ -62,19 +62,19 @@ export const getAuthState = createServerFn({ method: 'GET' }).handler(async () =
 })
 
 /**
- * Client config. `loopanyCli` is the CLI invocation prefix the skill + connect
+ * Client config. `adscaileCli` is the CLI invocation prefix the skill + connect
  * dialog use for every verb (`up`, `new`, …) — defaults to the published `npx`
- * form. Set LOOPANY_CLI locally to a runnable command that points at the in-repo
+ * form. Set ADSCAILE_CLI locally to a runnable command that points at the in-repo
  * daemon, e.g. `tsx /abs/packages/daemon/src/cli.ts` or
  * `node /abs/packages/daemon/dist/cli.js`, so loops created from THIS server tell
  * Claude Code to run your local code instead of the registry build.
  */
 export const getConfig = createServerFn({ method: 'GET' }).handler(() => {
-  const custom = process.env.LOOPANY_CLI?.trim()
+  const custom = process.env.ADSCAILE_CLI?.trim()
   return {
-    loopanyCli: custom || 'npx @crewlet/loopany@latest',
+    adscaileCli: custom || 'npx @crewlet/adscaile@latest',
     /** True when a non-default (dev) CLI is configured — the New-loop paste then
-     *  carries an explicit `loopany-cli:` line so Claude Code uses it verbatim. */
+     *  carries an explicit `adscaile-cli:` line so Claude Code uses it verbatim. */
     customCli: !!custom,
   }
 })

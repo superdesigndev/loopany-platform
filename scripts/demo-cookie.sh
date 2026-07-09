@@ -9,8 +9,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER_DIR="$ROOT/packages/server"
 DAEMON_CLI="$ROOT/packages/daemon/dist/cli.js"
 
-TMP="$(mktemp -d -t loopany-cookie)"
-PORT="${LOOPANY_PORT:-8799}"
+TMP="$(mktemp -d -t adscaile-cookie)"
+PORT="${ADSCAILE_PORT:-8799}"
 BASE="http://127.0.0.1:$PORT"
 TOKEN="dk_demo_cookie"
 
@@ -26,7 +26,7 @@ trap cleanup EXIT
 echo "▶ temp data dir: $TMP"
 
 # 1) start server (migrates on boot via ensureServer)
-( cd "$SERVER_DIR" && LOOPANY_DATA_DIR="$TMP" LOOPANY_DB_PATH="$TMP/loopany.db" LOOPANY_PORT="$PORT" \
+( cd "$SERVER_DIR" && ADSCAILE_DATA_DIR="$TMP" ADSCAILE_DB_PATH="$TMP/adscaile.db" ADSCAILE_PORT="$PORT" \
     pnpm exec tsx src/main.ts ) >"$TMP/server.log" 2>&1 &
 server_pid=$!
 
@@ -66,7 +66,7 @@ echo "  loop id: $LOOP_ID"
 
 # 4) start the daemon (unrestricted roots → scratch workdir)
 echo "▶ starting daemon"
-LOOPANY_TOKEN="$TOKEN" LOOPANY_SERVER_URL="$BASE" LOOPANY_POLL_MS=2000 \
+ADSCAILE_TOKEN="$TOKEN" ADSCAILE_SERVER_URL="$BASE" ADSCAILE_POLL_MS=2000 \
   node "$DAEMON_CLI" >"$TMP/daemon.log" 2>&1 &
 daemon_pid=$!
 

@@ -24,11 +24,11 @@ import type { Loop, Run } from "../db/schema.js";
 const log = logger.child({ mod: "scheduler" });
 
 const MAX_TIMER_MS = 2_147_483_647; // setTimeout ceiling
-const EVOLVE_EVERY = Number(process.env.LOOPANY_EVOLVE_EVERY || 3);
-const EVOLVE_DELAY_MS = Number(process.env.LOOPANY_EVOLVE_DELAY_MS || 5_000);
+const EVOLVE_EVERY = Number(process.env.ADSCAILE_EVOLVE_EVERY || 3);
+const EVOLVE_DELAY_MS = Number(process.env.ADSCAILE_EVOLVE_DELAY_MS || 5_000);
 /** Hard ceiling on AUTO evolution cadence: at most once per this window, however
  *  fast the loop runs (a 1-min loop won't evolve hundreds of times/day). */
-const EVOLVE_MIN_INTERVAL_MS = Number(process.env.LOOPANY_EVOLVE_MIN_INTERVAL_MS || 24 * 3_600_000);
+const EVOLVE_MIN_INTERVAL_MS = Number(process.env.ADSCAILE_EVOLVE_MIN_INTERVAL_MS || 24 * 3_600_000);
 
 /**
  * Best-effort notify that a run is pending for the loop's machine. Transport-

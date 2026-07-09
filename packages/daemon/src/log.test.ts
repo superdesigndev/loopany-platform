@@ -1,6 +1,6 @@
 /**
- * `loopany log`, exercised with every external touch INJECTED (cwd, fetch, output,
- * server, token) so nothing reads a real ~/.loopany or hits the network. Proves it
+ * `adscaile log`, exercised with every external touch INJECTED (cwd, fetch, output,
+ * server, token) so nothing reads a real ~/.adscaile or hits the network. Proves it
  * resolves the loop for the current workdir, forwards an explicit loop arg, and wires
  * to the run log.
  *
@@ -52,7 +52,7 @@ function stubFetch(routes: Record<string, { ok?: boolean; status?: number; body:
   return { fetchFn, calls };
 }
 
-const loopDir = path.join(os.tmpdir(), "loopany-log-test-workdir");
+const loopDir = path.join(os.tmpdir(), "adscaile-log-test-workdir");
 
 describe("runLog", () => {
   test("not connected → error, exit 2, no fetch", async () => {
@@ -148,10 +148,10 @@ describe("runLog", () => {
     const cap = capture({ cwd: () => "/unrelated", fetchFn });
     const code = await runLog(["loop-zzzz-00000000"], cap);
     expect(code).toBe(1); // an error, not a usage failure
-    // P6: `error:`/`code:` to STDOUT (never a prose `loopany:` line on stderr).
+    // P6: `error:`/`code:` to STDOUT (never a prose `adscaile:` line on stderr).
     expect(cap.stdout()).toContain("code: NOT_FOUND");
     expect(cap.stdout()).toContain('error: "no loop \\"loop-zzzz-00000000\\" on this machine');
-    expect(cap.stdout()).toContain("run `loopany loops`"); // actionable guidance kept
+    expect(cap.stdout()).toContain("run `adscaile loops`"); // actionable guidance kept
     expect(cap.stderr()).toBe("");
   });
 

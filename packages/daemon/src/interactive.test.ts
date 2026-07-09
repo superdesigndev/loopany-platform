@@ -1,5 +1,5 @@
 /**
- * `buildPatch` / `parseFlags` — the `loopany edit` patch assembly (batch-2 slim
+ * `buildPatch` / `parseFlags` — the `adscaile edit` patch assembly (batch-2 slim
  * surface: JSON-only + the content trio). Proves the whole envelope travels via a
  * single `--json '<obj>'`, the convenience `--*-file` content flags read a file's
  * raw content, and a REMOVED scalar flag (--cron/--tz/--pause/…) or any other
@@ -13,7 +13,7 @@ import { describe, expect, test } from "vitest";
 
 import { buildPatch, type InteractiveDeps, parseFlags, runInteractive } from "./interactive.js";
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), "loopany-edit-"));
+const tmp = () => mkdtempSync(path.join(os.tmpdir(), "adscaile-edit-"));
 
 describe("buildPatch", () => {
   test("the whole patch travels via a single --json object", () => {
@@ -78,7 +78,7 @@ describe("buildPatch", () => {
 
 /**
  * `runInteractive` fetch path with the token/server/fetch INJECTED so nothing touches
- * ~/.loopany. Proves `loops`/`edit` funnel through the unified `/api/machine/cli`
+ * ~/.adscaile. Proves `loops`/`edit` funnel through the unified `/api/machine/cli`
  * dispatch (NEW server), AND fall back to the legacy `/api/machine/loop` GET/PATCH
  * when the server 404s the unified endpoint (OLD server) — both halves of the matrix.
  */

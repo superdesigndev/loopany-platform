@@ -8,7 +8,7 @@ Idempotent-ish: pass --reset to delete a prior seeded loop of the same name.
 import argparse, json, math, os, sqlite3, uuid
 from datetime import datetime, timedelta, timezone
 
-DB = os.path.expanduser("~/.loopany/loopany.db")
+DB = os.path.expanduser("~/.adscaile/adscaile.db")
 LOOP_NAME = "上海每日天气播报（压测·120 runs）"
 
 def iso(dt):  # ISO 8601 UTC with millis + Z, matching app format

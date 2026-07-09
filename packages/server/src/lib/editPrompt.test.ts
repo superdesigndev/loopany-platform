@@ -3,15 +3,15 @@ import { buildEditPrompt, loopDir } from './editPrompt'
 
 describe('loopDir', () => {
   it('returns the containing directory of a POSIX task file path', () => {
-    expect(loopDir('/home/me/loopany/coffee/task.md')).toBe('/home/me/loopany/coffee')
+    expect(loopDir('/home/me/adscaile/coffee/task.md')).toBe('/home/me/adscaile/coffee')
   })
 
   it('handles Windows separators', () => {
-    expect(loopDir('C:\\Users\\me\\loopany\\coffee\\task.md')).toBe('C:/Users/me/loopany/coffee')
+    expect(loopDir('C:\\Users\\me\\adscaile\\coffee\\task.md')).toBe('C:/Users/me/adscaile/coffee')
   })
 
   it('ignores a trailing slash', () => {
-    expect(loopDir('/home/me/loopany/coffee/')).toBe('/home/me/loopany')
+    expect(loopDir('/home/me/adscaile/coffee/')).toBe('/home/me/adscaile')
   })
 
   it('degrades to null when absent or parentless (no fabricated path)', () => {
@@ -23,13 +23,13 @@ describe('loopDir', () => {
 })
 
 describe('buildEditPrompt', () => {
-  it('names the loop, carries the instruction, and points at the loopany CLI', () => {
+  it('names the loop, carries the instruction, and points at the adscaile CLI', () => {
     const p = buildEditPrompt({ loopId: 'lp_123', loopName: 'Coffee stock', instruction: 'run at 9am on weekdays' })
-    expect(p).toContain('Loopany loop "Coffee stock"')
+    expect(p).toContain('adScaile loop "Coffee stock"')
     expect(p).toContain('loop id: lp_123')
     expect(p).toContain('run at 9am on weekdays')
-    expect(p).toContain('loopany loops')
-    expect(p).toContain('loopany edit lp_123')
+    expect(p).toContain('adscaile loops')
+    expect(p).toContain('adscaile edit lp_123')
   })
 
   it('falls back to a describe-the-change placeholder when no instruction is given', () => {

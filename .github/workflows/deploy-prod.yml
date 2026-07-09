@@ -1,4 +1,4 @@
-# Deploy Loopany to PRODUCTION — app "loopany-prod", https://loopany.ai.
+# Deploy adScaile to PRODUCTION — app "adscaile-prod", https://adscaile.ai.
 #
 # ⚠️ TEMPORARY: prod currently AUTO-DEPLOYS on every push to main (see the `push`
 # trigger below). This is a deliberate, temporary override of the manual-only rule
@@ -9,7 +9,7 @@
 # Manual-only rationale (why prod is normally NOT auto-deployed): the
 # single-scheduler invariant makes an accidental double-target dangerous, so prod
 # is normally NOT auto-deployed on push to main (that's staging's job, deploy.yml →
-# loopany-testing) NOR on a `v*` tag (that tag is publish-daemon.yml's npm-publish
+# adscaile-testing) NOR on a `v*` tag (that tag is publish-daemon.yml's npm-publish
 # trigger — sharing it would deploy prod on every daemon release).
 #
 # Migrations apply on container boot: scripts/prestart.mjs runs the postgres-js
@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: flyctl deploy → loopany-prod
+    name: flyctl deploy → adscaile-prod
     runs-on: ubuntu-latest
     # Add required reviewers to this GitHub Environment for a manual promote gate.
     environment: production
@@ -65,13 +65,13 @@ jobs:
         # GIT_SHA / BUILT_AT bake the pushed commit into the image so /api/health
         # can report it (smoke check below asserts it matches).
         run: |
-          flyctl deploy --remote-only --ha=false -c fly.prod.toml -a loopany-prod \
+          flyctl deploy --remote-only --ha=false -c fly.prod.toml -a adscaile-prod \
             --build-arg GIT_SHA=${{ github.sha }} \
             --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         env:
           # Separate token from staging's FLY_API_TOKEN (set it in repo secrets).
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}
-      # Post-deploy smoke: prove the promoted image actually serves loopany.ai AND
+      # Post-deploy smoke: prove the promoted image actually serves adscaile.ai AND
       # is the commit we just pushed. A container that boots green but 500s, or a
       # promote that silently didn't take, fails the run here instead of passing.
       - name: Smoke — /api/health serves the pushed SHA
@@ -79,7 +79,7 @@ jobs:
           expected='${{ github.sha }}'
           got=''
           for attempt in 1 2 3 4 5; do
-            if body="$(curl -fsS --max-time 15 https://loopany.ai/api/health)"; then
+            if body="$(curl -fsS --max-time 15 https://adscaile.ai/api/health)"; then
               echo "health: $body"
               got="$(printf '%s' "$body" | sed -n 's/.*"sha":"\([^"]*\)".*/\1/p')"
               [ "$got" = "$expected" ] && break

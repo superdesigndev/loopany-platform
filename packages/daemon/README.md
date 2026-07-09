@@ -1,9 +1,9 @@
-# @crewlet/loopany
+# @crewlet/adscaile
 
-The **Loopany daemon** - runs on your machine, connects to a Loopany server, and
+The **adScaile daemon** - runs on your machine, connects to a adScaile server, and
 executes your scheduled agent loops locally via your own coding agent.
 
-Loopany is **BYOA** (bring your own agent): the server schedules, stores, and
+adScaile is **BYOA** (bring your own agent): the server schedules, stores, and
 notifies, but never runs an LLM or executes your code. This daemon is the
 execution half - it polls the server for due runs, spawns the loop's coding agent
 (Claude Code, `codex exec` for a `codex` loop, or the grok CLI for a `grok` loop)
@@ -15,47 +15,47 @@ in the loop's working directory, and reports the results back.
 - [Claude Code](https://claude.com/claude-code) installed (`claude` on your PATH),
   the OpenAI Codex CLI (`codex` on your PATH) for a `codex` loop, or the xAI grok
   CLI (`grok` on your PATH) for a `grok` loop
-- A Loopany server - its dashboard gives you the `server-url` and one-time
+- A adScaile server - its dashboard gives you the `server-url` and one-time
   `connect-key` used below
 
 ## Install
 
 ```bash
-npm install -g @crewlet/loopany
+npm install -g @crewlet/adscaile
 # or run ad-hoc:
-npx @crewlet/loopany --help
+npx @crewlet/adscaile --help
 ```
 
 ## Connect your machine
 
 ```bash
-loopany up --server-url <url> --connect-key <dk_…>
+adscaile up --server-url <url> --connect-key <dk_…>
 ```
 
 `up` is idempotent: it registers this machine (first time), stores the
-credentials under `~/.loopany/`, and spawns a detached daemon if none is
-running. It also refreshes the user-scope loopany skill, the SessionStart hook,
-and the `loopany` PATH shim. After that, `loopany up` alone reconnects.
+credentials under `~/.adscaile/`, and spawns a detached daemon if none is
+running. It also refreshes the user-scope adscaile skill, the SessionStart hook,
+and the `adscaile` PATH shim. After that, `adscaile up` alone reconnects.
 
 ## Commands
 
 ```
-loopany                 Show the content-first HOME: this machine's live loops +
+adscaile                 Show the content-first HOME: this machine's live loops +
                         recent runs (the poll loop moved to `up --foreground`).
 
 Setup
   up [--foreground]       Connect this machine / ensure its daemon is running
-                          (idempotent; refreshes the loopany skill, the SessionStart
-                          hook, and the `loopany` PATH shim). --foreground runs the
+                          (idempotent; refreshes the adscaile skill, the SessionStart
+                          hook, and the `adscaile` PATH shim). --foreground runs the
                           poll loop attached in this terminal instead of detached.
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
                           stdin). --dry-run validates + previews, creates nothing.
   setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
                           view as ambient context each session (--remove uninstalls).
-  skill [status|install]  Manage the loopany agent skill install (user scope by
+  skill [status|install]  Manage the adscaile agent skill install (user scope by
                           default; --project installs into the current directory).
   update                  Update this machine's daemon to the version you invoked
-                          (run via npx @crewlet/loopany@latest update): stops the
+                          (run via npx @crewlet/adscaile@latest update): stops the
                           running daemon, starts the new one, refreshes the
                           skill/hook/shim.
 
@@ -75,7 +75,7 @@ Interactive
                           --schema-file; --dry-run previews before/after).
 ```
 
-Run `loopany --help` for the full usage text, or `loopany <verb> --help` for a
+Run `adscaile --help` for the full usage text, or `adscaile <verb> --help` for a
 single verb's concise usage (prints and exits, running no side effect - safe to
 inspect foot-guns like `update` or `down`).
 
@@ -90,13 +90,13 @@ that folder's files back to the server (secrets and junk like `.env*`,
 reports the outcome. The loop folder is a synced **content home** (reports,
 state, ui, small artifacts) - not a scratch workspace: heavy work products (a
 repo clone, a git worktree, build output) belong outside it, and the daemon
-defensively caps how much it syncs per loop (`LOOPANY_SYNC_MAX_FILES` /
-`LOOPANY_SYNC_MAX_BYTES`) so a stray checkout can never flood the sync. Your code
+defensively caps how much it syncs per loop (`ADSCAILE_SYNC_MAX_FILES` /
+`ADSCAILE_SYNC_MAX_BYTES`) so a stray checkout can never flood the sync. Your code
 and credentials stay on your machine.
 
-The package also bundles the **loopany agent skill**, which teaches a coding
-agent how to author and evolve loops; `loopany up` (and `loopany new`) install
-it at user scope for every coding agent loopany knows about (Claude Code
-`~/.claude/skills/loopany/` and Codex `~/.agents/skills/loopany/` today)
-automatically, so any loop on this machine can discover it. Run `loopany skill
+The package also bundles the **adscaile agent skill**, which teaches a coding
+agent how to author and evolve loops; `adscaile up` (and `adscaile new`) install
+it at user scope for every coding agent adscaile knows about (Claude Code
+`~/.claude/skills/adscaile/` and Codex `~/.agents/skills/adscaile/` today)
+automatically, so any loop on this machine can discover it. Run `adscaile skill
 status` to see each agent's install location.

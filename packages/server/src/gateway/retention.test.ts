@@ -24,10 +24,10 @@ let retention: typeof import("./retention.js");
 let tokens: typeof import("./tokens.js");
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-retention-"));
-  process.env.LOOPANY_DATA_DIR = tmp;
-  process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
-  process.env.LOOPANY_LOG_LEVEL = "silent";
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-retention-"));
+  process.env.ADSCAILE_DATA_DIR = tmp;
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, "test.db");
+  process.env.ADSCAILE_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
   store = await import("../db/store.js");
@@ -48,7 +48,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  delete process.env.LOOPANY_LOOP_BYTES_CAP;
+  delete process.env.ADSCAILE_LOOP_BYTES_CAP;
 });
 
 function sha256(s: string | Buffer): string {
@@ -189,7 +189,7 @@ test("GC deletes bytes before metadata: a blob re-referenced mid-delete drops me
 });
 
 test("putBlob enforces the per-loop cap against the REAL byte length (sync under-reported the size)", async () => {
-  process.env.LOOPANY_LOOP_BYTES_CAP = "100";
+  process.env.ADSCAILE_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
   const { art, blobs } = gatewayWithStore();
 
@@ -214,7 +214,7 @@ test("putBlob enforces the per-loop cap against the REAL byte length (sync under
 });
 
 test("putBlob stores a NEW blob that fits the per-loop cap (honest path not falsely rejected)", async () => {
-  process.env.LOOPANY_LOOP_BYTES_CAP = "1000";
+  process.env.ADSCAILE_LOOP_BYTES_CAP = "1000";
   const { token, loop } = (await seed());
   const { art, blobs } = gatewayWithStore();
 
@@ -266,7 +266,7 @@ test("pruneSnapshots applies the window across every loop", async () => {
 });
 
 test("per-loop cap blocks new bytes past the limit and surfaces it", async () => {
-  process.env.LOOPANY_LOOP_BYTES_CAP = "100"; // tiny cap for the test
+  process.env.ADSCAILE_LOOP_BYTES_CAP = "100"; // tiny cap for the test
   const { token, loop } = (await seed());
   const { art, blobs } = gatewayWithStore();
 
@@ -305,7 +305,7 @@ test("per-loop cap blocks new bytes past the limit and surfaces it", async () =>
 });
 
 test("reusing an already-stored hash adds no bytes, so it's allowed even at the cap", async () => {
-  process.env.LOOPANY_LOOP_BYTES_CAP = "100";
+  process.env.ADSCAILE_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
   const { art, blobs } = gatewayWithStore();
   const a = "a".repeat(60);
@@ -327,7 +327,7 @@ test("reusing an already-stored hash adds no bytes, so it's allowed even at the 
 });
 
 test("the per-loop cap counts only NET growth, not in-place overwrites", async () => {
-  process.env.LOOPANY_LOOP_BYTES_CAP = "100";
+  process.env.ADSCAILE_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
   const { art, blobs } = gatewayWithStore();
 
@@ -409,7 +409,7 @@ test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate sna
 });
 
 test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size", async () => {
-  process.env.LOOPANY_LOOP_BYTES_CAP = "100";
+  process.env.ADSCAILE_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
   const { art, blobs } = gatewayWithStore();
 
@@ -451,7 +451,7 @@ test("per-loop cap base uses VERIFIED blob bytes, not the client-reported size",
 });
 
 test("overwrite 'freed' credit uses the VERIFIED prior size — an over-reported one can't mint cap headroom", async () => {
-  process.env.LOOPANY_LOOP_BYTES_CAP = "100";
+  process.env.ADSCAILE_LOOP_BYTES_CAP = "100";
   const { token, loop } = (await seed());
   const { art, blobs } = gatewayWithStore();
 
@@ -524,7 +524,7 @@ test("deleting a loop cascades runs/artifact_files/run_snapshots so its blobs be
 
 test("maintainStorage skips a concurrent pass while one is already running (in-flight guard)", async () => {
   // One garbage blob with the grace forced open so gcBlobs awaits its byte delete.
-  process.env.LOOPANY_BLOB_GC_GRACE_MS = "1";
+  process.env.ADSCAILE_BLOB_GC_GRACE_MS = "1";
   const base = new MemoryBlobStore();
   const content = "garbage bytes";
   const hash = sha256(content);
@@ -566,7 +566,7 @@ test("maintainStorage skips a concurrent pass while one is already running (in-f
     const r3 = await gw.maintainStorage();
     expect(r3).toEqual({ snapshotsPruned: 0, blobsReclaimed: 0 });
   } finally {
-    delete process.env.LOOPANY_BLOB_GC_GRACE_MS;
+    delete process.env.ADSCAILE_BLOB_GC_GRACE_MS;
   }
 });
 
@@ -594,8 +594,8 @@ test("maintainStorage prunes snapshots then reclaims the blobs they freed", asyn
   // Window of 1: prune the older snapshot → its blob `old` becomes collectable.
   // (Use a forced grace via the lower-level call after pruning, since maintainStorage
   // uses the configured grace; here we drive the env knob to elapse the window.)
-  process.env.LOOPANY_BLOB_GC_GRACE_MS = "1"; // ~immediate
-  process.env.LOOPANY_SNAPSHOT_RETENTION = "1";
+  process.env.ADSCAILE_BLOB_GC_GRACE_MS = "1"; // ~immediate
+  process.env.ADSCAILE_SNAPSHOT_RETENTION = "1";
   await new Promise((r) => setTimeout(r, 5));
   try {
     const res = await gw.maintainStorage();
@@ -604,7 +604,7 @@ test("maintainStorage prunes snapshots then reclaims the blobs they freed", asyn
     expect(await blobs.has(old)).toBe(false); // freed
     expect(await blobs.has(recent)).toBe(true); // still snapshot-referenced
   } finally {
-    delete process.env.LOOPANY_BLOB_GC_GRACE_MS;
-    delete process.env.LOOPANY_SNAPSHOT_RETENTION;
+    delete process.env.ADSCAILE_BLOB_GC_GRACE_MS;
+    delete process.env.ADSCAILE_SNAPSHOT_RETENTION;
   }
 });

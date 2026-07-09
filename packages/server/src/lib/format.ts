@@ -162,7 +162,7 @@ export const lastRunOf = (j: JobSummary): RunSummary | null => {
 
 /**
  * Completed = the loop reached its goal and was stamped terminal (`completedAt`
- * set by `loopany finish`). This is now an explicit loop state, NOT the old
+ * set by `adscaile finish`). This is now an explicit loop state, NOT the old
  * disabled+resolved heuristic — a merely paused loop (no completedAt) stays in
  * the active section with a "Paused" badge.
  */

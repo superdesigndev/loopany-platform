@@ -23,7 +23,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   retired the superset**: `finalizeCli` now STRIPS the cli body to `{text, exitCode,
   loops, runs}` (the daemon is a pure text sink) — see the batch-7 section below. The
   legacy endpoints skip `finalizeCli`, so their full structured bodies are unchanged.
-- **F2** (in-run `loopany log` printed nothing): fixed for free by `renderLoopLog`
+- **F2** (in-run `adscaile log` printed nothing): fixed for free by `renderLoopLog`
   gaining `text` — the in-run callback already prints `body.text`. Proven at the
   callback boundary by `daemon/src/callback.test.ts` (a stub server returning the new
   body, asserting non-empty stdout — that test changes NO daemon source).
@@ -141,10 +141,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   "`--run-at` is canonical; `--next` is a back-compat alias" note to the reschedule
   lever (F4). `evolve.md`'s "reading the log" survey now names the shipped
   `renderLogText` header verbatim — `runs[N]{ts,role,outcome,cost,metrics,session,message}`
-  + the `summary:` tally — and clarifies that `loopany log`'s `metrics` column shows
+  + the `summary:` tally — and clarifies that `adscaile log`'s `metrics` column shows
   `key=value` while the task-message inline table is metric-KEYS-only. `exec-core.md`
   and `run/edit.md` were verified conformant and left untouched.
-- **When you change the `loopany log` TOON columns (`renderLogText`) you MUST update
+- **When you change the `adscaile log` TOON columns (`renderLogText`) you MUST update
   `evolve.md`'s survey prose** — the pair is pinned by `-api.skill.references.test.ts`
   ("evolve.md log survey names the shipped TOON columns"), which substring-matches the
   exact header + `summary:` + the `key=value` phrasing. That serving test is the
@@ -154,15 +154,15 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   dropped the `task` column (batch 2) and 400s without `taskFile`/`workflow`, so the
   demo was actually broken — batch 5 renames it to `taskFile` (review F7).
 - These `.md` edits compile into the server bundle via `?raw`, so this batch DEPLOYS
-  server-side AND rides the next `@crewlet/loopany` npm tarball for the installed skill
+  server-side AND rides the next `@crewlet/adscaile` npm tarball for the installed skill
   (`sync-skill.mjs` whitelist is untouched — still SKILL.md + the 4 references).
 
 ## axi-conformance CLI (batch 6 — daemon text sink + content-first home)
 
-- **Server `home` verb** (`gateway/cli.ts`): bare `loopany` posts `["home", …ctx]`.
+- **Server `home` verb** (`gateway/cli.ts`): bare `adscaile` posts `["home", …ctx]`.
   DEVICE branch (`homeDevice`) is handled in `deviceCli` BEFORE the unknown-machine 401
   guard, so an unregistered machine renders the DEFINITIVE `machine: not connected — run
-  \`loopany up\`` state (never a 401/empty, P5/P8). A registered machine → `machinePresence`
+  \`adscaile up\`` state (never a 401/empty, P5/P8). A registered machine → `machinePresence`
   (`lib/machinePresence.ts`) line + cwd-scoped loop list + `recentMachineRuns` across the
   machine + help. RUN branch (`homeRun`, in `runCli` before the read branch) → the lease's
   OWN loop context (`renderRunHomeText`: identity + role + goal + recent), scoped to
@@ -180,61 +180,61 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   retired that fallback** — `printTextOrTooOld` now prints a definitive `SERVER_TOO_OLD`
   error instead (the render-only `printLoops`/`printEditDryRun`/`printCreateDryRun`/
   `formatRun`-fallback were deleted; `home` prints a definitive `tooOldHome` exit 0). See
-  the batch-7 section below. `--json` (log/show) stays the escape hatch; `loopany log
+  the batch-7 section below. `--json` (log/show) stays the escape hatch; `adscaile log
   --transcript` keeps its client render from the RETAINED `runs` channel (the server
   survey is concise, no `--full` inline yet). Converged on
   `callback`/`interactive`/`log`/`create`/`show`/`home`.
 - **Routing lives in the pure `route.ts` `classify(argv, env)`** (unit-tested; `cli.ts`
   maps a `Route` to its lazily-imported handler). The Batch-6 behavior change (OQ1): bare
-  `loopany` = the content-first HOME (device out-of-run; in-run bare posts `home` on the
+  `adscaile` = the content-first HOME (device out-of-run; in-run bare posts `home` on the
   run cred — fixes the old `argv.length > 0` guard). The foreground poll loop moved to
-  `loopany up --foreground`; the `--server-url`/`--api-key` detached re-exec path is
+  `adscaile up --foreground`; the `--server-url`/`--api-key` detached re-exec path is
   PRESERVED (still `{kind:"daemon"}`). `report`/`finish`/`complete` OUT of a run are
   FORWARDED to the server (device cred → the crafted run-only 403, F3), never a generic
-  unknown-command. `loopany show` out-of-run (F1) resolves the loop client-side (like
+  unknown-command. `adscaile show` out-of-run (F1) resolves the loop client-side (like
   `log`, reusing `log.ts` `resolveLoopId`) then forwards.
-- **`loopany setup hooks [--remove]`** (`setup.ts`, P7): idempotent SessionStart hook
+- **`adscaile setup hooks [--remove]`** (`setup.ts`, P7): idempotent SessionStart hook
   install per `HOOK_TARGET_AGENTS` (a SUPERSET of `SKILL_TARGET_AGENTS` - grok gets a hook
   but is NOT a skill-install target). Claude Code (`~/.claude/settings.json`), Codex
-  (`~/.codex/hooks.json`), and Grok Build (`~/.grok/hooks/loopany.json`) all have a concrete
+  (`~/.codex/hooks.json`), and Grok Build (`~/.grok/hooks/adscaile.json`) all have a concrete
   installer sharing ONE merge routine
-  (`installJsonSessionStartHook` — identical `{hooks:{SessionStart:[{type:"command",command:"loopany"}]}}`
+  (`installJsonSessionStartHook` — identical `{hooks:{SessionStart:[{type:"command",command:"adscaile"}]}}`
   shape), whose stdout lands as ambient context; an agent with no installer is reported
   `skipped`. Grok's global hooks are ALWAYS TRUSTED (no config/trust gate). Codex additionally
   gates hooks behind `hooks = true` in `~/.codex/config.toml`
   and a per-hook TRUST prompt on first session; the installer writes ONLY the `hooks.json`
   entry (never the version-sensitive `trusted_hash`, never the TOML) and SURFACES that
   enable/trust step in the report (and on the automatic `up`/`update` path). Matches
-  gh-axi UX (integrations report + restart hint). `loopany up`/`update` call the
+  gh-axi UX (integrations report + restart hint). `adscaile up`/`update` call the
   best-effort `refreshHooks` (one line, never blocks — like the skill install). The
-  ambient hook ONLY installs with a DURABLE on-PATH `loopany` (`resolveDurableCommand`:
+  ambient hook ONLY installs with a DURABLE on-PATH `adscaile` (`resolveDurableCommand`:
   our shim OR a PATH-resolvable global install): the automatic `refreshHooks` path SKIPS
-  it with one line of `npm i -g` guidance when only a bare, non-PATH `loopany` would
+  it with one line of `npm i -g` guidance when only a bare, non-PATH `adscaile` would
   result (the common npx-without-global flow — a hook pointing at a missing binary would
   fail every session); the explicit `setup hooks` verb still installs but warns before
   the bare fallback. The `home` view fetch is BOUNDED (`http.ts` `boundedFetch`,
   `HOME_TIMEOUT_MS`) so the SessionStart hot path degrades fast — a hung server renders a
   DEFINITIVE degraded home (`server unreachable`, exit 0), never stalling session start.
-- **PATH shim** (`bin-shim.ts`, feedback #4): `loopany up`/`update` write a `loopany`
+- **PATH shim** (`bin-shim.ts`, feedback #4): `adscaile up`/`update` write a `adscaile`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance when the dir
   isn't on PATH. `home` reports the shim as `bin:` via `existingBinShim`. HARDENED so
   the durable shim is never fragile/destructive: it lands ONLY from a durable install
   (`isEphemeralEntry` skips an npx/npm-cache `/_npx/`,`/_cacache/` re-exec entry, with
-  `npm i -g` guidance) and NEVER clobbers a foreign `loopany` (only refreshes our own
+  `npm i -g` guidance) and NEVER clobbers a foreign `adscaile` (only refreshes our own
   shim, detected by the `SHIM_MARKER` prefix); `ensureBinShim` returns
   `{path,onPath,written}` so callers/tests can assert skipped-vs-written.
 - **TEST HAZARD**: the `up`/`update` integration refreshers (`ensureBinShim`,
   `refreshHooks`) write the REAL `~/.claude/settings.json` + `~/.local/bin` if not
   injected. `ensure.test.ts`'s `seams()` MUST no-op both (it does); every setup/bin-shim
   test injects fs/env seams and NEVER touches the real home. Batch 6 is the one
-  behavior-changing daemon batch — ships in the next `@crewlet/loopany` npm release
-  (release note: bare `loopany` = home, foreground → `up --foreground`).
+  behavior-changing daemon batch — ships in the next `@crewlet/adscaile` npm release
+  (release note: bare `adscaile` = home, foreground → `up --foreground`).
 
 ## axi-conformance CLI (prod-E2E fixes — gate for batch 7)
 
 Conformance/polish fixes from the 0.12.0 production E2E (`e2e-axi-prod-v1`). Split
-server (deploys) vs daemon (rides the NEXT `@crewlet/loopany` npm release):
+server (deploys) vs daemon (rides the NEXT `@crewlet/adscaile` npm release):
 - **`loops` flag cluster (F1–F4), ONE root cause: the daemon `interactive.ts` loops
   path HARDCODED `postCli(["loops"])`, dropping every user flag** — the server never
   saw `--fields`/`--json`/unknown flags. Fix is BOTH sides: the daemon now forwards
@@ -247,25 +247,25 @@ server (deploys) vs daemon (rides the NEXT `@crewlet/loopany` npm release):
   unknown flag client-side too (uniform exit 2). `new`/`edit` already rejected unknowns.
 - **NOT_FOUND (F5)**: `log`/`show` resolve the loop id CLIENT-side (`resolveLoopId`,
   `log.ts`), so a nonexistent explicit id never reaches the server. It used to print a
-  prose `loopany:` line at exit 2 (a usage failure). Now `resolveLoopId` tags the
+  prose `adscaile:` line at exit 2 (a usage failure). Now `resolveLoopId` tags the
   explicit-not-found case `code: "NOT_FOUND"` and the shared `renderResolveError`
   emits `error:`/`code: NOT_FOUND` to STDOUT at exit 1 (message quoted via
-  `JSON.stringify`, keeping the actionable "run `loopany loops`" guidance). Other
+  `JSON.stringify`, keeping the actionable "run `adscaile loops`" guidance). Other
   resolve failures (no-folder-match, ambiguous) STAY prose/exit-2 usage errors.
 - **Hook gating (F6)**: the automatic `up`/`update` refresh (`refreshHooks`) and the
   explicit `setup hooks` BOTH derive from `resolveDurableCommand` — but `npx …`
   PREPENDS a throwaway `…/_npx/…/.bin` onto PATH, so the durability probe counted that
-  transient `loopany` as durable and installed a bin-dependent SessionStart hook while
+  transient `adscaile` as durable and installed a bin-dependent SessionStart hook while
   the bin shim was (correctly) skipped as ephemeral. Fix: `resolveDurableCommand`'s
-  PATH scan (`loopanyPathBin`) now SKIPS ephemeral dirs (`isEphemeralEntry`), so the
+  PATH scan (`adscailePathBin`) now SKIPS ephemeral dirs (`isEphemeralEntry`), so the
   npx-only case resolves to null → the automatic path skips the hook, parity with the
   skipped shim. `resolveDurableCommand` now returns the ABSOLUTE path (not bare
-  `loopany`) for a PATH global — a more robust hook command; `isOurHookCommand` still
-  matches it (`endsWith("/loopany")`).
+  `adscaile`) for a PATH global — a more robust hook command; `isOurHookCommand` still
+  matches it (`endsWith("/adscaile")`).
 - **`bin:` line always (F7, P8)**: the home MUST lead with `bin:`. The daemon `home.ts`
   now resolves the durable bin via `resolveDurableBinPath` (shim OR non-ephemeral PATH
   global, real path) and passes `--bin` when known; the server `renderHomeText` renders
-  the honest `bin: (not on PATH — run \`npm i -g @crewlet/loopany\`)` fallback when
+  the honest `bin: (not on PATH — run \`npm i -g @crewlet/adscaile\`)` fallback when
   `--bin` is absent (both the connected and not-connected branches). The daemon-local
   homes (`notConnectedHome`/`degradedHome`/`fallbackHome`) lead with the same
   `binLine(bin)`.
@@ -285,7 +285,7 @@ server (deploys) vs daemon (rides the NEXT `@crewlet/loopany` npm release):
 
 The final axi batch: the daemon is a PURE text sink, so the transitional "superset" render
 fields are retired. Ships server-first (deploys); the daemon changes ride the next
-`@crewlet/loopany` npm release (0.13.0) with PR #80's daemon fixes.
+`@crewlet/adscaile` npm release (0.13.0) with PR #80's daemon fixes.
 - **Server strips at the cli boundary.** `finalizeCli` (wraps `cli()` ONLY) now reduces
   every `/api/machine/cli` body to `CLI_RETAINED_KEYS` = `{text, exitCode, loops, runs}`
   after filling `text`/`exitCode` — dropping the render-only `ok`/`id`/`name`/`loop`/
@@ -310,7 +310,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
 - **Compat:** the 0.12 daemon (already a text sink) keeps working — it reads `text`/
   `exitCode` + the retained `loops`/`runs`. Daemons **≤ 0.11** (which render the structured
   fields) get EMPTY device-verb output against the new server; mitigation: `npx @latest`
-  users auto-upgrade, global installs run `loopany update`. The in-run path keeps working on
+  users auto-upgrade, global installs run `adscaile update`. The in-run path keeps working on
   ≤ 0.11 (it prints `text`, which stays). The postCli 404-fallback + legacy endpoint aliases
   are OUT of scope here (separate `rexp-b7`, its own upgrade-window gate).
 
@@ -405,7 +405,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   reassigns machine home-team pointers (cosmetic, machines are user-owned) to each
   owner's personal team; (2) invites are BOTH direct-add-by-email (existing account
   fast path) AND a single-use, 7-day invite link (`team_invites` table, migration
-  `0002`); (3) an invite never bypasses `LOOPANY_ALLOWED_LOGINS` (the redeemer already
+  `0002`); (3) an invite never bypasses `ADSCAILE_ALLOWED_LOGINS` (the redeemer already
   signed in through the gate); (4) team management is owner-only, loop creation stays
   any-member; (5) the personal team is renamable — **`store.ensureTeam` is now
   INSERT-ONLY for the name** (the old force-rename at every requestScope silently
@@ -427,7 +427,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   blocked-by-loops disabled state). Owner-only controls hide for a plain member; the
   server re-authorizes regardless.
 - **Verifying the gated flow in a browser without GitHub OAuth**: seed a `user` + a
-  `session` row into a temp-`LOOPANY_DATA_DIR` pglite, then forge the cookie
+  `session` row into a temp-`ADSCAILE_DATA_DIR` pglite, then forge the cookie
   `better-auth.session_token=<token>.<makeSignature(token, secret)>` (`makeSignature`
   from `better-auth/crypto`) — Better Auth verifies the HMAC signature regardless of
   cookie domain. pglite is single-writer, so seed in a separate process that exits

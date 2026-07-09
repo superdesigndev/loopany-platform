@@ -2,15 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Loopany** - multi-user scheduled **agent loops**. The server (TanStack Start)
+**adScaile** - multi-user scheduled **agent loops**. The server (TanStack Start)
 schedules/stores/authenticates/notifies; execution is **BYOA** - claude-code runs on
-each user's own machine via the `@crewlet/loopany` daemon. **Zero-exec invariant:
+each user's own machine via the `@crewlet/adscaile` daemon. **Zero-exec invariant:
 the server runs no LLM and executes no user code** - it only stores/reads bytes and
 computes pure functions. Run instructions: `README.md`.
 
 ## Layout (pnpm monorepo)
 
-- `packages/server` (`@loopany/server`) - TanStack Start UI + server fns +
+- `packages/server` (`@adscaile/server`) - TanStack Start UI + server fns +
   in-process Scheduler (croner) + machine routes + Better Auth + push notifications.
   Drizzle over Postgres (tiered driver: embedded pglite when `DATABASE_URL` is
   unset, postgres-js on Supabase when set).
@@ -29,24 +29,24 @@ computes pure functions. Run instructions: `README.md`.
     loopApi server fns.
   - `src/skill/` - ALL prompt/skill prose (see "The skill" below).
   - `src/routes/` - pages + server-only route files.
-- `packages/daemon` (`@crewlet/loopany`) - one binary, two roles: poll-loop daemon
-  and the in-run `loopany` callback; spawns claude.
+- `packages/daemon` (`@crewlet/adscaile`) - one binary, two roles: poll-loop daemon
+  and the in-run `adscaile` callback; spawns claude.
 
 ## Commands
 
 - `pnpm dev` - server on :3000 (UI + scheduler + machine routes).
 - `pnpm -r typecheck` - both packages (server typecheck runs `tsr generate` first,
   so a fresh checkout typechecks with no prior build).
-- `pnpm --filter @loopany/server test` / `pnpm --filter @crewlet/loopany test` -
+- `pnpm --filter @adscaile/server test` / `pnpm --filter @crewlet/adscaile test` -
   vitest; single file: append the path; single test: `vitest run -t "<name>"`.
-- `pnpm --filter @loopany/server db:generate` / `db:migrate` - Drizzle migrations.
+- `pnpm --filter @adscaile/server db:generate` / `db:migrate` - Drizzle migrations.
 - `bash scripts/demo-cookie-unified.sh` - e2e demo loop through the unified server.
 - Prod: nitro build, then `pnpm start` = `scripts/prestart.mjs` +
   `node .output/server/index.mjs`. prestart applies pending migrations via the
   postgres-js migrator over `DIRECT_DATABASE_URL` for the hosted Supabase tier
   (when `DATABASE_URL` is set; fails loud if that would route DDL over the :6543
   pooler); the embedded pglite tier migrates in-process at boot - prestart just
-  gates it (no `DATABASE_URL` requires the explicit `LOOPANY_DB=pglite` opt-in,
+  gates it (no `DATABASE_URL` requires the explicit `ADSCAILE_DB=pglite` opt-in,
   exit 1 otherwise, so a lost DB secret can't silently boot an empty pglite).
 
 ## Core model
@@ -57,13 +57,13 @@ computes pure functions. Run instructions: `README.md`.
   near-zero dispatch latency; with a run in flight it stays the classic ~3s
   short poll so the progress heartbeat flows; old daemons/servers degrade to
   plain short-poll on both sides); the daemon spawns claude; the agent talks back via
-  run-token verbs (`loopany report/show/set-*/reschedule/finish`, `/agent-api/loop`);
+  run-token verbs (`adscaile report/show/set-*/reschedule/finish`, `/agent-api/loop`);
   the final `report()` persists transcript/metrics/artifacts and retires the run lease.
 - Run roles: `exec` (scheduled run), `evolve` (self-improvement pass), `edit`
   (owner-requested change). Only exec runs produce user-facing notifications,
   success or failure.
 - **Open vs closed loops**: closed-ness derives from `loops.goal != null` (no kind
-  column). A closed loop's exec run gets `canFinish` and may call `loopany finish`
+  column). A closed loop's exec run gets `canFinish` and may call `adscaile finish`
   when the goal is met, stamping `completedAt`/`completionReason` + `enabled=false`.
   The invariant `completedAt != null implies goal != null` is enforced at the single
   write chokepoint `store.updateLoop`, which also runs lifecycle side effects for
@@ -73,9 +73,9 @@ computes pure functions. Run instructions: `README.md`.
   `task` column). The exec run's instructions live ENTIRELY in the first user turn
   (`buildExecTask` ← `skill/run/exec-core.md`): the self-sufficient CORE (identity +
   untrusted-data guard + the non-negotiable fallback core - read task file first, do
-  the work / surface only what changed, end with exactly ONE `loopany report`/`finish`,
+  the work / surface only what changed, end with exactly ONE `adscaile report`/`finish`,
   `{{stateLine}}` report grammar, one pass then stop + per-run trigger + a pointer to
-  the installable loopany skill for the deep protocol). `buildLoopSystemPrompt` returns
+  the installable adscaile skill for the deep protocol). `buildLoopSystemPrompt` returns
   `""`; on an OLD daemon `--append-system-prompt-file` then points at an empty file (a
   harmless no-op, so batches 1-2 shipped server-first with no daemon change), and the
   current daemon skips the flag entirely when the delivered `systemPrompt` is empty (the
@@ -94,13 +94,13 @@ computes pure functions. Run instructions: `README.md`.
   (`renderRecentRuns`: ts / role / outcome-status / cost as `$x.xx` / state KEYS only,
   not values / FULL session id so the `find … <session>.jsonl` deep-dive resolves /
   message collapsed + clipped to ~100 chars), headed by on-demand pointers
-  (`loopany log [--transcript]`, now reachable in-run, + the local session JSONL).
+  (`adscaile log [--transcript]`, now reachable in-run, + the local session JSONL).
   `buildEditTask` KEEPS its inlined current ui/workflow/schema - that is current CONFIG,
   not history, and is useful for a surgical edit.
 - `allowControl` defaults TRUE; `false` means the owner pins the schedule. A run's
   self-schedule surface is only `reschedule` + `set-cron`, with cadence floors
-  (`LOOPANY_SELF_CRON_FLOOR_MINUTES`, `LOOPANY_SELF_RESCHEDULE_FLOOR_MINUTES`)
-  applying to the run path ONLY - owner `loopany edit` is unlimited.
+  (`ADSCAILE_SELF_CRON_FLOOR_MINUTES`, `ADSCAILE_SELF_RESCHEDULE_FLOOR_MINUTES`)
+  applying to the run path ONLY - owner `adscaile edit` is unlimited.
 
 ## The skill (`packages/server/src/skill/`)
 
@@ -109,13 +109,13 @@ computes pure functions. Run instructions: `README.md`.
      bundled or installed.
   2. `SKILL.md` + `references/{create,update,evolve,run}.md` - the PUBLIC installable
      skill, bundled into the daemon npm package and auto-installed at USER scope for
-     EVERY coding agent loopany knows about (`SKILL_TARGET_AGENTS` in
-     `daemon/src/skill-install.ts` - Claude Code `~/.claude/skills/loopany` + Codex
-     `~/.agents/skills/loopany` today), via `npx skills add ... -a claude-code -a codex -g`
+     EVERY coding agent adscaile knows about (`SKILL_TARGET_AGENTS` in
+     `daemon/src/skill-install.ts` - Claude Code `~/.claude/skills/adscaile` + Codex
+     `~/.agents/skills/adscaile` today), via `npx skills add ... -a claude-code -a codex -g`
      (repeated `-a` flags per agent; the comma form `-a a,b` is an invalid single
      name, and `-a '*'` is deliberately avoided since it litters all ~72 supported
-     agents regardless of presence) on `loopany up`/`new`; best-effort, never blocks.
-     `installArgs` + `loopany skill status` both derive from `SKILL_TARGET_AGENTS`, so
+     agents regardless of presence) on `adscaile up`/`new`; best-effort, never blocks.
+     `installArgs` + `adscaile skill status` both derive from `SKILL_TARGET_AGENTS`, so
      adding an agent is a one-line list edit.
   3. `skill/run/{exec-core,edit}.md` - INTERNAL run prompts, imported `?raw` by
      `gateway/prompt.ts`; never served, never bundled. `exec-core.md` is the exec
@@ -123,9 +123,9 @@ computes pure functions. Run instructions: `README.md`.
      the former standing prompt `exec-loop.md` still sits in `skill/run/` (Batch-3
      source for `references/run.md`) but is imported by nothing. `run/edit.md`
      stays SEPARATE from `references/update.md` on purpose: the edit RUN uses
-     run-token verbs on the current loop (`loopany set-cron`/`set-ui` ..., no id)
+     run-token verbs on the current loop (`adscaile set-cron`/`set-ui` ..., no id)
      and must be self-contained (skill install is best-effort), while update.md is
-     the OWNER authoring CLI (`loopany edit <id> --json`) - a merge would ship
+     the OWNER authoring CLI (`adscaile edit <id> --json`) - a merge would ship
      run-token instructions in the public bundle.
 - `references/evolve.md` doubles as the evolve RUN prompt (same `?raw` import), so
   skill and run-dispatch cannot drift. `references/run.md` is the PUBLIC runtime
@@ -231,7 +231,7 @@ computes pure functions. Run instructions: `README.md`.
   mcporter (headless, `disableOAuth: true` - never launches a browser flow). The
   bridge `packages/daemon/src/mcp-bridge.mjs` is plain ESM on purpose (the workflow
   subprocess runs bare node, dev and prod); `scripts/copy-runtime-assets.mjs` ships
-  it to `dist/`. Caps + timeout via `LOOPANY_WORKFLOW_TOOL_*` env.
+  it to `dist/`. Caps + timeout via `ADSCAILE_WORKFLOW_TOOL_*` env.
 - A failed workflow does NOT fail the run: `runner.ts` falls back to the agent with
   the original task + failure context. A `/SyntaxError/` failure is a user-fix case
   (exec runs have no `set-workflow`) - the agent writes `workflow-setup-<date>.md`
@@ -251,9 +251,9 @@ computes pure functions. Run instructions: `README.md`.
   (a burst must never 413 the server's 32MB `SYNC_BODY_CAP`; overflow takes the
   PUT path), and the FIRST flush after watcher start inlines nothing
   (post-restart the server already has almost everything). Bytes live in R2
-  (`LOOPANY_R2_*`; in-memory store when unset - the test/dev
+  (`ADSCAILE_R2_*`; in-memory store when unset - the test/dev
   default), metadata in `blobs`/`artifact_files`. The **never-syncable dir** list
-  (`.git`, `node_modules`, `.worktrees`, common build/tool caches, `.loopany`) +
+  (`.git`, `node_modules`, `.worktrees`, common build/tool caches, `.adscaile`) +
   `.env*`/key files is enforced on BOTH daemon (`watcher.ts` `IGNORE_DIRS`) and
   server (`gateway/artifacts.ts` `IGNORE_DIRS`) - keep the two in sync. Per-file
   cap 10MB (larger = metadata-only `oversize`).
@@ -262,7 +262,7 @@ computes pure functions. Run instructions: `README.md`.
   loop dir and flooded sync). Two defenses: (1) the never-syncable dirs above
   exclude a checkout/worktree/build tree at the source; (2) `watcher.ts`
   `capManifest` bounds every sync to a per-loop file-count + byte ceiling
-  (`LOOPANY_SYNC_MAX_FILES` 5000 / `LOOPANY_SYNC_MAX_BYTES` 256MB) - over either,
+  (`ADSCAILE_SYNC_MAX_FILES` 5000 / `ADSCAILE_SYNC_MAX_BYTES` 256MB) - over either,
   it keeps the shallowest-then-smallest files (the top-level content home always
   survives) and DROPS the overflow with ONE loud warning, so the bounded POST
   can't 413/timeout into an endless retry storm. The SKILL teaches runs to keep
@@ -277,7 +277,7 @@ computes pure functions. Run instructions: `README.md`.
   (so a direct hit on an inline SVG can't script the origin). **DEV GOTCHA: `pnpm dev`
   (vite) intercepts asset-extension paths (`.png/.svg/.md/...`) BEFORE the SSR route
   and 404s them** ("Cannot GET …"), so image rendering only works against a nitro
-  PROD build (`pnpm build && pnpm start`, `PORT=…` not `LOOPANY_PORT`); markdown is
+  PROD build (`pnpm build && pnpm start`, `PORT=…` not `ADSCAILE_PORT`); markdown is
   unaffected (it reads via the `getArtifact` server fn, not this route). Verify image
   serving against prod, not dev.
 - **Front-matter convention** (migration `0018`, `blobs.meta`): markdown products
@@ -305,20 +305,20 @@ computes pure functions. Run instructions: `README.md`.
   (413). Per-field caps (`WIRE_TEXT_CAP` 512KB, `MESSAGE_CAP` 2000, ...) are
   row-bloat budgets, not the security boundary.
 - The device token fully impersonates the machine; it is serialized OWNER-ONLY
-  (`tokenVisibleTo`) - teammates/admins get `token: null`. `loopLog` (`loopany log`
+  (`tokenVisibleTo`) - teammates/admins get `token: null`. `loopLog` (`adscaile log`
   backend) is scoped to loops bound to that machine; cross-scope = flat 404.
 - **Unified CLI dispatch `POST /api/machine/cli`** (`gateway/cli.ts`
   `CliGateway.cli(token, argv)`, over the injected core `MachineGateway`) is a
   ROUTER in front of the existing gateway logic, keying authority on CREDENTIAL TYPE
   first: a `dk_`-prefixed **device** token → owner verbs (`new`→createLoop,
   `loops`→listLoops, `edit`→editLoop, `log`→loopLog, `show`→describe, `home`→homeDevice —
-  bare `loopany`'s content-first home, handled BEFORE the unknown-machine 401 guard so an
+  bare `adscaile`'s content-first home, handled BEFORE the unknown-machine 401 guard so an
   unregistered machine renders a DEFINITIVE not-connected state, never a 401/empty;
   `report`/`finish` are run-only → 403); a **run** credential (an `rk_`-prefixed run lease,
   or a pre-Batch-6 bare UUID over a deploy) → the per-run `dispatch()` verbs PLUS a read
   branch (`log`/`show`/`home`→homeRun, the lease's OWN loop context) scoped to the lease's
   OWN loop (this closes the historical
-  in-run `loopany log` 400 seam; batch 4 also wired a `log` case into `dispatch`
+  in-run `adscaile log` 400 seam; batch 4 also wired a `log` case into `dispatch`
   itself, so run-credential `log` now works on BOTH the unified `/api/machine/cli`
   and the legacy `/agent-api/loop` transports — keeping the in-run help that
   advertises `log` truthful everywhere). Run-credential rules: owner-only verbs
@@ -347,7 +347,7 @@ computes pure functions. Run instructions: `README.md`.
   the gateway methods DIRECTLY, not through `finalizeCli`, so their full structured bodies
   are unchanged. The axi-conformance spine lives in `gateway/toon.ts`; details +
   batch-7 compat matrix in `packages/server/AGENTS.md`. The in-run callback prints
-  `body.text`, so `renderLoopLog` carrying `text` is what makes in-run `loopany log` print
+  `body.text`, so `renderLoopLog` carrying `text` is what makes in-run `adscaile log` print
   (the F2 fix). `finalizeCli` fills `text` from any structured `{error}` and ensures
   `exitCode`; errors render as `error:`/`code:` TOON. Two behavior changes ride along:
   `report` and `finish` reject an invalid `--status` with a 400 `VALIDATION_ERROR` (F5) and
@@ -360,7 +360,7 @@ computes pure functions. Run instructions: `README.md`.
   unless `--full`. A run credential adds camelCase `selfSchedule`/`selfFinish` effective
   lines (these REPLACED the old kebab `self-schedule`/`self-finish` display keys). See
   `packages/server/AGENTS.md` for the durable notes.
-- `auth.ts` THROWS at boot when the GitHub gate is on but `LOOPANY_AUTH_SECRET` is
+- `auth.ts` THROWS at boot when the GitHub gate is on but `ADSCAILE_AUTH_SECRET` is
   unset. Set the Fly secret before deploying with the gate on.
 - Per-team connect-key: the claim carries the team (`rememberConnectKey` ->
   `connect_keys` table, keyed by the DERIVED machine id so the key itself is never
@@ -370,12 +370,12 @@ computes pure functions. Run instructions: `README.md`.
   cross-team create is fail-closed: claim minter must be the machine owner AND
   membership is re-validated at `createLoop` time. A machine's home team is always
   the owner's personal team; a loop's team comes from the validated claim.
-- Daemon jail: `LOOPANY_ROOTS` is an always-applied local jail (`roots.ts`) -
+- Daemon jail: `ADSCAILE_ROOTS` is an always-applied local jail (`roots.ts`) -
   server-sent roots can only NARROW it, paths are resolve-normalized before the
   prefix check. Child env is allowlisted everywhere (`spawn.ts`); the workflow
-  subprocess gets extra keys only via `LOOPANY_WORKFLOW_ENV=KEY1,KEY2`. All daemon
+  subprocess gets extra keys only via `ADSCAILE_WORKFLOW_ENV=KEY1,KEY2`. All daemon
   fetches go through `boundedFetch`; kills take the whole process group.
-- Exec timeout is OPT-IN (`LOOPANY_EXEC_TIMEOUT_MS`; default unlimited). The guard
+- Exec timeout is OPT-IN (`ADSCAILE_EXEC_TIMEOUT_MS`; default unlimited). The guard
   against a vanished machine is the SERVER's inactivity-based sweep: poll writes a
   freshness stamp into run progress; a run is reclaimed only after `RUN_TIMEOUT_MS`
   of silence. A canceled run's late `report()`
@@ -454,7 +454,7 @@ computes pure functions. Run instructions: `README.md`.
   "📵 appears offline"). Banner/string edits in `LoopDetailView`: entities in JS
   STRING literals are not decoded — write `&`, not `&amp;` (only JSX text decodes).
 - **Circuit breaker**: `notifyRunFailure` auto-pauses a loop at
-  `LOOPANY_FAILURE_AUTOPAUSE_STREAK` (default 10, 0=off) consecutive exec
+  `ADSCAILE_FAILURE_AUTOPAUSE_STREAK` (default 10, 0=off) consecutive exec
   failures - `enabled=false` + unschedule + ONE autopause note that SUBSUMES the
   failure alert (silent under `notify:"never"`; a plain pause, re-enable resumes).
   `skipped` runs are transparent to the streak (it counts only phase `error`).
@@ -490,12 +490,12 @@ computes pure functions. Run instructions: `README.md`.
   through the SAME `validate{Ui,Workflow,Schema}` helpers the run-token `set-*` path
   uses (two surfaces cannot drift; schema stays additive). Keys outside
   `EDITABLE_LOOP_FIELDS` are rejected with a 400 listing the allowed set. Both
-  `loopany new` and `loopany edit` support `--dry-run` (server validate-only, zero
+  `adscaile new` and `adscaile edit` support `--dry-run` (server validate-only, zero
   persistence).
 - **`createLoop` also accepts an optional `ui`** (gateway `createLoop`, same
   `validateUi` + `WIRE_TEXT_CAP` clip as `set-ui`/`editLoop`), so a template-driven
   loop ships a **day-one dashboard** instead of waiting for an evolve pass. The daemon
-  `loopany new` spreads the whole `--json` config, so `ui` passes through with no
+  `adscaile new` spreads the whole `--json` config, so `ui` passes through with no
   whitelist change; `--dry-run` reports `ui` as a presence flag (like `workflow`), not
   the markup. `create.md`'s "Dashboard at create" step tells the agent to author the
   initial `ui` when the product shape is already known (cross-refs `evolve.md` §3).
@@ -510,7 +510,7 @@ computes pure functions. Run instructions: `README.md`.
 
 - **Routing lives in the pure `route.ts` `classify(argv, env)`** (batch 6, unit-tested
   without hanging a subprocess); `cli.ts` maps the returned `Route` to its lazily-imported
-  handler. The in-run callback (`LOOPANY_RUN_TOKEN`+args) still wins FIRST; `-v`/`--version`
+  handler. The in-run callback (`ADSCAILE_RUN_TOKEN`+args) still wins FIRST; `-v`/`--version`
   (like `--help`/`-h`/`help`) is a light fast-path that prints just the version (`help.ts`
   `printVersion`, reusing `daemonVersion()`) and never launches a daemon (the usage screen
   also leads with that version). **`<verb> --help`/`-h` short-circuits to that verb's
@@ -518,23 +518,23 @@ computes pure functions. Run instructions: `README.md`.
   `up`→daemon branch so `up --foreground --help` shows help, never the poll loop. This is
   the no-side-effect guarantee for foot-guns (`update` hands the daemon over immediately).
   Structural: a NEW verb inherits it by joining `route.ts` `COMMAND_VERBS` (add a matching
-  `VERB_USAGE` entry; a missing one degrades to the full screen). **Bare `loopany` is now the content-first HOME**, not the
+  `VERB_USAGE` entry; a missing one degrades to the full screen). **Bare `adscaile` is now the content-first HOME**, not the
   foreground daemon: device out-of-run posts `home` on the device credential, in-run bare
   posts `home` on the run credential (fixes the old `argv.length > 0` guard). The
-  foreground poll loop MOVED to `loopany up --foreground`; the `--server-url`/`--api-key`
+  foreground poll loop MOVED to `adscaile up --foreground`; the `--server-url`/`--api-key`
   detached re-exec path is PRESERVED (still classifies as a `daemon` launch). An unknown
   leading verb still errors exit 2, never silently backgrounds a daemon.
   `report`/`finish`/`complete` typed OUT of a run are FORWARDED to the server so its
-  crafted run-only 403 reaches the agent (F3); `loopany show` out-of-run (F1) resolves the
+  crafted run-only 403 reaches the agent (F3); `adscaile show` out-of-run (F1) resolves the
   loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
-- **`loopany setup hooks [--remove]`** (`setup.ts`): idempotent SessionStart hook install
+- **`adscaile setup hooks [--remove]`** (`setup.ts`): idempotent SessionStart hook install
   per `HOOK_TARGET_AGENTS` (a SUPERSET of `SKILL_TARGET_AGENTS` - grok gets a hook but is
   deliberately NOT a skill-install target, since it reads Claude's skills dir). Claude Code
   (`~/.claude/settings.json`), Codex (`~/.codex/hooks.json`), and Grok Build
-  (`~/.grok/hooks/loopany.json`) all have concrete installers sharing ONE merge routine
+  (`~/.grok/hooks/adscaile.json`) all have concrete installers sharing ONE merge routine
   (`installJsonSessionStartHook` — all use the identical `{hooks:{SessionStart:[...]}}`
   JSON shape); each writes a SessionStart command hook running the durable ABSOLUTE
-  `loopany` path (our shim or a PATH global), whose stdout lands as ambient context; an
+  `adscaile` path (our shim or a PATH global), whose stdout lands as ambient context; an
   agent with no installer is reported `skipped`. **Codex discrepancy** (verified against
   codex-cli 0.143.0 + `/openai/codex` source): Codex additionally gates hooks behind
   `hooks = true` in `~/.codex/config.toml` AND a per-hook TRUST layer (`[hooks.state]`
@@ -543,52 +543,52 @@ computes pure functions. Run instructions: `README.md`.
   version-sensitive hash, never mutates the TOML) and SURFACES the enable/trust step in the
   report. Grok Build's global hooks (one file per tool under `~/.grok/hooks/*.json`) are
   ALWAYS TRUSTED - no `hooks = true` config gate and no per-hook trust hash - so writing
-  `loopany.json` makes the hook live immediately (no enable/trust note). Codex is fully
+  `adscaile.json` makes the hook live immediately (no enable/trust note). Codex is fully
   executable (`codex exec` — see the `loops.agent` bullet). `up`/`update` call the
   best-effort `refreshHooks` (never blocks). The ambient hook installs ONLY with a
-  DURABLE on-PATH `loopany` (`resolveDurableCommand`: our shim OR a NON-ephemeral PATH
+  DURABLE on-PATH `adscaile` (`resolveDurableCommand`: our shim OR a NON-ephemeral PATH
   global, returned as an absolute path - the transient `npx`/`_npx` PATH entry is
   filtered out, so it gates exactly like the bin shim, F6) — the automatic path SKIPS
-  it with `npm i -g` guidance when only a bare, non-PATH (or ephemeral npx) `loopany`
+  it with `npm i -g` guidance when only a bare, non-PATH (or ephemeral npx) `adscaile`
   would result; the explicit verb still installs but warns.
-- **PATH shim** (`bin-shim.ts`): `up`/`update` write a version-consistent `loopany`
+- **PATH shim** (`bin-shim.ts`): `up`/`update` write a version-consistent `adscaile`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance. It lands ONLY
   from a durable install (`isEphemeralEntry` skips an npx/npm-cache re-exec) and NEVER
-  clobbers a foreign `loopany` (refreshes only our own shim, detected by `SHIM_MARKER`).
+  clobbers a foreign `adscaile` (refreshes only our own shim, detected by `SHIM_MARKER`).
   `ensureBinShim` returns `{path,onPath,written}` so callers/tests assert skipped-vs-written.
   **TEST HAZARD**: `ensureBinShim`/`refreshHooks` write the REAL `~/.claude/settings.json`
   + `~/.local/bin` unless injected — `ensure.test.ts`'s `seams()` no-ops both, and every
   setup/bin-shim test injects fs/env seams. See `packages/server/AGENTS.md` for the server
   `home` verb + full text-sink notes.
-- Pidfile `~/.loopany/daemon.pid` records `<pid>:<startTime>` so a pid reused after
+- Pidfile `~/.adscaile/daemon.pid` records `<pid>:<startTime>` so a pid reused after
   an unclean crash is never mistaken for the daemon (or SIGTERMed by `down`).
-  `loopany up` consults the pidfile first (never spawns a second daemon); the device
+  `adscaile up` consults the pidfile first (never spawns a second daemon); the device
   token passes to the child via ENV, never argv (`ps`-visible).
-- `loopany new` takes `--json '<inline>'` (or `--json -` for stdin); `loopany edit`
+- `adscaile new` takes `--json '<inline>'` (or `--json -` for stdin); `adscaile edit`
   is JSON-only (`--json '<obj>'`) plus the content-file trio (`--workflow-file`,
   `--ui-file`, `--schema-file`). Unknown flags reject loudly. The server is the sole
   validator.
-- `loopany log [<loop>]` - concise run survey (session ids + metrics; `--transcript`/
+- `adscaile log [<loop>]` - concise run survey (session ids + metrics; `--transcript`/
   `--full` for full text; `--json` structured). Backed by `GET /api/machine/log` (device
   token). `--json`/`--transcript` keep the structured render (the text-sink server survey
   is concise, no `--full` inline yet).
-- `loopany update` hands the running daemon over to the invoking (new) CLI version:
+- `adscaile update` hands the running daemon over to the invoking (new) CLI version:
   `down` then `runEnsure({force:true})` - force skips the still-reported-online
   short-circuit (server `ONLINE_TTL` 30s outlives the local pidfile clear).
 - `loops.agent` (`CodingAgent` enum: `claude-code|codex|grok`) records the loop's host
   coding agent AND selects the executor (at create: measured env fingerprint >
   `--agent` > server default; detection markers in `create.ts detectAgentFromEnv`).
-  Editable afterward on the edit path - in `EDITABLE_LOOP_FIELDS`, `loopany edit
+  Editable afterward on the edit path - in `EDITABLE_LOOP_FIELDS`, `adscaile edit
   --json`/`show` roundtrip, and the web `LoopForm` agent select (the next run picks
   up a changed agent). `runner.ts buildAgentSpawn` branches on `d.loop.agent`
   (delivered by server `gateway/delivery.ts`):
-  - `claude-code` → `claude` (`LOOPANY_CLAUDE_BIN`) with stream-json + bypassPermissions
-  - `grok` → `grok` (`LOOPANY_GROK_BIN`): drops `--verbose` (exit-2 rejects it) + the
+  - `claude-code` → `claude` (`ADSCAILE_CLAUDE_BIN`) with stream-json + bypassPermissions
+  - `grok` → `grok` (`ADSCAILE_GROK_BIN`): drops `--verbose` (exit-2 rejects it) + the
     sys-prompt-file flag; uses `--output-format streaming-json` (not `stream-json`);
     `execEnv("grok")` forwards `XAI_API_KEY`/`GROK_HOME`/`XAI_API_BASE_URL` (OAuth via
     `~/.grok` is free through `HOME`)
-  - `codex` → `codex exec` (`LOOPANY_CODEX_BIN`): `--json`,
+  - `codex` → `codex exec` (`ADSCAILE_CODEX_BIN`): `--json`,
     `--dangerously-bypass-approvals-and-sandbox`, `--skip-git-repo-check`, optional
     `-m`; resume is `codex exec resume <sessionId> …`; `execEnv("codex")` forwards
     `OPENAI_API_KEY`/`CODEX_API_KEY`/`CODEX_HOME` (session/config under `~/.codex`
@@ -596,9 +596,9 @@ computes pure functions. Run instructions: `README.md`.
   **Non-Claude telemetry is DEGRADED**: grok's headless stream is grok-native
   (`thought`/`text`/`end`, no cost/usage) and codex `--json` is not Claude
   stream-json, so the Claude-shaped `makeStreamConsumer` parses nothing — a run
-  still marks ok on exit 0 and the agent's own `loopany report` persists the
+  still marks ok on exit 0 and the agent's own `adscaile report` persists the
   result; daemon-side live-progress/cost/transcript await per-agent stream adapters.
-  Grok's SessionStart hook (`setup.ts`, `~/.grok/hooks/loopany.json`, always-trusted)
+  Grok's SessionStart hook (`setup.ts`, `~/.grok/hooks/adscaile.json`, always-trusted)
   rides `HOOK_TARGET_AGENTS` (a superset of `SKILL_TARGET_AGENTS` — grok reads
   Claude's skills dir so it is NOT a skill-install target). The enum's single source
   is `CODING_AGENTS` in `packages/server/src/types.ts`
@@ -608,7 +608,7 @@ computes pure functions. Run instructions: `README.md`.
   need a real process or network.
 - **Unified CLI transport `cli-client.ts` `postCli(argv, legacy, deps)`** (batch 5):
   the ONE client behind BOTH CLI worlds. It selects the credential by env (run token
-  from `LOOPANY_RUN_TOKEN` wins, else the persisted device token), inlines the file
+  from `ADSCAILE_RUN_TOKEN` wins, else the persisted device token), inlines the file
   flags (`--message-file`→`--message`, `--state-file`→`--state-content`, `--file`→
   `--file-content` — moved out of `callback.ts` so both credentials get it), and POSTs
   `{argv}` to the unified `/api/machine/cli` (server batch 4). On a **404** (old server)
@@ -623,7 +623,7 @@ computes pure functions. Run instructions: `README.md`.
   (up/down/update/skill/status/setup/help/version + the `--foreground`/detached daemon
   launch) keep their own fast-paths and never touch the server. `log`'s cwd→loop resolution stays CLIENT-side (lists loops,
   then posts `log <id>`) because the server's `log` dispatch needs an explicit id.
-  This ships in the npm daemon package, so it needs a coordinated `@crewlet/loopany`
+  This ships in the npm daemon package, so it needs a coordinated `@crewlet/adscaile`
   release. (The daemon still forwards whatever token its env carries — the `rk_` run
   lease is batch 6, not here.)
 - **Transient-failure resume (`runner.ts`)**: a claude crash is CLASSIFIED
@@ -631,8 +631,8 @@ computes pure functions. Run instructions: `README.md`.
   `transient` (API error / connection closed / ECONNRESET / stream closed /
   overloaded / rate limit / 5xx) retries - `claude --resume <sessionId>` with a
   short continuation prompt (`buildResumeTask`: trust prior progress, end with
-  exactly ONE report/finish), up to `LOOPANY_TRANSIENT_RETRIES` (default 2) with
-  `LOOPANY_TRANSIENT_RETRY_BASE_MS` backoff (15s, x4, jitter; consts read at
+  exactly ONE report/finish), up to `ADSCAILE_TRANSIENT_RETRIES` (default 2) with
+  `ADSCAILE_TRANSIENT_RETRY_BASE_MS` backoff (15s, x4, jitter; consts read at
   module load - tests re-import). `--resume` FORKS the session id: track the
   latest for the next resume + transcript recovery. Timeouts never retry (our
   wall-clock guard, not a provider blip); no captured session = nothing to
@@ -650,7 +650,7 @@ computes pure functions. Run instructions: `README.md`.
   Phase 2 of the team-URL design). The shared `DashboardView` renders it AND bare `/`
   (open mode); the list server fns (`listJobs`/`listMachines`/`listMyTeams`) + `mintClaim`
   take an EXPLICIT `teamId`, membership-validated via `requestScope(explicitTeam?)` (route
-  param wins over the `loopany.team` cookie), so tabs on `/t/A` and `/t/B` show different
+  param wins over the `adscaile.team` cookie), so tabs on `/t/A` and `/t/B` show different
   teams at once. The cookie is now ONLY the bare-`/` redirect's last-used hint, never an
   auth key. Gated `/` redirects to `/t/<last-used|personal>` (`getDefaultTeam`); the
   signed-out CTA + open mode render at `/`. Non-member `/t/<x>` throws the same generic
@@ -680,7 +680,7 @@ computes pure functions. Run instructions: `README.md`.
   the loop conversationally (no dispatch, no credits). The hint names WHERE to run it,
   deriving the loop's on-disk dir from `job.taskFile` via `loopDir` (degrades to a
   generic instruction, never a fabricated path). Generic operation copy is
-  **agent-neutral** ("your coding agent"), NOT "Claude Code" - Loopany runs more than
+  **agent-neutral** ("your coding agent"), NOT "Claude Code" - adScaile runs more than
   one agent (claude-code, codex, grok, more later); the only "Claude Code"/"Codex" survivors
   are the `AGENT_LABEL` chip (the loop's ACTUAL recorded agent, a factual label).
   Guarded by `loopDetailEdit.regression.test.ts`.
@@ -738,11 +738,11 @@ computes pure functions. Run instructions: `README.md`.
 ## CI/CD (`.github/workflows/`)
 
 - `deploy.yml`: push to `main` -> `flyctl deploy --remote-only` (Fly app
-  `loopany-testing`). Migrations apply on container boot (forward-only). Both deploy
+  `adscaile-testing`). Migrations apply on container boot (forward-only). Both deploy
   workflows bake `--build-arg GIT_SHA`/`BUILT_AT` into the image; `/api/health` returns
   `{ok, sha, builtAt}` (baked ENV, `"unknown"` in local dev) and a post-deploy smoke
   step asserts the served `sha` == the pushed `github.sha`.
-- `deploy-prod.yml`: **manual `workflow_dispatch` ONLY** -> `loopany-prod` / loopany.ai,
+- `deploy-prod.yml`: **manual `workflow_dispatch` ONLY** -> `adscaile-prod` / adscaile.ai,
   `--ha=false` single machine (single-scheduler invariant; never auto-deploy prod). A
   preflight step fails loud if `FLY_API_TOKEN_PROD` is empty. Migrations are
   forward-only, so an image rollback does NOT roll back schema; check the

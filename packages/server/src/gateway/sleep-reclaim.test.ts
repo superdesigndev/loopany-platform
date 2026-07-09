@@ -24,10 +24,10 @@ let cliMod: typeof import("./cli.js");
 let tokens: typeof import("./tokens.js");
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-sleep-"));
-  process.env.LOOPANY_DATA_DIR = tmp;
-  process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
-  process.env.LOOPANY_LOG_LEVEL = "silent";
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-sleep-"));
+  process.env.ADSCAILE_DATA_DIR = tmp;
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, "test.db");
+  process.env.ADSCAILE_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
   store = await import("../db/store.js");

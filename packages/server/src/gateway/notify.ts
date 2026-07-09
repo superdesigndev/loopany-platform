@@ -117,7 +117,7 @@ export function deferredMessage(): string {
 }
 
 /**
- * The user-facing message for a CLOSED loop that reached its goal (`loopany
+ * The user-facing message for a CLOSED loop that reached its goal (`adscaile
  * finish`). A distinct, positive terminal event — surfaced unless notify=never
  * (the caller gates that). Prefers the finishing run's reason, then its message.
  */

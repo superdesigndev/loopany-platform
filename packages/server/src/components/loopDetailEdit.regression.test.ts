@@ -31,7 +31,7 @@ describe('LoopDetailView edit-mode heading', () => {
 })
 
 /**
- * Loopany runs more than one coding agent (claude-code, codex, more later), so
+ * adScaile runs more than one coding agent (claude-code, codex, more later), so
  * GENERIC edit copy must be agent-neutral ("your coding agent"), never hardcode
  * "Claude Code". The AGENT_LABEL maps (the ACTUAL recorded/selectable agent — the
  * detail-page chip and the LoopForm agent <select> options) are exempt: they are

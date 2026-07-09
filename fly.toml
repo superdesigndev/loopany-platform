@@ -1,37 +1,37 @@
-# Loopany STAGING on Fly.io — app "loopany-testing". ONE always-on machine (the
+# adScaile STAGING on Fly.io — app "adscaile-testing". ONE always-on machine (the
 # scheduler owns the cron loop; never scale to >1 or you'd double-fire).
 # DB: embedded pglite on the mounted volume by default. The container runs with
 # NODE_ENV=production, where a missing/bad DATABASE_URL now FAILS the boot unless
-# LOOPANY_DB=pglite explicitly opts into the embedded tier — so staying on pglite
-# REQUIRES LOOPANY_DB=pglite (set in [env] below). To point staging at a (separate)
+# ADSCAILE_DB=pglite explicitly opts into the embedded tier — so staying on pglite
+# REQUIRES ADSCAILE_DB=pglite (set in [env] below). To point staging at a (separate)
 # Supabase project instead, set the DATABASE_URL / DIRECT_DATABASE_URL secrets (and
-# drop LOOPANY_DB).
+# drop ADSCAILE_DB).
 # Production is a SEPARATE app + config — see fly.prod.toml. This app auto-deploys
 # on push to main (deploy.yml); prod is manual/gated (deploy-prod.yml).
 #
 # Setup:
 #   fly launch --no-deploy           # create the app (edit the name below)
-#   fly volumes create loopany_data --size 1
-#   fly secrets set LOOPANY_AUTH_SECRET=$(openssl rand -hex 32) \
+#   fly volumes create adscaile_data --size 1
+#   fly secrets set ADSCAILE_AUTH_SECRET=$(openssl rand -hex 32) \
 #       GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
-#       LOOPANY_BASE_URL=https://<app>.fly.dev \
-#       LOOPANY_ALLOWED_LOGINS=you@example.com
+#       ADSCAILE_BASE_URL=https://<app>.fly.dev \
+#       ADSCAILE_ALLOWED_LOGINS=you@example.com
 #   fly deploy
 #   # Push channels (Telegram/Slack/Feishu) are configured per team in the
 #   # dashboard (Notifications), not via secrets.
 
-app = "loopany-testing"
+app = "adscaile-testing"
 primary_region = "nrt"
 
 [build]
   dockerfile = "Dockerfile"
 
 [env]
-  LOOPANY_DATA_DIR = "/data"
+  ADSCAILE_DATA_DIR = "/data"
   PORT = "3000"
   # Opt into the embedded pglite tier under NODE_ENV=production (without this a
   # missing DATABASE_URL fails the boot). Drop this when moving to Supabase.
-  LOOPANY_DB = "pglite"
+  ADSCAILE_DB = "pglite"
 
 [http_service]
   internal_port = 3000
@@ -42,7 +42,7 @@ primary_region = "nrt"
   min_machines_running = 1
 
 [[mounts]]
-  source = "loopany_data"
+  source = "adscaile_data"
   destination = "/data"
 
 [[vm]]

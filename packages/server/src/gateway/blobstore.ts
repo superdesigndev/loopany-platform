@@ -129,6 +129,6 @@ export function createBlobStore(): BlobStore {
     log.info({ bucket: cfg.bucket, endpoint: cfg.endpoint }, "blob store: Cloudflare R2");
     return new R2BlobStore(cfg);
   }
-  log.warn("blob store: in-memory (no R2 credentials configured — set LOOPANY_R2_* for durable storage)");
+  log.warn("blob store: in-memory (no R2 credentials configured — set ADSCAILE_R2_* for durable storage)");
   return new MemoryBlobStore();
 }

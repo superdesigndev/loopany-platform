@@ -18,9 +18,9 @@ let tokens: typeof import("./tokens.js");
 let db: typeof import("../db/index.js");
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-tokens-"));
-  process.env.LOOPANY_DATA_DIR = tmp;
-  process.env.LOOPANY_LOG_LEVEL = "silent";
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-tokens-"));
+  process.env.ADSCAILE_DATA_DIR = tmp;
+  process.env.ADSCAILE_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
   tokens = await import("./tokens.js");

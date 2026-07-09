@@ -38,10 +38,10 @@ async function seedLoop(teamId: string, name: string) {
 }
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'loopany-teamcrud-'))
-  process.env.LOOPANY_DATA_DIR = tmp
-  process.env.LOOPANY_DB_PATH = path.join(tmp, 'test.db')
-  process.env.LOOPANY_LOG_LEVEL = 'silent'
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'adscaile-teamcrud-'))
+  process.env.ADSCAILE_DATA_DIR = tmp
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, 'test.db')
+  process.env.ADSCAILE_LOG_LEVEL = 'silent'
 
   db = await import('../db/index.js')
   await db.runMigrations()

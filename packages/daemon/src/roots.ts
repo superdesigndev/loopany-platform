@@ -1,5 +1,5 @@
 /**
- * Workdir-jail helpers (LOOPANY_ROOTS). The daemon's env roots are the LOCAL,
+ * Workdir-jail helpers (ADSCAILE_ROOTS). The daemon's env roots are the LOCAL,
  * always-enforced jail; server-sent roots may only NARROW it, never widen it —
  * every server-controlled path (a run's workdir, a watched loop folder, a
  * task-file read) is checked against these before it's touched. With no local
@@ -7,7 +7,7 @@
  */
 import path from "node:path";
 
-import { LOOPANY_DIR } from "./config.js";
+import { ADSCAILE_DIR } from "./config.js";
 import { expandTilde } from "./loopdir.js";
 
 /** Absolute, tilde-expanded form of a configured root. */
@@ -38,9 +38,9 @@ export function isWithinRoots(abs: string, roots: string[]): boolean {
   return isWithinResolvedRoots(abs, resolveRoots(roots));
 }
 
-/** The daemon-owned per-loop scratch parent (`~/.loopany/work`). Computed once —
- *  LOOPANY_DIR is itself fixed at module load (env read at import time). */
-const SCRATCH_DIR = path.join(LOOPANY_DIR, "work");
+/** The daemon-owned per-loop scratch parent (`~/.adscaile/work`). Computed once —
+ *  ADSCAILE_DIR is itself fixed at module load (env read at import time). */
+const SCRATCH_DIR = path.join(ADSCAILE_DIR, "work");
 
 /** Is `abs` the scratch parent or under it? Its location is fixed locally —
  *  never server-chosen — so it's allowed even under a jail (mirrors the

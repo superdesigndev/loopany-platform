@@ -1,5 +1,5 @@
 /**
- * Copy the canonical loopany skill from the server package into this daemon
+ * Copy the canonical adscaile skill from the server package into this daemon
  * package so it ships in the published npm tarball (package.json `files` includes
  * `skill`). Run on `build` and `prepublishOnly` so the bundled copy can never
  * drift from the single source of truth at packages/server/src/skill/.
@@ -12,10 +12,10 @@
  * (not an installable skill file), and skill/templates/ is the template-market
  * metadata (public-served via listTemplates, not an installable skill file) — none of
  * these may reach the public npm tarball or a user's installed
- * ./.claude/skills/loopany/. A naive `cpSync(src, dst, {recursive})` would copy run/,
+ * ./.claude/skills/adscaile/. A naive `cpSync(src, dst, {recursive})` would copy run/,
  * bootstrap.md AND templates/ too — so we whitelist instead.
  *
- * The daemon installs this bundled dir locally via `npx skills` during `loopany new`
+ * The daemon installs this bundled dir locally via `npx skills` during `adscaile new`
  * (see src/skill-install.ts) — a LOCAL path source, so end users never need the
  * (private) platform repo.
  */

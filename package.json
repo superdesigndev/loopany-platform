@@ -1,19 +1,19 @@
 {
-  "name": "loopany-platform",
+  "name": "adscaile-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "Loopany — multi-user scheduled-loop manager. Server schedules/stores/auths; execution is BYOA (claude-code on the user's own machine).",
+  "description": "adScaile — multi-user scheduled-loop manager. Server schedules/stores/auths; execution is BYOA (claude-code on the user's own machine).",
   "type": "module",
   "packageManager": "pnpm@8.15.0",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm --filter @loopany/server dev",
-    "build": "pnpm --filter @loopany/server build",
-    "start": "pnpm --filter @loopany/server start",
+    "dev": "pnpm --filter @adscaile/server dev",
+    "build": "pnpm --filter @adscaile/server build",
+    "start": "pnpm --filter @adscaile/server start",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @loopany/server test && pnpm --filter @crewlet/loopany test"
+    "test": "pnpm --filter @adscaile/server test && pnpm --filter @crewlet/adscaile test"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

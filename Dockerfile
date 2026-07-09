@@ -1,7 +1,7 @@
-# Loopany server (TanStack Start + in-process scheduler + machine gateway).
+# adScaile server (TanStack Start + in-process scheduler + machine gateway).
 # Single always-on container on Fly. Postgres store: with DATABASE_URL set it's
 # stateless (Supabase); to run the embedded pglite DB at /data (volume) instead,
-# opt in with LOOPANY_DB=pglite - without either, prestart refuses to boot (exit 1)
+# opt in with ADSCAILE_DB=pglite - without either, prestart refuses to boot (exit 1)
 # so a lost DATABASE_URL secret can't silently start an empty ephemeral database.
 FROM node:22-slim AS base
 # Build tools kept for any transitive native dep; postgres-js + pglite are pure JS.
@@ -18,7 +18,7 @@ RUN pnpm install --frozen-lockfile
 
 # Build the server (nitro → .output/server/index.mjs).
 COPY . .
-RUN pnpm --filter @loopany/server build
+RUN pnpm --filter @adscaile/server build
 
 # Build provenance baked into the image, surfaced at /api/health for the deploy
 # smoke check + drift visibility. CI passes these (--build-arg GIT_SHA=<github.sha>
@@ -30,11 +30,11 @@ ENV GIT_SHA=${GIT_SHA}
 ENV BUILT_AT=${BUILT_AT}
 
 ENV NODE_ENV=production
-ENV LOOPANY_DATA_DIR=/data
+ENV ADSCAILE_DATA_DIR=/data
 ENV PORT=3000
 EXPOSE 3000
 WORKDIR /app/packages/server
 # `start` = prestart.mjs (config gate + postgres-js migrator over DIRECT_DATABASE_URL
-# when hosted; in-process pglite migration when opted in via LOOPANY_DB=pglite,
+# when hosted; in-process pglite migration when opted in via ADSCAILE_DB=pglite,
 # else exit 1) → node .output/server/index.mjs
 CMD ["pnpm", "start"]

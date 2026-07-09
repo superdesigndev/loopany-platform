@@ -120,7 +120,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
       <header className="glass glass-bar sticky top-0 z-50">
         <div className="mx-auto flex max-w-[1180px] items-center gap-3 px-8 py-2.5">
           <LoopLogo size={30} />
-          <span className="text-[18px] font-semibold tracking-[-0.015em] text-display">Loopany</span>
+          <span className="text-[18px] font-semibold tracking-[-0.015em] text-display">adScaile</span>
           <TeamSwitcher data={teams} />
           <div className="flex-1" />
           {/* Open-source + community, quiet icon pills */}

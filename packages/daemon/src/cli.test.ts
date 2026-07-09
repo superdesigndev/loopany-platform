@@ -1,6 +1,6 @@
 /**
  * Dispatch behavior of the CLI entry, run as a real subprocess (the faithful
- * "what does a user typing `loopany …` get" check). Proves the new help/unknown
+ * "what does a user typing `adscaile …` get" check). Proves the new help/unknown
  * handling does NOT fall through to launching a daemon: each invocation EXITS
  * (the daemon would hang on its poll loop) with the expected code + output.
  */
@@ -21,11 +21,11 @@ const entry = path.resolve(here, "cli.ts");
 
 type Run = { code: number; stdout: string; stderr: string };
 
-/** Run the CLI with a clean env (no run token; isolated LOOPANY_HOME). */
+/** Run the CLI with a clean env (no run token; isolated ADSCAILE_HOME). */
 function runCli(args: string[]): Promise<Run> {
   return new Promise((resolve) => {
-    const env = { ...process.env, LOOPANY_HOME: path.join(os.tmpdir(), "loopany-cli-test-home") };
-    delete env.LOOPANY_RUN_TOKEN;
+    const env = { ...process.env, ADSCAILE_HOME: path.join(os.tmpdir(), "adscaile-cli-test-home") };
+    delete env.ADSCAILE_RUN_TOKEN;
     execFile(tsx, [entry, ...args], { env, timeout: 20_000 }, (err, stdout, stderr) => {
       const code = err && typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : 0;
       resolve({ code, stdout, stderr });
@@ -33,11 +33,11 @@ function runCli(args: string[]): Promise<Run> {
   });
 }
 
-describe("loopany CLI dispatch", () => {
+describe("adscaile CLI dispatch", () => {
   test("--help prints usage and exits 0 (no daemon)", async () => {
     const r = await runCli(["--help"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("Usage: loopany");
+    expect(r.stdout).toContain("Usage: adscaile");
     expect(r.stdout).toContain("status");
     expect(r.stdout).toContain("down");
     expect(r.stdout).toContain("update");
@@ -46,7 +46,7 @@ describe("loopany CLI dispatch", () => {
   test("-h prints usage and exits 0", async () => {
     const r = await runCli(["-h"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("Usage: loopany");
+    expect(r.stdout).toContain("Usage: adscaile");
   });
 
   test("--help leads with the daemon version (reused, not hardcoded)", async () => {
@@ -54,28 +54,28 @@ describe("loopany CLI dispatch", () => {
     expect(version).toBeTruthy(); // resolvable from this package's package.json
     const r = await runCli(["--help"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain(`loopany v${version}`);
+    expect(r.stdout).toContain(`adscaile v${version}`);
   });
 
   test("--version prints just the version and exits 0 (no daemon)", async () => {
     const version = daemonVersion();
     const r = await runCli(["--version"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain(`loopany v${version}`);
-    expect(r.stdout).not.toContain("Usage: loopany"); // version only, not the full screen
+    expect(r.stdout).toContain(`adscaile v${version}`);
+    expect(r.stdout).not.toContain("Usage: adscaile"); // version only, not the full screen
   });
 
   test("-v prints the version and exits 0", async () => {
     const version = daemonVersion();
     const r = await runCli(["-v"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain(`loopany v${version}`);
+    expect(r.stdout).toContain(`adscaile v${version}`);
   });
 
   test("help (bare verb) prints usage and exits 0", async () => {
     const r = await runCli(["help"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("Usage: loopany");
+    expect(r.stdout).toContain("Usage: adscaile");
   });
 
   test("unknown flag → exits non-zero with hint, does not launch daemon", async () => {
@@ -92,7 +92,7 @@ describe("loopany CLI dispatch", () => {
   });
 
   test("update with no connection → exits (never launches daemon)", async () => {
-    // Isolated LOOPANY_HOME has no stored server/token, so update returns 2 with a
+    // Isolated ADSCAILE_HOME has no stored server/token, so update returns 2 with a
     // clear message instead of hanging on a poll loop.
     const r = await runCli(["update"]);
     expect(r.code).toBe(2);
@@ -105,21 +105,21 @@ describe("loopany CLI dispatch", () => {
     // above, which reaches the handler and reports "not connected".
     const r = await runCli(["update", "--help"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("loopany update");
-    expect(r.stdout).toContain("Run `loopany --help` for all commands.");
+    expect(r.stdout).toContain("adscaile update");
+    expect(r.stdout).toContain("Run `adscaile --help` for all commands.");
     expect(r.stderr).not.toContain("not connected"); // handler never ran
   });
 
   test("update -h short-circuits to help too", async () => {
     const r = await runCli(["update", "-h"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("loopany update");
+    expect(r.stdout).toContain("adscaile update");
   });
 
   test("down --help prints usage and exits 0 (never stops a daemon)", async () => {
     const r = await runCli(["down", "--help"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("loopany down");
+    expect(r.stdout).toContain("adscaile down");
     expect(r.stdout).toContain("Stop the detached daemon");
   });
 
@@ -128,16 +128,16 @@ describe("loopany CLI dispatch", () => {
     // is parsed first, so this exits 0 with usage.
     const r = await runCli(["up", "--foreground", "--help"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("loopany up");
+    expect(r.stdout).toContain("adscaile up");
   });
 
-  test("bare `loopany` (no args) → the content-first home, NOT the poll loop (exit 0)", async () => {
-    // The Batch-6 behavior change: bare `loopany` no longer blocks on the daemon. With
-    // an isolated LOOPANY_HOME (no credential/server) it renders the definitive
+  test("bare `adscaile` (no args) → the content-first home, NOT the poll loop (exit 0)", async () => {
+    // The Batch-6 behavior change: bare `adscaile` no longer blocks on the daemon. With
+    // an isolated ADSCAILE_HOME (no credential/server) it renders the definitive
     // not-connected home and exits, rather than hanging on a poll loop.
     const r = await runCli([]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("not connected — run `loopany up`");
+    expect(r.stdout).toContain("not connected — run `adscaile up`");
   });
 
   test("help lists the new surface (bare = home, up --foreground, setup, device show)", async () => {
@@ -154,16 +154,16 @@ describe("loopany CLI dispatch", () => {
  * cover the daemon-launch paths (which would hang a subprocess) deterministically.
  */
 describe("classify — CLI routing table (Batch 6)", () => {
-  test("bare `loopany` OUT of a run → the content-first home (device cred), never the daemon", () => {
+  test("bare `adscaile` OUT of a run → the content-first home (device cred), never the daemon", () => {
     expect(classify([], {})).toEqual({ kind: "home" });
   });
 
-  test("bare `loopany` IN a run (zero args) → the callback posts `home` on the run cred (fixes the argv>0 guard)", () => {
-    expect(classify([], { LOOPANY_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: ["home"] });
+  test("bare `adscaile` IN a run (zero args) → the callback posts `home` on the run cred (fixes the argv>0 guard)", () => {
+    expect(classify([], { ADSCAILE_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: ["home"] });
   });
 
   test("any verb IN a run funnels through the callback (run cred)", () => {
-    expect(classify(["report", "--status", "new"], { LOOPANY_RUN_TOKEN: "rk_x" })).toEqual({
+    expect(classify(["report", "--status", "new"], { ADSCAILE_RUN_TOKEN: "rk_x" })).toEqual({
       kind: "callback",
       argv: ["report", "--status", "new"],
     });
@@ -217,7 +217,7 @@ describe("classify — CLI routing table (Batch 6)", () => {
   });
 
   test("--help IN a run stays a callback (server renders it; the router never intercepts)", () => {
-    expect(classify(["update", "--help"], { LOOPANY_RUN_TOKEN: "rk_x" })).toEqual({
+    expect(classify(["update", "--help"], { ADSCAILE_RUN_TOKEN: "rk_x" })).toEqual({
       kind: "callback",
       argv: ["update", "--help"],
     });
@@ -237,7 +237,7 @@ describe("classify — CLI routing table (Batch 6)", () => {
  */
 describe("postCli credential selection", () => {
   test("resolveCredential: the run token (env) wins over the device token", () => {
-    const cred = resolveCredential({ env: { LOOPANY_RUN_TOKEN: "run-1" }, deviceToken: "dk_dev" });
+    const cred = resolveCredential({ env: { ADSCAILE_RUN_TOKEN: "run-1" }, deviceToken: "dk_dev" });
     expect(cred).toEqual({ token: "run-1", isRun: true });
   });
 
@@ -257,7 +257,7 @@ describe("postCli credential selection", () => {
       return { status: 200, ok: true, json: async () => ({ text: "ok", exitCode: 0 }) };
     }) as unknown as typeof fetch;
     const r = await postCli(["report", "--status", "new"], legacyRun, {
-      env: { LOOPANY_RUN_TOKEN: "run-xyz" },
+      env: { ADSCAILE_RUN_TOKEN: "run-xyz" },
       server: "https://srv.test",
       fetchImpl,
     });

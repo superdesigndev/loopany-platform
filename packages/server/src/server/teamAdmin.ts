@@ -207,7 +207,7 @@ export async function addMemberByEmail(
   if (!target) {
     return {
       ok: false,
-      error: "No Loopany account uses that email yet. Generate an invite link they can redeem after signing in.",
+      error: "No adScaile account uses that email yet. Generate an invite link they can redeem after signing in.",
     };
   }
   if (await store.getTeamMember(teamId, target.id)) {

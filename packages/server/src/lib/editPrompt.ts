@@ -10,7 +10,7 @@
  */
 
 /** The loop's on-disk folder — the containing directory of its task file
- *  (e.g. `.../loopany/<loop>/`). Returns null when the task file path is absent
+ *  (e.g. `.../adscaile/<loop>/`). Returns null when the task file path is absent
  *  or has no parent, so callers degrade to a generic instruction rather than
  *  fabricating a path. Handles both POSIX and Windows separators. */
 export function loopDir(taskFile?: string | null): string | null {
@@ -21,10 +21,10 @@ export function loopDir(taskFile?: string | null): string | null {
 }
 
 /** Build the ready-to-paste prompt for a fresh coding-agent session: it states
- *  that they're adjusting a named Loopany loop, what the owner wants (their typed
+ *  that they're adjusting a named adScaile loop, what the owner wants (their typed
  *  instruction, or a clear placeholder asking them to describe it), and that the
- *  agent should drive the installed loopany CLI/skill (`loopany loops`,
- *  `loopany edit <id> ...`) to apply and confirm the change. Concise, agent-neutral. */
+ *  agent should drive the installed adscaile CLI/skill (`adscaile loops`,
+ *  `adscaile edit <id> ...`) to apply and confirm the change. Concise, agent-neutral. */
 export function buildEditPrompt({
   loopId,
   loopName,
@@ -36,11 +36,11 @@ export function buildEditPrompt({
 }): string {
   const want = instruction?.trim() || 'Describe the change you want to make to this loop.'
   return [
-    `I want to adjust my Loopany loop "${loopName}" (loop id: ${loopId}).`,
+    `I want to adjust my adScaile loop "${loopName}" (loop id: ${loopId}).`,
     '',
     'The change I want:',
     want,
     '',
-    `Use the installed loopany CLI/skill to apply it: run \`loopany loops\` to find the loop, then \`loopany edit ${loopId} ...\` to make the change, and confirm the loop now reflects it. Ask me first if anything is unclear.`,
+    `Use the installed adscaile CLI/skill to apply it: run \`adscaile loops\` to find the loop, then \`adscaile edit ${loopId} ...\` to make the change, and confirm the loop now reflects it. Ask me first if anything is unclear.`,
   ].join('\n')
 }

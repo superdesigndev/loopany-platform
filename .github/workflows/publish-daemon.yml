@@ -1,4 +1,4 @@
-# Publish @crewlet/loopany (packages/daemon) to npm via OIDC Trusted Publishing.
+# Publish @crewlet/adscaile (packages/daemon) to npm via OIDC Trusted Publishing.
 # No NPM_TOKEN: the runner mints a short-lived OIDC token that npm verifies against
 # the Trusted Publisher configured on npmjs.com (GitHub Actions / this repo / this
 # workflow file). Fires on a version tag (vX.Y.Z) or manual dispatch. Publishes ONLY
@@ -14,7 +14,7 @@ on:
 
 jobs:
   publish:
-    name: npm publish @crewlet/loopany
+    name: npm publish @crewlet/adscaile
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -62,7 +62,7 @@ jobs:
           test "$PKG" = "$TAG" || { echo "tag $TAG != package.json $PKG"; exit 1; }
 
       - name: Build daemon
-        run: pnpm --filter @crewlet/loopany build
+        run: pnpm --filter @crewlet/adscaile build
 
       - name: Publish
         working-directory: packages/daemon       # <-- ONLY the daemon, never the server

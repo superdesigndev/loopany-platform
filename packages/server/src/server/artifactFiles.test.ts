@@ -21,10 +21,10 @@ let auth: typeof import("../auth.js");
 let art: Awaited<ReturnType<typeof import("./boot.js")["getArtifactSync"]>>;
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-art2-"));
-  process.env.LOOPANY_DATA_DIR = tmp;
-  process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
-  process.env.LOOPANY_LOG_LEVEL = "silent";
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-art2-"));
+  process.env.ADSCAILE_DATA_DIR = tmp;
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, "test.db");
+  process.env.ADSCAILE_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
   store = await import("../db/store.js");

@@ -4,7 +4,7 @@
  * the installable skill; the references stay at /api/skill/references/*.) Exercises
  * the GET handler directly (vitest resolves the `?raw` bootstrap import the same way
  * the nitro build does) — the first-capture onboarding an agent follows before the
- * loopany skill is on disk. Asserts the bootstrap-only content: no frontmatter, the
+ * adscaile skill is on disk. Asserts the bootstrap-only content: no frontmatter, the
  * connect step, and fetch-references-over-HTTP. Batch 3 moved the decide-what-to-build
  * logic (session-has-task vs empty-session brainstorm) OUT of bootstrap and INTO
  * create.md §1, so bootstrap now just hands off to create.md for that.
@@ -30,17 +30,17 @@ describe('/api/bootstrap', () => {
 
   test('is bootstrap, NOT the installable skill — no frontmatter', async () => {
     const body = await (await GET()).text()
-    // The installable SKILL.md opens with a `---\nname: loopany` frontmatter block;
+    // The installable SKILL.md opens with a `---\nname: adscaile` frontmatter block;
     // the fetched-and-followed bootstrap doc must NOT (it's not installed).
     expect(body.startsWith('---')).toBe(false)
-    expect(body).not.toContain('name: loopany')
+    expect(body).not.toContain('name: adscaile')
   })
 
   test('carries the first-capture onboarding (connect + fetch references over HTTP)', async () => {
     const body = flat(await (await GET()).text())
     // Interpret the pasted values and connect the machine.
     expect(body).toContain('connect-key')
-    expect(body).toContain('loopany up')
+    expect(body).toContain('adscaile up')
     // The skill isn't on disk yet, so the references are fetched over HTTP.
     expect(body).toContain('/api/skill/references/create.md')
     // Still a quick check-in, not a full interview.

@@ -59,7 +59,7 @@ type Db = PostgresJsDatabase<typeof schema>;
 type Driver = "postgres" | "pglite";
 type Client = Sql | PGlite;
 
-const g = globalThis as unknown as { __loopanyDb?: Db; __loopanyClient?: Client; __loopanyDriver?: Driver };
+const g = globalThis as unknown as { __adscaileDb?: Db; __adscaileClient?: Client; __adscaileDriver?: Driver };
 
 /** Host (host:port, NEVER credentials) of a Postgres URL, for boot logging. */
 function pgHost(url: string): string {
@@ -71,8 +71,8 @@ function pgHost(url: string): string {
 }
 
 function open(): { db: Db; client: Client; driver: Driver } {
-  if (g.__loopanyDb && g.__loopanyClient && g.__loopanyDriver) {
-    return { db: g.__loopanyDb, client: g.__loopanyClient, driver: g.__loopanyDriver };
+  if (g.__adscaileDb && g.__adscaileClient && g.__adscaileDriver) {
+    return { db: g.__adscaileDb, client: g.__adscaileClient, driver: g.__adscaileDriver };
   }
   const url = databaseUrl();
   if (url) {
@@ -91,19 +91,19 @@ function open(): { db: Db; client: Client; driver: Driver } {
     // Conservative pool for one always-on machine against the pooler.
     const client = postgres(url, { prepare: false, max: 10, idle_timeout: 30, connect_timeout: 15 });
     const db = drizzlePostgres(client, { schema });
-    g.__loopanyClient = client;
-    g.__loopanyDb = db;
-    g.__loopanyDriver = "postgres";
+    g.__adscaileClient = client;
+    g.__adscaileDb = db;
+    g.__adscaileDriver = "postgres";
     return { db, client, driver: "postgres" };
   }
   // Embedded tier: file-backed pglite (WASM Postgres) at <dataDir>/pgdata.
   // Fail HARD in production unless the ephemeral embedded DB is opted into
   // explicitly — a missing DATABASE_URL secret must NOT silently boot an empty
   // pglite on ephemeral disk (data loss on the next redeploy).
-  if (process.env.NODE_ENV === "production" && process.env.LOOPANY_DB !== "pglite") {
+  if (process.env.NODE_ENV === "production" && process.env.ADSCAILE_DB !== "pglite") {
     throw new Error(
       "refusing to boot the ephemeral embedded database in production — " +
-        "set DATABASE_URL, or LOOPANY_DB=pglite to opt in",
+        "set DATABASE_URL, or ADSCAILE_DB=pglite to opt in",
     );
   }
   const dir = path.join(dataDir(), "pgdata");
@@ -111,9 +111,9 @@ function open(): { db: Db; client: Client; driver: Driver } {
   fs.mkdirSync(dataDir(), { recursive: true });
   const client = new PGlite(dir);
   const db = drizzlePglite(client, { schema }) as unknown as Db;
-  g.__loopanyClient = client;
-  g.__loopanyDb = db;
-  g.__loopanyDriver = "pglite";
+  g.__adscaileClient = client;
+  g.__adscaileDb = db;
+  g.__adscaileDriver = "pglite";
   return { db, client, driver: "pglite" };
 }
 

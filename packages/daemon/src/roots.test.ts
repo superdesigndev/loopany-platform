@@ -1,13 +1,13 @@
 /**
  * Workdir-jail helpers — the local-always-wins semantics: server-sent roots may
- * only NARROW the daemon's LOOPANY_ROOTS jail, never widen it.
+ * only NARROW the daemon's ADSCAILE_ROOTS jail, never widen it.
  */
 import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { LOOPANY_DIR } from "./config.js";
+import { ADSCAILE_DIR } from "./config.js";
 import { effectiveRoots, isScratchDir, isWithinRoots } from "./roots.js";
 
 describe("isWithinRoots", () => {
@@ -58,14 +58,14 @@ describe("effectiveRoots — the local jail always applies", () => {
 
 describe("isScratchDir", () => {
   test("the daemon-owned scratch parent is recognized; anything else isn't", () => {
-    expect(isScratchDir(path.join(LOOPANY_DIR, "work", "loop-1"))).toBe(true);
-    expect(isScratchDir(path.join(LOOPANY_DIR, "work"))).toBe(true);
+    expect(isScratchDir(path.join(ADSCAILE_DIR, "work", "loop-1"))).toBe(true);
+    expect(isScratchDir(path.join(ADSCAILE_DIR, "work"))).toBe(true);
     expect(isScratchDir("/tmp/elsewhere")).toBe(false);
   });
 
   test("unresolved `..` under the scratch prefix does not count as scratch", () => {
     // Raw string (path.join would normalize it away) — lexically prefixed by
     // the scratch dir but resolving elsewhere.
-    expect(isScratchDir(`${LOOPANY_DIR}/work/../../../etc`)).toBe(false);
+    expect(isScratchDir(`${ADSCAILE_DIR}/work/../../../etc`)).toBe(false);
   });
 });

@@ -1,16 +1,16 @@
 /**
- * Best-effort local install of the loopany agent skill via the `npx skills` CLI
+ * Best-effort local install of the adscaile agent skill via the `npx skills` CLI
  * (vercel-labs/skills). Installed at USER scope to match the daemon's per-machine
  * scope: coding agents discover user-level skills from ANY workdir, so a loop agent
  * still triggers the create/update/evolve references no matter where it runs — no
- * per-workdir copies scattering. It's fired at `loopany up` (refreshing the install
+ * per-workdir copies scattering. It's fired at `adscaile up` (refreshing the install
  * to whatever daemon version just launched) and again after a successful
- * `loopany new`, and it NEVER blocks: any failure (no network, no npx, no write
+ * `adscaile new`, and it NEVER blocks: any failure (no network, no npx, no write
  * permission, bundled skill absent) degrades silently to the always-working
- * /api/skill inline path. It just prints one status line. `loopany skill install`
+ * /api/skill inline path. It just prints one status line. `adscaile skill install`
  * is the manual escape hatch (`--project` installs into the cwd instead).
  *
- * MULTI-AGENT: the skill is installed for every coding agent loopany knows about
+ * MULTI-AGENT: the skill is installed for every coding agent adscaile knows about
  * (`SKILL_TARGET_AGENTS` — currently Claude Code and Codex, the two `CodingAgent`
  * values), so a Codex user (or any of the two) gets the skill, not just Claude Code.
  * We deliberately DON'T pass `-a '*'`: empirically the `skills` CLI treats `'*'` as
@@ -30,7 +30,7 @@
  * install works offline once `skills` itself is cached. The exact invocation
  *   npx --yes skills add <dir> -a claude-code -a codex -y --copy -g
  * was verified against the current `skills` CLI (`-g` targets each agent's user dir
- * → ~/.claude/skills/loopany/ for Claude Code, ~/.agents/skills/loopany/ for Codex;
+ * → ~/.claude/skills/adscaile/ for Claude Code, ~/.agents/skills/adscaile/ for Codex;
  * `-y` is non-interactive + idempotent-overwrite; `--copy` makes a self-contained
  * copy, no symlink into this package's temp dir). Dropping `-g` (the `--project`
  * escape hatch) installs into the runner's cwd instead.
@@ -46,7 +46,7 @@ import { fileURLToPath } from "node:url";
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
-/** Hard ceiling on the `npx skills` call so a hung install can't wedge `loopany new`. */
+/** Hard ceiling on the `npx skills` call so a hung install can't wedge `adscaile new`. */
 const INSTALL_TIMEOUT_MS = 90_000;
 
 /**
@@ -120,7 +120,7 @@ export interface InstallOpts {
   /** Install to the user dir (`~/.claude/skills`) instead of the project default. */
   global?: boolean;
   /** Project-level install target: the dir to run `npx skills` in, so the skill
-   *  lands in `<cwd>/.claude/skills/loopany`. Defaults to the process cwd. Ignored
+   *  lands in `<cwd>/.claude/skills/adscaile`. Defaults to the process cwd. Ignored
    *  when `global` is set (that always targets `~/.claude/skills`). */
   cwd?: string;
   /** Override the bundled skill dir (tests). */
@@ -130,18 +130,18 @@ export interface InstallOpts {
 }
 
 /**
- * The coding agents the loopany skill install targets — the two `CodingAgent`
+ * The coding agents the adscaile skill install targets — the two `CodingAgent`
  * values. Each carries the `skills` CLI agent id (for `-a <id>`), a human label,
  * and the skill dir layout that agent reads (relative to the scope root: `~` for a
  * global/user install, the cwd for a project install). Verified empirically against
  * the current `skills` CLI: Claude Code reads `.claude/skills`, Codex reads the
  * universal `.agents/skills`. Extend this list to cover a new agent (installArgs and
- * `loopany skill status` both derive from it — they cannot drift).
+ * `adscaile skill status` both derive from it — they cannot drift).
  */
 export const SKILL_TARGET_AGENTS: ReadonlyArray<{
   id: string;
   label: string;
-  /** Path segments under the scope root, before the `loopany` skill dir. */
+  /** Path segments under the scope root, before the `adscaile` skill dir. */
   skillsRoot: readonly string[];
 }> = [
   { id: "claude-code", label: "Claude Code", skillsRoot: [".claude", "skills"] },
@@ -164,14 +164,14 @@ export function installArgs(dir: string, global = false): string[] {
  *  path.join would otherwise strip). */
 export function targetSkillDirs(opts: { global?: boolean; cwd?: string } = {}): string[] {
   return SKILL_TARGET_AGENTS.map((t) => {
-    if (opts.global) return path.join("~", ...t.skillsRoot, "loopany");
-    if (opts.cwd) return path.join(opts.cwd, ...t.skillsRoot, "loopany");
-    return `./${path.join(...t.skillsRoot, "loopany")}`;
+    if (opts.global) return path.join("~", ...t.skillsRoot, "adscaile");
+    if (opts.cwd) return path.join(opts.cwd, ...t.skillsRoot, "adscaile");
+    return `./${path.join(...t.skillsRoot, "adscaile")}`;
   });
 }
 
 /**
- * Install/refresh the loopany skill. NEVER throws — returns an outcome with a
+ * Install/refresh the adscaile skill. NEVER throws — returns an outcome with a
  * one-line status to print. Idempotent: `skills add -y` overwrites an existing
  * install with the bundled (current) content every time.
  */
@@ -180,7 +180,7 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
   if (!bundledSkillAvailable(dir)) {
     return {
       ok: false,
-      line: "loopany skill: skipped (bundled skill not found — falling back to /api/skill)",
+      line: "adscaile skill: skipped (bundled skill not found — falling back to /api/skill)",
     };
   }
   const runner = opts.runner ?? defaultRunner;
@@ -190,14 +190,14 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
   try {
     res = await runner("npx", installArgs(dir, opts.global), { cwd });
   } catch (err) {
-    return { ok: false, line: `loopany skill: skipped (${err instanceof Error ? err.message : String(err)})` };
+    return { ok: false, line: `adscaile skill: skipped (${err instanceof Error ? err.message : String(err)})` };
   }
   if (res.code === 0) {
     const where = targetSkillDirs(opts).join(", ");
-    return { ok: true, line: `loopany skill: installed → ${where}` };
+    return { ok: true, line: `adscaile skill: installed → ${where}` };
   }
   const why = firstLine(res.stderr) || firstLine(res.stdout) || `exit ${res.code}`;
-  return { ok: false, line: `loopany skill: skipped (${why}) — falling back to /api/skill` };
+  return { ok: false, line: `adscaile skill: skipped (${why}) — falling back to /api/skill` };
 }
 
 function firstLine(s: string): string {

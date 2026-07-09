@@ -40,7 +40,7 @@ function signInAs(id: string | null, email: string | null) {
 }
 
 function setCookie(teamId: string | null) {
-  reqHolder.headers = new Headers(teamId ? { cookie: `loopany.team=${teamId}` } : {})
+  reqHolder.headers = new Headers(teamId ? { cookie: `adscaile.team=${teamId}` } : {})
 }
 
 /** Seed a loop into a team so the two tabs have distinguishable content. */
@@ -72,13 +72,13 @@ async function getDefaultTeam(): Promise<string> {
 }
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'loopany-teamurl-'))
-  process.env.LOOPANY_DATA_DIR = tmp
-  process.env.LOOPANY_DB_PATH = path.join(tmp, 'test.db')
-  process.env.LOOPANY_LOG_LEVEL = 'silent'
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'adscaile-teamurl-'))
+  process.env.ADSCAILE_DATA_DIR = tmp
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, 'test.db')
+  process.env.ADSCAILE_LOG_LEVEL = 'silent'
   process.env.GITHUB_CLIENT_ID = 'gh-id'
   process.env.GITHUB_CLIENT_SECRET = 'gh-secret'
-  process.env.LOOPANY_AUTH_SECRET = 'test-secret'
+  process.env.ADSCAILE_AUTH_SECRET = 'test-secret'
 
   db = await import('../db/index.js')
   await db.runMigrations()
@@ -149,7 +149,7 @@ describe('two tabs on /t/A and /t/B render different teams at once (explicit tea
     setCookie(TEAM_B) // last used team B
     const target = await getDefaultTeam()
     console.log('\n=== bare "/" redirect target (getDefaultTeam) ===')
-    console.log(`  cookie loopany.team=${TEAM_B} -> redirect /t/${target}`)
+    console.log(`  cookie adscaile.team=${TEAM_B} -> redirect /t/${target}`)
     expect(target).toBe(TEAM_B)
   })
 })

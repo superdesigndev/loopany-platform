@@ -32,7 +32,7 @@ export function SignIn({ callbackURL = '/' }: { callbackURL?: string }) {
         }`}
       >
         <LoopLogo size={52} />
-        <h1 className="mt-4 text-2xl font-semibold tracking-tight text-display">Loopany</h1>
+        <h1 className="mt-4 text-2xl font-semibold tracking-tight text-display">adScaile</h1>
         <p className="mt-2 text-sm text-secondary">Sign in to manage your scheduled agent loops.</p>
         <button
           className={`${btnPrimary} mt-6`}

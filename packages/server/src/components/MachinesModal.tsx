@@ -26,7 +26,7 @@ function connectCmd(token: string, cli: string): string {
 
 /** The one-liner that updates an outdated daemon (the invoked CLI is the new
  *  version; `update` hands the running daemon over). Same for every machine. */
-const UPDATE_CMD = 'npx @crewlet/loopany@latest update'
+const UPDATE_CMD = 'npx @crewlet/adscaile@latest update'
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false)
@@ -61,10 +61,10 @@ export function MachinesModal({
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [delErr, setDelErr] = useState<string | null>(null)
-  const [cliCmd, setCliCmd] = useState('npx @crewlet/loopany@latest')
+  const [cliCmd, setCliCmd] = useState('npx @crewlet/adscaile@latest')
 
   useEffect(() => {
-    if (open) void getConfig().then((c) => setCliCmd(c.loopanyCli))
+    if (open) void getConfig().then((c) => setCliCmd(c.adscaileCli))
     else setDelErr(null) // don't carry a stale delete error into the next open
   }, [open])
 
@@ -207,7 +207,7 @@ export function MachinesModal({
   // ---- Machine list ----
   return (
     <Modal open={open} onClose={onClose}>
-      <ModalHead title="Machines" sub="Each machine runs a loopany daemon that executes your loops via your local coding agent." />
+      <ModalHead title="Machines" sub="Each machine runs a adscaile daemon that executes your loops via your local coding agent." />
 
       <ModalSection>Connected machines</ModalSection>
       {delErr && <ErrorBanner message={delErr} onDismiss={() => setDelErr(null)} />}

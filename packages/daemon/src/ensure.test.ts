@@ -1,7 +1,7 @@
 /**
- * `loopany up`, exercised with every external touch INJECTED (status fetch,
+ * `adscaile up`, exercised with every external touch INJECTED (status fetch,
  * spawn, kill, sleep, local pidfile check, persistence, output) so nothing hits
- * the network, spawns a process, or writes the real ~/.loopany.
+ * the network, spawns a process, or writes the real ~/.adscaile.
  */
 import { describe, expect, test } from "vitest";
 
@@ -32,7 +32,7 @@ function seams(extra: EnsureDeps = {}): Cap {
     localPid: () => undefined,
     persist: () => {},
     readToken: () => "dk_stored",
-    installSkill: async (opts) => { skillInstalls.push(opts); return { ok: true, line: "loopany skill: installed → ~/.claude/skills/loopany" }; },
+    installSkill: async (opts) => { skillInstalls.push(opts); return { ok: true, line: "adscaile skill: installed → ~/.claude/skills/adscaile" }; },
     // No-op the integration refreshers so no test ever writes the real ~/.claude
     // settings or ~/.local/bin (the real defaults are exercised in their own tests).
     ensureBinShim: () => {},
@@ -108,7 +108,7 @@ describe("runEnsure — force (update's replace path)", () => {
       localPid: () => 4242,
       fetchStatus: async () => (++calls >= 1 ? { online: true, name: "Mac" } : undefined),
     });
-    const code = await runEnsure([], cap, { force: true });
+    const code = await runEnsure(["--server-url", "http://srv"], cap, { force: true });
     expect(code).toBe(0);
     expect(cap.spawned()).toBe(1);
     expect(cap.stdout()).toContain("starting daemon");
@@ -122,7 +122,7 @@ describe("runEnsure — user-scope skill refresh on every success path", () => {
     const code = await runEnsure(["--server-url", "http://srv"], cap);
     expect(code).toBe(0);
     expect(cap.skillInstalls()).toEqual([{ global: true }]);
-    expect(cap.stdout()).toContain("loopany skill: installed → ~/.claude/skills/loopany");
+    expect(cap.stdout()).toContain("adscaile skill: installed → ~/.claude/skills/adscaile");
   });
 
   test("live local daemon + server unreachable → still refreshes the skill", async () => {
@@ -166,11 +166,11 @@ describe("runEnsure — user-scope skill refresh on every success path", () => {
 });
 
 describe("buildDaemonSpawn — the token travels via env, never argv", () => {
-  test("argv carries only --server-url; the token rides LOOPANY_TOKEN", () => {
+  test("argv carries only --server-url; the token rides ADSCAILE_TOKEN", () => {
     const { args, env } = buildDaemonSpawn("http://srv", "dk_secret_token");
     expect(args.join(" ")).not.toContain("dk_secret_token"); // never visible in `ps`
     expect(args).not.toContain("--api-key");
-    expect(env.LOOPANY_TOKEN).toBe("dk_secret_token");
+    expect(env.ADSCAILE_TOKEN).toBe("dk_secret_token");
     // cli.ts's DAEMON_FLAGS fallback keys on the LEADING flag after the entry
     // script — `--server-url <url>` must be the trailing pair so the re-exec
     // still routes to daemon mode.

@@ -1,10 +1,10 @@
 {
-  "name": "@loopany/server",
+  "name": "@adscaile/server",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Loopany server — TanStack Start UI + in-process scheduler + machine WS gateway + agent-api + Better Auth. Zero code-exec, zero LLM (execution is BYOA on user machines).",
+  "description": "adScaile server — TanStack Start UI + in-process scheduler + machine WS gateway + agent-api + Better Auth. Zero code-exec, zero LLM (execution is BYOA on user machines).",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build && node scripts/copy-pglite-assets.mjs",

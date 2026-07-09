@@ -39,20 +39,20 @@ function signInAs(id: string | null, email: string | null) {
   )
 }
 
-/** Set (or clear) the loopany.team cookie the request carries. */
+/** Set (or clear) the adscaile.team cookie the request carries. */
 function setCookie(teamId: string | null) {
-  reqHolder.headers = new Headers(teamId ? { cookie: `loopany.team=${teamId}` } : {})
+  reqHolder.headers = new Headers(teamId ? { cookie: `adscaile.team=${teamId}` } : {})
 }
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'loopany-auth-'))
-  process.env.LOOPANY_DATA_DIR = tmp
-  process.env.LOOPANY_DB_PATH = path.join(tmp, 'test.db')
-  process.env.LOOPANY_LOG_LEVEL = 'silent'
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'adscaile-auth-'))
+  process.env.ADSCAILE_DATA_DIR = tmp
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, 'test.db')
+  process.env.ADSCAILE_LOG_LEVEL = 'silent'
   // Turn the gate ON (enforce), read at module load.
   process.env.GITHUB_CLIENT_ID = 'gh-id'
   process.env.GITHUB_CLIENT_SECRET = 'gh-secret'
-  process.env.LOOPANY_AUTH_SECRET = 'test-secret'
+  process.env.ADSCAILE_AUTH_SECRET = 'test-secret'
 
   db = await import('./db/index.js')
   await db.runMigrations()

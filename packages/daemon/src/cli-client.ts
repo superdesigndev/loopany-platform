@@ -1,7 +1,7 @@
 /**
  * The ONE CLI transport client (batch 5 — run-experience redesign §4.4). Both CLI
- * worlds — the in-run callback (`loopany report …`, run token) and the owner's
- * out-of-run verbs (`loopany loops`/`edit`/`log`/`new`, device token) — now converge
+ * worlds — the in-run callback (`adscaile report …`, run token) and the owner's
+ * out-of-run verbs (`adscaile loops`/`edit`/`log`/`new`, device token) — now converge
  * here: pick whatever credential the environment carries, inline the file flags, and
  * POST `{argv}` to the unified `/api/machine/cli` dispatch.
  *
@@ -93,7 +93,7 @@ export type PostCliResult =
  */
 export function resolveCredential(deps: PostCliDeps = {}): { token: string; isRun: boolean } | undefined {
   const env = deps.env ?? process.env;
-  const runToken = env.LOOPANY_RUN_TOKEN;
+  const runToken = env.ADSCAILE_RUN_TOKEN;
   if (runToken) return { token: runToken, isRun: true };
   const device = "deviceToken" in deps ? deps.deviceToken : readStored(DEVICE_FILE);
   if (device) return { token: device, isRun: false };
@@ -159,7 +159,7 @@ export function printText(
  * text spine (pre-0.12) — this CLI is a pure text sink with no structured render
  * fallback anymore, so print a DEFINITIVE structured error to stdout (P6) rather than
  * silently nothing, and exit 1. The mitigation is on the line: update the server, or
- * pin an older `@crewlet/loopany`.
+ * pin an older `@crewlet/adscaile`.
  */
 export function printTextOrTooOld(
   body: Record<string, unknown>,
@@ -170,7 +170,7 @@ export function printTextOrTooOld(
   if (code !== null) return code;
   out(
     `error: ${JSON.stringify(
-      "this Loopany server is too old for this CLI (no rendered `text`) — update the server, or pin an older `@crewlet/loopany`",
+      "this adScaile server is too old for this CLI (no rendered `text`) — update the server, or pin an older `@crewlet/adscaile`",
     )}\ncode: SERVER_TOO_OLD\n`,
   );
   return 1;

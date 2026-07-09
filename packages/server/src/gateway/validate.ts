@@ -37,7 +37,7 @@ export function validateWorkflow(body: string): { ok: true; value: string | null
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
     const hint = /export|import/.test(raw)
-      ? " — a Loopany workflow is a plain script body (statements + `return {message?, state?}`), NOT an ES module and NOT the Claude Code Workflow tool format: remove any top-level `export`/`import` (e.g. `export const meta = {...}`). Use the injected globals `prev`/`agent`/`tools`/`fetch` directly."
+      ? " — a adScaile workflow is a plain script body (statements + `return {message?, state?}`), NOT an ES module and NOT the Claude Code Workflow tool format: remove any top-level `export`/`import` (e.g. `export const meta = {...}`). Use the injected globals `prev`/`agent`/`tools`/`fetch` directly."
       : "";
     return { ok: false, detail: `workflow has a syntax error: ${raw}${hint}` };
   }

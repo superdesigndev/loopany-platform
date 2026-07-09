@@ -1,14 +1,14 @@
 /**
- * Bare `loopany` OUT of a run — the content-first HOME view (P8/§5.1). The daemon is
+ * Bare `adscaile` OUT of a run — the content-first HOME view (P8/§5.1). The daemon is
  * a text sink: it collects the local facts only IT knows (cwd + home dir for the
  * directory scoping, the PATH shim path, the daemon pid, the server URL) and posts
  * them as `home` context flags to the unified `/api/machine/cli`; the SERVER owns the
  * whole TOON render (`renderHomeText`). The daemon just prints `body.text`.
  *
  * Never empty (P5/P8): when this machine has no stored credential/server the post
- * short-circuits to a DEFINITIVE local "not connected — run `loopany up`" view; on a
+ * short-circuits to a DEFINITIVE local "not connected — run `adscaile up`" view; on a
  * too-old server (no `home` verb → no rendered `text`) a DEFINITIVE "server too old"
- * home is rendered (no structured-render fallback anymore). The in-run bare `loopany`
+ * home is rendered (no structured-render fallback anymore). The in-run bare `adscaile`
  * is handled separately (cli.ts routes it to the callback as `home` on the run cred).
  *
  * Bounded on the hot path (feedback follow-up): batch 6 runs this home view on EVERY
@@ -19,7 +19,7 @@
  * timeout. Interactive verbs keep their own fetch budgets.
  *
  * Every external touch (fetch, cwd, homedir, pid, server, output) is an injectable
- * seam so tests need no real process/network/~.loopany.
+ * seam so tests need no real process/network/~.adscaile.
  */
 import os from "node:os";
 
@@ -57,7 +57,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   const cwd = (injected.cwd ?? (() => process.cwd()))();
   const homedir = (injected.homedir ?? os.homedir)();
   const pid = (injected.localPid ?? (() => verifiedRunningPid()))();
-  // The durable `loopany` path (our shim OR a real global on PATH) for the home's
+  // The durable `adscaile` path (our shim OR a real global on PATH) for the home's
   // `bin:` line (P8). Null ⇒ npx-without-global; the SERVER then renders the honest
   // "not on PATH — npm i -g" fallback so the line ALWAYS leads the home (F7).
   const bin = (injected.binPath ?? (() => resolveDurableBinPath()))();
@@ -117,7 +117,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
  *  else the honest "not on PATH" fallback with the fix. Mirrors the server's
  *  `renderHomeText` so the local and server-rendered homes agree. */
 export function binLine(bin: string | null): string {
-  return bin ? `bin: ${bin}` : "bin: (not on PATH — run `npm i -g @crewlet/loopany`)";
+  return bin ? `bin: ${bin}` : "bin: (not on PATH — run `npm i -g @crewlet/adscaile`)";
 }
 
 /** The definitive not-connected home rendered locally (no server round-trip possible
@@ -125,11 +125,11 @@ export function binLine(bin: string | null): string {
 function notConnectedHome(bin: string | null): string {
   return (
     `${binLine(bin)}\n` +
-    "description: Run your scheduled Loopany agent loops on this machine with your own coding agent.\n" +
-    "machine: not connected — run `loopany up`\n" +
+    "description: Run your scheduled adScaile agent loops on this machine with your own coding agent.\n" +
+    "machine: not connected — run `adscaile up`\n" +
     "help[2]:\n" +
-    "  Run `loopany up --server-url <url> --connect-key <dk_…>` to connect this machine\n" +
-    "  Run `loopany --help` to see every command\n"
+    "  Run `adscaile up --server-url <url> --connect-key <dk_…>` to connect this machine\n" +
+    "  Run `adscaile --help` to see every command\n"
   );
 }
 
@@ -139,10 +139,10 @@ function notConnectedHome(bin: string | null): string {
 function degradedHome(bin: string | null, server: string, reason: string): string {
   return (
     `${binLine(bin)}\n` +
-    "description: Run your scheduled Loopany agent loops on this machine with your own coding agent.\n" +
+    "description: Run your scheduled adScaile agent loops on this machine with your own coding agent.\n" +
     `machine: configured${server ? ` · ${server}` : ""} — server unreachable right now (${reason})\n` +
     "help[1]:\n" +
-    "  Run `loopany loops` once the server is reachable to list this machine's loops\n"
+    "  Run `adscaile loops` once the server is reachable to list this machine's loops\n"
   );
 }
 
@@ -153,9 +153,9 @@ function degradedHome(bin: string | null, server: string, reason: string): strin
 function tooOldHome(bin: string | null, server: string): string {
   return (
     `${binLine(bin)}\n` +
-    "description: Run your scheduled Loopany agent loops on this machine with your own coding agent.\n" +
-    `machine: configured${server ? ` · ${server}` : ""} — server too old for this CLI; update the Loopany server\n` +
+    "description: Run your scheduled adScaile agent loops on this machine with your own coding agent.\n" +
+    `machine: configured${server ? ` · ${server}` : ""} — server too old for this CLI; update the adScaile server\n` +
     "help[1]:\n" +
-    "  Run `loopany loops` after updating the server to list this machine's loops\n"
+    "  Run `adscaile loops` after updating the server to list this machine's loops\n"
   );
 }

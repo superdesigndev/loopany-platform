@@ -1,7 +1,7 @@
 /**
  * Workflow sandbox — the bare-node subprocess gate. Proves the injected surface:
  * `prev`, `agent()`, and the new `tools.call()` MCP bridge. The bridge is pointed at
- * a FIXTURE module (via LOOPANY_MCP_BRIDGE) so nothing hits mcporter or the network —
+ * a FIXTURE module (via ADSCAILE_MCP_BRIDGE) so nothing hits mcporter or the network —
  * this tests the WIRING (args in, result out, errors surfaced), while mcp-bridge.test.ts
  * covers the bridge's own logic.
  */
@@ -25,11 +25,11 @@ function writeFixtureBridge(body: string): string {
 }
 
 beforeEach(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-wf-test-"));
-  cwd = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-wf-cwd-"));
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-wf-test-"));
+  cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-wf-cwd-"));
 });
 afterEach(() => {
-  delete process.env.LOOPANY_MCP_BRIDGE;
+  delete process.env.ADSCAILE_MCP_BRIDGE;
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(cwd, { recursive: true, force: true });
 });
@@ -58,12 +58,12 @@ describe("existing sandbox contract stays green", () => {
 });
 
 describe("subprocess env allowlist", () => {
-  test("server-supplied workflow JS cannot read shell secrets; LOOPANY_WORKFLOW_* rides along", async () => {
+  test("server-supplied workflow JS cannot read shell secrets; ADSCAILE_WORKFLOW_* rides along", async () => {
     process.env.MY_FAKE_SECRET = "leak-me-not";
-    process.env.LOOPANY_WORKFLOW_TOOL_RESULT_CAP = "12345";
+    process.env.ADSCAILE_WORKFLOW_TOOL_RESULT_CAP = "12345";
     try {
       const r = await runWorkflow(
-        `return { message: (process.env.MY_FAKE_SECRET ?? "absent") + "|" + (process.env.LOOPANY_WORKFLOW_TOOL_RESULT_CAP ?? "missing") };`,
+        `return { message: (process.env.MY_FAKE_SECRET ?? "absent") + "|" + (process.env.ADSCAILE_WORKFLOW_TOOL_RESULT_CAP ?? "missing") };`,
         null,
         cwd,
       );
@@ -71,14 +71,14 @@ describe("subprocess env allowlist", () => {
       expect(r.result?.message).toBe("absent|12345");
     } finally {
       delete process.env.MY_FAKE_SECRET;
-      delete process.env.LOOPANY_WORKFLOW_TOOL_RESULT_CAP;
+      delete process.env.ADSCAILE_WORKFLOW_TOOL_RESULT_CAP;
     }
   });
 
-  test("LOOPANY_WORKFLOW_ENV opts named keys through (MCP configs resolve ${VAR} creds from this env)", async () => {
+  test("ADSCAILE_WORKFLOW_ENV opts named keys through (MCP configs resolve ${VAR} creds from this env)", async () => {
     process.env.MY_FAKE_TOKEN = "tok-1";
     process.env.MY_OTHER_SECRET = "still-hidden";
-    process.env.LOOPANY_WORKFLOW_ENV = " MY_FAKE_TOKEN , MISSING_KEY ";
+    process.env.ADSCAILE_WORKFLOW_ENV = " MY_FAKE_TOKEN , MISSING_KEY ";
     try {
       const r = await runWorkflow(
         `return { message: (process.env.MY_FAKE_TOKEN ?? "absent") + "|" + (process.env.MY_OTHER_SECRET ?? "absent") };`,
@@ -91,7 +91,7 @@ describe("subprocess env allowlist", () => {
     } finally {
       delete process.env.MY_FAKE_TOKEN;
       delete process.env.MY_OTHER_SECRET;
-      delete process.env.LOOPANY_WORKFLOW_ENV;
+      delete process.env.ADSCAILE_WORKFLOW_ENV;
     }
   });
 });
@@ -99,7 +99,7 @@ describe("subprocess env allowlist", () => {
 describe("tools.call wiring (fixture bridge)", () => {
   test("tools.call is injected; args flow in and the result flows out", async () => {
     // Fixture echoes the call back so the workflow can assert both directions.
-    process.env.LOOPANY_MCP_BRIDGE = writeFixtureBridge(
+    process.env.ADSCAILE_MCP_BRIDGE = writeFixtureBridge(
       `return { text: "called " + name, data: { echoedArgs: args } };`,
     );
     const body = `
@@ -113,7 +113,7 @@ describe("tools.call wiring (fixture bridge)", () => {
   });
 
   test("prepared data can be handed to agent() (the intended pattern)", async () => {
-    process.env.LOOPANY_MCP_BRIDGE = writeFixtureBridge(
+    process.env.ADSCAILE_MCP_BRIDGE = writeFixtureBridge(
       `return { text: "3 rows", data: [{ id: 1 }, { id: 2 }, { id: 3 }] };`,
     );
     const body = `
@@ -129,7 +129,7 @@ describe("tools.call wiring (fixture bridge)", () => {
   });
 
   test("a failed tools.call fails the workflow (→ runner falls back to the agent)", async () => {
-    process.env.LOOPANY_MCP_BRIDGE = writeFixtureBridge(
+    process.env.ADSCAILE_MCP_BRIDGE = writeFixtureBridge(
       `throw new Error('tools.call: MCP server "posthog" is not configured on this machine');`,
     );
     const body = `await tools.call("posthog.projects-get", {}); return { message: "unreached" };`;
@@ -143,7 +143,7 @@ describe("tools.call wiring (fixture bridge)", () => {
     // Point at a bridge that would throw on import — proving lazy loading.
     const bad = path.join(dir, "explode.mjs");
     fs.writeFileSync(bad, `throw new Error("bridge import should not happen");`, "utf8");
-    process.env.LOOPANY_MCP_BRIDGE = pathToFileURL(bad).href;
+    process.env.ADSCAILE_MCP_BRIDGE = pathToFileURL(bad).href;
     const r = await runWorkflow(`return { message: "no tools here" };`, null, cwd);
     expect(r.ok).toBe(true);
     expect(r.result?.message).toBe("no tools here");

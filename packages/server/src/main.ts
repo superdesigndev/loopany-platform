@@ -9,7 +9,7 @@
  *   POST /machine/report     (Bearer run token)
  *   admin: /api/machines, /api/loops, /api/loops/:id/run, /api/loops/:id/runs
  *
- * Run: `tsx src/main.ts` (or built). Port = LOOPANY_PORT (default 8787).
+ * Run: `tsx src/main.ts` (or built). Port = ADSCAILE_PORT (default 8787).
  */
 import http from "node:http";
 
@@ -75,7 +75,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   }
   if (m === "POST" && p === "/agent-api/loop") {
     const tok = bearer(req);
-    if (!tok) return send(res, 401, { text: "loopany: missing token", exitCode: 1 });
+    if (!tok) return send(res, 401, { text: "adscaile: missing token", exitCode: 1 });
     const b = await json(req);
     const r = await cliGateway.agentApi(tok, Array.isArray(b.argv) ? b.argv : []);
     return send(res, r.status, r.body);
@@ -145,7 +145,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   send(res, 404, { error: "not found" });
 }
 
-const port = Number(process.env.LOOPANY_PORT || 8787);
+const port = Number(process.env.ADSCAILE_PORT || 8787);
 server.listen(port, "127.0.0.1", () => log.info({ url: `http://127.0.0.1:${port}` }, "machine server listening"));
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {

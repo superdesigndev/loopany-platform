@@ -1,5 +1,5 @@
 /**
- * Latest published @crewlet/loopany version — a cached, fail-silent lookup of the
+ * Latest published @crewlet/adscaile version — a cached, fail-silent lookup of the
  * npm dist-tag `latest`, so the web can tell a user their daemon is outdated and
  * show the exact update command.
  *
@@ -14,7 +14,7 @@
  * and `now`, or call the pure `fetchNpmLatest` directly.
  */
 
-const NPM_URL = "https://registry.npmjs.org/@crewlet/loopany";
+const NPM_URL = "https://registry.npmjs.org/@crewlet/adscaile";
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // ~1h
 const FETCH_TIMEOUT_MS = 4000;
 

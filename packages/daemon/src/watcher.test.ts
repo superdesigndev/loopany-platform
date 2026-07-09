@@ -1,7 +1,7 @@
 /**
  * Watcher tests, three layers:
  *  1. WatchManager.reconcile — the LOCAL roots jail: workdir/taskFile in the
- *     watch specs are SERVER-SENT, so when LOOPANY_ROOTS is set a folder outside
+ *     watch specs are SERVER-SENT, so when ADSCAILE_ROOTS is set a folder outside
  *     it is never watched (and therefore never synced out). No network is hit:
  *     watchers are closed before their debounced first flush fires.
  *  2. buildManifest — the incremental stat cache: an unchanged file's hash is
@@ -19,7 +19,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { LOOPANY_DIR } from "./config.js";
+import { ADSCAILE_DIR } from "./config.js";
 import { buildManifest, capManifest, flushLoop, INLINE_TOTAL_CAP, WatchManager, type HashCacheEntry, type SyncFetch } from "./watcher.js";
 
 const sha256 = (buf: Buffer): string => createHash("sha256").update(buf).digest("hex");
@@ -28,7 +28,7 @@ let root: string;
 let mgr: WatchManager | undefined;
 
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-watch-"));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-watch-"));
 });
 afterEach(async () => {
   await mgr?.closeAll();
@@ -45,7 +45,7 @@ describe("WatchManager.reconcile — local roots jail", () => {
     expect(mgr.watchedDirs().get("l1")).toBe(a);
   });
 
-  test("a folder outside LOOPANY_ROOTS is never watched; one inside is", () => {
+  test("a folder outside ADSCAILE_ROOTS is never watched; one inside is", () => {
     const jail = path.join(root, "jail");
     const inside = path.join(jail, "loop");
     const outside = path.join(root, "outside");
@@ -86,7 +86,7 @@ describe("WatchManager.reconcile — local roots jail", () => {
 
   test("the daemon-owned scratch dir stays allowed under a jail (its location is local, not server-chosen)", () => {
     const scratchLoop = `watch-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const scratchDir = path.join(LOOPANY_DIR, "work", scratchLoop);
+    const scratchDir = path.join(ADSCAILE_DIR, "work", scratchLoop);
     fs.mkdirSync(scratchDir, { recursive: true });
     try {
       mgr = new WatchManager("http://127.0.0.1:1", "dk_x", [path.join(root, "jail")]);
@@ -310,7 +310,7 @@ describe("LoopWatcher sync caps — graceful degradation of a flooded loop folde
     // caps are read at module load (like the transient-retry consts), so a fresh
     // module instance picks up the env — the static-import tests are unaffected.
     vi.resetModules();
-    process.env.LOOPANY_SYNC_MAX_FILES = "3";
+    process.env.ADSCAILE_SYNC_MAX_FILES = "3";
     const w = await import("./watcher.js");
     try {
       const dir = path.join(root, "loop");
@@ -341,7 +341,7 @@ describe("LoopWatcher sync caps — graceful degradation of a flooded loop folde
       // The bulk checkout is shed (only the single file that fit under the cap remains).
       expect(synced.filter((p) => p.startsWith("checkout/"))).toHaveLength(1);
     } finally {
-      delete process.env.LOOPANY_SYNC_MAX_FILES;
+      delete process.env.ADSCAILE_SYNC_MAX_FILES;
       vi.resetModules();
     }
   });

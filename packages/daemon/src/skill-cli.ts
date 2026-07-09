@@ -1,18 +1,18 @@
 /**
- * `loopany skill {status,install}` — a thin verb wrapping the same best-effort
- * install path `loopany up` / `loopany new` run. The manual escape hatch: lets a
- * user (re)install the loopany agent skill on demand, or check where it's installed.
+ * `adscaile skill {status,install}` — a thin verb wrapping the same best-effort
+ * install path `adscaile up` / `adscaile new` run. The manual escape hatch: lets a
+ * user (re)install the adscaile agent skill on demand, or check where it's installed.
  *
  * User (global) scope is THE scope now — your coding agent(s) discover it from any
  * workdir, matching the daemon's per-machine reach. Project scope is a rarely-needed
  * escape. The install targets EVERY agent in `SKILL_TARGET_AGENTS` (Claude Code +
  * Codex today), and `status` reports each one's location honestly.
  *
- *   loopany skill              # same as `loopany skill install`
- *   loopany skill install      # install for each known agent at user scope (~/…)
- *   loopany skill install -g   # same (accepted, redundant)
- *   loopany skill install --project  # escape hatch: install under the cwd instead
- *   loopany skill status       # report each agent's install location + bundle state
+ *   adscaile skill              # same as `adscaile skill install`
+ *   adscaile skill install      # install for each known agent at user scope (~/…)
+ *   adscaile skill install -g   # same (accepted, redundant)
+ *   adscaile skill install --project  # escape hatch: install under the cwd instead
+ *   adscaile skill status       # report each agent's install location + bundle state
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -20,9 +20,9 @@ import path from "node:path";
 
 import { bundledSkillAvailable, installSkill, SKILL_TARGET_AGENTS } from "./skill-install.js";
 
-/** The `loopany` skill dir for one agent, under a scope root. */
+/** The `adscaile` skill dir for one agent, under a scope root. */
 function skillDirFor(root: string, skillsRoot: readonly string[]): string {
-  return path.join(root, ...skillsRoot, "loopany");
+  return path.join(root, ...skillsRoot, "adscaile");
 }
 
 function isInstalledAt(dir: string): boolean {
@@ -40,7 +40,7 @@ export async function runSkill(args: string[]): Promise<number> {
   const project = args.includes("--project") || args.includes("--local");
 
   if (sub === "status") {
-    process.stdout.write(`loopany skill status:\n`);
+    process.stdout.write(`adscaile skill status:\n`);
     // One honest line per agent × scope (user + project), derived from the same
     // target list the installer uses, so the two surfaces cannot drift.
     for (const t of SKILL_TARGET_AGENTS) {
@@ -60,6 +60,6 @@ export async function runSkill(args: string[]): Promise<number> {
     return r.ok ? 0 : 1;
   }
 
-  process.stderr.write("loopany: usage: loopany skill [status|install] [--project]\n");
+  process.stderr.write("adscaile: usage: adscaile skill [status|install] [--project]\n");
   return 2;
 }

@@ -1,5 +1,5 @@
 /**
- * `loopany up` — idempotent "make sure a daemon is running for THIS machine".
+ * `adscaile up` — idempotent "make sure a daemon is running for THIS machine".
  *
  * Folds SKILL.md §1 (the token/daemon dance the agent used to hand-run) into one
  * command: resolve this machine's device token (reuse the stored one, else adopt
@@ -10,7 +10,7 @@
  * unreachable server can't make repeated `up`s leak a new daemon per attempt.
  *
  * On a successful up (daemon confirmed live or already running) it also best-effort
- * REFRESHES the loopany agent skill at USER scope (`~/.claude/skills/loopany`), so
+ * REFRESHES the adscaile agent skill at USER scope (`~/.claude/skills/adscaile`), so
  * the on-disk skill stays version-locked to the daemon `up` just launched. This is a
  * deliberate reintroduction of skill logic into `up`: 0.4.0 removed it because the
  * old PROJECT-scope install would pollute an arbitrary cwd `up` might run from; user
@@ -27,7 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ensureBinShim } from "./bin-shim.js";
-import { DEVICE_FILE, LOOPANY_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
+import { DEVICE_FILE, ADSCAILE_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
 import { fetchMachineStatus, type MachineStatus } from "./control.js";
 import { verifiedRunningPid } from "./pidfile.js";
 import { refreshHooks } from "./setup.js";
@@ -37,7 +37,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * The argv/env plan for the detached daemon spawn (pure, exported for tests).
- * The device token travels via ENV (LOOPANY_TOKEN — runDaemon reads it), NEVER
+ * The device token travels via ENV (ADSCAILE_TOKEN — runDaemon reads it), NEVER
  * argv: argv is visible in `ps` for the daemon's whole lifetime while the token
  * file is carefully 0600. Only `--server-url` stays in argv — it's non-secret,
  * and cli.ts's DAEMON_FLAGS fallback keys on the LEADING flag, so a
@@ -45,15 +45,15 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  */
 export function buildDaemonSpawn(server: string, token: string): { args: string[]; env: NodeJS.ProcessEnv } {
   const args = [...process.execArgv, process.argv[1] ?? "", "--server-url", server];
-  return { args, env: { ...process.env, LOOPANY_TOKEN: token } };
+  return { args, env: { ...process.env, ADSCAILE_TOKEN: token } };
 }
 
 /**
- * Spawn the daemon detached so it outlives this `loopany up` process (and the
+ * Spawn the daemon detached so it outlives this `adscaile up` process (and the
  * Claude Code session that called it). Re-execs THIS CLI, replaying the exact
  * launcher (execPath + execArgv + entry) the same way callback-bin does, so
  * `npx`, `node dist/cli.js`, and `tsx src/cli.ts` all resolve to runDaemon().
- * stdio is redirected to ~/.loopany/daemon.log. Returns the child pid so a
+ * stdio is redirected to ~/.adscaile/daemon.log. Returns the child pid so a
  * readiness timeout can kill exactly what it started.
  */
 function spawnDaemonDefault(server: string, token: string, logFile: string): number | undefined {
@@ -82,7 +82,7 @@ export type EnsureDeps = {
   readToken?: () => string | undefined;
   /** Refresh the user-scope skill (best-effort, announced). Injected in tests. */
   installSkill?: (opts: InstallOpts) => Promise<InstallOutcome>;
-  /** Install/refresh the `loopany` PATH shim (best-effort, feedback #4). Injected in tests. */
+  /** Install/refresh the `adscaile` PATH shim (best-effort, feedback #4). Injected in tests. */
   ensureBinShim?: () => void;
   /** Install/refresh the SessionStart hooks (best-effort, P7). Injected in tests. */
   refreshHooks?: () => Promise<void>;
@@ -92,7 +92,7 @@ export type EnsureDeps = {
 
 export type EnsureOpts = {
   /** Skip the "already running" short-circuits and start a fresh daemon
-   *  unconditionally. `loopany update` sets this: it has just stopped the old
+   *  unconditionally. `adscaile update` sets this: it has just stopped the old
    *  daemon, but the server still reports the machine online for up to
    *  ONLINE_TTL (30s), which would otherwise make `up` decline to start the
    *  replacement. The local pidfile was cleared by `down`, so the new daemon
@@ -116,7 +116,7 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
     err: injected.err ?? ((s: string) => process.stderr.write(s)),
   };
 
-  /** Best-effort integration refresh — the user-scope skill, the `loopany` PATH shim
+  /** Best-effort integration refresh — the user-scope skill, the `adscaile` PATH shim
    *  (feedback #4), and the SessionStart hooks (P7) — each announced in one line, none
    *  ever throwing/failing `up`. Called on every success path. Mirrors how the skill
    *  install has always been best-effort + awaited (may delay `up` on a cold npx, but
@@ -139,18 +139,18 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
   const server = resolveServerUrl(flag(args, "server-url"));
   // Reuse this machine's stored identity first (so we stay the SAME machine across
   // runs); only adopt the connect-key the first time, when nothing is stored yet.
-  const token = d.readToken() || flag(args, "connect-key") || process.env.LOOPANY_TOKEN;
+  const token = d.readToken() || flag(args, "connect-key") || process.env.ADSCAILE_TOKEN;
   if (!server || !token) {
-    d.err("loopany: usage: loopany up --server-url <url> --connect-key <dk_…>\n");
+    d.err("adscaile: usage: adscaile up --server-url <url> --connect-key <dk_…>\n");
     return 2;
   }
 
-  // Persist both now so `loopany new` and a restart are zero-config (the daemon
+  // Persist both now so `adscaile new` and a restart are zero-config (the daemon
   // persists them too on boot; doing it here makes them available immediately).
   d.persist(SERVER_FILE, server);
   d.persist(DEVICE_FILE, token);
 
-  const logFile = path.join(LOOPANY_DIR, "daemon.log");
+  const logFile = path.join(ADSCAILE_DIR, "daemon.log");
 
   // Local pidfile FIRST: a live verified daemon means never spawn a second one —
   // deciding purely from the server status endpoint meant an unreachable server
@@ -201,6 +201,6 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
       /* already gone */
     }
   }
-  d.err(`loopany: daemon did not come online within ${READY_TIMEOUT_MS / 1000}s — check ${logFile}\n`);
+  d.err(`adscaile: daemon did not come online within ${READY_TIMEOUT_MS / 1000}s — check ${logFile}\n`);
   return 1;
 }

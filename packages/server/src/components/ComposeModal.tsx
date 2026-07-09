@@ -9,7 +9,7 @@ import { btn, btnPrimary, btnPrimaryPill, btnSm } from './ui'
 const SLOW_WAIT_MS = 100_000
 
 // Display label for the coding agent the daemon MEASURED on the host and the
-// server recorded on the loop. There is no manual picker: `loopany new` resolves
+// server recorded on the loop. There is no manual picker: `adscaile new` resolves
 // the agent from the host env fingerprint (Claude Code, Codex, or Grok), so the
 // dialog only ever displays the recorded value — it never declares one.
 const AGENT_LABEL: Record<CodingAgent, string> = {
@@ -93,11 +93,11 @@ export function ComposeModal({
 }) {
   // Step 1 picks where the loop runs. null = chooser screen; 'local' advances to
   // the capture-from-Claude-Code paste flow. A template skips the chooser (host is
-  // pre-set to 'local'). 'hosted' (run on Loopany) is not yet available.
+  // pre-set to 'local'). 'hosted' (run on adScaile) is not yet available.
   const [host, setHost] = useState<'local' | null>(null)
   const [picked, setPicked] = useState<'local'>('local') // step-1 selection (local pre-selected; hosted is disabled)
   const [token, setToken] = useState<string | null>(null)
-  const [config, setConfig] = useState<{ loopanyCli: string; customCli: boolean } | null>(null)
+  const [config, setConfig] = useState<{ adscaileCli: string; customCli: boolean } | null>(null)
   // Carries the MEASURED agent (`loops.agent`, from the daemon's env fingerprint)
   // back from `claimStatus`, so the confirmation shows what actually ran, not a pick.
   const [created, setCreated] = useState<{ id: string; name: string; agent: CodingAgent } | null>(null)
@@ -117,13 +117,13 @@ export function ComposeModal({
   const instruction = instructionFor(origin)
 
   // The machine config lines stay fixed and read-only — never user-editable. No
-  // `agent:` line: `loopany new` resolves the agent from the host env fingerprint
+  // `agent:` line: `adscaile new` resolves the agent from the host env fingerprint
   // (Claude Code, Codex, or Grok), so the snippet never declares one to override it.
   const configLines = token
     ? [
         `server-url: ${origin}`,
         `connect-key: ${token}`,
-        ...(config?.customCli ? [`loopany-cli: ${config.loopanyCli}`] : []),
+        ...(config?.customCli ? [`adscaile-cli: ${config.adscaileCli}`] : []),
       ].join('\n')
     : ''
 
@@ -338,7 +338,7 @@ export function ComposeModal({
             <span className="absolute right-3 top-3 rounded-full bg-raised px-2 py-0.5 text-micro font-medium text-disabled">
               Coming soon
             </span>
-            <div className="text-[15px] font-medium text-disabled">Hosted on Loopany</div>
+            <div className="text-[15px] font-medium text-disabled">Hosted on adScaile</div>
             <div className="mt-1.5 text-body leading-snug text-disabled">
               We run the agent for you in the cloud. No machine to keep online - not
               available yet.

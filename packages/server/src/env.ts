@@ -2,13 +2,13 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * Loopany server data directory — server-side file state, and (for the embedded
+ * adScaile server data directory — server-side file state, and (for the embedded
  * pglite tier) the on-disk Postgres data dir at `<dataDir>/pgdata`. Locally it
- * defaults to `~/.loopany`. Override with `LOOPANY_DATA_DIR`. The HOSTED tier
+ * defaults to `~/.adscaile`. Override with `ADSCAILE_DATA_DIR`. The HOSTED tier
  * (DATABASE_URL set) is stateless and never touches this.
  */
 export function dataDir(): string {
-  return process.env.LOOPANY_DATA_DIR?.trim() || path.join(os.homedir(), ".loopany");
+  return process.env.ADSCAILE_DATA_DIR?.trim() || path.join(os.homedir(), ".adscaile");
 }
 
 /**
@@ -63,14 +63,14 @@ export interface R2Config {
 }
 
 export function r2Config(): R2Config | null {
-  const accountId = process.env.LOOPANY_R2_ACCOUNT_ID?.trim();
-  const bucket = process.env.LOOPANY_R2_BUCKET?.trim();
-  const accessKeyId = process.env.LOOPANY_R2_ACCESS_KEY_ID?.trim();
-  const secretAccessKey = process.env.LOOPANY_R2_SECRET_ACCESS_KEY?.trim();
+  const accountId = process.env.ADSCAILE_R2_ACCOUNT_ID?.trim();
+  const bucket = process.env.ADSCAILE_R2_BUCKET?.trim();
+  const accessKeyId = process.env.ADSCAILE_R2_ACCESS_KEY_ID?.trim();
+  const secretAccessKey = process.env.ADSCAILE_R2_SECRET_ACCESS_KEY?.trim();
   const endpoint =
-    process.env.LOOPANY_R2_ENDPOINT?.trim() || (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined);
+    process.env.ADSCAILE_R2_ENDPOINT?.trim() || (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined);
   if (!bucket || !accessKeyId || !secretAccessKey || !endpoint) return null;
-  return { bucket, endpoint, accessKeyId, secretAccessKey, region: process.env.LOOPANY_R2_REGION?.trim() || "auto" };
+  return { bucket, endpoint, accessKeyId, secretAccessKey, region: process.env.ADSCAILE_R2_REGION?.trim() || "auto" };
 }
 
 /**
@@ -96,7 +96,7 @@ function posIntEnv(name: string, fallback: number): number {
  * normal loop folder never hits it; a runaway growing folder does. 500MB.
  */
 export function loopBytesCap(): number {
-  return posIntEnv("LOOPANY_LOOP_BYTES_CAP", 500 * 1024 * 1024);
+  return posIntEnv("ADSCAILE_LOOP_BYTES_CAP", 500 * 1024 * 1024);
 }
 
 /**
@@ -106,7 +106,7 @@ export function loopBytesCap(): number {
  * the "Changes" view while bounding the table + blob retention. Default 20.
  */
 export function snapshotRetention(): number {
-  return posIntEnv("LOOPANY_SNAPSHOT_RETENTION", 20);
+  return posIntEnv("ADSCAILE_SNAPSHOT_RETENTION", 20);
 }
 
 /**
@@ -117,7 +117,7 @@ export function snapshotRetention(): number {
  * the next GC pass reclaims anyway. Default 3,600,000ms (1 hour).
  */
 export function blobGcGraceMs(): number {
-  return posIntEnv("LOOPANY_BLOB_GC_GRACE_MS", 60 * 60 * 1000);
+  return posIntEnv("ADSCAILE_BLOB_GC_GRACE_MS", 60 * 60 * 1000);
 }
 
 /**
@@ -125,21 +125,21 @@ export function blobGcGraceMs(): number {
  * blobs). Default 15 minutes. Kept independent of the faster offline-sweep tick.
  */
 export function gcIntervalMs(): number {
-  return posIntEnv("LOOPANY_GC_INTERVAL_MS", 15 * 60 * 1000);
+  return posIntEnv("ADSCAILE_GC_INTERVAL_MS", 15 * 60 * 1000);
 }
 
 /**
  * Self-schedule cadence floors — enforced ONLY on the RUN self-schedule path (a
  * run using `set-cron` / `reschedule` on itself). The owner's `editLoop` path is
  * unlimited. A run may not set a cron whose adjacent fires are closer than
- * `LOOPANY_SELF_CRON_FLOOR_MINUTES` (default 15), nor reschedule sooner than
- * `LOOPANY_SELF_RESCHEDULE_FLOOR_MINUTES` (default 5). Lazy env reads like the
+ * `ADSCAILE_SELF_CRON_FLOOR_MINUTES` (default 15), nor reschedule sooner than
+ * `ADSCAILE_SELF_RESCHEDULE_FLOOR_MINUTES` (default 5). Lazy env reads like the
  * other knobs, so tests set them per-case.
  */
 export function selfCronFloorMinutes(): number {
-  return posIntEnv("LOOPANY_SELF_CRON_FLOOR_MINUTES", 15);
+  return posIntEnv("ADSCAILE_SELF_CRON_FLOOR_MINUTES", 15);
 }
 
 export function selfRescheduleFloorMinutes(): number {
-  return posIntEnv("LOOPANY_SELF_RESCHEDULE_FLOOR_MINUTES", 5);
+  return posIntEnv("ADSCAILE_SELF_RESCHEDULE_FLOOR_MINUTES", 5);
 }

@@ -69,7 +69,7 @@ export const ONLINE_TTL_MS = 30_000;
  *  loop failing every tick burns credits and attention until a human notices
  *  (the anti-spam alert cadence means most failures are silent); past this bar
  *  the honest move is to stop the bleeding and say so once. 0 disables. */
-const AUTOPAUSE_STREAK = Math.max(0, Number(process.env.LOOPANY_FAILURE_AUTOPAUSE_STREAK ?? 10));
+const AUTOPAUSE_STREAK = Math.max(0, Number(process.env.ADSCAILE_FAILURE_AUTOPAUSE_STREAK ?? 10));
 
 /** How long a DEFERRED pending run (machine asleep/offline at fire time) stays
  *  claimable before it retires as `skipped`. Generous on purpose — the next cron
@@ -80,7 +80,7 @@ const DEFERRED_MAX_MS = 7 * 86_400_000;
  *  dedup marker for the offline note and as a "waiting" hint in the UI. */
 const DEFERRED_LABEL = "deferred - machine offline";
 /** A claimed run that never reports within this window is reclaimed as timed out. */
-const RUN_TIMEOUT_MS = Number(process.env.LOOPANY_RUN_TIMEOUT_MS || 20 * 60_000);
+const RUN_TIMEOUT_MS = Number(process.env.ADSCAILE_RUN_TIMEOUT_MS || 20 * 60_000);
 /** `runAt`/`reschedule` horizon - shared by the owner edit path here and the
  *  run-token reschedule path in `cli.ts`. */
 export const MAX_NEXT_MS = 30 * 86_400_000;
@@ -148,7 +148,7 @@ const WATCH_CACHE_TTL_MS = 15_000;
  *  only the server assigns. */
 const RUN_OUTCOMES = new Set(["direct", "silent", "exec", "evolve"]);
 
-/** `loopany log`: how many recent runs to return, and the per-run transcript cap.
+/** `adscaile log`: how many recent runs to return, and the per-run transcript cap.
  *  The on-machine agent wants recent history before editing/evolving — not an
  *  unbounded dump — so default to a handful of runs and clip each transcript.
  *  LOG_RUNS_DEFAULT is exported for `cli.ts` (`describe`'s recent-run window). */
@@ -686,7 +686,7 @@ export class MachineGateway {
       agent?: unknown;
       /** Web's New-loop claim token — correlates this loop back to the dialog. */
       claim?: unknown;
-      /** Validate-only (`loopany new --dry-run`): run every check, persist NOTHING,
+      /** Validate-only (`adscaile new --dry-run`): run every check, persist NOTHING,
        *  and return the normalized config + fire preview. Zero-exec preserved. */
       dryRun?: unknown;
       /** Content-hash idempotency key the daemon derives (sha256 over machine id +
@@ -748,7 +748,7 @@ export class MachineGateway {
       ? "the provided ui was empty after validation and was NOT applied — the loop was created without a dashboard"
       : undefined;
 
-    // Validate-only (`loopany new --dry-run`): every check above has passed, so
+    // Validate-only (`adscaile new --dry-run`): every check above has passed, so
     // return the normalized config + fire preview + open/closed classification and
     // persist NOTHING (no store write, no scheduler, no team-auth side effects).
     if (body.dryRun === true) {
@@ -787,7 +787,7 @@ export class MachineGateway {
       };
     }
 
-    // Idempotency (F8): a timed-out `loopany new` retry must never make a twin. The
+    // Idempotency (F8): a timed-out `adscaile new` retry must never make a twin. The
     // daemon sends a stable content key; if we already created a loop for this key on
     // THIS machine within the window, return that loop (an idempotent REPLAY, §4.5)
     // rather than a second one. Checked AFTER validation (so only a real, valid
@@ -890,7 +890,7 @@ export class MachineGateway {
 
   // ---- GET/PATCH /api/machine/loop — the owner's interactive agent edits ----
 
-  /** List the loops bound to this machine, for `loopany loops`. The default columns
+  /** List the loops bound to this machine, for `adscaile loops`. The default columns
    *  are the minimal `{id,name,cron,enabled,nextFire}` (P2); `--fields` extends them
    *  from the optional set, and an unknown field fails loud (P6, VALIDATION_ERROR).
    *  `--json` (OQ4) is the escape hatch: the full structured records as real JSON
@@ -913,9 +913,9 @@ export class MachineGateway {
     }
     const fields = [...LIST_DEFAULT_FIELDS, ...extras];
     // The derived cells cost an extra query per loop; the TOON path pays for them only
-    // when the column is actually selected (the default `loopany loops` computes
+    // when the column is actually selected (the default `adscaile loops` computes
     // neither). The `--json` escape hatch mirrors `show --json`, which ALWAYS computes
-    // both, so force them on for JSON — a plain `loopany loops --json` must report the
+    // both, so force them on for JSON — a plain `adscaile loops --json` must report the
     // real `runs`/`lastOutcome` per loop, never a lazy 0/null.
     const wantRuns = json || fields.includes("runs");
     const wantLastOutcome = json || fields.includes("lastOutcome");
@@ -939,7 +939,7 @@ export class MachineGateway {
           goal: l.goal ?? null,
           taskFile: l.taskFile ?? null,
           nextRunAt: l.nextRunAt,
-          // Folder hint so a workdir-scoped CLI (`loopany log`) can map the current
+          // Folder hint so a workdir-scoped CLI (`adscaile log`) can map the current
           // directory back to a loop the same way the watcher resolves it.
           workdir: l.workdir ?? null,
           nextFire,
@@ -959,7 +959,7 @@ export class MachineGateway {
 
   /**
    * Recent run execution logs (transcripts) for a loop, for the on-machine agent
-   * (`loopany log`). The device-facing twin of the web-only `getTranscript`:
+   * (`adscaile log`). The device-facing twin of the web-only `getTranscript`:
    * authed by the SAME device token the daemon already uses, and scoped strictly
    * to a loop bound to THAT machine (`loop.machineId === machineId`, exactly like
    * `editLoop`/`sync`) — a token can never read another loop's or another device's
@@ -977,7 +977,7 @@ export class MachineGateway {
   /** The machine-scoped run survey, shared by the device-token `loopLog` (resolves
    *  the machine from the token) AND the unified-dispatch run-credential `log` branch
    *  in `CliGateway` (passes the run lease's own machineId + loopId — this is what
-   *  closes the in-run `loopany log` 400 seam); public for that second consumer.
+   *  closes the in-run `adscaile log` 400 seam); public for that second consumer.
    *  Scoping is identical for both callers: only a loop
    *  bound to `machineId` is visible; anything else is a flat 404 (existence never
    *  leaks), exactly as before for the device path. */
@@ -1003,14 +1003,14 @@ export class MachineGateway {
         outcome: r.outcome ?? null,
         status: r.status ?? null,
         durationMs: r.durationMs ?? null,
-        /** Claude-reported spend (USD estimate) so `loopany log` surfaces run cost. */
+        /** Claude-reported spend (USD estimate) so `adscaile log` surfaces run cost. */
         costUsd: r.costUsd ?? null,
         error: r.error ?? null,
         message: r.message ?? null,
         // The claude-code session id lets the agent jump from this survey straight
         // to the run's on-disk `<session>.jsonl` for a deep dive (see evolve.md).
         sessionId: r.sessionId ?? null,
-        // The metrics the run reported (the `state` object), so `loopany log`
+        // The metrics the run reported (the `state` object), so `adscaile log`
         // surfaces them alongside the transcript (matches what buildEvolveTask
         // feeds the evolve agent).
         state: r.state ?? null,
@@ -1030,7 +1030,7 @@ export class MachineGateway {
 
   /**
    * Edit a loop's scheduling envelope from the owner's interactive agent
-   * (`loopany edit`). Authed by the machine's device token and scoped to loops
+   * (`adscaile edit`). Authed by the machine's device token and scoped to loops
    * bound to THAT machine — deliberately NOT gated by allowControl (that flag
    * governs a running run rescheduling ITSELF; the human owner may always edit).
    * Task CONTENT lives in the loop's README.md on the machine, so it's edited there, not here.
@@ -1054,7 +1054,7 @@ export class MachineGateway {
       goal?: unknown;
       agent?: unknown;
     },
-    /** Validate-only (`loopany edit --dry-run`): compute the per-key before→after
+    /** Validate-only (`adscaile edit --dry-run`): compute the per-key before→after
      *  preview + rejections, persist NOTHING. */
     dryRun = false,
   ): Promise<HttpResult> {
@@ -1314,7 +1314,7 @@ export class MachineGateway {
       return { status: 200, body: { ok: true } };
     }
 
-    // The run already finalized itself via `loopany finish` (phase "done"): the
+    // The run already finalized itself via `adscaile finish` (phase "done"): the
     // daemon's normal post-run report still arrives with the precise durationMs +
     // sessionId (+ transcript/artifacts), which finish couldn't know mid-run. ENRICH
     // the already-completed run with those so a finished run's log matches a reported
@@ -1453,7 +1453,7 @@ export class MachineGateway {
     }
 
     // Message: a workflow reports it here; a claude run already set it via the
-    // agent-api `loopany report` — fall back to claude's final text only if blank.
+    // agent-api `adscaile report` — fall back to claude's final text only if blank.
     // Clipped to the same cap the agent-api report verb enforces.
     const rawMessage =
       body.message !== undefined ? body.message : !run?.message && body.finalText ? body.finalText : undefined;
@@ -1464,7 +1464,7 @@ export class MachineGateway {
 
     // Mirror the workflow's returned cursor scalars onto THIS run, so the
     // generative UI's {{latest.*}} + the trend chart bind. A pure workflow has no
-    // `loopany report --state` call (that's how exec loops set run.state), so its
+    // `adscaile report --state` call (that's how exec loops set run.state), so its
     // metrics would otherwise live only in the loop cursor and never render. Don't
     // clobber a state the run already reported (e.g. a workflow that escalated).
     const runState = ok && !run?.state ? scalarState(cursor) : undefined;
@@ -1537,7 +1537,7 @@ export class MachineGateway {
   }
 
   /**
-   * The `loopany finish` verb's effect (closed-loop self-termination): record THIS
+   * The `adscaile finish` verb's effect (closed-loop self-termination): record THIS
    * run as an ordinary success (phase=done, outcome=exec, status=resolved) with the
    * run's summary/metrics, then stamp the loop terminal (completedAt=now,
    * completionReason, enabled=false), remove it from the scheduler, capture the end-
@@ -1626,7 +1626,7 @@ export interface Applied {
   code?: string;
 }
 
-/** Flatten a run's slimmed transcript steps into plain text for `loopany log`,
+/** Flatten a run's slimmed transcript steps into plain text for `adscaile log`,
  *  clipped to LOG_TRANSCRIPT_CAP (the agent wants recent history, not a dump).
  *  Tool steps render as `$ <name> <input>`; text/result steps as their text. */
 function renderTranscript(steps: TranscriptStep[] | null | undefined): { text: string; truncated: boolean } {
@@ -1684,14 +1684,14 @@ export function fmtTimeZoned(iso: string, timezone: string | null, opts: { secon
   }
 }
 
-/** `loopany loops` default columns (P2 — minimal): identity + the two things an
+/** `adscaile loops` default columns (P2 — minimal): identity + the two things an
  *  agent scans for (schedule + when it next fires). */
 const LIST_DEFAULT_FIELDS: string[] = ["id", "name", "cron", "enabled", "nextFire"];
 /** The optional columns `--fields` may add (the "available" set an unknown field is
  *  measured against, §4.2). `runs`/`lastOutcome` are derived per loop. */
 const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "goal", "taskFile", "runs", "lastOutcome"];
 
-/** A loop's row for `loopany loops`: every renderable cell precomputed once (so the
+/** A loop's row for `adscaile loops`: every renderable cell precomputed once (so the
  *  `--fields` selection is a pure column pick). The structured `loops` body carries the
  *  whole record — a RETAINED data channel the daemon reads to resolve cwd→loop
  *  client-side (id/name/workdir/taskFile), not for rendering. */
@@ -1734,7 +1734,7 @@ function loopCell(rec: LoopListRecord, field: string): Scalar {
   }
 }
 
-/** `loopany loops` — the typed loop list (P2/P4/P5/P9). Columns = the default set
+/** `adscaile loops` — the typed loop list (P2/P4/P5/P9). Columns = the default set
  *  plus any `--fields` extras (validated + resolved by `listLoops`). */
 function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
   if (!loops.length) {
@@ -1742,8 +1742,8 @@ function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
       countLine(0),
       emptyList("loops"),
       helpBlock([
-        "Run `loopany new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create your first loop",
-        "Run `loopany up` if this machine isn't connected yet",
+        "Run `adscaile new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create your first loop",
+        "Run `adscaile up` if this machine isn't connected yet",
       ]),
     );
   }
@@ -1754,7 +1754,7 @@ function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
       fields,
       loops.map((l) => fields.map((f) => loopCell(l, f))),
     ),
-    helpBlock(["Run `loopany show <id>` to see a loop's full config", "Run `loopany log <id>` to see a loop's recent runs"]),
+    helpBlock(["Run `adscaile show <id>` to see a loop's full config", "Run `adscaile log <id>` to see a loop's recent runs"]),
   );
 }
 
@@ -1789,8 +1789,8 @@ interface LogRun {
   message: string | null;
 }
 
-/** `loopany log` — the TOON run survey (F2: the in-run callback prints this `text`,
- *  so in-run `loopany log` starts working the day Batch 1 deploys). */
+/** `adscaile log` — the TOON run survey (F2: the in-run callback prints this `text`,
+ *  so in-run `adscaile log` starts working the day Batch 1 deploys). */
 function renderLogText(name: string, loopId: string, runs: LogRun[], total: number): string {
   const head = `loop: ${scalar(name)} (${loopId})`;
   if (!runs.length) {
@@ -1798,7 +1798,7 @@ function renderLogText(name: string, loopId: string, runs: LogRun[], total: numb
       head,
       countLine(0, { total }),
       emptyList("runs"),
-      helpBlock([`Run \`loopany show ${loopId}\` to see the loop config`]),
+      helpBlock([`Run \`adscaile show ${loopId}\` to see the loop config`]),
     );
   }
   const rows: (string | number | null)[][] = runs.map((r) => [
@@ -1825,13 +1825,13 @@ function renderLogText(name: string, loopId: string, runs: LogRun[], total: numb
     listBlock("runs", ["ts", "role", "outcome", "cost", "metrics", "session", "message"], rows),
     `summary: ${summary}`,
     helpBlock([
-      `Run \`loopany log ${loopId} --full\` to inline each run's transcript`,
+      `Run \`adscaile log ${loopId} --full\` to inline each run's transcript`,
       "Run `find ~/.claude/projects -name '<session>.jsonl'` to deep-dive a run's session",
     ]),
   );
 }
 
-/** `loopany new` (real create) — the created-loop confirmation (P4/P9). */
+/** `adscaile new` (real create) — the created-loop confirmation (P4/P9). */
 function renderCreatedText(
   name: string,
   loopId: string,
@@ -1851,24 +1851,24 @@ function renderCreatedText(
     nextRuns.length ? inlineArray("nextRuns", nextRuns, " · ") : null,
     warning ? kvLine("warning", warning) : null,
     helpBlock([
-      `Run \`loopany show ${loopId}\` to see the full config`,
-      `Run \`loopany log ${loopId}\` after the first run to see how it went`,
+      `Run \`adscaile show ${loopId}\` to see the full config`,
+      `Run \`adscaile log ${loopId}\` after the first run to see how it went`,
     ]),
   );
 }
 
-/** `loopany new` idempotent REPLAY (§4.5, F8) — the existing loop returned, never a
+/** `adscaile new` idempotent REPLAY (§4.5, F8) — the existing loop returned, never a
  *  twin. Terser than a fresh create (no dashboard/nextRuns lines): the loop already
  *  exists, so the agent just needs to know which one and how to inspect it. */
 function renderReplayText(name: string, loopId: string, goal: string | null): string {
   return doc(
     `created: ${scalar(name)} (${loopId}) [idempotent replay — existing loop returned]`,
     `classification: ${goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
-    helpBlock([`Run \`loopany show ${loopId}\` to see the full config`]),
+    helpBlock([`Run \`adscaile show ${loopId}\` to see the full config`]),
   );
 }
 
-/** `loopany new --dry-run` — the normalized config + fire preview (no persistence). */
+/** `adscaile new --dry-run` — the normalized config + fire preview (no persistence). */
 function renderCreateDryRunText(
   config: { name: string | null; cron: string; timezone: string | null; taskFile: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
   nextRuns: string[],
@@ -1888,31 +1888,31 @@ function renderCreateDryRunText(
     nextRuns.length ? inlineArray("nextRuns", nextRuns.map((iso) => fmtTimeZoned(iso, config.timezone)), " · ") : null,
     `classification: ${config.goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
     warning ? kvLine("warning", warning) : null,
-    helpBlock(["Run `loopany new --json '{...}'` (drop --dry-run) to create the loop"]),
+    helpBlock(["Run `adscaile new --json '{...}'` (drop --dry-run) to create the loop"]),
   );
 }
 
-/** `loopany edit` (real apply) — the updated-loop confirmation. */
+/** `adscaile edit` (real apply) — the updated-loop confirmation. */
 function renderEditAppliedText(loopId: string, name: string, applied: string[]): string {
   return doc(
     `updated: ${scalar(name)} (${loopId})`,
     inlineArray("applied", applied),
-    helpBlock([`Run \`loopany show ${loopId}\` to confirm the new config`]),
+    helpBlock([`Run \`adscaile show ${loopId}\` to confirm the new config`]),
   );
 }
 
-/** `loopany edit --json '{}'` — the empty-patch no-op (feedback #3). Reports plainly
+/** `adscaile edit --json '{}'` — the empty-patch no-op (feedback #3). Reports plainly
  *  that nothing changed and lists the keys an edit MAY touch, so the agent's next
  *  attempt is well-formed without having to fail to discover the envelope. */
 function renderEditNoopText(loopId: string, name: string): string {
   return doc(
     `nothing to change: ${scalar(name)} (${loopId})`,
     inlineArray("editable", [...EDITABLE_LOOP_FIELDS]),
-    helpBlock([`Run \`loopany show ${loopId}\` to see the current config`]),
+    helpBlock([`Run \`adscaile show ${loopId}\` to see the current config`]),
   );
 }
 
-/** `loopany edit --dry-run` — the per-key before→after preview + rejections. */
+/** `adscaile edit --dry-run` — the per-key before→after preview + rejections. */
 function renderEditDryRunText(
   loopId: string,
   name: string,
@@ -1930,7 +1930,7 @@ function renderEditDryRunText(
     rejections.length
       ? listBlock("rejections", ["key", "reason"], rejections.map((r) => [r.key, r.reason]))
       : "rejections: none",
-    helpBlock([`Run \`loopany edit ${loopId} --json '{...}'\` (drop --dry-run) to apply`]),
+    helpBlock([`Run \`adscaile edit ${loopId} --json '{...}'\` (drop --dry-run) to apply`]),
   );
 }
 

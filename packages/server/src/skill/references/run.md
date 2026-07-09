@@ -8,18 +8,18 @@ disagree, your prompt wins. If you are the owner (or your coding agent) reading 
 installed skill, this documents exactly how a loop behaves at runtime, so you can
 author a Spec that a run will follow and know what its levers are.
 
-A run reaches the user and changes anything only through the `loopany` command on its
-PATH — `loopany help` prints the full, role-aware verb list, and `loopany <verb> --help`
+A run reaches the user and changes anything only through the `adscaile` command on its
+PATH — `adscaile help` prints the full, role-aware verb list, and `adscaile <verb> --help`
 prints one verb's syntax + availability for this run. In practice a run uses
 `report`, `show`, and — for a loop with a goal — `finish`.
 
 **Command forms.** Every loop verb has a canonical explicit form that names the loop it
-acts on: `loopany <verb> --loop <loop-id> …` (for `log` and `show` the id may also be
-given positionally, e.g. `loopany log <loop-id>`). All verbs — whether typed inside a
+acts on: `adscaile <verb> --loop <loop-id> …` (for `log` and `show` the id may also be
+given positionally, e.g. `adscaile log <loop-id>`). All verbs — whether typed inside a
 run or by the owner from their own coding agent — funnel through one server dispatch
 that keys authority on the credential the command carries. **In a run the loop id is
-optional and defaults to the current loop**, so a run simply writes `loopany report …`,
-`loopany show`, `loopany log`. A run's credential is scoped to its own loop: naming a
+optional and defaults to the current loop**, so a run simply writes `adscaile report …`,
+`adscaile show`, `adscaile log`. A run's credential is scoped to its own loop: naming a
 *different* loop (via `--loop` or a positional id) is **refused, never silently
 retargeted onto another loop**. The owner, running these same verbs with the machine's
 device credential, names the loop explicitly (and may act on any loop on the machine).
@@ -32,7 +32,7 @@ disagree, the goal line wins.
 
 ## 1. The task file is the loop's memory
 
-The task file lives in the loop's own folder (`loopany/<slug>/`) and is the loop's
+The task file lives in the loop's own folder (`adscaile/<slug>/`) and is the loop's
 single source of truth — it persists across runs, so each run reads it first. It has
 three standing sections:
 
@@ -77,11 +77,11 @@ append one concise Timeline entry (finding + status), and compress as in §1.
 ## 3. Ending a run: report, or finish
 
 Every run ends with exactly ONE terminal call, made at the very end even when nothing
-happened. In almost every run that call is `loopany report` — the run's single channel
+happened. In almost every run that call is `adscaile report` — the run's single channel
 to the user and the run log:
 
-    loopany report --status nothing-new
-    loopany report --status new --message "<one short message to the user>"
+    adscaile report --status nothing-new
+    adscaile report --status new --message "<one short message to the user>"
 
 `--status` is one of:
 
@@ -100,13 +100,13 @@ delivered in the run's prompt as a `Goal (finish line): <goal>` line — and eac
 the judge of whether that setpoint has been reached. When a run believes the goal is
 met, it ends with `finish` instead of `report`:
 
-    loopany finish --message "<what was achieved>" --reason "<one line: why the goal is met>"
+    adscaile finish --message "<what was achieved>" --reason "<one line: why the goal is met>"
 
 `finish` records the run as a success AND completes the loop: it stops running and the
 user is told. Because it is terminal and irreversible for the loop, hold to a strict
 bar:
 
-- Run `loopany show` and confirm `goal` shows a setpoint and `selfFinish: allowed`.
+- Run `adscaile show` and confirm `goal` shows a setpoint and `selfFinish: allowed`.
   If either is off, you cannot finish — `report` as normal.
 - Judge the setpoint met per the Spec's own definition of done, from real evidence
   gathered *this run*, not a hunch.
@@ -116,10 +116,10 @@ bar:
 
 Only one terminal call per run — `report` OR `finish`, never both.
 
-**Reporting is one-way.** `loopany report`/`finish` cannot ask a question and get an
+**Reporting is one-way.** `adscaile report`/`finish` cannot ask a question and get an
 answer back within the run. If a run is blocked — missing credentials, an API down or
 hanging — it does not wait, retry, or poll indefinitely: it makes one bounded attempt,
-then `loopany report --status new --message "<one line on what is blocking>"` and
+then `adscaile report --status new --message "<one line on what is blocking>"` and
 exits. If finishing genuinely needs a human decision, the run says so plainly in that
 message.
 
@@ -131,21 +131,21 @@ cadence. Most runs leave the schedule alone; if so, skip this entirely.
 
 When a change is warranted:
 
-1. Run `loopany show` — it prints the current schedule and whether this loop may
+1. Run `adscaile show` — it prints the current schedule and whether this loop may
    change its own schedule (`selfSchedule: allowed|off`).
 2. If allowed, apply the change with one of the two levers, recording a clear reason in
    the Timeline. Each validates, applies immediately, and prints the result — read it
    to confirm:
 
-       loopany reschedule --run-at <30m|2h|ISO> one-shot: run again sooner/later, then resume cadence
-       loopany set-cron "<cron expr>"           change the regular cadence permanently
+       adscaile reschedule --run-at <30m|2h|ISO> one-shot: run again sooner/later, then resume cadence
+       adscaile set-cron "<cron expr>"           change the regular cadence permanently
 
    `--run-at` is canonical; `--next` is accepted as a back-compat alias for it.
 
 If self-schedule is off, don't force it — carry on as normal. Server-side **cadence
 floors** apply to a run's own changes: a run cannot schedule itself more frequently
 than the floor allows. Those floors bind the run path only — the owner can set any
-schedule via `loopany edit`, with no floor.
+schedule via `adscaile edit`, with no floor.
 
 ## 5. Front-matter product conventions
 

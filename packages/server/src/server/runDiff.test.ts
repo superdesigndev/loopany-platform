@@ -20,10 +20,10 @@ let gw: Awaited<ReturnType<typeof import("./boot.js")["getGateway"]>>;
 let art: Awaited<ReturnType<typeof import("./boot.js")["getArtifactSync"]>>;
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-diff-"));
-  process.env.LOOPANY_DATA_DIR = tmp;
-  process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
-  process.env.LOOPANY_LOG_LEVEL = "silent";
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-diff-"));
+  process.env.ADSCAILE_DATA_DIR = tmp;
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, "test.db");
+  process.env.ADSCAILE_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
   store = await import("../db/store.js");

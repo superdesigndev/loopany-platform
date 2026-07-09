@@ -1,12 +1,12 @@
 /**
- * Daemon pidfile — the local liveness/identity record `loopany status` and
- * `loopany down` need to find THIS machine's detached daemon.
+ * Daemon pidfile — the local liveness/identity record `adscaile status` and
+ * `adscaile down` need to find THIS machine's detached daemon.
  *
  * `up` spawns the daemon detached (it outlives the launching session) and relies
  * on the server's `/api/machine/status` for online-ness, but that says nothing
  * about the LOCAL process — you can't `down` a pid the server never sees. So the
  * daemon itself writes its pid here on boot (`daemon.pid` under the same
- * `~/.loopany` state dir as the device token / server URL) and removes it on a
+ * `~/.adscaile` state dir as the device token / server URL) and removes it on a
  * clean exit. `status`/`down` read it back and probe the pid with signal 0.
  *
  * All writes are best-effort: a missing/unwritable pidfile degrades `status` to
@@ -16,9 +16,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { LOOPANY_DIR } from "./config.js";
+import { ADSCAILE_DIR } from "./config.js";
 
-export const PID_FILE = path.join(LOOPANY_DIR, "daemon.pid");
+export const PID_FILE = path.join(ADSCAILE_DIR, "daemon.pid");
 
 /** A pidfile record: the daemon's pid plus a best-effort identity marker. */
 export type PidRecord = { pid: number; startTime?: string };
@@ -46,7 +46,7 @@ export function processStartTime(pid: number): string | undefined {
 /** Record the running daemon's pid + start-time identity (best-effort, 0600). */
 export function writePidFile(pid: number = process.pid): void {
   try {
-    fs.mkdirSync(LOOPANY_DIR, { recursive: true });
+    fs.mkdirSync(ADSCAILE_DIR, { recursive: true });
     const startTime = processStartTime(pid);
     const body = startTime ? `${pid}:${startTime}` : `${pid}`;
     fs.writeFileSync(PID_FILE, `${body}\n`, { mode: 0o600 });

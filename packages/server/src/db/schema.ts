@@ -1,5 +1,5 @@
 /**
- * Loopany business schema (Drizzle, Postgres `pg-core` dialect).
+ * adScaile business schema (Drizzle, Postgres `pg-core` dialect).
  *
  * Three tables — machines / loops / runs — keyed off the Better Auth `user`
  * table (added in the auth step; `userId` here is the owning user's id). We use
@@ -34,7 +34,7 @@ export interface StateField {
   unit?: string;
 }
 
-/** One control command an exec/evolve run issued via the `loopany` shim (audit). */
+/** One control command an exec/evolve run issued via the `adscaile` shim (audit). */
 export interface ControlAction {
   ts: string;
   command: string;
@@ -188,7 +188,7 @@ export const loops = pgTable(
     /** CLOSED-loop setpoint: a one-line, checkable goal. Null ⇒ OPEN loop
      *  (monitor/digest — never self-terminates; "finish" is not a concept for it).
      *  Non-null ⇒ CLOSED loop: each exec run is the comparator (judges state vs the
-     *  goal) and calls `loopany finish` when it's met. Open↔closed conversion = set/
+     *  goal) and calls `adscaile finish` when it's met. Open↔closed conversion = set/
      *  clear this. */
     goal: text("goal"),
     /** Terminal stamp: when the loop's goal was declared met (ISO). Null ⇒ still
@@ -216,7 +216,7 @@ export const loops = pgTable(
     /** Marker: next tick runs the evolution pass as its sole work. */
     evolveDue: boolean("evolve_due"),
     /** Pending owner edit: the next tick runs an `edit` agent that applies this
-     *  instruction (schedule via `loopany edit`, content via the loop's README.md) then clears it. */
+     *  instruction (schedule via `adscaile edit`, content via the loop's README.md) then clears it. */
     editRequest: text("edit_request"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -279,7 +279,7 @@ export const runs = pgTable(
 
 // ---- run_leases: the per-run credential (durable across deploys) ----
 //
-// A RUN LEASE is minted per delivery and authorizes every in-run `loopany` verb
+// A RUN LEASE is minted per delivery and authorizes every in-run `adscaile` verb
 // plus the final `/machine/report`. It was an in-process Map through v1, which
 // meant EVERY deploy broke every in-flight run's finalize (the report 401'd and
 // the run was falsely failed by the sweep ~20min later) and a long-sleep

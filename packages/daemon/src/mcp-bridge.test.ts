@@ -17,9 +17,9 @@ import {
 } from "./mcp-bridge.mjs";
 
 const CAP_ENVS = [
-  "LOOPANY_WORKFLOW_TOOL_ARGS_CAP",
-  "LOOPANY_WORKFLOW_TOOL_RESULT_CAP",
-  "LOOPANY_WORKFLOW_TOOL_TIMEOUT_SECONDS",
+  "ADSCAILE_WORKFLOW_TOOL_ARGS_CAP",
+  "ADSCAILE_WORKFLOW_TOOL_RESULT_CAP",
+  "ADSCAILE_WORKFLOW_TOOL_TIMEOUT_SECONDS",
 ];
 afterEach(() => {
   for (const k of CAP_ENVS) delete process.env[k];
@@ -58,13 +58,13 @@ describe("capArgs", () => {
     expect(capArgs("s", "t", undefined)).toEqual({});
   });
   test("throws a clear, specific error when args exceed the cap", () => {
-    process.env.LOOPANY_WORKFLOW_TOOL_ARGS_CAP = "50";
+    process.env.ADSCAILE_WORKFLOW_TOOL_ARGS_CAP = "50";
     expect(() => capArgs("posthog", "insight-query", { q: "x".repeat(200) })).toThrow(
-      /posthog\.insight-query.*args too large.*LOOPANY_WORKFLOW_TOOL_ARGS_CAP/,
+      /posthog\.insight-query.*args too large.*ADSCAILE_WORKFLOW_TOOL_ARGS_CAP/,
     );
   });
   test("cap is env-overridable upward", () => {
-    process.env.LOOPANY_WORKFLOW_TOOL_ARGS_CAP = "100000";
+    process.env.ADSCAILE_WORKFLOW_TOOL_ARGS_CAP = "100000";
     expect(() => capArgs("s", "t", { q: "x".repeat(2000) })).not.toThrow();
   });
 });
@@ -87,7 +87,7 @@ describe("extractText / shapeResult", () => {
     expect(r.data).toBeNull();
   });
   test("caps a runaway result text and marks it truncated", () => {
-    process.env.LOOPANY_WORKFLOW_TOOL_RESULT_CAP = "20";
+    process.env.ADSCAILE_WORKFLOW_TOOL_RESULT_CAP = "20";
     const r = shapeResult(textResult("x".repeat(500)));
     expect(r.truncated).toBe(true);
     expect(r.text).toMatch(/truncated/);
@@ -95,7 +95,7 @@ describe("extractText / shapeResult", () => {
     expect(r.data).toBeNull(); // truncated → don't try to parse partial JSON
   });
   test("drops oversized structured data rather than blowing the cap", () => {
-    process.env.LOOPANY_WORKFLOW_TOOL_RESULT_CAP = "40";
+    process.env.ADSCAILE_WORKFLOW_TOOL_RESULT_CAP = "40";
     const big = { items: Array.from({ length: 100 }, (_, i) => ({ i })) };
     const r = shapeResult({ content: [{ type: "text", text: "short" }], structuredContent: big });
     expect(r.data).toBeNull();
@@ -175,7 +175,7 @@ describe("callTool (fake runtime — no network)", () => {
   });
 
   test("rejects oversized args before any runtime call", async () => {
-    process.env.LOOPANY_WORKFLOW_TOOL_ARGS_CAP = "10";
+    process.env.ADSCAILE_WORKFLOW_TOOL_ARGS_CAP = "10";
     let called = false;
     const rt = fakeRuntime(() => {
       called = true;

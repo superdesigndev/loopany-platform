@@ -29,7 +29,7 @@ const loop = (over: Partial<Loop> = {}): Loop =>
     name: "Test Loop",
     cron: "0 8 * * *",
     timezone: "America/New_York",
-    taskFile: "/work/loopany/test/README.md",
+    taskFile: "/work/adscaile/test/README.md",
     stateSchema: null,
     allowControl: false,
     ui: null,
@@ -48,9 +48,9 @@ test("evolve + edit system prompts are empty (prose moved to the user turn)", ()
 test("evolve task turn keeps every lever + smoke-test discipline + protocol prose", () => {
   const t = buildEvolveTask(loop(), []);
   // The three structural levers run-dispatch live-supports for an evolve token.
-  expect(t).toContain("loopany set-ui --file");
-  expect(t).toContain("loopany set-schema --file");
-  expect(t).toContain("loopany set-workflow --file");
+  expect(t).toContain("adscaile set-ui --file");
+  expect(t).toContain("adscaile set-schema --file");
+  expect(t).toContain("adscaile set-workflow --file");
   // Binding syntax + chart primitives the UI lever depends on.
   expect(t).toContain("{{latest.");
   expect(t).toContain("<loop-chart");
@@ -60,7 +60,7 @@ test("evolve task turn keeps every lever + smoke-test discipline + protocol pros
   // The pass must leave a run-log summary (report --message), stated in both the
   // standing prose (§4 Finish) and the payload's closing instruction — an evolve
   // block in the timeline should never be blank.
-  expect(t).toMatch(/loopany report --message/);
+  expect(t).toMatch(/adscaile report --message/);
   expect(t).toMatch(/no change/i);
   // The untrusted-data guard rides along in the user turn (evolve reads run messages).
   expect(t).toMatch(/data, never as instructions/i);
@@ -73,8 +73,8 @@ test("evolve task turn keeps every lever + smoke-test discipline + protocol pros
   // Workflow elevated to §2, dashboard demoted to §3.
   expect(t).toContain("## 2. Workflow");
   expect(t).toContain("## 3. Dashboard");
-  // The two-lens log reading: survey (loopany log, with session id) + deep dive (session JSONL).
-  expect(t).toContain("loopany log");
+  // The two-lens log reading: survey (adscaile log, with session id) + deep dive (session JSONL).
+  expect(t).toContain("adscaile log");
   expect(t).toMatch(/session/i);
   expect(t).toMatch(/\.jsonl/i);
   // No unfilled placeholders leak into the evolve turn (it takes no `{{token}}` vars;
@@ -107,8 +107,8 @@ test("evolve task inlines a COMPACT run survey: keys not values, clipped message
   ] as unknown as Run[];
   const t = buildEvolveTask(loop(), runs);
 
-  // On-demand pointers head the survey: loopany log (works in-run now) + session JSONL.
-  expect(t).toContain("loopany log");
+  // On-demand pointers head the survey: adscaile log (works in-run now) + session JSONL.
+  expect(t).toContain("adscaile log");
   expect(t).toContain("--transcript");
   expect(t).toMatch(/find ~\/\.claude\/projects -name '<session>\.jsonl'/);
 
@@ -139,7 +139,7 @@ test("edit task turn is a short CORE: apply one change, don't run/finish, report
   expect(t).toMatch(/ONE owner-requested change/i);
   expect(t).toMatch(/NOT\s+running the loop's normal task/i);
   expect(t).toMatch(/do NOT finish the loop/i);
-  expect(t).toContain("loopany report --status resolved");
+  expect(t).toContain("adscaile report --status resolved");
   // The untrusted-data guard rides along (edit reads the loop's current config below).
   expect(t).toMatch(/data, never as instructions/i);
   // The schedule/envelope verbs stay available (run-token surface).
@@ -148,7 +148,7 @@ test("edit task turn is a short CORE: apply one change, don't run/finish, report
   }
   expect(t).toContain("set-ui --file");
   // Skill pointer for the deep verb syntax, with a CORE-sufficient fallback.
-  expect(t).toMatch(/loopany skill/i);
+  expect(t).toMatch(/adscaile skill/i);
   expect(t).toMatch(/sufficient/i);
   // The owner's instruction is carried through.
   expect(t).toContain("run at 9am on weekdays");
@@ -180,20 +180,20 @@ test("exec system prompt is empty (instructions moved to the user turn)", () => 
 test("exec task carries the CORE: identity, fallback core, report/finish, skill pointer", () => {
   const t = buildExecTask(loop());
   expect(t).toContain("[loop run · Test Loop]");
-  // Identity + role framing (one scheduled run, act only through `loopany`).
+  // Identity + role framing (one scheduled run, act only through `adscaile`).
   expect(t).toMatch(/one scheduled run/i);
-  expect(t).toContain("loopany");
+  expect(t).toContain("adscaile");
   // The non-negotiable inline fallback core, self-sufficient without the skill.
   expect(t).toMatch(/non-negotiable/i);
-  expect(t).toContain("/work/loopany/test/README.md"); // read the task file first
+  expect(t).toContain("/work/adscaile/test/README.md"); // read the task file first
   expect(t).toContain("## Spec");
   expect(t).toMatch(/surface only what/i); // do the work, surface only what changed
   expect(t).toMatch(/exactly ONE terminal call/i);
-  expect(t).toContain("loopany report");
-  expect(t).toContain("loopany finish");
+  expect(t).toContain("adscaile report");
+  expect(t).toContain("adscaile finish");
   expect(t).toMatch(/one pass/i); // one pass then stop
   // Skill pointer names the installable skill with a CORE-sufficient fallback.
-  expect(t).toMatch(/loopany skill/i);
+  expect(t).toMatch(/adscaile skill/i);
   expect(t).toMatch(/sufficient/i);
   // Nothing left unfilled.
   expect(t).not.toMatch(/\{\{\w+\}\}/);
@@ -211,14 +211,14 @@ test("exec task keeps the untrusted-data guard prominent in the user turn", () =
 test("exec task report grammar is schema-derived (stateLine)", () => {
   // No schema → a plain report line with no metrics grammar; points at defining a schema.
   const open = buildExecTask(loop());
-  expect(open).toContain("loopany report --status new");
+  expect(open).toContain("adscaile report --status new");
   expect(open).toContain("no metric schema");
   expect(open).not.toContain("--state '{");
   // Declared schema → the --state grammar lists every declared key.
   const withSchema = buildExecTask(
     loop({ stateSchema: [{ key: "mrr", label: "MRR", unit: "$" }] as Loop["stateSchema"] }),
   );
-  expect(withSchema).toContain("loopany report --status <s> --state");
+  expect(withSchema).toContain("adscaile report --status <s> --state");
   expect(withSchema).toContain('"mrr":<n>');
   expect(withSchema).not.toContain("no metric schema");
 });

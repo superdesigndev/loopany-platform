@@ -1,6 +1,6 @@
 /**
- * `loopany status` and `loopany down` — the owner-outside-a-run commands that
- * inspect and stop THIS machine's detached daemon (the one `loopany up` started).
+ * `adscaile status` and `adscaile down` — the owner-outside-a-run commands that
+ * inspect and stop THIS machine's detached daemon (the one `adscaile up` started).
  *
  * Both are built on the local pidfile (`pidfile.ts`): the daemon records its pid
  * on boot, so `status` can say "running (pid N)" and `down` can signal it — no
@@ -21,7 +21,7 @@ import { PID_FILE, readPidFile, clearPidFile, isAlive, processStartTime, verifie
 export type MachineStatus = { online: boolean; name: string | null };
 
 /** Best-effort server view of this machine (`/api/machine/status`) — shared by
- *  `status`'s connection line and `loopany up`'s readiness probe. Bounded (3s)
+ *  `status`'s connection line and `adscaile up`'s readiness probe. Bounded (3s)
  *  and swallow-all: an unreachable/hung server degrades to undefined, never a
  *  crash or a long stall. */
 export async function fetchMachineStatus(server: string, token: string): Promise<MachineStatus | undefined> {
@@ -48,7 +48,7 @@ export type ControlDeps = {
   out?: (s: string) => void;
   err?: (s: string) => void;
   // The local config inputs `status` reports — overridable so tests are isolated
-  // from the ambient ~/.loopany. Omitted ⇒ read from disk.
+  // from the ambient ~/.adscaile. Omitted ⇒ read from disk.
   server?: string;
   token?: string;
 };
@@ -80,14 +80,14 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
   // The shared pidfile.verifiedRunningPid check (reused-pid safe), fed our seams.
   const pid = verifiedRunningPid(d);
 
-  d.out("loopany status:\n");
+  d.out("adscaile status:\n");
   d.out(
     pid !== undefined
       ? `  daemon:    running (pid ${pid})\n`
-      : "  daemon:    not running — run `loopany up` to start it\n",
+      : "  daemon:    not running — run `adscaile up` to start it\n",
   );
-  d.out(`  server:    ${server || "not configured — run `loopany up --server-url <url>`"}\n`);
-  d.out(`  identity:  ${token ? tokenFingerprint(token) : "no device token — run `loopany up`"}\n`);
+  d.out(`  server:    ${server || "not configured — run `adscaile up --server-url <url>`"}\n`);
+  d.out(`  identity:  ${token ? tokenFingerprint(token) : "no device token — run `adscaile up`"}\n`);
   d.out(`  pidfile:   ${PID_FILE}\n`);
 
   // Best-effort: only the server can say whether this machine is currently
@@ -122,7 +122,7 @@ export async function runDown(args: string[], injected: ControlDeps = {}): Promi
       d.out("no daemon running for this machine\n");
       return 0;
     }
-    d.err(`loopany: could not stop daemon (pid ${pid}): ${err instanceof Error ? err.message : String(err)}\n`);
+    d.err(`adscaile: could not stop daemon (pid ${pid}): ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
 

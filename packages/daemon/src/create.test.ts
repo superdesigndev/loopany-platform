@@ -1,5 +1,5 @@
 /**
- * Agent recording at `loopany new`: the env-fingerprint detector and the
+ * Agent recording at `adscaile new`: the env-fingerprint detector and the
  * resolution precedence (measured env > declared --agent/config > undefined).
  * Pure functions, no network — they decide the `agent` field the create POST
  * carries (or omits, letting the server default it to claude-code).
@@ -29,7 +29,7 @@ function cfgJson(cfg: object): string {
 /** An absolute path under a fresh temp dir that does NOT yet exist — so a test can
  *  prove the installer's cwd is created before the install spawns (the ENOENT fix). */
 function tmpWorkdir(): string {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-workdir-"));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-workdir-"));
   return path.join(base, "loop", "run");
 }
 
@@ -109,21 +109,21 @@ describe("resolveAgent (precedence: measured > declared > undefined)", () => {
 });
 
 describe("runCreate — skill install fires only after a confirmed create, never blocks it", () => {
-  const prevToken = process.env.LOOPANY_TOKEN;
+  const prevToken = process.env.ADSCAILE_TOKEN;
   beforeEach(() => {
-    process.env.LOOPANY_TOKEN = "dk_test"; // satisfy the "machine connected" precheck without touching disk
+    process.env.ADSCAILE_TOKEN = "dk_test"; // satisfy the "machine connected" precheck without touching disk
   });
   afterEach(() => {
-    if (prevToken === undefined) delete process.env.LOOPANY_TOKEN;
-    else process.env.LOOPANY_TOKEN = prevToken;
+    if (prevToken === undefined) delete process.env.ADSCAILE_TOKEN;
+    else process.env.ADSCAILE_TOKEN = prevToken;
   });
 
   test("a successful create installs the skill at USER scope (global), independent of workdir", async () => {
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir: tmpWorkdir() });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "adscaile/x/README.md", workdir: tmpWorkdir() });
     const installed: InstallOpts[] = [];
     const installer = async (opts: InstallOpts): Promise<InstallOutcome> => {
       installed.push(opts);
-      return { ok: true, line: "loopany skill: installed → ~/.claude/skills/loopany" };
+      return { ok: true, line: "adscaile skill: installed → ~/.claude/skills/adscaile" };
     };
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
       fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie", text: "created: Cookie (loop-1)", exitCode: 0 }),
@@ -136,7 +136,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
   });
 
   test("a successful create with no workdir + no returned id STILL installs (user scope needs neither)", async () => {
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" }); // no workdir
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "adscaile/x/README.md" }); // no workdir
     const installed: InstallOpts[] = [];
     const installer = async (opts: InstallOpts): Promise<InstallOutcome> => {
       installed.push(opts);
@@ -152,7 +152,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
   });
 
   test("a failed create does NOT install the skill", async () => {
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "adscaile/x/README.md" });
     let called = false;
     const installer = async (): Promise<InstallOutcome> => {
       called = true;
@@ -168,7 +168,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
   });
 
   test("an install failure does NOT fail the create (best-effort, swallowed)", async () => {
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "adscaile/x/README.md" });
     const installer = async (): Promise<InstallOutcome> => {
       throw new Error("npx ENOENT");
     };
@@ -183,13 +183,13 @@ describe("runCreate — skill install fires only after a confirmed create, never
   });
 
   test("text sink: a new server's `text` is printed verbatim (not the structured line), and the skill still installs", async () => {
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "adscaile/x/README.md" });
     const toon = "created: Cookie (loop-1)\nclassification: open — runs until paused\ndashboard: not applied";
     const installed: InstallOpts[] = [];
     const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
       fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie", text: toon, exitCode: 0 }),
-      installer: async (opts) => { installed.push(opts); return { ok: true, line: "loopany skill: installed" }; },
+      installer: async (opts) => { installed.push(opts); return { ok: true, line: "adscaile skill: installed" }; },
       stdout: (s) => out.push(s),
     });
     expect(code).toBe(0);
@@ -200,7 +200,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
   });
 
   test("text sink: a --dry-run new server prints its `text` preview (no structured fallback)", async () => {
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "adscaile/x/README.md" });
     const toon = "dry-run:\n  name: —\n  cron: 0 8 * * *\nclassification: open — runs until paused";
     const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
@@ -214,7 +214,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
 
   test("--dry-run text-sinks the server's preview and does NOT create/install", async () => {
     const workdir = tmpWorkdir();
-    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md", workdir, goal: "ship v1" });
+    const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "adscaile/x/README.md", workdir, goal: "ship v1" });
     // The server renders the whole preview into `text` (config + fire times +
     // classification); the daemon is a pure text sink now.
     const toon = [
@@ -242,7 +242,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
 
   test("posts the whole config (including `ui`) to the unified /api/machine/cli as `new --json`", async () => {
     const ui = '<h3>React Doctor</h3><loop-chart series="score:Red Dot Score"></loop-chart><loop-kanban columns="open,merged"></loop-kanban>';
-    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/react-doctor/README.md", ui });
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "adscaile/react-doctor/README.md", ui });
     let sentUrl = "";
     let sentBody: any = null;
     const out: string[] = [];
@@ -268,7 +268,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
 
   test("falls back to legacy POST /api/machine/loop with the raw config when the server 404s the unified dispatch", async () => {
     const ui = "<h3>React Doctor</h3>";
-    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/react-doctor/README.md", ui });
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "adscaile/react-doctor/README.md", ui });
     const urls: string[] = [];
     let legacyBody: any = null;
     const out: string[] = [];
@@ -295,7 +295,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
   test("a DROPPED ui is loud in the server-rendered `text`, create still succeeds", async () => {
     // The server folds the dropped-dashboard warning into `text` (renderCreatedText); the
     // daemon text-sinks it (Batch 7 dropped the separate structured `warning`→stderr shout).
-    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md", ui: "   " });
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "adscaile/x/README.md", ui: "   " });
     const toon = "created: NoDash (loop-1)\ndashboard: not applied\nwarning: the provided ui was empty after validation and was NOT applied — the loop was created without a dashboard";
     const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
@@ -309,7 +309,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
   });
 
   test("--dry-run preview text-sinks the ui presence line (present when a ui was given)", async () => {
-    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md" });
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "adscaile/x/README.md" });
     const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
       fetchImpl: async () => okResponse({ ok: true, dryRun: true, text: "dry-run:\n  ui: present\nclassification: open: runs until paused", exitCode: 0 }),
@@ -388,16 +388,16 @@ describe("idempotencyKey / canonicalJson (F8 — `new` retry-safety, design §8.
 });
 
 describe("runCreate — sends the idempotency key on a real create, omits it on --dry-run", () => {
-  const prevToken = process.env.LOOPANY_TOKEN;
+  const prevToken = process.env.ADSCAILE_TOKEN;
   beforeEach(() => {
-    process.env.LOOPANY_TOKEN = "dk_test";
+    process.env.ADSCAILE_TOKEN = "dk_test";
   });
   afterEach(() => {
-    if (prevToken === undefined) delete process.env.LOOPANY_TOKEN;
-    else process.env.LOOPANY_TOKEN = prevToken;
+    if (prevToken === undefined) delete process.env.ADSCAILE_TOKEN;
+    else process.env.ADSCAILE_TOKEN = prevToken;
   });
 
-  // NB: the daemon resolves its token from ~/.loopany/device-token first (env is the
+  // NB: the daemon resolves its token from ~/.adscaile/device-token first (env is the
   // fallback), so the integration test can't pin the exact key to a fixed token — it
   // asserts the CONTRACT (present, 64-hex, stable across retries, differs by config).
   // The exact `sha256(machineId + canonicalJSON(resolvedBody))` value is pinned by the
@@ -405,7 +405,7 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
   const keyOf = (sent: any[]) => JSON.parse(sent[sent.length - 1].argv[2]).idempotencyKey as string | undefined;
 
   test("a real create stamps a 64-hex `idempotencyKey`, stable across a retry of the same config", async () => {
-    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md" });
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "adscaile/x/README.md" });
     const sent: any[] = [];
     const run = (json: string) =>
       runCreate(["--json", json, "--server-url", "http://test"], {
@@ -422,12 +422,12 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
     expect(await run(cfg)).toBe(0); // a retry (same argv)
     expect(keyOf(sent)).toBe(first); // stable across the retry
     // A different config ⇒ a different key (an intentional twin isn't collapsed).
-    expect(await run(cfgJson({ cron: "0 6 * * *", taskFile: "loopany/x/README.md" }))).toBe(0);
+    expect(await run(cfgJson({ cron: "0 6 * * *", taskFile: "adscaile/x/README.md" }))).toBe(0);
     expect(keyOf(sent)).not.toBe(first);
   });
 
   test("--dry-run carries NO idempotency key (a preview creates nothing to dedupe)", async () => {
-    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md" });
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "adscaile/x/README.md" });
     let payload: any = null;
     const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
       fetchImpl: async (_url: any, init: any) => {

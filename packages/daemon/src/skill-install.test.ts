@@ -20,8 +20,8 @@ import {
 } from "./skill-install.js";
 
 // A throwaway bundled-skill dir so the presence check passes without a real build.
-const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-skill-"));
-fs.writeFileSync(path.join(fixtureDir, "SKILL.md"), "---\nname: loopany\n---\n# x\n");
+const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-skill-"));
+fs.writeFileSync(path.join(fixtureDir, "SKILL.md"), "---\nname: adscaile\n---\n# x\n");
 
 afterAll(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
 
@@ -54,22 +54,22 @@ describe("installArgs", () => {
 describe("targetSkillDirs", () => {
   test("global → each agent's ~ skill dir", () => {
     expect(targetSkillDirs({ global: true })).toEqual([
-      "~/.claude/skills/loopany",
-      "~/.agents/skills/loopany",
+      "~/.claude/skills/adscaile",
+      "~/.agents/skills/adscaile",
     ]);
   });
 
   test("project cwd → each agent's dir under the cwd", () => {
     expect(targetSkillDirs({ cwd: "/loops/cookie" })).toEqual([
-      path.join("/loops/cookie", ".claude/skills/loopany"),
-      path.join("/loops/cookie", ".agents/skills/loopany"),
+      path.join("/loops/cookie", ".claude/skills/adscaile"),
+      path.join("/loops/cookie", ".agents/skills/adscaile"),
     ]);
   });
 
   test("default (no cwd) → cwd-relative, keeps the ./ prefix", () => {
     expect(targetSkillDirs()).toEqual([
-      "./.claude/skills/loopany",
-      "./.agents/skills/loopany",
+      "./.claude/skills/adscaile",
+      "./.agents/skills/adscaile",
     ]);
   });
 });
@@ -83,8 +83,8 @@ describe("installSkill", () => {
     };
     const r = await installSkill({ dir: fixtureDir, runner });
     expect(r.ok).toBe(true);
-    expect(r.line).toContain("./.claude/skills/loopany"); // Claude Code
-    expect(r.line).toContain("./.agents/skills/loopany"); // Codex
+    expect(r.line).toContain("./.claude/skills/adscaile"); // Claude Code
+    expect(r.line).toContain("./.agents/skills/adscaile"); // Codex
     expect(seen).toEqual(installArgs(fixtureDir, false));
   });
 
@@ -96,8 +96,8 @@ describe("installSkill", () => {
     };
     const r = await installSkill({ dir: fixtureDir, global: true, runner });
     expect(r.ok).toBe(true);
-    expect(r.line).toContain("~/.claude/skills/loopany"); // Claude Code
-    expect(r.line).toContain("~/.agents/skills/loopany"); // Codex
+    expect(r.line).toContain("~/.claude/skills/adscaile"); // Claude Code
+    expect(r.line).toContain("~/.agents/skills/adscaile"); // Codex
     expect(seen).toContain("-g");
   });
 
@@ -110,8 +110,8 @@ describe("installSkill", () => {
     const r = await installSkill({ dir: fixtureDir, cwd: "/loops/cookie", runner });
     expect(r.ok).toBe(true);
     expect(seenCwd).toBe("/loops/cookie"); // the project install runs IN the loop workdir
-    expect(r.line).toContain(path.join("/loops/cookie", ".claude/skills/loopany"));
-    expect(r.line).toContain(path.join("/loops/cookie", ".agents/skills/loopany"));
+    expect(r.line).toContain(path.join("/loops/cookie", ".claude/skills/adscaile"));
+    expect(r.line).toContain(path.join("/loops/cookie", ".agents/skills/adscaile"));
   });
 
   test("global ignores cwd — targets ~/.claude and runs with no cwd", async () => {
@@ -122,7 +122,7 @@ describe("installSkill", () => {
     };
     const r = await installSkill({ dir: fixtureDir, cwd: "/loops/cookie", global: true, runner });
     expect(r.ok).toBe(true);
-    expect(r.line).toContain("~/.claude/skills/loopany");
+    expect(r.line).toContain("~/.claude/skills/adscaile");
     expect(seenCwd).toBeUndefined();
   });
 

@@ -2,7 +2,7 @@
  * pidfile — the shared verifiedRunningPid check (seams injected, no real
  * process/`ps`) and the ownership-checked clearPidFile: a daemon exiting must
  * never delete a pidfile another daemon has since claimed. The fs-touching test
- * relocates ~/.loopany via LOOPANY_HOME and re-imports the module so LOOPANY_DIR
+ * relocates ~/.adscaile via ADSCAILE_HOME and re-imports the module so ADSCAILE_DIR
  * (computed at load) points at a temp dir.
  */
 import fs from "node:fs";
@@ -65,22 +65,22 @@ describe("verifiedRunningPid (seams injected)", () => {
   });
 });
 
-describe("clearPidFile ownership (real fs under a temp LOOPANY_HOME)", () => {
-  const prevHome = process.env.LOOPANY_HOME;
+describe("clearPidFile ownership (real fs under a temp ADSCAILE_HOME)", () => {
+  const prevHome = process.env.ADSCAILE_HOME;
   let home: string | undefined;
 
   afterEach(() => {
-    if (prevHome === undefined) delete process.env.LOOPANY_HOME;
-    else process.env.LOOPANY_HOME = prevHome;
+    if (prevHome === undefined) delete process.env.ADSCAILE_HOME;
+    else process.env.ADSCAILE_HOME = prevHome;
     if (home) fs.rmSync(home, { recursive: true, force: true });
     home = undefined;
     vi.resetModules();
   });
 
   test("clearPidFile(pid) removes the file only when it still records that pid", async () => {
-    home = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-pidfile-"));
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-pidfile-"));
     vi.resetModules();
-    process.env.LOOPANY_HOME = home;
+    process.env.ADSCAILE_HOME = home;
     const mod = await import("./pidfile.js");
 
     // Daemon #2 owns the file (pid 222); an exiting daemon #1 (pid 111) must not delete it.

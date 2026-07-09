@@ -1,7 +1,7 @@
 /**
- * Bare `loopany` OUT of a run — the content-first home (P8). The daemon is a text
+ * Bare `adscaile` OUT of a run — the content-first home (P8). The daemon is a text
  * sink: it posts local context to the server `home` verb and prints `body.text`. All
- * network/process touches are injected; nothing hits ~/.loopany or the network.
+ * network/process touches are injected; nothing hits ~/.adscaile or the network.
  */
 import { describe, expect, test } from "vitest";
 
@@ -27,7 +27,7 @@ function capture(extra: HomeDeps = {}) {
       cwd: () => "/work/here",
       homedir: () => "/home/u",
       localPid: () => 4821,
-      binPath: () => "/home/u/.local/bin/loopany",
+      binPath: () => "/home/u/.local/bin/adscaile",
       serverDisplay: () => "https://srv.test",
       out: (s: string) => void (out += s),
       ...extra,
@@ -42,26 +42,26 @@ describe("runHome", () => {
     const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined });
     expect(await runHome(cap.deps)).toBe(0);
     expect(calls).toHaveLength(0);
-    expect(cap.stdout()).toContain("machine: not connected — run `loopany up`");
+    expect(cap.stdout()).toContain("machine: not connected — run `adscaile up`");
     expect(cap.stdout()).toContain("description:");
   });
 
   test("F7: the local not-connected home LEADS with `bin:` — the durable path when known", async () => {
     const { fetchFn } = stub(() => ({ ok: true, body: {} }));
-    const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined, binPath: () => "/home/u/.local/bin/loopany" });
+    const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined, binPath: () => "/home/u/.local/bin/adscaile" });
     await runHome(cap.deps);
-    expect(cap.stdout().split("\n")[0]).toBe("bin: /home/u/.local/bin/loopany");
+    expect(cap.stdout().split("\n")[0]).toBe("bin: /home/u/.local/bin/adscaile");
   });
 
   test("F7: the local not-connected home LEADS with the honest bin fallback when non-durable (npx-without-global)", async () => {
     const { fetchFn } = stub(() => ({ ok: true, body: {} }));
     const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined, binPath: () => null });
     await runHome(cap.deps);
-    expect(cap.stdout().split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
+    expect(cap.stdout().split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/adscaile`)");
   });
 
   test("posts `home` with the daemon-supplied context and prints the server `text` verbatim", async () => {
-    const toon = "bin: /home/u/.local/bin/loopany\nmachine: online · daemon pid 4821 · https://srv.test\nloops[1]{name,cron,enabled,nextFire,lastOutcome}:\n  Docs Sweep,\"0 6 * * 1\",on,—,—";
+    const toon = "bin: /home/u/.local/bin/adscaile\nmachine: online · daemon pid 4821 · https://srv.test\nloops[1]{name,cron,enabled,nextFire,lastOutcome}:\n  Docs Sweep,\"0 6 * * 1\",on,—,—";
     const { fetchFn, calls } = stub((url, argv) =>
       url.includes("/api/machine/cli") && argv[0] === "home"
         ? { ok: true, body: { ok: true, text: toon, exitCode: 0 } }
@@ -74,7 +74,7 @@ describe("runHome", () => {
       "home",
       "--cwd", "/work/here",
       "--home", "/home/u",
-      "--bin", "/home/u/.local/bin/loopany",
+      "--bin", "/home/u/.local/bin/adscaile",
       "--pid", "4821",
       "--server", "https://srv.test",
     ]);
@@ -124,7 +124,7 @@ describe("runHome", () => {
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runHome(cap.deps)).toBe(0);
     expect(cap.stdout()).toContain("server too old for this CLI");
-    expect(cap.stdout()).toContain("update the Loopany server");
+    expect(cap.stdout()).toContain("update the adScaile server");
     expect(cap.stdout()).not.toContain("error:");
   });
 });

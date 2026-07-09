@@ -11,10 +11,10 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 const HELP_FLAG_ARGS = new Set(["--help", "-h"]);
 const VERSION_FLAGS = new Set(["--version", "-v"]);
 // Leading tokens that mean "run the daemon WITH flags" (the detached spawn from
-// `loopany up` re-execs us as `… --server-url <url> --api-key <token>`, and a power
+// `adscaile up` re-execs us as `… --server-url <url> --api-key <token>`, and a power
 // user may launch it the same way). Any OTHER leading flag is unknown. This re-exec
 // path is PRESERVED unchanged by the Batch-6 bare-command move — only the truly-bare
-// `loopany` (no args, no flags) changed meaning (bare → home, not daemon).
+// `adscaile` (no args, no flags) changed meaning (bare → home, not daemon).
 const DAEMON_FLAGS = new Set(["--server-url", "--api-key"]);
 // Run-ONLY verbs typed OUTSIDE a run (F3): forward them to the server on the device
 // credential so its crafted run-only 403 reaches the agent, instead of a generic
@@ -47,15 +47,15 @@ export type Route =
   | { kind: "show"; args: string[] }
   | { kind: "interactive"; argv: string[] }
   | { kind: "forward"; argv: string[] } // run-only verb out-of-run → device-cred 403
-  | { kind: "home" } // bare `loopany` out-of-run → content-first home (device cred)
+  | { kind: "home" } // bare `adscaile` out-of-run → content-first home (device cred)
   | { kind: "unknown"; verb: string };
 
 export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
-  // In-run (run token present) EVERY `loopany …` is a callback — including the bare
-  // `loopany` (zero args), which now posts `home` for the run's own context (fixing
-  // the old `argv.length > 0` guard that let bare `loopany` fall through to the daemon
+  // In-run (run token present) EVERY `adscaile …` is a callback — including the bare
+  // `adscaile` (zero args), which now posts `home` for the run's own context (fixing
+  // the old `argv.length > 0` guard that let bare `adscaile` fall through to the daemon
   // mid-run). The callback can't hijack an owner command: the owner runs outside a run.
-  if (env.LOOPANY_RUN_TOKEN) return { kind: "callback", argv: argv.length > 0 ? argv : ["home"] };
+  if (env.ADSCAILE_RUN_TOKEN) return { kind: "callback", argv: argv.length > 0 ? argv : ["home"] };
   const verb = argv[0];
   // Help/version win over everything (never launch a daemon), loading nothing heavy.
   if (verb !== undefined && HELP_FLAGS.has(verb)) return { kind: "help" };
@@ -65,7 +65,7 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   // shows help instead of launching the poll loop). Structural: any recognized command
   // verb inherits the no-side-effect help guarantee.
   if (verb !== undefined && COMMAND_VERBS.has(verb) && hasHelpFlag(argv.slice(1))) return { kind: "help", verb };
-  // The detached re-exec path (`loopany --server-url …`) runs the poll loop — the ONE
+  // The detached re-exec path (`adscaile --server-url …`) runs the poll loop — the ONE
   // surface (besides `up --foreground`) that still launches the daemon. Checked BEFORE
   // the verb switch so a leading daemon flag never reads as an unknown verb.
   if (verb !== undefined && DAEMON_FLAGS.has(verb)) return { kind: "daemon" };
@@ -84,7 +84,7 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   // report/finish/complete OUTSIDE a run are run-only (F3): forward on the device
   // credential so the server's crafted 403 reaches the agent, not a generic unknown.
   if (verb !== undefined && FORWARD_VERBS.has(verb)) return { kind: "forward", argv };
-  // Bare `loopany` (no args) → the content-first home (P8), NOT the poll loop.
+  // Bare `adscaile` (no args) → the content-first home (P8), NOT the poll loop.
   if (argv.length === 0) return { kind: "home" };
   return { kind: "unknown", verb: verb! };
 }

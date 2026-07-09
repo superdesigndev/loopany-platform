@@ -1,11 +1,11 @@
 {
-  "name": "@crewlet/loopany",
+  "name": "@crewlet/adscaile",
   "version": "0.16.0",
-  "description": "Loopany daemon — runs on your machine, connects to a Loopany server, and executes scheduled loops via your local claude-code. One binary, two roles (daemon / loop callback).",
+  "description": "adScaile daemon — runs on your machine, connects to a adScaile server, and executes scheduled loops via your local claude-code. One binary, two roles (daemon / loop callback).",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "loopany": "dist/cli.js"
+    "adscaile": "dist/cli.js"
   },
   "files": [
     "dist",

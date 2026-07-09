@@ -1,5 +1,5 @@
 /**
- * `loopany log [<loop>] [--limit N] [--transcript] [--json]` — print how a loop's
+ * `adscaile log [<loop>] [--limit N] [--transcript] [--json]` — print how a loop's
  * recent runs actually went, so the owner's Claude Code can read prior runs before
  * editing or evolving a loop.
  *
@@ -9,9 +9,9 @@
  * the full session JSONL for a deep dive. Pass `--transcript` (alias `--full`) to
  * inline the clipped transcript; `--json` always returns the full structured runs.
  *
- * Like `loopany loops`/`edit`, this is an owner-OUTSIDE-a-run command: it goes
+ * Like `adscaile loops`/`edit`, this is an owner-OUTSIDE-a-run command: it goes
  * through the shared CLI client (`postCli`), which reuses the device token + server
- * URL the daemon persisted under ~/.loopany and POSTs `{argv}` to the unified
+ * URL the daemon persisted under ~/.adscaile and POSTs `{argv}` to the unified
  * `/api/machine/cli`, falling back to the legacy `/api/machine/log` on a 404 (old
  * server). No run token, no re-auth — the machine is already connected.
  *
@@ -60,7 +60,7 @@ export type LogDeps = {
   fetchFn?: typeof fetch;
   out?: (s: string) => void;
   err?: (s: string) => void;
-  // Local config — overridable so tests are isolated from the ambient ~/.loopany.
+  // Local config — overridable so tests are isolated from the ambient ~/.adscaile.
   server?: string;
   token?: string;
 };
@@ -85,7 +85,7 @@ function seams(d: LogDeps): Seams {
  *  as a positional instead of swallowing it as `--json`'s argument. */
 const BOOL_FLAGS = new Set(["json", "transcript", "full"]);
 
-/** The flags `loopany log` accepts (plus the global daemon flags consumed separately).
+/** The flags `adscaile log` accepts (plus the global daemon flags consumed separately).
  *  `help` is allowlisted so it never trips the unknown-flag guard. */
 const LOG_FLAGS = new Set(["json", "transcript", "full", "limit", "help", "server-url", "api-key"]);
 
@@ -137,7 +137,7 @@ export function resolveLoopId(
     if (byName.length > 1) return { error: `"${explicit}" matches multiple loops — pass the loop id instead` };
     // An explicitly-named loop that doesn't exist is the P6 NOT_FOUND case (exit 1,
     // structured to stdout) — NOT a usage error. Keep the actionable guidance.
-    return { error: `no loop "${explicit}" on this machine — run \`loopany loops\` to list them`, code: "NOT_FOUND" };
+    return { error: `no loop "${explicit}" on this machine — run \`adscaile loops\` to list them`, code: "NOT_FOUND" };
   }
   if (loops.length === 0) return { error: "no loops on this machine yet" };
   const here = path.resolve(cwd);
@@ -147,7 +147,7 @@ export function resolveLoopId(
     // Most specific folder wins when loops nest.
     .sort((a, b) => b.dir.length - a.dir.length);
   if (matches.length === 0) {
-    return { error: "no loop folder matches this directory — pass a loop id, e.g. `loopany log <loop-id>` (`loopany loops` lists them)" };
+    return { error: "no loop folder matches this directory — pass a loop id, e.g. `adscaile log <loop-id>` (`adscaile loops` lists them)" };
   }
   return { id: matches[0]!.l.id, name: matches[0]!.l.name };
 }
@@ -155,7 +155,7 @@ export function resolveLoopId(
 /** Render a `resolveLoopId` failure. A coded error (NOT_FOUND) is a P6 structured
  *  error to STDOUT at exit 1 (`error: "<msg>"` / `code: <SLUG>`, the message quoted via
  *  JSON so backticks/quotes survive); an uncoded error stays a prose usage failure to
- *  stderr at exit 2. Shared by `loopany log` and `loopany show`. */
+ *  stderr at exit 2. Shared by `adscaile log` and `adscaile show`. */
 export function renderResolveError(
   e: ResolveError,
   out: (s: string) => void,
@@ -165,7 +165,7 @@ export function renderResolveError(
     out(`error: ${JSON.stringify(e.error)}\ncode: ${e.code}\n`);
     return 1;
   }
-  err(`loopany: ${e.error}\n`);
+  err(`adscaile: ${e.error}\n`);
   return 2;
 }
 
@@ -199,7 +199,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
     return i >= 0 ? argv[i + 1] : undefined;
   })();
   // Shared postCli deps: injected server/token override the persisted ones so tests
-  // never touch ~/.loopany; production leaves them undefined and postCli resolves.
+  // never touch ~/.adscaile; production leaves them undefined and postCli resolves.
   const cliDeps: PostCliDeps = {
     fetchImpl: injected.fetchFn,
     serverFlag: flagServer,
@@ -211,13 +211,13 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   // Reject an unknown flag (exit 2) instead of silently ignoring it — uniform with the
   // `loops`/`edit` flag discipline and the unknown-verb exit code.
   const unknown = Object.keys(flags).filter((k) => !LOG_FLAGS.has(k));
-  if (unknown.length) return d.err(`loopany: unknown flag --${unknown[0]} — try \`loopany log --help\`\n`), 2;
+  if (unknown.length) return d.err(`adscaile: unknown flag --${unknown[0]} — try \`adscaile log --help\`\n`), 2;
   const json = flags["json"] === true || flags["json"] === "true";
   const showTranscript = flags["transcript"] === true || flags["full"] === true;
   const limit = typeof flags["limit"] === "string" ? flags["limit"] : undefined;
 
   const notConnected = () =>
-    d.err("loopany: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set LOOPANY_SERVER_URL / LOOPANY_TOKEN)\n");
+    d.err("adscaile: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set ADSCAILE_SERVER_URL / ADSCAILE_TOKEN)\n");
 
   // 1. List the machine's loops so we can resolve which one this directory belongs
   //    to (client-side — the server's unified `log` needs an explicit loop id).
@@ -227,11 +227,11 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   };
   const listed = await postCli(["loops"], legacyLoops, cliDeps);
   if (listed.kind === "not-configured") return notConnected(), 2;
-  if (listed.kind === "read-error") return d.err(`loopany: cannot read ${listed.path}\n`), 1;
-  if (listed.kind === "network-error") return d.err(`loopany: ${listed.message}\n`), 1;
+  if (listed.kind === "read-error") return d.err(`adscaile: cannot read ${listed.path}\n`), 1;
+  if (listed.kind === "network-error") return d.err(`adscaile: ${listed.message}\n`), 1;
   const listData = listed.body as { loops?: LoopRow[]; error?: string };
   if (listed.status >= 400 || !listData.loops) {
-    d.err(`loopany: ${listData.error || `could not list loops (${listed.status})`}\n`);
+    d.err(`adscaile: ${listData.error || `could not list loops (${listed.status})`}\n`);
     return 1;
   }
   const resolved = resolveLoopId(listData.loops, positional[0], d.cwd());
@@ -247,8 +247,8 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   };
   const got = await postCli(logArgv, legacyLog, cliDeps);
   if (got.kind === "not-configured") return notConnected(), 2;
-  if (got.kind === "read-error") return d.err(`loopany: cannot read ${got.path}\n`), 1;
-  if (got.kind === "network-error") return d.err(`loopany: ${got.message}\n`), 1;
+  if (got.kind === "read-error") return d.err(`adscaile: cannot read ${got.path}\n`), 1;
+  if (got.kind === "network-error") return d.err(`adscaile: ${got.message}\n`), 1;
   const data = got.body as { runs?: RunRow[]; error?: string };
 
   // `--json` and `--transcript` read the RETAINED structured `runs` data channel
@@ -257,7 +257,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   // `runs` here means an error status (or a too-old server without the channel).
   if (json || showTranscript) {
     if (got.status >= 400 || !data.runs) {
-      d.err(`loopany: ${data.error || `log failed (${got.status})`}\n`);
+      d.err(`adscaile: ${data.error || `log failed (${got.status})`}\n`);
       return 1;
     }
     if (json) {

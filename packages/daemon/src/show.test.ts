@@ -1,5 +1,5 @@
 /**
- * `loopany show` OUT of a run (F1) — resolves the loop client-side (like `log`), then
+ * `adscaile show` OUT of a run (F1) — resolves the loop client-side (like `log`), then
  * forwards `show <id>` to the unified dispatch on the device credential and prints the
  * server's rendered envelope `text`. Every touch is injected.
  */

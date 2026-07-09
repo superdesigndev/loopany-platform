@@ -2,8 +2,8 @@ MIT License
 
 Copyright (c) 2026 Superdesign
 
-Loopany is a pnpm monorepo. Every package in this repository - including
-packages/daemon (@crewlet/loopany) and packages/server (@loopany/server) - and
+adScaile is a pnpm monorepo. Every package in this repository - including
+packages/daemon (@crewlet/adscaile) and packages/server (@adscaile/server) - and
 everything else (root configuration, scripts, docs) is licensed under the MIT
 License. See packages/daemon/LICENSE and packages/server/LICENSE for the
 per-package copies; their terms are identical to the ones below.

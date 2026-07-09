@@ -1,4 +1,4 @@
-# Deploy the Loopany server to Fly.io (app: loopany-testing).
+# Deploy the adScaile server to Fly.io (app: adscaile-testing).
 # Remote build → no Docker needed on the runner. Migration runs on container
 # boot via `pnpm start` (drizzle-kit migrate && node ...), so deploy = migrate.
 name: Deploy (Fly)
@@ -48,14 +48,14 @@ jobs:
             --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      # Same cheap smoke as prod: confirm loopany-testing actually serves the
+      # Same cheap smoke as prod: confirm adscaile-testing actually serves the
       # commit we just pushed. This is also the live proof of the version endpoint.
       - name: Smoke — /api/health serves the pushed SHA
         run: |
           expected='${{ github.sha }}'
           got=''
           for attempt in 1 2 3 4 5; do
-            if body="$(curl -fsS --max-time 15 https://loopany-testing.fly.dev/api/health)"; then
+            if body="$(curl -fsS --max-time 15 https://adscaile-testing.fly.dev/api/health)"; then
               echo "health: $body"
               got="$(printf '%s' "$body" | sed -n 's/.*"sha":"\([^"]*\)".*/\1/p')"
               [ "$got" = "$expected" ] && break

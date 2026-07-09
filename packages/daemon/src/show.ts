@@ -1,6 +1,6 @@
 /**
- * `loopany show [<loop>] [--json] [--full]` OUT of a run — the owner reads a loop's
- * full editable config (F1). Like `loopany log`, it resolves the target loop
+ * `adscaile show [<loop>] [--json] [--full]` OUT of a run — the owner reads a loop's
+ * full editable config (F1). Like `adscaile log`, it resolves the target loop
  * CLIENT-side (an explicit id/name wins; else the loop whose folder contains the cwd),
  * because the server's `show` dispatch needs an explicit loop id. Then it forwards
  * `show <id> [--json] [--full]` to the unified `/api/machine/cli` on the device
@@ -8,7 +8,7 @@
  * or — under `--json` — the exact `edit --json` envelope for the read/write roundtrip).
  *
  * The daemon is a text sink here too: the server owns the render. Every external touch
- * is an injectable seam so tests need no real process/network/~.loopany.
+ * is an injectable seam so tests need no real process/network/~.adscaile.
  */
 import path from "node:path";
 
@@ -25,7 +25,7 @@ export type ShowDeps = {
   token?: string;
 };
 
-/** The value-taking flags `loopany show` tolerates (consumed separately) — anything
+/** The value-taking flags `adscaile show` tolerates (consumed separately) — anything
  *  else that isn't a bare `--json`/`--full` is an unknown flag (exit 2). */
 const SHOW_VALUE_FLAGS = new Set(["server-url", "api-key"]);
 
@@ -69,9 +69,9 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   };
 
   const { positional, json, full, unknown } = parseArgs(argv);
-  if (unknown.length) return err(`loopany: unknown flag --${unknown[0]} — try \`loopany show --help\`\n`), 2;
+  if (unknown.length) return err(`adscaile: unknown flag --${unknown[0]} — try \`adscaile show --help\`\n`), 2;
   const notConnected = () =>
-    err("loopany: this machine isn't connected yet — start the daemon once with `loopany up`\n");
+    err("adscaile: this machine isn't connected yet — start the daemon once with `adscaile up`\n");
 
   // 1. List the machine's loops so the target can be resolved (client-side — the
   //    server's `show` needs an explicit id, just like `log`).
@@ -81,11 +81,11 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   };
   const listed = await postCli(["loops"], legacyLoops, cliDeps);
   if (listed.kind === "not-configured") return notConnected(), 2;
-  if (listed.kind === "read-error") return err(`loopany: cannot read ${listed.path}\n`), 1;
-  if (listed.kind === "network-error") return err(`loopany: ${listed.message}\n`), 1;
+  if (listed.kind === "read-error") return err(`adscaile: cannot read ${listed.path}\n`), 1;
+  if (listed.kind === "network-error") return err(`adscaile: ${listed.message}\n`), 1;
   const listData = listed.body as { loops?: LoopRow[]; error?: string };
   if (listed.status >= 400 || !listData.loops) {
-    err(`loopany: ${listData.error || `could not list loops (${listed.status})`}\n`);
+    err(`adscaile: ${listData.error || `could not list loops (${listed.status})`}\n`);
     return 1;
   }
   const resolved = resolveLoopId(listData.loops, positional[0], path.resolve(cwd()));
@@ -95,11 +95,11 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   //    (or the JSON envelope under --json). Old server (no /api/machine/cli): there is
   //    no device `show`, so degrade with a clear line.
   const showArgv = ["show", resolved.id, ...(json ? ["--json"] : []), ...(full ? ["--full"] : [])];
-  const legacyShow: LegacyFallback = async () => ({ status: 501, body: { error: "show needs a newer server — upgrade the Loopany server" } });
+  const legacyShow: LegacyFallback = async () => ({ status: 501, body: { error: "show needs a newer server — upgrade the adScaile server" } });
   const got = await postCli(showArgv, legacyShow, cliDeps);
   if (got.kind === "not-configured") return notConnected(), 2;
-  if (got.kind === "read-error") return err(`loopany: cannot read ${got.path}\n`), 1;
-  if (got.kind === "network-error") return err(`loopany: ${got.message}\n`), 1;
+  if (got.kind === "read-error") return err(`adscaile: cannot read ${got.path}\n`), 1;
+  if (got.kind === "network-error") return err(`adscaile: ${got.message}\n`), 1;
   // Text-sink: the server renders the envelope TOON (or the JSON envelope under
   // `--json`); we just print it. A too-old server (no device `show`, no `text`) → a
   // definitive SERVER_TOO_OLD error.

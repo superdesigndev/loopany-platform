@@ -1,8 +1,8 @@
 /**
- * `loopany update` — hand the running daemon over to a newer version.
+ * `adscaile update` — hand the running daemon over to a newer version.
  *
  * The invoking CLI IS already the new version (the user ran
- * `npx @crewlet/loopany@latest update`), so there's nothing to download: the
+ * `npx @crewlet/adscaile@latest update`), so there's nothing to download: the
  * verb just swaps the *running* detached daemon for this one.
  *
  *   - No daemon running → behave like `up` (start this version + refresh the
@@ -54,7 +54,7 @@ export async function runUpdate(args: string[], injected: UpdateDeps = {}): Prom
   const server = d.readServer();
   const token = d.readToken();
   if (!server || !token) {
-    d.err("loopany: not connected — run `loopany up --server-url <url> --connect-key <dk_…>` first\n");
+    d.err("adscaile: not connected — run `adscaile up --server-url <url> --connect-key <dk_…>` first\n");
     return 2;
   }
 
@@ -78,7 +78,7 @@ export async function runUpdate(args: string[], injected: UpdateDeps = {}): Prom
 
   const stopCode = await d.down([]);
   if (stopCode !== 0) {
-    d.err("loopany: could not stop the running daemon — update aborted\n");
+    d.err("adscaile: could not stop the running daemon — update aborted\n");
     return stopCode;
   }
 

@@ -13,10 +13,10 @@ let boot: typeof import("./boot.js");
 let store: typeof import("../db/store.js");
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-boot-"));
-  process.env.LOOPANY_DATA_DIR = tmp;
-  process.env.LOOPANY_DB_PATH = path.join(tmp, "boot.db");
-  process.env.LOOPANY_LOG_LEVEL = "silent";
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-boot-"));
+  process.env.ADSCAILE_DATA_DIR = tmp;
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, "boot.db");
+  process.env.ADSCAILE_LOG_LEVEL = "silent";
   boot = await import("./boot.js");
   store = await import("../db/store.js");
 });

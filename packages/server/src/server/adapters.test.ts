@@ -14,10 +14,10 @@ let store: typeof import("../db/store.js");
 let adapters: typeof import("./adapters.js");
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-adapters-"));
-  process.env.LOOPANY_DATA_DIR = tmp;
-  process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
-  process.env.LOOPANY_LOG_LEVEL = "silent";
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-adapters-"));
+  process.env.ADSCAILE_DATA_DIR = tmp;
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, "test.db");
+  process.env.ADSCAILE_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
   store = await import("../db/store.js");
@@ -39,7 +39,7 @@ async function seed(agent: "claude-code" | "codex") {
     machineId: "m-a",
     name: "L",
     cron: "0 8 * * *",
-    taskFile: "loopany/x/README.md",
+    taskFile: "adscaile/x/README.md",
     workdir: "/tmp/p",
     agent,
     enabled: true,
@@ -68,7 +68,7 @@ test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted 
   await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
 
   // Open loop (no goal): not closed, not completed.
-  const open = await store.createLoop({ userId: "u1", machineId: "m-a", name: "Open", cron: "0 8 * * *", taskFile: "loopany/x/README.md", enabled: true, notify: "auto" });
+  const open = await store.createLoop({ userId: "u1", machineId: "m-a", name: "Open", cron: "0 8 * * *", taskFile: "adscaile/x/README.md", enabled: true, notify: "auto" });
   const openSum = await adapters.toJobSummary(open);
   expect(openSum.goal).toBeNull();
   expect(openSum.completedAt).toBeNull();
@@ -76,7 +76,7 @@ test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted 
   expect(isCompleted(openSum)).toBe(false);
 
   // Closed active loop (goal, no completion): closed, not completed.
-  const closed = await store.createLoop({ userId: "u1", machineId: "m-a", name: "Closed", cron: "0 8 * * *", taskFile: "loopany/x/README.md", goal: "reach 100 signups", enabled: true, notify: "auto" });
+  const closed = await store.createLoop({ userId: "u1", machineId: "m-a", name: "Closed", cron: "0 8 * * *", taskFile: "adscaile/x/README.md", goal: "reach 100 signups", enabled: true, notify: "auto" });
   const closedSum = await adapters.toJobSummary(closed);
   expect(closedSum.goal).toBe("reach 100 signups");
   expect(isClosed(closedSum)).toBe(true);
@@ -85,7 +85,7 @@ test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted 
 
   // Completed loop: completedAt set → isCompleted true (regardless of last run status).
   const doneLoop = await store.createLoop({
-    userId: "u1", machineId: "m-a", name: "Done", cron: "0 8 * * *", taskFile: "loopany/x/README.md",
+    userId: "u1", machineId: "m-a", name: "Done", cron: "0 8 * * *", taskFile: "adscaile/x/README.md",
     goal: "ship v1", completedAt: "2026-07-01T00:00:00Z", completionReason: "v1 shipped", enabled: false, notify: "auto",
   });
   const doneSum = await adapters.toJobSummary(doneLoop);

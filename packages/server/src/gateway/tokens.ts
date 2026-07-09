@@ -2,7 +2,7 @@
  * Machine + run credential helpers. Device tokens (`dk_…`) identify a machine
  * (its id is derived from the token: `m-sha256(token)[:16]`, BYOA §2). A RUN
  * LEASE (`rk_…`) is minted per delivery, bound to one run, and carries the
- * run's least-privilege caps — the CLI dispatch authorizes the `loopany` shim
+ * run's least-privilege caps — the CLI dispatch authorizes the `adscaile` shim
  * against it. Its lifecycle is a small state machine (`active` →
  * `terminal-grace` → expired), not a mint→revoke pair; see `RunLease` below.
  *
@@ -105,7 +105,7 @@ export interface RunLeaseCaps {
   canSetUi?: boolean;
   canSetSchema?: boolean;
   canSetWorkflow?: boolean;
-  /** May THIS run declare the loop's goal met via `loopany finish`? Minted true
+  /** May THIS run declare the loop's goal met via `adscaile finish`? Minted true
    *  only for an EXEC run on a CLOSED loop (loop.goal != null) — independent of
    *  allowControl (like the structural caps). Evolve/edit runs never get it. */
   canFinish?: boolean;
@@ -231,7 +231,7 @@ export async function pruneExpiredLeases(now: number = Date.now()): Promise<void
 // ---- `new` idempotency (content-hash → the loop it created) ----
 // `new` is the LONE non-idempotent mutation: every other write overwrites-to-value,
 // but a create with no dedupe makes a fresh loop every call, so a timed-out
-// `loopany new` retry silently makes a twin (F8). The daemon derives a stable
+// `adscaile new` retry silently makes a twin (F8). The daemon derives a stable
 // content key (sha256 over the machine id + the canonical config) and sends it; we
 // remember which loop that key created for a short window, so a retry with the SAME
 // key returns the existing loop instead of a second one. In-memory + TTL-pruned,
@@ -291,7 +291,7 @@ export interface ClaimResult {
   machineId: string;
   // The coding agent the daemon MEASURED on the host (env fingerprint) and the
   // server recorded on the loop — surfaced so the New-loop confirmation shows
-  // the agent that actually ran `loopany new`, not a stale dialog pre-selection.
+  // the agent that actually ran `adscaile new`, not a stale dialog pre-selection.
   agent: CodingAgent;
 }
 

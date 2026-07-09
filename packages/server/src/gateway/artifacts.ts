@@ -61,7 +61,7 @@ export function safeRelPath(raw: unknown): string | null {
 // depth; the daemon's own watcher excludes the same set — keep the two in sync).
 const IGNORE_DIRS = new Set([
   ".git",
-  ".loopany",
+  ".adscaile",
   ".DS_Store",
   "node_modules",
   ".worktrees",

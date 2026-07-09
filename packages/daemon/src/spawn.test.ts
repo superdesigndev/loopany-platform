@@ -41,11 +41,11 @@ describe("execEnv", () => {
   test("drops unrelated shell secrets", () => {
     setEnv("AWS_SECRET_ACCESS_KEY", "leak-me-not");
     setEnv("GITHUB_TOKEN", "leak-me-not");
-    setEnv("LOOPANY_TOKEN", "dk_secret"); // the device token never reaches claude
+    setEnv("ADSCAILE_TOKEN", "dk_secret"); // the device token never reaches claude
     const env = execEnv();
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
-    expect(env.LOOPANY_TOKEN).toBeUndefined();
+    expect(env.ADSCAILE_TOKEN).toBeUndefined();
   });
 
   test("grok path forwards XAI_API_KEY (+ GROK_HOME/XAI_API_BASE_URL), not the Claude keys", () => {
@@ -99,12 +99,12 @@ describe("execEnv", () => {
 
 describe("allowlistEnv", () => {
   test("prefix families pass through; everything outside the allowlist is dropped", () => {
-    setEnv("LOOPANY_WORKFLOW_TOOL_RESULT_CAP", "1024");
-    setEnv("LOOPANY_TOKEN", "dk_secret"); // NOT under the workflow prefix
+    setEnv("ADSCAILE_WORKFLOW_TOOL_RESULT_CAP", "1024");
+    setEnv("ADSCAILE_TOKEN", "dk_secret"); // NOT under the workflow prefix
     setEnv("SOME_RANDOM_SECRET", "leak-me-not");
-    const env = allowlistEnv({ prefixes: ["LOOPANY_WORKFLOW_"] });
-    expect(env.LOOPANY_WORKFLOW_TOOL_RESULT_CAP).toBe("1024");
-    expect(env.LOOPANY_TOKEN).toBeUndefined();
+    const env = allowlistEnv({ prefixes: ["ADSCAILE_WORKFLOW_"] });
+    expect(env.ADSCAILE_WORKFLOW_TOOL_RESULT_CAP).toBe("1024");
+    expect(env.ADSCAILE_TOKEN).toBeUndefined();
     expect(env.SOME_RANDOM_SECRET).toBeUndefined();
   });
 

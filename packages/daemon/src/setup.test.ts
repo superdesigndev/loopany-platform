@@ -1,5 +1,5 @@
 /**
- * `loopany setup hooks` — SessionStart hook install (P7). Every filesystem touch is
+ * `adscaile setup hooks` — SessionStart hook install (P7). Every filesystem touch is
  * injected via SetupDeps, so NO test reads/writes the real ~/.claude.
  */
 import path from "node:path";
@@ -22,13 +22,13 @@ function fakeFs(seed: Record<string, string> = {}) {
     writeFile: (p: string, s: string) => void files.set(p, s),
     mkdir: () => {},
     homedir: () => "/home/u",
-    command: "/home/u/.local/bin/loopany",
+    command: "/home/u/.local/bin/adscaile",
     out: (s: string) => void out.push(s),
     err: (s: string) => void err.push(s),
   };
   const settingsPath = path.join("/home/u", ".claude", "settings.json");
   const codexPath = path.join("/home/u", ".codex", "hooks.json");
-  const grokPath = path.join("/home/u", ".grok", "hooks", "loopany.json");
+  const grokPath = path.join("/home/u", ".grok", "hooks", "adscaile.json");
   return { deps, files, out: () => out.join(""), err: () => err.join(""), settingsPath, codexPath, grokPath };
 }
 
@@ -42,22 +42,22 @@ describe("runSetup hooks", () => {
     expect(await runSetup(["hooks"], f.deps)).toBe(0);
     const ss = sessionStart(f.files.get(f.settingsPath)!);
     expect(ss).toHaveLength(1);
-    expect(ss[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/loopany" });
+    expect(ss[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/adscaile" });
     expect(f.out()).toContain("integrations[");
     expect(f.out()).toContain("Claude Code,installed");
     // Codex now has a concrete installer → its own SessionStart hook in ~/.codex/hooks.json.
     expect(f.out()).toContain("Codex,installed");
     const cx = sessionStart(f.files.get(f.codexPath)!);
     expect(cx).toHaveLength(1);
-    expect(cx[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/loopany" });
+    expect(cx[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/adscaile" });
     // The report tells the user about Codex's enable + trust prerequisites.
     expect(f.out()).toContain("hooks = true");
-    expect(f.out()).toContain("trust the loopany hook");
-    // Grok Build also has a concrete installer → ~/.grok/hooks/loopany.json (its own file).
+    expect(f.out()).toContain("trust the adscaile hook");
+    // Grok Build also has a concrete installer → ~/.grok/hooks/adscaile.json (its own file).
     expect(f.out()).toContain("Grok Build,installed");
     const gk = sessionStart(f.files.get(f.grokPath)!);
     expect(gk).toHaveLength(1);
-    expect(gk[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/loopany" });
+    expect(gk[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/adscaile" });
   });
 
   test("is idempotent: a second install does not duplicate the entry (refreshes it)", async () => {
@@ -69,7 +69,7 @@ describe("runSetup hooks", () => {
     expect(f.out()).toContain("Claude Code,refreshed");
   });
 
-  test("preserves OTHER SessionStart entries (only our loopany entry is managed)", async () => {
+  test("preserves OTHER SessionStart entries (only our adscaile entry is managed)", async () => {
     const existing = JSON.stringify({
       hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/opt/other-tool" }] }] },
     });
@@ -78,7 +78,7 @@ describe("runSetup hooks", () => {
     const ss = sessionStart(f.files.get(f.settingsPath)!);
     expect(ss).toHaveLength(2);
     expect(ss.some((e) => e.hooks[0].command === "/opt/other-tool")).toBe(true);
-    expect(ss.some((e) => e.hooks[0].command === "/home/u/.local/bin/loopany")).toBe(true);
+    expect(ss.some((e) => e.hooks[0].command === "/home/u/.local/bin/adscaile")).toBe(true);
   });
 
   test("--remove uninstalls our entry (and only ours), reporting `removed`", async () => {
@@ -86,7 +86,7 @@ describe("runSetup hooks", () => {
       hooks: {
         SessionStart: [
           { hooks: [{ type: "command", command: "/opt/other-tool" }] },
-          { hooks: [{ type: "command", command: "/home/u/.local/bin/loopany" }] },
+          { hooks: [{ type: "command", command: "/home/u/.local/bin/adscaile" }] },
         ],
       },
     });
@@ -111,10 +111,10 @@ describe("runSetup hooks", () => {
     expect(ss).toHaveLength(1);
   });
 
-  test("bare `loopany setup` prints what setup does + the hooks sub-action (exit 0)", async () => {
+  test("bare `adscaile setup` prints what setup does + the hooks sub-action (exit 0)", async () => {
     const f = fakeFs();
     expect(await runSetup([], f.deps)).toBe(0);
-    expect(f.out()).toContain("loopany setup hooks");
+    expect(f.out()).toContain("adscaile setup hooks");
     expect(f.files.size).toBe(0); // nothing written
   });
 
@@ -124,16 +124,16 @@ describe("runSetup hooks", () => {
     expect(f.err()).toContain("unknown setup command");
   });
 
-  test("no durable `loopany`: the explicit verb still installs (bare) but warns", async () => {
+  test("no durable `adscaile`: the explicit verb still installs (bare) but warns", async () => {
     const f = fakeFs();
     // Drop the injected shim path so resolution runs; report no durable bin.
     const deps = { ...f.deps, command: undefined, resolveCommand: () => null };
     expect(await runSetup(["hooks"], deps)).toBe(0);
     const ss = sessionStart(f.files.get(f.settingsPath)!);
     expect(ss).toHaveLength(1);
-    expect(ss[0].hooks[0].command).toBe("loopany"); // bare fallback
-    expect(f.err()).toContain("no durable `loopany` on PATH");
-    expect(f.err()).toContain("npm i -g @crewlet/loopany");
+    expect(ss[0].hooks[0].command).toBe("adscaile"); // bare fallback
+    expect(f.err()).toContain("no durable `adscaile` on PATH");
+    expect(f.err()).toContain("npm i -g @crewlet/adscaile");
   });
 });
 
@@ -167,7 +167,7 @@ describe("runSetup hooks — Codex (~/.codex/hooks.json)", () => {
     // Our entry was added alongside the pre-existing gh-axi SessionStart hook.
     expect(root.hooks.SessionStart).toHaveLength(2);
     expect(root.hooks.SessionStart.some((e: any) => e.hooks[0].command === "gh-axi")).toBe(true);
-    expect(root.hooks.SessionStart.some((e: any) => e.hooks[0].command === "/home/u/.local/bin/loopany")).toBe(true);
+    expect(root.hooks.SessionStart.some((e: any) => e.hooks[0].command === "/home/u/.local/bin/adscaile")).toBe(true);
     // The gh-axi entry kept its matcher/timeout, and the unrelated Stop event is untouched.
     expect(root.hooks.SessionStart.find((e: any) => e.hooks[0].command === "gh-axi").matcher).toBe("");
     expect(root.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "/opt/notify.sh" }] }]);
@@ -178,7 +178,7 @@ describe("runSetup hooks — Codex (~/.codex/hooks.json)", () => {
       hooks: {
         SessionStart: [
           { hooks: [{ type: "command", command: "gh-axi", timeout: 10 }], matcher: "" },
-          { hooks: [{ type: "command", command: "/home/u/.local/bin/loopany" }] },
+          { hooks: [{ type: "command", command: "/home/u/.local/bin/adscaile" }] },
         ],
       },
     });
@@ -193,7 +193,7 @@ describe("runSetup hooks — Codex (~/.codex/hooks.json)", () => {
   test("--remove drops an empty SessionStart key but keeps other events", async () => {
     const existing = JSON.stringify({
       hooks: {
-        SessionStart: [{ hooks: [{ type: "command", command: "/home/u/.local/bin/loopany" }] }],
+        SessionStart: [{ hooks: [{ type: "command", command: "/home/u/.local/bin/adscaile" }] }],
         Stop: [{ hooks: [{ type: "command", command: "/opt/notify.sh" }] }],
       },
     });
@@ -220,21 +220,21 @@ describe("runSetup hooks — Codex (~/.codex/hooks.json)", () => {
   });
 });
 
-// ---- Grok SessionStart installer (~/.grok/hooks/loopany.json) ------------------
+// ---- Grok SessionStart installer (~/.grok/hooks/adscaile.json) ------------------
 // Mirrors the Claude/Codex hook tests: idempotent install, merge preserves anything
 // already in our file, and --remove uninstalls it. Grok's global hooks live one-file-
 // per-tool and are ALWAYS trusted — no enable/trust gate — so no such note is expected.
-describe("runSetup hooks — Grok Build (~/.grok/hooks/loopany.json)", () => {
+describe("runSetup hooks — Grok Build (~/.grok/hooks/adscaile.json)", () => {
   function grokSessionStart(f: ReturnType<typeof fakeFs>): any[] {
     return sessionStart(f.files.get(f.grokPath)!);
   }
 
-  test("installs a SessionStart hook into a fresh ~/.grok/hooks/loopany.json", async () => {
+  test("installs a SessionStart hook into a fresh ~/.grok/hooks/adscaile.json", async () => {
     const f = fakeFs();
     await runSetup(["hooks"], f.deps);
     const gk = grokSessionStart(f);
     expect(gk).toHaveLength(1);
-    expect(gk[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/loopany" });
+    expect(gk[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/adscaile" });
     expect(f.out()).toContain("Grok Build,installed");
   });
 
@@ -251,11 +251,11 @@ describe("runSetup hooks — Grok Build (~/.grok/hooks/loopany.json)", () => {
       hooks: {
         SessionStart: [
           { hooks: [{ type: "command", command: "orca-status" }] },
-          { hooks: [{ type: "command", command: "/home/u/.local/bin/loopany" }] },
+          { hooks: [{ type: "command", command: "/home/u/.local/bin/adscaile" }] },
         ],
       },
     });
-    const f = fakeFs({ [path.join("/home/u", ".grok", "hooks", "loopany.json")]: existing });
+    const f = fakeFs({ [path.join("/home/u", ".grok", "hooks", "adscaile.json")]: existing });
     expect(await runSetup(["hooks", "--remove"], f.deps)).toBe(0);
     const gk = grokSessionStart(f);
     expect(gk).toHaveLength(1);
@@ -279,26 +279,26 @@ describe("runSetup hooks — Grok Build (~/.grok/hooks/loopany.json)", () => {
 });
 
 describe("refreshHooks (automatic up/update path)", () => {
-  test("no durable `loopany` → installs NO hook and prints skip guidance", async () => {
+  test("no durable `adscaile` → installs NO hook and prints skip guidance", async () => {
     const f = fakeFs();
     await refreshHooks({ ...f.deps, command: undefined, resolveCommand: () => null });
     expect(f.files.size).toBe(0); // never wrote a settings.json
     expect(f.out()).toContain("skipped the SessionStart hook");
-    expect(f.out()).toContain("npm i -g @crewlet/loopany");
+    expect(f.out()).toContain("npm i -g @crewlet/adscaile");
   });
 
-  test("durable `loopany` → installs the hook with the resolved command", async () => {
+  test("durable `adscaile` → installs the hook with the resolved command", async () => {
     const f = fakeFs();
-    await refreshHooks({ ...f.deps, command: undefined, resolveCommand: () => "/opt/node/bin/loopany" });
+    await refreshHooks({ ...f.deps, command: undefined, resolveCommand: () => "/opt/node/bin/adscaile" });
     const ss = sessionStart(f.files.get(f.settingsPath)!);
     expect(ss).toHaveLength(1);
-    expect(ss[0].hooks[0].command).toBe("/opt/node/bin/loopany");
+    expect(ss[0].hooks[0].command).toBe("/opt/node/bin/adscaile");
     expect(f.out()).toContain("SessionStart home view");
   });
 
   test("surfaces Codex's enable/trust prerequisite on the automatic path too", async () => {
     const f = fakeFs();
-    await refreshHooks({ ...f.deps, command: undefined, resolveCommand: () => "/opt/node/bin/loopany" });
+    await refreshHooks({ ...f.deps, command: undefined, resolveCommand: () => "/opt/node/bin/adscaile" });
     expect(f.out()).toContain("hooks = true");
     expect(f.out()).toContain("trusted on first session");
   });
@@ -307,15 +307,15 @@ describe("refreshHooks (automatic up/update path)", () => {
 // ---- F6: hook-gating parity via the REAL resolveDurableCommand -----------------
 // The automatic (`refreshHooks`) and explicit (`runSetup(["hooks"])`) paths BOTH derive
 // the hook command from the same `resolveDurableCommand`. The E2E bug: `npx …` PREPENDS
-// its throwaway `…/_npx/…/.bin` onto PATH, so the durability probe saw a `loopany` there
+// its throwaway `…/_npx/…/.bin` onto PATH, so the durability probe saw a `adscaile` there
 // and wrongly concluded "durable" — the bin shim was skipped (ephemeral, correct) while
 // the bin-dependent hook installed anyway. These pin that the two paths now AGREE.
 describe("F6: hook-gating parity — the npx-ephemeral case gates BOTH paths", () => {
   // `resolveDurableCommand` wired to an npx-only PATH (the exact E2E scenario): the only
-  // `loopany` lives in an ephemeral `/_npx/` bin dir, and there is no durable shim.
+  // `adscaile` lives in an ephemeral `/_npx/` bin dir, and there is no durable shim.
   const npxBin = "/home/u/.npm/_npx/abc123/node_modules/.bin";
   const ephemeralResolve = () =>
-    resolveDurableCommand({ env: { PATH: npxBin }, homedir: () => "/home/u", exists: (p) => p === path.join(npxBin, "loopany") });
+    resolveDurableCommand({ env: { PATH: npxBin }, homedir: () => "/home/u", exists: (p) => p === path.join(npxBin, "adscaile") });
 
   test("resolveDurableCommand treats the npx-only PATH as NOT durable (null)", () => {
     expect(ephemeralResolve()).toBeNull();
@@ -332,20 +332,20 @@ describe("F6: hook-gating parity — the npx-ephemeral case gates BOTH paths", (
     const f = fakeFs();
     await runSetup(["hooks"], { ...f.deps, command: undefined, resolveCommand: ephemeralResolve });
     // Explicit verb honors the ask (bare fallback) but never silently — it warns.
-    expect(f.err()).toContain("no durable `loopany` on PATH");
-    expect(sessionStart(f.files.get(f.settingsPath)!)[0].hooks[0].command).toBe("loopany");
+    expect(f.err()).toContain("no durable `adscaile` on PATH");
+    expect(sessionStart(f.files.get(f.settingsPath)!)[0].hooks[0].command).toBe("adscaile");
   });
 
   test("a DURABLE global on a real PATH gates BOTH paths ON (parity in the healthy case)", async () => {
     const realResolve = () =>
-      resolveDurableCommand({ env: { PATH: "/usr/local/bin" }, homedir: () => "/home/u", exists: (p) => p === "/usr/local/bin/loopany" });
-    expect(realResolve()).toBe("/usr/local/bin/loopany");
+      resolveDurableCommand({ env: { PATH: "/usr/local/bin" }, homedir: () => "/home/u", exists: (p) => p === "/usr/local/bin/adscaile" });
+    expect(realResolve()).toBe("/usr/local/bin/adscaile");
     const auto = fakeFs();
     await refreshHooks({ ...auto.deps, command: undefined, resolveCommand: realResolve });
-    expect(sessionStart(auto.files.get(auto.settingsPath)!)[0].hooks[0].command).toBe("/usr/local/bin/loopany");
+    expect(sessionStart(auto.files.get(auto.settingsPath)!)[0].hooks[0].command).toBe("/usr/local/bin/adscaile");
     const explicit = fakeFs();
     await runSetup(["hooks"], { ...explicit.deps, command: undefined, resolveCommand: realResolve });
     expect(explicit.err()).toBe(""); // no warning — it IS durable
-    expect(sessionStart(explicit.files.get(explicit.settingsPath)!)[0].hooks[0].command).toBe("/usr/local/bin/loopany");
+    expect(sessionStart(explicit.files.get(explicit.settingsPath)!)[0].hooks[0].command).toBe("/usr/local/bin/adscaile");
   });
 });

@@ -6,7 +6,7 @@ import { DISCORD_URL, DiscordIcon, GITHUB_URL, GitHubIcon } from './SocialLinks'
  *
  * Sells the method behind the product in four beats: the anatomy of a good
  * loop, the three roles serious loops grow into, the evolve cycle that makes
- * a loop antifragile, and what Loopany scaffolds by default. Pure content -
+ * a loop antifragile, and what adScaile scaffolds by default. Pure content -
  * no data wiring, so the dashboard poll never touches it. The pixel face
  * (font-pixel) is reserved for kickers and the big titles; everything else
  * stays on the app tokens so light/dark adapt for free.
@@ -139,7 +139,7 @@ export function LoopPlaybook({ onStart }: { onStart: () => void }) {
           Built in
         </div>
         <h3 className="mx-auto mt-3 max-w-[560px] font-pixel text-[clamp(21px,3vw,28px)] leading-[1.2] text-paper">
-          Loopany ships the guardrails by default
+          adScaile ships the guardrails by default
         </h3>
         <ul className="mx-auto mt-7 grid max-w-[760px] grid-cols-1 gap-x-8 gap-y-2.5 text-left sm:grid-cols-2">
           <BuiltIn>Contract, state and logs born with every loop</BuiltIn>

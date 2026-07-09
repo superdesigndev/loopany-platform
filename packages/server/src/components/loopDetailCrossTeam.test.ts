@@ -2,6 +2,9 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { LoopDetailView } from './LoopDetailView'
 import type { JobDetail } from '../types'
 
@@ -113,17 +116,16 @@ describe('loop detail cross-team header', () => {
 
     // Write the rendered header as an evidence artifact.
     const header = host!.querySelector('header')
-    const dir = '/var/folders/5h/2z3x38y52m5c9scwr9vdx8qc0000gn/T/no-mistakes-evidence/01KX02HH6YWJR9M8HHA4CKXYCX'
-    const fs = await import('node:fs')
-    fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(`${dir}/loop-header-cross-team.html`, header?.outerHTML ?? '', 'utf8')
+    const dir = mkdtempSync(join(tmpdir(), 'adscaile-evidence-'))
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'loop-header-cross-team.html'), header?.outerHTML ?? '', 'utf8')
   })
 
   it('the switch banner is a button that sets the team cookie and does NOT silently switch', async () => {
     h.detail = detailWithTeam({ id: 'team-b', name: 'Acme Web', isActive: false })
     await mount()
     // No cookie was written just by rendering the cross-team loop.
-    expect(document.cookie).not.toContain('loopany.team')
+    expect(document.cookie).not.toContain('adscaile.team')
     const btn = [...host!.querySelectorAll('button')].find((b) => b.textContent?.includes('Switch to this team'))
     expect(btn).toBeTruthy()
     // Clicking the button is the ONLY thing that writes the active-team cookie.
@@ -132,7 +134,7 @@ describe('loop detail cross-team header', () => {
     await act(async () => {
       btn!.click()
     })
-    expect(document.cookie).toContain('loopany.team=team-b')
+    expect(document.cookie).toContain('adscaile.team=team-b')
   })
 
   it('a loop in the caller’s ACTIVE team shows no chip and no switch banner', async () => {

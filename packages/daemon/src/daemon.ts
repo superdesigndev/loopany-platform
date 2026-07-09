@@ -1,5 +1,5 @@
 /**
- * Daemon mode — connect to a Loopany server and poll for deliveries. On each
+ * Daemon mode — connect to a adScaile server and poll for deliveries. On each
  * poll the server claims this machine's pending runs and returns them; we run
  * each locally (workflow gate + claude) and report back. While idle the poll
  * opts into a server-held LONG-poll (`wait:true`, ~20s hold, near-zero dispatch
@@ -9,7 +9,7 @@
  * stops cleanly.
  *
  * Machine identity + workdir roots are the daemon's local config: the device
- * token (env) identifies the machine; LOOPANY_ROOTS is the cwd jail (empty ⇒
+ * token (env) identifies the machine; ADSCAILE_ROOTS is the cwd jail (empty ⇒
  * unrestricted — the bind-time UI is where a user would normally set this).
  */
 import os from "node:os";
@@ -24,7 +24,7 @@ import { WatchManager, type WatchSpec } from "./watcher.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion, writeRunningVersion } from "./version.js";
 
-const POLL_MS = Number(process.env.LOOPANY_POLL_MS || 3000);
+const POLL_MS = Number(process.env.ADSCAILE_POLL_MS || 3000);
 /** Per-poll fetch timeout — a hung connection must not stall the heartbeat
  *  (the machine would look offline and get swept). Must comfortably exceed the
  *  server's long-poll hold (~20s) so a held request is never aborted client-side. */
@@ -72,7 +72,7 @@ export function nextPollDelayMs(elapsedMs: number, pollMs = POLL_MS): number {
  * Stable per-machine identity: persist the value we're given (so this machine
  * keeps the same identity/server across loops/restarts), or reuse the stored one
  * when none is passed. The machine id is derived from the token; the server URL
- * is persisted too so the interactive `loopany loops`/`edit` commands need no flags.
+ * is persisted too so the interactive `adscaile loops`/`edit` commands need no flags.
  */
 function resolveStored(file: string, explicit: string | undefined): string | undefined {
   if (explicit) {
@@ -86,13 +86,13 @@ export async function runDaemon(): Promise<number> {
   // CLI flags (the UI shows `--server-url … --api-key …`) win over env. Both the
   // token and server URL are persisted/reused so this machine keeps a stable
   // identity across runs — and so interactive edits later read them zero-config.
-  const token = resolveStored(DEVICE_FILE, flag("--api-key") || process.env.LOOPANY_TOKEN);
-  const server = resolveStored(SERVER_FILE, (flag("--server-url") || process.env.LOOPANY_SERVER_URL)?.replace(/\/$/, ""));
+  const token = resolveStored(DEVICE_FILE, flag("--api-key") || process.env.ADSCAILE_TOKEN);
+  const server = resolveStored(SERVER_FILE, (flag("--server-url") || process.env.ADSCAILE_SERVER_URL)?.replace(/\/$/, ""));
   if (!token || !server) {
-    logger.error("pass --server-url <url> --api-key <token> (or set LOOPANY_SERVER_URL / LOOPANY_TOKEN)");
+    logger.error("pass --server-url <url> --api-key <token> (or set ADSCAILE_SERVER_URL / ADSCAILE_TOKEN)");
     return 1;
   }
-  const roots = (process.env.LOOPANY_ROOTS || "")
+  const roots = (process.env.ADSCAILE_ROOTS || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
@@ -102,23 +102,23 @@ export async function runDaemon(): Promise<number> {
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
 
   // Refuse to boot when a live, VERIFIED daemon already owns the pidfile — a
-  // second daemon (e.g. a bare `loopany` in a terminal) would overwrite it, and
+  // second daemon (e.g. a bare `adscaile` in a terminal) would overwrite it, and
   // its exit would delete the file while daemon #1 still runs: invisible to
   // `status`, unkillable by `down`, and double-polling the server.
   const existing = verifiedRunningPid();
   if (existing !== undefined) {
-    logger.error({ pid: existing }, "daemon already running — use `loopany down` first");
+    logger.error({ pid: existing }, "daemon already running — use `adscaile down` first");
     return 1;
   }
 
-  // Write the `loopany` callback wrapper once, before any run can fire. Each run
+  // Write the `adscaile` callback wrapper once, before any run can fire. Each run
   // prepends CALLBACK_BIN_DIR to claude's PATH (no per-run shim in the workdir).
   ensureCallbackBin();
 
-  // Record our pid so `loopany status`/`loopany down` can find this detached
+  // Record our pid so `adscaile status`/`adscaile down` can find this detached
   // daemon locally (the server only knows online-ness, not the local process).
   writePidFile();
-  // Record our version beside the pidfile so `loopany update` can report the
+  // Record our version beside the pidfile so `adscaile update` can report the
   // old→new version when it hands the running daemon over (best-effort).
   writeRunningVersion();
 

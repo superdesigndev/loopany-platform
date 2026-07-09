@@ -5,7 +5,7 @@
  * (`{ status, body }` results):
  *
  *   POST /api/machine/cli  (Bearer device OR run credential) → unified dispatch
- *   POST /agent-api/loop   (Bearer run token)                → the `loopany` shim's verbs
+ *   POST /agent-api/loop   (Bearer run token)                → the `adscaile` shim's verbs
  *
  * The verb router keys authority on CREDENTIAL TYPE first (`dk_` device prefix
  * vs run-lease lookup, bare-UUID back-compat) and reuses the core gateway
@@ -94,7 +94,7 @@ export class CliGateway {
    *   · RUN credential (an `rk_`-prefixed run lease — or a bare-UUID token from a
    *     pre-Batch-6 mint over a deploy) → the least-privilege per-run `dispatch()`
    *     verbs, PLUS a read branch (`log`/`show`) scoped strictly to the lease's OWN
-   *     loop — this closes the in-run `loopany log` 400 seam. Owner-only verbs
+   *     loop — this closes the in-run `adscaile log` 400 seam. Owner-only verbs
    *     (`new`/`edit`/`loops`/`status`) are 403 for a run credential.
    * The branch keys on the `dk_` device prefix, NOT an `rk_` run prefix, so a
    * bare-UUID run token still routes to the run path (it just isn't a device token).
@@ -110,8 +110,8 @@ export class CliGateway {
   private async deviceCli(deviceToken: string, argv: string[]): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
     const verb = argv[0] ?? "";
-    // The content-first home (P8): bare `loopany` posts `["home"]`. It renders a
-    // DEFINITIVE state for an unregistered machine ("not connected — run `loopany
+    // The content-first home (P8): bare `adscaile` posts `["home"]`. It renders a
+    // DEFINITIVE state for an unregistered machine ("not connected — run `adscaile
     // up`") rather than a 401, so the ambient dashboard is never an error/empty —
     // handled BEFORE the unknown-machine guard the other verbs sit behind.
     if (verb === "home") return { status: 200, body: { ok: true, text: await this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
@@ -162,9 +162,9 @@ export class CliGateway {
       case "finish":
       case "complete":
         // Per §4.1: there is no run to attribute a device-credential report/finish to.
-        return { status: 403, body: { error: `loopany: "${verb}" is a run-only verb — a run reports/finishes itself; the owner edits via "edit"` } };
+        return { status: 403, body: { error: `adscaile: "${verb}" is a run-only verb — a run reports/finishes itself; the owner edits via "edit"` } };
       default:
-        return { status: 400, body: { error: `loopany: unknown command "${verb}" for the device credential (try: new, loops, edit, log, show)` } };
+        return { status: 400, body: { error: `adscaile: unknown command "${verb}" for the device credential (try: new, loops, edit, log, show)` } };
     }
   }
 
@@ -206,7 +206,7 @@ export class CliGateway {
       if (h) return { status: 200, body: { text: h, exitCode: 0 } };
     }
 
-    // Content-first home (P8), in-run: bare `loopany` inside a run posts `["home"]`
+    // Content-first home (P8), in-run: bare `adscaile` inside a run posts `["home"]`
     // and gets the run's OWN loop context (identity + role + goal + recent runs),
     // scoped strictly to the lease's loop (no cross-loop leak).
     if (verb === "home") {
@@ -359,10 +359,10 @@ export class CliGateway {
       await this.audit(lease, verb!, stringifyFlags(flags), r);
       return r.ok ? { code: 200, text: r.detail ?? `${verb} applied` } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
     }
-    return derr(400, `unknown command "${verb ?? ""}" (try: loopany help)`, "VALIDATION_ERROR");
+    return derr(400, `unknown command "${verb ?? ""}" (try: adscaile help)`, "VALIDATION_ERROR");
   }
 
-  /** Usage for `loopany help` / `--help` / a bare invocation, rendered as the §4.9
+  /** Usage for `adscaile help` / `--help` / a bare invocation, rendered as the §4.9
    *  axi TOON: grouped verbs with an availability tag reflecting THIS lease's caps
    *  (always / finish / dashboard-gate / schedule), then a trailing `help[]`. Still
    *  role-aware — the tags flip with the lease's role + caps, so the agent never
@@ -405,8 +405,8 @@ export class CliGateway {
       `  dashboard/gate: ${structural}`,
       schedule,
       helpBlock([
-        "Run `loopany show` to read the current config before changing it",
-        "Run `loopany report --status nothing-new` to close this run with no news",
+        "Run `adscaile show` to read the current config before changing it",
+        "Run `adscaile report --status nothing-new` to close this run with no news",
       ]),
     );
   }
@@ -533,7 +533,7 @@ export class CliGateway {
   }
 
   /**
-   * `loopany` (bare) — the content-first home for a DEVICE credential (P8/§5.1). The
+   * `adscaile` (bare) — the content-first home for a DEVICE credential (P8/§5.1). The
    * daemon passes the local facts it alone knows as context flags (`--cwd`/`--home`
    * for directory scoping, `--bin`/`--pid`/`--server` for the header); the server owns
    * the whole TOON render (text-sink). An unregistered machine renders a DEFINITIVE
@@ -569,7 +569,7 @@ export class CliGateway {
     return renderHomeText(ctx, presence, here, scoped.elsewhere, await recentMachineRuns(loops, 3));
   }
 
-  /** `loopany` (bare) inside a run — the RUN credential's own-loop home (§5.1). */
+  /** `adscaile` (bare) inside a run — the RUN credential's own-loop home (§5.1). */
   private async homeRun(lease: RunLease): Promise<string> {
     const loop = await store.getLoop(lease.loopId);
     if (!loop) return errorBlock("loop not found", "NOT_FOUND");
@@ -619,14 +619,14 @@ const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "status"]);
  *  device-credential `new`/`edit` verbs of the unified CLI. */
 function parseJsonFlag(raw: unknown): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
   if (raw === undefined || raw === true) return { ok: true, value: {} };
-  if (typeof raw !== "string") return { ok: false, error: "loopany: --json must be a JSON object string" };
+  if (typeof raw !== "string") return { ok: false, error: "adscaile: --json must be a JSON object string" };
   let obj: unknown;
   try {
     obj = JSON.parse(raw);
   } catch {
-    return { ok: false, error: "loopany: --json must be valid JSON (an object)" };
+    return { ok: false, error: "adscaile: --json must be valid JSON (an object)" };
   }
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "loopany: --json must be a JSON object" };
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "adscaile: --json must be a JSON object" };
   return { ok: true, value: obj as Record<string, unknown> };
 }
 
@@ -682,7 +682,7 @@ function finalizeCli(res: HttpResult): HttpResult {
   return res;
 }
 
-/** `loopany report` — the compact run-outcome confirmation (§4.6). */
+/** `adscaile report` — the compact run-outcome confirmation (§4.6). */
 function renderReportedText(status: string | undefined, state: Record<string, number | string> | undefined, hasMessage: boolean): string {
   const parts: string[] = [];
   if (status) parts.push(`status=${status}`);
@@ -692,7 +692,7 @@ function renderReportedText(status: string | undefined, state: Record<string, nu
   return `reported: ${parts.length ? parts.join(" · ") : "recorded"}`;
 }
 
-/** `loopany finish` — the goal-met confirmation, read back off the completed loop. */
+/** `adscaile finish` — the goal-met confirmation, read back off the completed loop. */
 async function renderFinishedText(loopId: string): Promise<string> {
   const loop = await store.getLoop(loopId);
   if (!loop) return "finished: goal met";
@@ -743,93 +743,93 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
     summary: "record this run's outcome + metrics (state keys must match the loop's schema)",
     avail: alwaysAvail,
     help: [
-      "Run `loopany report --status nothing-new` to close this run with no news",
-      'Run `loopany report --status new --message "<one line>" --state \'{"drift":3}\'` to record metrics',
+      "Run `adscaile report --status nothing-new` to close this run with no news",
+      'Run `adscaile report --status new --message "<one line>" --state \'{"drift":3}\'` to record metrics',
     ],
   },
   finish: {
     syntax: 'finish --message "<achieved>" [--reason "<one line>"]',
     summary: "declare the goal met — completes this closed loop",
     avail: (l) => (l.canFinish ? "available — declare the goal met" : `exec run on a goal (closed) loop only — this run is "${l.role}"`),
-    help: ['Run `loopany finish --message "<what was achieved>" --reason "<one line>"` to complete the loop'],
+    help: ['Run `adscaile finish --message "<what was achieved>" --reason "<one line>"` to complete the loop'],
   },
   show: {
     syntax: "show",
     summary: "print this loop's current config + recent state",
     avail: alwaysAvail,
-    help: ["Run `loopany log` to see this loop's recent runs"],
+    help: ["Run `adscaile log` to see this loop's recent runs"],
   },
   log: {
     syntax: "log [--limit <n>] [--transcript] [--json]",
     summary: "recent run survey for this loop (session ids + metrics)",
     avail: alwaysAvail,
-    help: ["Run `loopany log --transcript` to inline each run's transcript"],
+    help: ["Run `adscaile log --transcript` to inline each run's transcript"],
   },
   reschedule: {
     syntax: "reschedule --run-at <30m|2h|ISO>",
     summary: "run once more soon, then resume the cadence (floor applies; --next is an alias)",
     avail: controlAvail,
-    help: ["Run `loopany reschedule --run-at 2h` to run again in two hours"],
+    help: ["Run `adscaile reschedule --run-at 2h` to run again in two hours"],
   },
   "set-cron": {
     syntax: 'set-cron "<5-field cron>"',
     summary: "change the cadence (floor applies)",
     avail: controlAvail,
-    help: ['Run `loopany set-cron "0 7 * * 1"` to change the cadence'],
+    help: ['Run `adscaile set-cron "0 7 * * 1"` to change the cadence'],
   },
   "set-ui": {
     syntax: "set-ui --file <path>",
     summary: "replace the dashboard HTML (the shim inlines the file)",
     avail: gateAvail((l) => l.canSetUi),
-    help: ["Run `loopany set-ui --file dashboard.html` to replace the dashboard"],
+    help: ["Run `adscaile set-ui --file dashboard.html` to replace the dashboard"],
   },
   "set-schema": {
     syntax: "set-schema --file <path>",
     summary: "declare metrics — a JSON array of {key, label?, unit?}",
     avail: gateAvail((l) => l.canSetSchema),
-    help: ["Run `loopany set-schema --file schema.json` to declare the loop's metrics"],
+    help: ["Run `adscaile set-schema --file schema.json` to declare the loop's metrics"],
   },
   "set-workflow": {
     syntax: "set-workflow --file <path>",
     summary: "replace the deterministic pre-stage JS",
     avail: gateAvail((l) => l.canSetWorkflow),
-    help: ["Run `loopany set-workflow --file workflow.js` to replace the pre-stage"],
+    help: ["Run `adscaile set-workflow --file workflow.js` to replace the pre-stage"],
   },
   pause: {
     syntax: "pause",
     summary: "pause this loop (enabled=false)",
     avail: controlAvail,
-    help: ["Run `loopany resume` to re-enable it"],
+    help: ["Run `adscaile resume` to re-enable it"],
   },
   resume: {
     syntax: "resume",
     summary: "resume this loop (enabled=true)",
     avail: controlAvail,
-    help: ["Run `loopany pause` to pause it again"],
+    help: ["Run `adscaile pause` to pause it again"],
   },
   notify: {
     syntax: "notify always|auto|never",
     summary: "set this loop's failure/success notification policy",
     avail: controlAvail,
-    help: ["Run `loopany notify auto` to notify only on meaningful changes"],
+    help: ["Run `adscaile notify auto` to notify only on meaningful changes"],
   },
   "set-name": {
     syntax: 'set-name "<name>"',
     summary: "rename this loop",
     avail: controlAvail,
-    help: ['Run `loopany set-name "Docs Sweep"` to rename the loop'],
+    help: ['Run `adscaile set-name "Docs Sweep"` to rename the loop'],
   },
   "set-tz": {
     syntax: "set-tz <IANA zone>",
     summary: "set the loop's timezone (the cron fires in it)",
     avail: controlAvail,
-    help: ["Run `loopany set-tz America/Los_Angeles` to change the timezone"],
+    help: ["Run `adscaile set-tz America/Los_Angeles` to change the timezone"],
   },
   "set-model": {
     syntax: "set-model <model>",
     summary: "pin the coding-agent model for this loop",
     avail: controlAvail,
-    help: ["Run `loopany set-model claude-opus-4-8` to pin the model"],
+    help: ["Run `adscaile set-model claude-opus-4-8` to pin the model"],
   },
 };
 // `complete` is a documented alias of `finish` (§6.2).
@@ -841,32 +841,32 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     syntax: "new --json '<config>' [--dry-run]",
     summary: `create a loop (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")}; cron + taskFile|workflow required)`,
     help: [
-      "Run `loopany new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create a loop",
-      "Run `loopany new --json '{...}' --dry-run` to validate without creating",
+      "Run `adscaile new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create a loop",
+      "Run `adscaile new --json '{...}' --dry-run` to validate without creating",
     ],
   },
   loops: {
     syntax: "loops",
     summary: "list every loop bound to this machine",
-    help: ["Run `loopany show <id>` to see a loop's full config", "Run `loopany log <id>` to see a loop's recent runs"],
+    help: ["Run `adscaile show <id>` to see a loop's full config", "Run `adscaile log <id>` to see a loop's recent runs"],
   },
   edit: {
     syntax: "edit <id> --json '<patch>' [--dry-run]",
     summary: `change a loop's config (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")})`,
     help: [
-      "Run `loopany edit <id> --json '{\"cron\":\"0 7 * * 1\"}'` to change the schedule",
-      "Run `loopany edit <id> --json '{...}' --dry-run` to preview the change",
+      "Run `adscaile edit <id> --json '{\"cron\":\"0 7 * * 1\"}'` to change the schedule",
+      "Run `adscaile edit <id> --json '{...}' --dry-run` to preview the change",
     ],
   },
   show: {
     syntax: "show <id>",
     summary: "print a loop's full config + recent state",
-    help: ["Run `loopany loops` to list loops on this machine", "Run `loopany log <id>` to see the loop's recent runs"],
+    help: ["Run `adscaile loops` to list loops on this machine", "Run `adscaile log <id>` to see the loop's recent runs"],
   },
   log: {
     syntax: "log [<id>] [--limit <n>] [--transcript] [--json]",
     summary: "recent run survey for a loop (session ids + metrics)",
-    help: ["Run `loopany log <id> --transcript` to inline each run's transcript", "Run `loopany log <id> --json` for the structured run rows"],
+    help: ["Run `adscaile log <id> --transcript` to inline each run's transcript", "Run `adscaile log <id> --json` for the structured run rows"],
   },
 };
 
@@ -941,7 +941,7 @@ function nextFireDisplay(cron: string, timezone: string | null): string {
 }
 
 /**
- * `loopany show` — the full editable envelope TOON (F1/F6, feedback #1/#2, §4.1).
+ * `adscaile show` — the full editable envelope TOON (F1/F6, feedback #1/#2, §4.1).
  * The `loop:` block keys are EXACTLY `edit --json`'s keys (read/write identity),
  * then the read-only derived aggregates (`nextFire`/`classification`/`runs`). A run
  * caller (opts.allowControl/canFinish present) adds the effective `selfSchedule`/
@@ -986,14 +986,14 @@ function renderShowText(
   const isRun = opts.allowControl !== undefined || opts.canFinish !== undefined;
   const help = isRun
     ? [
-        "Run `loopany reschedule --run-at 2h` to run again sooner (then resume cadence)",
-        `Run \`loopany set-cron "${loop.cron}"\` to change the cadence (floors apply)`,
-        'Run `loopany report --status new --message "<one line>"` to record this run',
+        "Run `adscaile reschedule --run-at 2h` to run again sooner (then resume cadence)",
+        `Run \`adscaile set-cron "${loop.cron}"\` to change the cadence (floors apply)`,
+        'Run `adscaile report --status new --message "<one line>"` to record this run',
       ]
     : [
-        `Run \`loopany show ${loop.id} --full\` to see the complete ui/workflow bodies`,
-        `Run \`loopany edit ${loop.id} --json '{"cron":"0 7 * * 1"}'\` to change the schedule`,
-        `Run \`loopany log ${loop.id}\` to see recent run outcomes`,
+        `Run \`adscaile show ${loop.id} --full\` to see the complete ui/workflow bodies`,
+        `Run \`adscaile edit ${loop.id} --json '{"cron":"0 7 * * 1"}'\` to change the schedule`,
+        `Run \`adscaile log ${loop.id}\` to see recent run outcomes`,
       ];
   return doc(
     block,
@@ -1010,7 +1010,7 @@ function renderShowText(
 }
 
 // ---- content-first home (P8/§5.1) --------------------------------------------
-// Bare `loopany` renders a live machine dashboard (device) or the run's own-loop
+// Bare `adscaile` renders a live machine dashboard (device) or the run's own-loop
 // context (run). The server owns the whole TOON render (text-sink); the daemon
 // passes the local facts it alone knows (`--bin`/`--pid`/`--server`/`--cwd`/`--home`)
 // as context flags. Everything below is pure so it's exercised in the verb tests.
@@ -1036,7 +1036,7 @@ interface HomeLoop {
 
 /** The static one-line description in the home header (mirrors the reference axi
  *  tools' `description:` line — what this bin is for). */
-const HOME_DESCRIPTION = "Run your scheduled Loopany agent loops on this machine with your own coding agent.";
+const HOME_DESCRIPTION = "Run your scheduled adScaile agent loops on this machine with your own coding agent.";
 
 /** Expand a leading `~/` against the daemon-supplied home dir (the SERVER's own home
  *  is irrelevant — a loop's paths are the daemon machine's). Absent home ⇒ unchanged. */
@@ -1103,12 +1103,12 @@ function renderHomeText(
 ): string {
   const machineLine =
     presence === null
-      ? "machine: not connected — run `loopany up`"
+      ? "machine: not connected — run `adscaile up`"
       : `machine: ${[presence, ctx.pid ? `daemon pid ${ctx.pid}` : null, ctx.server].filter(Boolean).join(" · ")}`;
   // P8 requires the home to LEAD with `bin:` (every reference axi tool does). The daemon
   // sends the durable path via `--bin` when it has one; absent (npx-without-global), we
   // render the honest fallback so the line is NEVER missing (F7).
-  const binLineText = ctx.bin ? kvLine("bin", ctx.bin) : "bin: (not on PATH — run `npm i -g @crewlet/loopany`)";
+  const binLineText = ctx.bin ? kvLine("bin", ctx.bin) : "bin: (not on PATH — run `npm i -g @crewlet/adscaile`)";
   // Not connected: the header + the definitive state + how to connect. No loop/run
   // blocks (there's nothing to show), but never empty output (P5/P8).
   if (presence === null) {
@@ -1117,8 +1117,8 @@ function renderHomeText(
       kvLine("description", HOME_DESCRIPTION),
       machineLine,
       helpBlock([
-        "Run `loopany up --server-url <url> --connect-key <dk_…>` to connect this machine",
-        "Run `loopany --help` to see every command",
+        "Run `adscaile up --server-url <url> --connect-key <dk_…>` to connect this machine",
+        "Run `adscaile --help` to see every command",
       ]),
     );
   }
@@ -1144,9 +1144,9 @@ function renderHomeText(
     elsewhere > 0 ? `loops elsewhere: ${elsewhere} more on this machine` : null,
     recentBlock,
     helpBlock([
-      "Run `loopany loops` to list every loop on this machine",
-      "Run `loopany show <id>` to inspect a loop, `loopany log <id>` for its runs",
-      "Run `loopany new --json '{...}'` to create a loop",
+      "Run `adscaile loops` to list every loop on this machine",
+      "Run `adscaile show <id>` to inspect a loop, `adscaile log <id>` for its runs",
+      "Run `adscaile new --json '{...}'` to create a loop",
     ]),
   );
 }
@@ -1171,8 +1171,8 @@ function renderRunHomeText(
     `loop: ${scalar(name)} (${loopId}) · role ${role} · goal ${goal != null ? scalar(goal) : "none"}`,
     recentBlock,
     helpBlock([
-      "Run `loopany show` for the full config, `loopany log` for the run survey",
-      "Run `loopany report --status nothing-new` to close this run",
+      "Run `adscaile show` for the full config, `adscaile log` for the run survey",
+      "Run `adscaile report --status nothing-new` to close this run",
     ]),
   );
 }

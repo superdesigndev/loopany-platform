@@ -3,7 +3,7 @@
  * surface — SKILL.md + references/{create,update,evolve,run}.md — and nothing else.
  * The server's src/skill/ also holds INTERNAL run prompts under run/ (exec-loop,
  * edit) that are server-side run-dispatch only; a naive recursive copy would leak
- * them into every user's installed ./.claude/skills/loopany/. This runs the real
+ * them into every user's installed ./.claude/skills/adscaile/. This runs the real
  * sync-skill.mjs and asserts the selectivity (guards against a regression to
  * `cpSync(src, dst, {recursive})`).
  */

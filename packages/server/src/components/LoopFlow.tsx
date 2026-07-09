@@ -93,7 +93,7 @@ const DOCS_SWEEP: FlowSpec = {
         '3 items fixed, each verified by running it',
         'README — dev server is :3001, not :3000',
         'Setup guide — dropped a dead /api/v1 link',
-        'Quickstart — refreshed `loopany new` flags',
+        'Quickstart — refreshed `adscaile new` flags',
       ],
     },
     { type: 'metric', label: 'Drift count', series: [6, 4, 5, 3, 2, 3, 1, 2, 1, 0], note: '0 = docs are honest — a clean stop, no PR.', betterDown: true },
@@ -555,7 +555,7 @@ function FlowDiagram({ spec }: { spec: FlowSpec }) {
 function Dashboard({ spec }: { spec: FlowSpec }) {
   return (
     <div className="min-w-0">
-      <p className="mb-4 text-body leading-snug text-secondary">Loopany sets up a dashboard to track results.</p>
+      <p className="mb-4 text-body leading-snug text-secondary">adScaile sets up a dashboard to track results.</p>
       {spec.dashboard.map((w, i) => (
         <div key={i} className={`min-w-0 ${i > 0 ? 'mt-6' : ''}`}>
           {w.type === 'kanban' ? (

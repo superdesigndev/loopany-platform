@@ -1,8 +1,8 @@
 # Create a loop
 
-This machine is already connected — `loopany up` on first capture (see `bootstrap.md`)
+This machine is already connected — `adscaile up` on first capture (see `bootstrap.md`)
 or the daemon that's been running since. Decide what to build, author it, create it.
-Use the **loopany-cli** prefix the user pasted (default `npx @crewlet/loopany@latest`)
+Use the **adscaile-cli** prefix the user pasted (default `npx @crewlet/adscaile@latest`)
 and, on the first-capture path, the **connect-key** from the capture snippet.
 
 ## 1 · Decide what to build
@@ -80,7 +80,7 @@ not an interview.)
 
 ## 3 · Create the loop's folder and task file
 
-Every loop gets its **own folder** under the project: `<project>/loopany/<slug>/`
+Every loop gets its **own folder** under the project: `<project>/adscaile/<slug>/`
 (make it if needed; pick a short `<slug>` from the loop name). Its task file lives
 there, and by default the lightweight products it produces (reports, exports, dashboard
 `ui`, small artifacts) land there too, so its output stays self-contained.
@@ -93,7 +93,7 @@ temp dir) and writes only the finished report/artifact back in. Author the Spec 
 naturally keep bulk out — e.g. *"do the fix in a git worktree created outside this loop
 folder"*, never inside it. A repo checkout dropped in the loop folder floods the sync.
 
-Write the **task file** at `<project>/loopany/<slug>/README.md` — the loop's durable
+Write the **task file** at `<project>/adscaile/<slug>/README.md` — the loop's durable
 brief and running memory. Each scheduled run reads it for context and maintains it
 (see `evolve.md`). Fill it from what we ACTUALLY just did — real URLs, paths,
 commands, thresholds:
@@ -140,7 +140,7 @@ A loop fires on a cron schedule. Each run is **either**:
 
 ### Workflow syntax contract — read this before writing one
 
-A workflow **IS** a plain **JavaScript statement sequence** that Loopany runs
+A workflow **IS** a plain **JavaScript statement sequence** that adScaile runs
 *inside* an async function — so top-level `await` is fine and you end with
 `return { message?, state? }`. The injected globals `prev`, `agent(message?, data?)`,
 `tools.call(name, args)`, and `fetch` are already in scope — use them directly.
@@ -150,7 +150,7 @@ works via dynamic `await import(...)`, so a script may read a local credential f
 runtime and call an authenticated API with plain `fetch` — an MCP server is one way to
 reach an external tool, never the only one. One hard rule: **never embed a secret
 literal in the body** — it is stored server-side; credentials belong on the machine
-(a local file read at runtime, or `LOOPANY_WORKFLOW_ENV` passthrough), never in the
+(a local file read at runtime, or `ADSCAILE_WORKFLOW_ENV` passthrough), never in the
 script text.
 
 A workflow is **NOT an ES module** and **not the Claude Code `Workflow` tool**. Do
@@ -158,7 +158,7 @@ A workflow is **NOT an ES module** and **not the Claude Code `Workflow` tool**. 
 parse error that fails the whole run before any line executes. Need a module? Use
 dynamic `await import('node:os')`. There is no `require`. The server parse-checks
 the body at write time and rejects a bad one with this same guidance — a rejected
-`loopany new`/`edit`/`set-workflow` means fix the syntax.
+`adscaile new`/`edit`/`set-workflow` means fix the syntax.
 
 **Canonical example** (the whole surface — no header, no imports):
 
@@ -170,7 +170,7 @@ agent("summarize what changed", rows);                            // escalate to
 return { message: `${rows.length} rows`, state: { count: rows.length } };
 ```
 
-Author the config **inline** and pass it to `loopany new --json` (§5) — no config
+Author the config **inline** and pass it to `adscaile new --json` (§5) — no config
 file to write. Only the loop's real intent goes in it; the CLI fills the envelope:
 
 ```json
@@ -193,13 +193,13 @@ Rules:
   `workdir` + `taskFile` for any agent loop. Make any `workflow` self-contained and
   defensive (handle fetch failures).
 - **`goal` makes the loop closed**: with a goal set, each run judges it and calls
-  `loopany finish` when met, ending the loop. Omit `goal` for a monitor/digest loop
+  `adscaile finish` when met, ending the loop. Omit `goal` for a monitor/digest loop
   that runs indefinitely (§2).
 - `stateSchema` is optional — declare numeric per-run metrics to get a chart.
 - `ui` is optional — the loop's dashboard panel as small HTML (see **Dashboard at
   create** below).
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
-- **Don't add `timezone`, `claim`, or any auth** — `loopany new` injects the
+- **Don't add `timezone`, `claim`, or any auth** — `adscaile new` injects the
   timezone, the connect-key claim, and this machine's device token. (If the user
   states a different zone, pass `--tz <IANA>` in §5.)
 
@@ -223,7 +223,7 @@ normalized envelope, detected timezone, the next 3 fire times, and the open/clos
 classification, persisting nothing:
 
 ```bash
-<loopany-cli> new --json '<config>' --dry-run
+<adscaile-cli> new --json '<config>' --dry-run
 ```
 
 Check the classification matches your intent (a `goal` → `closed: will self-finish`;
@@ -234,21 +234,21 @@ HTML before creating. Then create for real — pass the connect-key so the web d
 learns the loop was created, and declare which coding agent you are:
 
 ```bash
-<loopany-cli> new \
+<adscaile-cli> new \
   --json '<config>' \
   --connect-key <connect-key> \
   --agent claude-code          # which coding agent you are (claude-code | codex | grok); omit to auto-detect
 ```
 
-`loopany new` detects the IANA timezone, injects the claim, records the coding agent
+`adscaile new` detects the IANA timezone, injects the claim, records the coding agent
 (the `--agent` you pass, or — preferred — the host it sniffs from its own env),
 authenticates, validates, and POSTs it. On success it prints `created loop <name> —
 <cron> <timezone>`; the loop now appears in the web UI and runs on schedule. If the
 config carried a `ui`, it also prints `dashboard ui: applied` — `not applied` plus a
-`loopany: warning:` means the dashboard was dropped (the loop was still created);
-fix the HTML and push it with `loopany edit <id> --ui-file <path>` (`update.md`).
-(For a large inline config, `--json -` reads it from stdin.) On `loopany: <error>`,
+`adscaile: warning:` means the dashboard was dropped (the loop was still created);
+fix the HTML and push it with `adscaile edit <id> --ui-file <path>` (`update.md`).
+(For a large inline config, `--json -` reads it from stdin.) On `adscaile: <error>`,
 fix the config and re-run.
 
 Finally, tell the user it's created (name + cadence) and that the first run comes
-automatically shortly — point them at the Loopany web UI to watch for the result.
+automatically shortly — point them at the adScaile web UI to watch for the result.

@@ -31,7 +31,7 @@ agent("write the digest from these rows", res.data);
 - **Allowlisted env** — the workflow subprocess never inherits the user's full shell. An
   MCP server config that resolves a credential from the environment (`${VAR}` / `$env:VAR`
   placeholders, or a stdio server's env) needs that key opted in via
-  `LOOPANY_WORKFLOW_ENV=KEY1,KEY2` in the daemon's environment, or the call throws
+  `ADSCAILE_WORKFLOW_ENV=KEY1,KEY2` in the daemon's environment, or the call throws
   `Environment variable X is required`.
 - **Throws a clear error** on a missing/unconfigured server, missing/failed tool, missing
   or expired auth, or an unavailable MCP runtime — naming the server/tool and what's missing.
@@ -44,10 +44,10 @@ agent("write the digest from these rows", res.data);
 
 | Env var                                   | Default | Meaning                              |
 | ----------------------------------------- | ------- | ------------------------------------ |
-| `LOOPANY_WORKFLOW_TOOL_ARGS_CAP`          | 16384   | max bytes of JSON args sent to a tool |
-| `LOOPANY_WORKFLOW_TOOL_RESULT_CAP`        | 262144  | max chars of result text/data returned |
-| `LOOPANY_WORKFLOW_TOOL_TIMEOUT_SECONDS`   | 30      | per-call wall-clock timeout           |
-| `LOOPANY_WORKFLOW_ENV`                    | (empty) | comma-separated env keys passed through to the workflow subprocess (MCP credentials) |
+| `ADSCAILE_WORKFLOW_TOOL_ARGS_CAP`          | 16384   | max bytes of JSON args sent to a tool |
+| `ADSCAILE_WORKFLOW_TOOL_RESULT_CAP`        | 262144  | max chars of result text/data returned |
+| `ADSCAILE_WORKFLOW_TOOL_TIMEOUT_SECONDS`   | 30      | per-call wall-clock timeout           |
+| `ADSCAILE_WORKFLOW_ENV`                    | (empty) | comma-separated env keys passed through to the workflow subprocess (MCP credentials) |
 
 ## How it's wired (implementation)
 
@@ -59,7 +59,7 @@ agent("write the digest from these rows", res.data);
   prompt. mcporter surfaces tool-level failures as `{ isError: true }`; the bridge turns
   that (and connection/auth throws) into clear thrown errors.
 - `src/workflow.ts` injects `tools.call` into the workflow subprocess and passes the bridge
-  file URL via `LOOPANY_MCP_BRIDGE` (overridable — tests point it at a fixture bridge).
+  file URL via `ADSCAILE_MCP_BRIDGE` (overridable — tests point it at a fixture bridge).
 - `src/runner.ts` — on any workflow failure, builds the fallback task via
   `buildWorkflowFallbackTask()` and runs the agent instead of reporting a failed run.
 
@@ -113,7 +113,7 @@ pass it to `agent(message, data)` for the judgment.
 
 ### Automated coverage (no live server needed)
 
-`pnpm --filter @crewlet/loopany test` covers the same wiring with fixtures/fakes:
+`pnpm --filter @crewlet/adscaile test` covers the same wiring with fixtures/fakes:
 `mcp-bridge.test.ts` (caps, result shaping, clear errors for missing server/tool/auth/runtime),
 `workflow.test.ts` (`tools.call` injected into the sandbox; args in / result out; failure surfaces),
 `runner.test.ts` (workflow-failure → agent-fallback carrying the original task + workflow error +

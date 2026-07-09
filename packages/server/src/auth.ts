@@ -1,11 +1,11 @@
 /**
  * Better Auth — GitHub social login, gated by a login allowlist
- * (LOOPANY_ALLOWED_LOGINS = comma-separated emails). Shared workspace: any
+ * (ADSCAILE_ALLOWED_LOGINS = comma-separated emails). Shared workspace: any
  * allowed user sees all loops/machines; `userId` is attribution only.
  *
  * OFF by default: with no GITHUB_CLIENT_ID/SECRET the app stays open (no gate),
  * so local dev + the verified Cookie/dashboard flow are unaffected. Set the
- * GitHub OAuth creds + LOOPANY_ALLOWED_LOGINS to turn the gate on.
+ * GitHub OAuth creds + ADSCAILE_ALLOWED_LOGINS to turn the gate on.
  */
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
@@ -24,14 +24,14 @@ export const authEnabled = !!(clientId && clientSecret);
 // falling back to the public dev constant would let anyone forge sessions, so
 // refuse to boot instead of running insecurely. Open mode (no gate ⇒ no
 // sessions worth forging) keeps the dev fallback for zero-config local runs.
-const authSecret = process.env.LOOPANY_AUTH_SECRET?.trim();
+const authSecret = process.env.ADSCAILE_AUTH_SECRET?.trim();
 if (authEnabled && !authSecret) {
   throw new Error(
-    "LOOPANY_AUTH_SECRET must be set when the GitHub login gate is enabled (GITHUB_CLIENT_ID/SECRET present) — refusing to fall back to the public dev secret.",
+    "ADSCAILE_AUTH_SECRET must be set when the GitHub login gate is enabled (GITHUB_CLIENT_ID/SECRET present) — refusing to fall back to the public dev secret.",
   );
 }
 
-const allowlist = (process.env.LOOPANY_ALLOWED_LOGINS || "")
+const allowlist = (process.env.ADSCAILE_ALLOWED_LOGINS || "")
   .split(",")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
@@ -61,7 +61,7 @@ export function teamNameForEmail(email: string | null | undefined): string {
 }
 
 /** Cookie (client-set, server-validated) carrying the active team selection. */
-const TEAM_COOKIE = "loopany.team";
+const TEAM_COOKIE = "adscaile.team";
 
 /**
  * The signed-in user (id + email) for the current server-fn request, or null when
@@ -100,7 +100,7 @@ export interface RequestScope {
  * Per-request data scope. Machines / loops / channels are scoped by `teamId`.
  * The active team is resolved from (in precedence order) an EXPLICIT team — the
  * `/t/<teamId>` route param, so a tab/bookmark pins its own team independent of
- * any cookie (Phase 2) — else the `loopany.team` cookie (now only a last-used
+ * any cookie (Phase 2) — else the `adscaile.team` cookie (now only a last-used
  * default hint). Either source is VALIDATED here against membership, never
  * trusted blind, and falls back to the user's personal team.
  *
@@ -162,7 +162,7 @@ export async function canAccessLoop(loopTeamId: string | null, scope: RequestSco
 }
 
 export const auth = betterAuth({
-  baseURL: process.env.LOOPANY_BASE_URL || "http://127.0.0.1:3000",
+  baseURL: process.env.ADSCAILE_BASE_URL || "http://127.0.0.1:3000",
   secret: authSecret || "dev-insecure-secret-change-in-prod",
   database: drizzleAdapter(db, { provider: "pg" }),
   socialProviders: authEnabled
@@ -177,7 +177,7 @@ export const auth = betterAuth({
           // Entries may be full emails or domain wildcards (see `emailAllowed`).
           if (!emailAllowed(user.email)) {
             const email = (user.email || "").toLowerCase();
-            throw new APIError("FORBIDDEN", { message: `${email} is not on the Loopany allowlist` });
+            throw new APIError("FORBIDDEN", { message: `${email} is not on the adScaile allowlist` });
           }
           return { data: user };
         },

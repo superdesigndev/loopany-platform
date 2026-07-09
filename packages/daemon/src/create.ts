@@ -1,5 +1,5 @@
 /**
- * `loopany new` — create a loop from a config file the agent wrote.
+ * `adscaile new` — create a loop from a config file the agent wrote.
  *
  * Folds SKILL.md §3 (hand IANA-timezone detection) and §4 (hand-built JSON +
  * curl) into one command. The agent's config carries only real intent —
@@ -80,7 +80,7 @@ function machineIdFromToken(token: string): string {
 /**
  * The `new` idempotency key (F8, design §8.1): `sha256(machineId + canonicalJSON(body))`
  * over the EXACT outgoing request body, minus the `idempotencyKey` nonce itself.
- * A timed-out retry of the SAME `loopany new` resolves to an identical body (same argv +
+ * A timed-out retry of the SAME `adscaile new` resolves to an identical body (same argv +
  * env ⇒ same config, timezone, connect-key/claim, agent), so it sends the SAME key and
  * the server replays the existing loop instead of making a twin. ANY envelope difference —
  * a different `--tz`, `--connect-key` (target team), `--agent`, or config field — yields a
@@ -96,7 +96,7 @@ export function idempotencyKey(token: string, resolvedBody: Record<string, unkno
     .digest("hex");
 }
 
-/** The coding agents Loopany can record a loop against (TS-only; cheap to widen). */
+/** The coding agents adScaile can record a loop against (TS-only; cheap to widen). */
 export type CodingAgent = "claude-code" | "codex" | "grok";
 
 /** Coerce an arbitrary declared value (--agent flag / config.agent) to a known
@@ -107,7 +107,7 @@ export function coerceAgent(v: unknown): CodingAgent | null {
 }
 
 /**
- * Best-effort fingerprint of the coding agent hosting THIS `loopany new` process,
+ * Best-effort fingerprint of the coding agent hosting THIS `adscaile new` process,
  * read from the env the host agent exported into our shell. This MEASURES the real
  * host (it can't be fooled by a wrong dialog selection), but it's best-effort: a
  * host that runs us without its marker env (e.g. Codex under bypass-sandbox mode)
@@ -155,14 +155,14 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   const jsonArg = flag(args, "json");
   const dryRun = args.includes("--dry-run");
   if (jsonArg === undefined) {
-    process.stderr.write("loopany: usage: loopany new --json '<config>' [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex|grok]\n");
+    process.stderr.write("adscaile: usage: adscaile new --json '<config>' [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex|grok]\n");
     return 2;
   }
 
   const server = resolveServerUrl(flag(args, "server-url"));
-  const token = readStored(DEVICE_FILE) || process.env.LOOPANY_TOKEN;
+  const token = readStored(DEVICE_FILE) || process.env.ADSCAILE_TOKEN;
   if (!server || !token) {
-    process.stderr.write("loopany: this machine isn't connected yet — run `loopany up --server-url … --connect-key …` first\n");
+    process.stderr.write("adscaile: this machine isn't connected yet — run `adscaile up --server-url … --connect-key …` first\n");
     return 2;
   }
 
@@ -171,11 +171,11 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     // `--json -` reads the config from stdin (fd 0) — handy for a large inline object.
     raw = jsonArg === "-" ? fs.readFileSync(0, "utf8") : jsonArg;
   } catch (err) {
-    process.stderr.write(`loopany: cannot read config from stdin: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`adscaile: cannot read config from stdin: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
   if (!raw.trim()) {
-    process.stderr.write("loopany: --json needs the config object (e.g. --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"loopany/x/README.md\"}')\n");
+    process.stderr.write("adscaile: --json needs the config object (e.g. --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"adscaile/x/README.md\"}')\n");
     return 2;
   }
   let config: Record<string, unknown>;
@@ -186,18 +186,18 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     }
     config = parsed as Record<string, unknown>;
   } catch (err) {
-    process.stderr.write(`loopany: cannot parse --json config: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`adscaile: cannot parse --json config: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
 
   if (!cronLooksValid(config.cron)) {
-    process.stderr.write('loopany: config needs a "cron" expression (e.g. "0 8 * * *")\n');
+    process.stderr.write('adscaile: config needs a "cron" expression (e.g. "0 8 * * *")\n');
     return 2;
   }
   // The `task` column is gone (batch 2): a loop's brief lives in its task file, so a
   // loop needs a "workflow" (JS) OR a "taskFile" (path to the Spec) to work from.
   if (!config.workflow && !config.taskFile) {
-    process.stderr.write('loopany: config needs a "workflow" (JS) or a "taskFile" (path to the loop\'s Spec)\n');
+    process.stderr.write('adscaile: config needs a "workflow" (JS) or a "taskFile" (path to the loop\'s Spec)\n');
     return 2;
   }
 
@@ -244,7 +244,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     });
     if (r.kind !== "ok") {
       const detail = r.kind === "network-error" ? r.message : r.kind === "read-error" ? `cannot read ${r.path}` : "machine not connected";
-      process.stderr.write(`loopany: ${detail}\n`);
+      process.stderr.write(`adscaile: ${detail}\n`);
       return 1;
     }
     // Text-sink: the server renders the created / dry-run / idempotent-replay TOON (incl.
@@ -254,21 +254,21 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     const code = printTextOrTooOld(r.body, r.status, write);
     if (code !== 0) return code;
     if (dryRun) return 0;
-    // Best-effort: now that the loop exists, install/refresh the loopany skill at
-    // USER scope (`~/.claude/skills/loopany`), so the coding agent discovers the
+    // Best-effort: now that the loop exists, install/refresh the adscaile skill at
+    // USER scope (`~/.claude/skills/adscaile`), so the coding agent discovers the
     // references from ANY loop workdir. Announced, never blocks — any failure
     // degrades to the always-working /api/skill/references path. Only runs after a
-    // confirmed create. (`loopany up` also refreshes it; this keeps a create made
+    // confirmed create. (`adscaile up` also refreshes it; this keeps a create made
     // without a fresh `up` current too.)
     await announceSkillInstall(installer, write);
     return 0;
   } catch (err) {
-    process.stderr.write(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`adscaile: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
 }
 
-/** Best-effort, announced USER-scope install (`~/.claude/skills/loopany`). Swallows
+/** Best-effort, announced USER-scope install (`~/.claude/skills/adscaile`). Swallows
  *  every error and prints one line — loop creation must never fail on the skill. */
 async function announceSkillInstall(
   installer: (opts: InstallOpts) => Promise<InstallOutcome>,

@@ -87,7 +87,7 @@ function RedeemInvite() {
     return (
       <Shell>
         <p className="mt-2 text-sm text-secondary">
-          This Loopany server runs in open mode (a single shared workspace), so team invites don't apply here.
+          This adScaile server runs in open mode (a single shared workspace), so team invites don't apply here.
         </p>
         <button className={`${btnPrimary} mt-6`} onClick={() => void navigate({ to: '/' })}>
           Go to the dashboard

@@ -27,16 +27,16 @@ interface Booted {
 // scheduler.start mean two concurrent first-requests would otherwise each run
 // `boot()` → double scheduler → double-fire every run. Assigning the promise
 // synchronously (before the first await) makes concurrent callers share it.
-const g = globalThis as unknown as { __loopanyBooted?: Promise<Booted> };
+const g = globalThis as unknown as { __adscaileBooted?: Promise<Booted> };
 
 export function ensureServer(): Promise<Booted> {
-  if (g.__loopanyBooted) return g.__loopanyBooted;
+  if (g.__adscaileBooted) return g.__adscaileBooted;
   const p = boot();
-  g.__loopanyBooted = p;
+  g.__adscaileBooted = p;
   // If boot fails, clear the cache so a later call can retry (mirrors the old
-  // sync behavior where a throw left `__loopanyBooted` unset).
+  // sync behavior where a throw left `__adscaileBooted` unset).
   p.catch(() => {
-    if (g.__loopanyBooted === p) g.__loopanyBooted = undefined;
+    if (g.__adscaileBooted === p) g.__adscaileBooted = undefined;
   });
   return p;
 }
@@ -87,7 +87,7 @@ async function boot(): Promise<Booted> {
   gc.unref?.();
   abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
 
-  logger.info("loopany server booted");
+  logger.info("adscaile server booted");
   return { scheduler, gateway, artifactSync, cliGateway, abort };
 }
 

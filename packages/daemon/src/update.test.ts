@@ -1,5 +1,5 @@
 /**
- * `loopany update`, exercised with every external touch INJECTED (pid check,
+ * `adscaile update`, exercised with every external touch INJECTED (pid check,
  * down, ensure, version reads, output) so nothing spawns a process or hits the
  * network.
  */

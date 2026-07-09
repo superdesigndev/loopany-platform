@@ -10,7 +10,7 @@
 //
 // Embedded pglite tier (no DATABASE_URL - light self-host): the database
 // migrates IN-PROCESS at boot, so no migration here - but the tier must be
-// OPTED INTO with LOOPANY_DB=pglite. The built artifact carries production
+// OPTED INTO with ADSCAILE_DB=pglite. The built artifact carries production
 // semantics (vite bakes NODE_ENV=production into the bundle), so a missing
 // DATABASE_URL secret must fail the container HERE, at startup, loudly -
 // db/index.ts has the same refusal, but it sits in a lazily-imported chunk,
@@ -21,15 +21,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 if (!process.env.DATABASE_URL) {
-  if (process.env.LOOPANY_DB !== "pglite") {
+  if (process.env.ADSCAILE_DB !== "pglite") {
     console.error(
       "[prestart] refusing to start on the ephemeral embedded database - " +
-        "set DATABASE_URL (hosted Postgres), or LOOPANY_DB=pglite to opt into " +
-        "the embedded pglite tier (and point LOOPANY_DATA_DIR at persistent storage)",
+        "set DATABASE_URL (hosted Postgres), or ADSCAILE_DB=pglite to opt into " +
+        "the embedded pglite tier (and point ADSCAILE_DATA_DIR at persistent storage)",
     );
     process.exit(1);
   }
-  console.log("[prestart] no DATABASE_URL - embedded pglite (LOOPANY_DB=pglite) migrates in-process at boot; skipping");
+  console.log("[prestart] no DATABASE_URL - embedded pglite (ADSCAILE_DB=pglite) migrates in-process at boot; skipping");
   process.exit(0);
 }
 

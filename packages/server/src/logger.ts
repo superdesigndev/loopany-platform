@@ -8,7 +8,7 @@
 import pino from "pino";
 import pretty from "pino-pretty";
 
-const level = (process.env.LOOPANY_LOG_LEVEL || "info").toLowerCase();
+const level = (process.env.ADSCAILE_LOG_LEVEL || "info").toLowerCase();
 
 const stream = pretty({
   destination: 2, // stderr

@@ -29,18 +29,18 @@ import { allowlistEnv, runProcess } from "./spawn.js";
  *  mcp-bridge.mjs). Overridable via env so tests can point at a fixture bridge;
  *  read at call time so an override set after module load still applies. */
 function mcpBridgeUrl(): string {
-  return process.env.LOOPANY_MCP_BRIDGE || new URL("./mcp-bridge.mjs", import.meta.url).href;
+  return process.env.ADSCAILE_MCP_BRIDGE || new URL("./mcp-bridge.mjs", import.meta.url).href;
 }
 
 /** Extra env keys the user OPTS INTO passing through to the workflow subprocess
- *  (`LOOPANY_WORKFLOW_ENV=KEY1,KEY2` on the daemon). MCP server configs commonly
+ *  (`ADSCAILE_WORKFLOW_ENV=KEY1,KEY2` on the daemon). MCP server configs commonly
  *  resolve credentials from the shell env — mcporter expands `${VAR}`/`$env:VAR`
  *  placeholders against the subprocess env, and stdio server children inherit
  *  it — which the allowlist below would otherwise strip, silently breaking
  *  every tools.call that needs such a credential. Read at call time so a
  *  restart-free override/test applies. */
 function passthroughEnvKeys(): string[] {
-  return (process.env.LOOPANY_WORKFLOW_ENV ?? "")
+  return (process.env.ADSCAILE_WORKFLOW_ENV ?? "")
     .split(",")
     .map((k) => k.trim())
     .filter(Boolean);
@@ -65,12 +65,12 @@ export interface WorkflowRun {
   stderr: string;
 }
 
-const TIMEOUT_MS = (Number(process.env.LOOPANY_WORKFLOW_TIMEOUT_SECONDS) || 30) * 1000;
+const TIMEOUT_MS = (Number(process.env.ADSCAILE_WORKFLOW_TIMEOUT_SECONDS) || 30) * 1000;
 
 function buildWrapper(body: string, prevState: unknown): string {
   const prevLiteral = JSON.stringify(JSON.stringify(prevState ?? null));
   return `import { writeFileSync } from "node:fs";
-const __OUT = process.env.LOOPANY_WORKFLOW_OUT;
+const __OUT = process.env.ADSCAILE_WORKFLOW_OUT;
 const prev = JSON.parse(${prevLiteral});
 const __agentCalls = [];
 const agent = (message, data) => {
@@ -79,7 +79,7 @@ const agent = (message, data) => {
 // tools.call("server.tool", args) → call one of this machine's configured MCP
 // servers (via mcporter). Lazily loads the bridge on first use; a missing bridge
 // path or a failed call throws a clear error (propagated as a workflow failure).
-const __bridgeUrl = process.env.LOOPANY_MCP_BRIDGE;
+const __bridgeUrl = process.env.ADSCAILE_MCP_BRIDGE;
 let __bridgeMod;
 const tools = {
   call: async (name, args) => {
@@ -111,7 +111,7 @@ __run(prev)
 }
 
 export async function runWorkflow(body: string, prevState: unknown, cwd: string, signal?: AbortSignal): Promise<WorkflowRun> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "loopany-workflow-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "adscaile-workflow-"));
   const scriptPath = path.join(dir, "workflow.mjs");
   const outPath = path.join(dir, "out.json");
 
@@ -121,14 +121,14 @@ export async function runWorkflow(body: string, prevState: unknown, cwd: string,
       cwd,
       // Allowlisted env only — the workflow body is server-supplied JS, so it must
       // never inherit the user's full shell (mirrors the claude child's execEnv).
-      // The LOOPANY_WORKFLOW_* prefix carries the tool caps mcp-bridge reads
+      // The ADSCAILE_WORKFLOW_* prefix carries the tool caps mcp-bridge reads
       // inside the subprocess (ARGS_CAP / RESULT_CAP / TIMEOUT_SECONDS), and
-      // LOOPANY_WORKFLOW_ENV names the exact keys the user passes through for
+      // ADSCAILE_WORKFLOW_ENV names the exact keys the user passes through for
       // MCP credentials (see passthroughEnvKeys).
       env: {
-        ...allowlistEnv({ keys: passthroughEnvKeys(), prefixes: ["LOOPANY_WORKFLOW_"] }),
-        LOOPANY_WORKFLOW_OUT: outPath,
-        LOOPANY_MCP_BRIDGE: mcpBridgeUrl(),
+        ...allowlistEnv({ keys: passthroughEnvKeys(), prefixes: ["ADSCAILE_WORKFLOW_"] }),
+        ADSCAILE_WORKFLOW_OUT: outPath,
+        ADSCAILE_MCP_BRIDGE: mcpBridgeUrl(),
       },
       signal,
       timeoutMs: TIMEOUT_MS,

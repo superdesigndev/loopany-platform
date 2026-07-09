@@ -12,8 +12,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER_DIR="$ROOT/packages/server"
 DAEMON_CLI="$ROOT/packages/daemon/dist/cli.js"
 
-TMP="$(mktemp -d -t loopany-cookieU)"
-PORT="${LOOPANY_PORT:-3877}"
+TMP="$(mktemp -d -t adscaile-cookieU)"
+PORT="${ADSCAILE_PORT:-3877}"
 BASE="http://127.0.0.1:$PORT"
 TOKEN="dk_demo_cookie_unified"
 
@@ -31,7 +31,7 @@ machine_post() { curl -fsS -X POST "$BASE$1" -H "Authorization: Bearer $TOKEN" -
 
 echo "▶ temp data dir: $TMP"
 echo "▶ starting unified server (pnpm dev) on $BASE ..."
-( cd "$SERVER_DIR" && LOOPANY_PORT="$PORT" LOOPANY_DATA_DIR="$TMP" LOOPANY_DB_PATH="$TMP/loopany.db" LOOPANY_LOG_LEVEL=info \
+( cd "$SERVER_DIR" && ADSCAILE_PORT="$PORT" ADSCAILE_DATA_DIR="$TMP" ADSCAILE_DB_PATH="$TMP/adscaile.db" ADSCAILE_LOG_LEVEL=info \
     pnpm dev ) >"$TMP/server.log" 2>&1 &
 server_pid=$!
 
@@ -44,10 +44,10 @@ for i in $(seq 1 80); do
 done
 [ -n "$ready" ] || { echo "server route not responding:"; tail -30 "$TMP/server.log"; exit 1; }
 
-# LOOPANY_HOME keeps the demo identity in $TMP so the daemon never clobbers a
-# real ~/.loopany device token / server URL on this machine.
+# ADSCAILE_HOME keeps the demo identity in $TMP so the daemon never clobbers a
+# real ~/.adscaile device token / server URL on this machine.
 echo "▶ starting daemon → $BASE (self-registers the machine on first poll)"
-LOOPANY_HOME="$TMP/loopany-home" LOOPANY_TOKEN="$TOKEN" LOOPANY_SERVER_URL="$BASE" LOOPANY_POLL_MS=2000 \
+ADSCAILE_HOME="$TMP/adscaile-home" ADSCAILE_TOKEN="$TOKEN" ADSCAILE_SERVER_URL="$BASE" ADSCAILE_POLL_MS=2000 \
   node "$DAEMON_CLI" >"$TMP/daemon.log" 2>&1 &
 daemon_pid=$!
 
@@ -67,7 +67,7 @@ done
 # folder the demo controls under $TMP, then pass its path (with the matching
 # workdir) in the create body.
 echo "▶ authoring the loop's task file (its standing ## Spec) on disk"
-LOOP_DIR="$TMP/workspace/loopany/cookie-breakfast"
+LOOP_DIR="$TMP/workspace/adscaile/cookie-breakfast"
 mkdir -p "$LOOP_DIR"
 TASK_FILE="$LOOP_DIR/README.md"
 cat >"$TASK_FILE" <<'EOF'

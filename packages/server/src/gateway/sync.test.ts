@@ -14,10 +14,10 @@ let syncMod: typeof import("./sync.js");
 let tokens: typeof import("./tokens.js");
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-sync-"));
-  process.env.LOOPANY_DATA_DIR = tmp;
-  process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
-  process.env.LOOPANY_LOG_LEVEL = "silent";
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-sync-"));
+  process.env.ADSCAILE_DATA_DIR = tmp;
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, "test.db");
+  process.env.ADSCAILE_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
   store = await import("../db/store.js");
@@ -407,13 +407,13 @@ test("getArtifacts (listLoopArtifacts) surfaces meta per file; null for untyped"
 test("poll response carries the watch set for every loop bound to the machine", async () => {
   const { token, machineId } = (await seed());
   // A second loop on the same machine, one with a taskFile.
-  (await store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/proj/loopany/l2/README.md", workdir: "/proj" }));
+  (await store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/proj/adscaile/l2/README.md", workdir: "/proj" }));
   const machineGw = new gatewayMod.MachineGateway(scheduler, new MemoryBlobStore());
   const res = (await machineGw.poll(token));
   const watch = (res.body as any).watch as Array<{ loopId: string; workdir: string | null; taskFile: string | null }>;
   expect(watch).toHaveLength(2);
   const withTask = watch.find((w) => w.taskFile)!;
-  expect(withTask.taskFile).toBe("/proj/loopany/l2/README.md");
+  expect(withTask.taskFile).toBe("/proj/adscaile/l2/README.md");
   expect(withTask.workdir).toBe("/proj");
 });
 

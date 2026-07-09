@@ -16,8 +16,8 @@ dist/
 *.db-shm
 
 # local runtime artifacts (daemon shim, downloaded delivery prompts, scratch task files)
-.loopany/
-/loopany/
+.adscaile/
+/adscaile/
 
 # development docs
 .lavish/

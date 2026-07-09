@@ -1,5 +1,5 @@
 /**
- * Callback mode — the in-run `loopany <verb>` path (run token in env). Proves it now
+ * Callback mode — the in-run `adscaile <verb>` path (run token in env). Proves it now
  * funnels through the unified `/api/machine/cli` dispatch carrying the RUN token, that
  * it inlines the file flags before posting, and that it falls back to the legacy
  * `/agent-api/loop` when an OLD server 404s the unified endpoint. Global `fetch` is
@@ -11,10 +11,10 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-// Isolate ~/.loopany BEFORE config.ts loads (LOOPANY_DIR is read at import) so the
+// Isolate ~/.adscaile BEFORE config.ts loads (ADSCAILE_DIR is read at import) so the
 // not-configured test can't accidentally resolve a real stored server url.
 vi.hoisted(() => {
-  process.env.LOOPANY_HOME = "/tmp/loopany-callback-test-home-does-not-exist";
+  process.env.ADSCAILE_HOME = "/tmp/adscaile-callback-test-home-does-not-exist";
 });
 
 import { runCallback } from "./callback.js";
@@ -33,24 +33,24 @@ function stubFetch(handler: (url: string, init: any) => { status: number; body: 
 }
 
 describe("runCallback — unified dispatch", () => {
-  const prevToken = process.env.LOOPANY_RUN_TOKEN;
-  const prevServer = process.env.LOOPANY_SERVER_URL;
+  const prevToken = process.env.ADSCAILE_RUN_TOKEN;
+  const prevServer = process.env.ADSCAILE_SERVER_URL;
   let outSpy: ReturnType<typeof vi.spyOn>;
   let errSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    process.env.LOOPANY_RUN_TOKEN = "run-tok-1";
-    process.env.LOOPANY_SERVER_URL = "https://srv.test";
+    process.env.ADSCAILE_RUN_TOKEN = "run-tok-1";
+    process.env.ADSCAILE_SERVER_URL = "https://srv.test";
     outSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    if (prevToken === undefined) delete process.env.LOOPANY_RUN_TOKEN;
-    else process.env.LOOPANY_RUN_TOKEN = prevToken;
-    if (prevServer === undefined) delete process.env.LOOPANY_SERVER_URL;
-    else process.env.LOOPANY_SERVER_URL = prevServer;
+    if (prevToken === undefined) delete process.env.ADSCAILE_RUN_TOKEN;
+    else process.env.ADSCAILE_RUN_TOKEN = prevToken;
+    if (prevServer === undefined) delete process.env.ADSCAILE_SERVER_URL;
+    else process.env.ADSCAILE_SERVER_URL = prevServer;
   });
 
   const stdout = () => outSpy.mock.calls.map((c) => String(c[0])).join("");
@@ -67,13 +67,13 @@ describe("runCallback — unified dispatch", () => {
   });
 
   test("a non-zero server exitCode is propagated to the process exit code", async () => {
-    stubFetch(() => ({ status: 200, body: { text: "loopany: bad flag", exitCode: 2 } }));
+    stubFetch(() => ({ status: 200, body: { text: "adscaile: bad flag", exitCode: 2 } }));
     expect(await runCallback(["report", "--bogus"])).toBe(2);
     expect(stdout()).toContain("bad flag");
   });
 
   test("inlines a --message-file into --message before posting (shared client)", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-cb-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adscaile-cb-"));
     const msgFile = path.join(dir, "msg.txt");
     fs.writeFileSync(msgFile, "a long human message body");
     const calls = stubFetch(() => ({ status: 200, body: { text: "ok", exitCode: 0 } }));
@@ -105,7 +105,7 @@ describe("runCallback — unified dispatch", () => {
     expect(stdout()).toContain("reported (legacy).");
   });
 
-  test("F2: in-run `loopany log` prints the server's TOON survey text on the EXISTING daemon", async () => {
+  test("F2: in-run `adscaile log` prints the server's TOON survey text on the EXISTING daemon", async () => {
     // The server's `/api/machine/cli` `log` response carries a rendered `text` field
     // (Batch 1's F2 fix); the callback prints `body.text`. Batch 7 keeps `runs` as a
     // retained data channel (for `--json`/`--transcript`) but the callback reads only
@@ -118,7 +118,7 @@ describe("runCallback — unified dispatch", () => {
       '  "2026-07-05 06:00",exec,ok/nothing-new,$0.08,drift=0,sess-abc,"no drift"',
       "summary: showing 1 of 12 · 1 ok · last exec ok/nothing-new 2026-07-05 06:00",
       "help[2]:",
-      "  Run `loopany log loop-abc --full` to inline each run's transcript",
+      "  Run `adscaile log loop-abc --full` to inline each run's transcript",
     ].join("\n");
     const calls = stubFetch(() => ({
       status: 200,
@@ -146,7 +146,7 @@ describe("runCallback — unified dispatch", () => {
   });
 
   test("no server url → control channel not configured (exit 2, no fetch)", async () => {
-    delete process.env.LOOPANY_SERVER_URL;
+    delete process.env.ADSCAILE_SERVER_URL;
     const calls = stubFetch(() => ({ status: 200, body: {} }));
     const code = await runCallback(["report"]);
     expect(code).toBe(2);

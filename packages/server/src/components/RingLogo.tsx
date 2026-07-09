@@ -57,7 +57,7 @@ export function RingLogo({
       height={size}
       viewBox="0 0 96 96"
       role="img"
-      aria-label="Loopany"
+      aria-label="adScaile"
       className={rootClass}
     >
       {/* Concentric corners: plate rx = sticker rx (6) + edge gap (9). */}

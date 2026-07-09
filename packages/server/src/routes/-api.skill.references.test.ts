@@ -34,7 +34,7 @@ describe('/api/skill/references/$', () => {
 
   test('serves the real create.md body (the create flow)', async () => {
     const body = await (await call('/api/skill/references/create.md')).text()
-    expect(body).toContain('loopany new')
+    expect(body).toContain('adscaile new')
   })
 
   test('create.md carries the §2 propose → confirm → build guidance', async () => {
@@ -43,7 +43,7 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('2 · Settle cadence, output')
     expect(body).toContain('propose → confirm → build')
     expect(body).toContain('Never silently guess')
-    // The parameters the agent must settle before `loopany new`.
+    // The parameters the agent must settle before `adscaile new`.
     expect(body).toContain('Cadence.')
     expect(body).toContain('Per-run output.')
     // Batch 3: a goal-shaped task also proposes a finish line (closed loop); a
@@ -67,10 +67,10 @@ describe('/api/skill/references/$', () => {
   test('create.md drops the removed `task` field + tmp.json ritual, uses inline --json', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // Batch 2 removed the `task` column and the loop.tmp.json config file; create.md
-    // now authors an inline config passed to `loopany new --json` and previews with --dry-run.
+    // now authors an inline config passed to `adscaile new --json` and previews with --dry-run.
     expect(body).not.toContain('loop.tmp.json')
     expect(body).not.toContain('--config')
-    expect(body).toContain('loopany new --json')
+    expect(body).toContain('adscaile new --json')
     expect(body).toContain('--dry-run')
   })
 
@@ -97,14 +97,14 @@ describe('/api/skill/references/$', () => {
     // Surface-only-what-changed nuance.
     expect(body).toContain('surfaces only what is new or changed')
     // The report/finish grammar and the strict finish bar.
-    expect(body).toContain('loopany report --status nothing-new')
-    expect(body).toContain('loopany finish --message')
+    expect(body).toContain('adscaile report --status nothing-new')
+    expect(body).toContain('adscaile finish --message')
     expect(body).toContain('selfFinish: allowed')
     expect(body).toContain('Never finish early')
-    // The schedule levers with `loopany show` first, and the run-path cadence floors.
-    expect(body).toContain('loopany show')
-    expect(body).toContain('loopany reschedule')
-    expect(body).toContain('loopany set-cron')
+    // The schedule levers with `adscaile show` first, and the run-path cadence floors.
+    expect(body).toContain('adscaile show')
+    expect(body).toContain('adscaile reschedule')
+    expect(body).toContain('adscaile set-cron')
     expect(body).toContain('cadence floors')
     // Front-matter product conventions (type/title/date).
     expect(body).toContain('front-matter')
@@ -114,7 +114,7 @@ describe('/api/skill/references/$', () => {
   test('run.md schedule levers name --run-at canonical + --next alias (batch 5, F4)', async () => {
     const body = flat(await (await call('/api/skill/references/run.md')).text())
     // The reschedule lever documents the canonical flag and keeps the back-compat alias.
-    expect(body).toContain('loopany reschedule --run-at')
+    expect(body).toContain('adscaile reschedule --run-at')
     expect(body).toContain('`--run-at` is canonical; `--next` is accepted as a back-compat alias')
     // The run-facing effective-capability keys are the shipped camelCase TOON keys,
     // not the retired kebab display names.
@@ -128,7 +128,7 @@ describe('/api/skill/references/$', () => {
     // The "reading the log" prose matches the server's `renderLogText` header + summary.
     expect(body).toContain('runs[N]{ts,role,outcome,cost,metrics,session,message}')
     expect(body).toContain('`summary:`')
-    // `loopany log` shows metric values as key=value; the task-message inline is keys-only.
+    // `adscaile log` shows metric values as key=value; the task-message inline is keys-only.
     expect(body).toContain('`metrics` column carries them as `key=value`')
   })
 

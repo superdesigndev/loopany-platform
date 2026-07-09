@@ -1,5 +1,5 @@
 /**
- * `loopany skill status` — honest, per-agent install reporting. The install now
+ * `adscaile skill status` — honest, per-agent install reporting. The install now
  * targets every agent in `SKILL_TARGET_AGENTS` (Claude Code + Codex today), so
  * status must report each one's location for BOTH scopes (user + project), derived
  * from the same target list as the installer so the two surfaces cannot drift.
@@ -31,7 +31,7 @@ async function captureStatus(): Promise<string> {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("loopany skill status — multi-agent", () => {
+describe("adscaile skill status — multi-agent", () => {
   test("reports every targeted agent (Claude Code + Codex) by label", async () => {
     const out = await captureStatus();
     for (const t of SKILL_TARGET_AGENTS) {
@@ -44,8 +44,8 @@ describe("loopany skill status — multi-agent", () => {
   test("reports each agent × scope (user + project) with a real installed/not-installed verdict", async () => {
     const out = await captureStatus();
     for (const t of SKILL_TARGET_AGENTS) {
-      const userDir = path.join(os.homedir(), ...t.skillsRoot, "loopany");
-      const projectDir = path.join(process.cwd(), ...t.skillsRoot, "loopany");
+      const userDir = path.join(os.homedir(), ...t.skillsRoot, "adscaile");
+      const projectDir = path.join(process.cwd(), ...t.skillsRoot, "adscaile");
       const userInstalled = fs.existsSync(path.join(userDir, "SKILL.md"));
       const projectInstalled = fs.existsSync(path.join(projectDir, "SKILL.md"));
       // user scope line
@@ -60,7 +60,7 @@ describe("loopany skill status — multi-agent", () => {
 
   test("distinct skill-root per agent — Claude Code under .claude, Codex under .agents", async () => {
     const out = await captureStatus();
-    expect(out).toContain(path.join(".claude", "skills", "loopany"));
-    expect(out).toContain(path.join(".agents", "skills", "loopany"));
+    expect(out).toContain(path.join(".claude", "skills", "adscaile"));
+    expect(out).toContain(path.join(".agents", "skills", "adscaile"));
   });
 });

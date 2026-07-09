@@ -1,11 +1,11 @@
 /**
- * `loopany --help` / `-h` / `help` — the usage screen, and `loopany -v` /
+ * `adscaile --help` / `-h` / `help` — the usage screen, and `adscaile -v` /
  * `--version` — the bare version line. Kept in its own module so both paths load
  * nothing heavy (no daemon/network), and so the verb list has a single readable
  * source. The usage screen leads with the daemon version (a troubleshooting
  * affordance, reusing `daemonVersion()`); when the version is unreadable it
  * degrades to the plain header instead of throwing. Grouped setup-vs-management;
- * the in-run callbacks (`loopany report …`, which the agent invokes via the PATH
+ * the in-run callbacks (`adscaile report …`, which the agent invokes via the PATH
  * wrapper) are NOT user commands and are deliberately omitted.
  *
  * The owner loop verbs (loops/edit/log/new) and the in-run callbacks are no longer
@@ -15,27 +15,27 @@
  */
 import { daemonVersion } from "./version.js";
 
-const HELP_BODY = ` connects this machine to a Loopany
+const HELP_BODY = ` connects this machine to a adScaile
 server and runs your scheduled agent loops locally with your own coding agent.
 
-Usage: loopany [command] [options]
+Usage: adscaile [command] [options]
 
-  loopany                 Show the content-first HOME: this machine's live loops +
+  adscaile                 Show the content-first HOME: this machine's live loops +
                           recent runs (the poll loop moved to \`up --foreground\`).
 
 Setup
   up [--foreground]       Connect this machine / ensure its daemon is running
-                          (idempotent; refreshes the loopany skill, the SessionStart
-                          hook, and the \`loopany\` PATH shim). --foreground runs the
+                          (idempotent; refreshes the adscaile skill, the SessionStart
+                          hook, and the \`adscaile\` PATH shim). --foreground runs the
                           poll loop attached in this terminal instead of detached.
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
     [--dry-run]           stdin). --dry-run validates + previews, creates nothing.
   setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
                           view as ambient context each session (--remove uninstalls).
-  skill [status|install]  Manage the loopany agent skill install (user scope by
+  skill [status|install]  Manage the adscaile agent skill install (user scope by
     [--project]           default; --project installs into the current directory).
   update                  Update this machine's daemon to the version you invoked
-                          (run via npx @crewlet/loopany@latest update): stops the
+                          (run via npx @crewlet/adscaile@latest update): stops the
                           running daemon, starts the new one, refreshes the skill/hook/shim.
 
 Management
@@ -61,7 +61,7 @@ Interactive (edit loops from your own agent session, using the stored device tok
 `;
 
 /**
- * Concise per-verb usage, printed by `loopany <verb> --help` / `-h`. Kept terse on
+ * Concise per-verb usage, printed by `adscaile <verb> --help` / `-h`. Kept terse on
  * purpose (the full screen above is one `--help` away): the load-bearing property is that
  * `<verb> --help` short-circuits to THIS text with NO side effect — critical for the
  * foot-gun verbs (`update` hands the daemon over immediately, `down` stops it). Every
@@ -69,29 +69,29 @@ Interactive (edit loops from your own agent session, using the stored device tok
  * degrades to the full usage screen rather than throwing.
  */
 const VERB_USAGE: Record<string, string> = {
-  up: "loopany up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  loopany skill, the SessionStart hook, and the PATH shim). --foreground runs the\n  poll loop attached in this terminal instead of detached.",
-  new: "loopany new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing.",
-  skill: "loopany skill [status|install] [--project]\n  Manage the loopany agent skill install (user scope by default; --project installs\n  into the current directory).",
-  setup: "loopany setup hooks [--remove]\n  Install/refresh (or --remove) the SessionStart hook that lands the home view as\n  ambient context each session.",
-  update: "loopany update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.",
-  status: "loopany status\n  Report whether this machine's daemon is running (local pid) + its connection state.",
-  down: "loopany down\n  Stop the detached daemon this machine started with `up`.",
-  log: "loopany log [<loop>] [--transcript|--full] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
-  show: "loopany show [<id>] [--full] [--json]\n  Show a loop's full editable config + recent state (the device credential inspects\n  any loop on this machine).",
-  loops: "loopany loops [--fields a,b] [--json]\n  List your loops (--json emits the raw JSON array). Default columns are\n  id/name/cron/enabled/nextFire.",
-  edit: "loopany edit <id> --json '<obj>' [--dry-run] [--workflow-file|--ui-file|--schema-file <path>]\n  Edit a loop (JSON-only + content-file trio). --dry-run previews before/after.",
-  report: "loopany report ...\n  In-run only: the running agent reports progress/results. Outside a run this is rejected.",
-  finish: "loopany finish ...\n  In-run only: the running agent marks a closed loop's goal met. Outside a run this is rejected.",
-  complete: "loopany complete ...\n  In-run only alias of `finish`. Outside a run this is rejected.",
+  up: "adscaile up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  adscaile skill, the SessionStart hook, and the PATH shim). --foreground runs the\n  poll loop attached in this terminal instead of detached.",
+  new: "adscaile new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing.",
+  skill: "adscaile skill [status|install] [--project]\n  Manage the adscaile agent skill install (user scope by default; --project installs\n  into the current directory).",
+  setup: "adscaile setup hooks [--remove]\n  Install/refresh (or --remove) the SessionStart hook that lands the home view as\n  ambient context each session.",
+  update: "adscaile update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.",
+  status: "adscaile status\n  Report whether this machine's daemon is running (local pid) + its connection state.",
+  down: "adscaile down\n  Stop the detached daemon this machine started with `up`.",
+  log: "adscaile log [<loop>] [--transcript|--full] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
+  show: "adscaile show [<id>] [--full] [--json]\n  Show a loop's full editable config + recent state (the device credential inspects\n  any loop on this machine).",
+  loops: "adscaile loops [--fields a,b] [--json]\n  List your loops (--json emits the raw JSON array). Default columns are\n  id/name/cron/enabled/nextFire.",
+  edit: "adscaile edit <id> --json '<obj>' [--dry-run] [--workflow-file|--ui-file|--schema-file <path>]\n  Edit a loop (JSON-only + content-file trio). --dry-run previews before/after.",
+  report: "adscaile report ...\n  In-run only: the running agent reports progress/results. Outside a run this is rejected.",
+  finish: "adscaile finish ...\n  In-run only: the running agent marks a closed loop's goal met. Outside a run this is rejected.",
+  complete: "adscaile complete ...\n  In-run only alias of `finish`. Outside a run this is rejected.",
 };
 
-/** `loopany <version>` for humans, or a plain fallback when it's unreadable. */
+/** `adscaile <version>` for humans, or a plain fallback when it's unreadable. */
 function versionLabel(version: string | undefined): string {
-  return version ? `loopany v${version}` : "loopany";
+  return version ? `adscaile v${version}` : "adscaile";
 }
 
 /**
- * `loopany <verb> --help` / `-h`: print that verb's concise usage and exit 0, running NO
+ * `adscaile <verb> --help` / `-h`: print that verb's concise usage and exit 0, running NO
  * handler side effect. Unknown verbs fall back to the full usage screen.
  */
 export function printVerbHelp(
@@ -101,7 +101,7 @@ export function printVerbHelp(
 ): number {
   const usage = VERB_USAGE[verb];
   if (!usage) return printHelp(out, version);
-  out(`${versionLabel(version)}\n\n${usage}\n\nRun \`loopany --help\` for all commands.\n`);
+  out(`${versionLabel(version)}\n\n${usage}\n\nRun \`adscaile --help\` for all commands.\n`);
   return 0;
 }
 
@@ -109,15 +109,15 @@ export function printHelp(
   out: (s: string) => void = (s) => process.stdout.write(s),
   version: string | undefined = daemonVersion(),
 ): number {
-  out(`${versionLabel(version)} - the Loopany daemon:${HELP_BODY}`);
+  out(`${versionLabel(version)} - the adScaile daemon:${HELP_BODY}`);
   return 0;
 }
 
-/** `loopany -v` / `--version`: just the version line, never starts the daemon. */
+/** `adscaile -v` / `--version`: just the version line, never starts the daemon. */
 export function printVersion(
   out: (s: string) => void = (s) => process.stdout.write(s),
   version: string | undefined = daemonVersion(),
 ): number {
-  out(`${version ? `loopany v${version}` : "loopany (version unknown)"}\n`);
+  out(`${version ? `adscaile v${version}` : "adscaile (version unknown)"}\n`);
   return 0;
 }

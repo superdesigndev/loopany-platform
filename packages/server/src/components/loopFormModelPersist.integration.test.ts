@@ -43,10 +43,10 @@ function legacyExec(f: { workdir: string; model: string; allowControl: boolean }
 }
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'loopany-modelpersist-'))
-  process.env.LOOPANY_DATA_DIR = tmp
-  process.env.LOOPANY_DB_PATH = path.join(tmp, 'test.db')
-  process.env.LOOPANY_LOG_LEVEL = 'silent'
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'adscaile-modelpersist-'))
+  process.env.ADSCAILE_DATA_DIR = tmp
+  process.env.ADSCAILE_DB_PATH = path.join(tmp, 'test.db')
+  process.env.ADSCAILE_LOG_LEVEL = 'silent'
   const db = await import('../db/index.js')
   await db.runMigrations()
   store = await import('../db/store.js')

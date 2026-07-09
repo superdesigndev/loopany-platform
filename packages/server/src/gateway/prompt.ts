@@ -1,7 +1,7 @@
 /**
  * Builds the per-run prompts on the SERVER, to ship inside a delivery (the machine
  * just writes the prompt to a file and runs claude with it). Ported from c0's
- * loop-prompt.ts, bound to the new Loop row and the renamed `loopany` CLI. Prompt
+ * loop-prompt.ts, bound to the new Loop row and the renamed `adscaile` CLI. Prompt
  * prose lives as markdown loaded + `{{token}}`-filled here. ALL prompt prose lives
  * under src/skill/: the public authoring trio (create/update/evolve) in
  * skill/references/, and the INTERNAL run prompts (exec-core, edit) in skill/run/ —
@@ -17,7 +17,7 @@
  * and passes `--append-system-prompt-file`, but an empty file is a harmless no-op
  * on every existing daemon (so this ships server-first, no daemon change). exec-core
  * is the self-sufficient CORE (identity + untrusted-data guard + the non-negotiable
- * fallback core + per-run trigger + a pointer to the installable loopany skill for
+ * fallback core + per-run trigger + a pointer to the installable adscaile skill for
  * the deep protocol); the deep protocol itself moves to the skill in a later batch.
  * The old standing system prompt (exec-loop.md) is retained as that batch's source
  * but is no longer imported or delivered.
@@ -31,7 +31,7 @@
  * longer dumps up to 12 runs as pretty-printed JSON (tens of KB of full messages +
  * full state); it emits a compact one-line-per-run SURVEY (ts / role / outcome-status
  * / cost / state KEYS only / session id / message clipped ~100 chars), headed by the
- * on-demand pointers (`loopany log [--transcript]`, now reachable in-run, and the
+ * on-demand pointers (`adscaile log [--transcript]`, now reachable in-run, and the
  * local session JSONL). `buildEditTask` KEEPS its inlined current ui/workflow/schema:
  * that is current config, not history, and is genuinely useful for a surgical edit.
  */
@@ -66,15 +66,15 @@ function formatSchemaFields(schema: StateField[]): string {
   return schema.map((f) => `${f.key}${f.unit ? ` (${f.unit})` : ""}${f.label ? ` — ${f.label}` : ""}`).join("; ");
 }
 
-/** The schema-derived `loopany report` grammar line for a loop's metric charts. */
+/** The schema-derived `adscaile report` grammar line for a loop's metric charts. */
 function stateReportLine(loop: Loop): string {
   const schema = loop.stateSchema ?? [];
   return schema.length
-    ? `loopany report --status <s> --state '{${schema.map((f) => `"${f.key}":<n>`).join(",")}}'
+    ? `adscaile report --status <s> --state '{${schema.map((f) => `"${f.key}":<n>`).join(",")}}'
   # record this run's metrics for the trend chart. Fields (keys must match, values must be finite numbers):
   #   ${formatSchemaFields(schema)}
   # report a subset if you only observed some; big payloads: --state-file <path>.`
-    : `loopany report --status new
+    : `adscaile report --status new
   # this loop has no metric schema, so this run records no chart metrics — just the status/message.
   # to start charting a trend, an evolve/edit pass can define a metric schema first.`;
 }
@@ -94,7 +94,7 @@ export function buildLoopSystemPrompt(_loop: Loop): string {
 /**
  * The per-run user turn — now the FULL exec CORE (identity, untrusted-data guard,
  * the non-negotiable inline fallback core, the report/finish grammar, the per-run
- * trigger, and a pointer to the installable loopany skill for the deep protocol).
+ * trigger, and a pointer to the installable adscaile skill for the deep protocol).
  * Self-sufficient by design: the skill is enrichment, never a dependency (§3.1). A
  * closed loop injects its setpoint as a `Goal (finish line): <goal>` line —
  * prompt-injected so it wins over the file per the trust hierarchy; an open loop
@@ -129,7 +129,7 @@ export function buildEditPrompt(): string {
 }
 
 /** The edit user turn — the short edit CORE (apply ONE owner-requested change, don't
- *  run the task, don't finish, end with `loopany report`; carries the untrusted-data
+ *  run the task, don't finish, end with `adscaile report`; carries the untrusted-data
  *  guard + skill pointer) ahead of the payload. The current ui/schema/workflow are
  *  inlined when present so an edit can make a surgical change to them rather than
  *  blind-rewrite — that is current CONFIG, not history, so it stays inlined (§3.4). */
@@ -155,7 +155,7 @@ export function buildEditTask(loop: Loop, instruction: string): string {
 }
 
 /** How many chars of a run's message survive in the compact survey (rest → ellipsis;
- *  the full text is a `loopany log`/session away). */
+ *  the full text is a `adscaile log`/session away). */
 const SURVEY_MESSAGE_CAP = 100;
 
 /** A run's message collapsed to a single clipped line for the survey. */
@@ -166,7 +166,7 @@ function surveyMessage(message: string | null): string {
 }
 
 /** One run as a single survey line. State appears as KEYS only — values are noise at
- *  survey altitude, and the agent pulls them via `loopany log`/the session if a call
+ *  survey altitude, and the agent pulls them via `adscaile log`/the session if a call
  *  hinges on them. The session id is kept in FULL so the deep-dive `find … -name
  *  '<session>.jsonl'` resolves; only the message is clipped. */
 function surveyRow(r: Run): string {
@@ -187,13 +187,13 @@ function surveyRow(r: Run): string {
 
 /** The compact recent-runs survey: one line per run (oldest → newest), headed by the
  *  on-demand pointers. Replaces the old tens-of-KB pretty-printed JSON dump — full
- *  detail (state values, un-clipped message, transcript) is a `loopany log`/session
- *  away, and `loopany log` now works IN-RUN too, so this is enrichment, not the only
+ *  detail (state values, un-clipped message, transcript) is a `adscaile log`/session
+ *  away, and `adscaile log` now works IN-RUN too, so this is enrichment, not the only
  *  window into history. */
 function renderRecentRuns(runs: Run[]): string {
   const header =
     `Recent runs (oldest → newest, N=${runs.length}) — a compact survey. Full detail on demand:\n` +
-    `  · loopany log [--transcript]  — the same survey straight from the server (works in-run); --transcript adds each run's clipped transcript\n` +
+    `  · adscaile log [--transcript]  — the same survey straight from the server (works in-run); --transcript adds each run's clipped transcript\n` +
     `  · session JSONL — take a run's session id below, then: find ~/.claude/projects -name '<session>.jsonl'  (the deep, unclipped dive)`;
   if (!runs.length) return `${header}\n\n(no prior runs yet)`;
   const columns = [
@@ -221,6 +221,6 @@ export function buildEvolveTask(loop: Loop, runs: Run[]): string {
     "Current ui:\n" + (loop.ui ? "```html\n" + loop.ui + "\n```" : "(none yet — author one if the data warrants it)"),
     "Current workflow:\n" + (loop.workflow ? "```js\n" + loop.workflow + "\n```" : "(none)"),
     renderRecentRuns(runs),
-    "Evolve this loop per your instructions: review the recent runs' log to sharpen AND distill the task file, distil/refine the workflow, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `loopany report --message '<one line: which levers you pulled and why, or \"no change\" and why>'` — an internal run-log line; evolution never notifies the user.",
+    "Evolve this loop per your instructions: review the recent runs' log to sharpen AND distill the task file, distil/refine the workflow, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `adscaile report --message '<one line: which levers you pulled and why, or \"no change\" and why>'` — an internal run-log line; evolution never notifies the user.",
   ].join("\n\n");
 }

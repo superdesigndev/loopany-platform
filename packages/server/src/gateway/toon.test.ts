@@ -125,12 +125,12 @@ test("inlineArray joins scalar items on one line with the given separator", () =
 // ---- help ----
 
 test("helpBlock renders help[N]: with indented command templates verbatim", () => {
-  const out = helpBlock(["Run `loopany show <id>` to see a loop's full config", "Run `loopany log <id>` to see recent runs"]);
+  const out = helpBlock(["Run `adscaile show <id>` to see a loop's full config", "Run `adscaile log <id>` to see recent runs"]);
   expect(out).toBe(
     [
       "help[2]:",
-      "  Run `loopany show <id>` to see a loop's full config",
-      "  Run `loopany log <id>` to see recent runs",
+      "  Run `adscaile show <id>` to see a loop's full config",
+      "  Run `adscaile log <id>` to see recent runs",
     ].join("\n"),
   );
 });

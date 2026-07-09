@@ -1,49 +1,49 @@
 #!/usr/bin/env node
 /**
- * Loopany daemon — one binary, many roles (BYOA MINIMAL_DAEMON §1):
+ * adScaile daemon — one binary, many roles (BYOA MINIMAL_DAEMON §1):
  *
- *   loopany                    → the content-first HOME (P8): a live machine
+ *   adscaile                    → the content-first HOME (P8): a live machine
  *                                dashboard on the device credential (in a run, the
  *                                run's own-loop context). NO LONGER the poll loop.
- *   loopany up [--foreground]  → setup mode: ensure a daemon is running for this
+ *   adscaile up [--foreground]  → setup mode: ensure a daemon is running for this
  *                                machine (idempotent; installs the session hook + PATH
  *                                shim). `--foreground` runs the poll loop attached in
- *                                this terminal (the old bare-`loopany` behavior).
- *   loopany setup hooks        → install/refresh the SessionStart hook that lands the
+ *                                this terminal (the old bare-`adscaile` behavior).
+ *   adscaile setup hooks        → install/refresh the SessionStart hook that lands the
  *     [--remove]                 home view as ambient context each session (P7).
- *   loopany new --config […]   → setup mode: create a loop from a config file,
+ *   adscaile new --config […]   → setup mode: create a loop from a config file,
  *                                filling timezone/claim/auth — folds SKILL.md §3–4.
- *   loopany skill [status|install] → install the loopany agent skill at USER scope
+ *   adscaile skill [status|install] → install the adscaile agent skill at USER scope
  *                                via `npx skills` (best-effort; the manual escape hatch
- *                                — `loopany up`/`new` also refresh ~/.claude/skills).
- *   loopany update             → setup mode: hand the running daemon over to this
+ *                                — `adscaile up`/`new` also refresh ~/.claude/skills).
+ *   adscaile update             → setup mode: hand the running daemon over to this
  *                                (newer) CLI — stop the old daemon, start this one,
  *                                refresh the skill (this CLI is already the new version).
- *   loopany status             → setup mode: report whether THIS machine's daemon
+ *   adscaile status             → setup mode: report whether THIS machine's daemon
  *                                is running (local pid) + its connection state.
- *   loopany down               → setup mode: stop the detached daemon `up` started.
- *   loopany log [<loop>]       → read mode: print a loop's recent run history
+ *   adscaile down               → setup mode: stop the detached daemon `up` started.
+ *   adscaile log [<loop>]       → read mode: print a loop's recent run history
  *                                (status + transcript) for the loop in this workdir.
- *   loopany --help | -h | help → print usage (leads with the version) and exit
+ *   adscaile --help | -h | help → print usage (leads with the version) and exit
  *                                (NEVER start the daemon).
- *   loopany --version | -v     → print just the daemon version and exit.
- *   loopany loops|edit […]     → interactive mode: the owner edits a loop from
+ *   adscaile --version | -v     → print just the daemon version and exit.
+ *   adscaile loops|edit […]     → interactive mode: the owner edits a loop from
  *                                their own coding agent, reusing the persisted
  *                                device token.
- *   loopany <verb> [...flags]  → callback mode (when LOOPANY_RUN_TOKEN is set;
+ *   adscaile <verb> [...flags]  → callback mode (when ADSCAILE_RUN_TOKEN is set;
  *                                claude calls this via the PATH wrapper).
  *
  * The loop verbs (report, finish, show, log, set-cron, reschedule, loops, edit,
  * new, …) no longer split into two worlds: they all funnel through the shared CLI client
  * (`cli-client.ts` `postCli`), which attaches whatever credential the env carries —
- * the run token if `LOOPANY_RUN_TOKEN` is set, else the persisted device token — and
+ * the run token if `ADSCAILE_RUN_TOKEN` is set, else the persisted device token — and
  * POSTs `{argv}` to the ONE unified dispatch `/api/machine/cli`, falling back to the
  * legacy per-credential endpoints on a 404 (old server). Only the LOCAL verbs below
  * (up/down/update/skill/status/help/version/bare-daemon) keep their own fast-paths.
  */
 import { classify } from "./route.js";
 
-// Lazy-import per branch: claude re-execs this CLI for every `loopany report …`
+// Lazy-import per branch: claude re-execs this CLI for every `adscaile report …`
 // callback, so keep that path from loading the daemon/interactive modules. The
 // routing decision itself lives in the pure `route.ts` (unit-tested); this just maps
 // each Route to its lazily-imported handler.
@@ -85,7 +85,7 @@ async function main(): Promise<number> {
     case "home":
       return (await import("./home.js")).runHome();
     case "unknown":
-      process.stderr.write(`loopany: unknown command '${r.verb}' — try \`loopany --help\`\n`);
+      process.stderr.write(`adscaile: unknown command '${r.verb}' — try \`adscaile --help\`\n`);
       return 2;
   }
 }
@@ -93,7 +93,7 @@ async function main(): Promise<number> {
 main().then(
   (code) => process.exit(code),
   (err) => {
-    process.stderr.write(`loopany: fatal: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`adscaile: fatal: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);
   },
 );

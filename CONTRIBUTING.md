@@ -1,16 +1,16 @@
-# Contributing to Loopany
+# Contributing to adScaile
 
 Thanks for your interest in contributing! This guide covers the basics for
 getting set up and landing a change.
 
 ## Repo layout
 
-Loopany is a pnpm monorepo with two packages:
+adScaile is a pnpm monorepo with two packages:
 
-- **`packages/server`** (`@loopany/server`, private) — the TanStack Start web app:
+- **`packages/server`** (`@adscaile/server`, private) — the TanStack Start web app:
   UI + server functions + the in-process scheduler + machine/agent routes + Better
   Auth + artifact storage. Drizzle/SQLite. Deployed on Fly.
-- **`packages/daemon`** (`@crewlet/loopany`, public on npm) — the machine-side
+- **`packages/daemon`** (`@crewlet/adscaile`, public on npm) — the machine-side
   daemon that runs on each user's own machine, polls the server for due runs, and
   executes them via the user's local coding agent (BYOA).
 
@@ -40,16 +40,16 @@ the artifact blob store, or other options. The app runs open (no auth) by defaul
 > Changed `packages/server/src/db/schema.ts`? Generate and apply the migration
 > locally — dev does **not** auto-migrate:
 > ```bash
-> pnpm --filter @loopany/server db:generate   # write the SQL + snapshot
-> pnpm --filter @loopany/server db:migrate     # apply to the dev DB
+> pnpm --filter @adscaile/server db:generate   # write the SQL + snapshot
+> pnpm --filter @adscaile/server db:migrate     # apply to the dev DB
 > ```
 
 ## Tests & typecheck
 
 ```bash
 pnpm -r test                          # run every package's test suite
-pnpm --filter @loopany/server test    # server only
-pnpm --filter @crewlet/loopany test   # daemon only
+pnpm --filter @adscaile/server test    # server only
+pnpm --filter @crewlet/adscaile test   # daemon only
 pnpm -r typecheck                     # typecheck both packages
 ```
 
@@ -64,21 +64,21 @@ Please keep tests and `typecheck` green before opening a PR.
 ## Releases
 
 - **Server** — deploys to Fly automatically on push to `main`
-  (`.github/workflows/deploy.yml`, staging `loopany-testing`). Production
-  (`loopany-prod` / loopany.ai) ships only via a manual `workflow_dispatch`
+  (`.github/workflows/deploy.yml`, staging `adscaile-testing`). Production
+  (`adscaile-prod` / adscaile.ai) ships only via a manual `workflow_dispatch`
   (`.github/workflows/deploy-prod.yml`). Migrations are forward-only (an image
   rollback does not roll back schema); check the `machines.daemon_version`
   fleet before removing legacy endpoints.
-- **Daemon** (`@crewlet/loopany`) — publishes to npm on a `vX.Y.Z` git tag
+- **Daemon** (`@crewlet/adscaile`) — publishes to npm on a `vX.Y.Z` git tag
   (`.github/workflows/publish-daemon.yml`, via npm OIDC trusted publishing). The
   tag must match the version in `packages/daemon/package.json`.
 
 ## Licensing
 
-Loopany is licensed under the [MIT License](LICENSE), and every package is MIT:
+adScaile is licensed under the [MIT License](LICENSE), and every package is MIT:
 
-- **`packages/daemon`** (`@crewlet/loopany`) — [MIT](packages/daemon/LICENSE).
-- **`packages/server`** (`@loopany/server`) — [MIT](packages/server/LICENSE).
+- **`packages/daemon`** (`@crewlet/adscaile`) — [MIT](packages/daemon/LICENSE).
+- **`packages/server`** (`@adscaile/server`) — [MIT](packages/server/LICENSE).
 
 Contributions are accepted under the MIT license (inbound=outbound): by opening
 a pull request you agree that your contribution is provided under the same MIT

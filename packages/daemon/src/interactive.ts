@@ -1,8 +1,8 @@
 /**
- * Interactive mode — `loopany loops` / `loopany edit <id> [...flags]`, run by the
+ * Interactive mode — `adscaile loops` / `adscaile edit <id> [...flags]`, run by the
  * owner (or their Claude Code) OUTSIDE a run. Goes through the shared CLI client
  * (`postCli`), which reuses the device token + server URL the daemon persisted under
- * ~/.loopany and POSTs `{argv}` to the unified `/api/machine/cli`, falling back to the
+ * ~/.adscaile and POSTs `{argv}` to the unified `/api/machine/cli`, falling back to the
  * legacy `/api/machine/loop` channel on a 404 (old server). No run token, no re-auth,
  * no claim — the machine is already connected, so editing an existing loop needs none.
  */
@@ -13,7 +13,7 @@ import { postCli, printTextOrTooOld } from "./cli-client.js";
 
 type Flags = Record<string, string | boolean>;
 
-/** Injectable seams so tests exercise the fetch path without a real ~/.loopany or
+/** Injectable seams so tests exercise the fetch path without a real ~/.adscaile or
  *  network (mirrors LogDeps). Absent ⇒ postCli resolves the real token/server. */
 export interface InteractiveDeps {
   fetchImpl?: typeof fetch;
@@ -58,7 +58,7 @@ function readFileFlag(flags: Flags, flag: string): string | undefined {
   return readFileSync(path, "utf8");
 }
 
-/** The ONLY flags `loopany edit` accepts (batch 2 slim-down to JSON-only + the
+/** The ONLY flags `adscaile edit` accepts (batch 2 slim-down to JSON-only + the
  *  content trio). The scalar envelope flags (--cron/--tz/--name/--notify/--model/
  *  --pause/--resume/--run-at/--task-file) and --json-file are GONE: reshape a loop
  *  with a single `--json '<obj>'` patch, and push development-artifact content
@@ -66,13 +66,13 @@ function readFileFlag(flags: Flags, flag: string): string | undefined {
  *  `server-url`/`api-key` are global daemon flags — allowed here, not patch keys. */
 const EDIT_FLAGS = new Set(["json", "workflow-file", "ui-file", "schema-file", "dry-run", "server-url", "api-key"]);
 
-/** The flags `loopany loops` accepts: `--fields <set>`, the `--json` escape hatch,
+/** The flags `adscaile loops` accepts: `--fields <set>`, the `--json` escape hatch,
  *  `--help`, plus the global daemon flags (consumed separately). An unknown flag is a
  *  usage error (exit 2) — the server validates unknown `--fields` VALUES separately. */
 const LOOPS_FLAGS = new Set(["fields", "json", "help", "server-url", "api-key"]);
 
 /**
- * Assemble the `loopany edit` patch body from the surviving flags. `--json '<obj>'`
+ * Assemble the `adscaile edit` patch body from the surviving flags. `--json '<obj>'`
  * carries the envelope + goal/enabled/allowControl etc; the `--*-file` flags read a
  * development-artifact file's raw content into workflow/ui/stateSchema (schema parsed
  * as JSON). Explicit `--json` keys win over the file flags. The server is the sole
@@ -82,7 +82,7 @@ const LOOPS_FLAGS = new Set(["fields", "json", "help", "server-url", "api-key"])
 export function buildPatch(flags: Flags): Record<string, unknown> {
   const unknown = Object.keys(flags).filter((k) => !EDIT_FLAGS.has(k));
   if (unknown.length) {
-    throw new Error(`unknown flag --${unknown[0]} — try \`loopany --help\` (edit takes --json '<obj>', --workflow-file, --ui-file, --schema-file)`);
+    throw new Error(`unknown flag --${unknown[0]} — try \`adscaile --help\` (edit takes --json '<obj>', --workflow-file, --ui-file, --schema-file)`);
   }
 
   const patch: Record<string, unknown> = {};
@@ -109,7 +109,7 @@ export function buildPatch(flags: Flags): Record<string, unknown> {
 }
 
 const USAGE =
-  "loopany: usage: loopany edit <loop-id> [options]\n" +
+  "adscaile: usage: adscaile edit <loop-id> [options]\n" +
   "  --json '<json-object>'      the whole patch — e.g. '{\"cron\":\"0 9 * * *\",\"goal\":\"ship v1\"}'\n" +
   "                              (envelope: name/cron/timezone/notify/model/allowControl/taskFile/\n" +
   "                               enabled/runAt/goal · {\"goal\":null} clears it, {\"enabled\":true}\n" +
@@ -128,7 +128,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     return i >= 0 ? process.argv[i + 1] : undefined;
   })();
   // Shared postCli deps: the injected server/token override the persisted ones so
-  // tests need no real ~/.loopany; production leaves them undefined and postCli
+  // tests need no real ~/.adscaile; production leaves them undefined and postCli
   // resolves the device token + server url itself (same values as before).
   const cliDeps: PostCliDeps = {
     fetchImpl: injected.fetchImpl,
@@ -141,7 +141,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
   const { positional, flags } = parseFlags(argv.slice(1));
 
   const notConnected = () =>
-    err("loopany: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set LOOPANY_SERVER_URL / LOOPANY_TOKEN)\n");
+    err("adscaile: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set ADSCAILE_SERVER_URL / ADSCAILE_TOKEN)\n");
 
   if (verb === "loops") {
     // Forward the user's flags so the server can honor `--fields`/`--json` and reject
@@ -149,7 +149,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     // (help promised `--fields` that never shipped; `--json` returned TOON). An unknown
     // FLAG is a usage error (exit 2), mirroring how an unknown VERB exits 2 client-side.
     const unknown = Object.keys(flags).filter((k) => !LOOPS_FLAGS.has(k));
-    if (unknown.length) return err(`loopany: unknown flag --${unknown[0]} — try \`loopany loops --help\`\n`), 2;
+    if (unknown.length) return err(`adscaile: unknown flag --${unknown[0]} — try \`adscaile loops --help\`\n`), 2;
     const cliArgv = ["loops"];
     if (typeof flags["fields"] === "string") cliArgv.push("--fields", flags["fields"]);
     if (flags["json"] === true || flags["json"] === "true") cliArgv.push("--json");
@@ -161,8 +161,8 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     };
     const r = await postCli(cliArgv, legacy, cliDeps);
     if (r.kind === "not-configured") return notConnected(), 2;
-    if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
-    if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
+    if (r.kind === "read-error") return err(`adscaile: cannot read ${r.path}\n`), 1;
+    if (r.kind === "network-error") return err(`adscaile: ${r.message}\n`), 1;
     // Text-sink: the server renders the TOON list, the JSON escape hatch (`--json`), and
     // the empty/error states; we just print `text`. A too-old server (no `text`) → a
     // definitive SERVER_TOO_OLD error, never blank output.
@@ -178,9 +178,9 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
       patch = buildPatch(flags);
     } catch (e) {
       // A removed/unknown flag or an unreadable file/JSON — fail loudly with guidance.
-      return err(`loopany: ${e instanceof Error ? e.message : String(e)}\n`), 2;
+      return err(`adscaile: ${e instanceof Error ? e.message : String(e)}\n`), 2;
     }
-    // Bare `loopany edit <id>` with no edit inputs is a usage error. But `--json '{}'`
+    // Bare `adscaile edit <id>` with no edit inputs is a usage error. But `--json '{}'`
     // (or any explicit input flag that resolves to an empty patch) is a VALID no-op:
     // forward it so the server reports "nothing to change" + the allowed-key list (F8),
     // instead of short-circuiting to the usage screen client-side.
@@ -200,14 +200,14 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     };
     const r = await postCli(cliArgv, legacy, cliDeps);
     if (r.kind === "not-configured") return notConnected(), 2;
-    if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
-    if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
+    if (r.kind === "read-error") return err(`adscaile: cannot read ${r.path}\n`), 1;
+    if (r.kind === "network-error") return err(`adscaile: ${r.message}\n`), 1;
     // Text-sink: the server renders the apply / dry-run / rejection / error TOON (and
     // pins exit 1 for rejections via `exitCode`); we just print it. A too-old server
     // (no `text`) → a definitive SERVER_TOO_OLD error.
     return printTextOrTooOld(r.body, r.status, out);
   }
 
-  err(`loopany: unknown command "${verb ?? ""}" (try: loops, edit)\n`);
+  err(`adscaile: unknown command "${verb ?? ""}" (try: loops, edit)\n`);
   return 2;
 }

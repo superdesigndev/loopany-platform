@@ -1,15 +1,15 @@
 # Edit an existing loop
 
 A loop lives in two places, and you change each where it lives. Use the same
-**loopany-cli** prefix as for create (default `npx @crewlet/loopany@latest`); it
+**adscaile-cli** prefix as for create (default `npx @crewlet/adscaile@latest`); it
 reuses this machine's persisted device token, so no `--server-url`/`--connect-key`
 or other auth is needed.
 
 - **Schedule / delivery envelope + goal** (cadence, name, timezone, notify, model,
-  pause, goal, …) — the server owns it. Change it with `loopany edit` (below), which
+  pause, goal, …) — the server owns it. Change it with `adscaile edit` (below), which
   is **JSON-only**: one `--json '<patch>'` of just the fields that change.
 - **What the loop does** (its instructions, context, log) — the loop's **task file
-  (`loopany/<slug>/README.md`) on this machine**. Edit it directly in the repo,
+  (`adscaile/<slug>/README.md`) on this machine**. Edit it directly in the repo,
   keeping its `## Spec` / `## Current understanding` / `## Timeline` structure; it
   syncs back to the server on the loop's next run. (How a run maintains it:
   `evolve.md`.) To point the loop at a *different* task file, patch the path:
@@ -24,7 +24,7 @@ or other auth is needed.
 First find the loop id (only loops bound to THIS machine are listed):
 
 ```bash
-<loopany-cli> loops
+<adscaile-cli> loops
 # -> loop-xxxx  on      0 8 * * *  Asia/Shanghai  Cookie Daily Breakfast Report
 #    loop-yyyy  paused  0 * * * *                 Hourly metrics
 ```
@@ -36,8 +36,8 @@ as a raw JSON array (every field, `runs`/`lastOutcome` always computed) when you
 to parse the list instead of read it.
 
 Before reshaping a loop, see how its recent runs actually went with
-`<loopany-cli> log` (the loop for the current directory) or
-`<loopany-cli> log <loop-id>` (`--limit N`, `--json`; `--transcript` for the full
+`<adscaile-cli> log` (the loop for the current directory) or
+`<adscaile-cli> log <loop-id>` (`--limit N`, `--json`; `--transcript` for the full
 transcript) — a concise survey of status, metrics, and session ids. Read it first so
 an edit is grounded in what the runs really did, not a guess.
 
@@ -47,11 +47,11 @@ Pass only the fields that change. The server validates the patch and rejects unk
 keys, so a typo fails loudly instead of a silent no-op:
 
 ```bash
-<loopany-cli> edit <loop-id> --json '{"cron":"0 9 * * *","notify":"always"}'   # reschedule + notify policy
-<loopany-cli> edit <loop-id> --json '{"enabled":false}'                         # pause (true = resume / reopen)
-<loopany-cli> edit <loop-id> --json '{"allowControl":false}'                    # pin the schedule — runs stop self-scheduling
-<loopany-cli> edit <loop-id> --json '{"goal":"ship v1.0"}'                      # make it closed (or change the finish line)
-<loopany-cli> edit <loop-id> --json '{"goal":null}'                             # back to an open monitor (clears goal AND completion)
+<adscaile-cli> edit <loop-id> --json '{"cron":"0 9 * * *","notify":"always"}'   # reschedule + notify policy
+<adscaile-cli> edit <loop-id> --json '{"enabled":false}'                         # pause (true = resume / reopen)
+<adscaile-cli> edit <loop-id> --json '{"allowControl":false}'                    # pin the schedule — runs stop self-scheduling
+<adscaile-cli> edit <loop-id> --json '{"goal":"ship v1.0"}'                      # make it closed (or change the finish line)
+<adscaile-cli> edit <loop-id> --json '{"goal":null}'                             # back to an open monitor (clears goal AND completion)
 ```
 
 The whitelist — every key `--json` accepts:
@@ -77,7 +77,7 @@ Preview any patch with `--dry-run` — the server shows each key's before→afte
 rejections, changing nothing (exits non-zero if the patch would be rejected):
 
 ```bash
-<loopany-cli> edit <loop-id> --json '{"goal":null,"cron":"0 9 * * *"}' --dry-run
+<adscaile-cli> edit <loop-id> --json '{"goal":null,"cron":"0 9 * * *"}' --dry-run
 ```
 
 ## Content fields — reshape without a run
@@ -87,9 +87,9 @@ run-time `set-*` verbs — because multi-line JS/HTML/JSON is awkward to embed i
 `--json` string:
 
 ```bash
-<loopany-cli> edit <loop-id> --workflow-file wf.js      # replace the deterministic pre-stage JS
-<loopany-cli> edit <loop-id> --ui-file dash.html        # replace the dashboard HTML
-<loopany-cli> edit <loop-id> --schema-file schema.json  # replace the metric schema (JSON array)
+<adscaile-cli> edit <loop-id> --workflow-file wf.js      # replace the deterministic pre-stage JS
+<adscaile-cli> edit <loop-id> --ui-file dash.html        # replace the dashboard HTML
+<adscaile-cli> edit <loop-id> --schema-file schema.json  # replace the metric schema (JSON array)
 ```
 
 A `--workflow-file` body must obey the workflow syntax contract — a plain statement
@@ -98,10 +98,10 @@ sequence run inside an async function, **not an ES module and not the Claude Cod
 see `create.md` §4). The server parse-checks it and rejects a bad body (surfaced by
 `--dry-run`).
 
-Explicit `--json` keys win over any file flag. `loopany edit` prints
-`updated <name> — <fields>` on success, or `loopany: <error>` to fix. You can only
-edit loops bound to this machine; if `<loopany-cli> loops` doesn't list it, the user
+Explicit `--json` keys win over any file flag. `adscaile edit` prints
+`updated <name> — <fields>` on success, or `adscaile: <error>` to fix. You can only
+edit loops bound to this machine; if `<adscaile-cli> loops` doesn't list it, the user
 is on a different machine than the one running the loop.
 
-> Pausing, reopening, or running a loop now are also one-click in the Loopany web
+> Pausing, reopening, or running a loop now are also one-click in the adScaile web
 > dashboard — point the user there for those rather than the CLI if they prefer.

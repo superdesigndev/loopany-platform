@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
 
-/** Bearer device token from the request (the machine's persisted ~/.loopany token). */
+/** Bearer device token from the request (the machine's persisted ~/.adscaile token). */
 function deviceToken(request: Request): string {
   const auth = request.headers.get('authorization') ?? ''
   return auth.startsWith('Bearer ') ? auth.slice(7) : ''
@@ -10,8 +10,8 @@ function deviceToken(request: Request): string {
 /**
  * /api/machine/loop — the machine's authenticated loop channel (Bearer device token):
  *   POST   Claude Code creates a loop (paste-forward New Loop)
- *   GET    list the loops bound to this machine (`loopany loops`)
- *   PATCH  edit a loop's scheduling envelope (`loopany edit`)
+ *   GET    list the loops bound to this machine (`adscaile loops`)
+ *   PATCH  edit a loop's scheduling envelope (`adscaile edit`)
  */
 export const Route = createFileRoute('/api/machine/loop')({
   server: {

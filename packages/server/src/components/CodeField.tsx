@@ -17,7 +17,7 @@ import { tags as t } from '@lezer/highlight'
  * the Rubik semantic inks (keyword/tag = interactive blue, string = success
  * green, number = warn orange, comment = disabled gray).
  */
-const loopanyTheme = createTheme({
+const adscaileTheme = createTheme({
   theme: 'light', // base defaults only; every visible color below is a CSS var
   settings: {
     background: 'var(--color-raised)',
@@ -91,7 +91,7 @@ export default function CodeField({
         value={value}
         onChange={onChange}
         placeholder={placeholder}
-        theme={loopanyTheme}
+        theme={adscaileTheme}
         // Soft-wrap long lines: these fields hold config-sized snippets with
         // long attribute strings; wrapping beats a nested horizontal scroll.
         extensions={[LANG[lang](), sizing, EditorView.lineWrapping]}

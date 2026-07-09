@@ -3,8 +3,8 @@ import { buildResumeCommand } from './resumeCommand'
 
 describe('buildResumeCommand', () => {
   it('cds into the loop dir then resumes the exact session', () => {
-    expect(buildResumeCommand({ sessionId: 'sess-abc123', dir: '/home/me/loopany/coffee' })).toBe(
-      "cd '/home/me/loopany/coffee' && claude --resume sess-abc123",
+    expect(buildResumeCommand({ sessionId: 'sess-abc123', dir: '/home/me/adscaile/coffee' })).toBe(
+      "cd '/home/me/adscaile/coffee' && claude --resume sess-abc123",
     )
   })
 

@@ -18,7 +18,7 @@ import { sessionTrace, type RunArtifact, type TranscriptStep } from "./artifacts
 import { CALLBACK_BIN_DIR } from "./callback-bin.js";
 import { setProgress, clearProgress } from "./progress.js";
 import { flushLoop, markRunActive, markRunDone } from "./watcher.js";
-import { LOOPANY_DIR } from "./config.js";
+import { ADSCAILE_DIR } from "./config.js";
 import type { CodingAgent } from "./create.js";
 
 export interface Delivery {
@@ -40,7 +40,7 @@ export interface Delivery {
   };
   prevState: unknown;
   /** Server-configured workdir jail — may only NARROW the daemon's local env
-   *  LOOPANY_ROOTS jail, never widen it (see roots.effectiveRoots). */
+   *  ADSCAILE_ROOTS jail, never widen it (see roots.effectiveRoots). */
   roots?: string[];
   systemPrompt: string;
   task: string;
@@ -107,12 +107,12 @@ export interface AgentSpawn {
  *     as claude/grok `bypassPermissions`), optional `-m` / `--model`, and
  *     `--skip-git-repo-check` so non-git loop workdirs are not rejected.
  *
- * Escape hatches: `LOOPANY_CLAUDE_BIN` / `LOOPANY_GROK_BIN` / `LOOPANY_CODEX_BIN`.
+ * Escape hatches: `ADSCAILE_CLAUDE_BIN` / `ADSCAILE_GROK_BIN` / `ADSCAILE_CODEX_BIN`.
  *
  * Telemetry note: grok's headless stream is grok-native (`thought`/`text`/`end`)
  * and codex `--json` is not Claude stream-json either — the Claude-shaped
  * `makeStreamConsumer` parses nothing from either. Both still mark OK on exit 0;
- * the agent's own `loopany report` persists the result. Daemon-side live-
+ * the agent's own `adscaile report` persists the result. Daemon-side live-
  * progress/cost/transcript for non-Claude agents is degraded until a per-agent
  * stream adapter lands.
  */
@@ -137,12 +137,12 @@ export function buildAgentSpawn(opts: {
     ];
     if (resumeSessionId) {
       return {
-        bin: process.env.LOOPANY_CODEX_BIN || "codex",
+        bin: process.env.ADSCAILE_CODEX_BIN || "codex",
         args: ["exec", "resume", resumeSessionId, ...unattended, prompt],
       };
     }
     return {
-      bin: process.env.LOOPANY_CODEX_BIN || "codex",
+      bin: process.env.ADSCAILE_CODEX_BIN || "codex",
       args: ["exec", ...unattended, prompt],
     };
   }
@@ -150,7 +150,7 @@ export function buildAgentSpawn(opts: {
   const modelArgs = model ? ["--model", model] : [];
   if (agent === "grok") {
     return {
-      bin: process.env.LOOPANY_GROK_BIN || "grok",
+      bin: process.env.ADSCAILE_GROK_BIN || "grok",
       args: [
         "-p", prompt,
         ...resume,
@@ -162,7 +162,7 @@ export function buildAgentSpawn(opts: {
     };
   }
   return {
-    bin: process.env.LOOPANY_CLAUDE_BIN || "claude",
+    bin: process.env.ADSCAILE_CLAUDE_BIN || "claude",
     args: [
       "-p", prompt,
       ...resume,
@@ -178,10 +178,10 @@ export function buildAgentSpawn(opts: {
 
 // The coding-agent child runs with NO wall-clock timeout by default — a real run
 // can legitimately take a long time, and the server's inactivity-based sweep is the
-// guard against a machine that disappears. `LOOPANY_EXEC_TIMEOUT_MS` is an opt-in
+// guard against a machine that disappears. `ADSCAILE_EXEC_TIMEOUT_MS` is an opt-in
 // override: a positive number arms the timer; unset/0/invalid/negative ⇒ unlimited
 // (runProcess treats a falsy/≤0 timeoutMs as "no timeout").
-const rawExecTimeout = Number(process.env.LOOPANY_EXEC_TIMEOUT_MS);
+const rawExecTimeout = Number(process.env.ADSCAILE_EXEC_TIMEOUT_MS);
 const TIMEOUT_MS = Number.isFinite(rawExecTimeout) && rawExecTimeout > 0 ? rawExecTimeout : 0;
 /** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
 const FLUSH_TIMEOUT_MS = 2500;
@@ -194,9 +194,9 @@ const FLUSH_TIMEOUT_MS = 2500;
 // only `transient` failures retry (auth/quota must not spin — BYOA decision 8 —
 // and a poisoned request would deterministically re-fail on resume); backoff
 // between attempts (base, then 4x) keeps a wobbly provider from being hammered.
-const rawRetries = Number(process.env.LOOPANY_TRANSIENT_RETRIES);
+const rawRetries = Number(process.env.ADSCAILE_TRANSIENT_RETRIES);
 const TRANSIENT_RETRIES = Number.isFinite(rawRetries) && rawRetries >= 0 ? Math.floor(rawRetries) : 2;
-const rawRetryBase = Number(process.env.LOOPANY_TRANSIENT_RETRY_BASE_MS);
+const rawRetryBase = Number(process.env.ADSCAILE_TRANSIENT_RETRY_BASE_MS);
 const RETRY_BASE_MS = Number.isFinite(rawRetryBase) && rawRetryBase > 0 ? rawRetryBase : 15_000;
 
 export type FailureClass = "transient" | "poisoned" | "auth" | "task";
@@ -240,7 +240,7 @@ export function buildResumeTask(reason: string): string {
   return [
     `Your previous attempt at this run was interrupted by a transient infrastructure error (${reason}).`,
     "You have been RESUMED in the same session: everything above this message is your own prior progress — trust it, do not redo completed work.",
-    "Continue from where you left off and finish normally: end with exactly ONE `loopany report ...` (or `loopany finish` when the goal is genuinely met), exactly as the original instructions specify.",
+    "Continue from where you left off and finish normally: end with exactly ONE `adscaile report ...` (or `adscaile finish` when the goal is genuinely met), exactly as the original instructions specify.",
   ].join("\n");
 }
 
@@ -337,7 +337,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     ]);
     return report(serverUrl, d.runToken, body);
   };
-  // The LOCAL env jail (LOOPANY_ROOTS) always applies when set; server-sent
+  // The LOCAL env jail (ADSCAILE_ROOTS) always applies when set; server-sent
   // roots can only narrow it — a hostile server must not widen the jail.
   const jail = effectiveRoots(roots, d.roots);
   let workdir: string;
@@ -391,13 +391,13 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   let finalText: string | undefined;
   let cost: RunCost | undefined;
   let attempts = 0;
-  // System prompt goes in ~/.loopany/runs (passed to claude by absolute path), not
+  // System prompt goes in ~/.adscaile/runs (passed to claude by absolute path), not
   // the workdir — keeps the run's cwd clean. Removed in `finally`. Batches 1-2 move
   // the full run instructions into the first user turn, so `systemPrompt` is now empty
   // on a current server: skip the sys file + the claude-only `--append-system-prompt-file`
   // flag entirely (an OLD server still populates it and keeps working — the flag path
   // is preserved when the string is non-empty).
-  const runsDir = path.join(LOOPANY_DIR, "runs");
+  const runsDir = path.join(ADSCAILE_DIR, "runs");
   const hasSystemPrompt = d.systemPrompt.trim().length > 0;
   const sysFile = hasSystemPrompt ? path.join(runsDir, `sys-${d.runId}.md`) : "";
   // Which coding agent executes this loop. Absent on an OLD server (pre-grok) ⇒
@@ -413,10 +413,10 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
 
     const env: NodeJS.ProcessEnv = {
       ...execEnv(agent),
-      // Prepend the home bin dir so `loopany` resolves to our re-exec wrapper.
+      // Prepend the home bin dir so `adscaile` resolves to our re-exec wrapper.
       PATH: `${CALLBACK_BIN_DIR}${path.delimiter}${process.env.PATH ?? ""}`,
-      LOOPANY_RUN_TOKEN: d.runToken,
-      LOOPANY_SERVER_URL: serverUrl,
+      ADSCAILE_RUN_TOKEN: d.runToken,
+      ADSCAILE_SERVER_URL: serverUrl,
     };
     const task = workflowFailure
       ? buildWorkflowFallbackTask(d.task, workflowFailure, dateStamp(), d.loop.name, d.loop.id)
@@ -529,7 +529,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
     error,
     // Every role sends finalText: the server only uses it as a message FALLBACK
-    // when the run didn't `loopany report --message` itself, and evolve/edit are
+    // when the run didn't `adscaile report --message` itself, and evolve/edit are
     // notification-exempt server-side — so an evolve pass that forgets to report
     // still leaves a readable run-log line instead of a blank timeline block.
     finalText,
@@ -566,8 +566,8 @@ export function buildWorkflowFallbackTask(
   // evolve/edit-only). So it must escalate to the owner, not quietly wait for evolve.
   const isSyntaxError = /SyntaxError/.test(failure.error);
   const editCmd = loopId
-    ? `loopany edit ${loopId} --workflow-file <corrected.js>`
-    : `loopany edit <loop-id> --workflow-file <corrected.js>`;
+    ? `adscaile edit ${loopId} --workflow-file <corrected.js>`
+    : `adscaile edit <loop-id> --workflow-file <corrected.js>`;
   const closing = isSyntaxError
     ? [
         "This is a SYNTAX ERROR: the workflow fails to parse, so it never runs and will",
@@ -583,7 +583,7 @@ export function buildWorkflowFallbackTask(
         "",
         `    ${editCmd}`,
         "",
-        "or, if the workflow isn't worth keeping, clear it (`loopany edit <loop-id> --json",
+        "or, if the workflow isn't worth keeping, clear it (`adscaile edit <loop-id> --json",
         `'{"workflow":""}'`,
         ").",
       ]
@@ -623,12 +623,12 @@ export function buildWorkflowFallbackTask(
     `Then, in your report to the user, include ONE short copy-paste prompt they can paste`,
     `into Claude Code or Codex to resolve it, e.g.:`,
     "",
-    `    fix workflow issue in loopany/${slug}/${setupFile}`,
+    `    fix workflow issue in adscaile/${slug}/${setupFile}`,
     "",
     "Note: the workflow subprocess runs with an ALLOWLISTED env — it does not inherit the",
     "user's shell. If the failure is a missing credential that the MCP server config reads",
     "from the environment (a `${VAR}` / `$env:VAR` placeholder, or a stdio server's env),",
-    "the fix is to name that key in `LOOPANY_WORKFLOW_ENV` (comma-separated env key names",
+    "the fix is to name that key in `ADSCAILE_WORKFLOW_ENV` (comma-separated env key names",
     "passed through to the workflow) in the daemon's environment and restart the daemon —",
     "say so concretely in the setup file.",
     "",
@@ -663,7 +663,7 @@ export function foldEscalation(calls: AgentCall[]): string {
 /** Best-effort read of the loop's task file for sync to the server. The path may
  *  be absolute, ~-rooted, or relative to the run's workdir. Never throws — a
  *  missing/unreadable file just syncs nothing (the report must still go out).
- *  taskFile is SERVER-SENT: under a local LOOPANY_ROOTS jail a path outside both
+ *  taskFile is SERVER-SENT: under a local ADSCAILE_ROOTS jail a path outside both
  *  the (already-jailed) workdir and the local roots is never read. */
 function readTaskFile(workdir: string, taskFile: string | null, localRoots: string[]): string | undefined {
   if (!taskFile) return undefined;
@@ -685,7 +685,7 @@ function readTaskFile(workdir: string, taskFile: string | null, localRoots: stri
 
 function resolveWorkdir(workdir: string | null, loopId: string, roots: string[]): string {
   if (!workdir) {
-    const scratch = path.join(LOOPANY_DIR, "work", loopId);
+    const scratch = path.join(ADSCAILE_DIR, "work", loopId);
     fs.mkdirSync(scratch, { recursive: true });
     return scratch;
   }

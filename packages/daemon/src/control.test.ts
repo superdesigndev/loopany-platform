@@ -1,7 +1,7 @@
 /**
- * `loopany status` / `loopany down`, exercised with every external touch INJECTED
+ * `adscaile status` / `adscaile down`, exercised with every external touch INJECTED
  * (pidfile read, liveness probe, start-time lookup, kill, server fetch, output) so
- * nothing reads a real ~/.loopany, signals a real process, or hits the network.
+ * nothing reads a real ~/.adscaile, signals a real process, or hits the network.
  */
 import { describe, expect, test } from "vitest";
 
@@ -33,7 +33,7 @@ describe("runStatus", () => {
     const cap = capture({ readPid: () => undefined, server: "", token: undefined });
     await runStatus([], cap);
     expect(cap.stdout()).toContain("not running");
-    expect(cap.stdout()).toContain("loopany up");
+    expect(cap.stdout()).toContain("adscaile up");
   });
 
   test("stale pidfile (pid dead) → not running, clears the stale file", async () => {

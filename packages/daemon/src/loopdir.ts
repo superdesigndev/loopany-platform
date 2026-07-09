@@ -1,14 +1,14 @@
 /**
  * Resolve a loop to its folder on this machine — the single source the artifact
- * watcher and `loopany log` both use, so a workdir-scoped command maps the current
+ * watcher and `adscaile log` both use, so a workdir-scoped command maps the current
  * directory back to a loop exactly the way the watcher decides what to watch.
  *
- * Kept dependency-free (no chokidar) so the `loopany log` path stays light.
+ * Kept dependency-free (no chokidar) so the `adscaile log` path stays light.
  */
 import os from "node:os";
 import path from "node:path";
 
-import { LOOPANY_DIR } from "./config.js";
+import { ADSCAILE_DIR } from "./config.js";
 
 /** The loop fields needed to resolve its folder (subset of the loop row). */
 export interface LoopDirSpec {
@@ -32,5 +32,5 @@ export function resolveLoopDir(spec: LoopDirSpec): string {
     if (spec.workdir) return path.dirname(path.resolve(expandTilde(spec.workdir), tf));
   }
   if (spec.workdir) return path.resolve(expandTilde(spec.workdir));
-  return path.join(LOOPANY_DIR, "work", spec.loopId);
+  return path.join(ADSCAILE_DIR, "work", spec.loopId);
 }
