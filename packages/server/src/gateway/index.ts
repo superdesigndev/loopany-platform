@@ -678,9 +678,9 @@ export class MachineGateway {
       /** Optional closed-loop setpoint. Non-null ⇒ the loop is CLOSED (self-finishes
        *  when met); null/absent ⇒ OPEN (monitor/digest). */
       goal?: unknown;
-      /** Coding agent the daemon recorded as this loop's host (claude-code | codex).
-       *  Absent for older daemons → defaults to claude-code. Recording-only: a codex
-       *  loop is still executed via Claude for now. */
+      /** Coding agent the daemon recorded as this loop's host (claude-code | codex |
+       *  grok). Absent for older daemons → defaults to claude-code. A grok loop is
+       *  EXECUTED via the grok CLI; codex stays recording-only (run via Claude). */
       agent?: unknown;
       /** Web's New-loop claim token — correlates this loop back to the dialog. */
       claim?: unknown;
@@ -731,7 +731,8 @@ export class MachineGateway {
     // Recorded coding agent: trust the daemon's resolved value when it's a known
     // agent, else default to claude-code (older daemons omit it; an unrecognized /
     // "unknown" value also degrades to the default rather than rejecting the loop).
-    const agent: CodingAgent = body.agent === "codex" ? "codex" : "claude-code";
+    const agent: CodingAgent =
+      body.agent === "codex" || body.agent === "grok" ? body.agent : "claude-code";
 
     const stateSchema = store.coerceStateSchema(body.stateSchema) ?? null;
     // Optional day-one dashboard — same validate/clip surface as `set-ui` (editLoop).

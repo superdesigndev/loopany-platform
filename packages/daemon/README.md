@@ -1,17 +1,19 @@
 # @crewlet/loopany
 
 The **Loopany daemon** - runs on your machine, connects to a Loopany server, and
-executes your scheduled agent loops locally via your own claude-code.
+executes your scheduled agent loops locally via your own coding agent.
 
 Loopany is **BYOA** (bring your own agent): the server schedules, stores, and
 notifies, but never runs an LLM or executes your code. This daemon is the
-execution half - it polls the server for due runs, spawns Claude Code in the
-loop's working directory, and reports the results back.
+execution half - it polls the server for due runs, spawns the loop's coding agent
+(Claude Code, or the grok CLI for a `grok` loop) in the loop's working directory,
+and reports the results back.
 
 ## Requirements
 
 - Node.js >= 22
-- [Claude Code](https://claude.com/claude-code) installed (`claude` on your PATH)
+- [Claude Code](https://claude.com/claude-code) installed (`claude` on your PATH),
+  or the xAI grok CLI (`grok` on your PATH) for a `grok` loop
 - A Loopany server - its dashboard gives you the `server-url` and one-time
   `connect-key` used below
 
@@ -81,7 +83,7 @@ inspect foot-guns like `update` or `down`).
 The daemon polls the server over HTTPS - no inbound ports, no websockets. While
 idle it opts into a bounded server-held long-poll so a due run dispatches almost
 instantly; with a run in flight it keeps a short poll so progress keeps flowing.
-When a run is due it executes claude-code in the loop's own folder, live-syncs
+When a run is due it executes the loop's coding agent in the loop's own folder, live-syncs
 that folder's files back to the server (secrets and junk like `.env*`,
 `node_modules`, `.git`, `.worktrees`, and build/tool caches are never sent), and
 reports the outcome. The loop folder is a synced **content home** (reports,

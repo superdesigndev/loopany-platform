@@ -4,6 +4,7 @@
  * spawn.ts. Task text goes via argv; stdin is unused.
  */
 import { spawn } from "node:child_process";
+import type { CodingAgent } from "./create.js";
 
 export interface SpawnResult {
   code: number | null;
@@ -140,11 +141,22 @@ export function allowlistEnv(extra: { keys?: string[]; prefixes?: string[] } = {
   return env;
 }
 
-/** Allowlisted env for the claude subprocess — never inherit unrelated secrets.
- *  The ANTHROPIC_* family covers proxy/gateway users (ANTHROPIC_BASE_URL /
+/** Allowlisted env for the coding-agent subprocess — never inherit unrelated
+ *  secrets. The ANTHROPIC_* family covers proxy/gateway users (ANTHROPIC_BASE_URL /
  *  ANTHROPIC_AUTH_TOKEN …), and CLAUDE_CONFIG_DIR keeps a relocated claude config
- *  writing transcripts where artifacts.sessionTrace() reads them back. */
-export function execEnv(): NodeJS.ProcessEnv {
+ *  writing transcripts where artifacts.sessionTrace() reads them back.
+ *
+ *  Grok's OAuth lives in `~/.grok` and is already reachable via `HOME` (in
+ *  `BASE_ALLOW`), so OAuth users work with no extra keys; API-key users need
+ *  `XAI_API_KEY` (+ optional `GROK_HOME`/`XAI_API_BASE_URL`) forwarded. Those keys
+ *  are added ONLY on the grok path so a claude run never inherits an unrelated
+ *  xAI secret. `agent` defaults to claude-code so existing callers are unchanged. */
+export function execEnv(agent: CodingAgent = "claude-code"): NodeJS.ProcessEnv {
+  if (agent === "grok") {
+    return allowlistEnv({
+      keys: ["XAI_API_KEY", "GROK_HOME", "XAI_API_BASE_URL"],
+    });
+  }
   return allowlistEnv({
     keys: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"],
     prefixes: ["ANTHROPIC_"],

@@ -17,7 +17,7 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { addCost, buildResumeTask, buildWorkflowFallbackTask, classifyFailure, costFromResult, dateStamp, foldEscalation, makeStreamConsumer, runDelivery, type Delivery } from "./runner.js";
+import { addCost, buildAgentSpawn, buildResumeTask, buildWorkflowFallbackTask, classifyFailure, costFromResult, dateStamp, foldEscalation, makeStreamConsumer, runDelivery, type Delivery } from "./runner.js";
 
 describe("dateStamp", () => {
   test("formats YYYY-MM-DD (UTC)", () => {
@@ -218,6 +218,66 @@ describe("buildResumeTask", () => {
     expect(t).toContain("Connection closed mid-response");
     expect(t).toContain("do not redo completed work");
     expect(t).toContain("exactly ONE `loopany report");
+  });
+});
+
+describe("buildAgentSpawn", () => {
+  afterEach(() => {
+    delete process.env.LOOPANY_CLAUDE_BIN;
+    delete process.env.LOOPANY_GROK_BIN;
+  });
+
+  test("claude-code: default bin + the claude arg vector (--verbose, stream-json, sys file)", () => {
+    const { bin, args } = buildAgentSpawn({ agent: "claude-code", prompt: "do it", sysFile: "/tmp/sys.md" });
+    expect(bin).toBe("claude");
+    expect(args).toEqual([
+      "-p", "do it",
+      "--output-format", "stream-json",
+      "--verbose",
+      "--permission-mode", "bypassPermissions",
+      "--append-system-prompt-file", "/tmp/sys.md",
+      "--disallowed-tools", "ScheduleWakeup,CronCreate,CronList,CronDelete",
+    ]);
+  });
+
+  test("claude-code: LOOPANY_CLAUDE_BIN escape hatch + resume + model, sys file omitted when absent", () => {
+    process.env.LOOPANY_CLAUDE_BIN = "/opt/claude";
+    const { bin, args } = buildAgentSpawn({ agent: "claude-code", prompt: "p", resumeSessionId: "sess-9", model: "opus" });
+    expect(bin).toBe("/opt/claude");
+    expect(args.slice(0, 4)).toEqual(["-p", "p", "--resume", "sess-9"]);
+    expect(args).not.toContain("--append-system-prompt-file");
+    expect(args.slice(-2)).toEqual(["--model", "opus"]);
+  });
+
+  test("grok: grok bin + grok arg vector — streaming-json, NO --verbose, NO sys-file flag", () => {
+    // A sysFile is passed but grok has no such flag — it must be dropped.
+    const { bin, args } = buildAgentSpawn({ agent: "grok", prompt: "do it", sysFile: "/tmp/sys.md" });
+    expect(bin).toBe("grok");
+    expect(args).toEqual([
+      "-p", "do it",
+      "--output-format", "streaming-json",
+      "--permission-mode", "bypassPermissions",
+      "--disallowed-tools", "ScheduleWakeup,CronCreate,CronList,CronDelete",
+    ]);
+    // The two flags that break a literal drop-in are never emitted for grok.
+    expect(args).not.toContain("--verbose");
+    expect(args).not.toContain("--append-system-prompt-file");
+    expect(args).not.toContain("stream-json");
+  });
+
+  test("grok: LOOPANY_GROK_BIN escape hatch + resume + model", () => {
+    process.env.LOOPANY_GROK_BIN = "/opt/grok";
+    const { bin, args } = buildAgentSpawn({ agent: "grok", prompt: "p", resumeSessionId: "g-1", model: "grok-4" });
+    expect(bin).toBe("/opt/grok");
+    expect(args.slice(0, 4)).toEqual(["-p", "p", "--resume", "g-1"]);
+    expect(args.slice(-2)).toEqual(["--model", "grok-4"]);
+  });
+
+  test("codex still takes the claude arm (recording-only; executed via claude today)", () => {
+    const { bin, args } = buildAgentSpawn({ agent: "codex", prompt: "p" });
+    expect(bin).toBe("claude");
+    expect(args).toContain("--verbose");
+    expect(args).toContain("stream-json");
   });
 });
 
@@ -707,5 +767,61 @@ describe("runDelivery — a non-zero exit with a clean result never records 'suc
     expect(rep).toBeTruthy();
     expect(rep.ok).toBe(false);
     expect(rep.error).toBe("error_max_turns");
+  }, 20000);
+});
+
+describe("runDelivery — a grok loop RUNS and reports ok despite degraded telemetry", () => {
+  test("grok emits its native thought/text/end stream (no Claude result event); run marked ok, no crash on missing session/cost", async () => {
+    // A fake `grok` that dumps its argv and emits the grok-native token stream —
+    // NOT Claude's `assistant`/`result` events, and NO cost/usage. The daemon's
+    // Claude-shaped parser reads nothing from it; the run must still succeed on exit 0.
+    const bin = path.join(root, "fake-grok.sh");
+    fs.writeFileSync(
+      bin,
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$@" > "$PWD/captured-argv.txt"`,
+        `printf '%s' "$2" > "$PWD/captured-task.txt"`,
+        `echo '{"type":"thought","data":"Working"}'`,
+        `echo '{"type":"text","data":"READY"}'`,
+        `echo '{"type":"end","stopReason":"EndTurn","sessionId":"019f45df-grok","requestId":"req-1"}'`,
+        "exit 0",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(bin, 0o755);
+    process.env.LOOPANY_GROK_BIN = bin;
+
+    const cap = reportCapture();
+    const url = await cap.start();
+    try {
+      await runDelivery(
+        delivery({ systemPrompt: "", loop: { ...delivery().loop, agent: "grok", workflow: null } }),
+        url,
+        [],
+      );
+    } finally {
+      cap.close();
+    }
+
+    // The run reached the agent with its task.
+    const captured = fs.readFileSync(path.join(workdir, "captured-task.txt"), "utf8");
+    expect(captured).toContain("ORIGINAL TASK: produce the daily report");
+
+    // The grok arg vector: streaming-json, no --verbose, no --append-system-prompt-file.
+    const argv = fs.readFileSync(path.join(workdir, "captured-argv.txt"), "utf8");
+    expect(argv).toContain("streaming-json");
+    expect(argv).not.toContain("--verbose");
+    expect(argv).not.toContain("--append-system-prompt-file");
+
+    // Exit 0 with a stream the Claude parser can't read ⇒ still ok (r.code===0 branch),
+    // and no cost/session_id/finalText — the report must not crash on their absence.
+    const rep = cap.reports.find((r) => r.runId === "run-1");
+    expect(rep).toBeTruthy();
+    expect(rep.ok).toBe(true);
+    expect(rep.error).toBeUndefined();
+    expect(rep.cost).toBeUndefined();
+    expect(rep.sessionId).toBeUndefined();
   }, 20000);
 });

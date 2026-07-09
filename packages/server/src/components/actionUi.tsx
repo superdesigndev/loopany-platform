@@ -86,9 +86,10 @@ export function ConfirmBar({
 
 /** The claude-code pixel-terminal mark (LobeHub icon set), in the Claude brand
  *  orange. Decorative (aria-hidden): the button text stays the accessible name,
- *  keeping generic copy agent-neutral while the LOGO is factual — the session
- *  being resumed is always a claude one today. Swap per-agent when codex
- *  execution ships. */
+ *  keeping generic copy agent-neutral while the LOGO is factual — a resumable
+ *  session is always a claude one today (codex runs via claude; a grok run's
+ *  telemetry is degraded, no session id). Swap per-agent once another agent
+ *  yields a resumable session. */
 function ClaudeCodeMark({ size = 14 }: { size?: number }) {
   return (
     <svg
@@ -122,7 +123,8 @@ function ClaudeCodeMark({ size = 14 }: { size?: number }) {
  * BELOW the row. `sessionId: null` ⇒ both render null, so callers can invoke
  * the hook unconditionally (hooks can't be conditional) while data loads.
  * Prose stays agent-neutral; the literal `claude` binary in the copied command
- * is factual (execution is always Claude today).
+ * is factual (only claude runs produce a resumable session today - codex runs
+ * via claude, grok telemetry is degraded).
  */
 export function useContinueSession({
   sessionId,

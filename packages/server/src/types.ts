@@ -15,9 +15,10 @@ import type { MachinePresence } from './lib/machinePresence'
 export type { MachinePresence } from './lib/machinePresence'
 import type { ArtifactMeta } from './server/frontmatter'
 
-/** The coding agent a loop is bound to / recorded as its host. Recording-only:
- *  a `codex` loop is still executed by the daemon via Claude for now. */
-export type CodingAgent = 'claude-code' | 'codex'
+/** The coding agent a loop is bound to / recorded as its host. Recording-only for
+ *  `codex` (still executed via Claude); a `grok` loop is executed by the daemon via
+ *  the grok CLI. */
+export type CodingAgent = 'claude-code' | 'codex' | 'grok'
 
 export type RunOutcome = 'error' | 'silent' | 'exec' | 'agent' | 'direct' | string
 export type RunStatus =
@@ -158,8 +159,9 @@ export interface JobFull {
   ui?: string
   /** Push channel this loop notifies through (notification_channels.id). */
   channelId?: string | null
-  /** Coding agent this loop is recorded as (claude-code | codex). Read-only in the
-   *  UI; a codex loop is still executed via Claude for now (recording-only). */
+  /** Coding agent this loop is recorded as (claude-code | codex | grok). Read-only in
+   *  the UI; a grok loop is executed via the grok CLI, while a codex loop is still
+   *  executed via Claude for now (recording-only). */
   agent?: CodingAgent
   owner?: {
     gateway?: string

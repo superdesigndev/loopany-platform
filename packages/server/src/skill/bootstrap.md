@@ -63,7 +63,7 @@ session, or — if the session is empty — brainstorming loops for this project
 letting the user pick), settles the cadence and per-run output, authors the loop's
 task file and config, and runs `loopany new`. Pass the **connect-key** as
 `--connect-key` so the created loop resolves back to the web dialog, and declare
-which coding agent you are with `--agent claude-code` (or `--agent codex`).
+which coding agent you are with `--agent claude-code` (or `--agent codex` / `--agent grok`).
 create.md carries the flow through to telling the user it's live — you don't need
 to add anything here.
 

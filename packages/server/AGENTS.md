@@ -194,11 +194,14 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   unknown-command. `loopany show` out-of-run (F1) resolves the loop client-side (like
   `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **`loopany setup hooks [--remove]`** (`setup.ts`, P7): idempotent SessionStart hook
-  install per `SKILL_TARGET_AGENTS`. Claude Code (`~/.claude/settings.json`) and Codex
-  (`~/.codex/hooks.json`) both have a concrete installer sharing ONE merge routine
+  install per `HOOK_TARGET_AGENTS` (a SUPERSET of `SKILL_TARGET_AGENTS` - grok gets a hook
+  but is NOT a skill-install target). Claude Code (`~/.claude/settings.json`), Codex
+  (`~/.codex/hooks.json`), and Grok Build (`~/.grok/hooks/loopany.json`) all have a concrete
+  installer sharing ONE merge routine
   (`installJsonSessionStartHook` — identical `{hooks:{SessionStart:[{type:"command",command:"loopany"}]}}`
   shape), whose stdout lands as ambient context; an agent with no installer is reported
-  `skipped`. Codex additionally gates hooks behind `hooks = true` in `~/.codex/config.toml`
+  `skipped`. Grok's global hooks are ALWAYS TRUSTED (no config/trust gate). Codex additionally
+  gates hooks behind `hooks = true` in `~/.codex/config.toml`
   and a per-hook TRUST prompt on first session; the installer writes ONLY the `hooks.json`
   entry (never the version-sensitive `trusted_hash`, never the TOML) and SURFACES that
   enable/trust step in the report (and on the automatic `up`/`update` path). Matches

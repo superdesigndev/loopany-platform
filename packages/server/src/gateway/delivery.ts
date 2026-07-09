@@ -3,7 +3,7 @@
  * machine-side config + the server-composed system prompt and task. The daemon
  * writes the prompt to a file, runs the workflow gate (if any), then claude.
  */
-import type { Loop } from "../db/schema.js";
+import type { CodingAgent, Loop } from "../db/schema.js";
 import * as store from "../db/store.js";
 import {
   buildEditPrompt,
@@ -28,6 +28,9 @@ export interface Delivery {
     workflow: string | null;
     model: string | null;
     allowControl: boolean;
+    /** Coding agent to EXECUTE this loop with (the daemon branches its spawn on
+     *  this — claude vs grok; codex still runs via claude today). */
+    agent: CodingAgent;
   };
   /** Cursor (prev state) for the workflow gate. */
   prevState: unknown;
@@ -70,6 +73,7 @@ export async function buildDelivery(loop: Loop, runId: string, runToken: string,
       workflow: loop.workflow ?? null,
       model: loop.model ?? null,
       allowControl: loop.allowControl,
+      agent: loop.agent,
     },
     prevState: loop.state ?? null,
     systemPrompt,

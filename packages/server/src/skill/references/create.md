@@ -133,8 +133,8 @@ A loop fires on a cron schedule. Each run is **either**:
   (use it to diff / avoid repeating). To escalate to the coding agent instead, call
   `agent(message?, data?)`. Prefer this whenever the task reduces to hitting an API,
   reading a value, or computing a digest.
-- **the coding agent (claude)**: for runs that need reasoning, code, or file work. It
-  runs via claude-code in `workdir`, driven by a server-composed trigger that points
+- **the coding agent**: for runs that need reasoning, code, or file work. It
+  runs via your loop's host coding agent in `workdir`, driven by a server-composed trigger that points
   it at your **task file** — no per-run instruction to write; the brief lives
   entirely in the task file's `## Spec`.
 
@@ -237,7 +237,7 @@ learns the loop was created, and declare which coding agent you are:
 <loopany-cli> new \
   --json '<config>' \
   --connect-key <connect-key> \
-  --agent claude-code          # which coding agent you are (claude-code | codex); omit to auto-detect
+  --agent claude-code          # which coding agent you are (claude-code | codex | grok); omit to auto-detect
 ```
 
 `loopany new` detects the IANA timezone, injects the claim, records the coding agent

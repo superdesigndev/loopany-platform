@@ -103,8 +103,9 @@ function toJobFull(loop: Loop): JobFull {
     channelId: loop.channelId ?? null,
     agent: loop.agent,
     exec: {
-      // The recorded coding agent (claude-code | codex), no longer hardcoded.
-      // Recording-only: a `codex` loop is still executed by the daemon via Claude.
+      // The recorded coding agent (claude-code | codex | grok), no longer hardcoded.
+      // The daemon branches execution on this: a `grok` loop runs via the grok CLI,
+      // while `codex` stays recording-only (executed via Claude).
       executor: loop.agent,
       workdir: loop.workdir ?? "",
       model: loop.model ?? undefined,

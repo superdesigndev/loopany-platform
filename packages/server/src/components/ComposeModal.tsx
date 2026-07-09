@@ -10,14 +10,15 @@ const SLOW_WAIT_MS = 100_000
 
 // Display label for the coding agent the daemon MEASURED on the host and the
 // server recorded on the loop. There is no manual picker: `loopany new` resolves
-// the agent from the host env fingerprint (Claude Code vs Codex), so the dialog
-// only ever displays the recorded value — it never declares one.
+// the agent from the host env fingerprint (Claude Code, Codex, or Grok), so the
+// dialog only ever displays the recorded value — it never declares one.
 const AGENT_LABEL: Record<CodingAgent, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+  grok: 'Grok Build',
 }
 
-// The two coding agents loopany supports today, shown as brand marks on the
+// Two representative coding agents, shown as brand marks on the
 // Copy-prompt button (the prompt runs in whichever you use). LobeHub icon set,
 // decorative (aria-hidden) — the button text is the accessible name.
 function ClaudeCodeMark({ size = 14 }: { size?: number }) {
@@ -117,7 +118,7 @@ export function ComposeModal({
 
   // The machine config lines stay fixed and read-only — never user-editable. No
   // `agent:` line: `loopany new` resolves the agent from the host env fingerprint
-  // (Claude Code vs Codex), so the snippet never declares one to override it.
+  // (Claude Code, Codex, or Grok), so the snippet never declares one to override it.
   const configLines = token
     ? [
         `server-url: ${origin}`,

@@ -3,9 +3,10 @@
  *
  * Execution is BYOA - the session lives on the owner's machine, so the server
  * can only hand back a ready-to-paste terminal command. Pure + unit-testable,
- * mirroring `editPrompt.ts`. The binary is literally `claude` because execution
- * is always Claude today (`loops.agent` is recording-only) - branch on the
- * loop's agent here if codex execution ever ships.
+ * mirroring `editPrompt.ts`. The binary is literally `claude` because only claude
+ * runs produce a resumable session today: `codex` is recording-only (run via claude)
+ * and a `grok` run's telemetry is degraded (no captured session id to resume) - branch
+ * on the loop's agent here once another agent yields a resumable session.
  */
 
 /** Single-quote a path for POSIX shells (embedded `'` becomes `'\''`). */
