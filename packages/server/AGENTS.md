@@ -63,7 +63,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - **`show` emits the FULL editable envelope** keyed EXACTLY as `edit --json` accepts
   (`loopEnvelope(loop)`: id + every `EDITABLE_LOOP_FIELDS` key — name, cron, timezone,
-  notify, model, allowControl, taskFile, enabled, runAt, goal, workflow, ui,
+  notify, model, agent, allowControl, taskFile, enabled, runAt, goal, workflow, ui,
   stateSchema) PLUS the derived read-only aggregates `nextFire`/`classification`/`runs`.
   `renderShowText` is the pure TOON renderer; `describe(loopId, {allowControl, canFinish,
   full})` wraps it with the loop lookup + runs tally. Large fields (`ui`/`workflow`)
@@ -79,7 +79,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **`show --json`** emits the envelope with COMPLETE bodies (no truncation) — body
   `{ok, loop: <env>, text: JSON.stringify(env)}`, served by the device `show` handler
   and a runCli `show --json` special-case (dispatch returns text-only, so `--json` can't
-  ride the TOON path). Derived aggregates are NOT in the `--json` envelope (only the 13
+  ride the TOON path). Derived aggregates are NOT in the `--json` envelope (only the 14
   editable keys + id), so dropping `id` yields a clean no-op `edit` patch.
 - **Read/write identity is REAL, pinned by the roundtrip test:** `show --json` minus
   `id` fed to `edit --dry-run` reports zero changes. Two `buildEditUpdate` changes make
