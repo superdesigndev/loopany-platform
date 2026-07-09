@@ -19,10 +19,12 @@ import type { ArtifactMeta } from './server/frontmatter'
  *  `codex` (still executed via Claude); a `grok` loop is executed by the daemon via
  *  the grok CLI.
  *
- *  Runtime SINGLE SOURCE (anti-drift): `CodingAgent` is DERIVED from this array,
- *  and both the server edit validator (`coerceCodingAgent`) and the web agent
- *  `<select>` (LoopForm) read `CODING_AGENTS`, so widening the set here widens
- *  every consumer with no downstream code change. */
+ *  Runtime SINGLE SOURCE (anti-drift): every server consumer DERIVES from this
+ *  array — the `CodingAgent` type here, the `db/schema.ts` `CodingAgent` type AND
+ *  the `loops.agent` column enum, the edit validator (`coerceCodingAgent`), and the
+ *  web agent `<select>` (LoopForm). So widening the set is a one-line edit HERE with
+ *  no other server change (the daemon's own enum in `packages/daemon/src/create.ts`
+ *  is a separate package, widened alongside). */
 export const CODING_AGENTS = ['claude-code', 'codex', 'grok'] as const
 export type CodingAgent = (typeof CODING_AGENTS)[number]
 

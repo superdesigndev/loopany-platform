@@ -25,6 +25,7 @@ import type {
   TranscriptResult,
   TranscriptStep,
 } from '../types'
+import { coerceCodingAgent } from '../types'
 import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
@@ -292,13 +293,17 @@ export const patchJob = createServerFn({ method: 'POST' })
     if (p.channelId && enforce && (await store.getChannel(p.channelId))?.teamId !== owned.loop.teamId) {
       return { error: 'channel not found' }
     }
+    // Enforce the SAME agent enum as the gateway/CLI edit surface via the shared
+    // validator: coerce once (null when absent or unrecognized) and only write a
+    // known value, so the web surface can't persist an arbitrary agent string.
+    const agent = coerceCodingAgent(p.agent)
     const loop = await store.updateLoop(data.id, {
       ...(p.name !== undefined ? { name: p.name.trim() || null } : {}),
       ...(p.cron !== undefined ? { cron: p.cron } : {}),
       ...(p.notify !== undefined ? { notify: p.notify as 'auto' | 'always' | 'never' } : {}),
       ...(p.channelId !== undefined ? { channelId: p.channelId || null } : {}),
       ...(p.enabled !== undefined ? { enabled: !!p.enabled } : {}),
-      ...(p.agent !== undefined ? { agent: p.agent } : {}),
+      ...(agent ? { agent } : {}),
       // Goal set/clear (store.updateLoop enforces the completion-stamp lifecycle:
       // clearing goal or reopening via enabled:true drops the terminal stamps).
       ...(p.goal !== undefined ? { goal: p.goal?.trim() || null } : {}),

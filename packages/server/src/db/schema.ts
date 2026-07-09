@@ -16,6 +16,12 @@ import { sql } from "drizzle-orm";
 import { pgTable, text, integer, doublePrecision, boolean, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 import type { ArtifactMeta } from "../server/frontmatter.js";
+// The coding-agent enum's SINGLE SOURCE lives in `../types` (client-safe, no db
+// deps); this schema DERIVES both the `CodingAgent` type and the `loops.agent`
+// column enum from it, so widening the set (e.g. adding `grok`) is a one-line edit
+// to `CODING_AGENTS` with no change here. `../types` imports nothing at runtime, so
+// this introduces no import cycle.
+import { CODING_AGENTS } from "../types.js";
 
 export type { ArtifactMeta } from "../server/frontmatter.js";
 
@@ -80,8 +86,9 @@ export type RunStatus = "new" | "resolved" | "nothing-new";
 
 export type ChannelType = "telegram" | "slack" | "feishu";
 
-/** The coding agent a loop is bound to / recorded as its host (see `loops.agent`). */
-export type CodingAgent = "claude-code" | "codex" | "grok";
+/** The coding agent a loop is bound to / recorded as its host (see `loops.agent`).
+ *  DERIVED from the `CODING_AGENTS` single source so it widens automatically. */
+export type CodingAgent = (typeof CODING_AGENTS)[number];
 
 /** A push channel's transport secrets (one shape per type; only the relevant keys set). */
 export interface ChannelConfig {
@@ -195,9 +202,10 @@ export const loops = pgTable(
      *  as its host) AND, for `grok`, EXECUTED with: the daemon's `buildAgentSpawn`
      *  branches on this value (grok spawns the grok CLI; `codex` is still recording-only,
      *  executed via claude). Measured from the creating CLI's env when detectable, else
-     *  the declared/selected value; TS-only enum (stored as plain text), so widening the
-     *  set is a type change with no migration. Existing rows backfill to `claude-code`. */
-    agent: text("agent", { enum: ["claude-code", "codex", "grok"] }).notNull().default("claude-code"),
+     *  the declared/selected value; TS-only enum (stored as plain text) DERIVED from the
+     *  `CODING_AGENTS` single source, so widening the set is a one-line edit there with
+     *  no migration and no change here. Existing rows backfill to `claude-code` via default. */
+    agent: text("agent", { enum: CODING_AGENTS }).notNull().default("claude-code"),
     enabled: boolean("enabled").notNull().default(true),
     /** One-shot override: run once at this time, then resume cron (ISO). */
     nextRunAt: text("next_run_at"),

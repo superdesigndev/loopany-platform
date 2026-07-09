@@ -11,21 +11,23 @@ import type { NewLoop } from '../db/schema.js'
  * The shared coding-agent enum validator + the web `patchJob` agent write path.
  *
  * `coerceCodingAgent` is the ONE enum validator both write surfaces read (server
- * `buildEditUpdate` + the web select), so it is exercised directly here.
+ * `buildEditUpdate` + the web `patchJob`/select), so it is exercised directly here.
  *
  * `patchJob` is a thin `createServerFn` wrapper; its distinguishing agent logic is
- * the `...(p.agent !== undefined ? { agent: p.agent } : {})` spread into
- * `store.updateLoop`. Following the `teamUrlScope.integration` convention, this
- * mirrors exactly that spread over a real pglite store to prove a `JobPayload`
- * carrying `agent` persists (and that an absent `agent` is untouched).
+ * `const agent = coerceCodingAgent(p.agent)` then `...(agent ? { agent } : {})`
+ * spread into `store.updateLoop`. Following the `teamUrlScope.integration`
+ * convention, this mirrors exactly that spread over a real pglite store to prove a
+ * `JobPayload` carrying a KNOWN `agent` persists, an absent one is untouched, and an
+ * UNRECOGNIZED one is dropped (never persisted).
  */
 
 let tmp: string
 let store: typeof import('../db/store.js')
 
-/** patchJob's agent spread, verbatim (the only field this test drives). */
+/** patchJob's agent write, verbatim (the only field this test drives). */
 function agentUpdate(p: JobPayload): Partial<NewLoop> {
-  return { ...(p.agent !== undefined ? { agent: p.agent } : {}) }
+  const agent = coerceCodingAgent(p.agent)
+  return { ...(agent ? { agent } : {}) }
 }
 
 beforeAll(async () => {
@@ -60,4 +62,8 @@ test('patchJob agent spread persists a JobPayload agent through store.updateLoop
   // An absent agent leaves the recorded value untouched (empty spread → no write).
   const noop = await store.updateLoop(created.id, agentUpdate({ name: 'B' }))
   expect(noop!.agent).toBe('codex')
+
+  // An unrecognized agent is dropped by the shared validator, never persisted.
+  const dropped = await store.updateLoop(created.id, agentUpdate({ agent: 'emacs' as never }))
+  expect(dropped!.agent).toBe('codex')
 })
