@@ -1,9 +1,30 @@
 import { forwardRef, lazy, Suspense, useEffect, useImperativeHandle, useState } from 'react'
-import type { ChannelSummary, CodingAgent, JobPayload, StateField } from '../types'
+import type { ChannelSummary, CodingAgent, ExecPayload, JobPayload, StateField } from '../types'
 import { CODING_AGENTS } from '../types'
 import { listChannels } from '../server/notifyFns'
 import { cronText } from '../lib/format'
 import { inputCls, labelCls, sectionHeadCls, selectCls } from './ui'
+
+/**
+ * Build the exec slice of a manual form save.
+ *
+ * Always emits so model / allowControl ride with Save even when workdir is
+ * empty (common for taskFile/workflow-only loops). Empty strings stay defined
+ * so patchJob can clear stored model/workdir via `trim() || null` - do not
+ * coerce cleared fields to `undefined` or gate the whole object on workdir.
+ */
+export function buildFormExec(f: {
+  workdir: string
+  model: string
+  allowControl: boolean
+}): ExecPayload {
+  return {
+    executor: 'claude',
+    workdir: f.workdir.trim(),
+    model: f.model.trim(),
+    allowControl: f.allowControl,
+  }
+}
 
 // CodeMirror rides in its own lazy chunk (heavy) - the manual form is a
 // rarely-entered mode, so the editors load on demand and stay out of the
@@ -146,14 +167,6 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
             return null
           }
         }
-        const exec = f.workdir.trim()
-          ? {
-              executor: 'claude' as const,
-              workdir: f.workdir.trim(),
-              model: f.model.trim() || undefined,
-              allowControl: f.allowControl,
-            }
-          : undefined
         return {
           name: f.name.trim(),
           cron: f.cron.trim(),
@@ -163,7 +176,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           workflow: f.workflow.trim(),
           ui: f.ui.trim() || undefined,
           agent: f.agent,
-          exec,
+          exec: buildFormExec(f),
           stateSchema,
         }
       },
