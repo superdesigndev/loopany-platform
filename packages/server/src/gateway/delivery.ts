@@ -28,8 +28,8 @@ export interface Delivery {
     workflow: string | null;
     model: string | null;
     allowControl: boolean;
-    /** Coding agent to EXECUTE this loop with (the daemon branches its spawn on
-     *  this — claude vs grok; codex still runs via claude today). */
+    /** Coding agent to EXECUTE this loop with (the daemon branches spawn +
+     *  credentials on this — claude-code | codex | grok). */
     agent: CodingAgent;
   };
   /** Cursor (prev state) for the workflow gate. */

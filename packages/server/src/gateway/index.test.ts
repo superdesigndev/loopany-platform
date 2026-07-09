@@ -484,7 +484,7 @@ test("editLoop changes a loop's envelope from its machine's device token", async
   expect((await store.getLoop(id))!.cron).toBe("0 9 * * *");
 });
 
-test("editLoop changes the coding agent to a known enum value (recording-only)", async () => {
+test("editLoop changes the coding agent to a known enum value", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));

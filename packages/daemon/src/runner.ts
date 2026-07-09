@@ -34,8 +34,8 @@ export interface Delivery {
     model: string | null;
     allowControl: boolean;
     /** Coding agent to EXECUTE this loop with. Absent on an OLD server (pre-grok)
-     *  ⇒ treated as claude-code. Only `grok` changes the spawn today (codex still
-     *  runs via claude). */
+     *  ⇒ treated as claude-code. The daemon branches spawn + credentials on this
+     *  (`claude-code` | `codex` | `grok`). */
     agent?: CodingAgent;
   };
   prevState: unknown;
@@ -97,21 +97,24 @@ export interface AgentSpawn {
 /**
  * Build the coding-agent spawn command (bin + argv) for one run pass.
  *
- * Grok deliberately mirrors Claude Code's CLI surface, so most flags are shared
- * (`-p`, `--permission-mode`, `--disallowed-tools`, `--model`, `--resume`). Two
- * differ and break a literal drop-in:
- *   - grok's streaming format token is `streaming-json`, not claude's `stream-json`;
- *   - grok HARD-REJECTS `--verbose` (exit 2) and has no `--append-system-prompt-file`
- *     (its system-prompt flags take a value, not a file). We drop both for grok.
+ * Three arms (BYOA — each agent's real CLI surface):
+ *   - `claude-code`: `claude -p … --output-format stream-json --verbose …`
+ *   - `grok`: mirrors Claude's shape but uses `streaming-json`, drops `--verbose`
+ *     (exit 2) and `--append-system-prompt-file` (no file form).
+ *   - `codex`: a DIFFERENT surface — `codex exec` / `codex exec resume`, not `-p`.
+ *     Flags verified against codex-cli 0.143.0: `--json` (JSONL on stdout),
+ *     `--dangerously-bypass-approvals-and-sandbox` (unattended BYOA, same intent
+ *     as claude/grok `bypassPermissions`), optional `-m` / `--model`, and
+ *     `--skip-git-repo-check` so non-git loop workdirs are not rejected.
  *
- * `codex` still executes via claude today (recording-only), so it takes the claude
- * arm here. `LOOPANY_GROK_BIN` / `LOOPANY_CLAUDE_BIN` are the per-agent escape hatches.
+ * Escape hatches: `LOOPANY_CLAUDE_BIN` / `LOOPANY_GROK_BIN` / `LOOPANY_CODEX_BIN`.
  *
- * NOTE (this PR): grok's headless stream is grok-native (`thought`/`text`/`end`) and
- * carries no cost/usage, so the Claude-shaped `makeStreamConsumer` parses nothing from
- * it — a grok run still marks OK on exit 0 and the agent's own `loopany report` verb
- * persists the result; daemon-side live-progress/cost/transcript is degraded until the
- * follow-up grok stream adapter lands.
+ * Telemetry note: grok's headless stream is grok-native (`thought`/`text`/`end`)
+ * and codex `--json` is not Claude stream-json either — the Claude-shaped
+ * `makeStreamConsumer` parses nothing from either. Both still mark OK on exit 0;
+ * the agent's own `loopany report` persists the result. Daemon-side live-
+ * progress/cost/transcript for non-Claude agents is degraded until a per-agent
+ * stream adapter lands.
  */
 export function buildAgentSpawn(opts: {
   agent: CodingAgent;
@@ -122,6 +125,27 @@ export function buildAgentSpawn(opts: {
   sysFile?: string;
 }): AgentSpawn {
   const { agent, prompt, resumeSessionId, model, sysFile } = opts;
+  if (agent === "codex") {
+    // Codex surface is `codex exec [OPTIONS] [PROMPT]` / `codex exec resume
+    // [OPTIONS] [SESSION_ID] [PROMPT]` — never Claude's `-p` / stream-json flags.
+    const modelArgs = model ? ["-m", model] : [];
+    const unattended = [
+      "--json",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+      ...modelArgs,
+    ];
+    if (resumeSessionId) {
+      return {
+        bin: process.env.LOOPANY_CODEX_BIN || "codex",
+        args: ["exec", "resume", resumeSessionId, ...unattended, prompt],
+      };
+    }
+    return {
+      bin: process.env.LOOPANY_CODEX_BIN || "codex",
+      args: ["exec", ...unattended, prompt],
+    };
+  }
   const resume = resumeSessionId ? ["--resume", resumeSessionId] : [];
   const modelArgs = model ? ["--model", model] : [];
   if (agent === "grok") {
@@ -377,10 +401,10 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   const hasSystemPrompt = d.systemPrompt.trim().length > 0;
   const sysFile = hasSystemPrompt ? path.join(runsDir, `sys-${d.runId}.md`) : "";
   // Which coding agent executes this loop. Absent on an OLD server (pre-grok) ⇒
-  // claude-code; only `grok` changes the spawn + credential set (codex still runs
-  // via claude today, so its failure reason stays "claude").
+  // claude-code. Spawn + credential set branch on the agent; agentLabel names the
+  // binary family in failure reasons (claude / codex / grok).
   const agent: CodingAgent = d.loop.agent ?? "claude-code";
-  const agentLabel = agent === "grok" ? "grok" : "claude";
+  const agentLabel = agent === "claude-code" ? "claude" : agent;
   try {
     if (hasSystemPrompt) {
       fs.mkdirSync(runsDir, { recursive: true });
@@ -409,9 +433,8 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       attempts += 1;
       const resuming = attempts > 1;
       const prompt = resuming ? buildResumeTask(error ?? "transient API error") : task;
-      // stream-json (JSONL) so we can derive a live progress signal as claude works;
-      // the terminal `result` event carries the same fields the single-JSON mode did.
-      // (grok emits a grok-native stream we can't yet parse — see buildAgentSpawn.)
+      // Claude stream-json (JSONL) yields live progress + a terminal `result` event.
+      // Grok/codex emit non-Claude streams we can't yet parse — see buildAgentSpawn.
       const { bin, args } = buildAgentSpawn({
         agent,
         prompt,

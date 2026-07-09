@@ -15,9 +15,10 @@ import type { MachinePresence } from './lib/machinePresence'
 export type { MachinePresence } from './lib/machinePresence'
 import type { ArtifactMeta } from './server/frontmatter'
 
-/** The coding agent a loop is bound to / recorded as its host. Recording-only for
- *  `codex` (still executed via Claude); a `grok` loop is executed by the daemon via
- *  the grok CLI.
+/** The coding agent a loop is bound to AND executed with (BYOA on the owner's
+ *  machine): `claude-code` → Claude Code, `codex` → `codex exec`, `grok` → Grok.
+ *  Non-Claude agents may still have thinner daemon telemetry until a stream
+ *  adapter lands; execution itself is real for every value.
  *
  *  Runtime SINGLE SOURCE (anti-drift): every server consumer DERIVES from this
  *  array — the `CodingAgent` type here, the `db/schema.ts` `CodingAgent` type AND
@@ -175,9 +176,9 @@ export interface JobFull {
   ui?: string
   /** Push channel this loop notifies through (notification_channels.id). */
   channelId?: string | null
-  /** Coding agent this loop is recorded as (claude-code | codex | grok). Editable in
-   *  the UI (LoopForm agent select); a grok loop is executed via the grok CLI, while
-   *  a codex loop is still executed via Claude for now (recording-only). */
+  /** Coding agent this loop is bound to and executed with (claude-code | codex |
+   *  grok). Editable in the UI (LoopForm agent select); the next run spawns that
+   *  agent on the bound machine. */
   agent?: CodingAgent
   owner?: {
     gateway?: string
@@ -313,8 +314,8 @@ export interface JobPayload {
   /** Push channel id (notification_channels.id), or '' / null to clear it. */
   channelId?: string | null
   enabled?: boolean
-  /** Coding agent this loop is recorded against (claude-code | codex). Recording-only
-   *  today, but editable — the next run picks up the new agent. */
+  /** Coding agent this loop executes with (claude-code | codex | grok). Editable —
+   *  the next run picks up the new agent. */
   agent?: CodingAgent
   exec?: ExecPayload
   owner?: OwnerRef

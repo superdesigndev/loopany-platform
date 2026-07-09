@@ -233,7 +233,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
             </select>
           </div>
 
-          <Section title="Execution" hint="Binds claude on the machine as the executor." />
+          <Section title="Execution" hint="Which coding agent on the machine runs this loop." />
           <div className="min-w-0">
             <label className={labelCls}>Coding agent</label>
             <select className={selectCls} value={f.agent} onChange={(e) => set('agent', e.target.value as CodingAgent)}>
@@ -243,7 +243,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
                 </option>
               ))}
             </select>
-            <div className={hintCls}>Which coding agent this loop is recorded against. Recording-only today - every loop still runs via Claude.</div>
+            <div className={hintCls}>Which coding agent executes this loop on the bound machine.</div>
           </div>
           <TextField
             label="Working directory"

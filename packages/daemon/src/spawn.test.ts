@@ -69,6 +69,32 @@ describe("execEnv", () => {
     const env = execEnv();
     expect(env.XAI_API_KEY).toBeUndefined();
   });
+
+  test("codex path forwards OPENAI_API_KEY / CODEX_API_KEY / CODEX_HOME, not Claude keys", () => {
+    setEnv("OPENAI_API_KEY", "sk-openai");
+    setEnv("CODEX_API_KEY", "codex-secret");
+    setEnv("CODEX_HOME", "/tmp/codex-home");
+    setEnv("ANTHROPIC_API_KEY", "sk-x");
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-tok");
+    setEnv("XAI_API_KEY", "xai-secret");
+    const env = execEnv("codex");
+    expect(env.OPENAI_API_KEY).toBe("sk-openai");
+    expect(env.CODEX_API_KEY).toBe("codex-secret");
+    expect(env.CODEX_HOME).toBe("/tmp/codex-home");
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.XAI_API_KEY).toBeUndefined();
+    // OAuth/session files under ~/.codex stay reachable via HOME (BASE_ALLOW).
+    expect(env.HOME).toBe(process.env.HOME);
+  });
+
+  test("claude path does NOT forward OpenAI/Codex keys", () => {
+    setEnv("OPENAI_API_KEY", "sk-openai");
+    setEnv("CODEX_API_KEY", "codex-secret");
+    const env = execEnv();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.CODEX_API_KEY).toBeUndefined();
+  });
 });
 
 describe("allowlistEnv", () => {

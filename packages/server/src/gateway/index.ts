@@ -680,9 +680,9 @@ export class MachineGateway {
       /** Optional closed-loop setpoint. Non-null ⇒ the loop is CLOSED (self-finishes
        *  when met); null/absent ⇒ OPEN (monitor/digest). */
       goal?: unknown;
-      /** Coding agent the daemon recorded as this loop's host (claude-code | codex |
-       *  grok). Absent for older daemons → defaults to claude-code. A grok loop is
-       *  EXECUTED via the grok CLI; codex stays recording-only (run via Claude). */
+      /** Coding agent this loop is bound to and EXECUTED with (claude-code | codex |
+       *  grok). Absent for older daemons → defaults to claude-code. The daemon
+       *  spawns that agent on the bound machine. */
       agent?: unknown;
       /** Web's New-loop claim token — correlates this loop back to the dialog. */
       claim?: unknown;
@@ -1202,8 +1202,8 @@ export class MachineGateway {
       else set("notify", v, loop.notify);
     }
     // Coding agent: only a known `CodingAgent` (the shared enum validator, so this
-    // widens automatically as the enum grows). Recording-only today — the next run
-    // picks up the new agent, matching how model/cron edits behave.
+    // widens automatically as the enum grows). The next run spawns the new agent,
+    // matching how model/cron edits behave.
     if (p.agent !== undefined) {
       const a = coerceCodingAgent(p.agent);
       if (!a) rejections.push({ key: "agent", reason: `agent must be one of ${CODING_AGENTS.join(", ")}` });

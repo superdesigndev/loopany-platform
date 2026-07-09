@@ -3,10 +3,11 @@
  *
  * Execution is BYOA - the session lives on the owner's machine, so the server
  * can only hand back a ready-to-paste terminal command. Pure + unit-testable,
- * mirroring `editPrompt.ts`. The binary is literally `claude` because only claude
- * runs produce a resumable session today: `codex` is recording-only (run via claude)
- * and a `grok` run's telemetry is degraded (no captured session id to resume) - branch
- * on the loop's agent here once another agent yields a resumable session.
+ * mirroring `editPrompt.ts`. The binary is literally `claude` because only
+ * Claude stream-json currently yields a captured session id for this affordance:
+ * codex/grok execute on their own CLIs but daemon telemetry is still degraded
+ * (no session id to resume). Branch on the loop's agent once another agent
+ * yields a resumable captured session.
  */
 
 /** Single-quote a path for POSIX shells (embedded `'` becomes `'\''`). */

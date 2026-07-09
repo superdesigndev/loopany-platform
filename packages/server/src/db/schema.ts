@@ -198,13 +198,13 @@ export const loops = pgTable(
     /** One-line reason recorded at completion (the finishing run's summary). */
     completionReason: text("completion_reason"),
     model: text("model"),
-    /** Coding agent this loop is BOUND TO / was created by (the harness recorded
-     *  as its host) AND, for `grok`, EXECUTED with: the daemon's `buildAgentSpawn`
-     *  branches on this value (grok spawns the grok CLI; `codex` is still recording-only,
-     *  executed via claude). Measured from the creating CLI's env when detectable, else
-     *  the declared/selected value; TS-only enum (stored as plain text) DERIVED from the
-     *  `CODING_AGENTS` single source, so widening the set is a one-line edit there with
-     *  no migration and no change here. Existing rows backfill to `claude-code` via default. */
+    /** Coding agent this loop is BOUND TO and EXECUTED with: the daemon's
+     *  `buildAgentSpawn` branches on this value (`claude-code` → claude,
+     *  `codex` → `codex exec`, `grok` → grok CLI). Measured from the creating
+     *  CLI's env when detectable, else the declared/selected value; TS-only enum
+     *  (stored as plain text) DERIVED from the `CODING_AGENTS` single source, so
+     *  widening the set is a one-line edit there with no migration and no change
+     *  here. Existing rows backfill to `claude-code` via default. */
     agent: text("agent", { enum: CODING_AGENTS }).notNull().default("claude-code"),
     enabled: boolean("enabled").notNull().default(true),
     /** One-shot override: run once at this time, then resume cron (ISO). */

@@ -51,6 +51,14 @@ describe('agent-neutral edit copy', () => {
     expect(src).toMatch(/Edit with your coding agent/)
     expect(src).toMatch(/Dispatch to your coding agent/)
   })
+
+  it('LoopForm agent hint does not claim every loop still runs via Claude', () => {
+    // Codex/Grok are real executors — product copy must not lie that only Claude runs.
+    expect(formSrc).not.toMatch(/every loop still runs via Claude/i)
+    expect(formSrc).not.toMatch(/Recording-only today/i)
+    expect(formSrc).not.toMatch(/Binds claude on the machine/i)
+    expect(formSrc).toMatch(/Which coding agent executes this loop on the bound machine/)
+  })
 })
 
 /**

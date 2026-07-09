@@ -63,7 +63,7 @@ The whitelist — every key `--json` accepts:
 | `timezone`     | IANA name                      | change the zone |
 | `notify`       | `always` \| `auto` \| `never`  | delivery policy |
 | `model`        | model id                       | coding-agent model |
-| `agent`        | `claude-code` \| `codex`       | which coding agent the loop is recorded against (recording-only today — every run still executes via Claude) |
+| `agent`        | `claude-code` \| `codex` \| `grok` | which coding agent executes this loop on the bound machine |
 | `allowControl` | boolean                        | `false` = **pin** the schedule (runs can't self-adjust) |
 | `enabled`      | boolean                        | `false` pauses; `true` resumes — or **reopens** a completed loop (clears its completion stamps; goal survives) |
 | `runAt`        | `2h` / ISO                     | one extra run soon, then resume cadence |

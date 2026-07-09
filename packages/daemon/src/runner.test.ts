@@ -225,6 +225,7 @@ describe("buildAgentSpawn", () => {
   afterEach(() => {
     delete process.env.LOOPANY_CLAUDE_BIN;
     delete process.env.LOOPANY_GROK_BIN;
+    delete process.env.LOOPANY_CODEX_BIN;
   });
 
   test("claude-code: default bin + the claude arg vector (--verbose, stream-json, sys file)", () => {
@@ -273,11 +274,45 @@ describe("buildAgentSpawn", () => {
     expect(args.slice(-2)).toEqual(["--model", "grok-4"]);
   });
 
-  test("codex still takes the claude arm (recording-only; executed via claude today)", () => {
-    const { bin, args } = buildAgentSpawn({ agent: "codex", prompt: "p" });
-    expect(bin).toBe("claude");
-    expect(args).toContain("--verbose");
-    expect(args).toContain("stream-json");
+  test("codex: codex exec arm — not claude flags; unattended + json + skip-git", () => {
+    // A sysFile is passed but codex has no Claude sys-prompt-file flag — drop it.
+    const { bin, args } = buildAgentSpawn({ agent: "codex", prompt: "do it", sysFile: "/tmp/sys.md" });
+    expect(bin).toBe("codex");
+    expect(args).toEqual([
+      "exec",
+      "--json",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+      "do it",
+    ]);
+    // Never emit Claude-shaped flags on the codex arm.
+    expect(args).not.toContain("-p");
+    expect(args).not.toContain("--verbose");
+    expect(args).not.toContain("--append-system-prompt-file");
+    expect(args).not.toContain("stream-json");
+    expect(args).not.toContain("--permission-mode");
+    expect(args).not.toContain("--disallowed-tools");
+  });
+
+  test("codex: LOOPANY_CODEX_BIN escape hatch + exec resume + model", () => {
+    process.env.LOOPANY_CODEX_BIN = "/opt/codex";
+    const { bin, args } = buildAgentSpawn({
+      agent: "codex",
+      prompt: "continue",
+      resumeSessionId: "sess-codex-1",
+      model: "o3",
+    });
+    expect(bin).toBe("/opt/codex");
+    expect(args).toEqual([
+      "exec",
+      "resume",
+      "sess-codex-1",
+      "--json",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+      "-m", "o3",
+      "continue",
+    ]);
   });
 });
 

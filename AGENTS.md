@@ -543,16 +543,14 @@ computes pure functions. Run instructions: `README.md`.
   version-sensitive hash, never mutates the TOML) and SURFACES the enable/trust step in the
   report. Grok Build's global hooks (one file per tool under `~/.grok/hooks/*.json`) are
   ALWAYS TRUSTED - no `hooks = true` config gate and no per-hook trust hash - so writing
-  `loopany.json` makes the hook live immediately (no enable/trust note). NB: Codex is
-  identity/skill/hook-onboarded but NOT executable — `runner.ts` runs it via `claude`
-  (`loops.agent` is recording-only for `codex`; `grok` DOES execute - see the `loops.agent`
-  bullet above). `up`/`update` call the best-effort
-  `refreshHooks` (never blocks). The ambient hook installs ONLY with a DURABLE on-PATH
-  `loopany` (`resolveDurableCommand`: our shim OR a NON-ephemeral PATH global, returned as
-  an absolute path - the transient `npx`/`_npx` PATH entry is filtered out, so it gates
-  exactly like the bin shim, F6) — the automatic path SKIPS it with `npm i -g` guidance
-  when only a bare, non-PATH (or ephemeral npx) `loopany` would result; the explicit verb
-  still installs but warns.
+  `loopany.json` makes the hook live immediately (no enable/trust note). Codex is fully
+  executable (`codex exec` — see the `loops.agent` bullet). `up`/`update` call the
+  best-effort `refreshHooks` (never blocks). The ambient hook installs ONLY with a
+  DURABLE on-PATH `loopany` (`resolveDurableCommand`: our shim OR a NON-ephemeral PATH
+  global, returned as an absolute path - the transient `npx`/`_npx` PATH entry is
+  filtered out, so it gates exactly like the bin shim, F6) — the automatic path SKIPS
+  it with `npm i -g` guidance when only a bare, non-PATH (or ephemeral npx) `loopany`
+  would result; the explicit verb still installs but warns.
 - **PATH shim** (`bin-shim.ts`): `up`/`update` write a version-consistent `loopany`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance. It lands ONLY
@@ -579,24 +577,31 @@ computes pure functions. Run instructions: `README.md`.
   `down` then `runEnsure({force:true})` - force skips the still-reported-online
   short-circuit (server `ONLINE_TTL` 30s outlives the local pidfile clear).
 - `loops.agent` (`CodingAgent` enum: `claude-code|codex|grok`) records the loop's host
-  coding agent (at create: measured env fingerprint > `--agent` > server default;
-  detection markers in `create.ts detectAgentFromEnv`). Editable afterward on the edit
-  path - in `EDITABLE_LOOP_FIELDS`, `loopany edit --json`/`show` roundtrip, and the web
-  `LoopForm` agent select (the next run picks up a changed agent). `codex` is
-  RECORDING-ONLY (still executed via claude); **`grok` actually EXECUTES** via the grok
-  CLI. `runner.ts buildAgentSpawn` branches the spawn on `d.loop.agent` (delivered by
-  server `gateway/delivery.ts`): grok drops `--verbose` (grok exit-2 rejects it) + the
-  sys-prompt-file flag and uses `--output-format streaming-json` (not `stream-json`);
-  `LOOPANY_GROK_BIN` mirrors `LOOPANY_CLAUDE_BIN`; `spawn.ts execEnv("grok")` forwards
-  `XAI_API_KEY`/`GROK_HOME`/`XAI_API_BASE_URL` (OAuth via `~/.grok` is free through
-  `HOME`). **Grok telemetry is DEGRADED**: grok's headless stream is grok-native
-  (`thought`/`text`/`end`, no cost/usage), so the Claude-shaped `makeStreamConsumer`
-  parses nothing — a grok run still marks ok on exit 0 and the agent's own `loopany
-  report` persists the result; daemon-side live-progress/cost/transcript await a
-  follow-up grok stream adapter. Grok's SessionStart hook (`setup.ts`,
-  `~/.grok/hooks/loopany.json`, always-trusted) rides `HOOK_TARGET_AGENTS` (a superset of
-  `SKILL_TARGET_AGENTS` — grok reads Claude's skills dir so it is NOT a skill-install
-  target). The enum's single source is `CODING_AGENTS` in `packages/server/src/types.ts`
+  coding agent AND selects the executor (at create: measured env fingerprint >
+  `--agent` > server default; detection markers in `create.ts detectAgentFromEnv`).
+  Editable afterward on the edit path - in `EDITABLE_LOOP_FIELDS`, `loopany edit
+  --json`/`show` roundtrip, and the web `LoopForm` agent select (the next run picks
+  up a changed agent). `runner.ts buildAgentSpawn` branches on `d.loop.agent`
+  (delivered by server `gateway/delivery.ts`):
+  - `claude-code` → `claude` (`LOOPANY_CLAUDE_BIN`) with stream-json + bypassPermissions
+  - `grok` → `grok` (`LOOPANY_GROK_BIN`): drops `--verbose` (exit-2 rejects it) + the
+    sys-prompt-file flag; uses `--output-format streaming-json` (not `stream-json`);
+    `execEnv("grok")` forwards `XAI_API_KEY`/`GROK_HOME`/`XAI_API_BASE_URL` (OAuth via
+    `~/.grok` is free through `HOME`)
+  - `codex` → `codex exec` (`LOOPANY_CODEX_BIN`): `--json`,
+    `--dangerously-bypass-approvals-and-sandbox`, `--skip-git-repo-check`, optional
+    `-m`; resume is `codex exec resume <sessionId> …`; `execEnv("codex")` forwards
+    `OPENAI_API_KEY`/`CODEX_API_KEY`/`CODEX_HOME` (session/config under `~/.codex`
+    free via `HOME`)
+  **Non-Claude telemetry is DEGRADED**: grok's headless stream is grok-native
+  (`thought`/`text`/`end`, no cost/usage) and codex `--json` is not Claude
+  stream-json, so the Claude-shaped `makeStreamConsumer` parses nothing — a run
+  still marks ok on exit 0 and the agent's own `loopany report` persists the
+  result; daemon-side live-progress/cost/transcript await per-agent stream adapters.
+  Grok's SessionStart hook (`setup.ts`, `~/.grok/hooks/loopany.json`, always-trusted)
+  rides `HOOK_TARGET_AGENTS` (a superset of `SKILL_TARGET_AGENTS` — grok reads
+  Claude's skills dir so it is NOT a skill-install target). The enum's single source
+  is `CODING_AGENTS` in `packages/server/src/types.ts`
   (the schema type/column enum + the `coerceCodingAgent` validator + the web select all
   derive from it; widening the set is a one-line edit there).
 - External touches (process/network/fs) are injectable seams throughout; tests never

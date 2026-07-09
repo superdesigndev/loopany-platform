@@ -142,19 +142,24 @@ export function allowlistEnv(extra: { keys?: string[]; prefixes?: string[] } = {
 }
 
 /** Allowlisted env for the coding-agent subprocess — never inherit unrelated
- *  secrets. The ANTHROPIC_* family covers proxy/gateway users (ANTHROPIC_BASE_URL /
- *  ANTHROPIC_AUTH_TOKEN …), and CLAUDE_CONFIG_DIR keeps a relocated claude config
- *  writing transcripts where artifacts.sessionTrace() reads them back.
- *
- *  Grok's OAuth lives in `~/.grok` and is already reachable via `HOME` (in
- *  `BASE_ALLOW`), so OAuth users work with no extra keys; API-key users need
- *  `XAI_API_KEY` (+ optional `GROK_HOME`/`XAI_API_BASE_URL`) forwarded. Those keys
- *  are added ONLY on the grok path so a claude run never inherits an unrelated
- *  xAI secret. `agent` defaults to claude-code so existing callers are unchanged. */
+ *  secrets. Per-agent credential sets stay tight (no full parent env dump):
+ *   - claude-code: ANTHROPIC_* + CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CONFIG_DIR
+ *     (proxy/gateway users + relocated config so transcripts stay findable)
+ *   - grok: XAI_API_KEY (+ optional GROK_HOME / XAI_API_BASE_URL); OAuth in
+ *     `~/.grok` is free via HOME (BASE_ALLOW)
+ *   - codex: OPENAI_API_KEY / CODEX_API_KEY (+ optional CODEX_HOME); OAuth /
+ *     session files under `~/.codex` are free via HOME
+ * Keys ride ONLY their agent's path so a claude run never inherits an unrelated
+ * xAI/OpenAI secret. `agent` defaults to claude-code so existing callers are unchanged. */
 export function execEnv(agent: CodingAgent = "claude-code"): NodeJS.ProcessEnv {
   if (agent === "grok") {
     return allowlistEnv({
       keys: ["XAI_API_KEY", "GROK_HOME", "XAI_API_BASE_URL"],
+    });
+  }
+  if (agent === "codex") {
+    return allowlistEnv({
+      keys: ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_HOME"],
     });
   }
   return allowlistEnv({
