@@ -753,6 +753,11 @@ computes pure functions. Run instructions: `README.md`.
   a real publish failure). Needs npm >= 11.5 (installed in-workflow). The tag must
   match `packages/daemon/package.json` version. pnpm version comes solely from the
   root `packageManager` field (do not also pass `version:` to `pnpm/action-setup`).
+  The repo is PUBLIC, so OIDC publishing emits a sigstore provenance statement -
+  `packages/daemon/package.json` MUST carry a `repository` object whose `url`
+  resolves to this source repo (`git+https://github.com/superdesigndev/loopany-platform.git`,
+  `directory: packages/daemon`) or npm rejects the publish with a 422 (an empty/
+  absent `repository.url` fails provenance validation). Do not strip that field.
 
 ## Maintaining this file
 
