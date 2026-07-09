@@ -52,8 +52,10 @@ async function main(): Promise<number> {
   switch (r.kind) {
     case "callback":
       return (await import("./callback.js")).runCallback(r.argv);
-    case "help":
-      return (await import("./help.js")).printHelp();
+    case "help": {
+      const help = await import("./help.js");
+      return r.verb ? help.printVerbHelp(r.verb) : help.printHelp();
+    }
     case "version":
       return (await import("./help.js")).printVersion();
     case "daemon":

@@ -99,6 +99,38 @@ describe("loopany CLI dispatch", () => {
     expect(r.stderr).toContain("not connected");
   });
 
+  test("update --help prints usage and exits 0 WITHOUT the daemon handover (the foot-gun)", async () => {
+    // The primary must-fix: `--help` is parsed before `runUpdate`, so no `down`/re-ensure
+    // side effect fires — even on an isolated home. Contrast the `update` (no --help) test
+    // above, which reaches the handler and reports "not connected".
+    const r = await runCli(["update", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("loopany update");
+    expect(r.stdout).toContain("Run `loopany --help` for all commands.");
+    expect(r.stderr).not.toContain("not connected"); // handler never ran
+  });
+
+  test("update -h short-circuits to help too", async () => {
+    const r = await runCli(["update", "-h"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("loopany update");
+  });
+
+  test("down --help prints usage and exits 0 (never stops a daemon)", async () => {
+    const r = await runCli(["down", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("loopany down");
+    expect(r.stdout).toContain("Stop the detached daemon");
+  });
+
+  test("up --foreground --help shows help instead of launching the poll loop", async () => {
+    // The ordering hazard: `up --foreground` would classify to `daemon` and hang. Help
+    // is parsed first, so this exits 0 with usage.
+    const r = await runCli(["up", "--foreground", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("loopany up");
+  });
+
   test("bare `loopany` (no args) → the content-first home, NOT the poll loop (exit 0)", async () => {
     // The Batch-6 behavior change: bare `loopany` no longer blocks on the daemon. With
     // an isolated LOOPANY_HOME (no credential/server) it renders the definitive
@@ -162,6 +194,37 @@ describe("classify — CLI routing table (Batch 6)", () => {
   test("an unknown verb is still `unknown` (→ exit 2), never a silent daemon launch", () => {
     expect(classify(["bogus"], {})).toEqual({ kind: "unknown", verb: "bogus" });
     expect(classify(["--frobnicate"], {})).toEqual({ kind: "unknown", verb: "--frobnicate" });
+  });
+
+  test("`<verb> --help`/`-h` short-circuits to per-verb help BEFORE any side effect (structural)", () => {
+    // Every recognized command verb — including the foot-guns — routes to help, not its handler.
+    expect(classify(["update", "--help"], {})).toEqual({ kind: "help", verb: "update" });
+    expect(classify(["update", "-h"], {})).toEqual({ kind: "help", verb: "update" });
+    expect(classify(["down", "--help"], {})).toEqual({ kind: "help", verb: "down" });
+    expect(classify(["setup", "hooks", "--help"], {})).toEqual({ kind: "help", verb: "setup" });
+    expect(classify(["skill", "-h"], {})).toEqual({ kind: "help", verb: "skill" });
+    expect(classify(["status", "--help"], {})).toEqual({ kind: "help", verb: "status" });
+    expect(classify(["new", "--help"], {})).toEqual({ kind: "help", verb: "new" });
+  });
+
+  test("help wins over the `up --foreground`→daemon branch (no poll loop for `--help`)", () => {
+    expect(classify(["up", "--foreground", "--help"], {})).toEqual({ kind: "help", verb: "up" });
+    expect(classify(["up", "--help"], {})).toEqual({ kind: "help", verb: "up" });
+  });
+
+  test("a run-only forward verb with --help shows local help out-of-run (no forward, no side effect)", () => {
+    expect(classify(["report", "--help"], {})).toEqual({ kind: "help", verb: "report" });
+  });
+
+  test("--help IN a run stays a callback (server renders it; the router never intercepts)", () => {
+    expect(classify(["update", "--help"], { LOOPANY_RUN_TOKEN: "rk_x" })).toEqual({
+      kind: "callback",
+      argv: ["update", "--help"],
+    });
+  });
+
+  test("an unknown verb carrying --help stays unknown (not intercepted)", () => {
+    expect(classify(["bogus", "--help"], {})).toEqual({ kind: "unknown", verb: "bogus" });
   });
 });
 

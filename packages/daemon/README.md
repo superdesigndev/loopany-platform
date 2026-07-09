@@ -72,7 +72,9 @@ Interactive
                           --schema-file; --dry-run previews before/after).
 ```
 
-Run `loopany --help` for the full usage text.
+Run `loopany --help` for the full usage text, or `loopany <verb> --help` for a
+single verb's concise usage (prints and exits, running no side effect - safe to
+inspect foot-guns like `update` or `down`).
 
 ## How it works
 

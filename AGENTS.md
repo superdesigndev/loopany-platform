@@ -513,7 +513,12 @@ computes pure functions. Run instructions: `README.md`.
   handler. The in-run callback (`LOOPANY_RUN_TOKEN`+args) still wins FIRST; `-v`/`--version`
   (like `--help`/`-h`/`help`) is a light fast-path that prints just the version (`help.ts`
   `printVersion`, reusing `daemonVersion()`) and never launches a daemon (the usage screen
-  also leads with that version). **Bare `loopany` is now the content-first HOME**, not the
+  also leads with that version). **`<verb> --help`/`-h` short-circuits to that verb's
+  concise usage (`help.ts` `printVerbHelp`) BEFORE its handler runs** - parsed ahead of the
+  `up`→daemon branch so `up --foreground --help` shows help, never the poll loop. This is
+  the no-side-effect guarantee for foot-guns (`update` hands the daemon over immediately).
+  Structural: a NEW verb inherits it by joining `route.ts` `COMMAND_VERBS` (add a matching
+  `VERB_USAGE` entry; a missing one degrades to the full screen). **Bare `loopany` is now the content-first HOME**, not the
   foreground daemon: device out-of-run posts `home` on the device credential, in-run bare
   posts `home` on the run credential (fixes the old `argv.length > 0` guard). The
   foreground poll loop MOVED to `loopany up --foreground`; the `--server-url`/`--api-key`

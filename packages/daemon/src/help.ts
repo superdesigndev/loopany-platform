@@ -60,9 +60,49 @@ Interactive (edit loops from your own agent session, using the stored device tok
   -v, --version           Print the daemon version and exit.
 `;
 
+/**
+ * Concise per-verb usage, printed by `loopany <verb> --help` / `-h`. Kept terse on
+ * purpose (the full screen above is one `--help` away): the load-bearing property is that
+ * `<verb> --help` short-circuits to THIS text with NO side effect — critical for the
+ * foot-gun verbs (`update` hands the daemon over immediately, `down` stops it). Every
+ * command verb the router knows (`route.ts` COMMAND_VERBS) has an entry; a missing entry
+ * degrades to the full usage screen rather than throwing.
+ */
+const VERB_USAGE: Record<string, string> = {
+  up: "loopany up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  loopany skill, the SessionStart hook, and the PATH shim). --foreground runs the\n  poll loop attached in this terminal instead of detached.",
+  new: "loopany new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing.",
+  skill: "loopany skill [status|install] [--project]\n  Manage the loopany agent skill install (user scope by default; --project installs\n  into the current directory).",
+  setup: "loopany setup hooks [--remove]\n  Install/refresh (or --remove) the SessionStart hook that lands the home view as\n  ambient context each session.",
+  update: "loopany update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.",
+  status: "loopany status\n  Report whether this machine's daemon is running (local pid) + its connection state.",
+  down: "loopany down\n  Stop the detached daemon this machine started with `up`.",
+  log: "loopany log [<loop>] [--transcript|--full] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
+  show: "loopany show [<id>] [--full] [--json]\n  Show a loop's full editable config + recent state (the device credential inspects\n  any loop on this machine).",
+  loops: "loopany loops [--fields a,b] [--json]\n  List your loops (--json emits the raw JSON array). Default columns are\n  id/name/cron/enabled/nextFire.",
+  edit: "loopany edit <id> --json '<obj>' [--dry-run] [--workflow-file|--ui-file|--schema-file <path>]\n  Edit a loop (JSON-only + content-file trio). --dry-run previews before/after.",
+  report: "loopany report ...\n  In-run only: the running agent reports progress/results. Outside a run this is rejected.",
+  finish: "loopany finish ...\n  In-run only: the running agent marks a closed loop's goal met. Outside a run this is rejected.",
+  complete: "loopany complete ...\n  In-run only alias of `finish`. Outside a run this is rejected.",
+};
+
 /** `loopany <version>` for humans, or a plain fallback when it's unreadable. */
 function versionLabel(version: string | undefined): string {
   return version ? `loopany v${version}` : "loopany";
+}
+
+/**
+ * `loopany <verb> --help` / `-h`: print that verb's concise usage and exit 0, running NO
+ * handler side effect. Unknown verbs fall back to the full usage screen.
+ */
+export function printVerbHelp(
+  verb: string,
+  out: (s: string) => void = (s) => process.stdout.write(s),
+  version: string | undefined = daemonVersion(),
+): number {
+  const usage = VERB_USAGE[verb];
+  if (!usage) return printHelp(out, version);
+  out(`${versionLabel(version)}\n\n${usage}\n\nRun \`loopany --help\` for all commands.\n`);
+  return 0;
 }
 
 export function printHelp(
