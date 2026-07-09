@@ -66,8 +66,9 @@ Please keep tests and `typecheck` green before opening a PR.
 - **Server** — deploys to Fly automatically on push to `main`
   (`.github/workflows/deploy.yml`, staging `loopany-testing`). Production
   (`loopany-prod` / loopany.ai) ships only via a manual `workflow_dispatch`
-  (`.github/workflows/deploy-prod.yml`); see [`docs/prod-release.md`](docs/prod-release.md)
-  for the release runbook, rollback recipe, and migration backward-compat checklist.
+  (`.github/workflows/deploy-prod.yml`). Migrations are forward-only (an image
+  rollback does not roll back schema); check the `machines.daemon_version`
+  fleet before removing legacy endpoints.
 - **Daemon** (`@crewlet/loopany`) — publishes to npm on a `vX.Y.Z` git tag
   (`.github/workflows/publish-daemon.yml`, via npm OIDC trusted publishing). The
   tag must match the version in `packages/daemon/package.json`.

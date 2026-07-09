@@ -715,10 +715,9 @@ computes pure functions. Run instructions: `README.md`.
   step asserts the served `sha` == the pushed `github.sha`.
 - `deploy-prod.yml`: **manual `workflow_dispatch` ONLY** -> `loopany-prod` / loopany.ai,
   `--ha=false` single machine (single-scheduler invariant; never auto-deploy prod). A
-  preflight step fails loud if `FLY_API_TOKEN_PROD` is empty. **Runbook + rollback +
-  migration backward-compat checklist: `docs/prod-release.md`** (migrations are
+  preflight step fails loud if `FLY_API_TOKEN_PROD` is empty. Migrations are
   forward-only, so an image rollback does NOT roll back schema; check the
-  `machines.daemon_version` fleet before removing legacy endpoints).
+  `machines.daemon_version` fleet before removing legacy endpoints.
 - `publish-daemon.yml`: tag `v*` -> `npm publish` of the daemon ONLY, via **npm OIDC
   trusted publishing** - no `NPM_TOKEN`, and `setup-node` deliberately omits
   `registry-url` (setting it writes a dummy-token `.npmrc` that breaks OIDC; that was
