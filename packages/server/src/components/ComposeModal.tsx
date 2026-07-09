@@ -15,6 +15,7 @@ const SLOW_WAIT_MS = 100_000
 const AGENT_LABEL: Record<CodingAgent, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+  grok: 'Grok Build',
 }
 
 // The two coding agents loopany supports today, shown as brand marks on the

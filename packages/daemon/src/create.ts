@@ -97,13 +97,13 @@ export function idempotencyKey(token: string, resolvedBody: Record<string, unkno
 }
 
 /** The coding agents Loopany can record a loop against (TS-only; cheap to widen). */
-export type CodingAgent = "claude-code" | "codex";
+export type CodingAgent = "claude-code" | "codex" | "grok";
 
 /** Coerce an arbitrary declared value (--agent flag / config.agent) to a known
  *  agent, or null when it's absent/unrecognized (so it can't override a measurement
  *  and the server falls back to its own default). */
 export function coerceAgent(v: unknown): CodingAgent | null {
-  return v === "claude-code" || v === "codex" ? v : null;
+  return v === "claude-code" || v === "codex" || v === "grok" ? v : null;
 }
 
 /**
@@ -119,10 +119,12 @@ export function coerceAgent(v: unknown): CodingAgent | null {
  *   - Codex CLI:  `CODEX_SANDBOX` / `CODEX_SANDBOX_NETWORK_DISABLED` (set for its
  *     shell tool under the sandbox). We deliberately ignore `CODEX_COMPANION_*`,
  *     which a Claude Code session can also export and would misattribute.
+ *   - Grok Build: `GROK_AGENT=1` (grok exports it into child processes).
  */
 export function detectAgentFromEnv(env: NodeJS.ProcessEnv): CodingAgent | null {
   if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT || env.CLAUDE_CODE_SESSION_ID) return "claude-code";
   if (env.CODEX_SANDBOX || env.CODEX_SANDBOX_NETWORK_DISABLED) return "codex";
+  if (env.GROK_AGENT) return "grok";
   return null;
 }
 
@@ -153,7 +155,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   const jsonArg = flag(args, "json");
   const dryRun = args.includes("--dry-run");
   if (jsonArg === undefined) {
-    process.stderr.write("loopany: usage: loopany new --json '<config>' [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex]\n");
+    process.stderr.write("loopany: usage: loopany new --json '<config>' [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex|grok]\n");
     return 2;
   }
 

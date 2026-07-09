@@ -28,7 +28,8 @@ function fakeFs(seed: Record<string, string> = {}) {
   };
   const settingsPath = path.join("/home/u", ".claude", "settings.json");
   const codexPath = path.join("/home/u", ".codex", "hooks.json");
-  return { deps, files, out: () => out.join(""), err: () => err.join(""), settingsPath, codexPath };
+  const grokPath = path.join("/home/u", ".grok", "hooks", "loopany.json");
+  return { deps, files, out: () => out.join(""), err: () => err.join(""), settingsPath, codexPath, grokPath };
 }
 
 function sessionStart(json: string): any[] {
@@ -52,6 +53,11 @@ describe("runSetup hooks", () => {
     // The report tells the user about Codex's enable + trust prerequisites.
     expect(f.out()).toContain("hooks = true");
     expect(f.out()).toContain("trust the loopany hook");
+    // Grok Build also has a concrete installer → ~/.grok/hooks/loopany.json (its own file).
+    expect(f.out()).toContain("Grok Build,installed");
+    const gk = sessionStart(f.files.get(f.grokPath)!);
+    expect(gk).toHaveLength(1);
+    expect(gk[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/loopany" });
   });
 
   test("is idempotent: a second install does not duplicate the entry (refreshes it)", async () => {
@@ -211,6 +217,64 @@ describe("runSetup hooks — Codex (~/.codex/hooks.json)", () => {
     const f = fakeFs({ [path.join("/home/u", ".codex", "hooks.json")]: "{not json" });
     expect(await runSetup(["hooks"], f.deps)).toBe(0);
     expect(codexSessionStart(f)).toHaveLength(1);
+  });
+});
+
+// ---- Grok SessionStart installer (~/.grok/hooks/loopany.json) ------------------
+// Mirrors the Claude/Codex hook tests: idempotent install, merge preserves anything
+// already in our file, and --remove uninstalls it. Grok's global hooks live one-file-
+// per-tool and are ALWAYS trusted — no enable/trust gate — so no such note is expected.
+describe("runSetup hooks — Grok Build (~/.grok/hooks/loopany.json)", () => {
+  function grokSessionStart(f: ReturnType<typeof fakeFs>): any[] {
+    return sessionStart(f.files.get(f.grokPath)!);
+  }
+
+  test("installs a SessionStart hook into a fresh ~/.grok/hooks/loopany.json", async () => {
+    const f = fakeFs();
+    await runSetup(["hooks"], f.deps);
+    const gk = grokSessionStart(f);
+    expect(gk).toHaveLength(1);
+    expect(gk[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/loopany" });
+    expect(f.out()).toContain("Grok Build,installed");
+  });
+
+  test("is idempotent: a second install refreshes rather than duplicates", async () => {
+    const f = fakeFs();
+    await runSetup(["hooks"], f.deps);
+    await runSetup(["hooks"], f.deps);
+    expect(grokSessionStart(f)).toHaveLength(1);
+    expect(f.out()).toContain("Grok Build,refreshed");
+  });
+
+  test("--remove uninstalls only our Grok entry, reporting `removed`", async () => {
+    const existing = JSON.stringify({
+      hooks: {
+        SessionStart: [
+          { hooks: [{ type: "command", command: "orca-status" }] },
+          { hooks: [{ type: "command", command: "/home/u/.local/bin/loopany" }] },
+        ],
+      },
+    });
+    const f = fakeFs({ [path.join("/home/u", ".grok", "hooks", "loopany.json")]: existing });
+    expect(await runSetup(["hooks", "--remove"], f.deps)).toBe(0);
+    const gk = grokSessionStart(f);
+    expect(gk).toHaveLength(1);
+    expect(gk[0].hooks[0].command).toBe("orca-status");
+    expect(f.out()).toContain("Grok Build,removed");
+  });
+
+  test("--remove on a clean Grok config reports `not installed`", async () => {
+    const f = fakeFs();
+    await runSetup(["hooks", "--remove"], f.deps);
+    expect(f.out()).toContain("Grok Build,not installed");
+  });
+
+  test("Grok needs NO enable/trust note — global hooks are always trusted (unlike Codex)", async () => {
+    const f = fakeFs();
+    await runSetup(["hooks"], f.deps);
+    // The only enable/trust guidance in the report is Codex's; no grok equivalent exists.
+    expect(f.out()).not.toContain("~/.grok/config");
+    expect(f.out()).not.toContain("trust the grok hook");
   });
 });
 

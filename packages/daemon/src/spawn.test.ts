@@ -47,6 +47,28 @@ describe("execEnv", () => {
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.LOOPANY_TOKEN).toBeUndefined();
   });
+
+  test("grok path forwards XAI_API_KEY (+ GROK_HOME/XAI_API_BASE_URL), not the Claude keys", () => {
+    setEnv("XAI_API_KEY", "xai-secret");
+    setEnv("GROK_HOME", "/tmp/grok");
+    setEnv("XAI_API_BASE_URL", "https://api.x.ai");
+    setEnv("ANTHROPIC_API_KEY", "sk-x"); // an unrelated Claude key must NOT ride the grok run
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-tok");
+    const env = execEnv("grok");
+    expect(env.XAI_API_KEY).toBe("xai-secret");
+    expect(env.GROK_HOME).toBe("/tmp/grok");
+    expect(env.XAI_API_BASE_URL).toBe("https://api.x.ai");
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    // OAuth users need nothing forwarded — ~/.grok is reachable via HOME (BASE_ALLOW).
+    expect(env.HOME).toBe(process.env.HOME);
+  });
+
+  test("claude path does NOT forward the xAI key (default agent = claude-code)", () => {
+    setEnv("XAI_API_KEY", "xai-secret");
+    const env = execEnv();
+    expect(env.XAI_API_KEY).toBeUndefined();
+  });
 });
 
 describe("allowlistEnv", () => {

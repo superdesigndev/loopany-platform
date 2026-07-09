@@ -15,9 +15,10 @@ import type { MachinePresence } from './lib/machinePresence'
 export type { MachinePresence } from './lib/machinePresence'
 import type { ArtifactMeta } from './server/frontmatter'
 
-/** The coding agent a loop is bound to / recorded as its host. Recording-only:
- *  a `codex` loop is still executed by the daemon via Claude for now. */
-export type CodingAgent = 'claude-code' | 'codex'
+/** The coding agent a loop is bound to / recorded as its host. Recording-only for
+ *  `codex` (still executed via Claude); a `grok` loop is executed by the daemon via
+ *  the grok CLI. */
+export type CodingAgent = 'claude-code' | 'codex' | 'grok'
 
 export type RunOutcome = 'error' | 'silent' | 'exec' | 'agent' | 'direct' | string
 export type RunStatus =

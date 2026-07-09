@@ -572,9 +572,22 @@ computes pure functions. Run instructions: `README.md`.
 - `loopany update` hands the running daemon over to the invoking (new) CLI version:
   `down` then `runEnsure({force:true})` - force skips the still-reported-online
   short-circuit (server `ONLINE_TTL` 30s outlives the local pidfile clear).
-- `loops.agent` records which coding agent created the loop (measured env
-  fingerprint > `--agent` > server default) - RECORDING-ONLY; execution is always
-  Claude today.
+- `loops.agent` (`CodingAgent` enum: `claude-code|codex|grok`) records the loop's host
+  coding agent (measured env fingerprint > `--agent` > server default; detection markers
+  in `create.ts detectAgentFromEnv`). `codex` is RECORDING-ONLY (still executed via
+  claude); **`grok` actually EXECUTES** via the grok CLI. `runner.ts buildAgentSpawn`
+  branches the spawn on `d.loop.agent` (delivered by server `gateway/delivery.ts`): grok
+  drops `--verbose` (grok exit-2 rejects it) + the sys-prompt-file flag and uses
+  `--output-format streaming-json` (not `stream-json`); `LOOPANY_GROK_BIN` mirrors
+  `LOOPANY_CLAUDE_BIN`; `spawn.ts execEnv("grok")` forwards `XAI_API_KEY`/`GROK_HOME`/
+  `XAI_API_BASE_URL` (OAuth via `~/.grok` is free through `HOME`). **Grok telemetry is
+  DEGRADED**: grok's headless stream is grok-native (`thought`/`text`/`end`, no cost/
+  usage), so the Claude-shaped `makeStreamConsumer` parses nothing — a grok run still
+  marks ok on exit 0 and the agent's own `loopany report` persists the result; daemon-side
+  live-progress/cost/transcript await a follow-up grok stream adapter. Grok's SessionStart
+  hook (`setup.ts`, `~/.grok/hooks/loopany.json`, always-trusted) rides `HOOK_TARGET_AGENTS`
+  (a superset of `SKILL_TARGET_AGENTS` — grok reads Claude's skills dir so it is NOT a
+  skill-install target).
 - External touches (process/network/fs) are injectable seams throughout; tests never
   need a real process or network.
 - **Unified CLI transport `cli-client.ts` `postCli(argv, legacy, deps)`** (batch 5):

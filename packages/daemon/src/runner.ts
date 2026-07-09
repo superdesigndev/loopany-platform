@@ -19,6 +19,7 @@ import { CALLBACK_BIN_DIR } from "./callback-bin.js";
 import { setProgress, clearProgress } from "./progress.js";
 import { flushLoop, markRunActive, markRunDone } from "./watcher.js";
 import { LOOPANY_DIR } from "./config.js";
+import type { CodingAgent } from "./create.js";
 
 export interface Delivery {
   runId: string;
@@ -32,6 +33,10 @@ export interface Delivery {
     workflow: string | null;
     model: string | null;
     allowControl: boolean;
+    /** Coding agent to EXECUTE this loop with. Absent on an OLD server (pre-grok)
+     *  ⇒ treated as claude-code. Only `grok` changes the spawn today (codex still
+     *  runs via claude). */
+    agent?: CodingAgent;
   };
   prevState: unknown;
   /** Server-configured workdir jail — may only NARROW the daemon's local env
@@ -82,6 +87,71 @@ interface ReportBody {
 const TASKFILE_CAP = 256 * 1024;
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
+
+/** The spawn command (executable + argv) for one coding-agent pass. */
+export interface AgentSpawn {
+  bin: string;
+  args: string[];
+}
+
+/**
+ * Build the coding-agent spawn command (bin + argv) for one run pass.
+ *
+ * Grok deliberately mirrors Claude Code's CLI surface, so most flags are shared
+ * (`-p`, `--permission-mode`, `--disallowed-tools`, `--model`, `--resume`). Two
+ * differ and break a literal drop-in:
+ *   - grok's streaming format token is `streaming-json`, not claude's `stream-json`;
+ *   - grok HARD-REJECTS `--verbose` (exit 2) and has no `--append-system-prompt-file`
+ *     (its system-prompt flags take a value, not a file). We drop both for grok.
+ *
+ * `codex` still executes via claude today (recording-only), so it takes the claude
+ * arm here. `LOOPANY_GROK_BIN` / `LOOPANY_CLAUDE_BIN` are the per-agent escape hatches.
+ *
+ * NOTE (this PR): grok's headless stream is grok-native (`thought`/`text`/`end`) and
+ * carries no cost/usage, so the Claude-shaped `makeStreamConsumer` parses nothing from
+ * it — a grok run still marks OK on exit 0 and the agent's own `loopany report` verb
+ * persists the result; daemon-side live-progress/cost/transcript is degraded until the
+ * follow-up grok stream adapter lands.
+ */
+export function buildAgentSpawn(opts: {
+  agent: CodingAgent;
+  prompt: string;
+  resumeSessionId?: string;
+  model?: string | null;
+  /** claude-only: the system-prompt file path (falsy ⇒ flag omitted). */
+  sysFile?: string;
+}): AgentSpawn {
+  const { agent, prompt, resumeSessionId, model, sysFile } = opts;
+  const resume = resumeSessionId ? ["--resume", resumeSessionId] : [];
+  const modelArgs = model ? ["--model", model] : [];
+  if (agent === "grok") {
+    return {
+      bin: process.env.LOOPANY_GROK_BIN || "grok",
+      args: [
+        "-p", prompt,
+        ...resume,
+        "--output-format", "streaming-json",
+        "--permission-mode", "bypassPermissions",
+        "--disallowed-tools", SELF_SCHEDULING_TOOLS,
+        ...modelArgs,
+      ],
+    };
+  }
+  return {
+    bin: process.env.LOOPANY_CLAUDE_BIN || "claude",
+    args: [
+      "-p", prompt,
+      ...resume,
+      "--output-format", "stream-json",
+      "--verbose",
+      "--permission-mode", "bypassPermissions",
+      ...(sysFile ? ["--append-system-prompt-file", sysFile] : []),
+      "--disallowed-tools", SELF_SCHEDULING_TOOLS,
+      ...modelArgs,
+    ],
+  };
+}
+
 // The coding-agent child runs with NO wall-clock timeout by default — a real run
 // can legitimately take a long time, and the server's inactivity-based sweep is the
 // guard against a machine that disappears. `LOOPANY_EXEC_TIMEOUT_MS` is an opt-in
@@ -311,8 +381,12 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       fs.writeFileSync(sysFile, d.systemPrompt, "utf8");
     }
 
+    // Which coding agent executes this loop. Absent on an OLD server (pre-grok) ⇒
+    // claude-code; only `grok` changes the spawn + credential set (codex still runs
+    // via claude today).
+    const agent: CodingAgent = d.loop.agent ?? "claude-code";
     const env: NodeJS.ProcessEnv = {
-      ...execEnv(),
+      ...execEnv(agent),
       // Prepend the home bin dir so `loopany` resolves to our re-exec wrapper.
       PATH: `${CALLBACK_BIN_DIR}${path.delimiter}${process.env.PATH ?? ""}`,
       LOOPANY_RUN_TOKEN: d.runToken,
@@ -323,7 +397,6 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       : escalation
         ? `${d.task}\n\nworkflow signal:\n${escalation}`
         : d.task;
-    const bin = process.env.LOOPANY_CLAUDE_BIN || "claude";
 
     // Attempt loop: the first pass runs the task; each further pass RESUMES the
     // same session after a transient infrastructure failure (see the constants
@@ -336,16 +409,14 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       const prompt = resuming ? buildResumeTask(error ?? "transient API error") : task;
       // stream-json (JSONL) so we can derive a live progress signal as claude works;
       // the terminal `result` event carries the same fields the single-JSON mode did.
-      const args = [
-        "-p", prompt,
-        ...(resuming && sessionId ? ["--resume", sessionId] : []),
-        "--output-format", "stream-json",
-        "--verbose",
-        "--permission-mode", "bypassPermissions",
-        ...(hasSystemPrompt ? ["--append-system-prompt-file", sysFile] : []),
-        "--disallowed-tools", SELF_SCHEDULING_TOOLS,
-      ];
-      if (d.loop.model) args.push("--model", d.loop.model);
+      // (grok emits a grok-native stream we can't yet parse — see buildAgentSpawn.)
+      const { bin, args } = buildAgentSpawn({
+        agent,
+        prompt,
+        resumeSessionId: resuming ? sessionId : undefined,
+        model: d.loop.model,
+        sysFile: hasSystemPrompt ? sysFile : undefined,
+      });
 
       const stream = makeStreamConsumer((p) => setProgress(d.runId, p));
       const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: stream.feed, signal });

@@ -7,12 +7,14 @@
  * never noise; it self-heals). `loopany up` invokes this best-effort, exactly like the
  * skill install, and it NEVER blocks/fails `up`.
  *
- * Claude Code (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`) both have
- * a concrete SessionStart mechanism, keyed by the same agent ids as
- * `SKILL_TARGET_AGENTS`. Both store hooks under the IDENTICAL
+ * Claude Code (`~/.claude/settings.json`), Codex (`~/.codex/hooks.json`), and Grok Build
+ * (`~/.grok/hooks/loopany.json`) all have a concrete SessionStart mechanism, keyed by
+ * `CodingAgent` id via `HOOK_TARGET_AGENTS`. All store hooks under the IDENTICAL
  * `{ hooks: { SessionStart: [...] } }` JSON shape, so they share one merge routine
  * (`installJsonSessionStartHook`) and covering a further agent is a one-entry addition,
  * never a router change. Any target agent without an installer is reported as skipped.
+ * `HOOK_TARGET_AGENTS` is a SUPERSET of `SKILL_TARGET_AGENTS` (grok gets a hook but is
+ * not a skill-install target — it reads Claude's skills dir; see that list's comment).
  *
  * CODEX DISCREPANCY (verified against codex-cli 0.143.0 + the /openai/codex source):
  * Codex additionally gates hooks behind `hooks = true` in `~/.codex/config.toml` AND a
@@ -167,12 +169,34 @@ const installCodexHook: HookInstaller = (s, remove) => {
   return installJsonSessionStartHook(s, remove, dir, path.join(dir, "hooks.json"));
 };
 
-/** Installers keyed by the same agent ids as `SKILL_TARGET_AGENTS`. An agent with no
+/** Grok Build: a SessionStart command hook in `~/.grok/hooks/loopany.json`. Grok's
+ *  hook schema is byte-identical to Claude's `{ hooks: { SessionStart } }`, and grok
+ *  loads GLOBAL hooks as one-file-per-tool under `~/.grok/hooks/*.json` that are ALWAYS
+ *  TRUSTED — no `hooks = true` config gate and no per-hook trust-hash like Codex — so
+ *  writing our dedicated `loopany.json` makes the hook live immediately (no enable/trust
+ *  note needed). The shared merge routine still owns the idempotent add / `--remove`. */
+const installGrokHook: HookInstaller = (s, remove) => {
+  const dir = path.join(s.homedir(), ".grok", "hooks");
+  return installJsonSessionStartHook(s, remove, dir, path.join(dir, "loopany.json"));
+};
+
+/** Installers keyed by `CodingAgent` id. An agent in `HOOK_TARGET_AGENTS` with no
  *  entry is reported `skipped (no session-hook integration yet)`. */
 const HOOK_INSTALLERS: Record<string, HookInstaller> = {
   "claude-code": installClaudeCodeHook,
   codex: installCodexHook,
+  grok: installGrokHook,
 };
+
+/** Agents that get a SessionStart hook. A SUPERSET of `SKILL_TARGET_AGENTS`: grok
+ *  additionally gets a hook but is deliberately NOT a skill-install target — grok
+ *  reads Claude's `~/.claude/skills`, and `skills add -a grok` is not a known `skills`
+ *  CLI agent id, so bundling it would risk breaking the shared `skills add` for every
+ *  agent. Extend this list (plus a `HOOK_INSTALLERS` entry) to cover a new agent. */
+const HOOK_TARGET_AGENTS: ReadonlyArray<{ id: string; label: string }> = [
+  ...SKILL_TARGET_AGENTS.map((a) => ({ id: a.id, label: a.label })),
+  { id: "grok", label: "Grok Build" },
+];
 
 /** Whether Codex is a target with an installer — gates the Codex trust/enable note in
  *  the report (so it never appears if Codex is dropped from `SKILL_TARGET_AGENTS`). */
@@ -217,7 +241,7 @@ export async function runSetup(args: string[], injected: SetupDeps = {}): Promis
 
 /** Run every target agent's installer, catching per-agent failures (best-effort). */
 export function installHooks(s: Seams, remove: boolean): AgentOutcome[] {
-  return SKILL_TARGET_AGENTS.map((a) => {
+  return HOOK_TARGET_AGENTS.map((a) => {
     const installer = HOOK_INSTALLERS[a.id];
     if (!installer) return { agent: a.label, status: "skipped (no session-hook integration yet)" };
     try {

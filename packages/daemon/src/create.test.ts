@@ -66,6 +66,10 @@ describe("detectAgentFromEnv", () => {
     expect(detectAgentFromEnv({ CODEX_COMPANION_SESSION_ID: "abc" })).toBeNull();
   });
 
+  test("fingerprints Grok Build from its GROK_AGENT child marker", () => {
+    expect(detectAgentFromEnv({ GROK_AGENT: "1" })).toBe("grok");
+  });
+
   test("returns null when no host marker is present (undetectable → caller falls back)", () => {
     expect(detectAgentFromEnv({ PATH: "/usr/bin" })).toBeNull();
   });
@@ -79,6 +83,7 @@ describe("coerceAgent", () => {
   test("passes through known agents, rejects everything else", () => {
     expect(coerceAgent("claude-code")).toBe("claude-code");
     expect(coerceAgent("codex")).toBe("codex");
+    expect(coerceAgent("grok")).toBe("grok");
     expect(coerceAgent("unknown")).toBeNull();
     expect(coerceAgent("")).toBeNull();
     expect(coerceAgent(undefined)).toBeNull();

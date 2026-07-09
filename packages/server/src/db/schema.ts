@@ -81,7 +81,7 @@ export type RunStatus = "new" | "resolved" | "nothing-new";
 export type ChannelType = "telegram" | "slack" | "feishu";
 
 /** The coding agent a loop is bound to / recorded as its host (see `loops.agent`). */
-export type CodingAgent = "claude-code" | "codex";
+export type CodingAgent = "claude-code" | "codex" | "grok";
 
 /** A push channel's transport secrets (one shape per type; only the relevant keys set). */
 export interface ChannelConfig {
@@ -192,12 +192,12 @@ export const loops = pgTable(
     completionReason: text("completion_reason"),
     model: text("model"),
     /** Coding agent this loop is BOUND TO / was created by (the harness recorded
-     *  as its host). Recording-only today: the daemon still executes every loop via
-     *  Claude regardless of this value (Codex execution is a later phase). Measured
-     *  from the creating CLI's env when detectable, else the declared/selected value;
-     *  TS-only enum (stored as plain text), so widening the set later is a type
-     *  change with no migration. Existing rows backfill to `claude-code` via default. */
-    agent: text("agent", { enum: ["claude-code", "codex"] }).notNull().default("claude-code"),
+     *  as its host) AND, for `grok`, EXECUTED with: the daemon's `buildAgentSpawn`
+     *  branches on this value (grok spawns the grok CLI; `codex` is still recording-only,
+     *  executed via claude). Measured from the creating CLI's env when detectable, else
+     *  the declared/selected value; TS-only enum (stored as plain text), so widening the
+     *  set is a type change with no migration. Existing rows backfill to `claude-code`. */
+    agent: text("agent", { enum: ["claude-code", "codex", "grok"] }).notNull().default("claude-code"),
     enabled: boolean("enabled").notNull().default(true),
     /** One-shot override: run once at this time, then resume cron (ISO). */
     nextRunAt: text("next_run_at"),
