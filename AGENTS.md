@@ -691,13 +691,20 @@ computes pure functions. Run instructions: `README.md`.
   via `<img src=inlineHref>` off the hardened `?view=inline` route. Markdown → the
   shared pipeline; oversize → a metadata-only note (no synced bytes). `LoopEmbed`
   disables the pixel-collapse for html/image (they self-bound + scroll internally).
-- **The dashboard is a DEFAULT responsive grid** (`.loopview` in `styles/app.css`,
-  `auto-fit minmax(min(100%,22rem),1fr)`): independent top-level panels tile side by
-  side on desktop (calendar left, document right) and stack when narrow; headings/
-  prose/`hr`/`section` AND content blocks (`ul`/`ol`/`table`/`pre`/`blockquote`/
-  `figure`/`img`) all span full width, so ONLY the custom `loop-*` panels + their
-  explicit `div` wrappers tile. A single panel fills the row (no regression).
-  `LoopView` dropped `space-y-*` so the grid gap owns spacing.
+- **The dashboard is a DEFAULT responsive grid CAPPED AT TWO COLUMNS** (`.loopview` in
+  `styles/app.css`, `auto-fit minmax(min(100%, max(28rem, (100% - gap) / 2)), 1fr)`):
+  independent top-level panels tile side by side on desktop (calendar left, document
+  right) and stack when narrow; headings/prose/`hr`/`section` AND content blocks
+  (`ul`/`ol`/`table`/`pre`/`blockquote`/`figure`/`img`) all span full width, so ONLY
+  the custom `loop-*` panels + their explicit `div` wrappers tile. The `(100% - gap) / 2`
+  per-track min is never smaller than half the row, so a third track can never fit (a
+  hard two-column cap at any width - an uncapped `auto-fit` used to spill a wide ~1180px
+  area into 3+ narrow columns, squeezing a kanban's own columns and card titles);
+  `auto-fit` still collapses to ONE full-width column for a lone panel (no regression for
+  chart-only / single-embed dashboards) and for a container too narrow (~below 916px,
+  where the 28rem floor wins). The gap is a shared `--loopview-gap` custom property used
+  in BOTH the track formula and the `gap` declaration so the cap math can never drift from
+  the actual gap. `LoopView` dropped `space-y-*` so the grid gap owns spacing.
 
 ## CI/CD (`.github/workflows/`)
 
