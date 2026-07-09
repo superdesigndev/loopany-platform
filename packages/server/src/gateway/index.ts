@@ -20,6 +20,7 @@ import { Cron } from "croner";
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
 import type { CodingAgent, Loop, NewLoop, Run, RunArtifact, RunRole, RunUsage, TranscriptStep } from "../db/schema.js";
+import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
 import { autopauseMessage, completionMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
@@ -102,6 +103,7 @@ export const EDITABLE_LOOP_FIELDS = new Set([
   "ui",
   "stateSchema",
   "goal",
+  "agent",
 ]);
 const MIN_INTERVAL_MS = 60_000;
 const MAX_ARTIFACTS = 200;
@@ -1050,6 +1052,7 @@ export class MachineGateway {
       ui?: unknown;
       stateSchema?: unknown;
       goal?: unknown;
+      agent?: unknown;
     },
     /** Validate-only (`loopany edit --dry-run`): compute the per-key before→after
      *  preview + rejections, persist NOTHING. */
@@ -1197,6 +1200,14 @@ export class MachineGateway {
       const v = p.notify;
       if (v !== "always" && v !== "auto" && v !== "never") rejections.push({ key: "notify", reason: "notify must be always|auto|never" });
       else set("notify", v, loop.notify);
+    }
+    // Coding agent: only a known `CodingAgent` (the shared enum validator, so this
+    // widens automatically as the enum grows). Recording-only today — the next run
+    // picks up the new agent, matching how model/cron edits behave.
+    if (p.agent !== undefined) {
+      const a = coerceCodingAgent(p.agent);
+      if (!a) rejections.push({ key: "agent", reason: `agent must be one of ${CODING_AGENTS.join(", ")}` });
+      else set("agent", a, loop.agent);
     }
     if (p.allowControl !== undefined) set("allowControl", !!p.allowControl, loop.allowControl);
     if (p.enabled !== undefined) set("enabled", !!p.enabled, loop.enabled);

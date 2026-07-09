@@ -33,15 +33,18 @@ describe('LoopDetailView edit-mode heading', () => {
 /**
  * Loopany runs more than one coding agent (claude-code, codex, more later), so
  * GENERIC edit copy must be agent-neutral ("your coding agent"), never hardcode
- * "Claude Code". The per-loop AGENT_LABEL chip (the ACTUAL recorded agent) is
- * exempt — it is a factual label, not generic copy.
+ * "Claude Code". The AGENT_LABEL maps (the ACTUAL recorded/selectable agent — the
+ * detail-page chip and the LoopForm agent <select> options) are exempt: they are
+ * factual labels, not generic copy.
  */
 describe('agent-neutral edit copy', () => {
   it('never hardcodes "Claude Code" in generic edit prose', () => {
     // strip the AGENT_LABEL map + its fallback default (the factual per-loop chip)
-    const generic = src.replace(/AGENT_LABEL[^\n]*Claude Code[^\n]*\n/g, '').replace(/\?\?\s*'Claude Code'/g, '')
-    expect(generic).not.toMatch(/Claude Code/)
-    expect(formSrc).not.toMatch(/Claude Code/)
+    const stripAgentLabel = (s: string) => s.replace(/AGENT_LABEL[^\n]*Claude Code[^\n]*\n/g, '').replace(/\?\?\s*'Claude Code'/g, '')
+    expect(stripAgentLabel(src)).not.toMatch(/Claude Code/)
+    // LoopForm's agent <select> carries the same factual AGENT_LABEL map; only its
+    // GENERIC prose must stay agent-neutral.
+    expect(stripAgentLabel(formSrc)).not.toMatch(/Claude Code/)
   })
 
   it('uses agent-neutral wording for the dispatch composer', () => {

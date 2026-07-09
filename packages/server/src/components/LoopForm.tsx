@@ -1,5 +1,6 @@
 import { forwardRef, lazy, Suspense, useEffect, useImperativeHandle, useState } from 'react'
-import type { ChannelSummary, JobPayload, StateField } from '../types'
+import type { ChannelSummary, CodingAgent, JobPayload, StateField } from '../types'
+import { CODING_AGENTS } from '../types'
 import { listChannels } from '../server/notifyFns'
 import { cronText } from '../lib/format'
 import { inputCls, labelCls, sectionHeadCls, selectCls } from './ui'
@@ -24,6 +25,7 @@ export interface LoopFormSeed {
   workflow?: string
   stateSchema?: StateField[]
   ui?: string
+  agent?: CodingAgent
   exec?: { workdir?: string; model?: string; allowControl?: boolean }
 }
 
@@ -36,6 +38,7 @@ interface FormState {
   workflow: string
   stateSchema: string
   ui: string
+  agent: CodingAgent
   workdir: string
   model: string
   allowControl: boolean
@@ -52,6 +55,7 @@ function initState(initial?: LoopFormSeed): FormState {
     workflow: initial?.workflow ?? '',
     stateSchema: initial?.stateSchema ? JSON.stringify(initial.stateSchema) : '',
     ui: initial?.ui ?? '',
+    agent: initial?.agent ?? 'claude-code',
     workdir: e?.workdir ?? '',
     model: e?.model ?? '',
     allowControl: !!e?.allowControl,
@@ -60,6 +64,10 @@ function initState(initial?: LoopFormSeed): FormState {
 
 /** Quiet helper line under a field - guidance, not chrome. */
 const hintCls = 'mt-1 text-caption leading-snug text-disabled'
+
+/** Display labels for the known agents; an unknown/widened value falls back to its
+ *  raw enum token so a newly-added agent (e.g. grok) still renders. */
+const AGENT_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
 
 // Module-level so identity is stable across renders (an inner component would
 // remount on each keystroke and drop input focus).
@@ -154,6 +162,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           channelId: f.channelId || null,
           workflow: f.workflow.trim(),
           ui: f.ui.trim() || undefined,
+          agent: f.agent,
           exec,
           stateSchema,
         }
@@ -212,6 +221,17 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           </div>
 
           <Section title="Execution" hint="Binds claude on the machine as the executor." />
+          <div className="min-w-0">
+            <label className={labelCls}>Coding agent</label>
+            <select className={selectCls} value={f.agent} onChange={(e) => set('agent', e.target.value as CodingAgent)}>
+              {CODING_AGENTS.map((a) => (
+                <option key={a} value={a}>
+                  {AGENT_LABEL[a] ?? a}
+                </option>
+              ))}
+            </select>
+            <div className={hintCls}>Which coding agent this loop is recorded against. Recording-only today - every loop still runs via Claude.</div>
+          </div>
           <TextField
             label="Working directory"
             value={f.workdir}

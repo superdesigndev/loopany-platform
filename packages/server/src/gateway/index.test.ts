@@ -484,6 +484,52 @@ test("editLoop changes a loop's envelope from its machine's device token", async
   expect((await store.getLoop(id))!.cron).toBe("0 9 * * *");
 });
 
+test("editLoop changes the coding agent to a known enum value (recording-only)", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "A", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const id = (created.body as any).id as string;
+  // Defaults to claude-code at create (no agent on the create body).
+  expect((await store.getLoop(id))!.agent).toBe("claude-code");
+
+  const res = (await gateway().editLoop(token, id, { agent: "codex" }));
+  expect(res.status).toBe(200);
+  expect((res.body as any).applied).toEqual(expect.arrayContaining(["agent"]));
+  expect((await store.getLoop(id))!.agent).toBe("codex");
+});
+
+test("editLoop rejects an unknown coding agent with a clear per-key message (loop untouched)", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().createLoop(token, { name: "A", cron: "0 8 * * *", taskFile: "loopany/x/README.md" }));
+  const id = (created.body as any).id as string;
+
+  const bad = (await gateway().editLoop(token, id, { agent: "emacs" } as any));
+  expect(bad.status).toBe(400);
+  expect((bad.body as any).error).toMatch(/agent must be one of/);
+  // The rejection leaves the recorded agent at its create-time default.
+  expect((await store.getLoop(id))!.agent).toBe("claude-code");
+});
+
+test("cli edit --json '{\"agent\":...}' changes the loop's recorded agent (the CLI forwards verbatim)", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const created = (await gateway().cli(token, ["new", "--json", JSON.stringify({ name: "A", cron: "0 8 * * *", taskFile: "loopany/x/README.md" })]));
+  const id = idIn(created);
+
+  const res = (await gateway().cli(token, ["edit", id, "--json", JSON.stringify({ agent: "codex" })]));
+  expect(res.status).toBe(200);
+  expect((await store.getLoop(id))!.agent).toBe("codex");
+
+  // An unknown agent over the same CLI path fails loud (exit 1) and never persists.
+  const bad = (await gateway().cli(token, ["edit", id, "--json", JSON.stringify({ agent: "nope" })]));
+  expect(bad.status).toBe(400);
+  expect((await store.getLoop(id))!.agent).toBe("codex");
+});
+
 test("editLoop repoints the task file and pushes workflow/ui/schema without a run", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -2260,7 +2306,7 @@ async function seededRichLoop() {
   const id = idIn(created);
   // model/allowControl aren't create fields; the pinned runAt override is edit-only.
   // Set them so the envelope carries non-default values for every editable key.
-  const edited = (await gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify({ model: "opus", allowControl: false, runAt: "2h" })]));
+  const edited = (await gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify({ model: "opus", allowControl: false, runAt: "2h", agent: "codex" })]));
   expect(edited.status).toBe(200);
   return { deviceToken, machineId, id, gw };
 }
@@ -2275,8 +2321,10 @@ test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op
   const env = JSON.parse((show.body as { text: string }).text) as Record<string, unknown>;
   // Keyed EXACTLY as edit --json accepts: id + every EDITABLE_LOOP_FIELDS key.
   expect(Object.keys(env).sort()).toEqual(
-    ["allowControl", "cron", "enabled", "goal", "id", "model", "name", "notify", "runAt", "stateSchema", "taskFile", "timezone", "ui", "workflow"].sort(),
+    ["agent", "allowControl", "cron", "enabled", "goal", "id", "model", "name", "notify", "runAt", "stateSchema", "taskFile", "timezone", "ui", "workflow"].sort(),
   );
+  // The agent edited to a non-default value roundtrips through the envelope.
+  expect(env.agent).toBe("codex");
   expect(env.id).toBe(id);
   // No derived read-only aggregates leak into the editable envelope.
   for (const k of ["nextFire", "classification", "runs", "selfSchedule", "selfFinish"]) {

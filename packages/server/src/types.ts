@@ -17,8 +17,22 @@ import type { ArtifactMeta } from './server/frontmatter'
 
 /** The coding agent a loop is bound to / recorded as its host. Recording-only for
  *  `codex` (still executed via Claude); a `grok` loop is executed by the daemon via
- *  the grok CLI. */
-export type CodingAgent = 'claude-code' | 'codex' | 'grok'
+ *  the grok CLI.
+ *
+ *  Runtime SINGLE SOURCE (anti-drift): `CodingAgent` is DERIVED from this array,
+ *  and both the server edit validator (`coerceCodingAgent`) and the web agent
+ *  `<select>` (LoopForm) read `CODING_AGENTS`, so widening the set here widens
+ *  every consumer with no downstream code change. */
+export const CODING_AGENTS = ['claude-code', 'codex', 'grok'] as const
+export type CodingAgent = (typeof CODING_AGENTS)[number]
+
+/** Coerce an unknown value to a known `CodingAgent`, or null when unrecognized.
+ *  The ONE agent enum validator, imported by both write surfaces (server
+ *  `buildEditUpdate`) and the web select — same anti-drift discipline as
+ *  `validateUi/Workflow/Schema`. */
+export function coerceCodingAgent(value: unknown): CodingAgent | null {
+  return typeof value === 'string' && (CODING_AGENTS as readonly string[]).includes(value) ? (value as CodingAgent) : null
+}
 
 export type RunOutcome = 'error' | 'silent' | 'exec' | 'agent' | 'direct' | string
 export type RunStatus =
@@ -159,9 +173,9 @@ export interface JobFull {
   ui?: string
   /** Push channel this loop notifies through (notification_channels.id). */
   channelId?: string | null
-  /** Coding agent this loop is recorded as (claude-code | codex | grok). Read-only in
-   *  the UI; a grok loop is executed via the grok CLI, while a codex loop is still
-   *  executed via Claude for now (recording-only). */
+  /** Coding agent this loop is recorded as (claude-code | codex | grok). Editable in
+   *  the UI (LoopForm agent select); a grok loop is executed via the grok CLI, while
+   *  a codex loop is still executed via Claude for now (recording-only). */
   agent?: CodingAgent
   owner?: {
     gateway?: string
@@ -297,6 +311,9 @@ export interface JobPayload {
   /** Push channel id (notification_channels.id), or '' / null to clear it. */
   channelId?: string | null
   enabled?: boolean
+  /** Coding agent this loop is recorded against (claude-code | codex). Recording-only
+   *  today, but editable — the next run picks up the new agent. */
+  agent?: CodingAgent
   exec?: ExecPayload
   owner?: OwnerRef
 }
