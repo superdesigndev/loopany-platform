@@ -194,9 +194,14 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   unknown-command. `loopany show` out-of-run (F1) resolves the loop client-side (like
   `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **`loopany setup hooks [--remove]`** (`setup.ts`, P7): idempotent SessionStart hook
-  install per `SKILL_TARGET_AGENTS` (only Claude Code has a concrete installer today —
-  `~/.claude/settings.json`, a `{hooks:[{type:"command",command:"loopany"}]}` SessionStart
-  entry whose stdout lands as ambient context; other agents reported `skipped`). Matches
+  install per `SKILL_TARGET_AGENTS`. Claude Code (`~/.claude/settings.json`) and Codex
+  (`~/.codex/hooks.json`) both have a concrete installer sharing ONE merge routine
+  (`installJsonSessionStartHook` — identical `{hooks:{SessionStart:[{type:"command",command:"loopany"}]}}`
+  shape), whose stdout lands as ambient context; an agent with no installer is reported
+  `skipped`. Codex additionally gates hooks behind `hooks = true` in `~/.codex/config.toml`
+  and a per-hook TRUST prompt on first session; the installer writes ONLY the `hooks.json`
+  entry (never the version-sensitive `trusted_hash`, never the TOML) and SURFACES that
+  enable/trust step in the report (and on the automatic `up`/`update` path). Matches
   gh-axi UX (integrations report + restart hint). `loopany up`/`update` call the
   best-effort `refreshHooks` (one line, never blocks — like the skill install). The
   ambient hook ONLY installs with a DURABLE on-PATH `loopany` (`resolveDurableCommand`:
