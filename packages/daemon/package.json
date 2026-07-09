@@ -3,6 +3,11 @@
   "version": "0.16.0",
   "description": "Loopany daemon — runs on your machine, connects to a Loopany server, and executes scheduled loops via your local claude-code. One binary, two roles (daemon / loop callback).",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/superdesigndev/loopany-platform.git",
+    "directory": "packages/daemon"
+  },
   "type": "module",
   "bin": {
     "loopany": "dist/cli.js"
