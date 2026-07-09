@@ -71,16 +71,15 @@ export function LoopFilesPanel({
   // exactly once (badge the synced artifact, or a synthetic entry pre-first-sync).
   const entries = useMemo(() => buildFileEntries(taskFile, artifacts ?? []), [taskFile, artifacts])
 
-  // Default selection: the task file, else the first artifact. Only auto-pick
-  // when nothing is selected (or the prior pick vanished) so a manual choice and
-  // the live polling don't fight.
-  useEffect(() => {
-    if (!entries.length) return
-    if (selected && entries.some((e) => e.path === selected)) return
-    setSelected(entries[0]!.path)
-  }, [entries, selected])
-
-  const active = entries.find((e) => e.path === selected) ?? null
+  // Effective selection, DERIVED during render (react.dev "You Might Not Need an
+  // Effect"): the user's explicit pick when it's still in the list, else the
+  // default — the task file first, then the first artifact. Deriving instead of
+  // copying the default into `selected` via an effect avoids the extra render
+  // auto-select cost, keeps a manual pick from fighting the live poll, and falls
+  // back cleanly when a selected file vanishes on refresh. `selected` now holds
+  // ONLY the user's explicit choice (set by the row buttons below).
+  const activePath = selected && entries.some((e) => e.path === selected) ? selected : entries[0]?.path ?? null
+  const active = entries.find((e) => e.path === activePath) ?? null
   // The task row — synthetic OR a synced artifact badged as the task — always
   // renders from the loop record's `taskFileContent` (authoritative + always
   // present), not the artifact's own blob fetch. Same file, but this is robust to
@@ -108,7 +107,7 @@ export function LoopFilesPanel({
           <nav className="max-h-44 overflow-y-auto border-b border-hairline sm:max-h-none sm:border-b-0 sm:border-r">
             <ul className="py-1.5">
               {entries.map((e) => {
-                const on = e.path === selected
+                const on = e.path === activePath
                 const isTask = isTaskEntry(e)
                 // Typed artifacts (front-matter `type`/`title`) get quiet chips; the
                 // task file keeps its TASK treatment and is exempt from all of this.

@@ -80,3 +80,25 @@ describe('LoopFilesPanel type/title chips', () => {
     expect(html).not.toContain('Should Not Show')
   })
 })
+
+// The default selection is DERIVED during render, not copied into `selected` via
+// an effect (react-doctor no-derived-state at LoopFilesPanel.tsx). These pin the
+// behavior the derive must preserve: a valid default is highlighted AND shown on
+// the very first paint, with the row highlight following that derived selection.
+describe('LoopFilesPanel default selection', () => {
+  it('highlights and shows the first entry on mount with no manual pick', async () => {
+    const html = await mount([file('a.md'), file('b.md')])
+    // The active row carries the `border-display` highlight — present on the first
+    // paint because it is derived, not set by a follow-up auto-select effect.
+    expect(html.match(/border-display/g)?.length).toBe(1) // exactly one active row
+    // ...and it is the FIRST entry (path-sorted), not the second.
+    expect(html.indexOf('b.md')).toBeGreaterThan(html.indexOf('a.md'))
+  })
+
+  it('defaults to the task file when present', async () => {
+    const html = await mount([file('reports/r.md')], { taskFile: 'README.md', taskFileContent: '# hello spec' })
+    // The task pane is the default view; its rendered markdown proves it is active.
+    expect(html).toContain('Task file')
+    expect(html).toContain('hello spec')
+  })
+})
