@@ -231,6 +231,13 @@ describe("refreshHooks (automatic up/update path)", () => {
     expect(ss[0].hooks[0].command).toBe("/opt/node/bin/loopany");
     expect(f.out()).toContain("SessionStart home view");
   });
+
+  test("surfaces Codex's enable/trust prerequisite on the automatic path too", async () => {
+    const f = fakeFs();
+    await refreshHooks({ ...f.deps, command: undefined, resolveCommand: () => "/opt/node/bin/loopany" });
+    expect(f.out()).toContain("hooks = true");
+    expect(f.out()).toContain("trusted on first session");
+  });
 });
 
 // ---- F6: hook-gating parity via the REAL resolveDurableCommand -----------------

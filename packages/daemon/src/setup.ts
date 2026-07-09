@@ -250,6 +250,14 @@ export async function refreshHooks(injected: SetupDeps = {}): Promise<void> {
     const outcomes = installHooks(s, false);
     const done = outcomes.filter((o) => o.status === "installed" || o.status === "refreshed").map((o) => o.agent);
     s.out(done.length ? `loopany hooks: SessionStart home view → ${done.join(", ")}\n` : "loopany hooks: up to date\n");
+    // Codex gates hooks behind `hooks = true` + a first-session trust prompt; the
+    // installer only writes the entry, so surface the enable/trust step here too (not
+    // just the explicit `setup hooks` verb) — matching loopany's never-silent pattern.
+    if (codexInstalled(outcomes)) {
+      s.out(
+        "loopany hooks: Codex needs `hooks = true` in ~/.codex/config.toml and the loopany hook trusted on first session\n",
+      );
+    }
   } catch {
     /* never let a hook refresh fail `up` */
   }
