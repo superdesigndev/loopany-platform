@@ -12,6 +12,8 @@ import { NotificationsModal } from './NotificationsModal'
 import { TeamsModal } from './TeamsModal'
 import { ComposeModal } from './ComposeModal'
 import { LoopLogo } from './LoopLogo'
+import { LoopPlaybook } from './LoopPlaybook'
+import { DISCORD_URL, DiscordIcon, GITHUB_URL, GitHubIcon } from './SocialLinks'
 
 /** The seed the route loader hands the dashboard: the live fan-out plus the
  *  static-per-deploy templates. Both `/` (open mode) and `/t/<id>` render from it. */
@@ -121,6 +123,13 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
           <span className="text-[18px] font-semibold tracking-[-0.015em] text-display">Loopany</span>
           <TeamSwitcher data={teams} />
           <div className="flex-1" />
+          {/* Open-source + community, quiet icon pills */}
+          <a href={GITHUB_URL} target="_blank" rel="noreferrer" aria-label="GitHub repository" title="GitHub" className={headerIconBtn}>
+            <GitHubIcon className="size-[17px]" />
+          </a>
+          <a href={DISCORD_URL} target="_blank" rel="noreferrer" aria-label="Discord community" title="Discord" className={headerIconBtn}>
+            <DiscordIcon className="size-[17px]" />
+          </a>
           {/* Team management is a gated feature (real identities) — the button
               shows only when the user actually has teams (gate on). */}
           {teams && teams.teams.length > 0 && (
@@ -148,7 +157,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         {/* Hero - invite creation first (serif = the one editorial moment),
             then the template fan, then a prominent blank-loop entry. */}
         <section className="pb-2 pt-14 text-center">
-          <h1 className="font-display text-[38px] font-semibold tracking-[-0.01em] text-display">
+          <h1 className="font-pixel text-[clamp(28px,4.5vw,38px)] leading-[1.15] text-display">
             What should happen while you sleep?
           </h1>
           {templates.length > 0 && (
@@ -201,6 +210,10 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
             ))}
           </>
         )}
+
+        {/* The playbook band - static education/sales content anchoring the page;
+            its CTA is the same blank-loop compose as the hero button. */}
+        <LoopPlaybook onStart={() => setCompose({ open: true, template: null })} />
       </main>
 
       <ComposeModal
@@ -223,6 +236,10 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
 /* The top bar's quiet pill button (Notifications / Machines share it). */
 const headerBtn =
   'inline-flex shrink-0 cursor-pointer items-center rounded-full px-3 py-1.5 text-meta font-medium text-secondary transition-colors hover:bg-raised hover:text-display'
+
+/* Icon-only variant for the GitHub/Discord links. */
+const headerIconBtn =
+  'inline-flex shrink-0 cursor-pointer items-center rounded-full p-1.5 text-secondary transition-colors hover:bg-raised hover:text-display'
 
 /**
  * The template fan - a hand of tilted cards (tilt/lift computed from each

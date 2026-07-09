@@ -24,3 +24,7 @@ dist/
 
 # local MCP server config (may carry machine-specific paths/secrets)
 .mcp.json
+
+# verification proof output (screenshots/video), never committed
+evidence/
+/.playwright-cli

@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Geist Pixel - self-hosted (public/fonts), used via the --font-pixel token. */
+@font-face {
+  font-family: "Geist Pixel";
+  src: url("/fonts/GeistPixel-Square.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 /*
  * Loopany design system - "liquid glass x Rubik signals" (2026-07 redesign).
  *
@@ -25,6 +34,9 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   --font-display: ui-serif, "New York", Georgia, "Times New Roman", serif;
+  /* Pixel display face - the brand wordmark + the Playbook section's big titles
+     ONLY (self-hosted, see @font-face below). Never body copy. */
+  --font-pixel: "Geist Pixel", ui-monospace, "SF Mono", Menlo, monospace;
 
   /* Apple-scale radii -> rounded-control / rounded-card / rounded-sheet */
   --radius-control: 10px;
@@ -634,5 +646,49 @@
   .lpf-pulse,
   .lpf-comet {
     display: none;
+  }
+}
+
+/*
+ * Loop Playbook roles diagram (LoopPlaybook.tsx RolesFlow) - a 9s narrative
+ * cycle that walks the dispatch story: trigger + orchestrator -> executors ->
+ * verifiers -> proof -> report-back. Each element opts in with `.lpb-stage`
+ * (cards: soft ring in its role ink) or `.lpb-flow` (connectors: brighten),
+ * `--lpb-i` picks its 1.8s slot and `--lpb-c` its highlight ink. Negative
+ * delays keep all slots in phase from first paint.
+ */
+@keyframes lpb-stage-hl {
+  0%, 20%, 100% {
+    box-shadow: var(--shadow-card);
+  }
+  5%, 15% {
+    box-shadow:
+      var(--shadow-card),
+      0 0 0 3px color-mix(in srgb, var(--lpb-c, var(--color-interactive)) 22%, transparent),
+      0 10px 24px -10px color-mix(in srgb, var(--lpb-c, var(--color-interactive)) 50%, transparent);
+  }
+}
+@keyframes lpb-flow-hl {
+  0%, 20%, 100% {
+    opacity: 0.45;
+  }
+  5%, 15% {
+    opacity: 1;
+  }
+}
+.lpb-stage {
+  animation: lpb-stage-hl 9s ease-in-out infinite;
+  animation-delay: calc(var(--lpb-i, 0) * 1.8s - 9s);
+}
+.lpb-flow {
+  opacity: 0.45;
+  animation: lpb-flow-hl 9s ease-in-out infinite;
+  animation-delay: calc(var(--lpb-i, 0) * 1.8s - 9s);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lpb-stage,
+  .lpb-flow {
+    animation: none;
+    opacity: 1;
   }
 }
