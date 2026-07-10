@@ -230,55 +230,6 @@ export const listTemplates = createServerFn({ method: 'GET' }).handler((): Templ
 
 // ---- writes (apply via the live in-process Scheduler) ----
 
-export const createJob = createServerFn({ method: 'POST' })
-  .validator((d: JobPayload & { machineId?: string }) => d)
-  .handler(async ({ data }): Promise<MutationResult> => {
-    const { scheduler } = await backend()
-    const { enforce, userId, teamId } = await requestScope()
-    if (enforce && !userId) return { error: 'not signed in' }
-    const owner = userId ?? 'shared'
-    // Membership-scoped machine pick: any machine whose owner belongs to the active
-    // team (one machine serves all of its owner's teams, report §2.3). Open mode has
-    // no membership rows, so use the full shared list there.
-    const machineId =
-      data.machineId ?? (enforce ? await store.listMachinesForTeam(teamId) : await store.listMachines())[0]?.id
-    if (!machineId) return { error: 'no machine registered — connect a daemon first' }
-    // A loop may run on your own machine, or any machine whose owner is a member of
-    // the active team — NOT keyed to the machine's single home team anymore.
-    const machine = await store.getMachine(machineId)
-    const usable =
-      !!machine && (!enforce || machine.userId === owner || (await store.isTeamMember(teamId, machine.userId)))
-    if (!usable) return { error: 'machine not found' }
-    if (!data.cron) return { error: 'cron required' }
-    // A chosen channel must belong to this team; default to the team's latest
-    // channel (newest-first) when none was picked, so new loops auto-route.
-    const channelId = data.channelId?.trim() || (await store.defaultChannelId(teamId))
-    if (channelId && enforce && (await store.getChannel(channelId))?.teamId !== teamId) return { error: 'channel not found' }
-    const loop = await store.createLoop({
-      userId: owner,
-      teamId,
-      machineId,
-      name: data.name?.trim() || null,
-      cron: data.cron,
-      workdir: data.exec?.workdir?.trim() || null,
-      taskFile: data.taskFile?.trim() || null,
-      workflow: data.workflow?.trim() || null,
-      stateSchema: store.coerceStateSchema(data.stateSchema) ?? null,
-      ui: store.coerceUi(data.ui) ?? null,
-      notify: (data.notify as 'auto' | 'always' | 'never') || 'auto',
-      channelId,
-      allowControl: !!data.exec?.allowControl,
-      model: data.exec?.model?.trim() || null,
-      enabled: data.enabled ?? true,
-    })
-    scheduler.addLoop(loop)
-    // Kick off one run immediately so a new loop produces output without waiting
-    // for its first cron tick. armNextRunAt gates on `enabled`, so a loop created
-    // paused stays idle until its schedule.
-    if (loop.enabled) await scheduler.runNow(loop.id)
-    return { ok: true, id: loop.id }
-  })
-
 export const patchJob = createServerFn({ method: 'POST' })
   .validator((d: { id: string; patch: JobPayload }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {
