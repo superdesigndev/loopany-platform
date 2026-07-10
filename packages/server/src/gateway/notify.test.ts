@@ -1,5 +1,7 @@
-import { expect, test } from 'vitest'
-import { failureMessage } from './notify'
+import { afterEach, expect, test } from 'vitest'
+import { CHANNELS, failureMessage, setWebhookFetchDeps } from './notify'
+
+afterEach(() => setWebhookFetchDeps({})) // restore real DNS + fetch after each seam
 
 test('a running run interrupted mid-flight reads as calmly asleep, not a scary failure', () => {
   const m = failureMessage('machine timed out / disconnected')
@@ -28,4 +30,60 @@ test("the daemon's exec-timeout is a real failure, not the calm asleep copy", ()
   const m = failureMessage('claude timed out (30s)')
   expect(m).toBe('⚠️ Run failed — claude timed out (30s)')
   expect(m).not.toMatch(/asleep|resumes automatically/i)
+})
+
+// ---- Feishu webhook SSRF guard (create/test gate + send-time DNS/IP guard) ----
+
+const feishu = CHANNELS.feishu
+
+test('feishu.validate (create/test gate) rejects off-allowlist / non-HTTPS / metadata targets', () => {
+  // These are exactly what notifyFns.createChannel / testChannel run before storing/firing.
+  expect(feishu.validate!({ webhookUrl: 'http://127.0.0.1/open-apis/bot/v2/hook/x' })).toBeTruthy()
+  expect(feishu.validate!({ webhookUrl: 'https://10.0.0.5/open-apis/bot/v2/hook/x' })).toBeTruthy()
+  expect(feishu.validate!({ webhookUrl: 'https://169.254.169.254/open-apis/bot/v2/hook/x' })).toBeTruthy()
+  expect(feishu.validate!({ webhookUrl: 'https://evil.example.com/open-apis/bot/v2/hook/x' })).toBeTruthy()
+  expect(feishu.validate!({ webhookUrl: 'http://open.feishu.cn/open-apis/bot/v2/hook/x' })).toBeTruthy()
+})
+
+test('feishu.validate accepts an official Feishu/Lark HTTPS webhook', () => {
+  expect(feishu.validate!({ webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/abc' })).toBeNull()
+  expect(feishu.validate!({ webhookUrl: 'https://open.larksuite.com/open-apis/bot/v2/hook/abc' })).toBeNull()
+})
+
+test('feishu.send re-validates the allowlist at SEND time (stored URL is untrusted)', async () => {
+  let fetched = false
+  setWebhookFetchDeps({
+    lookup: async () => [{ address: '93.184.216.34' }],
+    fetchImpl: (async () => {
+      fetched = true
+      return new Response('{}')
+    }) as unknown as typeof fetch,
+  })
+  const r = await feishu.send({ webhookUrl: 'https://internal.corp/open-apis/bot/v2/hook/x' }, 'T', 'M')
+  expect(r.ok).toBe(false)
+  expect(fetched).toBe(false) // rejected before any network call
+})
+
+test('feishu.send rejects an allowlisted host that resolves to a private address', async () => {
+  setWebhookFetchDeps({
+    lookup: async () => [{ address: '127.0.0.1' }],
+    fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+  })
+  const r = await feishu.send({ webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/x' }, 'T', 'M')
+  expect(r.ok).toBe(false)
+  expect(r.error).toMatch(/non-public/)
+})
+
+test('feishu.send delivers to an allowlisted host resolving public (network stubbed)', async () => {
+  let posted: unknown = null
+  setWebhookFetchDeps({
+    lookup: async () => [{ address: '93.184.216.34' }],
+    fetchImpl: (async (_url: string, init: RequestInit) => {
+      posted = JSON.parse(init.body as string)
+      return new Response(JSON.stringify({ code: 0 }), { status: 200 })
+    }) as unknown as typeof fetch,
+  })
+  const r = await feishu.send({ webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/x' }, 'Title', 'Body')
+  expect(r.ok).toBe(true)
+  expect(posted).toMatchObject({ msg_type: 'text', content: { text: '🔁 Title\nBody' } })
 })

@@ -433,6 +433,32 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   cookie domain. pglite is single-writer, so seed in a separate process that exits
   before the dev server opens the same dir.
 
+## Notification webhook SSRF guard (`gateway/webhookGuard.ts`)
+
+- The built-in Feishu/Lark notifier POSTs to a user-supplied `webhookUrl`, so it is
+  guarded against SSRF by `gateway/webhookGuard.ts` (pure, unit-tested):
+  `validateFeishuWebhookUrl` (require `https:` + an EXACT host allowlist
+  `FEISHU_WEBHOOK_HOSTS` + the `/open-apis/bot/v2/hook/` path shape) and
+  `classifyAddress` (blocks loopback/RFC1918/link-local incl. `169.254.169.254`/
+  ULA/multicast/reserved; IPv4 + IPv6 + IPv4-mapped). `safeWebhookFetch` composes
+  them: allowlist → DNS-resolve + IP-guard EVERY host → bounded timeout
+  (`WEBHOOK_TIMEOUT_MS`) + bounded response read (`WEBHOOK_MAX_BYTES`); redirects
+  NOT auto-followed (`redirect:"manual"`, each hop re-runs the full guard).
+- Enforced at BOTH ends: `CHANNELS.feishu.validate` runs the pure allowlist check at
+  create/edit time (called by `notifyFns.createChannel` via the new optional
+  `ChannelKind.validate` hook); `CHANNELS.feishu.send` runs the FULL DNS/IP guard at
+  every send/test (a stored URL is untrusted - re-checked, never trusted from create).
+- **Test seam**: `setWebhookFetchDeps({lookup, fetchImpl})` in `notify.ts` injects DNS
+  + fetch so `notify.test.ts` exercises the guard without network (restore with `{}` in
+  `afterEach`). `webhookGuard.test.ts` covers the pure helpers directly.
+- Residual: global `fetch` re-resolves DNS on connect (no stdlib socket-pinning without
+  a custom undici dispatcher, deliberately not pulled in) - the exact-host allowlist
+  bounds any rebind to an official Feishu/Lark domain. Adding a NEW outbound integration?
+  Reuse this module; do NOT reintroduce a raw `fetch(userUrl)`.
+- FOLLOW-UP (audit H-02): channel create/test is any-member (open mode may be
+  unauthenticated). The destination restriction closes the SSRF regardless of creator;
+  tightening create to team-owner-only is a separate change.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

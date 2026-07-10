@@ -57,6 +57,10 @@ export const createChannel = createServerFn({ method: 'POST' })
     // leakage), trimmed.
     const keys = [...kind.required, ...(kind.optional ?? [])]
     const config: ChannelConfig = Object.fromEntries(keys.filter((k) => cfg[k]?.trim()).map((k) => [k, cfg[k]!.trim()]))
+    // Per-type destination validation (e.g. the Feishu webhook allowlist) — reject
+    // an off-allowlist / non-HTTPS target before it is ever stored or fired.
+    const invalid = kind.validate?.(config)
+    if (invalid) return { ok: false, error: invalid }
     const ch = await store.createChannel({ teamId, type: data.type, name, config })
     return { ok: true, id: ch.id }
   })

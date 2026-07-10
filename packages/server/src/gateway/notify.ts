@@ -16,6 +16,7 @@ import { createHmac } from "node:crypto";
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
 import type { ChannelConfig, ChannelType, Loop, NotifyPolicy, RunStatus } from "../db/schema.js";
+import { safeWebhookFetch, validateFeishuWebhookUrl, type WebhookFetchDeps } from "./webhookGuard.js";
 
 const log = logger.child({ mod: "notify" });
 
@@ -32,7 +33,22 @@ export interface ChannelKind {
   optional?: (keyof ChannelConfig)[];
   /** Redacted, secret-free one-liner so a configured channel reads as set up. */
   hint: (cfg: ChannelConfig) => string;
+  /** Extra per-type validation beyond required-field presence, run at create/edit
+   *  time. Returns an error string to reject, or null to accept. Pure + sync (no
+   *  network): a full DNS/IP guard additionally runs at send time. */
+  validate?: (cfg: ChannelConfig) => string | null;
   send: (cfg: ChannelConfig, title: string, message: string) => Promise<SendResult>;
+}
+
+/**
+ * Injectable transport seam for the SSRF-guarded webhook send (Feishu/Lark).
+ * Defaults to real DNS + global fetch; tests override `lookup`/`fetchImpl` so the
+ * guard logic still runs but never touches the network. Set via
+ * `setWebhookFetchDeps` (test-only).
+ */
+let webhookFetchDeps: WebhookFetchDeps = {};
+export function setWebhookFetchDeps(deps: WebhookFetchDeps): void {
+  webhookFetchDeps = deps;
 }
 
 /** Should this run message the user, per the loop's notify policy + run status? */
@@ -191,9 +207,15 @@ export const CHANNELS: Record<ChannelType, ChannelKind> = {
         return "webhook";
       }
     },
-    send: (cfg, title, message) => {
+    // Reject a non-allowlisted / non-HTTPS destination at create/edit time (pure,
+    // no network); the send path additionally DNS-resolves + IP-guards.
+    validate: (cfg) => {
+      const check = validateFeishuWebhookUrl(cfg.webhookUrl);
+      return check.ok ? null : check.error;
+    },
+    send: async (cfg, title, message) => {
       const url = cfg.webhookUrl?.trim();
-      if (!url) return Promise.resolve({ ok: false, error: "missing webhook url" });
+      if (!url) return { ok: false, error: "missing webhook url" };
       // Feishu text msgs don't render Markdown — keep the title plain (no asterisks).
       const body: Record<string, unknown> = { msg_type: "text", content: { text: `🔁 ${title}\n${message}` } };
       const secret = cfg.secret?.trim();
@@ -203,11 +225,21 @@ export const CHANNELS: Record<ChannelType, ChannelKind> = {
         // 签名校验: HMAC-SHA256 with `${ts}\n${secret}` as the key over an empty body, base64.
         body.sign = createHmac("sha256", `${ts}\n${secret}`).update("").digest("base64");
       }
-      return postJson(
-        url,
-        { method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body) },
-        (d, status) => (d.code === 0 ? null : (typeof d.msg === "string" ? d.msg : `HTTP ${status}`)),
-      );
+      // SSRF guard: re-validate the allowlist + resolved IPs at SEND time (a stored
+      // URL is untrusted — it may have been tampered with in the DB since create),
+      // with a bounded timeout + bounded response read and no redirect bypass.
+      try {
+        const res = await safeWebhookFetch(
+          url,
+          { headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body) },
+          webhookFetchDeps,
+        );
+        const d = res.json;
+        if (d.code === 0) return { ok: true };
+        return { ok: false, error: typeof d.msg === "string" ? d.msg : `HTTP ${res.status}` };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
     },
   },
 };
