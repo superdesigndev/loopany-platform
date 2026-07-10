@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "image": {
+    "name": "ghcr.io/maphilipps/adscaile-sportscms-sandbox",
+    "platform": "linux/amd64",
+    "sourceDateEpoch": 1783510608
+  },
+  "base": {
+    "ref": "mcr.microsoft.com/playwright:v1.61.1-noble@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6",
+    "indexDigest": "sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48",
+    "node": "24.17.0",
+    "npm": "11.13.0",
+    "playwright": "1.61.1",
+    "browsers": {
+      "chromium": "chromium-1228",
+      "firefox": "firefox-1532",
+      "webkit": "webkit-2311"
+    }
+  },
+  "ubuntu": {
+    "snapshot": "20260710T000000Z",
+    "packagesLockSha256": "6600f6636ae1c953e7a8ab5a0a6aca0fab5c5e433e94acb32cc254ebec836055"
+  },
+  "composer": {
+    "version": "2.10.2",
+    "url": "https://getcomposer.org/download/2.10.2/composer.phar",
+    "sha256": "5ee7125f8a30a34d246cefdc0bc85b8a783b28f2aec968994118512350d28027"
+  },
+  "npmPackages": {
+    "@anthropic-ai/claude-code": {
+      "version": "2.1.206",
+      "integrity": "sha512-THRCtnNNX5usIEdf4ulEv31Fq/WL55sD5u8Y6rQLTEmLkwAKdHo1FhfWzfHI3ur/gJ0SU5x4irpvY7VAIXX24w=="
+    },
+    "@openai/codex": {
+      "version": "0.144.1",
+      "integrity": "sha512-Xir1zqPfpenhdoAoshN53uonzbBXj18COyzRkFlVZpSNyEl5XtkuYu9oddELePFN7K/0sXUcSO34Ad5IeCXPbw=="
+    },
+    "opencode-ai": {
+      "version": "1.17.18",
+      "integrity": "sha512-gpCE5X3dwvYam2ba9r3mw+FTPBTDlmKkguiOoYF1nv9MVA3sDIXje3tPQ+EMNxYkWD43FN3+eVC1GW6tRO9Aiw=="
+    },
+    "@mariozechner/pi-coding-agent": {
+      "version": "0.73.1",
+      "integrity": "sha512-gXQh3SaZmWTfVMc4Ao5+LGbVeKvzyO7tolok0nLsZgq9nGjZx/EEU3NM8C+qUnB4Nvs2rswG5qOVgLzQkq0fHQ=="
+    },
+    "agent-browser": {
+      "version": "0.31.1",
+      "integrity": "sha512-RjgfT0EsHe1oZQbwzUqJTPb7w3sU8DGbbAjMxLNI5dW1y0cc81TbVsqgjqQJmsy3GEbEcKe/ryARwmWGqJAXXQ=="
+    },
+    "playwright": {
+      "version": "1.61.1",
+      "integrity": "sha512-DWnY5o3YbLWK4GovuAVwpqL+1VwGNdUGrRr++8j8PtQQzvAVZUIMjKQ90fY689sEJZJBbZVw1rXaOKSTitkzPQ=="
+    },
+    "pnpm": {
+      "version": "8.15.0",
+      "integrity": "sha512-6kVRfVKF0SPqwCw3k1Bfof1tqQovxg0ejZ4MHpKSiG7Pr/UT8GK50cyAIbuGFQM7GsW+o7LuP8FlptcDS75rAw=="
+    }
+  },
+  "sportsCms": {
+    "repository": "https://github.com/maphilipps/adesso-sports-cms.git",
+    "commit": "fc2454212b2a975d7b8f706ec58eef11365f9e14",
+    "tree": "d637364e38beadc7559af54c886b771cbe020297",
+    "archiveSha256": "8f5e146470c4da24a26cf70ad4b17c1a1e75e918314ce9fa9594588867ea3d94",
+    "composerJsonSha256": "2a594012428be97d33c605c5b6d983b471950f05c2e65913bc1fad88b2dd4a95",
+    "composerLockSha256": "15c8997b374c52efd5c0b358141c61fa0dea0498903ec4e7f792e60a8dac7fce",
+    "configSha256": "5e2e496e0a8a9c41a53cd38c6a58a326c53f2f217377aa06f3ac464a402c4d43",
+    "syntheticConfigSha256": "fcdfd7546b4b8b9f65bffd15be2f1e541af9dc23c06ef414ba7a912b848a264e",
+    "siteUuid": "03276217-2579-4d04-bba1-f71c194c7a5a"
+  },
+  "callback": {
+    "repository": "https://github.com/maphilipps/adscaile-platform.git",
+    "commit": "82b66a4c5b567fe4212337ce47d6ee46351bef0e",
+    "daemonArchiveSha256": "de7fbed92d2350954dd8723949a97bb780c064e8cf370f7f71bcc62dd4d5138a",
+    "packageJsonSha256": "47ab531383cd46a2bde474d71f96945f19355a741103c3f1019cecbe6e3f1a24",
+    "pnpmLockSha256": "f600735830f242b136cee82d065f89603ab4368100781027e4a9a199dc1fb23d"
+  },
+  "runtime": {
+    "uid": 10001,
+    "gid": 10001,
+    "user": "factory",
+    "home": "/home/factory",
+    "workspace": "/workspace",
+    "goldenProject": "/opt/project-golden",
+    "playwrightSeccompSha256": "cc3e61cabda6bbc1e53e54d27ba4d55a9d3be829b6dd1a596f4a7b31b1cc7849"
+  },
+  "supplyChain": {
+    "buildkit": "moby/buildkit:v0.31.1@sha256:6b59b7df63a8cb9902736f9ddf7fcff8261613d3e7449b8ea8b7537fc399c03a",
+    "trivy": "aquasec/trivy@sha256:c6e969c5662a546ad5de4a73c2a6b7a7c627f86d916903e175aa623af5b97ada",
+    "gitleaks": "zricethezav/gitleaks@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb",
+    "syft": "anchore/syft@sha256:484dc49cd5869780d8a8e1b2fa2d9381cc1388fc32caeb69e8be81e3ae08bbb1",
+    "grype": "anchore/grype@sha256:8755370228a7c6dd0f2148696bcb8334ca307d9e358301ca2f8fb29704c73c4e",
+    "cosign": "ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
+  }
+}

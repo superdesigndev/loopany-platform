@@ -1,0 +1,178 @@
+name: SportsCMS sandbox image
+
+on:
+  pull_request:
+    paths:
+      - sandbox/sports-cms/**
+      - .github/workflows/sports-cms-sandbox-image.yml
+  push:
+    branches: [main]
+    paths:
+      - sandbox/sports-cms/**
+      - .github/workflows/sports-cms-sandbox-image.yml
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push, attest and sign the verified image
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sports-cms-sandbox-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SPORTS_CMS_COMMIT: fc2454212b2a975d7b8f706ec58eef11365f9e14
+  IMAGE_NAME: ghcr.io/maphilipps/adscaile-sportscms-sandbox
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the proposed platform revision without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Record and verify the exact checked revision
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          printf '%s\n' "$EXPECTED_SHA"
+
+      - name: Verify lock, scanner and hardening contract
+        run: node --test sandbox/sports-cms/scripts/contract.test.mjs
+
+  image:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout trusted platform revision without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Require the scoped SportsCMS read credential
+        env:
+          SPORTS_CMS_DEPLOY_KEY: ${{ secrets.SPORTS_CMS_DEPLOY_KEY }}
+        run: test -n "$SPORTS_CMS_DEPLOY_KEY"
+
+      - name: Checkout the exact private SportsCMS revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: maphilipps/adesso-sports-cms
+          ref: ${{ env.SPORTS_CMS_COMMIT }}
+          path: sports-cms-source
+          ssh-key: ${{ secrets.SPORTS_CMS_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Build with the locked BuildKit
+        run: sandbox/sports-cms/scripts/build-image.sh "$GITHUB_WORKSPACE/sports-cms-source" adscaile-sportscms-sandbox:ci
+
+      - name: Smoke the hardened no-credential runtime
+        run: sandbox/sports-cms/scripts/smoke-image.sh adscaile-sportscms-sandbox:ci
+
+      - name: Scan secrets, paths, vulnerabilities and emit SPDX SBOM
+        run: sandbox/sports-cms/scripts/scan-image.sh adscaile-sportscms-sandbox:ci
+
+      - name: Prove deleted-layer sentinels are detected
+        run: sandbox/sports-cms/scripts/verify-negative-control.sh "$GITHUB_WORKSPACE/sports-cms-source"
+
+      - name: Run two independent cold reproducibility builds
+        run: sandbox/sports-cms/scripts/reproducible-build.sh "$GITHUB_WORKSPACE/sports-cms-source"
+
+      - name: Login to GHCR through stdin
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username '${{ github.actor }}' --password-stdin
+
+      - name: Publish with the locked BuildKit and max attestations
+        id: push
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: |
+          context="$RUNNER_TEMP/adscaile-sportscms-publish-context"
+          builder="adscaile-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() { sandbox/sports-cms/scripts/pinned-builder.sh remove "$builder" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT INT TERM
+          sandbox/sports-cms/scripts/prepare-context.sh "$GITHUB_WORKSPACE/sports-cms-source" "$context"
+          sandbox/sports-cms/scripts/pinned-builder.sh create "$builder" >/dev/null
+          docker buildx build \
+            --builder "$builder" \
+            --platform linux/amd64 \
+            --target sandbox \
+            --file "$context/image/Dockerfile" \
+            --build-arg SOURCE_DATE_EPOCH=1783510608 \
+            --build-arg PLATFORM_GIT_SHA="$GITHUB_SHA" \
+            --provenance=mode=max \
+            --sbom=true \
+            --tag "$IMAGE_NAME:sha-${GITHUB_SHA}" \
+            --output type=registry,rewrite-timestamp=true \
+            --metadata-file "$RUNNER_TEMP/image-metadata.json" \
+            "$context"
+          digest="$(jq -er '."containerimage.digest"' "$RUNNER_TEMP/image-metadata.json")"
+          test "$(printf '%s' "$digest" | grep -Ec '^sha256:[a-f0-9]{64}$')" = 1
+          ref="$IMAGE_NAME@$digest"
+          platform_digest="$(docker buildx imagetools inspect --raw "$ref" | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
+          test "$platform_digest" = "$(cat sandbox/sports-cms/output/reproducibility/platform-manifest-digest.txt)"
+          printf '%s\n' "$ref" > sandbox/sports-cms/output/image-ref.txt
+          printf '%s\n' "$digest" > sandbox/sports-cms/output/published-digest.txt
+          printf '%s\n' "$platform_digest" > sandbox/sports-cms/output/published-platform-digest.txt
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke and scan the exact published digest
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: |
+          ref="$(cat sandbox/sports-cms/output/image-ref.txt)"
+          docker pull "$ref"
+          sandbox/sports-cms/scripts/smoke-image.sh "$ref" sandbox/sports-cms/output/published-smoke
+          sandbox/sports-cms/scripts/scan-image.sh "$ref" sandbox/sports-cms/output/published-security
+
+      - name: Create GitHub build-provenance attestation
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Keyless-sign and verify the exact digest
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          ref="$(cat sandbox/sports-cms/output/image-ref.txt)"
+          cosign_image="$(jq -r .supplyChain.cosign sandbox/sports-cms/image.lock.json)"
+          docker run --rm \
+            -e COSIGN_EXPERIMENTAL \
+            -e ACTIONS_ID_TOKEN_REQUEST_URL \
+            -e ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            "$cosign_image" sign --yes "$ref"
+          docker run --rm "$cosign_image" verify \
+            --certificate-identity-regexp '^https://github.com/maphilipps/adscaile-platform/.github/workflows/sports-cms-sandbox-image.yml@' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$ref" >/dev/null
+          gh attestation verify "oci://$ref" --repo "$GITHUB_REPOSITORY"
+
+      - name: Upload redacted evidence bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sports-cms-sandbox-evidence-${{ github.sha }}
+          path: sandbox/sports-cms/output/
+          if-no-files-found: error
+          retention-days: 30

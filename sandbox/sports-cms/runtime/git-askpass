@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+  *sername*) printf '%s\n' 'x-access-token' ;;
+  *assword*)
+    file=${ADSCAILE_GIT_TOKEN_FILE:?ADSCAILE_GIT_TOKEN_FILE is required}
+    test -f "$file"
+    test ! -L "$file"
+    test "$(stat -c %u "$file")" = "$(id -u)"
+    case "$(stat -c %a "$file")" in 400|600) ;; *) exit 1 ;; esac
+    test -s "$file"
+    exec cat "$file"
+    ;;
+  *) exit 1 ;;
+esac

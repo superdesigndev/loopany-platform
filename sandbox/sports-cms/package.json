@@ -1,0 +1,16 @@
+{
+  "name": "adscaile-sportscms-sandbox-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned runtime tools for the credential-free SportsCMS sandbox image",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.206",
+    "@mariozechner/pi-coding-agent": "0.73.1",
+    "@openai/codex": "0.144.1",
+    "agent-browser": "0.31.1",
+    "opencode-ai": "1.17.18",
+    "playwright": "1.61.1",
+    "pnpm": "8.15.0"
+  }
+}

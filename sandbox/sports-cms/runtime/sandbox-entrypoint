@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+test "$(id -u)" = 10001
+test "$(id -g)" = 10001
+test "${HOME:-}" = /home/factory
+for path in /workspace /home/factory /tmp; do
+  test -d "$path"
+  test -w "$path"
+done
+umask 077
+exec "$@"

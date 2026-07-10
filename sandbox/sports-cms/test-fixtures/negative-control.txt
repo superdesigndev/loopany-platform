@@ -1,0 +1,7 @@
+-----BEGIN PRIVATE KEY-----
+SYNTHETIC-ONLY-NEVER-A-CREDENTIAL
+-----END PRIVATE KEY-----
+token=adscaile_canary_secret_value_000000000000
+email=canary.person@not-a-real-company.invalid
+phone=+49 30 5550 0100
+iban=DE89 3704 0044 0532 0130 00

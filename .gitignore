@@ -28,3 +28,7 @@ dist/
 # verification proof output (screenshots/video), never committed
 evidence/
 /.playwright-cli
+
+# credential-free SportsCMS image verification output
+/sandbox/sports-cms/output/
+/sandbox/sports-cms/image-id.txt

@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "files": {
+    "image/test-fixtures/negative-control.txt": {
+      "sha256": "6f8e592760ae120558b68bdf803473d04b5f99439e6ab0de72dbe8712bdf4a19",
+      "rules": ["PRIVATE_KEY", "TOKEN_ASSIGNMENT", "EMAIL", "PHONE", "IBAN"],
+      "justification": "Exact-hash synthetic negative control; copied only by the never-published negative-control target."
+    },
+    "project-source/composer.lock": {
+      "sha256": "15c8997b374c52efd5c0b358141c61fa0dea0498903ec4e7f792e60a8dac7fce",
+      "rules": ["EMAIL"],
+      "justification": "Immutable Composer dependency metadata required to resolve the locked SportsCMS dependency graph."
+    },
+    "project-source/web/profiles/drupal_cms_installer/tests/src/Functional/InteractiveInstallTest.php": {
+      "sha256": "ca033798e1a32c1f21a78989d8ec28bac5c5b5ad774ed85fcedb3abbfd1975bb",
+      "rules": ["EMAIL"],
+      "justification": "Exact-hash upstream Drupal synthetic test fixture."
+    },
+    "project-source/web/themes/custom/adesso_theme/vendor/gsap/gsap.min.js": {
+      "sha256": "92bb9a96476f983d212a2bc4f54c889039c1696dd4461d40a736860938570fbb",
+      "rules": ["EMAIL"],
+      "justification": "Exact-hash vendored GSAP distribution metadata, not SportsCMS user data."
+    },
+    "project-source/web/modules/custom/sports_ai_pii_guard/src/EventSubscriber/AiLogPiiSubscriber.php": {
+      "sha256": "8b636ad89c5ea6afb40b4a156c398d831c78658574a6c398f63df4e69426324e",
+      "rules": ["IBAN"],
+      "justification": "Exact-hash PII detector source containing only its deterministic match pattern."
+    },
+    "project-source/web/modules/custom/sports_ai_pii_guard/tests/src/Kernel/PiiGuardRecipeTest.php": {
+      "sha256": "990ca92ba7232f54cf082ba39b3e02d691e8461a20e434f22502c20e15598020",
+      "rules": ["IBAN"],
+      "justification": "Exact-hash synthetic PII negative-control test."
+    },
+    "project-source/web/modules/custom/sports_ai_pii_guard/tests/src/Unit/AiLogPiiSubscriberTest.php": {
+      "sha256": "4f8acd96e049a3accf51fcc32400344eb97084ad55632da707fd1c54dfd11b23",
+      "rules": ["IBAN", "PHONE"],
+      "justification": "Exact-hash synthetic PII negative-control test."
+    },
+    "platform/packages/daemon/src/cli-client.ts": {
+      "sha256": "93315a2cead658256df0b5826a6d4f3283a0ca7a76241d7e763e00efd98d54a0",
+      "rules": ["TOKEN_ASSIGNMENT"],
+      "justification": "Exact-hash callback transport source; match is a variable assignment, not credential material."
+    },
+    "platform/packages/daemon/src/ensure.ts": {
+      "sha256": "768c3431c89f5cd68b377b3e63212549c2c80299a406c46c6674744bc7d84692",
+      "rules": ["TOKEN_ASSIGNMENT"],
+      "justification": "Exact-hash callback setup source; match is a variable assignment, not credential material."
+    },
+    "platform/packages/daemon/src/update.ts": {
+      "sha256": "43775661dc96da65f7eca5b6b3c101ae66aae6c37c76b09428810b201bdc05d3",
+      "rules": ["TOKEN_ASSIGNMENT"],
+      "justification": "Exact-hash callback update source; match is a variable assignment, not credential material."
+    },
+    "project-source/recipes/sports_ai_estate_baseline/recipe.yml": {
+      "sha256": "77a18f88004728429110863a9caf195d0b33acfa21c2d47c03e25c2818f32ec1",
+      "rules": ["TOKEN_ASSIGNMENT"],
+      "justification": "Exact-hash synthetic recipe configuration, not a credential."
+    },
+    "project-source/web/modules/custom/adesso_sportsplatform_api_connector/tests/src/Unit/Client/ClubPlatformClientTest.php": {
+      "sha256": "d6f6f0c6b42c500f44966c9b87475cb0bffdf7f7980027f195b3d1dbc087a268",
+      "rules": ["TOKEN_ASSIGNMENT"],
+      "justification": "Exact-hash synthetic connector unit-test fixture."
+    },
+    "project-source/web/themes/custom/adesso_theme/components/match-highlight/match-highlight.twig": {
+      "sha256": "dba237df4b6b6658536199ba6e6b305c06c6df874ecc551b8b0a6d9618d237d5",
+      "rules": ["TOKEN_ASSIGNMENT"],
+      "justification": "Exact-hash Twig component whose token-like match is presentation data, not a credential."
+    }
+  }
+}

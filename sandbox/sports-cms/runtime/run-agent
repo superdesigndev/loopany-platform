@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -lt 1 ]; then
+  echo "usage: run-agent <claude-code|codex|opencode|pi> [arguments...]" >&2
+  exit 64
+fi
+
+agent=$1
+shift
+case "$agent" in
+  claude-code) command=/usr/local/bin/claude ;;
+  codex) command=/usr/local/bin/codex ;;
+  opencode) command=/usr/local/bin/opencode ;;
+  pi) command=/usr/local/bin/pi ;;
+  *)
+    echo "run-agent: unsupported worker alias" >&2
+    exit 64
+    ;;
+esac
+
+test "$(id -u)" = 10001
+test "$(id -g)" = 10001
+exec "$command" "$@"
