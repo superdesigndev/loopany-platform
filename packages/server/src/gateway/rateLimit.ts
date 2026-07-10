@@ -17,6 +17,14 @@
  *    gated mode never reaches a generous per-credential allowance (enrollment fails
  *    closed under the IP tier).
  *
+ * The blob-PUT and sync-POST routes DISABLE the per-token tier (`perToken:false`):
+ * a large first sync bursts many concurrent blob PUTs on ONE device token, which
+ * would exhaust the modest per-token bucket and 429 legitimate uploads. Those two
+ * routes are already bounded by the sync hash-handshake (the server only accepts
+ * hashes it asked THIS machine for) plus the per-loop 500MB byte cap, so the
+ * per-token tier adds throttle risk with little security gain there. They stay on
+ * the PER-IP tier (the real flood boundary); every other machine route keeps both.
+ *
  * Keyed maps are bounded (LRU-ish oldest-eviction) so a flood of distinct
  * IPs/tokens can't grow memory without limit. Pure/injectable clock for tests.
  */
@@ -148,11 +156,22 @@ function tooMany(): Response {
  * machine route handler, right after reading the Bearer token (pass it so a valid
  * daemon keys off its own per-machine bucket). Returns a 429 `Response` to return
  * verbatim, or null to proceed.
+ *
+ * `opts.perToken` (default true) gates the per-token tier: the blob-PUT / sync-POST
+ * routes pass `false` so a large first sync's burst of concurrent PUTs isn't
+ * throttled by the modest per-token bucket (still bounded by the per-IP tier + the
+ * sync handshake + the per-loop byte cap). The per-IP tier always applies.
  */
-export function machineRouteLimit(request: Request, token?: string, now: number = Date.now()): Response | null {
+export function machineRouteLimit(
+  request: Request,
+  token?: string,
+  opts: { perToken?: boolean; now?: number } = {},
+): Response | null {
   if (!rateLimitEnabled()) return null;
+  const now = opts.now ?? Date.now();
+  const perToken = opts.perToken ?? true;
   if (!ipLimiter.allow(clientIp(request), now)) return tooMany();
-  if (token && !tokenLimiter.allow(token, now)) return tooMany();
+  if (perToken && token && !tokenLimiter.allow(token, now)) return tooMany();
   return null;
 }
 

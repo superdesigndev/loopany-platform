@@ -77,10 +77,10 @@ describe("machineRouteLimit", () => {
     const req = () => new Request("http://x/api/machine/poll", { method: "POST", headers: { "x-forwarded-for": "7.7.7.7" } });
     const now = 2_000_000;
     // Burst 3 ⇒ three allowed, fourth limited (frozen clock ⇒ no refill).
-    expect(rl.machineRouteLimit(req(), undefined, now)).toBeNull();
-    expect(rl.machineRouteLimit(req(), undefined, now)).toBeNull();
-    expect(rl.machineRouteLimit(req(), undefined, now)).toBeNull();
-    const limited = rl.machineRouteLimit(req(), undefined, now);
+    expect(rl.machineRouteLimit(req(), undefined, { now })).toBeNull();
+    expect(rl.machineRouteLimit(req(), undefined, { now })).toBeNull();
+    expect(rl.machineRouteLimit(req(), undefined, { now })).toBeNull();
+    const limited = rl.machineRouteLimit(req(), undefined, { now });
     expect(limited?.status).toBe(429);
   });
 
@@ -88,9 +88,31 @@ describe("machineRouteLimit", () => {
     rl.__resetMachineRateLimiters();
     const now = 3_000_000;
     const from = (ip: string) => new Request("http://x/api/machine/poll", { method: "POST", headers: { "x-forwarded-for": ip } });
-    for (let i = 0; i < 5; i++) rl.machineRouteLimit(from("8.8.8.8"), undefined, now);
-    expect(rl.machineRouteLimit(from("8.8.8.8"), undefined, now)?.status).toBe(429);
-    expect(rl.machineRouteLimit(from("9.9.9.9"), undefined, now)).toBeNull(); // fresh bucket
+    for (let i = 0; i < 5; i++) rl.machineRouteLimit(from("8.8.8.8"), undefined, { now });
+    expect(rl.machineRouteLimit(from("8.8.8.8"), undefined, { now })?.status).toBe(429);
+    expect(rl.machineRouteLimit(from("9.9.9.9"), undefined, { now })).toBeNull(); // fresh bucket
+  });
+
+  test("perToken:false skips the per-token tier (blob/sync path) but keeps per-IP", () => {
+    rl.__resetMachineRateLimiters();
+    const now = 4_000_000;
+    // Distinct IP per call so the per-IP tier never trips; only the per-token tier
+    // could throttle a shared device token. With perToken:false it never does.
+    const from = (ip: string) => new Request("http://x/api/machine/sync", { method: "POST", headers: { "x-forwarded-for": ip } });
+    for (let i = 0; i < 200; i++) {
+      const res = rl.machineRouteLimit(from(`10.0.0.${i}`), "dk_shared", { perToken: false, now });
+      expect(res).toBeNull();
+    }
+    // The SAME shared token WOULD trip the per-token bucket (default 120 burst) when
+    // the tier is on — proving the exemption is what let the burst through above.
+    let tripped = false;
+    for (let i = 0; i < 200; i++) {
+      if (rl.machineRouteLimit(from(`11.0.0.${i}`), "dk_shared_on", { now })) {
+        tripped = true;
+        break;
+      }
+    }
+    expect(tripped).toBe(true);
   });
 });
 

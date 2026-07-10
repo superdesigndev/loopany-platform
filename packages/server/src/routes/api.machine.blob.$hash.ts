@@ -14,7 +14,7 @@ export const Route = createFileRoute('/api/machine/blob/$hash')({
       PUT: async ({ request }: { request: Request }) => {
         const auth = request.headers.get('authorization') ?? ''
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-        const limited = machineRouteLimit(request, token || undefined)
+        const limited = machineRouteLimit(request, token || undefined, { perToken: false })
         if (limited) return limited
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         // Malformed percent-encoding must be a clean 400, never a thrown 500.
