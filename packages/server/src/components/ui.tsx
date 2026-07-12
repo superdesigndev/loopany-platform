@@ -57,8 +57,6 @@ export const sectionHeadCls = 'text-label font-semibold text-secondary'
 /** Field labels: sentence case, quiet weight - hierarchy from color, not caps. */
 export const labelCls = 'mb-1.5 mt-3 block text-label font-medium text-secondary'
 export const inputCls = `w-full rounded-control border border-wire bg-surface px-3 py-2.5 text-sm text-primary outline-none transition-shadow focus:border-transparent focus:shadow-focus`
-/** Content-editing textareas keep mono - they hold markdown/code, not prose. */
-export const areaCls = `${inputCls} min-h-16 resize-y bg-raised font-mono text-body leading-relaxed`
 /** Field-sized <select>: the input token + the `.lp-select` caret/padding. */
 export const selectCls = `${inputCls} lp-select cursor-pointer`
 
