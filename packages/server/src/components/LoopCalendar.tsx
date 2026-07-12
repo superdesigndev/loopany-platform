@@ -67,7 +67,10 @@ function clampMonth(months: string[], shown: string | null): string {
 
 const monthLabel = (ym: string): string => {
   const [y, m] = ym.split('-').map(Number)
-  return `${new Date(y!, m! - 1, 1).toLocaleString(undefined, { month: 'long' })} ${y}`
+  // Pin locale + timeZone so the month name renders identically on the server and
+  // the client (no hydration mismatch) and stays English in the English-only UI.
+  // Build the date in UTC so day-1 never rolls across a timezone boundary.
+  return `${new Date(Date.UTC(y!, m! - 1, 1)).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })} ${y}`
 }
 
 /** Chip text: basename without extension or a trailing date (digest-2026-07-01.md → "digest"). */
