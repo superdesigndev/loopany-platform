@@ -706,16 +706,20 @@ function EvolveTimeline() {
     if (timer.current) clearInterval(timer.current)
     setTick(0)
     timer.current = setInterval(() => {
-      setTick((v) => {
-        const next = Math.min(v + 1, FINAL)
-        if (next >= FINAL && timer.current) {
-          clearInterval(timer.current)
-          timer.current = null
-        }
-        return next
-      })
+      setTick((v) => Math.min(v + 1, FINAL))
     }, 500)
   }
+
+  // Stop the play interval once the counter reaches the final step. This lives in
+  // an effect, not inside the setTick updater, so the updater stays pure — React
+  // may invoke an updater more than once, so the clearInterval side effect must
+  // not run from within it.
+  useEffect(() => {
+    if (tick >= FINAL && timer.current) {
+      clearInterval(timer.current)
+      timer.current = null
+    }
+  }, [tick])
 
   useEffect(() => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
