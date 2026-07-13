@@ -13,28 +13,13 @@ export function dataDir(): string {
 
 /**
  * Supabase (or any Postgres) connection string for the RUNTIME app process. When
- * set, the server uses the postgres-js driver (hosted prod/staging) with MODE-AWARE
- * pool options (`db/poolOptions.ts`): a transaction-pooler URL (`:6543`) forces
- * `prepare:false` + `max_pipeline:0` (the #970 wedge guard); a session-pooler or
- * direct URL (`:5432`) uses prepared statements + an enforced `statement_timeout`.
+ * set, the server uses the postgres-js driver (hosted prod/staging) — point it at
+ * the Supabase TRANSACTION POOLER (`:6543`); the driver forces `prepare:false`.
  * When UNSET, the server falls back to the embedded, file-backed pglite database
  * at `<dataDir>/pgdata` (local dev + light self-host + tests) — zero external DB.
  */
 export function databaseUrl(): string | undefined {
   return process.env.DATABASE_URL?.trim() || undefined;
-}
-
-/**
- * Override for the DB pool's connection-mode detection (`db/poolOptions.ts`). The
- * default is a port heuristic (`:6543` ⇒ transaction pooler); set this to force the
- * mode for a self-hosted PgBouncer/Supavisor on a nonstandard port, or a multihost
- * URL the port heuristic can't classify. Getting this wrong on a real transaction
- * pooler re-arms the #970 wedge, so it's a deliberate explicit escape hatch.
- * Returns `"transaction" | "session" | undefined` (unset/unrecognized ⇒ heuristic).
- */
-export function dbPoolMode(): "transaction" | "session" | undefined {
-  const raw = process.env.LOOPANY_DB_POOL_MODE?.trim().toLowerCase();
-  return raw === "transaction" || raw === "session" ? raw : undefined;
 }
 
 /**

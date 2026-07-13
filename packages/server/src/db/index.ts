@@ -27,9 +27,8 @@ import { drizzle as drizzlePglite, type PgliteDatabase } from "drizzle-orm/pglit
 import { drizzle as drizzlePostgres, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres, { type Sql } from "postgres";
 
-import { dataDir, databaseUrl, dbPoolMode } from "../env.js";
+import { dataDir, databaseUrl } from "../env.js";
 import { logger } from "../logger.js";
-import { isTransactionPooler, poolOptionsFor } from "./poolOptions.js";
 import { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runLeases, connectKeys } from "./schema.js";
 import { user, session, account, verification } from "./auth-schema.js";
 
@@ -77,10 +76,9 @@ function open(): { db: Db; client: Client; driver: Driver } {
   }
   const url = databaseUrl();
   if (url) {
-    // Hosted tier: postgres-js against Supabase. Pool options are mode-aware
-    // (poolOptionsFor): a transaction-pooler URL (:6543) forces `prepare:false` +
-    // `max_pipeline:0`; a session/direct URL (:5432) uses prepared statements +
-    // enforced statement_timeout. Log the HOST only — never the full URL (password).
+    // Hosted tier: postgres-js against Supabase. `prepare:false` is mandatory for
+    // the pgBouncer transaction pooler (:6543) — cached prepared statements break.
+    // Log the HOST only — never the full URL (it carries the password).
     logger.info({ tier: "postgres", host: pgHost(url) }, "database tier: postgres");
     // A URL with no sslmode may negotiate a PLAINTEXT connection. A local dev
     // Postgres is a legitimate no-SSL case, so warn loudly rather than hard-fail.
@@ -90,14 +88,17 @@ function open(): { db: Db; client: Client; driver: Driver } {
         "DATABASE_URL has no sslmode — the connection may be plaintext; append ?sslmode=require",
       );
     }
-    // Mode-aware pool options (poolOptions.ts) — correct against EITHER a
-    // transaction-pooler (:6543) or a session/direct (:5432) URL, so a rollback or
-    // the move to session mode is a pure DATABASE_URL swap. `LOOPANY_DB_POOL_MODE`
-    // overrides the port heuristic (a nonstandard-port/self-hosted pooler). The cast
-    // is because `max_pipeline` is a real but UNtyped postgres-js option.
-    const mode = dbPoolMode();
-    const txnPooler = mode ? mode === "transaction" : isTransactionPooler(url);
-    const client = postgres(url, poolOptionsFor(url, txnPooler) as Parameters<typeof postgres>[1]);
+    // Conservative pool for one always-on machine against the pooler. `max_lifetime`
+    // + `statement_timeout` are the pool's self-healing ring after the 2026-07-09
+    // wedged-pool incident (see api.health.db.ts for the full story + Fly backstop).
+    const client = postgres(url, {
+      prepare: false,
+      max: 10,
+      idle_timeout: 30,
+      connect_timeout: 15,
+      max_lifetime: 60 * 30, // 30 min — retire connections by age so dead sockets drop
+      connection: { statement_timeout: 30_000 }, // 30s server-side kill for a hung query (ms)
+    });
     const db = drizzlePostgres(client, { schema });
     g.__loopanyClient = client;
     g.__loopanyDb = db;
