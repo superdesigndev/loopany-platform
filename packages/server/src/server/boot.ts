@@ -120,10 +120,6 @@ async function boot(): Promise<Booted> {
   return { scheduler, gateway, artifactSync, cliGateway, abort };
 }
 
-export async function getScheduler(): Promise<Scheduler> {
-  return (await ensureServer()).scheduler;
-}
-
 export async function getGateway(): Promise<MachineGateway> {
   return (await ensureServer()).gateway;
 }
