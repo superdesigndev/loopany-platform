@@ -6,14 +6,23 @@
  * from any server-side entry (the standalone machine server / TanStack server
  * fns); the first call boots, the rest share the same instance.
  */
-import { runMigrations, closeClient } from "../db/index.js";
+import { sql } from "drizzle-orm";
+
+import { runMigrations, closeClient, db } from "../db/index.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
 import { ArtifactSync } from "../gateway/sync.js";
 import { CliGateway } from "../gateway/cli.js";
 import { createBlobStore } from "../gateway/blobstore.js";
-import { gcIntervalMs } from "../env.js";
+import {
+  gcIntervalMs,
+  dbWatchdogEnabled,
+  dbWatchdogIntervalMs,
+  dbWatchdogTimeoutMs,
+  dbWatchdogFailureThreshold,
+} from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
+import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
   scheduler: Scheduler;
@@ -86,6 +95,26 @@ async function boot(): Promise<Booted> {
   );
   gc.unref?.();
   abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
+
+  // DB watchdog — the ACTUAL auto-recovery backstop for a wedged postgres pool
+  // (Fly's failing health check only de-routes; it never restarts the VM). Pings
+  // `select 1` under a hard deadline and exits after a sustained wedge so Fly's
+  // on-failure restart brings up a fresh pool. Hosted-postgres tier only; see
+  // env.ts `dbWatchdogEnabled` + server/dbWatchdog.ts for the full rationale.
+  if (dbWatchdogEnabled()) {
+    const intervalMs = dbWatchdogIntervalMs();
+    const timeoutMs = dbWatchdogTimeoutMs();
+    const failureThreshold = dbWatchdogFailureThreshold();
+    logger.info({ intervalMs, timeoutMs, failureThreshold }, "db watchdog: armed");
+    const stopWatchdog = startDbWatchdog({
+      probe: () => db.execute(sql`select 1`),
+      exit: (code) => process.exit(code),
+      intervalMs,
+      timeoutMs,
+      failureThreshold,
+    });
+    abort.signal.addEventListener("abort", () => stopWatchdog(), { once: true });
+  }
 
   logger.info("loopany server booted");
   return { scheduler, gateway, artifactSync, cliGateway, abort };

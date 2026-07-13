@@ -32,6 +32,10 @@ primary_region = "nrt"
   # Opt into the embedded pglite tier under NODE_ENV=production (without this a
   # missing DATABASE_URL fails the boot). Drop this when moving to Supabase.
   LOOPANY_DB = "pglite"
+  # Arm the DB watchdog on staging (default-off for the pglite tier) so the boot
+  # wiring is exercised on the auto-deploy path before a manual prod deploy. pglite
+  # never wedges, so this only proves it arms + never false-trips (server/dbWatchdog.ts).
+  LOOPANY_DB_WATCHDOG = "on"
 
 [http_service]
   internal_port = 3000

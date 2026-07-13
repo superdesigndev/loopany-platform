@@ -129,6 +129,46 @@ export function gcIntervalMs(): number {
 }
 
 /**
+ * DB watchdog (`server/dbWatchdog.ts`) — the ACTUAL auto-recovery backstop for a
+ * wedged postgres-js pool. Fly's `[http_service.checks]` failing only pulls the
+ * machine from load balancing; it never restarts the VM (the 2026-07-12 outage:
+ * the pool wedged, `/api/health/db` hung, the check went critical, and the box
+ * stayed down ~9h with no auto-restart). The watchdog turns a HANG into a process
+ * EXIT so Fly's `restart.policy = "on-failure"` kicks in with a fresh pool.
+ *
+ * Enabled by default ONLY on the hosted postgres tier (a wedged transaction-pooler
+ * connection is the failure mode); OFF for the embedded pglite tier and under
+ * vitest (a test must never `process.exit`). Force either way with
+ * `LOOPANY_DB_WATCHDOG=on|off`.
+ */
+export function dbWatchdogEnabled(): boolean {
+  const raw = process.env.LOOPANY_DB_WATCHDOG?.trim().toLowerCase();
+  if (raw === "on") return true;
+  if (raw === "off") return false;
+  if (process.env.VITEST || process.env.NODE_ENV === "test") return false;
+  return Boolean(databaseUrl());
+}
+
+/** How often the DB watchdog pings `select 1`. Default 20s. */
+export function dbWatchdogIntervalMs(): number {
+  return posIntEnv("LOOPANY_DB_WATCHDOG_INTERVAL_MS", 20_000);
+}
+
+/** Hard per-ping deadline; a ping that exceeds it counts as a failure. Default 5s. */
+export function dbWatchdogTimeoutMs(): number {
+  return posIntEnv("LOOPANY_DB_WATCHDOG_TIMEOUT_MS", 5_000);
+}
+
+/**
+ * Consecutive failed/timed-out pings before the watchdog exits the process. A
+ * healthy ping resets the counter, so this only trips on a SUSTAINED wedge — a
+ * brief blip never restarts the box. Default 3 (≈60-75s to detect at 20s cadence).
+ */
+export function dbWatchdogFailureThreshold(): number {
+  return posIntEnv("LOOPANY_DB_WATCHDOG_FAILURES", 3);
+}
+
+/**
  * Self-schedule cadence floors — enforced ONLY on the RUN self-schedule path (a
  * run using `set-cron` / `reschedule` on itself). The owner's `editLoop` path is
  * unlimited. A run may not set a cron whose adjacent fires are closer than

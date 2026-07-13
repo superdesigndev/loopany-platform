@@ -43,9 +43,13 @@ primary_region = "sjc"
   auto_start_machines = true
   min_machines_running = 1
 
-  # DB-touching health check → Fly auto-restarts a machine whose DB pool wedged
-  # (rationale: packages/server/src/routes/api.health.db.ts). A 503/timeout from
-  # /api/health/db marks it unhealthy; grace_period covers boot + in-process migrations.
+  # DB-touching health check → SURFACES a wedged pool (a 503/timeout from
+  # /api/health/db marks the machine unhealthy and Fly de-routes it). NB: a failing
+  # check does NOT restart the VM — only `restart.policy = "on-failure"` (a process
+  # EXIT) does. Auto-recovery from a wedged pool is the in-process DB watchdog
+  # (server/dbWatchdog.ts), which exits so this restart policy brings up a fresh
+  # pool. grace_period covers boot + in-process migrations. Rationale:
+  # packages/server/src/routes/api.health.db.ts.
   [[http_service.checks]]
     method = "get"
     path = "/api/health/db"
