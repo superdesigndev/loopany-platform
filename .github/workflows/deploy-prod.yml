@@ -1,14 +1,11 @@
 # Deploy Loopany to PRODUCTION — app "loopany-prod", https://loopany.ai.
 #
-# ⚠️ TEMPORARY: prod currently AUTO-DEPLOYS on every push to main (see the `push`
-# trigger below). This is a deliberate, temporary override of the manual-only rule
-# — REVERT it (drop the `push` block, leaving `workflow_dispatch` only) once the
-# temporary window is over. Rationale for the normal manual-only stance is kept
-# below and still applies while this override is active: watch each auto-deploy.
+# MANUAL-ONLY (workflow_dispatch): the temporary auto-deploy-on-push override is
+# over and has been removed — prod deploys are back to explicit, watched promotes.
 #
-# Manual-only rationale (why prod is normally NOT auto-deployed): the
-# single-scheduler invariant makes an accidental double-target dangerous, so prod
-# is normally NOT auto-deployed on push to main (that's staging's job, deploy.yml →
+# Manual-only rationale (why prod is NOT auto-deployed): the single-scheduler
+# invariant makes an accidental double-target dangerous, so prod is NOT
+# auto-deployed on push to main (that's staging's job, deploy.yml →
 # loopany-testing) NOR on a `v*` tag (that tag is publish-daemon.yml's npm-publish
 # trigger — sharing it would deploy prod on every daemon release).
 #
@@ -18,18 +15,6 @@
 name: Deploy Prod (Fly)
 
 on:
-  # ⚠️ TEMPORARY auto-deploy on merge to main — remove this whole `push` block to
-  # restore the manual-only (workflow_dispatch) invariant. Mirrors staging's
-  # paths-ignore so a doc-only change doesn't needlessly re-migrate/re-deploy prod.
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'packages/daemon/**'
-      - 'README.md'
-      - 'AGENTS.md'
-      - 'CLAUDE.md'
-      - 'CONTRIBUTING.md'
-      - 'docs/**'
   workflow_dispatch: {}
 
 # Distinct group from staging's `fly-deploy` so neither cancels the other's

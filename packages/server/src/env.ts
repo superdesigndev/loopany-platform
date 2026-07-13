@@ -13,13 +13,32 @@ export function dataDir(): string {
 
 /**
  * Supabase (or any Postgres) connection string for the RUNTIME app process. When
- * set, the server uses the postgres-js driver (hosted prod/staging) — point it at
- * the Supabase TRANSACTION POOLER (`:6543`); the driver forces `prepare:false`.
+ * set, the server uses the postgres-js driver (hosted prod/staging). Pool options
+ * are MODE-AWARE (`db/poolOptions.ts`): a Supabase TRANSACTION pooler URL
+ * (`:6543`) gets `prepare:false`; a SESSION pooler / direct URL (`:5432`) gets
+ * `prepare:true` (backend pinned per connection — safe and faster). Either form
+ * is supported; `dbPoolMode()` below overrides the port-based detection.
  * When UNSET, the server falls back to the embedded, file-backed pglite database
  * at `<dataDir>/pgdata` (local dev + light self-host + tests) — zero external DB.
  */
 export function databaseUrl(): string | undefined {
   return process.env.DATABASE_URL?.trim() || undefined;
+}
+
+/**
+ * Explicit pool-mode override for the runtime postgres-js pool
+ * (`LOOPANY_DB_POOL_MODE=transaction|session`). Normally UNSET — the mode is
+ * detected from `DATABASE_URL`'s port (`:6543` ⇒ transaction pooler; see
+ * `db/poolOptions.ts` `isTransactionPooler`). This is the escape hatch for a
+ * NONSTANDARD-PORT or self-hosted pooler the port heuristic can't classify.
+ * Getting it wrong on a real transaction pooler (`session` when the pooler is
+ * transaction-mode) re-arms the prepared-statement breakage the detection
+ * exists to prevent — set it only when you know the pooler's mode.
+ */
+export function dbPoolMode(): "transaction" | "session" | undefined {
+  const raw = process.env.LOOPANY_DB_POOL_MODE?.trim().toLowerCase();
+  if (raw === "transaction" || raw === "session") return raw;
+  return undefined;
 }
 
 /**

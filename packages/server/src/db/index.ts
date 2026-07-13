@@ -3,8 +3,9 @@
  * (see `db/index.ts` note in the migration blueprint):
  *
  *   - `DATABASE_URL` SET   → postgres-js against Supabase (hosted prod/staging).
- *                            `prepare:false` is REQUIRED for the pgBouncer
- *                            transaction pooler (`:6543`).
+ *                            Pool options are mode-aware (`db/poolOptions.ts`):
+ *                            `prepare:false` on the `:6543` transaction pooler,
+ *                            `prepare:true` on a `:5432` session/direct URL.
  *   - `DATABASE_URL` UNSET → embedded pglite, file-backed at `<dataDir>/pgdata`
  *                            (local dev + light self-host + tests). Same pg
  *                            dialect, same migrations, zero external database.
@@ -27,8 +28,9 @@ import { drizzle as drizzlePglite, type PgliteDatabase } from "drizzle-orm/pglit
 import { drizzle as drizzlePostgres, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres, { type Sql } from "postgres";
 
-import { dataDir, databaseUrl } from "../env.js";
+import { dataDir, databaseUrl, dbPoolMode } from "../env.js";
 import { logger } from "../logger.js";
+import { isTransactionPooler, poolOptionsFor } from "./poolOptions.js";
 import { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runLeases, connectKeys } from "./schema.js";
 import { user, session, account, verification } from "./auth-schema.js";
 
@@ -76,8 +78,11 @@ function open(): { db: Db; client: Client; driver: Driver } {
   }
   const url = databaseUrl();
   if (url) {
-    // Hosted tier: postgres-js against Supabase. `prepare:false` is mandatory for
-    // the pgBouncer transaction pooler (:6543) — cached prepared statements break.
+    // Hosted tier: postgres-js against Supabase. Pool options are MODE-AWARE
+    // (db/poolOptions.ts): a :6543 transaction pooler gets `prepare:false`
+    // (backend reassigned per txn — cached prepared statements break); a :5432
+    // session/direct URL gets `prepare:true` (backend pinned, safe + faster).
+    // `LOOPANY_DB_POOL_MODE` overrides the port-based detection (env.ts).
     // Log the HOST only — never the full URL (it carries the password).
     logger.info({ tier: "postgres", host: pgHost(url) }, "database tier: postgres");
     // A URL with no sslmode may negotiate a PLAINTEXT connection. A local dev
@@ -91,14 +96,9 @@ function open(): { db: Db; client: Client; driver: Driver } {
     // Conservative pool for one always-on machine against the pooler. `max_lifetime`
     // + `statement_timeout` are the pool's self-healing ring after the 2026-07-09
     // wedged-pool incident (see api.health.db.ts for the full story + Fly backstop).
-    const client = postgres(url, {
-      prepare: false,
-      max: 10,
-      idle_timeout: 30,
-      connect_timeout: 15,
-      max_lifetime: 60 * 30, // 30 min — retire connections by age so dead sockets drop
-      connection: { statement_timeout: 30_000 }, // 30s server-side kill for a hung query (ms)
-    });
+    const mode = dbPoolMode();
+    const txnPooler = mode ? mode === "transaction" : isTransactionPooler(url);
+    const client = postgres(url, poolOptionsFor(url, txnPooler));
     const db = drizzlePostgres(client, { schema });
     g.__loopanyClient = client;
     g.__loopanyDb = db;
