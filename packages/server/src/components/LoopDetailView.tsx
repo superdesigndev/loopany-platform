@@ -302,7 +302,7 @@ export function LoopDetailView({ id }: { id: string }) {
   }
 
   const CONFIRM = {
-    run: { q: 'Run one real cycle now?', note: 'Spawns the coding agent (claude).', cta: 'Run once', danger: false },
+    run: { q: 'Run one real cycle now?', note: `Spawns the coding agent (${AGENT_LABEL[job.agent ?? 'claude-code'] ?? job.agent ?? 'Claude Code'}).`, cta: 'Run once', danger: false },
     evolve: {
       q: 'Trigger an evolution pass now?',
       note: 'Re-authors the dashboard / tightens the gate from real run data.',
