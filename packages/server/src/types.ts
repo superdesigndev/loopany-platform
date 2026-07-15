@@ -16,7 +16,8 @@ export type { MachinePresence } from './lib/machinePresence'
 import type { ArtifactMeta } from './server/frontmatter'
 
 /** The coding agent a loop is bound to AND executed with (BYOA on the owner's
- *  machine): `claude-code` → Claude Code, `codex` → `codex exec`, `grok` → Grok.
+ *  machine): `claude-code` → Claude Code, `codex` → `codex exec`, `grok` → Grok,
+ *  `copilot` → GitHub Copilot CLI (`copilot -p`).
  *  Non-Claude agents may still have thinner daemon telemetry until a stream
  *  adapter lands; execution itself is real for every value.
  *
@@ -26,7 +27,7 @@ import type { ArtifactMeta } from './server/frontmatter'
  *  web agent `<select>` (LoopForm). So widening the set is a one-line edit HERE with
  *  no other server change (the daemon's own enum in `packages/daemon/src/create.ts`
  *  is a separate package, widened alongside). */
-export const CODING_AGENTS = ['claude-code', 'codex', 'grok'] as const
+export const CODING_AGENTS = ['claude-code', 'codex', 'grok', 'copilot'] as const
 export type CodingAgent = (typeof CODING_AGENTS)[number]
 
 /** Coerce an unknown value to a known `CodingAgent`, or null when unrecognized.
@@ -314,8 +315,8 @@ export interface JobPayload {
   /** Push channel id (notification_channels.id), or '' / null to clear it. */
   channelId?: string | null
   enabled?: boolean
-  /** Coding agent this loop executes with (claude-code | codex | grok). Editable —
-   *  the next run picks up the new agent. */
+  /** Coding agent this loop executes with (claude-code | codex | grok | copilot).
+   *  Editable — the next run picks up the new agent. */
   agent?: CodingAgent
   exec?: ExecPayload
   owner?: OwnerRef

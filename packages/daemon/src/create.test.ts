@@ -70,6 +70,10 @@ describe("detectAgentFromEnv", () => {
     expect(detectAgentFromEnv({ GROK_AGENT: "1" })).toBe("grok");
   });
 
+  test("fingerprints GitHub Copilot from its COPILOT_CLI marker (verified live)", () => {
+    expect(detectAgentFromEnv({ COPILOT_CLI: "1" })).toBe("copilot");
+  });
+
   test("returns null when no host marker is present (undetectable → caller falls back)", () => {
     expect(detectAgentFromEnv({ PATH: "/usr/bin" })).toBeNull();
   });
@@ -84,6 +88,7 @@ describe("coerceAgent", () => {
     expect(coerceAgent("claude-code")).toBe("claude-code");
     expect(coerceAgent("codex")).toBe("codex");
     expect(coerceAgent("grok")).toBe("grok");
+    expect(coerceAgent("copilot")).toBe("copilot");
     expect(coerceAgent("unknown")).toBeNull();
     expect(coerceAgent("")).toBeNull();
     expect(coerceAgent(undefined)).toBeNull();
@@ -94,6 +99,10 @@ describe("resolveAgent (precedence: measured > declared > undefined)", () => {
   test("a measured host overrides a conflicting declaration (can't be fooled)", () => {
     // Dialog/skill said codex, but we were pasted into a Claude Code session.
     expect(resolveAgent({ CLAUDECODE: "1" }, "codex")).toBe("claude-code");
+  });
+
+  test("a measured Copilot host overrides a conflicting declaration", () => {
+    expect(resolveAgent({ COPILOT_CLI: "1" }, "codex")).toBe("copilot");
   });
 
   test("falls back to the declared value when the env is undetectable", () => {

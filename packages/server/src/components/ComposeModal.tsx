@@ -16,9 +16,10 @@ const AGENT_LABEL: Record<CodingAgent, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   grok: 'Grok Build',
+  copilot: 'Copilot',
 }
 
-// The three supported coding agents, shown as brand marks on the
+// The supported coding agents, shown as brand marks on the
 // Copy-prompt button (the prompt runs in whichever you use). LobeHub icon set,
 // decorative (aria-hidden) — the button text is the accessible name.
 function ClaudeCodeMark({ size = 14 }: { size?: number }) {
@@ -57,6 +58,16 @@ function GrokMark({ size = 14 }: { size?: number }) {
   return (
     <svg aria-hidden width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="shrink-0" xmlns="http://www.w3.org/2000/svg">
       <path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815" />
+    </svg>
+  )
+}
+
+/** Copilot mark (Octicon `copilot`, simplified) — monochrome; inherits the button
+ *  text color, matching the Grok mark's treatment. */
+function CopilotMark({ size = 14 }: { size?: number }) {
+  return (
+    <svg aria-hidden width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="shrink-0" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C7.03 2 3 5.5 3 9.83c0 1.64.58 3.15 1.56 4.4-.32.99-.85 2.68-1.2 3.77a.5.5 0 00.66.62c1.07-.42 2.7-1.08 3.66-1.48A10.9 10.9 0 0012 17.66c4.97 0 9-3.5 9-7.83S16.97 2 12 2zM8.5 11.5a1.5 1.5 0 113 0 1.5 1.5 0 01-3 0zm7.5 1.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3z" />
     </svg>
   )
 }
@@ -258,6 +269,7 @@ export function ComposeModal({
         <ClaudeCodeMark />
         <CodexMark />
         <GrokMark />
+        <CopilotMark />
       </span>
       {copied ? '✓ Copied' : 'Copy prompt'}
     </button>

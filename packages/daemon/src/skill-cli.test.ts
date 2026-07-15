@@ -1,8 +1,9 @@
 /**
  * `loopany skill status` — honest, per-agent install reporting. The install now
- * targets every agent in `SKILL_TARGET_AGENTS` (Claude Code + Codex today), so
- * status must report each one's location for BOTH scopes (user + project), derived
- * from the same target list as the installer so the two surfaces cannot drift.
+ * targets every agent in `SKILL_TARGET_AGENTS` (Claude Code, Codex, GitHub Copilot
+ * today), so status must report each one's location for BOTH scopes (user +
+ * project), derived from the same target list as the installer so the two
+ * surfaces cannot drift.
  * Nothing here spawns npx or hits the network — status is pure filesystem reads.
  */
 import fs from "node:fs";
@@ -32,13 +33,13 @@ async function captureStatus(): Promise<string> {
 afterEach(() => vi.restoreAllMocks());
 
 describe("loopany skill status — multi-agent", () => {
-  test("reports every targeted agent (Claude Code + Codex) by label", async () => {
+  test("reports every targeted agent (Claude Code + Codex + GitHub Copilot) by label", async () => {
     const out = await captureStatus();
     for (const t of SKILL_TARGET_AGENTS) {
       expect(out).toContain(t.label);
     }
-    // The two CodingAgent values are exactly what we target today.
-    expect(SKILL_TARGET_AGENTS.map((t) => t.id)).toEqual(["claude-code", "codex"]);
+    // The CodingAgent values we target today.
+    expect(SKILL_TARGET_AGENTS.map((t) => t.id)).toEqual(["claude-code", "codex", "github-copilot"]);
   });
 
   test("reports each agent × scope (user + project) with a real installed/not-installed verdict", async () => {

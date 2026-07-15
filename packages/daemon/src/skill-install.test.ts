@@ -32,19 +32,19 @@ describe("installArgs", () => {
     // Repeated `-a <id>` flags, one per known agent (the comma form `-a a,b` is
     // rejected by the `skills` CLI as a single bogus agent name).
     expect(installArgs("/b/skill")).toEqual([
-      "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-y", "--copy",
+      "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-a", "github-copilot", "-y", "--copy",
     ]);
   });
 
   test("global appends -g", () => {
     expect(installArgs("/b/skill", true)).toEqual([
-      "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-y", "--copy", "-g",
+      "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-a", "github-copilot", "-y", "--copy", "-g",
     ]);
   });
 
-  test("targets exactly the two CodingAgent values, never `-a '*'`", () => {
+  test("targets exactly the known CodingAgent skill-CLI ids, never `-a '*'`", () => {
     const args = installArgs("/b/skill");
-    expect(SKILL_TARGET_AGENTS.map((t) => t.id)).toEqual(["claude-code", "codex"]);
+    expect(SKILL_TARGET_AGENTS.map((t) => t.id)).toEqual(["claude-code", "codex", "github-copilot"]);
     // one `-a` per agent, and the litter-everything wildcard never appears
     expect(args.filter((a) => a === "-a")).toHaveLength(SKILL_TARGET_AGENTS.length);
     expect(args).not.toContain("*");
@@ -56,6 +56,7 @@ describe("targetSkillDirs", () => {
     expect(targetSkillDirs({ global: true })).toEqual([
       "~/.claude/skills/loopany",
       "~/.agents/skills/loopany",
+      "~/.copilot/skills/loopany",
     ]);
   });
 
@@ -63,6 +64,7 @@ describe("targetSkillDirs", () => {
     expect(targetSkillDirs({ cwd: "/loops/cookie" })).toEqual([
       path.join("/loops/cookie", ".claude/skills/loopany"),
       path.join("/loops/cookie", ".agents/skills/loopany"),
+      path.join("/loops/cookie", ".copilot/skills/loopany"),
     ]);
   });
 
@@ -70,6 +72,7 @@ describe("targetSkillDirs", () => {
     expect(targetSkillDirs()).toEqual([
       "./.claude/skills/loopany",
       "./.agents/skills/loopany",
+      "./.copilot/skills/loopany",
     ]);
   });
 });

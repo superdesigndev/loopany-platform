@@ -88,7 +88,7 @@ const hintCls = 'mt-1 text-caption leading-snug text-disabled'
 
 /** Display labels for the known agents; an unknown/widened value falls back to its
  *  raw enum token so a newly-added agent (e.g. grok) still renders. */
-const AGENT_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+const AGENT_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', grok: 'Grok Build', copilot: 'Copilot' }
 
 // Module-level so identity is stable across renders (an inner component would
 // remount on each keystroke and drop input focus).

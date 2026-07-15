@@ -181,7 +181,12 @@ const installGrokHook: HookInstaller = (s, remove) => {
 };
 
 /** Installers keyed by `CodingAgent` id. An agent in `HOOK_TARGET_AGENTS` with no
- *  entry is reported `skipped (no session-hook integration yet)`. */
+ *  entry is reported `skipped (no session-hook integration yet)` — this currently
+ *  covers `github-copilot`: Copilot CLI's `~/.copilot/config.json` does have a
+ *  `hooks` key, but the verified `copilot help config`/`--help` output never
+ *  enumerates its event names (no confirmed SessionStart equivalent), so wiring
+ *  an installer here would risk shipping a malformed hook config. Deliberately
+ *  left as a documented gap until that's verified, not an oversight. */
 const HOOK_INSTALLERS: Record<string, HookInstaller> = {
   "claude-code": installClaudeCodeHook,
   codex: installCodexHook,

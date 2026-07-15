@@ -11,8 +11,8 @@
  * is the manual escape hatch (`--project` installs into the cwd instead).
  *
  * MULTI-AGENT: the skill is installed for every coding agent loopany knows about
- * (`SKILL_TARGET_AGENTS` — currently Claude Code and Codex, the two `CodingAgent`
- * values), so a Codex user (or any of the two) gets the skill, not just Claude Code.
+ * (`SKILL_TARGET_AGENTS` — currently Claude Code, Codex, and GitHub Copilot),
+ * so any of them gets the skill, not just Claude Code.
  * We deliberately DON'T pass `-a '*'`: empirically the `skills` CLI treats `'*'` as
  * "install to ALL ~72 supported agents regardless of presence", littering dozens of
  * home dirs (`~/.aider-desk`, `~/.astrbot`, …). Targeting the known agents explicitly
@@ -130,13 +130,17 @@ export interface InstallOpts {
 }
 
 /**
- * The coding agents the loopany skill install targets — the two `CodingAgent`
- * values. Each carries the `skills` CLI agent id (for `-a <id>`), a human label,
- * and the skill dir layout that agent reads (relative to the scope root: `~` for a
- * global/user install, the cwd for a project install). Verified empirically against
- * the current `skills` CLI: Claude Code reads `.claude/skills`, Codex reads the
- * universal `.agents/skills`. Extend this list to cover a new agent (installArgs and
- * `loopany skill status` both derive from it — they cannot drift).
+ * The coding agents the loopany skill install targets. Each carries the `skills`
+ * CLI agent id (for `-a <id>`), a human label, and the skill dir layout that
+ * agent reads (relative to the scope root: `~` for a global/user install, the
+ * cwd for a project install). Verified empirically against the current `skills`
+ * CLI: Claude Code reads `.claude/skills`, Codex reads the universal
+ * `.agents/skills`. GitHub Copilot's `skills` CLI agent id is `github-copilot`
+ * (NOT `copilot` — verified by unpacking the `skills` npm package source), and
+ * `copilot skill --help` confirms it reads personal skills from `~/.copilot/skills`
+ * (its `skillsRoot` here), also falling back to the universal `~/.agents/skills`.
+ * Extend this list to cover a new agent (installArgs and `loopany skill status`
+ * both derive from it — they cannot drift).
  */
 export const SKILL_TARGET_AGENTS: ReadonlyArray<{
   id: string;
@@ -146,6 +150,7 @@ export const SKILL_TARGET_AGENTS: ReadonlyArray<{
 }> = [
   { id: "claude-code", label: "Claude Code", skillsRoot: [".claude", "skills"] },
   { id: "codex", label: "Codex", skillsRoot: [".agents", "skills"] },
+  { id: "github-copilot", label: "GitHub Copilot", skillsRoot: [".copilot", "skills"] },
 ];
 
 /** The argv (after `npx`) for the install — pure, so tests can assert it. Targets
