@@ -7,8 +7,11 @@
  * Ported from c0's scheduler/workflow.ts.
  *
  * Script contract:
- *   - return "text" or { message?, state? } → `message` is the direct message to
- *     the user (no claude); `state` is the persisted cursor (passed back as `prev`).
+ *   - return "text" or { message?, state?, status? } → `message` is the direct
+ *     message to the user (no claude); `state` is the persisted cursor (passed
+ *     back as `prev`); `status` (new|resolved|nothing-new) is the SAME
+ *     content-status vocabulary an agent sets via `loopany report --status` —
+ *     optional, drives the dashboard's color-coded run block + the notify gate.
  *   - agent(message?, data?) → request escalation to claude (handled by the runner
  *     after the script finishes; the task + message + data become claude's context).
  *   - await tools.call("server.tool", args) → call one of this machine's OWN
@@ -54,6 +57,11 @@ export interface AgentCall {
 export interface WorkflowResult {
   message?: string;
   state?: unknown;
+  /** Same content-status vocabulary an agent sets via `loopany report --status`
+   *  (new | resolved | nothing-new) — lets a pure zero-LLM workflow drive the
+   *  same color-coded run status (dashboard timeline block color + the
+   *  `shouldNotify` gate), not just the neutral `direct`/`silent` outcome. */
+  status?: "new" | "resolved" | "nothing-new";
   agentCalls: AgentCall[];
 }
 
@@ -152,6 +160,9 @@ export async function runWorkflow(body: string, prevState: unknown, cwd: string,
     }
     if (parsed.message !== undefined && typeof parsed.message !== "string") {
       return { ok: false, error: "workflow `message` must be a string", ...logs };
+    }
+    if (parsed.status !== undefined && parsed.status !== "new" && parsed.status !== "resolved" && parsed.status !== "nothing-new") {
+      return { ok: false, error: `workflow \`status\` must be new|resolved|nothing-new (got ${JSON.stringify(parsed.status)})`, ...logs };
     }
     return { ok: true, result: parsed, ...logs };
   } finally {
