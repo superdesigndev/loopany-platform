@@ -9,7 +9,8 @@ Loopany is a pnpm monorepo with two packages:
 
 - **`packages/server`** (`@loopany/server`, private) — the TanStack Start web app:
   UI + server functions + the in-process scheduler + machine/agent routes + Better
-  Auth + artifact storage. Drizzle/SQLite. Deployed on Fly.
+  Auth + artifact storage. Drizzle over Postgres (embedded pglite locally or an
+  external Postgres in production). Deployed on Fly.
 - **`packages/daemon`** (`@crewlet/loopany`, public on npm) — the machine-side
   daemon that runs on each user's own machine, polls the server for due runs, and
   executes them via the user's local coding agent (BYOA).
@@ -37,11 +38,14 @@ pnpm dev          # server on http://127.0.0.1:3000 (UI + scheduler + machine ro
 Copy `.env.example` to `packages/server/.env` if you need to configure auth,
 the artifact blob store, or other options. The app runs open (no auth) by default.
 
-> Changed `packages/server/src/db/schema.ts`? Generate and apply the migration
-> locally — dev does **not** auto-migrate:
+> Changed `packages/server/src/db/schema.ts` or `auth-schema.ts`? Generate the
+> migration before restarting the server. Embedded pglite applies generated
+> migrations automatically at boot; use `db:migrate` only when targeting an
+> external Postgres (with `DIRECT_DATABASE_URL` set when the runtime URL uses a
+> transaction pooler):
 > ```bash
 > pnpm --filter @loopany/server db:generate   # write the SQL + snapshot
-> pnpm --filter @loopany/server db:migrate     # apply to the dev DB
+> pnpm --filter @loopany/server db:migrate     # external Postgres only
 > ```
 
 ## Tests & typecheck
