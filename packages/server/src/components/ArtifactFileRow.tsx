@@ -4,7 +4,7 @@ import { fmt, humanBytes } from '../lib/format'
 import { getArtifact } from '../server/loopApi'
 
 /** Human byte size - "1.8 KB", "3.4 MB" ("" when unknown). */
-export function fmtBytes(n: number | null): string {
+function fmtBytes(n: number | null): string {
   return n == null ? '' : humanBytes(n)
 }
 
