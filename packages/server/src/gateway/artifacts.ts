@@ -8,8 +8,6 @@ import { createHash } from "node:crypto";
 
 /** Per-file byte cap. At or under ⇒ bytes sync; over ⇒ metadata-only (no bytes). */
 export const BLOB_CAP = 10 * 1024 * 1024; // 10MB
-/** Small text blobs at/under this may be inlined in the sync POST (skip the PUT round-trip). */
-export const INLINE_CAP = 64 * 1024; // 64KB
 /** Hard ceiling on a sync POST body (manifest + any inlined blobs). */
 export const SYNC_BODY_CAP = 32 * 1024 * 1024; // 32MB
 
