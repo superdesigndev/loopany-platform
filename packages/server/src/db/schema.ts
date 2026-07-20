@@ -53,10 +53,15 @@ export interface RunArtifact {
  *  older daemon / a timed-out run reports none). Rides in a JSON column; the
  *  aggregable USD figure gets its own real column (`runs.costUsd`). */
 export interface RunUsage {
+  totalTokens?: number;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  reasoningTokens?: number;
+  /** Latest ACP context occupancy/window. Unlike token totals, these are not additive. */
+  contextTokens?: number;
+  contextWindow?: number;
   numTurns?: number;
   /** Total claude invocations for the run — present only when > 1 (the daemon's
    *  transient-failure recovery resumed the session; cost/tokens are the sum). */

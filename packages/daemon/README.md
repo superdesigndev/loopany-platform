@@ -6,7 +6,7 @@ executes your scheduled agent loops locally via your own coding agent.
 Loopany is **BYOA** (bring your own agent): the server schedules, stores, and
 notifies, but never runs an LLM or executes your code. This daemon is the
 execution half - it polls the server for due runs, spawns the loop's coding agent
-(Claude Code, `codex exec` for a `codex` loop, or the grok CLI for a `grok` loop)
+(Claude Code, native `codex exec` or optional ACP for a `codex` loop, or the grok CLI for a `grok` loop)
 in the loop's working directory, and reports the results back.
 
 ## Requirements
@@ -93,6 +93,14 @@ repo clone, a git worktree, build output) belong outside it, and the daemon
 defensively caps how much it syncs per loop (`LOOPANY_SYNC_MAX_FILES` /
 `LOOPANY_SYNC_MAX_BYTES`) so a stray checkout can never flood the sync. Your code
 and credentials stay on your machine.
+
+For Codex, the default backend remains the native CLI. Set
+`LOOPANY_CODEX_BACKEND=acp` before starting the daemon to use the package's
+pinned local `acpx` + `codex-acp` transport. ACP adds normalized live activity,
+tool/file trace, session identity, and detailed token/context usage to run
+detail; it still executes locally and sends only Loopany's normal run report to
+your configured Loopany server. Set the value back to `native` for an immediate
+rollback. No `npx` download is performed at run time.
 
 The package also bundles the **loopany agent skill**, which teaches a coding
 agent how to author and evolve loops; `loopany up` (and `loopany new`) install

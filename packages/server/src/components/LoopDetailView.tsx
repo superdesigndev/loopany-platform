@@ -246,6 +246,7 @@ export function LoopDetailView({ id }: { id: string }) {
     sessionId: detail?.runs.find((r) => r.sessionId)?.sessionId ?? null,
     dir: detail ? detail.job.exec?.workdir || loopDir(detail.job.taskFile) : null,
     machineName: detail?.machine.name || null,
+    agent: detail?.job.agent ?? null,
     label: 'Continue agent session',
   })
 
