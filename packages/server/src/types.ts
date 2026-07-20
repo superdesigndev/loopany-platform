@@ -93,6 +93,16 @@ export interface ChannelSummary {
   hint: string
 }
 
+/** One Slack channel offered by the add-channel picker (`listSlackChannels`),
+ *  from `conversations.list` — enough to render "#name" / "🔒 #name" and warn
+ *  when a private channel doesn't have the bot yet. */
+export interface SlackChannelSummary {
+  id: string
+  name: string
+  isPrivate: boolean
+  isMember: boolean
+}
+
 /** A connected machine (a teammate's daemon) for the Machines panel. */
 export interface MachineSummary {
   id: string

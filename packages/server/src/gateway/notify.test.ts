@@ -1,7 +1,10 @@
-import { afterEach, expect, test } from 'vitest'
-import { CHANNELS, failureMessage, setWebhookFetchDeps } from './notify'
+import { afterEach, expect, test, vi } from 'vitest'
+import { CHANNELS, failureMessage, fetchSlackChannels, setWebhookFetchDeps } from './notify'
 
-afterEach(() => setWebhookFetchDeps({})) // restore real DNS + fetch after each seam
+afterEach(() => {
+  setWebhookFetchDeps({}) // restore real DNS + fetch after each seam
+  vi.unstubAllGlobals()
+})
 
 test('a running run interrupted mid-flight reads as calmly asleep, not a scary failure', () => {
   const m = failureMessage('machine timed out / disconnected')
@@ -86,4 +89,110 @@ test('feishu.send delivers to an allowlisted host resolving public (network stub
   const r = await feishu.send({ webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/x' }, 'Title', 'Body')
   expect(r.ok).toBe(true)
   expect(posted).toMatchObject({ msg_type: 'text', content: { text: '🔁 Title\nBody' } })
+})
+
+// ---- Slack (bot token + chat.postMessage) ----
+
+const slack = CHANNELS.slack
+
+test('slack.validate accepts a well-formed bot token + channel', () => {
+  expect(slack.validate!({ token: 'xoxb-123-456-abc', channel: '#alerts' })).toBeNull()
+})
+
+test('slack.validate rejects a token that is not a Slack xox token', () => {
+  const err = slack.validate!({ token: 'not-a-slack-token', channel: '#alerts' })
+  expect(err).toBeTruthy()
+  expect(err).toMatch(/xoxb-/)
+})
+
+test('slack.validate rejects an empty/whitespace channel', () => {
+  expect(slack.validate!({ token: 'xoxb-123', channel: '' })).toBeTruthy()
+  expect(slack.validate!({ token: 'xoxb-123', channel: '   ' })).toBeTruthy()
+})
+
+test('slack.send maps not_in_channel to an actionable invite message', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'not_in_channel' }), { status: 200 })),
+  )
+  const r = await slack.send({ token: 'xoxb-123', channel: '#alerts' }, 'T', 'M')
+  expect(r.ok).toBe(false)
+  expect(r.error).toMatch(/not_in_channel/)
+  expect(r.error).toMatch(/invite/i)
+})
+
+test('slack.send maps invalid_auth to an actionable revoked-token message', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'invalid_auth' }), { status: 200 })),
+  )
+  const r = await slack.send({ token: 'xoxb-123', channel: '#alerts' }, 'T', 'M')
+  expect(r.ok).toBe(false)
+  expect(r.error).toMatch(/invalid_auth/)
+  expect(r.error).toMatch(/invalid|revoked/i)
+})
+
+test('slack.send converts the message through markdownToMrkdwn and keeps the bold mrkdwn title', async () => {
+  let posted: unknown = null
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, init: RequestInit) => {
+      posted = JSON.parse(init.body as string)
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    }),
+  )
+  const r = await slack.send({ token: 'xoxb-123', channel: '#alerts' }, 'Title', '**bold** text')
+  expect(r.ok).toBe(true)
+  expect(posted).toMatchObject({ channel: '#alerts', text: '🔁 *Title*\n*bold* text' })
+})
+
+// ---- fetchSlackChannels (the add-channel picker's `conversations.list` call) ----
+
+test('fetchSlackChannels rejects a non-xox token without any network call', async () => {
+  const fetchSpy = vi.fn()
+  vi.stubGlobal('fetch', fetchSpy)
+  const r = await fetchSlackChannels('not-a-token')
+  expect(r.ok).toBe(false)
+  expect(r.error).toMatch(/xoxb-/)
+  expect(fetchSpy).not.toHaveBeenCalled()
+})
+
+test('fetchSlackChannels paginates via response_metadata.next_cursor and sorts by name', async () => {
+  const pages = [
+    { ok: true, channels: [{ id: 'C2', name: 'zeta', is_private: false, is_member: true }], response_metadata: { next_cursor: 'page2' } },
+    { ok: true, channels: [{ id: 'C1', name: 'alpha', is_private: true, is_member: false }], response_metadata: { next_cursor: '' } },
+  ]
+  let call = 0
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify(pages[call++]), { status: 200 })),
+  )
+  const r = await fetchSlackChannels('xoxb-123')
+  expect(r.ok).toBe(true)
+  expect(call).toBe(2)
+  expect(r.channels).toEqual([
+    { id: 'C1', name: 'alpha', isPrivate: true, isMember: false },
+    { id: 'C2', name: 'zeta', isPrivate: false, isMember: true },
+  ])
+})
+
+test('fetchSlackChannels maps missing_scope to actionable guidance', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'missing_scope' }), { status: 200 })),
+  )
+  const r = await fetchSlackChannels('xoxb-123')
+  expect(r.ok).toBe(false)
+  expect(r.error).toMatch(/channels:read/)
+})
+
+test('fetchSlackChannels maps invalid_auth to actionable guidance', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'invalid_auth' }), { status: 200 })),
+  )
+  const r = await fetchSlackChannels('xoxb-123')
+  expect(r.ok).toBe(false)
+  expect(r.error).toMatch(/invalid_auth/)
+  expect(r.error).toMatch(/invalid|revoked/i)
 })

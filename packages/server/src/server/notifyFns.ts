@@ -13,8 +13,8 @@ import * as store from '../db/store.js'
 import type { ChannelConfig, ChannelType, NotificationChannel } from '../db/schema.js'
 import { requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
-import { CHANNELS } from '../gateway/notify.js'
-import type { ChannelSummary } from '../types'
+import { CHANNELS, fetchSlackChannels } from '../gateway/notify.js'
+import type { ChannelSummary, SlackChannelSummary } from '../types'
 
 function toSummary(c: NotificationChannel): ChannelSummary {
   return { id: c.id, type: c.type, name: c.name, hint: CHANNELS[c.type]?.hint(c.config) ?? '—' }
@@ -72,6 +72,21 @@ export const deleteChannel = createServerFn({ method: 'POST' })
     await ensureServer()
     if (!(await ownedChannel(id))) return { ok: false, error: 'channel not found' }
     return { ok: await store.deleteChannel(id) }
+  })
+
+/** POST — list the channels a pasted Slack bot token can see, for the Slack
+ *  add-channel picker (`NotificationsModal`). Takes the raw token straight from
+ *  the add form, not a stored channel — the channel doesn't exist yet at this
+ *  point, so there is no team-owned row to scope this to. Thin passthrough to
+ *  `fetchSlackChannels` (gateway/notify), which never throws / never logs the
+ *  token. */
+export const listSlackChannels = createServerFn({ method: 'POST' })
+  .validator((d: { token: string }) => d)
+  .handler(async ({ data }): Promise<{ ok: boolean; channels?: SlackChannelSummary[]; error?: string }> => {
+    await ensureServer()
+    const token = data.token?.trim()
+    if (!token) return { ok: false, error: 'token required' }
+    return fetchSlackChannels(token)
   })
 
 /** POST — send a test message through a saved channel (verifies the secrets). */

@@ -17,6 +17,8 @@ import { logger } from "../logger.js";
 import * as store from "../db/store.js";
 import type { ChannelConfig, ChannelType, Loop, NotifyPolicy, RunStatus } from "../db/schema.js";
 import { safeWebhookFetch, validateFeishuWebhookUrl, type WebhookFetchDeps } from "./webhookGuard.js";
+import { markdownToMrkdwn } from "./mrkdwn.js";
+import type { SlackChannelSummary } from "../types.js";
 
 const log = logger.child({ mod: "notify" });
 
@@ -181,6 +183,17 @@ export const CHANNELS: Record<ChannelType, ChannelKind> = {
   slack: {
     required: ["token", "channel"],
     hint: (c) => c.channel?.trim() || "—",
+    // Pure, sync, no network — a Bot User OAuth Token always starts "xoxb-" (or the
+    // rarer "xoxp-" user token); catches a pasted app-id/signing-secret/webhook URL
+    // at create/edit time instead of failing silently at send time.
+    validate: (cfg) => {
+      const token = cfg.token?.trim() ?? "";
+      if (!token.startsWith("xox")) {
+        return 'Slack token should start with "xoxb-" (a Bot User OAuth Token) — got something else';
+      }
+      if (!cfg.channel?.trim()) return "Slack channel is required";
+      return null;
+    },
     send: (cfg, title, message) => {
       const token = cfg.token?.trim();
       const channel = cfg.channel?.trim();
@@ -190,9 +203,19 @@ export const CHANNELS: Record<ChannelType, ChannelKind> = {
         {
           method: "POST",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
-          body: JSON.stringify({ channel, text: `🔁 *${title}*\n${message}` }),
+          body: JSON.stringify({ channel, text: `🔁 *${title}*\n${markdownToMrkdwn(message)}` }),
         },
-        (d, status) => (d.ok ? null : (typeof d.error === "string" ? d.error : `HTTP ${status}`)),
+        (d, status) => {
+          if (d.ok) return null;
+          const code = typeof d.error === "string" ? d.error : null;
+          if (code === "channel_not_found" || code === "not_in_channel") {
+            return `${code} — invite the bot to the channel (/invite @yourbot)`;
+          }
+          if (code === "invalid_auth" || code === "token_revoked" || code === "account_inactive") {
+            return `${code} — the bot token is invalid or revoked, reconnect the channel with a fresh token`;
+          }
+          return code || `HTTP ${status}`;
+        },
       );
     },
   },
@@ -243,6 +266,72 @@ export const CHANNELS: Record<ChannelType, ChannelKind> = {
     },
   },
 };
+
+/** One page of `conversations.list` (200 channels, Slack's own max page size). */
+const SLACK_CHANNELS_PAGE_LIMIT = 200;
+/** Hard cap on how many channels the picker will ever load, across pages. */
+const SLACK_CHANNELS_MAX = 1000;
+
+/**
+ * List the channels a Slack bot token can see, for the add-channel picker
+ * (`notifyFns.listSlackChannels`) — paginates `conversations.list` via
+ * `response_metadata.next_cursor`, capped at `SLACK_CHANNELS_MAX` total. Pure
+ * passthrough to a fixed `slack.com` host (no user-supplied URL), so this needs
+ * no webhookGuard-style SSRF check — same trust boundary as `CHANNELS.slack.send`.
+ * Never throws, never logs the token.
+ */
+export async function fetchSlackChannels(token: string): Promise<{
+  ok: boolean;
+  channels?: SlackChannelSummary[];
+  error?: string;
+}> {
+  const t = token.trim();
+  if (!t.startsWith("xox")) {
+    return { ok: false, error: 'Slack token should start with "xoxb-" (a Bot User OAuth Token) — got something else' };
+  }
+  const channels: SlackChannelSummary[] = [];
+  let cursor = "";
+  try {
+    do {
+      const params = new URLSearchParams({
+        types: "public_channel,private_channel",
+        exclude_archived: "true",
+        limit: String(SLACK_CHANNELS_PAGE_LIMIT),
+      });
+      if (cursor) params.set("cursor", cursor);
+      const res = await fetch(`https://slack.com/api/conversations.list?${params.toString()}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${t}` },
+      });
+      const d = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!d.ok) {
+        const code = typeof d.error === "string" ? d.error : null;
+        if (code === "missing_scope") {
+          return {
+            ok: false,
+            error: "the app is missing the channels:read scope — recreate it with the pre-filled button or add the scope manually",
+          };
+        }
+        if (code === "invalid_auth" || code === "token_revoked" || code === "account_inactive") {
+          return { ok: false, error: `${code} — the bot token is invalid or revoked, reconnect the channel with a fresh token` };
+        }
+        return { ok: false, error: code ?? `HTTP ${res.status}` };
+      }
+      const list = Array.isArray(d.channels) ? (d.channels as Record<string, unknown>[]) : [];
+      for (const c of list) {
+        if (typeof c.id === "string" && typeof c.name === "string") {
+          channels.push({ id: c.id, name: c.name, isPrivate: !!c.is_private, isMember: !!c.is_member });
+        }
+      }
+      const meta = d.response_metadata as Record<string, unknown> | undefined;
+      cursor = typeof meta?.next_cursor === "string" ? meta.next_cursor : "";
+    } while (cursor && channels.length < SLACK_CHANNELS_MAX);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  channels.sort((a, b) => a.name.localeCompare(b.name));
+  return { ok: true, channels: channels.slice(0, SLACK_CHANNELS_MAX) };
+}
 
 /** Route a finished run's message to the loop's channel. Best-effort, no throw. */
 export async function dispatchNotification(loop: Loop, message: string): Promise<void> {
