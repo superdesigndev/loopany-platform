@@ -12,20 +12,36 @@ import update from '../skill/references/update.md?raw'
 import evolve from '../skill/references/evolve.md?raw'
 import run from '../skill/references/run.md?raw'
 
+// Per-template on-demand references (templates/<name>/reference.md): bulky
+// material a template's setup flow needs (e.g. a dashboard reference layout)
+// that must NOT ride in the paste prompt. Exposed under the build-time key
+// `templates/<name>/reference.md` — still a static map, so the path-safety
+// argument below is unchanged (only exact known keys resolve).
+const templateRefs = import.meta.glob<string>('../skill/templates/*/reference.md', {
+  eager: true,
+  query: '?raw',
+  import: 'default',
+})
+
 const REFERENCES: Record<string, string> = {
   'create.md': create,
   'update.md': update,
   'evolve.md': evolve,
   'run.md': run,
+  ...Object.fromEntries(
+    Object.entries(templateRefs).map(([path, body]) => [path.replace('../skill/', ''), body]),
+  ),
 }
 
 const PREFIX = '/api/skill/references/'
 
 /**
  * GET /api/skill/references/:file — serve one loopany skill reference file. Path-safe:
- * only an exact, single-segment name from the static REFERENCES map resolves; anything
- * else (nested paths, traversal, unknown names) is 404. The server only reads bytes it
- * shipped — no filesystem access, no user input reaches disk (zero-exec invariant holds).
+ * only a key present in the static REFERENCES map resolves — a top-level `<name>.md`
+ * or a template's `templates/<name>/reference.md` — and anything else (traversal, other
+ * files in a template folder, unknown names) is 404. Keys are compared whole, so a
+ * nested-looking path is not a path: nothing is joined or walked. The server only reads
+ * bytes it shipped — no filesystem access, no user input reaches disk (zero-exec holds).
  */
 export const Route = createFileRoute('/api/skill/references/$')({
   server: {

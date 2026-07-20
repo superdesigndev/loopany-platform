@@ -242,7 +242,39 @@ const FOLLOW_UP: FlowSpec = {
   ],
 }
 
+const SUPPORT_TRIAGE: FlowSpec = {
+  worktreeLabel: 'Fix agent · isolated worktree',
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Connect inbox + stack', detail: 'smoke-test support read/write · DB, billing, analytics skills · agree the reply boundary' },
+    { id: 'tick', kicker: 'Always on', glyph: '◷', title: 'Hourly · gated', detail: 'wakes only on real customer messages — bot noise is a silent tick' },
+    { id: 'investigate', kicker: 'Step 1 · Investigate', glyph: '⌕', title: 'Root-cause first', detail: 'their account in DB / billing / sessions — before any reply' },
+    { id: 'resolve', kicker: 'Step 2 · Resolve', glyph: '✉', title: 'Reply or escalate', detail: 'vetted answers sent · money & sensitive drafted, held for you' },
+    { id: 'capture', kicker: 'Step 3 · Capture', glyph: '⚑', title: 'File the signal', detail: 'ticket note · recurring themes gain frequency' },
+    { id: 'fix', wt: true, kicker: 'Step 4 · Fix', glyph: '⑂', title: 'Fix real bugs', detail: 'root-cause → verified PR — never merges' },
+  ],
+  dashboard: [
+    {
+      type: 'kanban',
+      heading: 'Ticket board',
+      sub: 'needs human → resolved',
+      columns: [
+        ['Needs human', [
+          ['SUP-78', 'Forgot-to-cancel refund ask', 'decision drafted'],
+          ['SUP-77', 'Unrecognized recurring charge', 'decision drafted'],
+        ]],
+        ['Resolved', [
+          ['SUP-71', '"Canvas blank" — bug fixed, shipped', 'closed warm'],
+          ['SUP-69', 'Stuck generation — credits explained', 'auto-replied'],
+          ['SUP-66', 'Crash on translate — how-to sent', 'auto-replied'],
+        ]],
+      ],
+    },
+    { type: 'metric', label: 'Auto-handled per run', series: [2, 4, 3, 6, 5, 7, 6, 9, 8, 10], note: 'signals & eng bugs accrue on their own boards.' },
+  ],
+}
+
 const FLOWS: Record<string, FlowSpec> = {
+  'support-triage': SUPPORT_TRIAGE,
   'react-doctor': REACT_DOCTOR,
   'docs-sweep': DOCS_SWEEP,
   'error-sweep': ERROR_SWEEP,

@@ -96,7 +96,7 @@ function ViewerActions({
   showToggle: boolean
 }) {
   return (
-    <div className="flex items-center gap-2 border-b border-hairline bg-surface px-5 py-1.5">
+    <div className="flex items-center gap-2 border-b border-hairline bg-transparent px-5 py-1.5">
       {showToggle && mode && onMode && (
         <div className="inline-flex overflow-hidden rounded-control border border-hairline">
           {(['preview', 'source'] as ViewMode[]).map((m) => (

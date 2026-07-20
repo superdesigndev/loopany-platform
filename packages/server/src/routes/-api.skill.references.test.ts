@@ -6,6 +6,8 @@
  * clean JSON 404. This is the prod behavior; the Vite dev static layer swallows
  * `.md` paths before the route runs, so it can only be observed off the dev server.
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 
 import { Route } from './api.skill.references.$'
@@ -168,6 +170,55 @@ describe('/api/skill/references/$', () => {
     ]) {
       const res = await call(p)
       expect(res.status).toBe(404)
+    }
+  })
+
+  test('serves a template reference under its exact nested key', async () => {
+    const res = await call('/api/skill/references/templates/support-triage/reference.md')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('text/markdown; charset=utf-8')
+    const body = await res.text()
+    // The on-demand dashboard layout + state schema the paste prompt points at.
+    expect(body).toContain('loop-tabs')
+    expect(body).toContain('eng_bugs_open')
+  })
+
+  test('template folders expose ONLY reference.md (meta/thumb stay off this route)', async () => {
+    for (const p of [
+      '/api/skill/references/templates/support-triage/meta.json',
+      '/api/skill/references/templates/support-triage/thumb.svg',
+      '/api/skill/references/templates/nope/reference.md',
+    ]) {
+      const res = await call(p)
+      expect(res.status).toBe(404)
+    }
+  })
+
+  /**
+   * COVERAGE = DISK. The dev-server plugin (vite.config.ts `devSkillReferences`)
+   * matches these paths by SHAPE while this route resolves them from a build-time
+   * map — so a reference file added to disk but never wired into the map would
+   * serve 200 in dev and 404 in prod, the exact dev/prod split that plugin exists
+   * to remove. Asserting the route covers every file on disk keeps the two ends
+   * honest in BOTH directions: a missed import fails here, and the map can't list
+   * anything that isn't really there (the reads below would throw).
+   */
+  test('every reference file on disk is served by the route', async () => {
+    const skillDir = path.join(import.meta.dirname, '..', 'skill')
+
+    const onDisk = [
+      ...fs.readdirSync(path.join(skillDir, 'references')).filter((f: string) => f.endsWith('.md')),
+      ...fs
+        .readdirSync(path.join(skillDir, 'templates'), { withFileTypes: true })
+        .filter((e: { isDirectory(): boolean; name: string }) => e.isDirectory() && fs.existsSync(path.join(skillDir, 'templates', e.name, 'reference.md')))
+        .map((e: { name: string }) => `templates/${e.name}/reference.md`),
+    ]
+    expect(onDisk.length).toBeGreaterThan(0)
+
+    for (const name of onDisk) {
+      const res = await call(`/api/skill/references/${name}`)
+      expect(res.status, `${name} exists on disk but the route does not serve it`).toBe(200)
+      expect(await res.text()).toBe(fs.readFileSync(path.join(skillDir, name.startsWith('templates/') ? name : `references/${name}`), 'utf8'))
     }
   })
 })

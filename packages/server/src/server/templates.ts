@@ -39,7 +39,7 @@ const thumbs = import.meta.glob<string>('../skill/templates/*/thumb.svg', {
  * loops first (docs → errors → React → tech debt), then the research/ops loops. A
  * template not in this list falls to the end, name-sorted, so a new folder still shows.
  */
-const CARD_ORDER = ['docs-sweep', 'error-sweep', 'react-doctor', 'housekeeper', 'market-research', 'dependency-triage', 'follow-up-tracker']
+const CARD_ORDER = ['docs-sweep', 'error-sweep', 'react-doctor', 'housekeeper', 'market-research', 'dependency-triage', 'follow-up-tracker', 'support-triage']
 const orderOf = (name: string): number => {
   const i = CARD_ORDER.indexOf(name)
   return i === -1 ? CARD_ORDER.length : i

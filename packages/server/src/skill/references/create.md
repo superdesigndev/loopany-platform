@@ -211,10 +211,18 @@ fixes the artifacts/metrics up front — author the initial `ui` NOW and include
 the config, so the loop has a day-one dashboard instead of a blank one until it
 evolves. Use the same panel primitives and `{{latest.<key>}}` bindings documented in
 `evolve.md` §3 (`<loop-chart>` for a metric trend, `<loop-kanban>`/`<loop-embed>`/
-`<loop-calendar>` for the loop's typed products) — don't duplicate that guidance here;
+`<loop-calendar>` for the loop's typed products, `<loop-tabs>` to split several panels
+into tabs) — don't duplicate that guidance here;
 just bind only keys your `stateSchema` declares and columns your Spec's `type`
 vocabulary uses. Keep it small. Skip it when the product shape isn't settled yet — a
 speculative dashboard is worse than none.
+
+**Template references (on demand).** When the task came from a dashboard template,
+it may ship a per-template reference with a validated dashboard layout and state
+schema at `<server-url>/api/skill/references/templates/<template-name>/reference.md`
+— fetch it when you reach this step (never earlier; it's deliberately not in the
+paste prompt). Start from that layout and adapt it to the vocabulary you agreed
+with the user, rather than composing a dashboard from scratch.
 
 ## 5 · Validate, then create
 

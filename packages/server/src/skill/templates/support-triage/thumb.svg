@@ -1,0 +1,70 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Support inboxes (Intercom, Slack, email) flow through the loop into
+       resolution pieces: a sent reply, a flagged product signal with rising
+       frequency, a merged fix PR. Chrome rides theme vars; logos keep brand color. -->
+
+  <!-- ── Left: support-system chips ─────────────────────────────── -->
+  <!-- Intercom: official mark (simple-icons path), white glyph knockout on brand blue -->
+  <rect x="10" y="9" width="18" height="18" rx="4.5" fill="#fff"/>
+  <path transform="translate(10,9) scale(0.75)" fill="#1F8DED" fill-rule="evenodd" d="M21 0H3C1.343 0 0 1.343 0 3v18c0 1.658 1.343 3 3 3h18c1.658 0 3-1.342 3-3V3c0-1.657-1.342-3-3-3zm-5.801 4.399c0-.44.36-.8.802-.8.44 0 .8.36.8.8v10.688c0 .442-.36.801-.8.801-.443 0-.802-.359-.802-.801V4.399zM11.2 3.994c0-.44.357-.799.8-.799s.8.359.8.799v11.602c0 .44-.357.8-.8.8s-.8-.36-.8-.8V3.994zm-4 .405c0-.44.359-.8.799-.8.443 0 .802.36.802.8v10.688c0 .442-.36.801-.802.801-.44 0-.799-.359-.799-.801V4.399zM3.199 6c0-.442.36-.8.802-.8.44 0 .799.358.799.8v7.195c0 .441-.359.8-.799.8-.443 0-.802-.36-.802-.8V6zM20.52 18.202c-.123.105-3.086 2.593-8.52 2.593-5.433 0-8.397-2.486-8.521-2.593-.335-.288-.375-.792-.086-1.128.285-.334.79-.375 1.125-.09.047.041 2.693 2.211 7.481 2.211 4.848 0 7.456-2.186 7.479-2.207.334-.289.839-.25 1.128.086.289.336.25.84-.086 1.128zm.281-5.007c0 .441-.36.8-.801.8-.441 0-.801-.36-.801-.8V6c0-.442.361-.8.801-.8.441 0 .801.357.801.8v7.195z"/>
+
+  <!-- Slack: official 2019 mark, scaled -->
+  <rect x="10.5" y="31.5" width="17" height="17" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <g transform="translate(12.6,33.6) scale(0.1008)">
+    <path d="M27.2 80c0 7.3-5.9 13.2-13.2 13.2C6.7 93.2.8 87.3.8 80c0-7.3 5.9-13.2 13.2-13.2h13.2V80zm6.6 0c0-7.3 5.9-13.2 13.2-13.2 7.3 0 13.2 5.9 13.2 13.2v33c0 7.3-5.9 13.2-13.2 13.2-7.3 0-13.2-5.9-13.2-13.2V80z" fill="#E01E5A"/>
+    <path d="M47 27c-7.3 0-13.2-5.9-13.2-13.2C33.8 6.5 39.7.6 47 .6c7.3 0 13.2 5.9 13.2 13.2V27H47zm0 6.7c7.3 0 13.2 5.9 13.2 13.2 0 7.3-5.9 13.2-13.2 13.2H13.9C6.6 60.1.7 54.2.7 46.9c0-7.3 5.9-13.2 13.2-13.2H47z" fill="#36C5F0"/>
+    <path d="M99.9 46.9c0-7.3 5.9-13.2 13.2-13.2 7.3 0 13.2 5.9 13.2 13.2 0 7.3-5.9 13.2-13.2 13.2H99.9V46.9zm-6.6 0c0 7.3-5.9 13.2-13.2 13.2-7.3 0-13.2-5.9-13.2-13.2V13.8C66.9 6.5 72.8.6 80.1.6c7.3 0 13.2 5.9 13.2 13.2v33.1z" fill="#2EB67D"/>
+    <path d="M80.1 99.8c7.3 0 13.2 5.9 13.2 13.2 0 7.3-5.9 13.2-13.2 13.2-7.3 0-13.2-5.9-13.2-13.2V99.8h13.2zm0-6.6c-7.3 0-13.2-5.9-13.2-13.2 0-7.3 5.9-13.2 13.2-13.2h33.1c7.3 0 13.2 5.9 13.2 13.2 0 7.3-5.9 13.2-13.2 13.2H80.1z" fill="#ECB22E"/>
+  </g>
+
+  <!-- Email: light chip, envelope -->
+  <rect x="10.5" y="53.5" width="17" height="17" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="13.75" y="57.75" width="10.5" height="8.5" rx="1.5" fill="none" stroke="var(--color-secondary, #6b7280)" stroke-width="1.3"/>
+  <path d="M14 58.5 L19 62.2 L24 58.5" fill="none" stroke="var(--color-secondary, #6b7280)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- ── Wires: inboxes → loop → resolutions ────────────────────── -->
+  <g stroke="var(--color-wire, #cfd3db)" stroke-width="1.4" fill="none" stroke-linecap="round">
+    <path d="M31 18 C 42 18, 46 34, 56 39"/>
+    <path d="M31 40 L 56 40"/>
+    <path d="M31 62 C 42 62, 46 46, 56 41"/>
+    <path d="M74 40 C 80 40, 80 17, 87 17"/>
+    <path d="M74 40 L 87 40"/>
+    <path d="M74 40 C 80 40, 80 63, 87 63"/>
+  </g>
+
+  <!-- Loop node: circular arrow -->
+  <circle cx="65" cy="40" r="9.5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <path d="M69.2 38.6 a4.6 4.6 0 1 0 0.4 2.6" fill="none" stroke="var(--color-display, #16181d)" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M69.9 35.4 L69.4 38.8 L66.1 38.1" fill="none" stroke="var(--color-display, #16181d)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- ── Right: resolution pieces ───────────────────────────────── -->
+  <!-- Reply sent: card with green check + text lines -->
+  <rect x="87.5" y="8.5" width="46" height="17" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <circle cx="95.5" cy="17" r="4.2" fill="var(--color-rubik-green, #009b48)"/>
+  <path d="M93.7 17 L95 18.4 L97.4 15.7" stroke="#fff" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="102.5" y="13.5" width="24" height="2.4" rx="1.2" fill="var(--color-secondary, #6b7280)"/>
+  <rect x="102.5" y="18.2" width="16" height="2.4" rx="1.2" fill="var(--color-hairline, #e3e5ea)"/>
+
+  <!-- Product signal: card with orange flag + rising frequency bars -->
+  <rect x="87.5" y="31.5" width="46" height="17" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <path d="M93 36.4 L93 45.6" stroke="var(--color-rubik-orange, #ff5800)" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M93 36.6 L99.6 36.6 L97.8 39 L99.6 41.4 L93 41.4 Z" fill="var(--color-rubik-orange, #ff5800)"/>
+  <g fill="var(--color-secondary, #6b7280)">
+    <rect x="105.5" y="41.5" width="2.6" height="4" rx="1"/>
+    <rect x="109.7" y="39.5" width="2.6" height="6" rx="1"/>
+    <rect x="113.9" y="37" width="2.6" height="8.5" rx="1"/>
+    <rect x="118.1" y="34.5" width="2.6" height="11" rx="1"/>
+  </g>
+
+  <!-- Fix PR merged: card with merge glyph + text lines -->
+  <rect x="87.5" y="54.5" width="46" height="17" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <g stroke="var(--color-rubik-blue, #0051ba)" stroke-width="1.4" fill="none" stroke-linecap="round">
+    <path d="M93.5 58.8 L93.5 67.2"/>
+    <path d="M93.5 60.2 C 93.5 64, 99 62, 99 65.8"/>
+  </g>
+  <circle cx="93.5" cy="58.6" r="1.7" fill="var(--color-rubik-blue, #0051ba)"/>
+  <circle cx="93.5" cy="67.4" r="1.7" fill="var(--color-rubik-blue, #0051ba)"/>
+  <circle cx="99" cy="66.4" r="1.7" fill="var(--color-rubik-blue, #0051ba)"/>
+  <rect x="104.5" y="59.5" width="24" height="2.4" rx="1.2" fill="var(--color-secondary, #6b7280)"/>
+  <rect x="104.5" y="64.2" width="14" height="2.4" rx="1.2" fill="var(--color-hairline, #e3e5ea)"/>
+</svg>

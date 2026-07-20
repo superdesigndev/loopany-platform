@@ -46,3 +46,23 @@ test("sync-skill bundles ONLY the public surface (no internal run prompts)", () 
   // but not installable — they must never leak into the tarball either.
   expect(files.some((f) => f.startsWith("templates/"))).toBe(false);
 });
+
+/**
+ * STALENESS GUARD. `packages/daemon/skill/` is a build artifact, but it is also what
+ * `loopany skill install` copies onto a user's machine — so a checkout whose bundle
+ * predates the source silently installs OLD instructions into every coding agent.
+ * That really happened (2026-07-20): a Jul-14 bundle kept installing a superseded
+ * skill describing a different task-folder convention and a CLI API the shipped
+ * binary doesn't have, and a template setup run followed it instead of the source.
+ * The selectivity test above passes happily in that state, because it re-runs the
+ * sync first. This one compares BYTES as committed/checked-out — run sync-skill
+ * (i.e. `pnpm --filter @crewlet/loopany build`) whenever the skill source changes.
+ */
+test("the bundled skill is not stale (bytes match src/skill's public surface)", () => {
+  const src = path.resolve(root, "..", "server", "src", "skill");
+  for (const rel of ["SKILL.md", "references/create.md", "references/update.md", "references/evolve.md", "references/run.md"]) {
+    const bundled = fs.readFileSync(path.join(bundle, rel), "utf8");
+    const source = fs.readFileSync(path.join(src, rel), "utf8");
+    expect(bundled, `${rel} is stale — re-run the daemon build to re-sync`).toBe(source);
+  }
+});

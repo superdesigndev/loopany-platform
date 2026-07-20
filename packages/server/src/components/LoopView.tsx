@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import DOMPurify, { type Config } from 'dompurify'
-import parse, { Element, type HTMLReactParserOptions } from 'html-react-parser'
+import parse, { domToReact, Element, type DOMNode, type HTMLReactParserOptions } from 'html-react-parser'
 import type { ArtifactSummary, RunSummary } from '../types'
 import { buildBindingContext, parseSeries, resolveBindings } from '../lib/binding'
 import { numericSeries } from '../lib/stats'
@@ -9,6 +9,7 @@ import { LoopChart } from './LoopChart'
 import { LoopEmbed } from './LoopEmbed'
 import { LoopCalendar } from './LoopCalendar'
 import { LoopKanban } from './LoopKanban'
+import { LoopTabs } from './LoopTabs'
 
 /**
  * Renders a loop's generative-UI template (agent-authored HTML on `Job.ui`).
@@ -23,6 +24,7 @@ import { LoopKanban } from './LoopKanban'
  *   <loop-embed match="reports/digest-*.md"></loop-embed>      newest matching artifact, embedded
  *   <loop-calendar match="reports/*.md"></loop-calendar>       month calendar of produced files
  *   <loop-kanban columns="a,b,c" match="notes/*.md">           typed products as a board, columns = type
+ *   <loop-tabs tabs="A,B,C"><section>…</section>…</loop-tabs>  tab strip; one label per top-level <section>
  *
  * Registering a new primitive means moving three things together: LOOP_TAGS +
  * the sanitizer config below, the parser swap in `options`, and the skill's
@@ -30,10 +32,10 @@ import { LoopKanban } from './LoopKanban'
  * allowlist and the skill prose must never drift apart.
  */
 
-const LOOP_TAGS = ['loop-chart', 'loop-embed', 'loop-calendar', 'loop-kanban']
+const LOOP_TAGS = ['loop-chart', 'loop-embed', 'loop-calendar', 'loop-kanban', 'loop-tabs']
 
 /** Data-bearing attributes on the loop-* primitives (all parsed by us, never markup). */
-const LOOP_ATTRS = ['series', 'file', 'match', 'full', 'columns']
+const LOOP_ATTRS = ['series', 'file', 'match', 'full', 'columns', 'tabs']
 
 const ARTIFACT_RETRY_MAX = 3
 const ARTIFACT_RETRY_MS = 4000
@@ -148,6 +150,20 @@ export function LoopView({
               taskFile={taskFile}
             />
           )
+        if (node.name === 'loop-tabs') {
+          const labels = (a.tabs ?? '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+          // One panel per top-level <section> child, parsed through the same
+          // options so nested loop-* primitives keep working inside a tab. The
+          // self-reference is safe: `replace` only runs once `parse` is called
+          // below, long after the useMemo has assigned `options`.
+          const panels = node.children
+            .filter((c): c is Element => c instanceof Element && c.name === 'section')
+            .map((sec) => domToReact(sec.children as DOMNode[], options))
+          return <LoopTabs labels={labels} panels={panels} />
+        }
         return undefined
       },
     }),

@@ -43,6 +43,7 @@ describe('template registry', () => {
       'market-research',
       'dependency-triage',
       'follow-up-tracker',
+      'support-triage',
     ])
   })
 

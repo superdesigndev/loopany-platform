@@ -215,7 +215,9 @@ export function ComposeModal({
           </button>
         )}
       </div>
-      <div className="mt-2 overflow-hidden rounded-control border border-hairline bg-raised p-3 font-mono text-label text-primary">
+      {/* Capped height with internal scroll: a long template description (the
+          structured multi-step ones) must not stretch the modal off-screen. */}
+      <div className="mt-2 max-h-[max(24rem,60vh)] overflow-y-auto rounded-control border border-hairline bg-raised p-3 font-mono text-label text-primary">
         {/* Instruction line - a single fixed bootstrap line; the skill (not the
             snippet) collects the task, cadence, and output format. */}
         <p className="leading-relaxed">{instruction}</p>
