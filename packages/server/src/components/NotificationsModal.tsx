@@ -256,8 +256,8 @@ export function NotificationsModal({ open, onClose }: { open: boolean; onClose: 
               {spec.action.label} ↗
             </a>
           )}
-          <label className={labelCls}>Name</label>
-          <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. My alerts" />
+          <label className={labelCls} htmlFor="notif-channel-name">Name</label>
+          <input id="notif-channel-name" className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. My alerts" />
           {spec.fields.map((f) => {
             if (f.requires && !fields[f.requires]?.trim()) return null
             const isSlackChannel = adding === 'slack' && f.key === 'channel'
