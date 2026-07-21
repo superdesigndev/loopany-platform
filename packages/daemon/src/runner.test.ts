@@ -423,6 +423,41 @@ describe("runDelivery — workflow failure falls back to the agent", () => {
     );
     expect(fs.existsSync(path.join(workdir, "captured-task.txt"))).toBe(false);
   }, 20000);
+
+  test("a pure workflow's status (new|resolved|nothing-new) rides along in the final report", async () => {
+    const cap = reportCapture();
+    const url = await cap.start();
+    try {
+      await runDelivery(
+        delivery({ loop: { ...delivery().loop, workflow: `return { message: "healthy", status: "resolved" };` } }),
+        url,
+        [],
+      );
+    } finally {
+      cap.close();
+    }
+    const rep = cap.reports.find((r) => r.runId === "run-1");
+    expect(rep).toBeTruthy();
+    expect(rep.outcome).toBe("direct");
+    expect(rep.status).toBe("resolved");
+  }, 20000);
+
+  test("a pure workflow that omits status reports undefined (unaffected — matches pre-status behavior)", async () => {
+    const cap = reportCapture();
+    const url = await cap.start();
+    try {
+      await runDelivery(
+        delivery({ loop: { ...delivery().loop, workflow: `return { message: "healthy" };` } }),
+        url,
+        [],
+      );
+    } finally {
+      cap.close();
+    }
+    const rep = cap.reports.find((r) => r.runId === "run-1");
+    expect(rep).toBeTruthy();
+    expect(rep.status).toBeUndefined();
+  }, 20000);
 });
 
 describe("runDelivery — a timed-out run keeps its session pointer", () => {

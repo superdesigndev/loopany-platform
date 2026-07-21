@@ -55,6 +55,24 @@ describe("existing sandbox contract stays green", () => {
     expect(r.result?.message).toBeUndefined();
     expect(r.result?.agentCalls).toEqual([]);
   });
+
+  test("workflow can set status (new|resolved|nothing-new) alongside message/state", async () => {
+    const r = await runWorkflow(`return { message: "ok", state: { n: 1 }, status: "resolved" };`, null, cwd);
+    expect(r.ok).toBe(true);
+    expect(r.result?.status).toBe("resolved");
+  });
+
+  test("omitting status leaves it undefined (backward compatible with existing workflows)", async () => {
+    const r = await runWorkflow(`return { message: "ok" };`, null, cwd);
+    expect(r.ok).toBe(true);
+    expect(r.result?.status).toBeUndefined();
+  });
+
+  test("an invalid status value fails the workflow with a clear error", async () => {
+    const r = await runWorkflow(`return { message: "ok", status: "bogus" };`, null, cwd);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/status.*new\|resolved\|nothing-new/);
+  });
 });
 
 describe("subprocess env allowlist", () => {
