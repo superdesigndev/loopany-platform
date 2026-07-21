@@ -109,6 +109,27 @@ function gridFor(zoom: Zoom, from: number, to: number): Array<{ pct: number; str
 
 type Hover = { mark: TimelineMark; loop: TimelineLoop; x: number; y: number }
 
+/**
+ * Which lanes to draw, and how many were held back.
+ *
+ * A loop with neither a run nor a projected fire inside the window contributes
+ * an unbroken empty track — pure noise at day zoom, where most loops simply
+ * aren't due. Hidden by DEFAULT, but always counted: a silently dropped loop is
+ * exactly the "is anything dead?" signal this view exists to surface, so the
+ * caller can offer them in one click.
+ *
+ * Pure so the rule is testable without mounting the view.
+ */
+export function visibleLanes(
+  loops: TimelineLoop[],
+  marks: TimelineMark[],
+  showIdle: boolean,
+): { lanes: TimelineLoop[]; idleCount: number } {
+  const busy = new Set(marks.map((m) => m.loopId))
+  const active = loops.filter((l) => busy.has(l.id))
+  return { lanes: showIdle ? loops : active, idleCount: loops.length - active.length }
+}
+
 const backLink = 'ml-auto text-label text-secondary hover:underline'
 
 /**
@@ -146,6 +167,8 @@ export function LoopTimeline({ teamId }: { teamId?: string }) {
   /** null ⇒ every device. Loops are bound to one machine, so this is a plain
    *  equality filter on the lane list. */
   const [machineId, setMachineId] = useState<string | null>(null)
+  /** Reveal lanes with nothing in the window (hidden by default — see the lane memo). */
+  const [showIdle, setShowIdle] = useState(false)
   const [data, setData] = useState<TimelineData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [hover, setHover] = useState<Hover | null>(null)
@@ -219,14 +242,28 @@ export function LoopTimeline({ teamId }: { teamId?: string }) {
   // silently rendering an empty board.
   const device = machineId != null && machines.some((m) => m.id === machineId) ? machineId : null
 
-  /** Lanes + the header tally, both scoped to the selected device — a filtered
-   *  board showing the unfiltered team total would contradict what's on screen.
-   *  Sums the way the server does: null costs excluded, never counted as zero. */
-  const { loops, shown } = useMemo(() => {
+  /**
+   * Lanes + the header tally, both scoped to the selected device — a filtered
+   * board showing the unfiltered team total would contradict what's on screen.
+   * Sums the way the server does: null costs excluded, never counted as zero.
+   *
+   * EMPTY LANES ARE HIDDEN BY DEFAULT. A loop with neither a run nor a projected
+   * fire inside the window contributes an unbroken empty track, which is pure
+   * noise at day zoom (where most loops simply aren't due). They stay countable
+   * and one click away rather than vanishing — a silently dropped loop is
+   * exactly the "is anything dead?" signal this view exists to surface.
+   */
+  const { loops, idleCount, shown } = useMemo(() => {
     const all = data?.loops ?? []
-    if (!data || device == null) return { loops: all, shown: data?.totals ?? { runCount: 0, costUsd: 0 } }
-    const lanes = all.filter((l) => l.machineId === device)
-    const ids = new Set(lanes.map((l) => l.id))
+    const scoped = device == null ? all : all.filter((l) => l.machineId === device)
+    if (!data) return { loops: scoped, idleCount: 0, shown: { runCount: 0, costUsd: 0 } }
+
+    const { lanes, idleCount: idle } = visibleLanes(scoped, data.marks, showIdle)
+
+    // The unfiltered total is already computed server-side; only recompute when
+    // a device filter actually narrows the set.
+    if (device == null) return { loops: lanes, idleCount: idle, shown: data.totals }
+    const ids = new Set(scoped.map((l) => l.id))
     let runCount = 0
     let costUsd = 0
     for (const m of data.marks) {
@@ -234,8 +271,8 @@ export function LoopTimeline({ teamId }: { teamId?: string }) {
       runCount++
       if (m.costUsd != null) costUsd += m.costUsd
     }
-    return { loops: lanes, shown: { runCount, costUsd: Math.round(costUsd * 1e4) / 1e4 } }
-  }, [data, device])
+    return { loops: lanes, idleCount: idle, shown: { runCount, costUsd: Math.round(costUsd * 1e4) / 1e4 } }
+  }, [data, device, showIdle])
 
   return (
     <section className="min-w-0">
@@ -332,9 +369,16 @@ export function LoopTimeline({ teamId }: { teamId?: string }) {
           const lastReal = marks.findLast((m) => m.kind === 'run')
           const total = data?.totals.byLoop[loop.id]
           return (
-            <div key={loop.id} className={`items-center ${laneGrid}`}>
+            // `group` + a full-row tint on hover: lanes are only 22px tall and
+            // the label sits ~200px from its marks, so tracing a mark back to
+            // its loop by eye is genuinely hard without it. Uses a bg tint
+            // rather than a border so the row height never shifts.
+            <div
+              key={loop.id}
+              className={`group items-center rounded-[6px] py-px transition-colors hover:bg-[color:var(--color-display)]/[0.045] ${laneGrid}`}
+            >
               {/* lane label — identity lives here, not in colour */}
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 items-center gap-2 pl-1">
                 <span
                   className="h-3.5 w-[3px] shrink-0 rounded-[2px]"
                   style={{ background: lastReal ? dotColor(lastReal) : 'var(--color-hairline)' }}
@@ -342,20 +386,20 @@ export function LoopTimeline({ teamId }: { teamId?: string }) {
                 <Link
                   to="/loops/$loopId"
                   params={{ loopId: loop.id }}
-                  className="truncate text-label font-medium text-primary hover:underline"
+                  className="truncate text-label font-medium text-primary group-hover:text-display group-hover:underline"
                   title={loop.name}
                 >
                   {loop.name}
                 </Link>
                 {/* Readable cadence, NOT the raw cron: at day zoom the chart shows
                     one day, so cadence is the thing the picture cannot say. */}
-                <span className="ml-auto shrink-0 whitespace-nowrap text-[10px] text-disabled max-sm:hidden">
+                <span className="ml-auto shrink-0 whitespace-nowrap text-[10px] text-disabled group-hover:text-secondary max-sm:hidden">
                   {loop.enabled ? loop.cadence : 'paused'}
                 </span>
               </div>
 
               {/* track */}
-              <div className="relative h-[22px] min-w-0 overflow-hidden rounded-[5px] bg-raised">
+              <div className="relative h-[22px] min-w-0 overflow-hidden rounded-[5px] bg-raised transition-colors group-hover:bg-[color:var(--color-wire)]/40">
                 {grid.map((g, i) => (
                   <span
                     key={i}
@@ -399,8 +443,26 @@ export function LoopTimeline({ teamId }: { teamId?: string }) {
 
       {loops.length === 0 && (
         <p className="py-8 text-center text-label text-secondary">
-          {data ? 'No loops in this team yet.' : 'Loading…'}
+          {!data
+            ? 'Loading…'
+            : idleCount > 0
+              ? `Nothing ran or is due in this window — ${idleCount} ${idleCount === 1 ? 'loop is' : 'loops are'} idle here.`
+              : 'No loops in this team yet.'}
         </p>
+      )}
+
+      {/* Idle lanes are hidden, never silently dropped: say how many and offer
+          them in one click, so "where did that loop go?" always has an answer. */}
+      {idleCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowIdle((v) => !v)}
+          className="mt-2 cursor-pointer text-label text-secondary underline-offset-2 hover:text-primary hover:underline"
+        >
+          {showIdle
+            ? `Hide ${idleCount} idle ${idleCount === 1 ? 'loop' : 'loops'}`
+            : `Show ${idleCount} idle ${idleCount === 1 ? 'loop' : 'loops'} (nothing in this window)`}
+        </button>
       )}
 
       {/* legend */}
