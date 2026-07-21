@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cronText, isClosed, isCompleted } from './format'
+import { cronText, dur, isClosed, isCompleted } from './format'
 import type { JobSummary } from '../types'
 
 /** Minimal JobSummary factory — only the goal/completedAt fields matter here. */
@@ -71,5 +71,39 @@ describe('cronText', () => {
     expect(cronText('0 6 * * 1-5')).toBe('0 6 * * 1-5')
     expect(cronText('0 0 5 * * *')).toBe('0 0 5 * * *')
     expect(cronText('')).toBe('')
+  })
+})
+
+/*
+ * Runs legitimately span hours (a long agent task, or a laptop asleep mid-run —
+ * durationMs is wall-clock). The old unconditional `${seconds}s` rendered those
+ * as "10800s", so long runs were invisible on the run page, loop card and
+ * timeline tooltip alike. All three read this one helper.
+ */
+describe('dur', () => {
+  it('keeps sub-minute durations in seconds', () => {
+    expect(dur(45_000)).toBe('45s')
+    expect(dur(1_000)).toBe('1s')
+    expect(dur(59_400)).toBe('59s')
+  })
+
+  it('breaks minutes out once past a minute', () => {
+    expect(dur(60_000)).toBe('1m 0s')
+    expect(dur(90_000)).toBe('1m 30s')
+    expect(dur(450_000)).toBe('7m 30s')
+    expect(dur(3_540_000)).toBe('59m 0s')
+  })
+
+  it('breaks hours out once past an hour', () => {
+    expect(dur(3_600_000)).toBe('1h 0m')
+    expect(dur(10_800_000)).toBe('3h 0m')
+    expect(dur(11_700_000)).toBe('3h 15m')
+    expect(dur(86_400_000)).toBe('24h 0m')
+  })
+
+  it('stays empty for null/0 — call sites fall back with `|| dash`', () => {
+    expect(dur(null)).toBe('')
+    expect(dur(undefined)).toBe('')
+    expect(dur(0)).toBe('')
   })
 })

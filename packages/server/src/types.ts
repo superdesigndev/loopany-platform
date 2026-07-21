@@ -141,6 +141,19 @@ export interface TimelineLoop {
   /** Human cadence derived from the cron ("Daily 05:00", "Every 30 min") — the
    *  lane label. Computed server-side so the client never parses cron. */
   cadence: string
+  /** The machine this loop is bound to and executes on — backs the device filter. */
+  machineId: string
+}
+
+/** A machine offered in the timeline's device filter. */
+export interface TimelineMachine {
+  id: string
+  /** Friendly name, else hostname, else a short id — never blank (an unnamed
+   *  machine has `name: ""` until its daemon connects). */
+  label: string
+  /** How many of the window's lanes are bound to it (the filter shows counts so
+   *  an empty selection is obvious before you make it). */
+  loopCount: number
 }
 
 /** One mark in a lane: a real run, or a projected future fire. */
@@ -170,6 +183,10 @@ export interface TimelineData {
   from: string
   to: string
   loops: TimelineLoop[]
+  /** Machines owning at least one of the returned loops — the device filter's
+   *  options. Derived from the loops in scope, so it never offers a machine that
+   *  would filter the view down to nothing. */
+  machines: TimelineMachine[]
   marks: TimelineMark[]
   totals: {
     runCount: number

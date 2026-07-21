@@ -4,7 +4,7 @@ import { Link } from '@tanstack/react-router'
 import type { TimelineData, TimelineLoop, TimelineMark } from '../types'
 import { listTimeline } from '../server/loopApi'
 import { dotColor, dotLabel, dur, money } from '../lib/format'
-import { runPulseAnim, useHydrated } from './ui'
+import { runPulseAnim, selectCls, useHydrated } from './ui'
 
 /*
  * The cross-loop timeline: ONE form at every zoom — row = loop, x = time.
@@ -143,6 +143,9 @@ export function TimelinePage({ teamId }: { teamId?: string }) {
 export function LoopTimeline({ teamId }: { teamId?: string }) {
   const [zoom, setZoom] = useState<Zoom>('day')
   const [costMode, setCostMode] = useState(false)
+  /** null ⇒ every device. Loops are bound to one machine, so this is a plain
+   *  equality filter on the lane list. */
+  const [machineId, setMachineId] = useState<string | null>(null)
   const [data, setData] = useState<TimelineData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [hover, setHover] = useState<Hover | null>(null)
@@ -209,7 +212,30 @@ export function LoopTimeline({ teamId }: { teamId?: string }) {
   }, [data])
 
   const nowPct = now.getTime() >= from && now.getTime() <= to ? pct(now.getTime()) : null
-  const loops = data?.loops ?? []
+  const machines = data?.machines ?? []
+  // Filtering is client-side over already-loaded lanes, so switching device is
+  // instant and needs no refetch. A selection that vanishes from the payload
+  // (its last loop deleted or rebound) resolves back to "all" rather than
+  // silently rendering an empty board.
+  const device = machineId != null && machines.some((m) => m.id === machineId) ? machineId : null
+
+  /** Lanes + the header tally, both scoped to the selected device — a filtered
+   *  board showing the unfiltered team total would contradict what's on screen.
+   *  Sums the way the server does: null costs excluded, never counted as zero. */
+  const { loops, shown } = useMemo(() => {
+    const all = data?.loops ?? []
+    if (!data || device == null) return { loops: all, shown: data?.totals ?? { runCount: 0, costUsd: 0 } }
+    const lanes = all.filter((l) => l.machineId === device)
+    const ids = new Set(lanes.map((l) => l.id))
+    let runCount = 0
+    let costUsd = 0
+    for (const m of data.marks) {
+      if (m.kind !== 'run' || !ids.has(m.loopId)) continue
+      runCount++
+      if (m.costUsd != null) costUsd += m.costUsd
+    }
+    return { loops: lanes, shown: { runCount, costUsd: Math.round(costUsd * 1e4) / 1e4 } }
+  }, [data, device])
 
   return (
     <section className="min-w-0">
@@ -236,10 +262,33 @@ export function LoopTimeline({ teamId }: { teamId?: string }) {
         <span className="font-mono text-caption text-secondary">
           {dayLabel(from)} → {dayLabel(to)}
         </span>
+        {/* Device filter. Options come from the loops in scope, so it can never
+            offer a machine that would empty the board. Hidden at one machine —
+            a filter with a single choice is just noise. */}
+        {machines.length > 1 && (
+          <label className="inline-flex items-center gap-2 text-label text-secondary">
+            <span className="sr-only">Filter by device</span>
+            <select
+              value={device ?? ''}
+              onChange={(e) => {
+                setHover(null)
+                setMachineId(e.target.value || null)
+              }}
+              className={selectCls + ' w-auto py-1.5 text-label'}
+            >
+              <option value="">All devices ({data?.loops.length ?? 0})</option>
+              {machines.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label} ({m.loopCount})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="ml-auto flex items-center gap-4">
           {data && (
             <span className="font-mono text-caption text-secondary">
-              {data.totals.runCount} runs · {money(data.totals.costUsd) || '$0.00'}
+              {shown.runCount} runs · {money(shown.costUsd) || '$0.00'}
             </span>
           )}
           <label className="inline-flex cursor-pointer items-center gap-2 text-label text-secondary">

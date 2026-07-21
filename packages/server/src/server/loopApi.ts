@@ -32,7 +32,7 @@ import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
-import { projectFires, projectedMark, runToMark, sumCosts, toTimelineLoop } from './timeline.js'
+import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
 
 function backend() {
@@ -162,6 +162,7 @@ export const listTimeline = createServerFn({ method: 'GET' })
       from: data.from,
       to: data.to,
       loops: [],
+      machines: [],
       marks: [],
       totals: { runCount: 0, costUsd: 0, byLoop: {} },
       truncated: false,
@@ -174,7 +175,10 @@ export const listTimeline = createServerFn({ method: 'GET' })
 
     const scoped = enforce ? active : undefined
     const loops = (await store.listLoops(scoped)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-    const rows = await store.listTeamRunsInRange(scoped, data.from, data.to, TIMELINE_RUN_CAP)
+    const [rows, machineRows] = await Promise.all([
+      store.listTeamRunsInRange(scoped, data.from, data.to, TIMELINE_RUN_CAP),
+      store.listMachines(scoped),
+    ])
 
     const marks: TimelineMark[] = rows.map(runToMark)
     // Project only forward of now — the past half of the window is history, and a
@@ -188,10 +192,12 @@ export const listTimeline = createServerFn({ method: 'GET' })
     }
     marks.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
 
+    const timelineLoops = loops.map(toTimelineLoop)
     return {
       from: data.from,
       to: data.to,
-      loops: loops.map(toTimelineLoop),
+      loops: timelineLoops,
+      machines: timelineMachines(timelineLoops, machineRows),
       marks,
       totals: sumCosts(marks),
       truncated: rows.length >= TIMELINE_RUN_CAP,

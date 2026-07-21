@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import type { Loop } from '../db/schema.js'
 import type { TimelineRun } from '../db/store.js'
-import { MAX_PROJECTED_PER_LOOP, projectFires, runToMark, sumCosts, toTimelineLoop } from './timeline.js'
+import {
+  MAX_PROJECTED_PER_LOOP,
+  projectFires,
+  runToMark,
+  sumCosts,
+  timelineMachines,
+  toTimelineLoop,
+} from './timeline.js'
 
 const loop = (over: Partial<Loop> = {}): Loop =>
   ({
@@ -141,5 +148,35 @@ describe('toTimelineLoop', () => {
 
   it('falls back to the id when a loop is unnamed', () => {
     expect(toTimelineLoop(loop({ name: null })).name).toBe('l1')
+  })
+})
+
+describe('timelineMachines', () => {
+  const m = (id: string, name: string, hostname: string | null = null) => ({ id, name, hostname })
+  const tl = (id: string, machineId: string) => ({ ...toTimelineLoop(loop({ id })), machineId })
+
+  it('derives options from the loops in scope, with counts', () => {
+    const out = timelineMachines([tl('a', 'm1'), tl('b', 'm1'), tl('c', 'm2')], [m('m1', 'laptop'), m('m2', 'desktop')])
+    expect(out).toEqual([
+      { id: 'm2', label: 'desktop', loopCount: 1 },
+      { id: 'm1', label: 'laptop', loopCount: 2 },
+    ])
+  })
+
+  it('never offers a machine with no loops in scope', () => {
+    const out = timelineMachines([tl('a', 'm1')], [m('m1', 'laptop'), m('m2', 'idle-box')])
+    expect(out.map((x) => x.id)).toEqual(['m1'])
+  })
+
+  it('falls back to hostname when the daemon has not named the machine yet', () => {
+    // machines.name is "" until the daemon connects — a blank option is unpickable.
+    expect(timelineMachines([tl('a', 'm1')], [m('m1', '', 'mac-mini.local')])[0]!.label).toBe('mac-mini.local')
+    expect(timelineMachines([tl('a', 'm1')], [m('m1', '   ', '  host  ')])[0]!.label).toBe('host')
+  })
+
+  it('labels a loop whose machine row is gone rather than dropping the option', () => {
+    // Orphaning those lanes from the filter would make them unreachable.
+    const out = timelineMachines([tl('a', 'm-deadbeef1234')], [])
+    expect(out).toEqual([{ id: 'm-deadbeef1234', label: 'm-deadbeef…', loopCount: 1 }])
   })
 })
