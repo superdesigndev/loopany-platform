@@ -1,13 +1,19 @@
 # Deploy Loopany to PRODUCTION — app "loopany-prod", https://loopany.ai.
 #
-# MANUAL-ONLY (workflow_dispatch): the temporary auto-deploy-on-push override is
-# over and has been removed — prod deploys are back to explicit, watched promotes.
+# AUTO-PROMOTE-AFTER-STAGING: prod promotes automatically, but ONLY once the
+# staging deploy (deploy.yml → loopany-testing) has finished SUCCESSFULLY for the
+# same commit. The `workflow_run` trigger fires when "Deploy (Fly)" completes and
+# the job `if:` gates on `conclusion == 'success'`, so a red staging deploy never
+# reaches prod. Manual `workflow_dispatch` is always available for out-of-band
+# promotes / retries, and the `production` GitHub Environment can still add
+# required reviewers for a human gate on top of the staging gate.
 #
-# Manual-only rationale (why prod is NOT auto-deployed): the single-scheduler
-# invariant makes an accidental double-target dangerous, so prod is NOT
-# auto-deployed on push to main (that's staging's job, deploy.yml →
-# loopany-testing) NOR on a `v*` tag (that tag is publish-daemon.yml's npm-publish
-# trigger — sharing it would deploy prod on every daemon release).
+# Why gated on staging (not push/tag directly): the single-scheduler invariant
+# makes an accidental double-target dangerous, so prod is NEVER deployed straight
+# off a raw push to main, NOR off a `v*` tag (that tag is publish-daemon.yml's
+# npm-publish trigger — sharing it would deploy prod on every daemon release).
+# Chaining off staging's success keeps the "observe on loopany-testing first"
+# buffer while removing the manual step.
 #
 # Migrations apply on container boot: scripts/prestart.mjs runs the postgres-js
 # migrator over the DIRECT Supabase URL (DIRECT_DATABASE_URL) whenever
@@ -16,6 +22,12 @@ name: Deploy Prod (Fly)
 
 on:
   workflow_dispatch: {}
+  workflow_run:
+    # Auto-promote after the staging deploy workflow completes. The job `if:`
+    # below requires conclusion == 'success', so a failed staging run is a no-op.
+    workflows: ["Deploy (Fly)"]
+    types: [completed]
+    branches: [main]
 
 # Distinct group from staging's `fly-deploy` so neither cancels the other's
 # in-flight deploy. Never cancel a prod deploy mid-flight.
@@ -29,6 +41,16 @@ jobs:
     runs-on: ubuntu-latest
     # Add required reviewers to this GitHub Environment for a manual promote gate.
     environment: production
+    # Auto-promote ONLY after a green staging deploy; manual dispatch always runs.
+    # A failed/cancelled staging `workflow_run` is a silent no-op (never promotes).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    # On a workflow_run event `github.sha` is the default-branch HEAD, which can
+    # drift past the commit staging actually built. Pin to the triggering run's
+    # head_sha; fall back to github.sha for a manual dispatch (workflow_run null).
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       # Fail LOUD before flyctl if the prod token is empty. GitHub interpolates a
       # missing/rotted secret to the empty string (no error), which flyctl then
@@ -43,6 +65,9 @@ jobs:
             exit 1
           fi
       - uses: actions/checkout@v7
+        with:
+          # Build the exact commit staging validated, not whatever HEAD is now.
+          ref: ${{ env.DEPLOY_SHA }}
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy
         # --ha=false: exactly ONE machine. Fly's default HA creates a second
@@ -51,7 +76,7 @@ jobs:
         # can report it (smoke check below asserts it matches).
         run: |
           flyctl deploy --remote-only --ha=false -c fly.prod.toml -a loopany-prod \
-            --build-arg GIT_SHA=${{ github.sha }} \
+            --build-arg GIT_SHA="$DEPLOY_SHA" \
             --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         env:
           # Separate token from staging's FLY_API_TOKEN (set it in repo secrets).
@@ -61,7 +86,7 @@ jobs:
       # promote that silently didn't take, fails the run here instead of passing.
       - name: Smoke — /api/health serves the pushed SHA
         run: |
-          expected='${{ github.sha }}'
+          expected="$DEPLOY_SHA"
           got=''
           for attempt in 1 2 3 4 5; do
             if body="$(curl -fsS --max-time 15 https://loopany.ai/api/health)"; then

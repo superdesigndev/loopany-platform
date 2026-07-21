@@ -773,11 +773,18 @@ computes pure functions. Run instructions: `README.md`.
   workflows bake `--build-arg GIT_SHA`/`BUILT_AT` into the image; `/api/health` returns
   `{ok, sha, builtAt}` (baked ENV, `"unknown"` in local dev) and a post-deploy smoke
   step asserts the served `sha` == the pushed `github.sha`.
-- `deploy-prod.yml`: **manual `workflow_dispatch` ONLY** -> `loopany-prod` / loopany.ai,
-  `--ha=false` single machine (single-scheduler invariant; never auto-deploy prod). A
-  preflight step fails loud if `FLY_API_TOKEN_PROD` is empty. Migrations are
-  forward-only, so an image rollback does NOT roll back schema; check the
-  `machines.daemon_version` fleet before removing legacy endpoints.
+- `deploy-prod.yml`: **auto-promotes after a GREEN staging deploy** -> `loopany-prod` /
+  loopany.ai, `--ha=false` single machine (single-scheduler invariant). It triggers on
+  `workflow_run` of "Deploy (Fly)" and the job `if:` gates on
+  `conclusion == 'success'`, so prod is NEVER deployed straight off a raw push to main or
+  a `v*` tag - only after loopany-testing serves the commit. `workflow_dispatch` stays for
+  out-of-band promotes/retries, and the `production` GitHub Environment can add required
+  reviewers on top. Builds `DEPLOY_SHA` = the triggering run's `head_sha` (a `workflow_run`
+  event's `github.sha` is default-branch HEAD, which can drift past the staged commit;
+  manual dispatch falls back to `github.sha`). A preflight step fails loud if
+  `FLY_API_TOKEN_PROD` is empty. Migrations are forward-only, so an image rollback does
+  NOT roll back schema; check the `machines.daemon_version` fleet before removing legacy
+  endpoints.
 - `publish-daemon.yml`: tag `v*` -> `npm publish` of the daemon ONLY, via **npm OIDC
   trusted publishing** - no `NPM_TOKEN`, and `setup-node` deliberately omits
   `registry-url` (setting it writes a dummy-token `.npmrc` that breaks OIDC; that was
