@@ -15,7 +15,7 @@ import { Timeline, WINDOW } from './Timeline'
 import { ArtifactList, btn, btnCost, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, Pre, runPulseStyle, sectionHeadCls } from './ui'
 import { ConfirmBar, FlashLine, LoadErrorCard, useContinueSession, useDeferredDelete, useFlash } from './actionUi'
 
-const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex', grok: 'Grok Build' }
+const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex', grok: 'Grok Build', copilot: 'Copilot' }
 
 /** Composer starters - one per editable dimension, so a blank box never stalls
  *  the owner. Clicking seeds the instruction; the agent handles the rest. */

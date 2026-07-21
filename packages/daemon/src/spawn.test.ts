@@ -95,6 +95,42 @@ describe("execEnv", () => {
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.CODEX_API_KEY).toBeUndefined();
   });
+
+  test("copilot path forwards COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN/COPILOT_HOME/COPILOT_MODEL/GH_HOST/COPILOT_GH_HOST + COPILOT_PROVIDER_* BYOK family, not Claude keys", () => {
+    setEnv("COPILOT_GITHUB_TOKEN", "ghu-secret");
+    setEnv("GH_TOKEN", "gh-secret");
+    setEnv("GITHUB_TOKEN", "gha-secret");
+    setEnv("COPILOT_HOME", "/tmp/copilot-home");
+    setEnv("COPILOT_MODEL", "gpt-5");
+    setEnv("GH_HOST", "mycompany.ghe.com");
+    setEnv("COPILOT_GH_HOST", "github.com");
+    setEnv("COPILOT_PROVIDER_BASE_URL", "https://byok.example");
+    setEnv("COPILOT_PROVIDER_API_KEY", "byok-secret");
+    setEnv("ANTHROPIC_API_KEY", "sk-x");
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-tok");
+    const env = execEnv("copilot");
+    expect(env.COPILOT_GITHUB_TOKEN).toBe("ghu-secret");
+    expect(env.GH_TOKEN).toBe("gh-secret");
+    expect(env.GITHUB_TOKEN).toBe("gha-secret");
+    expect(env.COPILOT_HOME).toBe("/tmp/copilot-home");
+    expect(env.COPILOT_MODEL).toBe("gpt-5");
+    expect(env.GH_HOST).toBe("mycompany.ghe.com");
+    expect(env.COPILOT_GH_HOST).toBe("github.com");
+    expect(env.COPILOT_PROVIDER_BASE_URL).toBe("https://byok.example");
+    expect(env.COPILOT_PROVIDER_API_KEY).toBe("byok-secret");
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    // OAuth session under ~/.copilot stays reachable via HOME (BASE_ALLOW).
+    expect(env.HOME).toBe(process.env.HOME);
+  });
+
+  test("claude path does NOT forward Copilot keys", () => {
+    setEnv("COPILOT_GITHUB_TOKEN", "ghu-secret");
+    setEnv("COPILOT_MODEL", "gpt-5");
+    const env = execEnv();
+    expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
+    expect(env.COPILOT_MODEL).toBeUndefined();
+  });
 });
 
 describe("allowlistEnv", () => {

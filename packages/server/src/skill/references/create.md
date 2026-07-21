@@ -245,7 +245,7 @@ learns the loop was created, and declare which coding agent you are:
 <loopany-cli> new \
   --json '<config>' \
   --connect-key <connect-key> \
-  --agent claude-code          # which coding agent you are (claude-code | codex | grok); omit to auto-detect
+  --agent claude-code          # which coding agent you are (claude-code | codex | grok | copilot); omit to auto-detect
 ```
 
 `loopany new` detects the IANA timezone, injects the claim, records the coding agent

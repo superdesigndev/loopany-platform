@@ -149,6 +149,11 @@ export function allowlistEnv(extra: { keys?: string[]; prefixes?: string[] } = {
  *     `~/.grok` is free via HOME (BASE_ALLOW)
  *   - codex: OPENAI_API_KEY / CODEX_API_KEY (+ optional CODEX_HOME); OAuth /
  *     session files under `~/.codex` are free via HOME
+ *   - copilot: COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN (auth precedence
+ *     per `copilot help environment`) + optional COPILOT_HOME / COPILOT_MODEL /
+ *     GH_HOST / COPILOT_GH_HOST (GitHub Enterprise host targeting) + the
+ *     COPILOT_PROVIDER_* BYOK family; OAuth session under `~/.copilot` is
+ *     free via HOME
  * Keys ride ONLY their agent's path so a claude run never inherits an unrelated
  * xAI/OpenAI secret. `agent` defaults to claude-code so existing callers are unchanged. */
 export function execEnv(agent: CodingAgent = "claude-code"): NodeJS.ProcessEnv {
@@ -160,6 +165,12 @@ export function execEnv(agent: CodingAgent = "claude-code"): NodeJS.ProcessEnv {
   if (agent === "codex") {
     return allowlistEnv({
       keys: ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_HOME"],
+    });
+  }
+  if (agent === "copilot") {
+    return allowlistEnv({
+      keys: ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "COPILOT_HOME", "COPILOT_MODEL", "GH_HOST", "COPILOT_GH_HOST"],
+      prefixes: ["COPILOT_PROVIDER_"],
     });
   }
   return allowlistEnv({

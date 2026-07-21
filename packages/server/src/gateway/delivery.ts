@@ -29,7 +29,7 @@ export interface Delivery {
     model: string | null;
     allowControl: boolean;
     /** Coding agent to EXECUTE this loop with (the daemon branches spawn +
-     *  credentials on this — claude-code | codex | grok). */
+     *  credentials on this — claude-code | codex | grok | copilot). */
     agent: CodingAgent;
   };
   /** Cursor (prev state) for the workflow gate. */

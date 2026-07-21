@@ -274,6 +274,29 @@ describe("buildAgentSpawn", () => {
     expect(args.slice(-2)).toEqual(["--model", "grok-4"]);
   });
 
+  test("copilot: copilot bin + copilot arg vector — allow-all, no-ask-user, json, NO sys-file flag", () => {
+    // A sysFile is passed but copilot has no Claude sys-prompt-file flag — it must be dropped.
+    const { bin, args } = buildAgentSpawn({ agent: "copilot", prompt: "do it", sysFile: "/tmp/sys.md" });
+    expect(bin).toBe("copilot");
+    expect(args).toEqual([
+      "-p", "do it",
+      "--allow-all",
+      "--deny-tool", "ScheduleWakeup,CronCreate,CronList,CronDelete",
+      "--no-ask-user",
+      "--output-format", "json",
+    ]);
+    expect(args).not.toContain("--append-system-prompt-file");
+    expect(args).not.toContain("--verbose");
+  });
+
+  test("copilot: LOOPANY_COPILOT_BIN escape hatch + resume + model", () => {
+    process.env.LOOPANY_COPILOT_BIN = "/opt/copilot";
+    const { bin, args } = buildAgentSpawn({ agent: "copilot", prompt: "p", resumeSessionId: "c-1", model: "gpt-5" });
+    expect(bin).toBe("/opt/copilot");
+    expect(args.slice(0, 4)).toEqual(["-p", "p", "--resume", "c-1"]);
+    expect(args.slice(-2)).toEqual(["--model", "gpt-5"]);
+  });
+
   test("codex: codex exec arm — not claude flags; unattended + json + skip-git", () => {
     // A sysFile is passed but codex has no Claude sys-prompt-file flag — drop it.
     const { bin, args } = buildAgentSpawn({ agent: "codex", prompt: "do it", sysFile: "/tmp/sys.md" });

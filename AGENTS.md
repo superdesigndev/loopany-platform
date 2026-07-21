@@ -646,8 +646,8 @@ computes pure functions. Run instructions: `README.md`.
 - `loopany update` hands the running daemon over to the invoking (new) CLI version:
   `down` then `runEnsure({force:true})` - force skips the still-reported-online
   short-circuit (server `ONLINE_TTL` 30s outlives the local pidfile clear).
-- `loops.agent` (`CodingAgent` enum: `claude-code|codex|grok`) records the loop's host
-  coding agent AND selects the executor (at create: measured env fingerprint >
+- `loops.agent` (`CodingAgent` enum: `claude-code|codex|grok|copilot`) records the loop's
+  host coding agent AND selects the executor (at create: measured env fingerprint >
   `--agent` > server default; detection markers in `create.ts detectAgentFromEnv`).
   Editable afterward on the edit path - in `EDITABLE_LOOP_FIELDS`, `loopany edit
   --json`/`show` roundtrip, and the web `LoopForm` agent select (the next run picks
@@ -663,11 +663,29 @@ computes pure functions. Run instructions: `README.md`.
     `-m`; resume is `codex exec resume <sessionId> …`; `execEnv("codex")` forwards
     `OPENAI_API_KEY`/`CODEX_API_KEY`/`CODEX_HOME` (session/config under `~/.codex`
     free via `HOME`)
+  - `copilot` → `copilot` (`LOOPANY_COPILOT_BIN`), flags verified against a live
+    `copilot --help`: `-p`, `--allow-all` (unattended BYOA, same intent as claude/grok
+    `bypassPermissions`; also satisfies the `--allow-all-tools` non-interactive
+    requirement), `--deny-tool SELF_SCHEDULING_TOOLS` (parity with claude/grok's
+    `--disallowed-tools` — an unattended copilot run must not self-schedule either),
+    `--no-ask-user` (so an unattended run never blocks on Copilot's `ask_user` tool),
+    `--output-format json`, optional `-r/--resume <id>`/`--model`; `detectAgentFromEnv`
+    fingerprints it via `COPILOT_CLI` (verified live in-session); `execEnv("copilot")`
+    forwards `COPILOT_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN` (auth precedence per
+    `copilot help environment`) + `COPILOT_HOME`/`COPILOT_MODEL`/`GH_HOST`/
+    `COPILOT_GH_HOST` (GitHub Enterprise host targeting, same doc) + the
+    `COPILOT_PROVIDER_*` BYOK family (OAuth session under `~/.copilot` is free
+    via `HOME`). Its skill-install target id is `github-copilot` (verified against the
+    `skills` npm package source, NOT `copilot`), reading `~/.copilot/skills`. It has
+    NO `HOOK_TARGET_AGENTS` entry yet — Copilot CLI's `hooks` config exists but its
+    event-name schema (SessionStart equivalent) isn't confirmed in verified docs, so
+    that's a deliberate gap, not an oversight (`setup.ts`).
   **Non-Claude telemetry is DEGRADED**: grok's headless stream is grok-native
-  (`thought`/`text`/`end`, no cost/usage) and codex `--json` is not Claude
-  stream-json, so the Claude-shaped `makeStreamConsumer` parses nothing — a run
-  still marks ok on exit 0 and the agent's own `loopany report` persists the
-  result; daemon-side live-progress/cost/transcript await per-agent stream adapters.
+  (`thought`/`text`/`end`, no cost/usage), codex `--json` is not Claude stream-json,
+  and copilot's `--output-format json` is its own JSONL shape too — the Claude-shaped
+  `makeStreamConsumer` parses nothing from any of them; a run still marks ok on exit 0
+  and the agent's own `loopany report` persists the result; daemon-side live-progress/
+  cost/transcript await per-agent stream adapters.
   Grok's SessionStart hook (`setup.ts`, `~/.grok/hooks/loopany.json`, always-trusted)
   rides `HOOK_TARGET_AGENTS` (a superset of `SKILL_TARGET_AGENTS` — grok reads
   Claude's skills dir so it is NOT a skill-install target). The enum's single source

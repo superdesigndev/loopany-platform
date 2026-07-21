@@ -97,13 +97,13 @@ export function idempotencyKey(token: string, resolvedBody: Record<string, unkno
 }
 
 /** The coding agents Loopany can record a loop against (TS-only; cheap to widen). */
-export type CodingAgent = "claude-code" | "codex" | "grok";
+export type CodingAgent = "claude-code" | "codex" | "grok" | "copilot";
 
 /** Coerce an arbitrary declared value (--agent flag / config.agent) to a known
  *  agent, or null when it's absent/unrecognized (so it can't override a measurement
  *  and the server falls back to its own default). */
 export function coerceAgent(v: unknown): CodingAgent | null {
-  return v === "claude-code" || v === "codex" || v === "grok" ? v : null;
+  return v === "claude-code" || v === "codex" || v === "grok" || v === "copilot" ? v : null;
 }
 
 /**
@@ -120,11 +120,14 @@ export function coerceAgent(v: unknown): CodingAgent | null {
  *     shell tool under the sandbox). We deliberately ignore `CODEX_COMPANION_*`,
  *     which a Claude Code session can also export and would misattribute.
  *   - Grok Build: `GROK_AGENT=1` (grok exports it into child processes).
+ *   - GitHub Copilot CLI: `COPILOT_CLI=1` (verified against a live copilot session's
+ *     exported env; it also sets `COPILOT_AGENT_SESSION_ID`/`COPILOT_CLI_BINARY_VERSION`).
  */
 export function detectAgentFromEnv(env: NodeJS.ProcessEnv): CodingAgent | null {
   if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT || env.CLAUDE_CODE_SESSION_ID) return "claude-code";
   if (env.CODEX_SANDBOX || env.CODEX_SANDBOX_NETWORK_DISABLED) return "codex";
   if (env.GROK_AGENT) return "grok";
+  if (env.COPILOT_CLI) return "copilot";
   return null;
 }
 
@@ -155,7 +158,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   const jsonArg = flag(args, "json");
   const dryRun = args.includes("--dry-run");
   if (jsonArg === undefined) {
-    process.stderr.write("loopany: usage: loopany new --json '<config>' [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex|grok]\n");
+    process.stderr.write("loopany: usage: loopany new --json '<config>' [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex|grok|copilot]\n");
     return 2;
   }
 

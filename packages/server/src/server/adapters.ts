@@ -103,7 +103,7 @@ function toJobFull(loop: Loop): JobFull {
     channelId: loop.channelId ?? null,
     agent: loop.agent,
     exec: {
-      // The coding agent this loop executes with (claude-code | codex | grok).
+      // The coding agent this loop executes with (claude-code | codex | grok | copilot).
       // The daemon branches spawn + credentials on this value.
       executor: loop.agent,
       workdir: loop.workdir ?? "",

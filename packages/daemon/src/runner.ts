@@ -97,7 +97,7 @@ export interface AgentSpawn {
 /**
  * Build the coding-agent spawn command (bin + argv) for one run pass.
  *
- * Three arms (BYOA — each agent's real CLI surface):
+ * Four arms (BYOA — each agent's real CLI surface):
  *   - `claude-code`: `claude -p … --output-format stream-json --verbose …`
  *   - `grok`: mirrors Claude's shape but uses `streaming-json`, drops `--verbose`
  *     (exit 2) and `--append-system-prompt-file` (no file form).
@@ -106,15 +106,23 @@ export interface AgentSpawn {
  *     `--dangerously-bypass-approvals-and-sandbox` (unattended BYOA, same intent
  *     as claude/grok `bypassPermissions`), optional `-m` / `--model`, and
  *     `--skip-git-repo-check` so non-git loop workdirs are not rejected.
+ *   - `copilot`: GitHub Copilot CLI's own `-p`/`--prompt` non-interactive surface
+ *     (flags verified against a live `copilot --help`). `--allow-all` is the
+ *     unattended-BYOA equivalent of claude/grok's `bypassPermissions` (it also
+ *     satisfies `--allow-all-tools`, required for non-interactive mode);
+ *     `--no-ask-user` disables the `ask_user` tool so an unattended run can never
+ *     block waiting on a question; `-r/--resume <id>` resumes a session; no Claude
+ *     sys-prompt-file flag, so `sysFile` is dropped like grok/codex.
  *
- * Escape hatches: `LOOPANY_CLAUDE_BIN` / `LOOPANY_GROK_BIN` / `LOOPANY_CODEX_BIN`.
+ * Escape hatches: `LOOPANY_CLAUDE_BIN` / `LOOPANY_GROK_BIN` / `LOOPANY_CODEX_BIN` /
+ * `LOOPANY_COPILOT_BIN`.
  *
- * Telemetry note: grok's headless stream is grok-native (`thought`/`text`/`end`)
- * and codex `--json` is not Claude stream-json either — the Claude-shaped
- * `makeStreamConsumer` parses nothing from either. Both still mark OK on exit 0;
- * the agent's own `loopany report` persists the result. Daemon-side live-
- * progress/cost/transcript for non-Claude agents is degraded until a per-agent
- * stream adapter lands.
+ * Telemetry note: grok's headless stream is grok-native (`thought`/`text`/`end`),
+ * codex `--json` is not Claude stream-json, and copilot's `--output-format json`
+ * is its own JSONL shape too — the Claude-shaped `makeStreamConsumer` parses
+ * nothing from any of them. All three still mark OK on exit 0; the agent's own
+ * `loopany report` persists the result. Daemon-side live-progress/cost/transcript
+ * for non-Claude agents is degraded until a per-agent stream adapter lands.
  */
 export function buildAgentSpawn(opts: {
   agent: CodingAgent;
@@ -157,6 +165,20 @@ export function buildAgentSpawn(opts: {
         "--output-format", "streaming-json",
         "--permission-mode", "bypassPermissions",
         "--disallowed-tools", SELF_SCHEDULING_TOOLS,
+        ...modelArgs,
+      ],
+    };
+  }
+  if (agent === "copilot") {
+    return {
+      bin: process.env.LOOPANY_COPILOT_BIN || "copilot",
+      args: [
+        "-p", prompt,
+        ...resume,
+        "--allow-all",
+        "--deny-tool", SELF_SCHEDULING_TOOLS,
+        "--no-ask-user",
+        "--output-format", "json",
         ...modelArgs,
       ],
     };
