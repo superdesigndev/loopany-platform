@@ -729,6 +729,29 @@ computes pure functions. Run instructions: `README.md`.
   `key={teamId}` so a switcher `/t/A`→`/t/B` navigation re-seeds its fetch-then-set poll
   state (same route, new param ⇒ no natural remount). Guards:
   `-index.regression.test.ts`, `auth.test.ts` (requestScope precedence).
+- **The cross-loop timeline** (`components/LoopTimeline.tsx`, routes
+  `t.$teamId_.timeline.tsx` + open-mode `timeline.tsx`) is ONE form at every zoom:
+  **row = loop, x = time**, zoom (day default / week / month) changes only the
+  window. Deliberately NOT a merged calendar - a run is a POINT event, so a Gantt
+  bar has no length and a shared day-cell becomes overlapping chips; lanes on a
+  shared axis give the same machine-contention read as a calendar (simultaneous
+  fires line up VERTICALLY) and scale to any loop count. **Hue stays on STATUS**
+  (`dotColor`, shared with the loop card's strip); loop identity is the row label,
+  because hue is bounded (~5-8 slots, and every Rubik hue is already a status
+  colour) while loops are not. Marks carry no text - detail is a cursor tooltip -
+  so lanes stay dense. Backed by `listTimeline` (`server/loopApi.ts`) over
+  `store.listTeamRunsInRange` (runs ⋈ loops on `team_id`; `runs` has no teamId) plus
+  `server/timeline.ts` `projectFires` - a croner projection of FUTURE fires
+  (dashed ghosts past the now-line), which is what makes the view answer "what
+  runs every day and at what time"; a history-only timeline cannot. Projection is
+  capped per loop (`MAX_PROJECTED_PER_LOOP`) and the run query at
+  `TIMELINE_RUN_CAP` (over ⇒ `truncated`, surfaced, never silently clipped).
+  Gotchas: the now-line is drawn INSIDE each track (an overlay across the grid has
+  to re-derive the label column width in a `calc()`, which drifts at the mobile
+  breakpoint); axis edge ticks ANCHOR instead of centring (day zoom always has a
+  tick at exactly 100%); mark width is true duration floored in px and clamped to
+  `100 - left`. `cronText` (`lib/format.ts`) is the ONE cron humaniser - the lane
+  label, loop card and form all read it, so a change shows in three places.
 - Loop detail and run detail are PAGES, not modals: `/loops/$loopId` and
   `/loops/$loopId/runs/$runId` (route file `loops.$loopId_.runs.$runId.tsx` - the
   trailing `_` un-nests it). Never render Base UI `Dialog.*` parts (e.g. `ModalHead`)

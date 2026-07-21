@@ -128,6 +128,60 @@ export interface MachineSummary {
   loopCount: number
 }
 
+/** One lane on the cross-loop timeline (`listTimeline`). */
+export interface TimelineLoop {
+  id: string
+  name: string
+  cron: string
+  /** IANA zone the cron fires in (null ⇒ server local). Carried so the UI can
+   *  tell the viewer when a loop's own zone differs from theirs. */
+  timezone: string | null
+  enabled: boolean
+  completedAt: string | null
+  /** Human cadence derived from the cron ("Daily 05:00", "Every 30 min") — the
+   *  lane label. Computed server-side so the client never parses cron. */
+  cadence: string
+}
+
+/** One mark in a lane: a real run, or a projected future fire. */
+export interface TimelineMark {
+  loopId: string
+  /** ISO start. For a projection this is the computed fire time. */
+  ts: string
+  /** Real runs carry their row id; projections have none (nothing to link to). */
+  runId: string | null
+  /** `projected` ⇒ a future cron fire, never persisted. */
+  kind: 'run' | 'projected'
+  /** Visual state — mirrors `lib/format.ts` dotColor/dotLabel inputs. */
+  running: boolean
+  canceled: boolean
+  role: 'exec' | 'evolve' | 'edit' | string
+  outcome: RunOutcome | null
+  status: RunStatus | null
+  durationMs: number | null
+  costUsd: number | null
+  message: string | null
+  error: string | null
+}
+
+/** Payload behind the timeline view: lanes + marks + window totals. */
+export interface TimelineData {
+  /** Echoed window (ISO), so the client renders exactly what the server scoped. */
+  from: string
+  to: string
+  loops: TimelineLoop[]
+  marks: TimelineMark[]
+  totals: {
+    runCount: number
+    costUsd: number
+    /** Per-loop spend inside the window; missing key ⇒ no cost reported. */
+    byLoop: Record<string, number>
+  }
+  /** True when the run query hit its safety cap — the UI warns rather than
+   *  silently showing a partial window. */
+  truncated: boolean
+}
+
 export interface JobSummary {
   id: string
   name: string
