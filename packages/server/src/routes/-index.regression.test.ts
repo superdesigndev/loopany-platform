@@ -78,13 +78,13 @@ describe('dashboard template fan layout', () => {
     expect(card).toContain('shrink-0')
   })
 
-  it('splits 6+ templates into balanced rows - a full row never strands one orphan card', () => {
-    // With 7 templates a single flex-wrap row broke 6/1 at common desktop
-    // widths - a lone centered card under a full row reads as a bug. The fan
-    // must pre-split into balanced rows (max 4 per row) instead of letting
-    // flex-wrap decide the break point.
-    expect(view).toMatch(/templates\.length <= 5 \? 1 : Math\.ceil\(templates\.length \/ 4\)/)
-    // Remaining cards divide evenly across remaining rows (7 -> 4/3, not 4/3/0).
-    expect(view).toMatch(/Math\.ceil\(\(templates\.length - at\) \/ \(rowCount - r\)\)/)
+  it('splits 6+ templates into balanced rows - smaller row on top, never an orphan', () => {
+    // The fan pre-splits into balanced rows (up to 5 per row) instead of letting
+    // flex-wrap decide the break point. floor-first puts the SMALLER row on top,
+    // so 9 templates lay out as 4 over 5 (not a lopsided 5/4 or a cramped 3x3),
+    // and the last (largest) row always absorbs the remainder - never an orphan.
+    expect(view).toMatch(/templates\.length <= 5 \? 1 : Math\.ceil\(templates\.length \/ 5\)/)
+    // Remaining cards divide across remaining rows, floor-first (9 -> 4/5, 7 -> 3/4).
+    expect(view).toMatch(/Math\.floor\(\(templates\.length - at\) \/ \(rowCount - r\)\)/)
   })
 })

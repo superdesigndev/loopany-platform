@@ -147,13 +147,24 @@ computes pure functions. Run instructions: `README.md`.
 
 ## Template market (`packages/server/src/skill/templates/`)
 
-- A template is a **canned loop INTENT, not a flow** - metadata only. There is NO
-  template serving endpoint and NO per-template doc: all loop-building intelligence
-  stays in `bootstrap.md` + `references/create.md` (propose-then-confirm cadence,
-  config, dashboard authoring). The template just seeds the natural-language intent.
-- Each template is a **folder** under `skill/templates/<name>/` with a single static
+- A template is a **canned loop INTENT expressed as the paste-prompt** the user copies
+  from a template card (`ComposeModal` appends `description` under the connect-key config;
+  the agent fetches `/api/bootstrap` and builds from it). **Division of responsibility:**
+  `bootstrap.md` + `references/create.md` own the GENERAL loop-building mechanism —
+  propose-then-confirm cadence, config, task-file + dashboard authoring, the
+  zero-exec/worktree/front-matter disciplines — identical for every loop; the template
+  `description` owns THIS loop's SPECIFICS — the per-run workflow, the hard rules, the
+  boundaries and quality gates that make it actually work well. **Spell the specifics out
+  in the description; do NOT rely on create.md to reconstruct them.** Bulky per-template
+  detail (a validated dashboard layout, a state schema, an artifact contract) goes in an
+  ON-DEMAND `reference.md` (below), fetched only when the create flow needs it.
+- Each template is a **folder** under `skill/templates/<name>/` with a static
   `meta.json` (the `TemplateInfo`: `name`, `label`, `desc` = one-line card blurb,
-  `description` = the canned task text appended to the snippet). Zero-exec, file-based.
+  `description` = the paste-prompt task text) and an OPTIONAL `reference.md` served
+  on-demand at `/api/skill/references/templates/<name>/reference.md`
+  (`routes/api.skill.references.$.ts`, static glob; ONLY `reference.md` is exposed —
+  `meta.json`/`thumb.svg` stay off that route, pinned by `-api.skill.references.test.ts`).
+  Zero-exec, file-based.
 - **Adding a template is pure content addition - no code change.** The registry
   (`server/templates.ts`) builds `TEMPLATES` from an `import.meta.glob` over `meta.json`;
   `listTemplates` returns it. Drop a new folder; the registry test (a non-empty
@@ -170,11 +181,26 @@ computes pure functions. Run instructions: `README.md`.
 - **PUBLIC but NOT bundled.** `meta.json` rides to the client via `listTemplates`, and
   `sync-skill.mjs`'s whitelist stays selective (`skill/templates/` never ships in the
   daemon npm tarball; guarded by `sync-skill.test.ts`).
-- Seven templates ship today, each `description` a short English paragraph at the same
-  granularity (intent + defining disciplines, no tool flags, no machinery the create
-  flow already handles). Keep them tight. English only. `templates.test.ts` pins the
-  full name list AND asserts each template's defining behaviors stay in its
-  description. The v1 three:
+- **A template `description` SHOULD spell out the specifics that make the loop work** —
+  the per-run workflow, the hard rules, the boundaries and quality gates — as a guided
+  multi-step setup conversation (`## Step` headers, confirm-each-step-before-creating),
+  and, where the loop keeps a task file, **embed the task-file skeleton to author** (with
+  `<placeholders>` the create flow fills). Don't leave the specifics to create.md, and
+  don't settle for a tight one-paragraph blurb; some older short-paragraph templates
+  predate this and are lighter. English only. `templates.test.ts` pins the full name list
+  AND asserts each template's defining behaviors stay in its description.
+- **New-template SOP — a template is up to FOUR pieces, only the first required:**
+  (1) `meta.json` — the paste-prompt `description`: a guided multi-step setup conversation
+  (verify-before-create gates → the loop's rules / boundaries / quality gates → optionally
+  the task-file skeleton to author). (2) OPTIONAL `reference.md` — bulky detail fetched on
+  demand: the artifact contract, the REAL dashboard layout markup (`loop-kanban`/`loop-chart`/
+  `loop-embed`), the metric state schema. (3) OPTIONAL `thumb.svg` — the folder-paired card
+  thumbnail (chrome on theme vars, any brand logo in its real color). (4) OPTIONAL **loop-flow
+  + dashboard PREVIEW** — a `FlowSpec` registered in `components/LoopFlow.tsx` `FLOWS` (nodes +
+  dashboard widgets, pure data; `hasLoopFlow(name)` flips the modal to its two-column layout
+  and renders the Loop-flow / Dashboard tabs). **The LOOP FLOW and the DASHBOARD are the CARD
+  VISUAL in (4) + what create.md/`reference.md` actually author — NOT sections the paste-prompt
+  must enumerate.** The shipping templates (the short-paragraph ones came first):
   - **React Doctor** (open): daily ~6am `npx react-doctor@latest`, fix the single worst
     issue in a fresh worktree off `main` (never dirty the checkout), PR via gh,
     no-stacking while a prior PR is unmerged (still refresh status + score), one
@@ -218,6 +244,19 @@ computes pure functions. Run instructions: `README.md`.
     no-stacking; NEVER copy credentials/tokens/PII into reports or PRs; one dated
     `type: report` per run + actionable-error-count metric; nothing actionable = clean
     stop.
+  - **Support Triage** (open): a 4-step guided setup — (1) the support source + a WRITE
+    smoke-test (reply/note/tag, not just read), (2) the debugging stack with read access
+    verified per system, (3) the triage contract + the reply-vs-hold-for-approval
+    boundary + the ticket-note artifact contract, (4) outputs/metrics — plus an on-demand
+    `reference.md` carrying the validated dashboard layout + metric state schema.
+  - **Reddit Karma** (open): value-first Reddit comments grounded in the owner's OWN
+    knowledge base — a 5-step guided setup (KB gate two-branch: confirm-or-assemble from
+    the owner's past content, never invent opinions; verify `opencli reddit` + account
+    sign-off; a shared-account ledger FILE enforcing a per-account ≥21-min post gap +
+    ≤5/day cap across every automation on the account; a derived subreddit boundary, not a
+    fixed list; draft-for-review default) plus an embedded task-file skeleton carrying the
+    per-run workflow, the pure-value firewall, and the anti-AI writing rules (no em-dashes
+    / no LLM cadence — the load-bearing "don't read as a bot" discipline).
 
 ## Workflows (deterministic pre-stage)
 

@@ -44,6 +44,7 @@ describe('template registry', () => {
       'dependency-triage',
       'follow-up-tracker',
       'support-triage',
+      'reddit-karma',
     ])
   })
 
@@ -140,5 +141,31 @@ describe('template registry', () => {
     expect(d).toContain('finish condition') // the goal is a concrete finish line
     // The paste-right-after-shipping invocation is the card's job, not the snippet's.
     expect(ft.desc.toLowerCase()).toContain('after finishing the task')
+  })
+
+  test('ships the Reddit Karma template with its defining behaviors in the description', () => {
+    const rk = TEMPLATES.find((t) => t.name === 'reddit-karma') as TemplateInfo
+    expect(rk).toBeTruthy()
+    expect(rk.label).toBe('Reddit Karma')
+    const d = rk.description
+    const l = d.toLowerCase()
+    // KB gate: two-branch, and never invent opinions.
+    expect(l).toContain('knowledge base')
+    expect(l).toContain('documented') // cite documented positions, never reconstruct
+    // The Reddit interface is opencli (concrete), verified before creating.
+    expect(l).toContain('opencli')
+    expect(l).toContain('sign-off') // explicit owner sign-off on the account
+    // Shared-account ledger as a real file, read-before / append-after.
+    expect(l).toContain('ledger')
+    expect(l).toContain('>=21') // the per-account spacing floor
+    // Subreddit boundary is derived, not a fixed list.
+    expect(l).toContain('boundary')
+    expect(l).toContain('broaden-into')
+    // The pure-value firewall + draft-first default.
+    expect(l).toContain('pure value only')
+    expect(l).toContain('draft-for-review')
+    // The anti-AI writing rules are the hard-won differentiator.
+    expect(l).toContain('em-dash')
+    expect(d).toContain('written by ChatGPT') // the #1 AI tell it guards against
   })
 })

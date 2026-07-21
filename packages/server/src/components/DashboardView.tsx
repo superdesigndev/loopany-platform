@@ -256,10 +256,12 @@ function TemplateFan({
   templates: TemplateInfo[]
   onPick: (t: TemplateInfo) => void
 }) {
-  const rowCount = templates.length <= 5 ? 1 : Math.ceil(templates.length / 4)
+  // Up to 5 cards per row, and the SMALLER row on top (floor-first) so 9 templates
+  // lay out as 4 over 5, not a lopsided 5 over 4 or a cramped 3x3 fan.
+  const rowCount = templates.length <= 5 ? 1 : Math.ceil(templates.length / 5)
   const rows: TemplateInfo[][] = []
   for (let r = 0, at = 0; r < rowCount; r++) {
-    const size = Math.ceil((templates.length - at) / (rowCount - r))
+    const size = Math.floor((templates.length - at) / (rowCount - r))
     rows.push(templates.slice(at, at + size))
     at += size
   }

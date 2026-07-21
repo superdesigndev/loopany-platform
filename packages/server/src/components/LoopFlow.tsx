@@ -273,8 +273,43 @@ const SUPPORT_TRIAGE: FlowSpec = {
   ],
 }
 
+const REDDIT_KARMA: FlowSpec = {
+  worktreeLabel: '', // no worktree — it comments, it never touches code
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Content library + Reddit CLI', detail: 'confirm the KB · verify opencli login' },
+    { id: 'tick', kicker: 'Daytime cron', glyph: '◷', title: '3-5 posts a day', detail: 'half-hourly slots · a workflow picks a few' },
+    { id: 'find', kicker: 'Step 1 · Find', glyph: '⌕', title: 'Find relevant qualified posts', detail: 'fresh < 48h · on-boundary · answerable' },
+    { id: 'gate', kicker: 'Step 2 · Gate', glyph: '⚖', title: 'Quality gate', detail: 'grounded · room temp OK · zero is fine' },
+    { id: 'write', kicker: 'Step 3 · Write', glyph: '✎', title: 'One value comment', detail: 'pure value, human voice · no links' },
+    { id: 'record', kicker: 'Step 4 · Record', glyph: '◈', title: 'Post or draft · log it', detail: 'post or hold · update the ledger' },
+  ],
+  dashboard: [
+    {
+      type: 'kanban',
+      heading: 'Comment board',
+      sub: 'drafted → posted',
+      columns: [
+        ['Drafted', [
+          ['RC-48', "r/LLMDevs — bugs aren't in the prompt", 'awaiting review'],
+          ['RC-47', 'r/ClaudeAI — self-verify before shipping', 'awaiting review'],
+        ]],
+        ['Posted', [
+          ['RC-45', 'r/AI_Agents — isolate token-heavy calls', '+6 karma'],
+          ['RC-44', 'r/DesignSystems — shared style-guide.md', '+4 karma'],
+          ['RC-41', 'r/vibecoding — smoke-test the money flows', '+2 karma'],
+        ]],
+        ['Skipped', [
+          ['RC-46', 'r/FigmaDesign — thread went cold', 'stale'],
+        ]],
+      ],
+    },
+    { type: 'metric', label: 'Comment karma', series: [0, 1, 1, 3, 4, 6, 9, 11, 15, 19], note: 'value comments compound — karma is the by-product of being useful.' },
+  ],
+}
+
 const FLOWS: Record<string, FlowSpec> = {
   'support-triage': SUPPORT_TRIAGE,
+  'reddit-karma': REDDIT_KARMA,
   'react-doctor': REACT_DOCTOR,
   'docs-sweep': DOCS_SWEEP,
   'error-sweep': ERROR_SWEEP,
