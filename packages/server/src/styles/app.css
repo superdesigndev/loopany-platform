@@ -238,12 +238,13 @@
 }
 
 /*
- * The bundle DIAL — an arcade "stage select" wheel (BundleDial.tsx). ONE oversized
- * disc (`.dial-wheel`) rotates by `var(--rot)`; each bundle rides its rim as a spoke,
- * counter-rotated so it stays upright. The pivot sits well BELOW the stage, so only the
- * top arc is visible — `.dial-stage` is `overflow: hidden`, so the huge disc is clipped
- * and NO page scroll is introduced (the hard rule). `--rot` is a registered custom
- * property so the spin is a smooth ~0.6s ease-out; `prefers-reduced-motion` jumps.
+ * The bundle DIAL — an arcade "stage select" carousel (BundleDial.tsx). An INVISIBLE
+ * wheel (`.dial-wheel`) rotates by `var(--rot)`; each bundle rides its rim as a spoke,
+ * counter-rotated so it stays upright. There is NO visible disc behind the fans — the
+ * wheel is only the pivot geometry. The pivot sits well BELOW the stage, so only the
+ * apex spoke shows; `.dial-stage` is `overflow: hidden`, so the off-apex spokes are
+ * clipped and NO page scroll is introduced (the hard rule). `--rot` is a registered
+ * custom property so the spin is a smooth ~0.6s ease-out; `prefers-reduced-motion` jumps.
  */
 @property --rot {
   syntax: '<angle>';
@@ -255,7 +256,7 @@
   position: relative;
   height: 380px;
   overflow: hidden;
-  /* Disc radius + how far INSIDE the rim a spoke attaches. STEP (deg between spokes)
+  /* Pivot radius + how far INSIDE the rim a spoke attaches. STEP (deg between spokes)
      lives in BundleDial.tsx — the two are tuned together. */
   --dial-r: 860px;
   --dial-attach: 96px;
@@ -266,7 +267,8 @@
 .dial-wheel {
   position: absolute;
   left: 50%;
-  /* Pivot below the visible stage: only the top ~210px arc of the disc peeks in. */
+  /* Pivot below the visible stage: only the top ~210px of the rim reaches in, so the
+     apex spoke sits in the stage while its neighbours swing off-screen. */
   top: calc(100% + var(--dial-r) - 210px);
   width: 0;
   height: 0;
@@ -278,34 +280,6 @@
   .dial-wheel {
     transition: none;
   }
-}
-
-/* The decorative plate: subtle radial tick marks, a hairline border, an inner dashed
-   rim ring. Centered on the pivot (the wheel's 0,0). */
-.dial-plate {
-  position: absolute;
-  left: 0;
-  top: 0;
-  z-index: 0;
-  width: calc(2 * var(--dial-r));
-  height: calc(2 * var(--dial-r));
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  border: 1px solid var(--color-hairline);
-  background:
-    radial-gradient(circle at center, color-mix(in srgb, var(--color-raised) 55%, transparent) 0%, transparent 72%),
-    repeating-conic-gradient(
-      from 0deg,
-      color-mix(in srgb, var(--color-wire) 55%, transparent) 0deg 0.28deg,
-      transparent 0.28deg 4deg
-    );
-}
-.dial-plate::after {
-  content: '';
-  position: absolute;
-  inset: 58px;
-  border-radius: 50%;
-  border: 1px dashed color-mix(in srgb, var(--color-wire) 70%, transparent);
 }
 
 .dial-spoke {

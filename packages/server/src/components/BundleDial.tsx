@@ -6,11 +6,12 @@ import { AgentMarksRow } from './AgentMarks'
 const STEP = 52
 
 /**
- * The stage-select DIAL — an arcade song-wheel over the template bundles. A single
- * oversized disc (`.dial-wheel`) rotates by `var(--rot)`; each bundle is a spoke on its
- * rim, counter-rotated so it rides upright. Spinning brings the next bundle's fan of
- * loop-cards to the apex. Only the top arc of the disc is visible (the stage clips the
- * rest), so no page scroll is introduced.
+ * The stage-select DIAL — an arcade song-wheel carousel over the template bundles. An
+ * INVISIBLE wheel (`.dial-wheel`) rotates by `var(--rot)`; each bundle is a spoke riding
+ * its rim, counter-rotated so it rides upright. Spinning brings the next bundle's fan of
+ * loop-cards to the apex. There is no visible disc behind the fans — the wheel is just
+ * the pivot geometry — and the stage clips the off-apex spokes, so no page scroll is
+ * introduced.
  *
  * Navigation: prev/next arrows (no wrap-around), dot indicators, horizontal pointer
  * drag, and ArrowLeft/ArrowRight keys. Motion honors `prefers-reduced-motion` (the spin
@@ -85,8 +86,8 @@ export function BundleDial({
         aria-label="Template bundles"
       >
         <div className="dial-wheel" style={{ ['--rot' as string]: `${-idx * STEP}deg` }}>
-          {/* Decorative plate: tick marks + hairline border + inner dashed rim ring. */}
-          <div className="dial-plate" aria-hidden />
+          {/* No visible disc — the wheel is an invisible pivot the spokes ride, so only
+              the active bundle's fan shows (carousel mechanics without the plate). */}
           {bundles.map((b, i) => {
             const active = i === idx
             const accent = `var(--color-${b.accent})`
