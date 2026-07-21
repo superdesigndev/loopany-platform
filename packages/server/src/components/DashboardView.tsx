@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { Tooltip } from '@base-ui/react/tooltip'
 import { listJobs, listMyTeams } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
@@ -136,6 +136,19 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
             <button onClick={() => setTeamsOpen(true)} className={headerBtn}>
               Teams
             </button>
+          )}
+          {/* The cross-loop timeline is a PAGE, not a modal (it owns a zoom +
+              window in its own right). Open mode has no /t/<id>, so it links to
+              the bare /timeline route instead — the view must be reachable in
+              BOTH modes or self-hosters never find it. */}
+          {teamId ? (
+            <Link to="/t/$teamId/timeline" params={{ teamId }} className={headerBtn}>
+              Timeline
+            </Link>
+          ) : (
+            <Link to="/timeline" className={headerBtn}>
+              Timeline
+            </Link>
           )}
           <button onClick={() => setNotifyOpen(true)} className={headerBtn}>
             Notifications

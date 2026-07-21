@@ -8,7 +8,7 @@
  * Using Drizzle (not raw SQL) keeps the dialect swap a swap, not a rewrite.
  */
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray, sql } from "drizzle-orm";
 
 import { db } from "./index.js";
 import { user } from "./auth-schema.js";
@@ -226,6 +226,65 @@ export async function listRunsBefore(loopId: string, beforeTs: string, limit = 1
     .select()
     .from(runs)
     .where(and(eq(runs.loopId, loopId), lt(runs.ts, beforeTs)))
+    .orderBy(desc(runs.ts))
+    .limit(limit);
+  return rows.reverse();
+}
+
+/** Slim run row for the cross-loop timeline — only the columns the lanes render.
+ *  Deliberately NOT a full `Run`: a month window spans thousands of rows and the
+ *  heavy jsonb columns (transcript/state/control/artifacts) must never ride along. */
+export type TimelineRun = {
+  id: string;
+  loopId: string;
+  ts: string;
+  phase: Run["phase"];
+  role: Run["role"];
+  outcome: Run["outcome"];
+  status: Run["status"];
+  durationMs: number | null;
+  costUsd: number | null;
+  message: string | null;
+  error: string | null;
+};
+
+/**
+ * Every run in `[from, to)` across a TEAM's loops, oldest-first.
+ *
+ * `runs` carries no `teamId`, so team scoping joins through `loops`. Pass
+ * `teamId: undefined` for open mode (single shared workspace, no filter). The
+ * `runs_loop_ts_idx` index covers the ts ordering; `limit` is a runaway guard,
+ * not a pagination cursor — the caller picks a bounded window instead.
+ */
+export async function listTeamRunsInRange(
+  teamId: string | undefined,
+  from: string,
+  to: string,
+  limit = 5000,
+): Promise<TimelineRun[]> {
+  const rows = await db
+    .select({
+      id: runs.id,
+      loopId: runs.loopId,
+      ts: runs.ts,
+      phase: runs.phase,
+      role: runs.role,
+      outcome: runs.outcome,
+      status: runs.status,
+      durationMs: runs.durationMs,
+      costUsd: runs.costUsd,
+      message: runs.message,
+      error: runs.error,
+    })
+    .from(runs)
+    .innerJoin(loops, eq(runs.loopId, loops.id))
+    .where(
+      and(
+        gte(runs.ts, from),
+        lt(runs.ts, to),
+        ...(teamId ? [eq(loops.teamId, teamId)] : []),
+      ),
+    )
     .orderBy(desc(runs.ts))
     .limit(limit);
   return rows.reverse();

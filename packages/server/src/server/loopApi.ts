@@ -22,6 +22,8 @@ import type {
   RunSummary,
   TeamsView,
   TemplateInfo,
+  TimelineData,
+  TimelineMark,
   TranscriptResult,
   TranscriptStep,
 } from '../types'
@@ -30,6 +32,7 @@ import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
+import { projectFires, projectedMark, runToMark, sumCosts, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
 
 function backend() {
@@ -137,6 +140,62 @@ export const listJobs = createServerFn({ method: 'GET' })
       a.createdAt < b.createdAt ? 1 : -1,
     )
     return (await Promise.all(loops.map(toJobSummary))) as JobSummary[]
+  })
+
+/** Runaway guard on the cross-loop run query. A month of busy loops stays well
+ *  under this; hitting it flags `truncated` rather than silently clipping. */
+const TIMELINE_RUN_CAP = 5000
+
+/** GET — lanes + marks for the cross-loop timeline over an explicit window.
+ *
+ *  One query for every run in range (joined through `loops` for team scoping),
+ *  plus a per-loop cron projection for the FUTURE half of the window — the part
+ *  that answers "what runs every day, and at what time". The window is chosen by
+ *  the caller (the zoom control) and echoed back, so the client renders exactly
+ *  what the server scoped. */
+export const listTimeline = createServerFn({ method: 'GET' })
+  .validator((d: { teamId?: string; from: string; to: string }) => d)
+  .handler(async ({ data }): Promise<TimelineData> => {
+    await backend()
+    const { enforce, userId, teamId: active } = await requestScope(data.teamId)
+    const empty: TimelineData = {
+      from: data.from,
+      to: data.to,
+      loops: [],
+      marks: [],
+      totals: { runCount: 0, costUsd: 0, byLoop: {} },
+      truncated: false,
+    }
+    if (enforce && !userId) return empty
+
+    const fromDate = new Date(data.from)
+    const toDate = new Date(data.to)
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate >= toDate) return empty
+
+    const scoped = enforce ? active : undefined
+    const loops = (await store.listLoops(scoped)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    const rows = await store.listTeamRunsInRange(scoped, data.from, data.to, TIMELINE_RUN_CAP)
+
+    const marks: TimelineMark[] = rows.map(runToMark)
+    // Project only forward of now — the past half of the window is history, and a
+    // ghost overlapping a real run would double-count the same fire.
+    const now = new Date()
+    const projectFrom = now > fromDate ? now : fromDate
+    if (projectFrom < toDate) {
+      for (const loop of loops) {
+        for (const ts of projectFires(loop, projectFrom, toDate)) marks.push(projectedMark(loop.id, ts))
+      }
+    }
+    marks.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
+
+    return {
+      from: data.from,
+      to: data.to,
+      loops: loops.map(toTimelineLoop),
+      marks,
+      totals: sumCosts(marks),
+      truncated: rows.length >= TIMELINE_RUN_CAP,
+    }
   })
 
 /** GET — full detail (job + summary + reversed runs). */

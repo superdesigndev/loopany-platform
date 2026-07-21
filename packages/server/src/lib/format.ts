@@ -3,7 +3,7 @@
  * self-contained UI page (src/scheduler/ui.ts). The six status colors encode
  * meaning and are reused by the timeline, chart, and A/B panel.
  */
-import type { JobSummary, RunSummary } from '../types'
+import type { JobSummary, RunOutcome, RunStatus, RunSummary } from '../types'
 
 export const fmt = (t: string | null | undefined): string =>
   t ? new Date(t).toLocaleString() : '—'
@@ -41,9 +41,25 @@ export function cronText(cron: string): string {
   if (/^\d+$/.test(mi) && /^\d+$/.test(ho) && dateWild) {
     const hhmm = `${ho.padStart(2, '0')}:${mi.padStart(2, '0')}`
     if (dow === '*') return `daily ${hhmm}`
-    if (/^[0-6]$/.test(dow)) return `${DOW[Number(dow)]} ${hhmm}`
+    // cron allows 7 for Sunday as well as 0.
+    if (/^[0-7]$/.test(dow)) return `${DOW[Number(dow) % 7]} ${hhmm}`
+    const set = dowSet(dow)
+    if (set) return `${set} ${hhmm}`
   }
   return cron
+}
+
+/** Comma-listed day-of-week set → a name ("weekdays", "weekends", "Mon/Thu").
+ *  Null when the field isn't a plain comma list (ranges/steps stay raw cron). */
+function dowSet(dow: string): string | null {
+  const parts = dow.split(',')
+  if (parts.length < 2 || !parts.every((p) => /^[0-7]$/.test(p))) return null
+  // 7 and 0 are both Sunday, so normalize before deduping ("0,7" is one day).
+  const days = [...new Set(parts.map((p) => Number(p) % 7))].sort((a, b) => a - b)
+  if (days.length === 7) return 'daily'
+  if (days.length === 5 && !days.includes(0) && !days.includes(6)) return 'weekdays'
+  if (days.length === 2 && days.includes(0) && days.includes(6)) return 'weekends'
+  return days.map((d) => DOW[d]).join('/')
 }
 
 /** Compact time-until-future: "due" / "in 50m" / "in 2h" / "in 3d". */
@@ -131,7 +147,21 @@ const OUTCOME_LABEL: Record<string, string> = {
 const titleCase = (s: string): string =>
   s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/-/g, ' ') : s
 
-export function dotColor(r: RunSummary): string {
+/**
+ * The structural minimum `dotColor`/`dotLabel` actually read. Widened from
+ * `RunSummary` so the cross-loop timeline's `TimelineMark` feeds the SAME status
+ * vocabulary as the loop card's run strip — one place decides what a run looks
+ * like, so the two surfaces cannot drift.
+ */
+export type RunLike = {
+  running?: boolean
+  canceled?: boolean
+  role?: string
+  outcome: RunOutcome | string | null
+  status: RunStatus | string | null
+}
+
+export function dotColor(r: RunLike): string {
   // An in-flight evolve pass pulses in its own blue; other runs pulse display ink.
   if (r.running) return r.role === 'evolve' ? ST.evolve.c : ST.new.c
   if (r.canceled) return ST.silent.c
@@ -141,7 +171,7 @@ export function dotColor(r: RunSummary): string {
   return (lookup(r.status) ?? ST['nothing-new']).c
 }
 
-export function dotLabel(r: RunSummary): string {
+export function dotLabel(r: RunLike): string {
   if (r.running) return r.role === 'evolve' ? 'Evolving…' : 'Running…'
   // A deferred run retired without executing (machine offline at fire time) -
   // it rides phase `canceled`, so this check must come first for the honest label.
@@ -150,6 +180,8 @@ export function dotLabel(r: RunSummary): string {
   if (r.outcome === 'error') return ST.error.label
   if (r.outcome === 'evolve') return ST.evolve.label
   if (r.outcome === 'silent') return ST.silent.label
+  // A projected fire carries no outcome — it hasn't run yet.
+  if (r.outcome == null) return 'Scheduled'
   // Prefer the run's status (No update / New / Resolved …); otherwise map the
   // delivery outcome to a human label so internal enums never reach the UI.
   return lookup(r.status)?.label ?? OUTCOME_LABEL[r.outcome] ?? titleCase(r.outcome)
