@@ -427,6 +427,36 @@ export interface TemplateInfo {
   thumb?: string
 }
 
+/** The accent color a bundle tints its dial spoke + chip with — one of the app's
+ *  `--color-<accent>` CSS-var tokens (so light/dark follows the theme for free). */
+export type BundleAccent = 'interactive' | 'rubik-green' | 'rubik-orange'
+
+/**
+ * A bundle META (the static `skill/bundles/<name>/meta.json`): a curated grouping of
+ * templates by name. `templates` is the member ORDER; the registry resolves each name
+ * to its `TemplateInfo`. Pure content — adding a bundle is dropping a meta.json, mirror
+ * of the template system.
+ */
+export interface BundleInfo {
+  name: string
+  label: string
+  /** One-line pitch shown under the bundle name on the dial. */
+  tagline: string
+  accent: BundleAccent
+  /** Member template names, in display order. */
+  templates: string[]
+}
+
+/** A bundle with its member templates RESOLVED (unknown names dropped), as the
+ *  dashboard dial + the bundle Copy-prompt path consume it. */
+export interface BundleView {
+  name: string
+  label: string
+  tagline: string
+  accent: BundleAccent
+  members: TemplateInfo[]
+}
+
 /** The team switcher's data: the teams this user may view + the active selection. */
 export interface TeamsView {
   teams: { id: string; name: string }[]

@@ -238,6 +238,150 @@
 }
 
 /*
+ * The bundle DIAL — an arcade "stage select" wheel (BundleDial.tsx). ONE oversized
+ * disc (`.dial-wheel`) rotates by `var(--rot)`; each bundle rides its rim as a spoke,
+ * counter-rotated so it stays upright. The pivot sits well BELOW the stage, so only the
+ * top arc is visible — `.dial-stage` is `overflow: hidden`, so the huge disc is clipped
+ * and NO page scroll is introduced (the hard rule). `--rot` is a registered custom
+ * property so the spin is a smooth ~0.6s ease-out; `prefers-reduced-motion` jumps.
+ */
+@property --rot {
+  syntax: '<angle>';
+  inherits: true;
+  initial-value: 0deg;
+}
+
+.dial-stage {
+  position: relative;
+  height: 380px;
+  overflow: hidden;
+  /* Disc radius + how far INSIDE the rim a spoke attaches. STEP (deg between spokes)
+     lives in BundleDial.tsx — the two are tuned together. */
+  --dial-r: 860px;
+  --dial-attach: 96px;
+  /* Let vertical page scroll pass through; horizontal is our drag gesture. */
+  touch-action: pan-y;
+}
+
+.dial-wheel {
+  position: absolute;
+  left: 50%;
+  /* Pivot below the visible stage: only the top ~210px arc of the disc peeks in. */
+  top: calc(100% + var(--dial-r) - 210px);
+  width: 0;
+  height: 0;
+  transform: rotate(var(--rot));
+  transition: --rot 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dial-wheel {
+    transition: none;
+  }
+}
+
+/* The decorative plate: subtle radial tick marks, a hairline border, an inner dashed
+   rim ring. Centered on the pivot (the wheel's 0,0). */
+.dial-plate {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  width: calc(2 * var(--dial-r));
+  height: calc(2 * var(--dial-r));
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid var(--color-hairline);
+  background:
+    radial-gradient(circle at center, color-mix(in srgb, var(--color-raised) 55%, transparent) 0%, transparent 72%),
+    repeating-conic-gradient(
+      from 0deg,
+      color-mix(in srgb, var(--color-wire) 55%, transparent) 0deg 0.28deg,
+      transparent 0.28deg 4deg
+    );
+}
+.dial-plate::after {
+  content: '';
+  position: absolute;
+  inset: 58px;
+  border-radius: 50%;
+  border: 1px dashed color-mix(in srgb, var(--color-wire) 70%, transparent);
+}
+
+.dial-spoke {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  /* Ride the rim: rotate to this spoke's angle, then push out to the attach radius. */
+  transform: rotate(var(--a)) translateY(calc(-1 * (var(--dial-r) - var(--dial-attach))));
+}
+
+/* Counter-rotate the wheel's rotation AND this spoke's own angle, pivoting about the
+   attach point (its 0,0), so the content rides the rim yet stays screen-upright. */
+.dial-spoke-inner {
+  transform: rotate(calc(-1 * var(--rot) - var(--a)));
+  transform-origin: 0 0;
+}
+
+.dial-spoke-content {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 600px;
+  /* Center on the attach point, sitting above it (the fan reaches up the arc). */
+  transform: translate(-50%, -100%);
+  transition:
+    opacity 0.5s ease,
+    filter 0.5s ease;
+}
+.dial-spoke-content:not(.dial-dim) {
+  z-index: 2;
+}
+
+/* Non-active spokes fade into a blurred, desaturated background hint. */
+.dial-dim {
+  opacity: 0.14;
+  filter: blur(2px) saturate(0.35);
+  pointer-events: none;
+}
+
+.dial-arrow {
+  position: absolute;
+  top: 46%;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-hairline);
+  background: var(--color-surface);
+  color: var(--color-secondary);
+  box-shadow: 0 6px 18px -10px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.15s ease;
+}
+.dial-arrow:hover:not(:disabled) {
+  color: var(--color-display);
+  border-color: var(--color-wire);
+}
+.dial-arrow:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+.dial-arrow-prev {
+  left: 6px;
+}
+.dial-arrow-next {
+  right: 6px;
+}
+
+/*
  * Agent-authored dashboard (generative UI, `LoopView`). DEFAULT layout is a
  * responsive grid so independent top-level panels sit side by side on desktop
  * (the motivating case: calendar left, rendered document right) and stack on

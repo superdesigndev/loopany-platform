@@ -1,0 +1,7 @@
+{
+  "name": "engineering",
+  "label": "Engineering",
+  "tagline": "Keep your codebase healthy while you sleep.",
+  "accent": "interactive",
+  "templates": ["react-doctor", "housekeeper", "docs-sweep", "dependency-triage", "error-sweep"]
+}

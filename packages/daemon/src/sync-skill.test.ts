@@ -45,6 +45,9 @@ test("sync-skill bundles ONLY the public surface (no internal run prompts)", () 
   // The template-market docs (skill/templates/*) are PUBLIC-served (like bootstrap.md)
   // but not installable — they must never leak into the tarball either.
   expect(files.some((f) => f.startsWith("templates/"))).toBe(false);
+  // The bundle metadata (skill/bundles/*) is likewise PUBLIC-served via listBundles but
+  // not installable — it must never leak into the tarball either.
+  expect(files.some((f) => f.startsWith("bundles/"))).toBe(false);
 });
 
 /**

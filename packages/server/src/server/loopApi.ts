@@ -20,6 +20,7 @@ import type {
   MutationResult,
   RunDiffResult,
   RunSummary,
+  BundleView,
   TeamsView,
   TemplateInfo,
   TimelineData,
@@ -35,6 +36,7 @@ import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
 import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
+import { listBundles as listBundlesRegistry } from './bundles.js'
 
 function backend() {
   return ensureServer()
@@ -297,6 +299,13 @@ export const listTemplates = createServerFn({ method: 'GET' }).handler((): Templ
   // The file-based template registry (server/templates.ts): canned loop intents shown
   // as cards beside "New Loop". Metadata only — the description rides the snippet.
   return TEMPLATES
+})
+
+export const listBundles = createServerFn({ method: 'GET' }).handler((): BundleView[] => {
+  // The file-based bundle registry (server/bundles.ts): curated groupings of templates
+  // shown as the dashboard's stage-select dial. Members are resolved TemplateInfos —
+  // static per deploy, seeded by the route loader (never re-polled).
+  return listBundlesRegistry()
 })
 
 // ---- writes (apply via the live in-process Scheduler) ----

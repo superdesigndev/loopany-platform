@@ -1,6 +1,6 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { canViewTeam, getAuthState, listTemplates } from '../server/loopApi'
+import { canViewTeam, getAuthState, listBundles, listTemplates } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
 import { DashboardView, fetchLiveData, type DashboardData } from '../components/DashboardView'
 import { SignIn } from '../components/SignIn'
@@ -35,7 +35,8 @@ export const Route = createFileRoute('/t/$teamId')({
         throw new Error('This team does not exist, or you do not have access to it.')
       }
     }
-    const initial = { ...(await fetchLiveData(teamId)), templates: await listTemplates() }
+    const [live, templates, bundles] = await Promise.all([fetchLiveData(teamId), listTemplates(), listBundles()])
+    const initial = { ...live, templates, bundles }
     return { mode: 'dashboard', auth, teamId, initial }
   },
   component: TeamDashboard,

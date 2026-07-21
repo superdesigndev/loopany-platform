@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CodingAgent, TemplateInfo } from '../types'
+import type { BundleView, CodingAgent, TemplateInfo } from '../types'
 import { claimStatus, getConfig, mintClaim } from '../server/loopApi'
 import { Modal, ModalHead } from './Modal'
 import { LoopFlow, hasLoopFlow } from './LoopFlow'
 import { CreationChecklist, useCreationProgress } from './CreationChecklist'
+import { AgentMarksRow } from './AgentMarks'
+import { buildBundlePrompt } from '../lib/bundlePrompt'
 import { btn, btnPrimary, btnPrimaryPill, btnSm } from './ui'
 
 // How long to wait on a silent paste before nudging the user to check things.
@@ -17,49 +19,6 @@ const AGENT_LABEL: Record<CodingAgent, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   grok: 'Grok Build',
-}
-
-// The three supported coding agents, shown as brand marks on the
-// Copy-prompt button (the prompt runs in whichever you use). LobeHub icon set,
-// decorative (aria-hidden) — the button text is the accessible name.
-function ClaudeCodeMark({ size = 14 }: { size?: number }) {
-  return (
-    <svg aria-hidden width={size} height={size} viewBox="0 0 24 24" fill="#D97757" fillRule="evenodd" className="shrink-0" xmlns="http://www.w3.org/2000/svg">
-      <path
-        clipRule="evenodd"
-        d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z"
-      />
-    </svg>
-  )
-}
-
-/** Codex color mark (LobeHub icon set) — verbatim: white app tile + gradient glyph. */
-function CodexMark({ size = 14 }: { size?: number }) {
-  return (
-    <svg aria-hidden width={size} height={size} viewBox="0 0 24 24" className="shrink-0" xmlns="http://www.w3.org/2000/svg">
-      <path d="M19.503 0H4.496A4.496 4.496 0 000 4.496v15.007A4.496 4.496 0 004.496 24h15.007A4.496 4.496 0 0024 19.503V4.496A4.496 4.496 0 0019.503 0z" fill="#fff" />
-      <path
-        d="M9.064 3.344a4.578 4.578 0 012.285-.312c1 .115 1.891.54 2.673 1.275.01.01.024.017.037.021a.09.09 0 00.043 0 4.55 4.55 0 013.046.275l.047.022.116.057a4.581 4.581 0 012.188 2.399c.209.51.313 1.041.315 1.595a4.24 4.24 0 01-.134 1.223.123.123 0 00.03.115c.594.607.988 1.33 1.183 2.17.289 1.425-.007 2.71-.887 3.854l-.136.166a4.548 4.548 0 01-2.201 1.388.123.123 0 00-.081.076c-.191.551-.383 1.023-.74 1.494-.9 1.187-2.222 1.846-3.711 1.838-1.187-.006-2.239-.44-3.157-1.302a.107.107 0 00-.105-.024c-.388.125-.78.143-1.204.138a4.441 4.441 0 01-1.945-.466 4.544 4.544 0 01-1.61-1.335c-.152-.202-.303-.392-.414-.617a5.81 5.81 0 01-.37-.961 4.582 4.582 0 01-.014-2.298.124.124 0 00.006-.056.085.085 0 00-.027-.048 4.467 4.467 0 01-1.034-1.651 3.896 3.896 0 01-.251-1.192 5.189 5.189 0 01.141-1.6c.337-1.112.982-1.985 1.933-2.618.212-.141.413-.251.601-.33.215-.089.43-.164.646-.227a.098.098 0 00.065-.066 4.51 4.51 0 01.829-1.615 4.535 4.535 0 011.837-1.388zm3.482 10.565a.637.637 0 000 1.272h3.636a.637.637 0 100-1.272h-3.636zM8.462 9.23a.637.637 0 00-1.106.631l1.272 2.224-1.266 2.136a.636.636 0 101.095.649l1.454-2.455a.636.636 0 00.005-.64L8.462 9.23z"
-        fill="url(#lobe-icons-codex-grad)"
-      />
-      <defs>
-        <linearGradient gradientUnits="userSpaceOnUse" id="lobe-icons-codex-grad" x1="12" x2="12" y1="3" y2="21">
-          <stop stopColor="#B1A7FF" />
-          <stop offset=".5" stopColor="#7A9DFF" />
-          <stop offset="1" stopColor="#3941FF" />
-        </linearGradient>
-      </defs>
-    </svg>
-  )
-}
-
-/** Grok mark (LobeHub icon set) — monochrome; inherits the button text color. */
-function GrokMark({ size = 14 }: { size?: number }) {
-  return (
-    <svg aria-hidden width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="shrink-0" xmlns="http://www.w3.org/2000/svg">
-      <path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815" />
-    </svg>
-  )
 }
 
 // The one human-readable instruction the snippet carries. `/api/bootstrap` serves the
@@ -91,12 +50,18 @@ export function ComposeModal({
   onClose,
   onCreated,
   template = null,
+  bundle = null,
   teamId,
 }: {
   open: boolean
   onClose: () => void
   onCreated: () => void
   template?: TemplateInfo | null
+  /** A whole bundle picked from the dial: the snippet becomes a self-contained
+   *  candidate menu (each member's full setup inline). Mutually exclusive with
+   *  `template`. In bundle mode the modal does NOT auto-close on the first loop —
+   *  a bundle yields several loops over one conversation. */
+  bundle?: BundleView | null
   /** The dashboard's explicit team (the `/t/<id>` route) so a captured loop binds
    *  to the tab's team, not the shared last-used cookie. Undefined in open mode. */
   teamId?: string
@@ -139,22 +104,28 @@ export function ComposeModal({
 
   // A template appends its canned task description under the config (the INTENT).
   const description = template?.description?.trim() ?? ''
-  const snippet = token
-    ? [instruction, '', configLines, ...(description ? ['', description] : [])].join('\n')
-    : ''
+  // Three snippet shapes: a BUNDLE builds the self-contained candidate menu (preamble +
+  // numbered members + each member's full setup); a TEMPLATE appends its one description;
+  // a blank loop is just instruction + config. All copy from the same `snippet` string so
+  // the rendered box and the clipboard can't desync.
+  const snippet = !token
+    ? ''
+    : bundle
+      ? buildBundlePrompt({ origin, configLines, bundle })
+      : [instruction, '', configLines, ...(description ? ['', description] : [])].join('\n')
 
-  // Reset each time the dialog opens. A template goes straight to the local paste
-  // flow (skip the chooser); a blank loop starts at the chooser.
+  // Reset each time the dialog opens. A template OR a bundle goes straight to the
+  // local paste flow (skip the chooser); a blank loop starts at the chooser.
   useEffect(() => {
     if (!open) return
-    setHost(template ? 'local' : null)
+    setHost(template || bundle ? 'local' : null)
     setPicked('local')
     setToken(null)
     setCreated(null)
     setError(null)
     setCopied(false)
     setSlow(false)
-  }, [open, template])
+  }, [open, template, bundle])
 
   // Mint a claim + load config once the user picks the local agent.
   useEffect(() => {
@@ -168,7 +139,12 @@ export function ComposeModal({
   // Wait on the claim: Claude Code POSTs the loop with this token as `claim`.
   // If nothing lands within SLOW_WAIT_MS the paste likely didn't reach us
   // (wrong project, daemon down) — flip `slow` to surface a troubleshoot nudge.
+  // BUNDLE mode skips this correlation entirely: a bundle yields SEVERAL loops over
+  // one conversation, so there's no single "created" event to close on — the new
+  // loops just surface via the dashboard's own poll (the connect-key still binds
+  // the machine/team). The copy UI + a waiting hint stay put.
   useEffect(() => {
+    if (bundle) return
     if (!open || host !== 'local' || created || !token) return
     if (pollRef.current) clearInterval(pollRef.current)
     pollRef.current = setInterval(() => {
@@ -191,7 +167,7 @@ export function ComposeModal({
       if (pollRef.current) clearInterval(pollRef.current)
       clearTimeout(slowTimer)
     }
-  }, [open, host, created, token])
+  }, [open, host, created, token, bundle])
 
   async function copy() {
     try {
@@ -263,11 +239,7 @@ export function ComposeModal({
   // the supported-agent marks. Sits flush-right in the waiting row.
   const copyPromptButton = (
     <button className={`${btnPrimaryPill} ml-auto`} onClick={() => void copy()} disabled={!snippet}>
-      <span className="inline-flex items-center gap-0.5">
-        <ClaudeCodeMark />
-        <CodexMark />
-        <GrokMark />
-      </span>
+      <AgentMarksRow />
       {copied ? '✓ Copied' : 'Copy prompt'}
     </button>
   )
@@ -297,6 +269,50 @@ export function ComposeModal({
           <button className={btnPrimary} onClick={onClose}>
             Done
           </button>
+        </div>
+      </Modal>
+    )
+  }
+
+  // Bundle screen — the self-contained candidate menu (preamble + each member's full
+  // setup). No host chooser; no "created" correlation (a bundle spawns several loops
+  // over one conversation), so it never auto-closes — the copy UI + a waiting hint stay
+  // put and the new loops surface in Active loops via the dashboard's own poll.
+  if (bundle) {
+    return (
+      <Modal open={open} onClose={onClose}>
+        <ModalHead
+          title={`${bundle.label} bundle`}
+          sub={`Paste this into your coding agent, in the project you want loops for. It suggests which of the ${bundle.members.length} loops fit, then sets up only the ones you confirm.`}
+        />
+        <div className="mt-5 min-w-0">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-label font-semibold text-display">Try the whole bundle</h3>
+            {snippet && (
+              <button className={btnSm} onClick={() => void copy()}>
+                {copied ? '✓ Copied' : 'Copy'}
+              </button>
+            )}
+          </div>
+          {/* Capped height + internal scroll: the bundle snippet inlines every member's
+              full setup, so it must not stretch the modal off-screen. */}
+          <div className="mt-2 max-h-[max(24rem,60vh)] overflow-y-auto rounded-control border border-hairline bg-raised p-3 font-mono text-label text-primary">
+            {snippet ? (
+              <pre className="whitespace-pre-wrap leading-relaxed">{snippet}</pre>
+            ) : (
+              <div className="leading-relaxed text-secondary">minting a connect key…</div>
+            )}
+          </div>
+          <p className="mt-2 text-body leading-snug text-secondary">
+            Paste it - loops appear in Active loops as your agent confirms them.
+          </p>
+        </div>
+        {error && <div className="mt-3 text-body text-accent">Error: {error}</div>}
+        <div className="mt-6 flex items-center gap-3">
+          <span className="text-label leading-relaxed text-secondary">
+            Set up one at a time, in this session.
+          </span>
+          {copyPromptButton}
         </div>
       </Modal>
     )

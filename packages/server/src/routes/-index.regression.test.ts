@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
  * route must carry a retryable errorComponent for the first-load failure case.
  */
 // The route file keeps only the loader + errorComponent; the dashboard BODY (poll,
-// switcher, template fan) moved to the shared DashboardView (rendered by both `/`
+// switcher, bundle dial) moved to the shared DashboardView (rendered by both `/`
 // in open mode and `/t/$teamId`), so the body guards read from there.
 const src = readFileSync(fileURLToPath(new URL('./index.tsx', import.meta.url)), 'utf8')
 const teamRoute = readFileSync(fileURLToPath(new URL('./t.$teamId.tsx', import.meta.url)), 'utf8')
@@ -21,6 +21,7 @@ const view = readFileSync(
   fileURLToPath(new URL('../components/DashboardView.tsx', import.meta.url)),
   'utf8',
 )
+const appCss = readFileSync(fileURLToPath(new URL('../styles/app.css', import.meta.url)), 'utf8')
 const switcher = readFileSync(
   fileURLToPath(new URL('../components/TeamSwitcher.tsx', import.meta.url)),
   'utf8',
@@ -63,28 +64,29 @@ describe('dashboard poll resilience', () => {
   })
 })
 
-describe('dashboard template fan layout', () => {
-  it('fan cards wrap and stay fixed-width - no template count may widen the page', () => {
-    // The hero template fan grows with the registry. Per the
-    // no-page-level-horizontal-scroll rule each fan ROW must WRAP at narrow
-    // widths (flex-wrap on the row container) and each card is a fixed narrow
-    // width (w-[..px] shrink-0), so no count of templates can overflow the
-    // viewport - extra cards fold into a second row instead.
-    const fan = /<div key=\{r\} className="flex flex-wrap[^"]*">[\s\S]*?row\.map/.exec(view)?.[0]
-    expect(fan, 'the wrapping fan row should contain the template cards').toBeTruthy()
-    const card = /row\.map\([\s\S]*?className="([^"]*)"/.exec(view)?.[1]
-    expect(card, 'the template card should have a className').toBeTruthy()
-    expect(card).toMatch(/\bw-\[\d+px\]/)
-    expect(card).toContain('shrink-0')
+describe('dashboard bundle dial layout', () => {
+  it('renders the BundleDial in the hero, not the old flat TemplateFan', () => {
+    // The template fan was replaced by the rotating stage-select dial.
+    expect(view).toContain('<BundleDial')
+    expect(view).not.toContain('TemplateFan')
+    // The dial is seeded from the loader's static-per-deploy bundles (never re-polled).
+    expect(view).toContain('bundles={bundles}')
   })
 
-  it('splits 6+ templates into balanced rows - smaller row on top, never an orphan', () => {
-    // The fan pre-splits into balanced rows (up to 5 per row) instead of letting
-    // flex-wrap decide the break point. floor-first puts the SMALLER row on top,
-    // so 9 templates lay out as 4 over 5 (not a lopsided 5/4 or a cramped 3x3),
-    // and the last (largest) row always absorbs the remainder - never an orphan.
-    expect(view).toMatch(/templates\.length <= 5 \? 1 : Math\.ceil\(templates\.length \/ 5\)/)
-    // Remaining cards divide across remaining rows, floor-first (9 -> 4/5, 7 -> 3/4).
-    expect(view).toMatch(/Math\.floor\(\(templates\.length - at\) \/ \(rowCount - r\)\)/)
+  it('clips the oversized disc so no page scroll is introduced (the hard rule)', () => {
+    // The wheel is a huge disc (2 x --dial-r); the stage MUST clip it (overflow:hidden)
+    // with a bounded height, so the disc never widens or lengthens the page. This is
+    // the dial's equivalent of the fan's flex-wrap guarantee.
+    const stage = /\.dial-stage\s*\{[\s\S]*?\}/.exec(appCss)?.[0]
+    expect(stage, 'the .dial-stage rule should exist').toBeTruthy()
+    expect(stage).toContain('overflow: hidden')
+    expect(stage).toMatch(/height:\s*\d+px/)
+  })
+
+  it('drives the spin via the registered @property --rot (transitionable angle)', () => {
+    // The rotation angle is a registered custom property so the ~0.6s ease-out spin
+    // animates; reduced-motion jumps instantly.
+    expect(appCss).toMatch(/@property\s+--rot/)
+    expect(appCss).toContain('prefers-reduced-motion')
   })
 })
