@@ -271,9 +271,10 @@ export function TeamsModal({
           </ul>
 
           <div className="mt-4 rounded-control border border-hairline bg-raised px-3 py-3">
-            <label className={`${labelCls} mt-0`}>New team</label>
+            <label className={`${labelCls} mt-0`} htmlFor="team-new-name">New team</label>
             <div className="flex gap-2">
               <input
+                id="team-new-name"
                 className={inputCls}
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
@@ -372,9 +373,10 @@ export function TeamsModal({
               {isOwner && (
                 <>
                   <div className="mt-4 rounded-control border border-hairline bg-raised px-3 py-3">
-                    <label className={`${labelCls} mt-0`}>Add a member by email</label>
+                    <label className={`${labelCls} mt-0`} htmlFor="team-add-email">Add a member by email</label>
                     <div className="flex flex-wrap gap-2">
                       <input
+                        id="team-add-email"
                         className={`${inputCls} min-w-[12rem] flex-1`}
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}

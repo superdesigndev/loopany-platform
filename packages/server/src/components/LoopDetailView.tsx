@@ -343,10 +343,13 @@ export function LoopDetailView({ id }: { id: string }) {
       }}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <span className="text-body font-medium text-display">Edit with your coding agent</span>
+        <label htmlFor="loop-edit-instruction" className="text-body font-medium text-display">
+          Edit with your coding agent
+        </label>
         <span className="text-meta text-secondary">One agent pass on {onMachine} · spends credits</span>
       </div>
       <textarea
+        id="loop-edit-instruction"
         ref={editBoxRef}
         autoFocus
         value={editInstruction}
