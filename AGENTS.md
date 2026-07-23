@@ -291,12 +291,16 @@ computes pure functions. Run instructions: `README.md`.
   never re-processes history; going-forward items ride live ingestion).
 - API: `listTodos`/`patchTodo`/`getTodoOutput` in `server/loopApi.ts` (team-scoped
   like `listJobs`; `patchTodo` authorizes by membership in the item's own team and
-  an assignee must be a member of that team). **Expand renders an HTML report**
-  (captain req): `getTodoOutput` returns the run's own `.html` artifact
-  (`store.htmlArtifactForRun`, keyed on `artifact_files.lastRunId`) rendered by the
-  shared sandboxed `ArtifactBody`, ELSE the run's final report (markdown/text)
-  through `TaskFileView` (the existing DOMPurify markdown pipeline) — no new
-  renderer, no weakened sandbox. Live updates ride the existing fetch-then-set
+  an assignee must be a member of that team). **Expand renders ONE HTML report**
+  (`TodoDetail`/`HtmlReportView`): every detail is a single sandboxed iframe — a run's
+  own `.html` artifact shown as-is (`getTodoOutput` reads the bytes via
+  `store.htmlArtifactForRun`, keyed on `artifact_files.lastRunId`), ELSE the run's
+  markdown/text wrapped by `lib/todoReport.ts` `markdownToReportDoc` (the shared
+  `renderMarkdown` sanitizer + a SELF-CONTAINED report stylesheet, since the frame is
+  opaque-origin) — so there is NO text-vs-html branch in the UI. Sandbox is
+  `allow-scripts` WITHOUT `allow-same-origin` (identical to the artifact viewer),
+  unchanged in the Base UI `Dialog` FULLSCREEN view. `getTodoOutput` returns
+  `{kind:'html'|'markdown'|'empty'}`. Live updates ride the existing fetch-then-set
   poll (no new realtime stack).
 
 ## Workflows (deterministic pre-stage)

@@ -3,20 +3,18 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import type { TodoItemView, TodoListView } from '../types'
+import type { TodoItemView, TodoListView, TodoOutput } from '../types'
 
 const { patchTodo, getTodoOutput } = vi.hoisted(() => ({
   patchTodo: vi.fn(async () => ({ ok: true })),
-  getTodoOutput: vi.fn(async () => ({ kind: 'markdown' as const, content: '# Report body' })),
+  getTodoOutput: vi.fn(async (): Promise<TodoOutput> => ({ kind: 'markdown', content: '# Report body' })),
 }))
 
 vi.mock('../server/loopApi', () => ({ patchTodo, getTodoOutput }))
-// The router Link + the heavy report viewers are out of scope for the panel test.
+// The router Link is out of scope for the panel test.
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: unknown }) => createElement('a', {}, children as never),
 }))
-vi.mock('./artifactView', () => ({ ArtifactBody: () => createElement('div', { 'data-testid': 'artifact' }) }))
-vi.mock('./TaskFileView', () => ({ TaskFileView: ({ content }: { content: string }) => createElement('div', { 'data-testid': 'md' }, content) }))
 
 import { TodoPanel } from './TeamTodoView'
 
@@ -117,7 +115,8 @@ it('archive moves an item to the Archive tab', async () => {
   expect(patchTodo).toHaveBeenCalledWith({ data: { id: 'a', patch: { archived: true } } })
 })
 
-it('expanding a row loads and renders the report', async () => {
+it('expanding a row renders the HTML report in a sandboxed iframe', async () => {
+  getTodoOutput.mockResolvedValueOnce({ kind: 'markdown', content: '# Report body\n\nhello' })
   const el = await mount(view([item({ id: 'a', title: 'Open me' })]))
   const caret = el.querySelector('button[aria-label="Expand item"]') as HTMLButtonElement
   await act(async () => {
@@ -125,7 +124,40 @@ it('expanding a row loads and renders the report', async () => {
   })
   await act(async () => {})
   expect(getTodoOutput).toHaveBeenCalledWith({ data: { id: 'a' } })
-  expect(el.querySelector('[data-testid="md"]')?.textContent).toContain('# Report body')
+  const iframe = el.querySelector('iframe') as HTMLIFrameElement
+  expect(iframe).toBeTruthy()
+  // Sandbox posture unchanged: scripts allowed, NO same-origin.
+  expect(iframe.getAttribute('sandbox')).toBe('allow-scripts')
+  const srcdoc = iframe.getAttribute('srcdoc') ?? ''
+  expect(srcdoc).toContain('<!doctype html>')
+  expect(srcdoc).toContain('Report body')
+  // Fullscreen affordance present.
+  expect(el.querySelector('button[aria-label="Open report fullscreen"]')).toBeTruthy()
+})
+
+it("renders a run's HTML artifact as-is (no markdown wrapping)", async () => {
+  const raw = '<!doctype html><html><body><h1>Artifact report</h1></body></html>'
+  getTodoOutput.mockResolvedValueOnce({ kind: 'html', html: raw })
+  const el = await mount(view([item({ id: 'a' })]))
+  const caret = el.querySelector('button[aria-label="Expand item"]') as HTMLButtonElement
+  await act(async () => caret.click())
+  await act(async () => {})
+  const iframe = el.querySelector('iframe') as HTMLIFrameElement
+  expect(iframe.getAttribute('srcdoc')).toBe(raw)
+})
+
+it('opening fullscreen mounts a full-viewport sandboxed frame with a close control', async () => {
+  getTodoOutput.mockResolvedValueOnce({ kind: 'markdown', content: '# Full me' })
+  const el = await mount(view([item({ id: 'a' })]))
+  await act(async () => (el.querySelector('button[aria-label="Expand item"]') as HTMLButtonElement).click())
+  await act(async () => {})
+  await act(async () => (el.querySelector('button[aria-label="Open report fullscreen"]') as HTMLButtonElement).click())
+  await act(async () => {})
+  // Base UI portals the dialog to the body; both the inline + fullscreen frames exist.
+  const frames = document.querySelectorAll('iframe')
+  expect(frames.length).toBeGreaterThanOrEqual(2)
+  expect(document.querySelector('button[aria-label="Close fullscreen"]')).toBeTruthy()
+  frames.forEach((f) => expect(f.getAttribute('sandbox')).toBe('allow-scripts'))
 })
 
 it('sorting by title reorders the rows', async () => {

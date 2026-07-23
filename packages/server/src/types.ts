@@ -382,11 +382,12 @@ export interface TodoListView {
   canEdit: boolean
 }
 
-/** The rendered-report output for a to-do item's expansion (captain addendum):
- *  the run's own HTML artifact when it produced one, else its final report
- *  (markdown/text) — both rendered through the existing sandboxed viewers. */
+/** The output source for a to-do item's expansion. Both render into ONE
+ *  consistent HTML report document in the sandboxed frame: `html` is a run's own
+ *  HTML artifact (shown as-is); `markdown` is its final report (markdown/text),
+ *  wrapped client-side into the same styled report document. */
 export type TodoOutput =
-  | { kind: 'artifact'; loopId: string; file: ArtifactSummary }
+  | { kind: 'html'; html: string }
   | { kind: 'markdown'; content: string }
   | { kind: 'empty' }
 

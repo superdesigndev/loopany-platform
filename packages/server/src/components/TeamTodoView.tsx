@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
+import { Dialog } from '@base-ui/react/dialog'
 
 import type { TodoItemView, TodoListView, TodoMember, TodoOutput, TodoPatch, TodoPriority, TodoStatus } from '../types'
 import { getTodoOutput, patchTodo } from '../server/loopApi'
-import { rel, tsShort } from '../lib/format'
+import { tsShort } from '../lib/format'
 import { useHydrated } from './ui'
-import { ArtifactBody } from './artifactView'
-import { TaskFileView } from './TaskFileView'
+import { markdownToReportDoc } from '../lib/todoReport'
 
 /**
  * The team To-Do panel: every meaningful loop run lands here as one quiet row
@@ -361,11 +361,10 @@ function BareSelect({
 }
 
 /**
- * The expanded row: the run's output rendered as a styled HTML report. If the run
- * produced an HTML artifact, that artifact IS the report (the shared sandboxed
- * `ArtifactBody`); otherwise its final report renders through the shared markdown
- * pipeline (`TaskFileView`). Loop output is untrusted — both keep the existing
- * sandbox/sanitizer posture.
+ * The expanded row: the run's output as ONE consistent HTML report. A run's own
+ * HTML artifact is shown as-is; a markdown/text report is wrapped into the SAME
+ * styled report document (`markdownToReportDoc`). Both render through the single
+ * `HtmlReportView` (a sandboxed iframe) — no text-vs-html branching in the UI.
  */
 function TodoDetail({ item }: { item: TodoItemView }) {
   const [out, setOut] = useState<TodoOutput | { loading: true } | { error: string }>({ loading: true })
@@ -382,19 +381,86 @@ function TodoDetail({ item }: { item: TodoItemView }) {
     }
   }, [item.id])
 
+  // Turn every source into ONE HTML document: an artifact is used as-is; markdown/
+  // text is wrapped into the styled report doc (needs the DOM sanitizer, so it
+  // waits for hydration). `null` ⇒ nothing to render.
+  const doc = useMemo(() => {
+    if ('loading' in out || 'error' in out) return null
+    if (out.kind === 'html') return out.html
+    if (out.kind === 'markdown') return hydrated ? markdownToReportDoc(out.content) : null
+    return null
+  }, [out, hydrated])
+
   return (
     <div className="mb-3 ml-[26px] overflow-hidden rounded-control border border-hairline bg-surface">
-      {'loading' in out ? (
+      {'loading' in out || ('kind' in out && out.kind !== 'empty' && doc === null) ? (
         <div className="px-5 py-8 text-body text-disabled">Loading report…</div>
       ) : 'error' in out ? (
         <div className="px-5 py-8 text-body text-accent">Couldn&apos;t load this report — {out.error}</div>
-      ) : out.kind === 'artifact' ? (
-        <ArtifactBody loopId={out.loopId} file={out.file} />
-      ) : out.kind === 'markdown' ? (
-        hydrated ? <TaskFileView content={out.content} /> : <div className="px-5 py-8 text-body text-disabled">Loading report…</div>
+      ) : doc !== null ? (
+        <HtmlReportView html={doc} title={item.title} />
       ) : (
         <div className="px-5 py-8 text-body text-disabled">This run produced no report output.</div>
       )}
+    </div>
+  )
+}
+
+/** The exact sandbox posture of the app's HTML-artifact viewer: `allow-scripts`
+ *  WITHOUT `allow-same-origin`, so the frame gets an opaque origin (no cookies, no
+ *  storage, no `parent` access). Loop output is untrusted; this is the load-bearing
+ *  containment, identical inline and fullscreen. */
+const SANDBOX = 'allow-scripts'
+
+function ReportFrame({ html, className }: { html: string; className: string }) {
+  return (
+    <iframe
+      title="Report (sandboxed)"
+      srcDoc={html}
+      sandbox={SANDBOX}
+      referrerPolicy="no-referrer"
+      className={className}
+    />
+  )
+}
+
+/**
+ * The unified report view: the HTML document in a sandboxed iframe, plus a
+ * Fullscreen affordance. Fullscreen is a Base UI Dialog (focus trap + Esc + scroll
+ * lock, the app's modal convention) whose popup covers the whole viewport with the
+ * SAME sandboxed frame — the sandbox rules are unchanged in fullscreen.
+ */
+function HtmlReportView({ html, title }: { html: string; title: string }) {
+  const [full, setFull] = useState(false)
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setFull(true)}
+        aria-label="Open report fullscreen"
+        className="absolute right-2 top-2 z-10 inline-flex cursor-pointer items-center gap-1 rounded-control border border-hairline bg-surface/90 px-2 py-1 text-caption font-medium text-secondary backdrop-blur transition-colors hover:text-display"
+      >
+        <span aria-hidden>⤢</span> Fullscreen
+      </button>
+      <ReportFrame html={html} className="h-[min(70vh,620px)] w-full border-0 bg-white" />
+
+      <Dialog.Root open={full} onOpenChange={(o) => !o && setFull(false)}>
+        <Dialog.Portal>
+          <Dialog.Backdrop className="fixed inset-0 z-[900] bg-black/40 backdrop-blur-[6px] transition-opacity duration-200 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0" />
+          <Dialog.Popup className="fixed inset-0 z-[901] flex flex-col bg-white outline-none transition-opacity duration-200 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0">
+            <div className="flex items-center justify-between gap-3 border-b border-hairline bg-surface px-4 py-2">
+              <span className="min-w-0 truncate text-label font-medium text-display" title={title}>{title}</span>
+              <Dialog.Close
+                aria-label="Close fullscreen"
+                className="shrink-0 cursor-pointer rounded-full border-none bg-transparent px-2 py-0.5 text-[15px] leading-none text-disabled transition-colors hover:text-display focus-visible:text-display focus-visible:outline-none"
+              >
+                ✕
+              </Dialog.Close>
+            </div>
+            <ReportFrame html={html} className="min-h-0 w-full flex-1 border-0 bg-white" />
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   )
 }

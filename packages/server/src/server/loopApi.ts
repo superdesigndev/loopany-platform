@@ -34,7 +34,7 @@ import { coerceCodingAgent } from '../types'
 import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
-import { toArtifactSummary, toJobDetail, toJobSummary, toRunSummary, toTodoItemView } from './adapters.js'
+import { toJobDetail, toJobSummary, toRunSummary, toTodoItemView } from './adapters.js'
 import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
 
@@ -347,9 +347,10 @@ export const patchTodo = createServerFn({ method: 'POST' })
     return updated ? { ok: true } : { error: 'not found' }
   })
 
-/** GET — a To-Do item's rendered report (captain addendum): the source run's own
- *  HTML artifact when it produced one (rendered in the sandboxed viewer), else the
- *  run's final report (markdown/text). Authorized through the source loop. */
+/** GET — a To-Do item's report SOURCE for the unified HTML report view: the source
+ *  run's own HTML artifact bytes when it produced one (shown as-is in the sandboxed
+ *  frame), else its final report markdown/text (wrapped client-side into the same
+ *  styled report document). Authorized through the source loop. */
 export const getTodoOutput = createServerFn({ method: 'GET' })
   .validator((d: { id: string }) => d)
   .handler(async ({ data }): Promise<TodoOutput> => {
@@ -358,10 +359,16 @@ export const getTodoOutput = createServerFn({ method: 'GET' })
     if (!item) return { kind: 'empty' }
     // Authorize via the source loop (shared enumeration-safe gate).
     if (!(await ownedLoop(item.loopId))) return { kind: 'empty' }
-    // Prefer the run's own HTML artifact — that artifact IS the report.
-    const html = await store.htmlArtifactForRun(item.loopId, item.runId)
-    if (html) return { kind: 'artifact', loopId: item.loopId, file: toArtifactSummary(html) }
-    // Otherwise render the run's final report (message, or the error on a failure).
+    // Prefer the run's own HTML artifact — that artifact IS the report. Read its
+    // bytes so the client renders ONE consistent thing (an HTML document) in the
+    // sandboxed frame; a binary/oversize/unsynced artifact falls through to text.
+    const artifact = await store.htmlArtifactForRun(item.loopId, item.runId)
+    if (artifact) {
+      const { readLoopArtifact } = await import('./artifactFiles.js')
+      const bytes = await readLoopArtifact(item.loopId, artifact.path)
+      if ('text' in bytes && bytes.text.trim()) return { kind: 'html', html: bytes.text }
+    }
+    // Otherwise the run's final report (message, or the error on a failure).
     const run = await store.getRun(item.runId)
     const content = run?.message?.trim() || (item.failed ? run?.error?.trim() || '' : '')
     return content ? { kind: 'markdown', content } : { kind: 'empty' }
