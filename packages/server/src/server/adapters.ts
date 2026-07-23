@@ -6,9 +6,9 @@
 import { Cron } from "croner";
 
 import * as store from "../db/store.js";
-import type { ArtifactFileWithMeta } from "../db/store.js";
+import type { ArtifactFileWithMeta, TodoItemWithContext } from "../db/store.js";
 import type { Loop, Run } from "../db/schema.js";
-import type { ArtifactSummary, JobDetail, JobFull, JobSummary, RunSummary } from "../types.js";
+import type { ArtifactSummary, JobDetail, JobFull, JobSummary, RunSummary, TodoItemView } from "../types.js";
 import { machinePresence } from "../lib/machinePresence.js";
 
 const SUMMARY_RUNS = 18;
@@ -60,6 +60,30 @@ export function toArtifactSummary(row: ArtifactFileWithMeta): ArtifactSummary {
     binary: row.binary,
     oversize: row.oversize,
     meta: row.meta ?? null,
+  };
+}
+
+/** One To-Do row (item + joined loop/machine/assignee context) → the board view
+ *  shape. Labels degrade gracefully (a deleted loop still shows its id). */
+export function toTodoItemView(row: TodoItemWithContext): TodoItemView {
+  return {
+    id: row.id,
+    loopId: row.loopId,
+    loopName: row.loopName ?? row.loopId,
+    runId: row.runId,
+    machineId: row.machineId,
+    machineName: row.machineName ?? "",
+    role: row.role,
+    outcome: row.outcome ?? null,
+    runStatus: row.runStatus ?? null,
+    failed: row.failed,
+    title: row.title,
+    producedAt: row.producedAt,
+    status: row.status,
+    priority: row.priority,
+    assigneeUserId: row.assigneeUserId ?? null,
+    assigneeLabel: row.assigneeName || row.assigneeEmail || null,
+    archived: row.archived,
   };
 }
 

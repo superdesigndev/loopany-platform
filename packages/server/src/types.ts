@@ -334,6 +334,71 @@ export type ArtifactContent =
   | { binary: true; size: number | null; oversize: boolean }
   | { error: string }
 
+// ---- team To-Do list (one item per meaningful run; see server/todo.ts) ----
+
+/** The workflow status a user drives on a to-do item. */
+export type TodoStatus = 'new' | 'in_progress' | 'done'
+/** The priority a user sets on a to-do item (sortable). */
+export type TodoPriority = 'high' | 'medium' | 'low'
+
+/** One to-do item as the board renders it: the run-derived summary plus the
+ *  user-owned fields, with the loop/machine/assignee context resolved to labels. */
+export interface TodoItemView {
+  id: string
+  loopId: string
+  loopName: string
+  runId: string
+  machineId: string
+  machineName: string
+  role: 'exec' | 'evolve' | 'edit'
+  /** Source run outcome at ingestion (display/badge). */
+  outcome: string | null
+  /** Source run content status at ingestion. */
+  runStatus: 'new' | 'resolved' | 'nothing-new' | null
+  /** The source run failed (a failure item). */
+  failed: boolean
+  title: string
+  /** When the source run produced this (the run ts, ISO). */
+  producedAt: string
+  status: TodoStatus
+  priority: TodoPriority
+  assigneeUserId: string | null
+  /** Display label for the assignee (name/email), or null when unassigned. */
+  assigneeLabel: string | null
+  archived: boolean
+}
+
+/** A team member offered in the assignee picker (empty in open mode). */
+export interface TodoMember {
+  userId: string
+  label: string
+}
+
+/** The To-Do board payload: the team's items + the assignee options + whether the
+ *  caller may edit (signed in under the gate, or open mode). */
+export interface TodoListView {
+  items: TodoItemView[]
+  members: TodoMember[]
+  canEdit: boolean
+}
+
+/** The rendered-report output for a to-do item's expansion (captain addendum):
+ *  the run's own HTML artifact when it produced one, else its final report
+ *  (markdown/text) — both rendered through the existing sandboxed viewers. */
+export type TodoOutput =
+  | { kind: 'artifact'; loopId: string; file: ArtifactSummary }
+  | { kind: 'markdown'; content: string }
+  | { kind: 'empty' }
+
+/** A to-do item's user-owned patch (inline edits). */
+export interface TodoPatch {
+  status?: TodoStatus
+  priority?: TodoPriority
+  /** '' / null clears the assignee. */
+  assigneeUserId?: string | null
+  archived?: boolean
+}
+
 // ---- per-run diff: what changed vs the previous run (Phase 3) ----
 
 /** One file's change between a run and the previous run. */

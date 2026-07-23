@@ -258,6 +258,35 @@ computes pure functions. Run instructions: `README.md`.
     per-run workflow, the pure-value firewall, and the anti-AI writing rules (no em-dashes
     / no LLM cadence — the load-bearing "don't read as a bot" discipline).
 
+## Team To-Do list (run outputs as actionable items)
+
+- A team-scoped, DB-backed board where every MEANINGFUL loop run lands as one
+  actionable item (`todo_items` table, migration `0003`; `run_id` UNIQUE = the
+  idempotency key). Route: `/t/<teamId>/todo` (+ open-mode `/todo`), rendered by
+  `components/TeamTodoView.tsx` (a Rows-style row board: inline priority/status/
+  assignee edits, sortable headers, Active/Archive tabs, expand-a-row).
+- **Ingestion is server-side, ZERO daemon change.** The pure rule + title live in
+  `server/todo.ts` (`todoDecision`/`todoTitle`, unit-tested); `ingestRunTodo` is
+  called at EVERY run finalize point in `gateway/index.ts` (normal report, the
+  reclaim→wake-report reconcile, `finishLoop`, `reclaimRun`) via the best-effort
+  `ingestTodo` helper. Rule: a FAILURE (phase error) or a successful run
+  (phase done) creates an item, EXCEPT `nothing-new` status, a `silent` workflow
+  pass, `edit`/`canceled`/`skipped` runs. Idempotent by `run_id` — a re-ingest
+  refreshes the run-derived columns (title/outcome/producedAt) but PRESERVES the
+  user-owned columns (status/priority/assignee/archived).
+- **Backfill** (`seedTodosIfEmpty`, called from `boot.ts`) seeds the last 14 days
+  ONLY when the table is empty (the empty-table gate IS the idempotency — a reboot
+  never re-processes history; going-forward items ride live ingestion).
+- API: `listTodos`/`patchTodo`/`getTodoOutput` in `server/loopApi.ts` (team-scoped
+  like `listJobs`; `patchTodo` authorizes by membership in the item's own team and
+  an assignee must be a member of that team). **Expand renders an HTML report**
+  (captain req): `getTodoOutput` returns the run's own `.html` artifact
+  (`store.htmlArtifactForRun`, keyed on `artifact_files.lastRunId`) rendered by the
+  shared sandboxed `ArtifactBody`, ELSE the run's final report (markdown/text)
+  through `TaskFileView` (the existing DOMPurify markdown pipeline) — no new
+  renderer, no weakened sandbox. Live updates ride the existing fetch-then-set
+  poll (no new realtime stack).
+
 ## Workflows (deterministic pre-stage)
 
 - A loop's workflow is an **async function body, NOT an ES module**: top-level

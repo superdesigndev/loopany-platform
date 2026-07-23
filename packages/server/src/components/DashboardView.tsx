@@ -142,6 +142,15 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
               the bare /timeline route instead — the view must be reachable in
               BOTH modes or self-hosters never find it. */}
           {teamId ? (
+            <Link to="/t/$teamId/todo" params={{ teamId }} className={headerBtn}>
+              To-Do
+            </Link>
+          ) : (
+            <Link to="/todo" className={headerBtn}>
+              To-Do
+            </Link>
+          )}
+          {teamId ? (
             <Link to="/t/$teamId/timeline" params={{ teamId }} className={headerBtn}>
               Timeline
             </Link>

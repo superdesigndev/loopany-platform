@@ -24,6 +24,9 @@ import type {
   TemplateInfo,
   TimelineData,
   TimelineMark,
+  TodoListView,
+  TodoOutput,
+  TodoPatch,
   TranscriptResult,
   TranscriptStep,
 } from '../types'
@@ -31,7 +34,7 @@ import { coerceCodingAgent } from '../types'
 import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
-import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
+import { toArtifactSummary, toJobDetail, toJobSummary, toRunSummary, toTodoItemView } from './adapters.js'
 import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
 
@@ -283,6 +286,85 @@ export const getRunDiff = createServerFn({ method: 'GET' })
     if (!(await ownedLoop(run.loopId))) return { hasSnapshot: false, files: [] }
     const { computeRunDiff } = await import('./runDiff.js')
     return computeRunDiff(data.runId)
+  })
+
+// ---- team To-Do list (one item per meaningful run; see server/todo.ts) ----
+
+const TODO_STATUSES = ['new', 'in_progress', 'done'] as const
+const TODO_PRIORITIES = ['high', 'medium', 'low'] as const
+
+/** GET — the team's To-Do board: items (newest-produced first) + the assignee
+ *  options + whether the caller may edit. Scoped to the given/active team like
+ *  `listJobs`; open mode ⇒ the single shared workspace. */
+export const listTodos = createServerFn({ method: 'GET' })
+  .validator((teamId?: string) => teamId)
+  .handler(async ({ data: teamId }): Promise<TodoListView> => {
+    await backend()
+    const { enforce, userId, teamId: active } = await requestScope(teamId)
+    if (enforce && !userId) return { items: [], members: [], canEdit: false }
+    const scoped = enforce ? active : undefined
+    const rows = await store.listTeamTodos(scoped)
+    // Assignee options are the team's members (open mode has no real identities).
+    const members = enforce
+      ? (await store.listTeamMembers(active)).map((m) => ({
+          userId: m.userId,
+          label: m.displayName || m.email || m.userId,
+        }))
+      : []
+    return { items: rows.map(toTodoItemView), members, canEdit: !enforce || !!userId }
+  })
+
+/** POST — patch a To-Do item's user-owned fields (status / priority / assignee /
+ *  archived). Authorized by MEMBERSHIP in the item's own team (a cross-team edit
+ *  is a generic not-found). An assignee must be a member of that same team. */
+export const patchTodo = createServerFn({ method: 'POST' })
+  .validator((d: { id: string; patch: TodoPatch }) => d)
+  .handler(async ({ data }): Promise<MutationResult> => {
+    await backend()
+    const item = await store.getTodoItem(data.id)
+    if (!item) return { error: 'not found' }
+    const scope = await requestScope()
+    // Same enumeration-safe gate as loops: a member of the item's team may edit it
+    // even when it isn't their active team; a non-member sees a generic not-found.
+    if (scope.enforce && !scope.userId) return { error: 'not found' }
+    if (!(await canAccessLoop(item.teamId, scope))) return { error: 'not found' }
+    const p = data.patch
+    const patch: Parameters<typeof store.updateTodoItem>[1] = {}
+    if (p.status !== undefined && (TODO_STATUSES as readonly string[]).includes(p.status)) patch.status = p.status
+    if (p.priority !== undefined && (TODO_PRIORITIES as readonly string[]).includes(p.priority)) patch.priority = p.priority
+    if (p.archived !== undefined) patch.archived = !!p.archived
+    if (p.assigneeUserId !== undefined) {
+      const uid = p.assigneeUserId?.trim() || null
+      // Only accept an assignee who is a member of the item's own team; clearing
+      // (null/'') always allowed. Open mode has no identities → no assignee.
+      if (uid && (!item.teamId || !(await store.isTeamMember(item.teamId, uid)))) {
+        return { error: 'assignee must be a team member' }
+      }
+      patch.assigneeUserId = uid
+    }
+    if (!Object.keys(patch).length) return { error: 'nothing to change' }
+    const updated = await store.updateTodoItem(data.id, patch)
+    return updated ? { ok: true } : { error: 'not found' }
+  })
+
+/** GET — a To-Do item's rendered report (captain addendum): the source run's own
+ *  HTML artifact when it produced one (rendered in the sandboxed viewer), else the
+ *  run's final report (markdown/text). Authorized through the source loop. */
+export const getTodoOutput = createServerFn({ method: 'GET' })
+  .validator((d: { id: string }) => d)
+  .handler(async ({ data }): Promise<TodoOutput> => {
+    await backend()
+    const item = await store.getTodoItem(data.id)
+    if (!item) return { kind: 'empty' }
+    // Authorize via the source loop (shared enumeration-safe gate).
+    if (!(await ownedLoop(item.loopId))) return { kind: 'empty' }
+    // Prefer the run's own HTML artifact — that artifact IS the report.
+    const html = await store.htmlArtifactForRun(item.loopId, item.runId)
+    if (html) return { kind: 'artifact', loopId: item.loopId, file: toArtifactSummary(html) }
+    // Otherwise render the run's final report (message, or the error on a failure).
+    const run = await store.getRun(item.runId)
+    const content = run?.message?.trim() || (item.failed ? run?.error?.trim() || '' : '')
+    return content ? { kind: 'markdown', content } : { kind: 'empty' }
   })
 
 // ---- catalog ----

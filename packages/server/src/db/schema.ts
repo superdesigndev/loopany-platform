@@ -502,6 +502,60 @@ export const runSnapshots = pgTable(
   (t) => [index("run_snapshots_loop_idx").on(t.loopId)],
 );
 
+// ---- todo_items: the team-global To-Do list (one item per meaningful run) ----
+//
+// A team-scoped, DB-backed list where the OUTPUT of every loop run lands as an
+// actionable item (see `server/todo.ts` for the ingestion rule). One row per
+// SOURCE RUN (`runId` unique) so ingestion is idempotent — a re-report, a
+// backfill re-run, or a reclaim→wake-report reconcile upserts the SAME row,
+// refreshing the run-derived fields (title/outcome/status/producedAt) while
+// PRESERVING the user-owned fields (status/priority/assignee/archived). `teamId`
+// is denormalized from the source loop so the team board is one indexed query
+// (runs carry no teamId; loops do). The run-derived columns mirror what the row
+// summary needs without re-joining runs on every list.
+export const todoItems = pgTable(
+  "todo_items",
+  {
+    id: text("id").primaryKey(),
+    /** Owning team (denormalized from the source loop for the team-scoped board). */
+    teamId: text("team_id"),
+    /** Source loop. */
+    loopId: text("loop_id").notNull(),
+    /** Source run — UNIQUE (one item per run; the idempotency key). */
+    runId: text("run_id").notNull(),
+    /** Source machine (attribution / the row's machine column). */
+    machineId: text("machine_id").notNull(),
+    /** Source run role at ingestion (`exec` | `evolve`; `edit` never ingests). */
+    role: text("role", { enum: ["exec", "evolve", "edit"] }).notNull(),
+    /** Source run outcome at ingestion (display + filtering). */
+    outcome: text("outcome", { enum: ["silent", "direct", "exec", "error", "evolve", "skipped"] }),
+    /** Source run content status at ingestion (`new` | `resolved` | `nothing-new`). */
+    runStatus: text("run_status", { enum: ["new", "resolved", "nothing-new"] }),
+    /** Whether the source run failed (a failure item, even without a message). */
+    failed: boolean("failed").notNull().default(false),
+    /** Title/summary derived from the run's final report (message, else error). */
+    title: text("title").notNull(),
+    /** When the source run produced this (the run's ts, ISO). */
+    producedAt: text("produced_at").notNull(),
+    // ---- user-owned fields (survive independently of the run data) ----
+    /** Workflow status the user drives: New / In progress / Done. */
+    status: text("status", { enum: ["new", "in_progress", "done"] }).notNull().default("new"),
+    /** Priority the user sets (sortable): high / medium / low. */
+    priority: text("priority", { enum: ["high", "medium", "low"] }).notNull().default("medium"),
+    /** Assigned team member (user.id), or null (unassigned). */
+    assigneeUserId: text("assignee_user_id"),
+    /** Archived → the Archive tab (Active = not archived). */
+    archived: boolean("archived").notNull().default(false),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    index("todo_items_team_idx").on(t.teamId),
+    uniqueIndex("todo_items_run_idx").on(t.runId),
+    index("todo_items_loop_idx").on(t.loopId),
+  ],
+);
+
 export type Machine = typeof machines.$inferSelect;
 export type NewMachine = typeof machines.$inferInsert;
 export type Loop = typeof loops.$inferSelect;
@@ -524,9 +578,11 @@ export type RunSnapshot = typeof runSnapshots.$inferSelect;
 export type NewRunSnapshot = typeof runSnapshots.$inferInsert;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type ConnectKeyRow = typeof connectKeys.$inferSelect;
+export type TodoItem = typeof todoItems.$inferSelect;
+export type NewTodoItem = typeof todoItems.$inferInsert;
 
 /** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, connectKeys };
+export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, connectKeys, todoItems };
 
 // Keep a default no-op SQL reference so `sql` import isn't flagged before use.
 export const _schemaVersion = sql`1`;

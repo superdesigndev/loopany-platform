@@ -30,7 +30,7 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
-  await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+  await (db.client as any).exec("DELETE FROM todo_items; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 /** The core gateway MERGED with the CLI verb surface (`agentApi`/`cli` moved to
@@ -2983,4 +2983,35 @@ test("pollWait with pending work returns immediately; an empty wait times out wi
   const empty = (await gw.pollWait(token, undefined, undefined, { wait: true, waitMs: 120 })).body as { deliveries: unknown[] };
   expect(empty.deliveries).toHaveLength(0);
   expect(Date.now() - t1).toBeGreaterThanOrEqual(100);
+});
+
+test("report() ingests a successful run into the team To-Do list", async () => {
+  const { loop, run, rt } = await seededExecRun();
+  // The agent already set the run's content status before the daemon's report.
+  await store.updateRun(run.id, { status: "new" });
+  const res = await gateway().report(rt, { ok: true, message: "Shipped the daily digest", outcome: "exec" });
+  expect(res.status).toBe(200);
+  const items = await store.listTeamTodos(loop.teamId ?? undefined);
+  expect(items).toHaveLength(1);
+  expect(items[0]!.runId).toBe(run.id);
+  expect(items[0]!.title).toBe("Shipped the daily digest");
+  expect(items[0]!.failed).toBe(false);
+  expect(items[0]!.status).toBe("new");
+});
+
+test("report() of a nothing-new run creates NO To-Do item", async () => {
+  const { loop, run, rt } = await seededExecRun();
+  await store.updateRun(run.id, { status: "nothing-new" });
+  await gateway().report(rt, { ok: true, message: "nothing today", outcome: "exec" });
+  expect(await store.listTeamTodos(loop.teamId ?? undefined)).toHaveLength(0);
+});
+
+test("report() of a failed run ingests a failure To-Do item", async () => {
+  const { loop, run, rt } = await seededExecRun();
+  const res = await gateway().report(rt, { ok: false, error: "connection refused" });
+  expect(res.status).toBe(200);
+  const items = await store.listTeamTodos(loop.teamId ?? undefined);
+  expect(items).toHaveLength(1);
+  expect(items[0]!.failed).toBe(true);
+  expect(items[0]!.title).toBe("connection refused");
 });

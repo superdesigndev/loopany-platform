@@ -62,6 +62,7 @@ import {
 } from "./toon.js";
 import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
 import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
+import { ingestRunTodo } from "../server/todo.js";
 
 const log = logger.child({ mod: "gateway" });
 
@@ -421,10 +422,31 @@ export class MachineGateway {
    *  reconciliation retires the lease single-shot. A pending run (no lease minted
    *  yet) is unaffected — the terminalize is a no-op there. */
   private async reclaimRun(run: Run, reason: string): Promise<void> {
-    await store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
+    const finalized = await store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
     await terminalizeLease(run.id);
     if (run.role === "evolve") await this.scheduler.finishEvolution(run.loopId);
+    // A reclaimed run is a genuine failure — surface it on the team To-Do list too.
+    await this.ingestTodo(finalized, run.loopId);
     await this.notifyRunFailure(run.loopId, run.role, reason);
+  }
+
+  /**
+   * Best-effort: ingest a FINALIZED run into the team To-Do list (one item per
+   * meaningful run — see `server/todo.ts` for the rule). Idempotent by the
+   * `run_id` unique index, so calling it at every finalize point (normal report,
+   * the reclaim→wake-report reconcile, `finishLoop`, and `reclaimRun`) is safe:
+   * a later reconcile upserts the SAME row, refreshing the run-derived summary
+   * while preserving the user's status/assignee/priority/archived. NEVER throws
+   * into the report/finish path (the list is a downstream projection, not part
+   * of the run-lifecycle write).
+   */
+  private async ingestTodo(run: Run | undefined | null, loopId: string): Promise<void> {
+    if (!run) return;
+    try {
+      await ingestRunTodo(run, await store.getLoop(loopId));
+    } catch (err) {
+      log.warn({ runId: run.id, err: err instanceof Error ? err.message : String(err) }, "todo ingest failed");
+    }
   }
 
   /**
@@ -1422,6 +1444,10 @@ export class MachineGateway {
       });
       // Single-shot: no second late report may re-flip this run.
       await retireLease(runToken);
+      // Reconcile the To-Do item too (a reclaim created a failure item; a
+      // successful wake-report upserts the SAME row to the corrected result, the
+      // user's status/assignee/priority intact).
+      await this.ingestTodo(finalized, lease.loopId);
       // Re-capture the end-state snapshot (best-effort), same as the normal path.
       try {
         await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
@@ -1509,6 +1535,9 @@ export class MachineGateway {
       ts: nowIso(),
     });
     await retireLease(runToken);
+
+    // Project this run onto the team To-Do list (idempotent; best-effort).
+    await this.ingestTodo(finalized, lease.loopId);
 
     // Capture the loop's full file set as THIS run's snapshot (Phase 3 diff
     // baseline). Cheap: just record the manifest from the already-synced
@@ -1605,7 +1634,7 @@ export class MachineGateway {
     // is lost; the enriching report overrides it with the precise value.
     const run = await store.getRun(lease.runId);
     const durationMs = run ? Date.now() - Date.parse(run.ts) : NaN;
-    await store.updateRun(lease.runId, {
+    const finished = await store.updateRun(lease.runId, {
       phase: "done",
       outcome: "exec",
       status: "resolved",
@@ -1617,6 +1646,8 @@ export class MachineGateway {
     });
     const loop = await store.updateLoop(lease.loopId, { completedAt: ts, completionReason: reason, enabled: false });
     this.scheduler.removeLoop(lease.loopId);
+    // A finished closed-loop run is a resolved result — add it to the To-Do list.
+    await this.ingestTodo(finished, lease.loopId);
     // Snapshot the loop's end-state (Phase 3 diff baseline), best-effort like report().
     try {
       await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));

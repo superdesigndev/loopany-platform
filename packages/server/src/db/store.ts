@@ -24,6 +24,7 @@ import {
   artifactFiles,
   runSnapshots,
   runLeases,
+  todoItems,
   type ArtifactFile,
   type ArtifactMeta,
   type Loop,
@@ -40,6 +41,8 @@ import {
   type Team,
   type TeamMember,
   type TeamInvite,
+  type TodoItem,
+  type NewTodoItem,
 } from "./schema.js";
 
 // ---- coercion helpers (carried from c0 store.ts) ----
@@ -1222,4 +1225,175 @@ export async function liveArtifactSizes(loopId: string): Promise<Map<string, num
       ),
     );
   return new Map(rows.map((r) => [r.path, Number(r.size ?? 0)]));
+}
+
+// ---- todo_items (the team-global To-Do list; see server/todo.ts) ----
+
+/** One todo item joined with the context the board row renders: the source loop's
+ *  name, the source machine's name, and the assignee's email/display name. */
+export interface TodoItemWithContext extends TodoItem {
+  loopName: string | null;
+  machineName: string | null;
+  assigneeEmail: string | null;
+  assigneeName: string | null;
+}
+
+/** The run-derived half of a todo item (everything an ingest computes from the
+ *  finalized run + its loop). The user-owned half — status/priority/assignee/
+ *  archived — is NEVER set here; it defaults on insert and is preserved on a
+ *  re-ingest (upsert conflict). */
+export interface TodoRunFields {
+  runId: string;
+  loopId: string;
+  teamId: string | null;
+  machineId: string;
+  role: "exec" | "evolve" | "edit";
+  outcome: Run["outcome"];
+  runStatus: Run["status"];
+  failed: boolean;
+  title: string;
+  producedAt: string;
+}
+
+/** Idempotent ingest: create the item for a run, or (on a re-report/backfill/
+ *  reconcile) refresh ONLY the run-derived columns while preserving the user's
+ *  status/priority/assignee/archived. Keyed by the unique `run_id`. Returns the
+ *  resulting row. */
+export async function upsertTodoFromRun(f: TodoRunFields): Promise<TodoItem> {
+  const ts = nowIso();
+  const row: NewTodoItem = {
+    id: `todo-${randomUUID()}`,
+    teamId: f.teamId,
+    loopId: f.loopId,
+    runId: f.runId,
+    machineId: f.machineId,
+    role: f.role,
+    outcome: f.outcome,
+    runStatus: f.runStatus,
+    failed: f.failed,
+    title: f.title,
+    producedAt: f.producedAt,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  return (
+    await db
+      .insert(todoItems)
+      .values(row)
+      .onConflictDoUpdate({
+        target: todoItems.runId,
+        // Run-derived fields only — the user-owned columns are left untouched.
+        set: {
+          teamId: f.teamId,
+          loopId: f.loopId,
+          machineId: f.machineId,
+          role: f.role,
+          outcome: f.outcome,
+          runStatus: f.runStatus,
+          failed: f.failed,
+          title: f.title,
+          producedAt: f.producedAt,
+          updatedAt: ts,
+        },
+      })
+      .returning()
+  )[0]!;
+}
+
+export async function getTodoItem(id: string): Promise<TodoItem | undefined> {
+  return (await db.select().from(todoItems).where(eq(todoItems.id, id)))[0];
+}
+
+export async function getTodoByRun(runId: string): Promise<TodoItem | undefined> {
+  return (await db.select().from(todoItems).where(eq(todoItems.runId, runId)))[0];
+}
+
+/** The team's todo items (newest-produced first) with each row's loop/machine/
+ *  assignee context joined. `teamId: undefined` ⇒ open mode (the single shared
+ *  workspace — no team filter). Capped as a runaway guard. */
+export async function listTeamTodos(teamId: string | undefined, limit = 1000): Promise<TodoItemWithContext[]> {
+  const rows = await db
+    .select({
+      item: todoItems,
+      loopName: loops.name,
+      machineName: machines.name,
+      assigneeEmail: user.email,
+      assigneeName: user.name,
+    })
+    .from(todoItems)
+    .leftJoin(loops, eq(todoItems.loopId, loops.id))
+    .leftJoin(machines, eq(todoItems.machineId, machines.id))
+    .leftJoin(user, eq(todoItems.assigneeUserId, user.id))
+    .where(teamId ? eq(todoItems.teamId, teamId) : sql`true`)
+    .orderBy(desc(todoItems.producedAt))
+    .limit(limit);
+  return rows.map((r) => ({
+    ...r.item,
+    loopName: r.loopName ?? null,
+    machineName: r.machineName ?? null,
+    assigneeEmail: r.assigneeEmail ?? null,
+    assigneeName: r.assigneeName ?? null,
+  }));
+}
+
+/** Patch a todo item's user-owned fields. Only the passed keys are written. */
+export async function updateTodoItem(
+  id: string,
+  patch: Partial<Pick<TodoItem, "status" | "priority" | "assigneeUserId" | "archived">>,
+): Promise<TodoItem | undefined> {
+  await db.update(todoItems).set({ ...patch, updatedAt: nowIso() }).where(eq(todoItems.id, id));
+  return getTodoItem(id);
+}
+
+/** Finalized (done/error) runs across all loops since `sinceIso`, newest-first,
+ *  capped — the backfill input. `edit` runs are excluded at the source (they never
+ *  become items). */
+export async function listFinalizedRunsSince(sinceIso: string, limit = 5000): Promise<Run[]> {
+  return db
+    .select()
+    .from(runs)
+    .where(and(gte(runs.ts, sinceIso), inArray(runs.phase, ["done", "error"]), ne(runs.role, "edit")))
+    .orderBy(desc(runs.ts))
+    .limit(limit);
+}
+
+/** The best HTML artifact a run produced (for the item's rendered report): a live,
+ *  byte-backed `.html` file whose `lastRunId` is this run, newest-synced first.
+ *  Undefined ⇒ the run produced no HTML artifact (the report renders the run's
+ *  markdown/text message instead). */
+export async function htmlArtifactForRun(loopId: string, runId: string): Promise<ArtifactFileWithMeta | undefined> {
+  const rows = await db
+    .select({
+      id: artifactFiles.id,
+      loopId: artifactFiles.loopId,
+      path: artifactFiles.path,
+      hash: artifactFiles.hash,
+      size: artifactFiles.size,
+      binary: artifactFiles.binary,
+      oversize: artifactFiles.oversize,
+      deleted: artifactFiles.deleted,
+      updatedAt: artifactFiles.updatedAt,
+      lastRunId: artifactFiles.lastRunId,
+      meta: blobs.meta,
+    })
+    .from(artifactFiles)
+    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
+    .where(
+      and(
+        eq(artifactFiles.loopId, loopId),
+        eq(artifactFiles.lastRunId, runId),
+        eq(artifactFiles.deleted, false),
+        isNotNull(artifactFiles.hash),
+        sql`lower(${artifactFiles.path}) like '%.html'`,
+      ),
+    )
+    .orderBy(desc(artifactFiles.updatedAt));
+  const r = rows[0];
+  return r ? { ...r, meta: r.meta ?? null } : undefined;
+}
+
+/** Total todo item count — the first-rollout backfill gate (seed only when empty). */
+export async function countTodos(): Promise<number> {
+  const r = (await db.select({ n: sql<number>`count(*)` }).from(todoItems))[0];
+  return Number(r?.n ?? 0);
 }

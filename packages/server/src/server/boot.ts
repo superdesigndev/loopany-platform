@@ -23,6 +23,7 @@ import {
 } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
+import { seedTodosIfEmpty } from "./todo.js";
 
 interface Booted {
   scheduler: Scheduler;
@@ -73,6 +74,14 @@ async function boot(): Promise<Booted> {
   const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);
+
+  // First-rollout seed for the team To-Do list: backfill items from recent runs
+  // so the view isn't empty for teams that predate the feature. Gated on an empty
+  // table (idempotent — a re-boot never re-processes history), best-effort so it
+  // never blocks or fails boot.
+  void seedTodosIfEmpty()
+    .then((n) => n > 0 && logger.info({ ingested: n }, "todo: seeded from recent runs"))
+    .catch((err) => logger.warn({ err: String(err) }, "todo: seed failed"));
 
   // sweep() is async now: a rejected promise off a bare timer callback is an
   // unhandled rejection (Node can terminate). Catch it so a transient sweep error
