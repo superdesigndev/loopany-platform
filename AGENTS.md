@@ -264,8 +264,13 @@ computes pure functions. Run instructions: `README.md`.
   actionable item (`todo_items` table, migration `0003`; `run_id` UNIQUE = the
   idempotency key). It lives ON THE DASHBOARD (no standalone route): `DashboardView`
   renders a TWO-COLUMN layout — LEFT `TodoPanel`, RIGHT the existing loop sections —
-  ONLY when there are items (`todos.items.length > 0`), else the single-column loop
-  layout (no empty rail); narrow viewports stack (todos above loops). `TodoPanel`
+  ONLY when there are items (`todos.items.length > 0`), else a single-column loop
+  layout (no empty rail). The board region is FULL-BLEED (the `<main>` dropped its
+  `max-w`; the hero + playbook keep their own centered `max-w-[1180px]` wrappers) and
+  at `lg+` stands `h-[90vh]` with each column `overflow-y-auto min-h-0` so the columns
+  scroll INTERNALLY (the page doesn't grow with the list); the empty single column
+  gets the same full-width/90vh/internal-scroll treatment. Below `lg` it drops the
+  height cap and stacks in normal page flow (todos above loops). `TodoPanel`
   (`components/TeamTodoView.tsx`) is a calm, PRESENTATIONAL Rows-style board (the
   dashboard owns the fetch/poll and passes `data` + an `onChanged` refetch, so there
   is ONE poll and the layout keys off the count): one flat list, thin quiet headers,

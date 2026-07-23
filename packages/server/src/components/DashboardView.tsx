@@ -155,18 +155,26 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
     </>
   )
 
-  // Two-column ONLY when there are to-do items (spec: no empty left rail). The
-  // TODOs sit LEFT, the loops RIGHT; narrow viewports stack (TODOs above loops)
-  // via a single-column grid, and `min-w-0` on both tracks keeps wide content
-  // (a report, a card) scrolling inside its own pane — never the page.
+  // The board spans the FULL screen width and stands a fixed 90vh tall; each
+  // column scrolls INTERNALLY within that height (the page doesn't grow with the
+  // list). Two columns ONLY when there are to-do items (no empty left rail) — TODOs
+  // LEFT, loops RIGHT. The 90vh + internal scroll is a desktop (lg) treatment;
+  // narrow viewports drop it and stack in normal page flow (TODOs above loops), so
+  // the panes never become cramped 45vh slivers on a phone. `min-w-0` keeps wide
+  // content scrolling inside its own pane, never the page.
   const hasTodos = todos.items.length > 0
+  const columnScroll = 'min-w-0 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:pb-6'
   const board = hasTodos ? (
-    <div className="mt-12 grid grid-cols-1 gap-x-12 gap-y-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
-      <TodoPanel data={todos} onChanged={refresh} />
-      <div className="min-w-0">{loopContent}</div>
+    <div className="mt-10 grid grid-cols-1 gap-x-10 gap-y-8 px-8 max-sm:px-4 lg:h-[90vh] lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+      <div className={columnScroll}>
+        <TodoPanel data={todos} onChanged={refresh} />
+      </div>
+      <div className={columnScroll}>{loopContent}</div>
     </div>
   ) : (
-    <div className="mt-12">{loopContent}</div>
+    // Empty state (no items): SAME treatment — full width, 90vh, internal scroll —
+    // just a single column instead of two.
+    <div className="mt-10 px-8 max-sm:px-4 lg:h-[90vh] lg:min-h-0 lg:overflow-y-auto lg:pb-6">{loopContent}</div>
   )
 
   return (
@@ -222,10 +230,12 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1180px] px-8 pb-24">
+      {/* The main is full-width so the board region below can span the full screen;
+          the hero + playbook keep their own centered max-width wrappers. */}
+      <main className="pb-24">
         {/* Hero - invite creation first (serif = the one editorial moment),
             then the template fan, then a prominent blank-loop entry. */}
-        <section className="pb-2 pt-14 text-center">
+        <section className="mx-auto max-w-[1180px] px-8 pb-2 pt-14 text-center max-sm:px-4">
           <h1 className="font-pixel text-[clamp(28px,4.5vw,38px)] leading-[1.15] text-display">
             What should happen while you sleep?
           </h1>
@@ -249,8 +259,11 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         {board}
 
         {/* The playbook band - static education/sales content anchoring the page;
-            its CTA is the same blank-loop compose as the hero button. */}
-        <LoopPlaybook onStart={() => setCompose({ open: true, template: null })} />
+            its CTA is the same blank-loop compose as the hero button. Back inside a
+            centered wrapper (the board above is the only full-bleed region). */}
+        <div className="mx-auto max-w-[1180px] px-8 max-sm:px-4">
+          <LoopPlaybook onStart={() => setCompose({ open: true, template: null })} />
+        </div>
       </main>
 
       <ComposeModal
