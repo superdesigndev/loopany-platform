@@ -189,14 +189,11 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
             What should happen while you sleep?
           </h1>
           {bundles.length > 0 && (
-            <>
-              <div className="mb-1 mt-2 text-body text-secondary">Start with a bundle, or a single loop…</div>
-              <BundleCarousel
-                bundles={bundles}
-                onPickTemplate={(t) => setCompose({ open: true, template: t, bundle: null })}
-                onTryBundle={(b) => setCompose({ open: true, template: null, bundle: b })}
-              />
-            </>
+            <BundleCarousel
+              bundles={bundles}
+              onPickTemplate={(t) => setCompose({ open: true, template: t, bundle: null })}
+              onTryBundle={(b) => setCompose({ open: true, template: null, bundle: b })}
+            />
           )}
           <div className="mt-7">
             <button

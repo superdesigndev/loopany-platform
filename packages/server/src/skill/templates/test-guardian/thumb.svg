@@ -1,0 +1,24 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of the loop's dashboard: a test suite with the newest guarded test
+       passing (green check), a shield marking the guardian, and coverage
+       climbing. Colors ride the app's CSS variables. -->
+  <rect x="10.5" y="8.5" width="64" height="63" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="17" y="15" width="26" height="3" rx="1.5" fill="var(--color-rubik-green, #009b48)"/>
+  <circle cx="19.5" cy="27.25" r="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="26" y="26" width="38" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <rect x="15" y="34.5" width="54" height="9" rx="3" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+  <path d="M17.5 39l1.6 1.6 2.8-3" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="26" y="37.75" width="40" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <circle cx="19.5" cy="51.25" r="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="26" y="50" width="30" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <circle cx="19.5" cy="63.25" r="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="26" y="62" width="34" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <path d="M105 12l13 5v11c0 10-13 16-13 16s-13-6-13-16V17z" fill="var(--color-success-soft, rgba(0,155,72,0.1))" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M100 28l3.5 3.5 6-7" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="var(--color-rubik-green, #009b48)">
+    <rect x="92" y="62" width="6" height="7" rx="1.5" opacity="0.4"/>
+    <rect x="102" y="58" width="6" height="11" rx="1.5" opacity="0.6"/>
+    <rect x="112" y="53" width="6" height="16" rx="1.5" opacity="0.8"/>
+    <rect x="122" y="48" width="6" height="21" rx="1.5"/>
+  </g>
+</svg>

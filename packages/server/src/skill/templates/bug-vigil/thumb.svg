@@ -1,0 +1,19 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of a closed loop staking out one bug: a goal chip, a patrol
+       watching until a recurrence spikes and is captured (magnifier over a
+       bug), then the finish. Colors ride the app's CSS variables. -->
+  <rect x="10" y="8" width="60" height="11" rx="5.5" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+  <circle cx="18" cy="13.5" r="2" fill="var(--color-rubik-green, #009b48)"/>
+  <rect x="24" y="12.25" width="38" height="2.5" rx="1.25" fill="var(--color-rubik-green, #009b48)" opacity="0.55"/>
+  <rect x="10.5" y="26.5" width="60" height="45" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <path d="M16 58 24 57 32 58 40 56.5 46 57" stroke="var(--color-wire, #cfd3db)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M46 57 51 40" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="15" y="33" width="24" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <ellipse cx="52" cy="40" rx="4.5" ry="5.5" fill="none" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.4"/>
+  <path d="M52 34.5v-2.5M47.8 36.5l-2-1.5M56.2 36.5l2-1.5M47.5 40h-3M59.5 40h-3M48 44l-2 1.5M56 44l2 1.5" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.2" stroke-linecap="round"/>
+  <circle cx="60" cy="49" r="5.5" fill="none" stroke="var(--color-secondary, #6b7280)" stroke-width="1.5"/>
+  <path d="M64 53l4 4" stroke="var(--color-secondary, #6b7280)" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M96 40h14" stroke="var(--color-wire, #cfd3db)" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <circle cx="121" cy="40" r="11" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+  <path d="M115.5 40l3.5 3.5 7-8" stroke="var(--color-rubik-green, #009b48)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

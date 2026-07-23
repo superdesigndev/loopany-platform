@@ -1,0 +1,25 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of the loop's dashboard: outdated packages listed with an
+       upgrade-arrow, one pre-authorized upgrade applied (green check) and a
+       major held (amber), over the outdated-package count falling. Colors ride
+       the app's CSS variables. -->
+  <rect x="10.5" y="8.5" width="66" height="63" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="17" y="14" width="26" height="3" rx="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="17" y="24" width="10" height="8" rx="2" fill="var(--color-rubik-green, #009b48)" opacity="0.18"/>
+  <path d="M22 30.5v-4.5m0 0l-1.8 1.8M22 26l1.8 1.8" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="31" y="25" width="26" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <path d="M62 28.25l2 2 3.5-4" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="17" y="38" width="10" height="8" rx="2" fill="var(--color-rubik-green, #009b48)" opacity="0.18"/>
+  <path d="M22 44.5v-4.5m0 0l-1.8 1.8M22 40l1.8 1.8" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="31" y="39" width="22" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <path d="M62 42.25l2 2 3.5-4" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="15" y="52" width="56" height="9" rx="3" fill="var(--color-rubik-yellow, #ffd500)" opacity="0.2"/>
+  <rect x="17" y="52.5" width="10" height="8" rx="2" fill="var(--color-rubik-orange, #ff5800)" opacity="0.25"/>
+  <path d="M22 60v-4.5m0 0l-1.8 1.8M22 55.5l1.8 1.8" stroke="var(--color-rubik-orange, #ff5800)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="31" y="53.5" width="24" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <path d="M60 53.7v3.6M60 58.9h0.01" stroke="var(--color-rubik-orange, #ff5800)" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M82 66h52" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
+  <path d="M84 24 95 30 106 28 117 40 128 50 132 56" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="84" y="14" width="20" height="3" rx="1.5" fill="var(--color-hairline, #e3e5ea)"/>
+  <circle cx="132" cy="56" r="2.5" fill="var(--color-rubik-green, #009b48)"/>
+</svg>

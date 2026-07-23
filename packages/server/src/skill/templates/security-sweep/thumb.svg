@@ -1,0 +1,22 @@
+<svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <!-- Mock of the loop's dashboard: an advisory card flagged then a hardened
+       pin resolved, a padlock marking a held secret, and the open-advisory
+       count easing down. Colors ride the app's CSS variables. -->
+  <rect x="10.5" y="8.5" width="66" height="40" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="17" y="14" width="24" height="3" rx="1.5" fill="var(--color-rubik-red, #b71234)"/>
+  <rect x="15" y="21.5" width="57" height="9" rx="3" fill="var(--color-rubik-red, #b71234)" opacity="0.08"/>
+  <path d="M21 23.2v3.6M21 28.4h0.01" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M21 20.5l4 7.5h-8z" fill="none" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.3" stroke-linejoin="round"/>
+  <rect x="29" y="24.5" width="38" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <path d="M19 39.5l2 2 3.5-4" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="29" y="39" width="34" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="86" y="10" width="18" height="18" rx="4" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="91" y="18" width="8" height="7" rx="1.5" fill="var(--color-secondary, #6b7280)"/>
+  <path d="M92 18v-2.5a3 3 0 0 1 6 0V18" fill="none" stroke="var(--color-secondary, #6b7280)" stroke-width="1.4"/>
+  <rect x="110" y="10" width="24" height="18" rx="4" fill="var(--color-interactive-soft, rgba(0,70,173,0.08))"/>
+  <path d="M116 15h12M116 19h9M116 23h12" stroke="var(--color-rubik-blue, #0046ad)" stroke-width="1.4" stroke-linecap="round" opacity="0.6"/>
+  <path d="M86 68h48" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
+  <path d="M12 66h62" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
+  <path d="M14 55 30 57 46 54 62 60 78 58 92 62 108 61 132 66" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="132" cy="66" r="2.5" fill="var(--color-rubik-green, #009b48)"/>
+</svg>

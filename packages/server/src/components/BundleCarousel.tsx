@@ -190,12 +190,7 @@ function BundleFace({
   const rows = splitRows(bundle.members, 3)
   return (
     <div className="flex min-h-[300px] flex-col items-center justify-center px-10 py-2">
-      <div className="text-[18px] font-semibold tracking-[-0.01em] text-display">
-        {bundle.label}
-        <span className="ml-2 align-middle text-caption font-normal text-disabled">
-          {bundle.members.length} {bundle.members.length === 1 ? 'loop' : 'loops'}
-        </span>
-      </div>
+      <div className="text-[18px] font-semibold tracking-[-0.01em] text-display">{bundle.label}</div>
       <div className="mt-0.5 text-center text-body text-secondary">{bundle.tagline}</div>
 
       {/* The fan — balanced rows of up to three cards; tilt/lift grow from each row's
