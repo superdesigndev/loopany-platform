@@ -1,25 +1,29 @@
 <svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <!-- Mock of a closed loop shepherding one release: a goal chip with the
-       target date, a daily readiness checklist (mostly done, one pending), and
-       the go/no-go finish. Colors ride the app's CSS variables. -->
-  <rect x="10" y="8" width="50" height="11" rx="5.5" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
-  <path d="M17 10.5v6M15 12.5h4M15 14.5h4" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.3" stroke-linecap="round"/>
-  <rect x="24" y="12.25" width="30" height="2.5" rx="1.25" fill="var(--color-rubik-green, #009b48)" opacity="0.55"/>
-  <rect x="10.5" y="26.5" width="66" height="45" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <!-- Mock of a closed loop shepherding one release: a dated goal chip, a daily
+       readiness checklist (mostly done, one item pending), the open-item count
+       falling, and the go/no-go finish. Colors ride the app's CSS variables. -->
+  <rect x="10" y="8" width="62" height="11" rx="5.5" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+  <rect x="15" y="10" width="7" height="7" rx="1.5" fill="none" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.2"/>
+  <path d="M15 12h7" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.2"/>
+  <rect x="27" y="12.25" width="38" height="2.5" rx="1.25" fill="var(--color-rubik-green, #009b48)" opacity="0.55"/>
+  <rect x="10.5" y="26.5" width="52" height="45" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
   <g stroke="var(--color-rubik-green, #009b48)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="17" y="33" width="8" height="8" rx="2" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
-    <path d="M19 37l1.6 1.6 2.8-3"/>
-    <rect x="17" y="45" width="8" height="8" rx="2" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
-    <path d="M19 49l1.6 1.6 2.8-3"/>
+    <rect x="16" y="33" width="8" height="8" rx="2" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+    <path d="M18 37l1.6 1.6 2.8-3"/>
+    <rect x="16" y="45" width="8" height="8" rx="2" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+    <path d="M18 49l1.6 1.6 2.8-3"/>
   </g>
-  <rect x="17" y="57" width="8" height="8" rx="2" fill="none" stroke="var(--color-rubik-orange, #ff5800)" stroke-width="1.5"/>
+  <rect x="16" y="57" width="8" height="8" rx="2" fill="none" stroke="var(--color-rubik-orange, #ff5800)" stroke-width="1.5"/>
   <g fill="var(--color-wire, #cfd3db)">
-    <rect x="30" y="35.5" width="40" height="2.5" rx="1.25"/>
-    <rect x="30" y="47.5" width="34" height="2.5" rx="1.25"/>
+    <rect x="29" y="35.5" width="26" height="2.5" rx="1.25"/>
+    <rect x="29" y="47.5" width="22" height="2.5" rx="1.25"/>
   </g>
-  <rect x="30" y="59.5" width="30" height="2.5" rx="1.25" fill="var(--color-rubik-orange, #ff5800)" opacity="0.45"/>
-  <path d="M96 40h14" stroke="var(--color-wire, #cfd3db)" stroke-width="1.2" stroke-dasharray="3 3"/>
-  <circle cx="121" cy="40" r="11" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
-  <path d="M121 32c4 5 4 11 0 16-4-5-4-11 0-16z" fill="var(--color-rubik-green, #009b48)"/>
-  <path d="M121 34v12" stroke="var(--color-surface, #fff)" stroke-width="1" stroke-linecap="round"/>
+  <rect x="29" y="59.5" width="20" height="2.5" rx="1.25" fill="var(--color-rubik-orange, #ff5800)" opacity="0.45"/>
+  <path d="M70 40h12" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
+  <path d="M70 66h13" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
+  <path d="M71 58 78 55 85 56 92 49 99 45" stroke="var(--color-rubik-blue, #0046ad)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M104 40h13" stroke="var(--color-wire, #cfd3db)" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <circle cx="126" cy="40" r="10" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
+  <path d="M126 32c3.5 4.5 3.5 11 0 15.5-3.5-4.5-3.5-11 0-15.5z" fill="var(--color-rubik-green, #009b48)"/>
+  <path d="M126 34v11.5" stroke="var(--color-surface, #fff)" stroke-width="1" stroke-linecap="round"/>
 </svg>

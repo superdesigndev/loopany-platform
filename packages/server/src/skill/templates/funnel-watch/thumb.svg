@@ -1,17 +1,18 @@
 <svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <!-- Mock of the loop's dashboard: the conversion funnel narrowing step by
-       step with one step dropping (red alert), over the conversion-rate
-       trend. Colors ride the app's CSS variables. -->
-  <rect x="10.5" y="8.5" width="60" height="63" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
-  <rect x="17" y="14" width="24" height="3" rx="1.5" fill="var(--color-wire, #cfd3db)"/>
-  <rect x="18" y="24" width="44" height="7" rx="2" fill="var(--color-rubik-blue, #0046ad)" opacity="0.85"/>
-  <rect x="24" y="34" width="32" height="7" rx="2" fill="var(--color-rubik-blue, #0046ad)" opacity="0.6"/>
-  <rect x="30" y="44" width="20" height="7" rx="2" fill="var(--color-rubik-red, #b71234)" opacity="0.8"/>
-  <rect x="34" y="54" width="12" height="7" rx="2" fill="var(--color-rubik-blue, #0046ad)" opacity="0.3"/>
-  <path d="M56 47.5l3 0M62 47.5v-4M62 47.5l-2-2M62 47.5l2-2" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="80" y="12" width="24" height="3" rx="1.5" fill="var(--color-rubik-green, #009b48)"/>
-  <path d="M80 66h54" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
-  <path d="M81 40 92 44 103 42 114 52 125 56 133 60" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="114" cy="52" r="3" fill="var(--color-rubik-red, #b71234)"/>
-  <rect x="80" y="24" width="20" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <!-- Mock of the loop's dashboard: the newest report showing the conversion
+       funnel with one step dropping (red alert), beside the conversion-rate
+       trend over time. Colors ride the app's CSS variables. -->
+  <rect x="10.5" y="8.5" width="62" height="63" rx="5" fill="var(--color-surface, #fff)" stroke="var(--color-hairline, #e3e5ea)"/>
+  <rect x="17" y="15" width="24" height="3" rx="1.5" fill="var(--color-wire, #cfd3db)"/>
+  <rect x="18" y="25" width="46" height="8" rx="2" fill="var(--color-rubik-blue, #0046ad)" opacity="0.85"/>
+  <rect x="24" y="36" width="34" height="8" rx="2" fill="var(--color-rubik-blue, #0046ad)" opacity="0.6"/>
+  <rect x="30" y="47" width="22" height="8" rx="2" fill="var(--color-rubik-red, #b71234)" opacity="0.8"/>
+  <rect x="34" y="58" width="14" height="8" rx="2" fill="var(--color-rubik-blue, #0046ad)" opacity="0.3"/>
+  <path d="M55 51h4M62 51v-4.5M62 51l-2-2M62 51l2-2" stroke="var(--color-rubik-red, #b71234)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="82" y="12" width="24" height="3" rx="1.5" fill="var(--color-rubik-green, #009b48)"/>
+  <path d="M82 66h52" stroke="var(--color-hairline, #e3e5ea)" stroke-width="1.2"/>
+  <path d="M83 38 93 42 103 40 113 51 123 55 132 58" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="113" cy="51" r="3" fill="var(--color-rubik-red, #b71234)"/>
+  <rect x="82" y="24" width="20" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
+  <rect x="82" y="30" width="14" height="2.5" rx="1.25" fill="var(--color-hairline, #e3e5ea)"/>
 </svg>
