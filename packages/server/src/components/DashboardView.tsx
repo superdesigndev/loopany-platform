@@ -11,6 +11,7 @@ import { MachinesModal } from './MachinesModal'
 import { NotificationsModal } from './NotificationsModal'
 import { TeamsModal } from './TeamsModal'
 import { ComposeModal } from './ComposeModal'
+import { OnboardingEntry } from './OnboardingEntry'
 import { LoopLogo } from './LoopLogo'
 import { LoopPlaybook } from './LoopPlaybook'
 import { DISCORD_URL, DiscordIcon, GITHUB_URL, GitHubIcon } from './SocialLinks'
@@ -167,6 +168,12 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
       </header>
 
       <main className="mx-auto max-w-[1180px] px-8 pb-24">
+        {/* Minimal first-run entry hook: auto-starts the guided onboarding for an
+            empty workspace and offers a quiet re-entry while the user has no loops.
+            Its own component so this dashboard body stays untouched. */}
+        <div className="pt-6">
+          <OnboardingEntry teamId={teamId} noLoops={jobs.length === 0} noMachines={machines.length === 0} />
+        </div>
         {/* Hero - invite creation first (serif = the one editorial moment),
             then the template fan, then a prominent blank-loop entry. */}
         <section className="pb-2 pt-14 text-center">

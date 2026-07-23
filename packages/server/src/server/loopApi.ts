@@ -72,13 +72,18 @@ export const getAuthState = createServerFn({ method: 'GET' }).handler(async () =
  * `node /abs/packages/daemon/dist/cli.js`, so loops created from THIS server tell
  * Claude Code to run your local code instead of the registry build.
  */
-export const getConfig = createServerFn({ method: 'GET' }).handler(() => {
+export const getConfig = createServerFn({ method: 'GET' }).handler(async () => {
+  const { onboardingSimEnabled } = await import('../lib/onboardingSim.js')
   const custom = process.env.LOOPANY_CLI?.trim()
   return {
     loopanyCli: custom || 'npx @crewlet/loopany@latest',
     /** True when a non-default (dev) CLI is configured — the New-loop paste then
      *  carries an explicit `loopany-cli:` line so Claude Code uses it verbatim. */
     customCli: !!custom,
+    /** DEV-ONLY: whether the onboarding simulation shim is live (dev build + the
+     *  `LOOPANY_ONBOARDING_SIM` opt-in). The wizard renders its "simulate" buttons
+     *  ONLY when this is true; always false in a production build. */
+    onboardingSim: onboardingSimEnabled(),
   }
 })
 

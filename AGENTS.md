@@ -828,6 +828,31 @@ computes pure functions. Run instructions: `README.md`.
   in BOTH the track formula and the `gap` declaration so the cap math can never drift from
   the actual gap. `LoopView` dropped `space-y-*` so the grid gap owns spacing.
 
+- **First-run onboarding** (`routes/onboarding.tsx` → `components/OnboardingWizard.tsx`)
+  is its OWN route, NOT a homepage overlay - deliberately, so it never restructures the
+  dashboard. The homepage's only footprint is `components/OnboardingEntry.tsx` (one line +
+  import in `DashboardView`): it auto-starts the wizard ONCE for a fully empty workspace
+  (no loops AND no machines, `markOnboardingDismissed` set BEFORE the redirect so Back
+  can't re-trigger) and otherwise shows a quiet re-entry banner while the user has no
+  loops. The wizard MIRRORS how a loop is really born and advances ONLY on DETECTED
+  reality: the machine step reuses `createMachine`/`machineStatus` (Continue gated on
+  `.online`), the create step reuses `mintClaim`/`claimStatus` + the Housekeeper template
+  `description` (auto-advances on `.done`) - never a claimed Next. Step + minted tokens
+  persist per team via `lib/onboardingState.ts` (pure, unit-tested) so a mid-flow reload
+  resumes.
+- **DEV-ONLY onboarding sim** lets the flow be clicked locally without a second machine.
+  ONE gate, `lib/onboardingSim.ts` `onboardingSimEnabled()` = NOT a production build AND
+  `LOOPANY_ONBOARDING_SIM` truthy; `getConfig` echoes it so the wizard's "Simulate …"
+  buttons only render when it's on, and `server/onboardingSim.ts` (`simulateMachineConnect`
+  / `simulateLoopCreated`) refuse when it's off - so a prod build can reach neither the
+  affordance nor the effect. The sim writes the SAME store rows a real daemon would
+  (`updateMachine` online / `gateway.createLoop` with the claim), so the detection paths
+  the wizard polls stay 100% real. Local demo: `LOOPANY_ONBOARDING_SIM=1 LOOPANY_DATA_DIR=<fresh>
+  LOOPANY_DB=pglite pnpm dev`.
+- **Shared-Chrome contention in browser verify**: other lanes drive the same Chrome, so a
+  bare `chrome-devtools-axi` tab gets navigated out from under you mid-flow. Set
+  `CHROME_DEVTOOLS_AXI_SESSION=<lane>` to get a fully isolated browser instance for the run.
+
 ## CI/CD (`.github/workflows/`)
 
 - `deploy.yml`: push to `main` -> `flyctl deploy --remote-only` (Fly app
