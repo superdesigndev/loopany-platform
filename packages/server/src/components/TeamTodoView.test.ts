@@ -5,21 +5,20 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import type { TodoItemView, TodoListView } from '../types'
 
-const { listTodos, patchTodo, getTodoOutput } = vi.hoisted(() => ({
-  listTodos: vi.fn(),
+const { patchTodo, getTodoOutput } = vi.hoisted(() => ({
   patchTodo: vi.fn(async () => ({ ok: true })),
   getTodoOutput: vi.fn(async () => ({ kind: 'markdown' as const, content: '# Report body' })),
 }))
 
-vi.mock('../server/loopApi', () => ({ listTodos, patchTodo, getTodoOutput }))
-// The router Link + the heavy report viewers are out of scope for the board test.
+vi.mock('../server/loopApi', () => ({ patchTodo, getTodoOutput }))
+// The router Link + the heavy report viewers are out of scope for the panel test.
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: unknown }) => createElement('a', {}, children as never),
 }))
 vi.mock('./artifactView', () => ({ ArtifactBody: () => createElement('div', { 'data-testid': 'artifact' }) }))
 vi.mock('./TaskFileView', () => ({ TaskFileView: ({ content }: { content: string }) => createElement('div', { 'data-testid': 'md' }, content) }))
 
-import { TodoPage } from './TeamTodoView'
+import { TodoPanel } from './TeamTodoView'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -55,7 +54,6 @@ let host: HTMLDivElement | null = null
 let root: Root | null = null
 
 beforeEach(() => {
-  listTodos.mockReset()
   patchTodo.mockClear()
   getTodoOutput.mockClear()
 })
@@ -67,49 +65,44 @@ afterEach(async () => {
   root = null
 })
 
-async function mount() {
+async function mount(data: TodoListView, onChanged?: () => void) {
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
   await act(async () => {
-    root!.render(createElement(TodoPage, { teamId: 'team-a' }))
+    root!.render(createElement(TodoPanel, { data, onChanged }))
   })
-  // Let the mount refetch resolve.
-  await act(async () => {})
   return host!
 }
 
 it('renders rows and Active/Archive tab counts', async () => {
-  listTodos.mockResolvedValue(
+  const el = await mount(
     view([item({ id: 'a', title: 'Active one' }), item({ id: 'b', title: 'Archived one', archived: true })]),
   )
-  const el = await mount()
   expect(el.textContent).toContain('Active one')
   // The archived item is on the other tab, not shown in Active.
   expect(el.textContent).not.toContain('Archived one')
-  // Tab counts: Active 1, Archive 1.
-  const tabs = Array.from(el.querySelectorAll('button')).filter((b) => /^(Active|Archive)/.test(b.textContent ?? ''))
+  const tabs = Array.from(el.querySelectorAll('button')).filter((b) => /^(Active|Archive)\s/.test(b.textContent ?? ''))
   expect(tabs.find((b) => b.textContent?.startsWith('Active'))?.textContent).toContain('1')
   expect(tabs.find((b) => b.textContent?.startsWith('Archive'))?.textContent).toContain('1')
 })
 
-it('an inline status edit calls patchTodo', async () => {
-  listTodos.mockResolvedValue(view([item({ id: 'a' })]))
-  const el = await mount()
+it('an inline status edit calls patchTodo and onChanged', async () => {
+  const onChanged = vi.fn()
+  const el = await mount(view([item({ id: 'a' })]), onChanged)
   const statusSelect = Array.from(el.querySelectorAll('select')).find(
     (s) => s.getAttribute('aria-label') === 'Change status',
   ) as HTMLSelectElement
-  expect(statusSelect).toBeTruthy()
   await act(async () => {
     statusSelect.value = 'done'
     statusSelect.dispatchEvent(new Event('change', { bubbles: true }))
   })
   expect(patchTodo).toHaveBeenCalledWith({ data: { id: 'a', patch: { status: 'done' } } })
+  expect(onChanged).toHaveBeenCalled()
 })
 
 it('the mark-done checkbox sets status done', async () => {
-  listTodos.mockResolvedValue(view([item({ id: 'a' })]))
-  const el = await mount()
+  const el = await mount(view([item({ id: 'a' })]))
   const cb = el.querySelector('input[type="checkbox"]') as HTMLInputElement
   await act(async () => {
     cb.click()
@@ -117,9 +110,15 @@ it('the mark-done checkbox sets status done', async () => {
   expect(patchTodo).toHaveBeenCalledWith({ data: { id: 'a', patch: { status: 'done' } } })
 })
 
+it('archive moves an item to the Archive tab', async () => {
+  const el = await mount(view([item({ id: 'a' })]))
+  const archiveBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Archive' && !/^Archive\s/.test(b.textContent ?? '')) as HTMLButtonElement
+  await act(async () => archiveBtn.click())
+  expect(patchTodo).toHaveBeenCalledWith({ data: { id: 'a', patch: { archived: true } } })
+})
+
 it('expanding a row loads and renders the report', async () => {
-  listTodos.mockResolvedValue(view([item({ id: 'a', title: 'Open me' })]))
-  const el = await mount()
+  const el = await mount(view([item({ id: 'a', title: 'Open me' })]))
   const caret = el.querySelector('button[aria-label="Expand item"]') as HTMLButtonElement
   await act(async () => {
     caret.click()
@@ -130,16 +129,13 @@ it('expanding a row loads and renders the report', async () => {
 })
 
 it('sorting by title reorders the rows', async () => {
-  listTodos.mockResolvedValue(
-    view([item({ id: 'a', title: 'Zebra' }), item({ id: 'b', title: 'Apple' })]),
-  )
-  const el = await mount()
-  const titles = () =>
-    Array.from(el.querySelectorAll('button[title]'))
-      .map((b) => b.getAttribute('title'))
-      .filter((t) => t === 'Zebra' || t === 'Apple')
-  // Default sort is date-desc (both same-ish); click the Item header → title asc.
-  const header = Array.from(el.querySelectorAll('button')).find((b) => (b.textContent ?? '').startsWith('Item')) as HTMLButtonElement
+  const el = await mount(view([item({ id: 'a', title: 'Zebra' }), item({ id: 'b', title: 'Apple' })]))
+  const titleOf = () =>
+    Array.from(el.querySelectorAll('button[aria-label="Expand item"]')).map((caret) => {
+      const row = caret.closest('.group') as HTMLElement
+      return Array.from(row.querySelectorAll('button[title]')).map((b) => b.getAttribute('title')).find((t) => t === 'Zebra' || t === 'Apple')
+    })
+  const header = Array.from(el.querySelectorAll('button')).find((b) => (b.textContent ?? '').trim().toLowerCase().startsWith('item')) as HTMLButtonElement
   await act(async () => header.click())
-  expect(titles()[0]).toBe('Apple')
+  expect(titleOf()[0]).toBe('Apple')
 })

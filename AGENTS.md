@@ -260,11 +260,18 @@ computes pure functions. Run instructions: `README.md`.
 
 ## Team To-Do list (run outputs as actionable items)
 
-- A team-scoped, DB-backed board where every MEANINGFUL loop run lands as one
+- A team-scoped, DB-backed list where every MEANINGFUL loop run lands as one
   actionable item (`todo_items` table, migration `0003`; `run_id` UNIQUE = the
-  idempotency key). Route: `/t/<teamId>/todo` (+ open-mode `/todo`), rendered by
-  `components/TeamTodoView.tsx` (a Rows-style row board: inline priority/status/
-  assignee edits, sortable headers, Active/Archive tabs, expand-a-row).
+  idempotency key). It lives ON THE DASHBOARD (no standalone route): `DashboardView`
+  renders a TWO-COLUMN layout — LEFT `TodoPanel`, RIGHT the existing loop sections —
+  ONLY when there are items (`todos.items.length > 0`), else the single-column loop
+  layout (no empty rail); narrow viewports stack (todos above loops). `TodoPanel`
+  (`components/TeamTodoView.tsx`) is a calm, PRESENTATIONAL Rows-style board (the
+  dashboard owns the fetch/poll and passes `data` + an `onChanged` refetch, so there
+  is ONE poll and the layout keys off the count): one flat list, thin quiet headers,
+  inline priority/status/assignee edits (bare selects revealing affordances on
+  hover/focus), Active/Archive tabs, mark-done, expand-a-row. `DashboardView`'s
+  `fetchLiveData`/`DashboardData` carry `todos` (seeded by the route loaders).
 - **Ingestion is server-side, ZERO daemon change.** The pure rule + title live in
   `server/todo.ts` (`todoDecision`/`todoTitle`, unit-tested); `ingestRunTodo` is
   called at EVERY run finalize point in `gateway/index.ts` (normal report, the

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Tooltip } from '@base-ui/react/tooltip'
-import { listJobs, listMyTeams } from '../server/loopApi'
+import { listJobs, listMyTeams, listTodos } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
-import type { JobSummary, MachineSummary, RunSummary, TeamsView, TemplateInfo } from '../types'
+import type { JobSummary, MachineSummary, RunSummary, TeamsView, TemplateInfo, TodoListView } from '../types'
 import { isCompleted } from '../lib/format'
 import { LoopCard } from './LoopCard'
+import { TodoPanel } from './TeamTodoView'
 import { TeamSwitcher } from './TeamSwitcher'
 import { MachinesModal } from './MachinesModal'
 import { NotificationsModal } from './NotificationsModal'
@@ -22,6 +23,7 @@ export interface DashboardData {
   templates: TemplateInfo[]
   machines: MachineSummary[]
   teams: TeamsView | undefined
+  todos: TodoListView
 }
 
 /** The LIVE data fan-out - jobs/machines/teams change between polls. Templates
@@ -32,12 +34,13 @@ export interface DashboardData {
  *  scopes every list fn EXPLICITLY - so a tab on /t/A and one on /t/B show
  *  different teams simultaneously, independent of the shared last-used cookie. */
 export async function fetchLiveData(teamId?: string) {
-  const [jobs, machines, teams] = await Promise.all([
+  const [jobs, machines, teams, todos] = await Promise.all([
     listJobs({ data: teamId }),
     listMachines({ data: teamId }),
     listMyTeams({ data: teamId }),
+    listTodos({ data: teamId }),
   ])
-  return { jobs, machines, teams }
+  return { jobs, machines, teams, todos }
 }
 
 /**
@@ -56,8 +59,9 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
     templates: initial?.templates ?? [],
     machines: initial?.machines ?? [],
     teams: initial?.teams,
+    todos: initial?.todos ?? { items: [], members: [], canEdit: false },
   }))
-  const { jobs, templates, machines, teams } = data
+  const { jobs, templates, machines, teams, todos } = data
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
   // Compose carries an optional template: null = blank New Loop; a TemplateInfo =
@@ -113,6 +117,58 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
       void navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: jobId, runId: run.id } }),
   })
 
+  // The loop-side content (unchanged): Active + Completed loop sections. Extracted
+  // so it can be the RIGHT column when there are to-do items, or the single column
+  // otherwise. Keeping this a bare fragment (no top margin) lets the wrappers below
+  // own the spacing so the two column headings line up.
+  const loopContent = (
+    <>
+      <div className="mb-5 flex items-baseline gap-2.5">
+        <h2 className="text-body font-semibold text-display">Active loops</h2>
+        <span className="text-label text-secondary">
+          {active.length ? `${activeOn} scheduled · ${active.length} total` : ''}
+        </span>
+      </div>
+
+      {active.length ? (
+        active.map((j) => <LoopCard job={j} {...cardProps()} key={j.id} />)
+      ) : (
+        <div className="py-16 text-center">
+          <div className="text-[15px] text-secondary">{jobs.length ? 'No active loops' : 'No loops yet'}</div>
+          {!jobs.length && (
+            <div className="mt-1.5 text-body text-disabled">Pick a template above, or start a blank loop.</div>
+          )}
+        </div>
+      )}
+
+      {completed.length > 0 && (
+        <>
+          <div className="mb-5 mt-11 flex items-baseline gap-2.5">
+            <h2 className="text-body font-semibold text-display">Completed</h2>
+            <span className="text-label text-secondary">{completed.length} total</span>
+          </div>
+          {completed.map((j) => (
+            <LoopCard job={j} {...cardProps()} key={j.id} />
+          ))}
+        </>
+      )}
+    </>
+  )
+
+  // Two-column ONLY when there are to-do items (spec: no empty left rail). The
+  // TODOs sit LEFT, the loops RIGHT; narrow viewports stack (TODOs above loops)
+  // via a single-column grid, and `min-w-0` on both tracks keeps wide content
+  // (a report, a card) scrolling inside its own pane — never the page.
+  const hasTodos = todos.items.length > 0
+  const board = hasTodos ? (
+    <div className="mt-12 grid grid-cols-1 gap-x-12 gap-y-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+      <TodoPanel data={todos} onChanged={refresh} />
+      <div className="min-w-0">{loopContent}</div>
+    </div>
+  ) : (
+    <div className="mt-12">{loopContent}</div>
+  )
+
   return (
     <Tooltip.Provider delay={120}>
       {/* Sticky glass top bar - the ONE always-glass surface; content scrolls
@@ -141,15 +197,6 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
               window in its own right). Open mode has no /t/<id>, so it links to
               the bare /timeline route instead — the view must be reachable in
               BOTH modes or self-hosters never find it. */}
-          {teamId ? (
-            <Link to="/t/$teamId/todo" params={{ teamId }} className={headerBtn}>
-              To-Do
-            </Link>
-          ) : (
-            <Link to="/todo" className={headerBtn}>
-              To-Do
-            </Link>
-          )}
           {teamId ? (
             <Link to="/t/$teamId/timeline" params={{ teamId }} className={headerBtn}>
               Timeline
@@ -199,39 +246,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
           </div>
         </section>
 
-        <div className="mb-5 mt-12 flex items-baseline gap-2.5">
-          <h2 className="text-body font-semibold text-display">Active loops</h2>
-          <span className="text-label text-secondary">
-            {active.length ? `${activeOn} scheduled · ${active.length} total` : ''}
-          </span>
-        </div>
-
-        {active.length ? (
-          active.map((j) => <LoopCard job={j} {...cardProps()} key={j.id} />)
-        ) : (
-          <div className="py-16 text-center">
-            <div className="text-[15px] text-secondary">
-              {jobs.length ? 'No active loops' : 'No loops yet'}
-            </div>
-            {!jobs.length && (
-              <div className="mt-1.5 text-body text-disabled">
-                Pick a template above, or start a blank loop.
-              </div>
-            )}
-          </div>
-        )}
-
-        {completed.length > 0 && (
-          <>
-            <div className="mb-5 mt-11 flex items-baseline gap-2.5">
-              <h2 className="text-body font-semibold text-display">Completed</h2>
-              <span className="text-label text-secondary">{completed.length} total</span>
-            </div>
-            {completed.map((j) => (
-              <LoopCard job={j} {...cardProps()} key={j.id} />
-            ))}
-          </>
-        )}
+        {board}
 
         {/* The playbook band - static education/sales content anchoring the page;
             its CTA is the same blank-loop compose as the hero button. */}
