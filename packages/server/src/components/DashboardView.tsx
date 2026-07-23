@@ -6,7 +6,7 @@ import { listMachines } from '../server/machineFns'
 import type { BundleView, JobSummary, MachineSummary, RunSummary, TeamsView, TemplateInfo } from '../types'
 import { isCompleted } from '../lib/format'
 import { LoopCard } from './LoopCard'
-import { BundleDial } from './BundleDial'
+import { BundleShelf } from './BundleShelf'
 import { TeamSwitcher } from './TeamSwitcher'
 import { MachinesModal } from './MachinesModal'
 import { NotificationsModal } from './NotificationsModal'
@@ -183,15 +183,15 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
           <OnboardingEntry teamId={teamId} noLoops={jobs.length === 0} noMachines={machines.length === 0} />
         </div>
         {/* Hero - invite creation first (serif = the one editorial moment), then the
-            stage-select dial of template bundles, then a prominent blank-loop entry. */}
+            shelf of every template bundle, then a prominent blank-loop entry. */}
         <section className="pb-2 pt-14 text-center">
           <h1 className="font-pixel text-[clamp(28px,4.5vw,38px)] leading-[1.15] text-display">
             What should happen while you sleep?
           </h1>
           {bundles.length > 0 && (
             <>
-              <div className="mb-1 mt-2 text-body text-secondary">Spin to a bundle, or pick a single loop…</div>
-              <BundleDial
+              <div className="mb-1 mt-2 text-body text-secondary">Start with a bundle, or a single loop…</div>
+              <BundleShelf
                 bundles={bundles}
                 onPickTemplate={(t) => setCompose({ open: true, template: t, bundle: null })}
                 onTryBundle={(b) => setCompose({ open: true, template: null, bundle: b })}

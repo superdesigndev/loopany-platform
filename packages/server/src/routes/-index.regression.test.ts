@@ -64,29 +64,34 @@ describe('dashboard poll resilience', () => {
   })
 })
 
-describe('dashboard bundle dial layout', () => {
-  it('renders the BundleDial in the hero, not the old flat TemplateFan', () => {
-    // The template fan was replaced by the rotating stage-select dial.
-    expect(view).toContain('<BundleDial')
+describe('dashboard bundle shelf layout', () => {
+  it('renders the BundleShelf in the hero, not the old fan or carousel', () => {
+    // Round 2: the one-bundle-at-a-time dial was replaced by a static shelf showing
+    // every bundle at once.
+    expect(view).toContain('<BundleShelf')
     expect(view).not.toContain('TemplateFan')
-    // The dial is seeded from the loader's static-per-deploy bundles (never re-polled).
+    expect(view).not.toContain('BundleDial')
+    // Seeded from the loader's static-per-deploy bundles (never re-polled).
     expect(view).toContain('bundles={bundles}')
   })
 
-  it('clips the oversized disc so no page scroll is introduced (the hard rule)', () => {
-    // The wheel is a huge disc (2 x --dial-r); the stage MUST clip it (overflow:hidden)
-    // with a bounded height, so the disc never widens or lengthens the page. This is
-    // the dial's equivalent of the fan's flex-wrap guarantee.
-    const stage = /\.dial-stage\s*\{[\s\S]*?\}/.exec(appCss)?.[0]
-    expect(stage, 'the .dial-stage rule should exist').toBeTruthy()
-    expect(stage).toContain('overflow: hidden')
-    expect(stage).toMatch(/height:\s*\d+px/)
+  it('carries no carousel/dial CSS anymore (no spin, arrows, or clipped disc)', () => {
+    // The shelf is plain flow layout: no oversized wheel to clip, so none of the
+    // dial machinery should survive in the stylesheet.
+    expect(appCss).not.toContain('.dial-')
+    expect(appCss).not.toMatch(/@property\s+--rot/)
   })
 
-  it('drives the spin via the registered @property --rot (transitionable angle)', () => {
-    // The rotation angle is a registered custom property so the ~0.6s ease-out spin
-    // animates; reduced-motion jumps instantly.
-    expect(appCss).toMatch(/@property\s+--rot/)
-    expect(appCss).toContain('prefers-reduced-motion')
+  it('splits bundles into balanced rows of up to three, larger row on top', () => {
+    // The layout rule is data-driven (splitRows in BundleShelf.tsx): ceil-first so the
+    // LARGER row sits on top — the captain's 5 -> 3+2 example, generalizing to any count.
+    const shelf = readFileSync(
+      fileURLToPath(new URL('../components/BundleShelf.tsx', import.meta.url)),
+      'utf8',
+    )
+    expect(shelf).toContain('splitRows(bundles, 3)')
+    expect(shelf).toMatch(/Math\.ceil\(\(items\.length - at\) \/ \(rowCount - r\)\)/)
+    // Row containers wrap so no bundle count can widen the page.
+    expect(shelf).toContain('flex flex-wrap')
   })
 })
