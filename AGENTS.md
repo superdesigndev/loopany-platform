@@ -839,12 +839,18 @@ computes pure functions. Run instructions: `README.md`.
   `.online`), the create step reuses `mintClaim`/`claimStatus` + the Housekeeper template
   `description` (auto-advances on `.done`) - never a claimed Next. Step + minted tokens
   persist per team via `lib/onboardingState.ts` (pure, unit-tested) so a mid-flow reload
-  resumes. The "Meet Housekeeper" step embeds `HousekeeperCinematic` - a tiny in-house
-  (CSS/SVG/JS, no deps) three-act auto-playing storyboard (8:00 AM black frame → a
-  stylized NON-GitHub PR mock, +2/−102 merged clean → a 30→80 cleanliness-score arc)
-  that RESTS on the last act with Replay; `prefers-reduced-motion` (JS `matchMedia`, since
-  the global CSS reduced-motion reset can't stop JS timers) renders static stills, no
-  auto-play. Decorative only - never gates Continue.
+  resumes. The "Meet Housekeeper" step embeds `HousekeeperCinematic` - a spring-physics
+  three-act storyboard (in-house CSS/SVG/JS, NO framer-motion): odometer clock rolling to
+  8:00, a stylized NON-GitHub PR mock (staggered deletion-line sweep, −102 odometer, a
+  "Merged" STAMP) and a 30→80 cleanliness arc with overshoot + a spark flourish. It follows
+  the storyboard pattern (ONE `stage` integer + a `TIMING` map + config objects); springs
+  are CSS back-out cubic-beziers (`--hk-spring` in app.css, `hk-*` keyframes), numeric
+  counters are `useTween` (setInterval + `Date.now`, so vitest fake timers drive them - do
+  NOT switch to rAF or the tests can't advance it). Acts crossfade+transform for
+  choreographed handoff. RESTS on the last act with Replay; `prefers-reduced-motion` (JS
+  `matchMedia`, since the global CSS reduced-motion reset can't stop JS timers) renders a
+  separate static-stills path. Decorative only - never gates Continue. `data-act` (0/1/2 or
+  "stills") + `data-testid=hk-score` are the test hooks.
 - **DEV-ONLY onboarding sim** lets the flow be clicked locally without a second machine.
   ONE gate, `lib/onboardingSim.ts` `onboardingSimEnabled()` = NOT a production build AND
   `LOOPANY_ONBOARDING_SIM` truthy; `getConfig` echoes it so the wizard's "Simulate …"

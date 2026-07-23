@@ -110,9 +110,10 @@ describe('OnboardingWizard step machine', () => {
 
     click('Continue')
     expect(host!.textContent).toContain('Meet Housekeeper')
-    // The three-act cinematic renders (all acts are in the DOM; they crossfade).
+    // The three-act cinematic renders (all acts mount; content that is present from
+    // the first frame — later beats like the Merged stamp arrive on a timeline).
     expect(host!.textContent).toContain('8:00 AM')
-    expect(host!.textContent).toContain('Merged')
+    expect(host!.textContent).toContain('Remove dead code')
     expect(host!.textContent).toContain('Cleanliness score')
 
     click('Set it up')
