@@ -1,0 +1,7 @@
+{
+  "name": "ship-with-confidence",
+  "label": "Ship with Confidence",
+  "tagline": "Make every release safe to ship.",
+  "accent": "rubik-red",
+  "templates": ["test-guardian", "security-sweep", "ci-doctor"]
+}

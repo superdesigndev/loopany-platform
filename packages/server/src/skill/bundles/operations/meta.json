@@ -1,7 +1,0 @@
-{
-  "name": "operations",
-  "label": "Operations",
-  "tagline": "Stay on top of customers and what you shipped.",
-  "accent": "rubik-orange",
-  "templates": ["support-triage"]
-}

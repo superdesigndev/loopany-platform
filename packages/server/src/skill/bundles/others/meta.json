@@ -3,6 +3,6 @@
   "label": "Others",
   "tagline": "One-off loops you set up individually, one at a time.",
   "accent": "secondary",
-  "templates": ["follow-up-tracker"],
+  "templates": ["follow-up-tracker", "outcome-watch", "bug-vigil", "release-shepherd"],
   "individual": true
 }

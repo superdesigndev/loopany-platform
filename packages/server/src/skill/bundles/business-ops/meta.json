@@ -1,0 +1,7 @@
+{
+  "name": "business-ops",
+  "label": "Business Ops",
+  "tagline": "Stay on top of customers, metrics, and conversion.",
+  "accent": "rubik-orange",
+  "templates": ["support-triage", "metrics-digest", "funnel-watch"]
+}

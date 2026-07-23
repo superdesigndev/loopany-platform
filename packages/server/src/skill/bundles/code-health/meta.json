@@ -1,0 +1,7 @@
+{
+  "name": "code-health",
+  "label": "Code Health",
+  "tagline": "Keep your codebase healthy while you sleep.",
+  "accent": "interactive",
+  "templates": ["docs-sweep", "error-sweep", "react-doctor", "housekeeper", "dependency-triage"]
+}

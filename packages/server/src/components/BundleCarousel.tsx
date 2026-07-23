@@ -5,18 +5,13 @@ import type { BundleView, TemplateInfo } from '../types'
 const AUTOPLAY_MS = 4500
 
 /**
- * Split `items` into balanced rows of at most `maxPerRow`, LARGER row on top
- * (ceil-first), so the fan generalizes to any count and matches the product rule:
- * 3 → [3], 5 → [3, 2], 7 → [3, 2, 2]. Pure + data-driven (no hardcoded counts).
+ * Split `items` into rows of at most `maxPerRow`, filling each row before wrapping (so
+ * the larger rows sit on top), matching the product rule: 3 → [3], 4 → [3, 1],
+ * 5 → [3, 2], 7 → [3, 3, 1]. Pure + data-driven (no hardcoded counts).
  */
 export function splitRows<T>(items: T[], maxPerRow: number): T[][] {
-  const rowCount = Math.max(1, Math.ceil(items.length / maxPerRow))
   const rows: T[][] = []
-  for (let r = 0, at = 0; r < rowCount; r++) {
-    const size = Math.ceil((items.length - at) / (rowCount - r))
-    rows.push(items.slice(at, at + size))
-    at += size
-  }
+  for (let i = 0; i < items.length; i += maxPerRow) rows.push(items.slice(i, i + maxPerRow))
   return rows
 }
 
@@ -189,6 +184,9 @@ function BundleFace({
   onTryBundle: (b: BundleView) => void
 }) {
   const accent = `var(--color-${bundle.accent})`
+  // A few accents (rubik-yellow) are too LIGHT for white CTA text — use dark ink there.
+  const LIGHT_ACCENTS = new Set(['rubik-yellow'])
+  const ctaText = LIGHT_ACCENTS.has(bundle.accent) ? 'var(--color-display)' : 'var(--color-paper)'
   const rows = splitRows(bundle.members, 3)
   return (
     <div className="flex min-h-[300px] flex-col items-center justify-center px-10 py-2">
@@ -251,8 +249,8 @@ function BundleFace({
           type="button"
           tabIndex={active ? 0 : -1}
           onClick={() => active && onTryBundle(bundle)}
-          className="mt-4 inline-flex cursor-pointer items-center rounded-full px-4 py-2 text-meta font-medium text-paper outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-interactive"
-          style={{ background: accent }}
+          className="mt-4 inline-flex cursor-pointer items-center rounded-full px-4 py-2 text-meta font-medium outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-interactive"
+          style={{ background: accent, color: ctaText }}
         >
           Try this bundle
         </button>

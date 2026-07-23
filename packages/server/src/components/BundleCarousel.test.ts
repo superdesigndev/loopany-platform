@@ -84,19 +84,22 @@ describe('splitRows — balanced rows of up to N, larger row on top', () => {
   const sizes = (rows: number[][]) => rows.map((r) => r.length)
   const seq = (n: number) => Array.from({ length: n }, (_, i) => i)
 
-  it('keeps <=3 in a single row; splits 5 into 3 + 2 (the captain example)', () => {
+  it('keeps <=3 in a single row; splits 4 into 3+1 and 5 into 3+2 (the captain examples)', () => {
     expect(sizes(splitRows(seq(3), 3))).toEqual([3])
+    expect(sizes(splitRows(seq(4), 3))).toEqual([3, 1])
     expect(sizes(splitRows(seq(5), 3))).toEqual([3, 2])
   })
 
-  it('generalizes: 4->[2,2], 6->[3,3], 7->[3,2,2], and never drops/overflows', () => {
-    expect(sizes(splitRows(seq(4), 3))).toEqual([2, 2])
+  it('generalizes: 6->[3,3], 7->[3,3,1], larger rows on top, never drops/overflows', () => {
     expect(sizes(splitRows(seq(6), 3))).toEqual([3, 3])
-    expect(sizes(splitRows(seq(7), 3))).toEqual([3, 2, 2])
+    expect(sizes(splitRows(seq(7), 3))).toEqual([3, 3, 1])
     for (let n = 1; n <= 12; n++) {
       const rows = splitRows(seq(n), 3)
       expect(rows.flat().length).toBe(n)
       for (const row of rows) expect(row.length).toBeLessThanOrEqual(3)
+      // rows are non-increasing (larger rows on top).
+      const s = rows.map((r) => r.length)
+      for (let i = 1; i < s.length; i++) expect(s[i]!).toBeLessThanOrEqual(s[i - 1]!)
     }
   })
 })

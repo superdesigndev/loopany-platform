@@ -1,0 +1,7 @@
+{
+  "name": "personal",
+  "label": "Personal",
+  "tagline": "Little daily loops that keep your life running smoothly.",
+  "accent": "rubik-yellow",
+  "templates": ["morning-briefing", "homebrew-updater", "daily-lesson"]
+}

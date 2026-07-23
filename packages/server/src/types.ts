@@ -427,10 +427,17 @@ export interface TemplateInfo {
   thumb?: string
 }
 
-/** The accent color a bundle tints its name rule + CTA with — one of the app's
+/** The accent color a bundle tints its dot + CTA with — one of the app's
  *  `--color-<accent>` CSS-var tokens (so light/dark follows the theme for free).
- *  `secondary` is the neutral tint for the catch-all "Others" category. */
-export type BundleAccent = 'interactive' | 'rubik-green' | 'rubik-orange' | 'secondary'
+ *  `secondary` is the neutral tint for the catch-all "Others" category; `rubik-yellow`
+ *  is a LIGHT accent (the carousel uses dark CTA text for it — see BundleCarousel). */
+export type BundleAccent =
+  | 'interactive'
+  | 'rubik-green'
+  | 'rubik-orange'
+  | 'rubik-red'
+  | 'rubik-yellow'
+  | 'secondary'
 
 /**
  * A bundle META (the static `skill/bundles/<name>/meta.json`): a curated grouping of

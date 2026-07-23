@@ -1,0 +1,6 @@
+{
+  "name": "morning-briefing",
+  "label": "Morning Briefing",
+  "desc": "A daily personalized briefing - weather, your calendar, and the topics you choose - delivered as one dated report each morning.",
+  "description": "Set up a daily loop that delivers a personalized morning briefing. Setup is a short conversation - confirm each piece with me before creating the loop, and never create a blind loop. First agree what the briefing covers and verify each source works on this machine: local weather (a weather API or CLI), my calendar for the day (a calendar tool or MCP), and the topics I care about - news in my field, markets, a sports team, whatever I choose - each smoke-tested once so nothing in the briefing is invented. Every morning around 6am my local time, gather the agreed pieces and write one dated markdown report with front matter `type: report`, a `title`, and `date`, in a tight, skimmable shape: today's weather, my schedule, then the topic highlights. Keep it factual and grounded in what the sources actually return - never pad or fabricate a section; if a source is unavailable, say so briefly rather than making something up. Read-only always; never copy any credential into a report. Set up the loop's dashboard at creation: a calendar of the briefings plus an embed of the newest one. Over time, tune the sections around what I actually read."
+}

@@ -101,11 +101,11 @@ describe('dashboard bundle carousel', () => {
     expect(appCss).toMatch(/prefers-reduced-motion[\s\S]*?\.bundle-carousel-track\s*\{\s*transition:\s*none/)
   })
 
-  it('wraps the loop-card fan in balanced rows of up to three WITHIN a bundle', () => {
-    // Round 3: the 3 -> [3], 5 -> [3,2] rule applies to the fanned loop cards inside one
-    // bundle (data-driven splitRows, ceil-first so the LARGER row sits on top).
+  it('wraps the loop-card fan in rows of up to three WITHIN a bundle (3->[3], 4->[3,1], 5->[3,2])', () => {
+    // The fill-first rule applies to the fanned loop cards inside one bundle (data-driven
+    // splitRows, filling each row of up to 3 so the larger rows sit on top).
     expect(carousel).toContain('splitRows(bundle.members, 3)')
-    expect(carousel).toMatch(/Math\.ceil\(\(items\.length - at\) \/ \(rowCount - r\)\)/)
+    expect(carousel).toMatch(/for \(let i = 0; i < items\.length; i \+= maxPerRow\)/)
     // Fan rows wrap so no loop count can widen the page.
     expect(carousel).toContain('flex flex-wrap')
   })

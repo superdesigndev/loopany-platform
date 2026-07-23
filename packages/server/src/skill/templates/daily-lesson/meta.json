@@ -1,0 +1,6 @@
+{
+  "name": "daily-lesson",
+  "label": "Daily Lesson",
+  "desc": "A daily short lesson on a topic you choose, each one building on the last, delivered as a dated report on the calendar.",
+  "description": "Set up a daily loop that teaches me one short lesson at a time on a topic I choose. Before creating it, ask what I want to learn - a language, a technical skill, a subject - and how deep to go, propose a rough learning arc from beginner to fluent, and confirm it with me; never create a blind loop. Every morning around 7am my local time, write one short, self-contained lesson as a dated markdown report with front matter `type: report`, a `title`, and `date`, so the lessons ride the calendar. Each lesson builds on what previous ones covered - the loop keeps track of the arc so far, so it never repeats a lesson already given and picks the natural next step - and stays genuinely short: one idea, a concrete example, and a tiny exercise or takeaway, not an overwhelming wall of text. Keep it accurate and grounded; never invent facts to fill a lesson. Set up the loop's dashboard at creation: a calendar of the lessons plus an embed of the newest one. Over time, adjust the pace and depth to how the lessons are landing."
+}

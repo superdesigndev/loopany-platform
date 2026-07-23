@@ -1,0 +1,6 @@
+{
+  "name": "metrics-digest",
+  "label": "Metrics Digest",
+  "desc": "A daily morning digest of your product's key metrics that flags anomalies plainly and stays quiet otherwise.",
+  "description": "Set up a daily loop that reports this product's key metrics every morning. Before creating it, ask which product-analytics stack the numbers live in - PostHog, an analytics warehouse, a database, a dashboard API - verify read access to it on this machine, run one query as a smoke test, and confirm with me which KPI matters most and what a normal range looks like; never create a blind loop. Every morning around 8am my local time, pull the agreed metrics for the latest window, compare them against recent history, and write one dated markdown report with front matter `type: report`, a `title`, and `date`. Lead with the KPI and its trend, then flag any anomaly plainly - a meaningful drop or spike, with the number and the comparison - and say clearly when everything is in normal range rather than manufacturing concern. Read-only always: never write to or mutate the analytics source, and never copy credentials or personal data into a report. Report the chosen KPI as the metric. Set up the loop's dashboard at creation: a calendar of the reports, an embed of the newest one, and a chart of the KPI over time."
+}

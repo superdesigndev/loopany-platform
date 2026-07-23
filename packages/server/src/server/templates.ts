@@ -35,11 +35,26 @@ const thumbs = import.meta.glob<string>('../skill/templates/*/thumb.svg', {
 })
 
 /**
- * Product-curated card order for the dashboard (NOT alphabetical): the code-hygiene
- * loops first (docs → errors → React → tech debt), then the research/ops loops. A
- * template not in this list falls to the end, name-sorted, so a new folder still shows.
+ * Product-curated card order (NOT alphabetical), grouped to mirror the dashboard
+ * carousel's bundle order: Code Health → Ship with Confidence → Growth → Business Ops →
+ * Personal → Others. A bundle resolves its OWN member order from its meta, so this order
+ * only governs the flat `TEMPLATES` list; a template not listed falls to the end,
+ * name-sorted, so a new folder still shows.
  */
-const CARD_ORDER = ['docs-sweep', 'error-sweep', 'react-doctor', 'housekeeper', 'market-research', 'dependency-triage', 'follow-up-tracker', 'support-triage', 'reddit-karma']
+const CARD_ORDER = [
+  // Code Health
+  'docs-sweep', 'error-sweep', 'react-doctor', 'housekeeper', 'dependency-triage',
+  // Ship with Confidence
+  'test-guardian', 'security-sweep', 'ci-doctor',
+  // Growth
+  'market-research', 'reddit-karma', 'changelog-broadcaster',
+  // Business Ops
+  'support-triage', 'metrics-digest', 'funnel-watch',
+  // Personal
+  'morning-briefing', 'homebrew-updater', 'daily-lesson',
+  // Others (individually-created, closed loops)
+  'follow-up-tracker', 'outcome-watch', 'bug-vigil', 'release-shepherd',
+]
 const orderOf = (name: string): number => {
   const i = CARD_ORDER.indexOf(name)
   return i === -1 ? CARD_ORDER.length : i

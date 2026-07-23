@@ -20,11 +20,11 @@ const metas = import.meta.glob<BundleInfo>('../skill/bundles/*/meta.json', {
 
 /**
  * Product-curated bundle order for the dashboard carousel (NOT alphabetical):
- * Engineering (the flagship code-hygiene set) → Growth → Operations → Others (the
+ * Code Health → Ship with Confidence → Growth → Business Ops → Personal → Others (the
  * individually-set-up catch-all, last). A bundle not in this list falls to the end,
  * name-sorted, so a new folder still shows.
  */
-const BUNDLE_ORDER = ['engineering', 'growth', 'operations', 'others']
+const BUNDLE_ORDER = ['code-health', 'ship-with-confidence', 'growth', 'business-ops', 'personal', 'others']
 const orderOf = (name: string): number => {
   const i = BUNDLE_ORDER.indexOf(name)
   return i === -1 ? BUNDLE_ORDER.length : i
