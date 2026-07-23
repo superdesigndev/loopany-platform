@@ -12,7 +12,7 @@ import { describe, expect, test } from 'vitest'
 import { BUNDLES, listBundles } from './bundles'
 import { TEMPLATES } from './templates'
 
-const VALID_ACCENTS = ['interactive', 'rubik-green', 'rubik-orange']
+const VALID_ACCENTS = ['interactive', 'rubik-green', 'rubik-orange', 'secondary']
 
 describe('bundle registry', () => {
   test('is non-empty and every bundle has the BundleView shape', () => {
@@ -39,11 +39,11 @@ describe('bundle registry', () => {
     expect(new Set(names).size).toBe(names.length)
   })
 
-  test('listBundles returns the curated order (Engineering, Growth, Operations)', () => {
-    expect(listBundles().map((b) => b.name)).toEqual(['engineering', 'growth', 'operations'])
+  test('listBundles returns the curated order (Engineering, Growth, Operations, Others)', () => {
+    expect(listBundles().map((b) => b.name)).toEqual(['engineering', 'growth', 'operations', 'others'])
   })
 
-  test('the three shipped bundles carry their label, accent, and members', () => {
+  test('the shipped bundles carry their label, accent, and members', () => {
     const byName = new Map(BUNDLES.map((b) => [b.name, b]))
     const eng = byName.get('engineering')!
     expect(eng.label).toBe('Engineering')
@@ -58,7 +58,20 @@ describe('bundle registry', () => {
     const ops = byName.get('operations')!
     expect(ops.label).toBe('Operations')
     expect(ops.accent).toBe('rubik-orange')
-    expect(ops.members.map((m) => m.name)).toEqual(['support-triage', 'follow-up-tracker'])
+    expect(ops.members.map((m) => m.name)).toEqual(['support-triage'])
+  })
+
+  test('the "Others" category holds the individually-set-up loops (no bundle CTA)', () => {
+    const others = BUNDLES.find((b) => b.name === 'others')!
+    expect(others).toBeTruthy()
+    expect(others.label).toBe('Others')
+    // Follow-up Tracker is set up individually, so it lives in Others, not Operations.
+    expect(others.members.map((m) => m.name)).toContain('follow-up-tracker')
+    // `individual` marks a no-CTA category; the tryable bundles never set it.
+    expect(others.individual).toBe(true)
+    for (const b of BUNDLES.filter((x) => x.name !== 'others')) {
+      expect(b.individual).toBe(false)
+    }
   })
 
   test('every template belongs to EXACTLY ONE bundle — no orphan, no duplicate', () => {

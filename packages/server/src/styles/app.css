@@ -238,6 +238,61 @@
 }
 
 /*
+ * The bundle CAROUSEL (BundleCarousel.tsx) — a PLAIN slide carousel (no rotating disc/
+ * spin): a translated track inside a clipped viewport. One bundle shows at a time;
+ * auto-play + arrows just change `--idx` → `translateX`. `overflow: hidden` on the
+ * viewport clips the off-screen slides so no page scroll is introduced. The slide tween
+ * (and, in JS, auto-play) are disabled under `prefers-reduced-motion`.
+ */
+.bundle-carousel-viewport {
+  overflow: hidden;
+}
+.bundle-carousel-track {
+  display: flex;
+  transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .bundle-carousel-track {
+    transition: none;
+  }
+}
+.bundle-slide {
+  flex: 0 0 100%;
+  min-width: 0;
+}
+
+.bundle-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-hairline);
+  background: var(--color-surface);
+  color: var(--color-secondary);
+  box-shadow: 0 6px 18px -10px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.bundle-arrow:hover {
+  color: var(--color-display);
+  border-color: var(--color-wire);
+}
+.bundle-arrow-prev {
+  left: -6px;
+}
+.bundle-arrow-next {
+  right: -6px;
+}
+
+/*
  * Agent-authored dashboard (generative UI, `LoopView`). DEFAULT layout is a
  * responsive grid so independent top-level panels sit side by side on desktop
  * (the motivating case: calendar left, rendered document right) and stack on

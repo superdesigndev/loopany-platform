@@ -1,0 +1,8 @@
+{
+  "name": "others",
+  "label": "Others",
+  "tagline": "One-off loops you set up individually, one at a time.",
+  "accent": "secondary",
+  "templates": ["follow-up-tracker"],
+  "individual": true
+}

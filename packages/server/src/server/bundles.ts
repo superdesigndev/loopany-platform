@@ -19,11 +19,12 @@ const metas = import.meta.glob<BundleInfo>('../skill/bundles/*/meta.json', {
 })
 
 /**
- * Product-curated bundle order for the dashboard dial (NOT alphabetical): Engineering
- * (the flagship code-hygiene set) → Growth → Operations. A bundle not in this list
- * falls to the end, name-sorted, so a new folder still shows.
+ * Product-curated bundle order for the dashboard carousel (NOT alphabetical):
+ * Engineering (the flagship code-hygiene set) → Growth → Operations → Others (the
+ * individually-set-up catch-all, last). A bundle not in this list falls to the end,
+ * name-sorted, so a new folder still shows.
  */
-const BUNDLE_ORDER = ['engineering', 'growth', 'operations']
+const BUNDLE_ORDER = ['engineering', 'growth', 'operations', 'others']
 const orderOf = (name: string): number => {
   const i = BUNDLE_ORDER.indexOf(name)
   return i === -1 ? BUNDLE_ORDER.length : i
@@ -37,8 +38,9 @@ export const BUNDLES: BundleView[] = Object.values(metas)
     label: meta.label,
     tagline: meta.tagline,
     accent: meta.accent,
+    individual: meta.individual ?? false,
     // Resolve member names to templates in the meta's order; skip unknown names so a
-    // renamed/removed template never yields an undefined member (or crashes the dial).
+    // renamed/removed template never yields an undefined member (or crashes the carousel).
     members: meta.templates.map((n) => byName.get(n)).filter((t): t is NonNullable<typeof t> => Boolean(t)),
   }))
   .sort((a, b) => orderOf(a.name) - orderOf(b.name) || a.name.localeCompare(b.name))

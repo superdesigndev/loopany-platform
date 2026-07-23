@@ -64,34 +64,58 @@ describe('dashboard poll resilience', () => {
   })
 })
 
-describe('dashboard bundle shelf layout', () => {
-  it('renders the BundleShelf in the hero, not the old fan or carousel', () => {
-    // Round 2: the one-bundle-at-a-time dial was replaced by a static shelf showing
-    // every bundle at once.
-    expect(view).toContain('<BundleShelf')
+const carousel = readFileSync(
+  fileURLToPath(new URL('../components/BundleCarousel.tsx', import.meta.url)),
+  'utf8',
+)
+
+describe('dashboard bundle carousel', () => {
+  it('renders the BundleCarousel in the hero, not the old fan/dial/shelf', () => {
+    // Round 3: a plain auto-playing carousel (one bundle at a time), NOT the round-1
+    // rotating disc nor the round-2 all-at-once shelf.
+    expect(view).toContain('<BundleCarousel')
     expect(view).not.toContain('TemplateFan')
     expect(view).not.toContain('BundleDial')
+    expect(view).not.toContain('BundleShelf')
     // Seeded from the loader's static-per-deploy bundles (never re-polled).
     expect(view).toContain('bundles={bundles}')
   })
 
-  it('carries no carousel/dial CSS anymore (no spin, arrows, or clipped disc)', () => {
-    // The shelf is plain flow layout: no oversized wheel to clip, so none of the
-    // dial machinery should survive in the stylesheet.
+  it('is a PLAIN slide carousel — a clipped viewport + translated track, no dial/spin', () => {
+    // No page scroll: the viewport clips off-screen slides. No leftover rotating-disc
+    // machinery (round-1 dial) survives in the stylesheet.
+    const vp = /\.bundle-carousel-viewport\s*\{[\s\S]*?\}/.exec(appCss)?.[0]
+    expect(vp, 'the .bundle-carousel-viewport rule should exist').toBeTruthy()
+    expect(vp).toContain('overflow: hidden')
     expect(appCss).not.toContain('.dial-')
     expect(appCss).not.toMatch(/@property\s+--rot/)
   })
 
-  it('splits bundles into balanced rows of up to three, larger row on top', () => {
-    // The layout rule is data-driven (splitRows in BundleShelf.tsx): ceil-first so the
-    // LARGER row sits on top — the captain's 5 -> 3+2 example, generalizing to any count.
-    const shelf = readFileSync(
-      fileURLToPath(new URL('../components/BundleShelf.tsx', import.meta.url)),
-      'utf8',
-    )
-    expect(shelf).toContain('splitRows(bundles, 3)')
-    expect(shelf).toMatch(/Math\.ceil\(\(items\.length - at\) \/ \(rowCount - r\)\)/)
-    // Row containers wrap so no bundle count can widen the page.
-    expect(shelf).toContain('flex flex-wrap')
+  it('auto-plays but honours reduced-motion and pauses on interaction', () => {
+    // Auto-advance on an interval, disabled under reduced-motion and while paused
+    // (hover/focus) or stopped (after a manual nav).
+    expect(carousel).toContain('setInterval')
+    expect(carousel).toContain('prefers-reduced-motion')
+    expect(carousel).toMatch(/const autoplaying =[^\n]*!reduced[^\n]*!stopped/)
+    // The slide tween is disabled under reduced-motion at the CSS layer.
+    expect(appCss).toMatch(/prefers-reduced-motion[\s\S]*?\.bundle-carousel-track\s*\{\s*transition:\s*none/)
+  })
+
+  it('wraps the loop-card fan in balanced rows of up to three WITHIN a bundle', () => {
+    // Round 3: the 3 -> [3], 5 -> [3,2] rule applies to the fanned loop cards inside one
+    // bundle (data-driven splitRows, ceil-first so the LARGER row sits on top).
+    expect(carousel).toContain('splitRows(bundle.members, 3)')
+    expect(carousel).toMatch(/Math\.ceil\(\(items\.length - at\) \/ \(rowCount - r\)\)/)
+    // Fan rows wrap so no loop count can widen the page.
+    expect(carousel).toContain('flex flex-wrap')
+  })
+
+  it('CTA is exactly "Try this bundle" (no icons/prefix) and skipped for Others', () => {
+    expect(carousel).toContain('Try this bundle')
+    expect(carousel).not.toContain('Copy prompt · try this bundle')
+    // The individually-set-up category renders no bundle CTA.
+    expect(carousel).toContain('!bundle.individual &&')
+    // The single-loop affordance stays.
+    expect(carousel).toContain('or click a loop to set it up alone')
   })
 })

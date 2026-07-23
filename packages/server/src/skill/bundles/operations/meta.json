@@ -3,5 +3,5 @@
   "label": "Operations",
   "tagline": "Stay on top of customers and what you shipped.",
   "accent": "rubik-orange",
-  "templates": ["support-triage", "follow-up-tracker"]
+  "templates": ["support-triage"]
 }

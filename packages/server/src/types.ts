@@ -427,9 +427,10 @@ export interface TemplateInfo {
   thumb?: string
 }
 
-/** The accent color a bundle tints its dial spoke + chip with — one of the app's
- *  `--color-<accent>` CSS-var tokens (so light/dark follows the theme for free). */
-export type BundleAccent = 'interactive' | 'rubik-green' | 'rubik-orange'
+/** The accent color a bundle tints its name rule + CTA with — one of the app's
+ *  `--color-<accent>` CSS-var tokens (so light/dark follows the theme for free).
+ *  `secondary` is the neutral tint for the catch-all "Others" category. */
+export type BundleAccent = 'interactive' | 'rubik-green' | 'rubik-orange' | 'secondary'
 
 /**
  * A bundle META (the static `skill/bundles/<name>/meta.json`): a curated grouping of
@@ -440,21 +441,27 @@ export type BundleAccent = 'interactive' | 'rubik-green' | 'rubik-orange'
 export interface BundleInfo {
   name: string
   label: string
-  /** One-line pitch shown under the bundle name on the dial. */
+  /** One-line pitch shown under the bundle name in the carousel. */
   tagline: string
   accent: BundleAccent
   /** Member template names, in display order. */
   templates: string[]
+  /** When true this is a CATEGORY of loops that must be set up individually (the
+   *  "Others" bucket): the carousel renders NO "Try this bundle" CTA for it — only the
+   *  click-a-loop-to-set-it-up-alone affordance. Absent/false ⇒ a normal tryable bundle. */
+  individual?: boolean
 }
 
 /** A bundle with its member templates RESOLVED (unknown names dropped), as the
- *  dashboard dial + the bundle Copy-prompt path consume it. */
+ *  dashboard carousel + the bundle Copy-prompt path consume it. */
 export interface BundleView {
   name: string
   label: string
   tagline: string
   accent: BundleAccent
   members: TemplateInfo[]
+  /** True ⇒ an individually-set-up category (no bundle CTA). See `BundleInfo`. */
+  individual?: boolean
 }
 
 /** The team switcher's data: the teams this user may view + the active selection. */

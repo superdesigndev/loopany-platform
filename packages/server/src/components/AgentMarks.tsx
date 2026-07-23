@@ -1,9 +1,8 @@
 /**
  * The three supported coding agents as brand marks (LobeHub icon set), shown on the
- * Copy-prompt affordances (the prompt runs in whichever agent you use). Decorative
- * (aria-hidden) — the surrounding button text is the accessible name. Shared by
- * ComposeModal (the snippet copy button) and BundleShelf (the bundle try button) so
- * the two can't drift.
+ * Copy-prompt affordance (the prompt runs in whichever agent you use). Decorative
+ * (aria-hidden) — the surrounding button text is the accessible name. Used by
+ * ComposeModal's snippet copy button.
  */
 
 /** Claude Code mark — the orange app glyph. */
