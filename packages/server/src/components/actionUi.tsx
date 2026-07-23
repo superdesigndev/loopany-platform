@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { CodingAgent } from '../types'
 import { buildResumeCommand } from '../lib/resumeCommand'
 import { btn, btnDanger, btnPrimary } from './ui'
 
@@ -84,35 +85,32 @@ export function ConfirmBar({
   )
 }
 
-/** The claude-code pixel-terminal mark (LobeHub icon set), in the Claude brand
- *  orange. Decorative (aria-hidden): the button text stays the accessible name,
- *  keeping generic copy agent-neutral while the LOGO is factual — only Claude
- *  stream-json currently yields a captured session id for this affordance
- *  (codex/grok execute on their own CLIs; telemetry is still degraded, no
- *  session id). Swap per-agent once another agent yields a resumable session. */
-function ClaudeCodeMark({ size = 14 }: { size?: number }) {
+/** Neutral terminal mark: both Claude and ACP-backed Codex sessions can now be
+ * resumed, while the accessible button text remains agent-neutral. */
+function AgentSessionMark({ size = 14 }: { size?: number }) {
   return (
     <svg
       aria-hidden
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill="#D97757"
-      fillRule="evenodd"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       className="shrink-0"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <path
-        clipRule="evenodd"
-        d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z"
-      />
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="m7 9 3 3-3 3M12.5 15H17" />
     </svg>
   )
 }
 
 /**
  * "Continue agent session" copy affordance (run page + loop page) — copies a
- * ready-to-paste terminal command (`cd '<loop dir>' && claude --resume <id>`)
+ * ready-to-paste terminal command for the run's recorded agent
  * that reopens the run's coding-agent session on the owner's machine. BYOA: the
  * session lives there, so copy-a-command is the whole feature.
  *
@@ -122,19 +120,19 @@ function ClaudeCodeMark({ size = 14 }: { size?: number }) {
  * got pushed to its own line). The caller places `button` IN the row and `hint`
  * BELOW the row. `sessionId: null` ⇒ both render null, so callers can invoke
  * the hook unconditionally (hooks can't be conditional) while data loads.
- * Prose stays agent-neutral; the literal `claude` binary in the copied command
- * is factual (only Claude stream-json currently yields a captured session id —
- * codex/grok execute, but daemon telemetry is still degraded for them).
+ * Prose stays agent-neutral; the command builder selects Claude or Codex.
  */
 export function useContinueSession({
   sessionId,
   dir,
   machineName,
+  agent,
   label,
 }: {
   sessionId: string | null
   dir?: string | null
   machineName?: string | null
+  agent?: CodingAgent | null
   label: string
 }): { button: React.ReactNode; hint: React.ReactNode } {
   const [copied, setCopied] = useState(false)
@@ -142,7 +140,9 @@ export function useContinueSession({
   if (!sessionId) return { button: null, hint: null }
   const onCopy = async () => {
     try {
-      await navigator.clipboard.writeText(buildResumeCommand({ sessionId, dir }))
+      await navigator.clipboard.writeText(
+        buildResumeCommand({ sessionId, dir, agent: agent === 'codex' ? 'codex' : 'claude-code' }),
+      )
       setCopyErr(false)
       setCopied(true)
       setTimeout(() => setCopied(false), 4000)
@@ -159,7 +159,7 @@ export function useContinueSession({
       onClick={() => void onCopy()}
     >
       <span className="inline-flex items-center gap-1.5">
-        <ClaudeCodeMark />
+        <AgentSessionMark />
         {copied ? '✓ Command copied' : label}
       </span>
     </button>

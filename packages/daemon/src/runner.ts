@@ -20,6 +20,15 @@ import { setProgress, clearProgress } from "./progress.js";
 import { flushLoop, markRunActive, markRunDone } from "./watcher.js";
 import { LOOPANY_DIR } from "./config.js";
 import type { CodingAgent } from "./create.js";
+import {
+  acpSessionName,
+  buildCodexAcpEnsureSpawn,
+  buildCodexAcpSpawn,
+  makeAcpStreamConsumer,
+  resolveCodexBackend,
+  type AcpStreamFinal,
+  type CodexBackend,
+} from "./acp.js";
 
 export interface Delivery {
   runId: string;
@@ -51,10 +60,15 @@ export interface Delivery {
  *  older claude / a timed-out run may carry none of it. */
 export interface RunCost {
   usd?: number;
+  totalTokens?: number;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  reasoningTokens?: number;
+  /** Latest context occupancy and advertised context-window size. */
+  contextTokens?: number;
+  contextWindow?: number;
   numTurns?: number;
 }
 
@@ -101,7 +115,7 @@ export interface AgentSpawn {
  *   - `claude-code`: `claude -p … --output-format stream-json --verbose …`
  *   - `grok`: mirrors Claude's shape but uses `streaming-json`, drops `--verbose`
  *     (exit 2) and `--append-system-prompt-file` (no file form).
- *   - `codex`: a DIFFERENT surface — `codex exec` / `codex exec resume`, not `-p`.
+ *   - `codex` native: `codex exec` / `codex exec resume`, not `-p`.
  *     Flags verified against codex-cli 0.143.0: `--json` (JSONL on stdout),
  *     `--dangerously-bypass-approvals-and-sandbox` (unattended BYOA, same intent
  *     as claude/grok `bypassPermissions`), optional `-m` / `--model`, and
@@ -109,23 +123,32 @@ export interface AgentSpawn {
  *
  * Escape hatches: `LOOPANY_CLAUDE_BIN` / `LOOPANY_GROK_BIN` / `LOOPANY_CODEX_BIN`.
  *
- * Telemetry note: grok's headless stream is grok-native (`thought`/`text`/`end`)
- * and codex `--json` is not Claude stream-json either — the Claude-shaped
- * `makeStreamConsumer` parses nothing from either. Both still mark OK on exit 0;
- * the agent's own `loopany report` persists the result. Daemon-side live-
- * progress/cost/transcript for non-Claude agents is degraded until a per-agent
- * stream adapter lands.
+ * Codex may instead use the structured ACP arm when
+ * `LOOPANY_CODEX_BACKEND=acp`; it runs pinned acpx + codex-acp dependencies and
+ * is parsed by makeAcpStreamConsumer. Native remains the default/rollback path.
+ * Grok telemetry remains degraded because its stream is still grok-native.
  */
 export function buildAgentSpawn(opts: {
   agent: CodingAgent;
   prompt: string;
   resumeSessionId?: string;
   model?: string | null;
+  /** codex-only; ignored by the other agents. */
+  backend?: CodexBackend;
+  /** ACP persistent-session routing key (one per Loopany run). */
+  acpSession?: string;
   /** claude-only: the system-prompt file path (falsy ⇒ flag omitted). */
   sysFile?: string;
 }): AgentSpawn {
-  const { agent, prompt, resumeSessionId, model, sysFile } = opts;
+  const { agent, prompt, resumeSessionId, model, sysFile, backend = "native", acpSession } = opts;
   if (agent === "codex") {
+    if (backend === "acp") {
+      return buildCodexAcpSpawn({
+        prompt,
+        sessionName: acpSession ?? "loopany-run",
+        model,
+      });
+    }
     // Codex surface is `codex exec [OPTIONS] [PROMPT]` / `codex exec resume
     // [OPTIONS] [SESSION_ID] [PROMPT]` — never Claude's `-p` / stream-json flags.
     const modelArgs = model ? ["-m", model] : [];
@@ -185,6 +208,8 @@ const rawExecTimeout = Number(process.env.LOOPANY_EXEC_TIMEOUT_MS);
 const TIMEOUT_MS = Number.isFinite(rawExecTimeout) && rawExecTimeout > 0 ? rawExecTimeout : 0;
 /** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
 const FLUSH_TIMEOUT_MS = 2500;
+/** ACP named-session setup is infrastructure, not the unbounded agent turn. */
+const ACP_SESSION_SETUP_TIMEOUT_MS = 60_000;
 
 // Transient-failure recovery: when claude dies mid-run on an infrastructure
 // error (an API "Connection closed mid-response", ECONNRESET, overloaded/5xx,
@@ -248,12 +273,27 @@ export function buildResumeTask(reason: string): string {
 export function addCost(a: RunCost | undefined, b: RunCost | undefined): RunCost | undefined {
   if (!a) return b;
   if (!b) return a;
-  const keys: (keyof RunCost)[] = ["usd", "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens", "numTurns"];
+  const keys: (keyof RunCost)[] = [
+    "usd",
+    "totalTokens",
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheCreationTokens",
+    "reasoningTokens",
+    "numTurns",
+  ];
   const out: RunCost = {};
   for (const k of keys) {
     const sum = (a[k] ?? 0) + (b[k] ?? 0);
     if (a[k] !== undefined || b[k] !== undefined) out[k] = sum;
   }
+  // Context occupancy/window describe the latest session state; summing them
+  // across a resumed turn would invent a context size that never existed.
+  out.contextTokens = b.contextTokens ?? a.contextTokens;
+  out.contextWindow = b.contextWindow ?? a.contextWindow;
+  if (out.contextTokens === undefined) delete out.contextTokens;
+  if (out.contextWindow === undefined) delete out.contextWindow;
   return out;
 }
 
@@ -384,13 +424,15 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     }
   }
 
-  // 2. Exec: run claude (no workflow, the workflow escalated, or it FAILED → fallback).
+  // 2. Exec: run the selected coding agent (no workflow, escalation, or fallback).
   let ok = false;
   let sessionId: string | undefined;
   let error: string | undefined;
   let finalText: string | undefined;
   let cost: RunCost | undefined;
   let attempts = 0;
+  const streamedArtifacts = new Map<string, "created" | "edited">();
+  const streamedTranscript: TranscriptStep[] = [];
   // System prompt goes in ~/.loopany/runs (passed to claude by absolute path), not
   // the workdir — keeps the run's cwd clean. Removed in `finally`. Batches 1-2 move
   // the full run instructions into the first user turn, so `systemPrompt` is now empty
@@ -404,7 +446,14 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   // claude-code. Spawn + credential set branch on the agent; agentLabel names the
   // binary family in failure reasons (claude / codex / grok).
   const agent: CodingAgent = d.loop.agent ?? "claude-code";
-  const agentLabel = agent === "claude-code" ? "claude" : agent;
+  let codexBackend: CodexBackend = "native";
+  try {
+    if (agent === "codex") codexBackend = resolveCodexBackend();
+  } catch (err) {
+    return reportRun({ runId: d.runId, ok: false, durationMs: Date.now() - start, error: msg(err) });
+  }
+  const usesAcp = agent === "codex" && codexBackend === "acp";
+  const agentLabel = agent === "claude-code" ? "claude" : usesAcp ? "codex ACP" : agent;
   try {
     if (hasSystemPrompt) {
       fs.mkdirSync(runsDir, { recursive: true });
@@ -417,12 +466,45 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       PATH: `${CALLBACK_BIN_DIR}${path.delimiter}${process.env.PATH ?? ""}`,
       LOOPANY_RUN_TOKEN: d.runToken,
       LOOPANY_SERVER_URL: serverUrl,
+      // Match the native Codex arm's unattended/full-access semantics. NO_BROWSER
+      // prevents a headless scheduled run from trying to launch an auth browser.
+      ...(usesAcp
+        ? {
+            INITIAL_AGENT_MODE: process.env.INITIAL_AGENT_MODE || "agent-full-access",
+            NO_BROWSER: "1",
+          }
+        : {}),
     };
     const task = workflowFailure
       ? buildWorkflowFallbackTask(d.task, workflowFailure, dateStamp(), d.loop.name, d.loop.id)
       : escalation
         ? `${d.task}\n\nworkflow signal:\n${escalation}`
         : d.task;
+
+    if (usesAcp) {
+      // Named sessions are what make a transient retry resume the same Codex
+      // thread. acpx deliberately does not create a named session implicitly.
+      const setup = buildCodexAcpEnsureSpawn({
+        sessionName: acpSessionName(d.runId),
+        model: d.loop.model,
+      });
+      setProgress(d.runId, { step: 0, label: "starting Codex ACP session" });
+      try {
+        const initialized = await runProcess(setup.bin, setup.args, {
+          cwd: workdir,
+          env,
+          timeoutMs: ACP_SESSION_SETUP_TIMEOUT_MS,
+          signal,
+        });
+        if (initialized.timedOut) throw new Error("ACP session setup timed out (60s)");
+        if (initialized.code !== 0) {
+          const detail = (initialized.stderr || initialized.stdout || "acpx sessions ensure failed").trim().slice(-1000);
+          throw new Error(detail);
+        }
+      } finally {
+        clearProgress(d.runId);
+      }
+    }
 
     // Attempt loop: the first pass runs the task; each further pass RESUMES the
     // same session after a transient infrastructure failure (see the constants
@@ -432,54 +514,84 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     for (;;) {
       attempts += 1;
       const resuming = attempts > 1;
-      const prompt = resuming ? buildResumeTask(error ?? "transient API error") : task;
-      // Claude stream-json (JSONL) yields live progress + a terminal `result` event.
-      // Grok/codex emit non-Claude streams we can't yet parse — see buildAgentSpawn.
+      const prompt = resuming
+        ? buildResumeTask(error ?? "transient API error")
+        : usesAcp && hasSystemPrompt
+          ? `${d.systemPrompt}\n\n${task}`
+          : task;
       const { bin, args } = buildAgentSpawn({
         agent,
         prompt,
         resumeSessionId: resuming ? sessionId : undefined,
         model: d.loop.model,
         sysFile: hasSystemPrompt ? sysFile : undefined,
+        backend: codexBackend,
+        acpSession: acpSessionName(d.runId),
       });
 
-      const stream = makeStreamConsumer((p) => setProgress(d.runId, p));
+      const stream = usesAcp
+        ? makeAcpStreamConsumer((p) => setProgress(d.runId, p), workdir)
+        : makeStreamConsumer((p) => setProgress(d.runId, p));
       const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: stream.feed, signal });
       clearProgress(d.runId);
-      const final = stream.result();
       error = undefined;
       finalText = undefined;
-      if (r.timedOut) {
-        error = `${agentLabel} timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
-        // The stream captured the session id early — keep the pointer so exactly
-        // the runs that need debugging (timeouts) still get the transcript/artifact
-        // recovery below instead of losing their session.
+      if (usesAcp) {
+        // `stream` is chosen from a runtime backend flag; make that correlation
+        // explicit for TypeScript (both consumers intentionally share feed()).
+        const final = stream.result() as AcpStreamFinal;
         sessionId = final.sessionId ?? sessionId;
-        break;
-      } else if (final.json) {
-        ok = !final.json.is_error && r.code === 0;
-        // `--resume` forks a NEW session id — track the latest so a further
-        // resume (and the transcript/artifact recovery below) follow the fork.
-        sessionId = final.sessionId ?? final.json.session_id ?? sessionId;
-        finalText = final.json.result?.trim() || undefined;
-        cost = addCost(cost, costFromResult(final.json));
-        if (!ok) {
-          // A non-zero exit can arrive WITH a clean result event (subtype "success") —
-          // recording "success" as the error reads as nonsense; name the exit instead.
-          const subtype = final.json.subtype;
-          error =
-            subtype && subtype !== "success"
-              ? subtype
-              : r.code !== 0
-                ? `${agentLabel} exited with code ${r.code}`
-                : `${agentLabel} reported an error`;
+        finalText = final.finalText;
+        cost = addCost(cost, final.cost);
+        for (const artifact of final.artifacts) {
+          if (streamedArtifacts.get(artifact.path) !== "created") streamedArtifacts.set(artifact.path, artifact.kind);
         }
-      } else if (r.code === 0) {
-        ok = true;
-        sessionId = final.sessionId ?? sessionId;
+        for (const step of final.transcript) {
+          if (streamedTranscript.length >= 80) break;
+          streamedTranscript.push(step);
+        }
+        if (r.timedOut) {
+          error = `${agentLabel} timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
+          break;
+        }
+        const abnormalStop = final.stopReason && final.stopReason !== "end_turn" ? final.stopReason : undefined;
+        ok = r.code === 0 && !final.error && !abnormalStop;
+        if (!ok) {
+          error =
+            final.error ||
+            (abnormalStop ? `${agentLabel} stopped: ${abnormalStop}` : undefined) ||
+            (r.stderr || `${agentLabel} exited with code ${r.code}`).trim().slice(0, 500);
+        }
       } else {
-        error = (r.stderr || r.stdout || `${agentLabel} produced no output`).trim().slice(0, 500);
-        sessionId = final.sessionId ?? sessionId;
+        const final = stream.result() as StreamFinal;
+        if (r.timedOut) {
+          error = `${agentLabel} timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
+          // The stream captured the session id early — keep the pointer so exactly
+          // the runs that need debugging still get transcript/artifact recovery.
+          sessionId = final.sessionId ?? sessionId;
+          break;
+        } else if (final.json) {
+          ok = !final.json.is_error && r.code === 0;
+          // Native resume may fork a NEW session id — follow the latest fork.
+          sessionId = final.sessionId ?? final.json.session_id ?? sessionId;
+          finalText = final.json.result?.trim() || undefined;
+          cost = addCost(cost, costFromResult(final.json));
+          if (!ok) {
+            const subtype = final.json.subtype;
+            error =
+              subtype && subtype !== "success"
+                ? subtype
+                : r.code !== 0
+                  ? `${agentLabel} exited with code ${r.code}`
+                  : `${agentLabel} reported an error`;
+          }
+        } else if (r.code === 0) {
+          ok = true;
+          sessionId = final.sessionId ?? sessionId;
+        } else {
+          error = (r.stderr || r.stdout || `${agentLabel} produced no output`).trim().slice(0, 500);
+          sessionId = final.sessionId ?? sessionId;
+        }
       }
 
       if (ok || attempts > TRANSIENT_RETRIES || !sessionId || signal?.aborted) break;
@@ -488,7 +600,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       const wait = retryDelayMs(attempts);
       logger.warn(
         { runId: d.runId, attempt: attempts, waitMs: wait, error },
-        "transient claude failure — resuming the session after backoff",
+        "transient coding-agent failure — resuming the session after backoff",
       );
       // Keep the live signal honest during the wait (and the server's inactivity
       // sweep fed — the progress stamp rides the poll heartbeat).
@@ -503,10 +615,14 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     if (sysFile) fs.rmSync(sysFile, { force: true }); // don't let prompt files accumulate
   }
 
-  // Recover this session's artifacts + slimmed trace from ONE transcript read (best-effort).
+  // ACP already streamed a normalized trace. Native Claude keeps its fast local
+  // transcript recovery; native Codex/Grok still have no on-disk adapter here.
   let artifacts: RunArtifact[] | undefined;
   let transcript: TranscriptStep[] | undefined;
-  if (sessionId) {
+  if (usesAcp) {
+    if (streamedArtifacts.size) artifacts = [...streamedArtifacts].map(([artifactPath, kind]) => ({ path: artifactPath, kind }));
+    if (streamedTranscript.length) transcript = streamedTranscript;
+  } else if (sessionId) {
     try {
       const trace = sessionTrace(sessionId, workdir);
       if (trace.artifacts.length) artifacts = trace.artifacts;

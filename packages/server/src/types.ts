@@ -67,10 +67,14 @@ export interface RunSummary {
   costUsd: number | null
   /** Token-count breakdown reported with the cost (display-only detail). */
   usage: {
+    totalTokens?: number
     inputTokens?: number
     outputTokens?: number
     cacheReadTokens?: number
     cacheCreationTokens?: number
+    reasoningTokens?: number
+    contextTokens?: number
+    contextWindow?: number
     numTurns?: number
   } | null
   error: string | null

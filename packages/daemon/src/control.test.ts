@@ -36,7 +36,7 @@ describe("runStatus", () => {
     expect(cap.stdout()).toContain("loopany up");
   });
 
-  test("stale pidfile (pid dead) → not running, clears the stale file", async () => {
+  test("stale pidfile (pid dead) → not running without mutating state", async () => {
     let cleared = false;
     const cap = capture({
       readPid: () => ({ pid: 999 }),
@@ -46,11 +46,11 @@ describe("runStatus", () => {
       token: undefined,
     });
     await runStatus([], cap);
-    expect(cleared).toBe(true);
+    expect(cleared).toBe(false);
     expect(cap.stdout()).toContain("not running");
   });
 
-  test("pid alive but start-time mismatch (reused pid) → not running, clears stale file", async () => {
+  test("pid alive but start-time mismatch (reused pid) → not running without mutating state", async () => {
     let cleared = false;
     const cap = capture({
       readPid: () => ({ pid: 4242, startTime: "Mon Jun 30 09:00:00 2026" }),
@@ -61,7 +61,7 @@ describe("runStatus", () => {
       token: undefined,
     });
     await runStatus([], cap);
-    expect(cleared).toBe(true);
+    expect(cleared).toBe(false);
     expect(cap.stdout()).toContain("not running");
   });
 

@@ -35,6 +35,22 @@ function Field({ k, children }: { k: string; children: React.ReactNode }) {
   )
 }
 
+/** Agent-neutral token summary. ACP agents may report usage without a USD estimate. */
+function usageSummary(usage: RunSummary['usage']): string | null {
+  if (!usage) return null
+  const input = (usage.inputTokens ?? 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheCreationTokens ?? 0)
+  const hasDetail = usage.inputTokens != null || usage.outputTokens != null || usage.cacheReadTokens != null
+  const detail = hasDetail
+    ? `${fnum(input)} in · ${fnum(usage.outputTokens ?? 0)} out${usage.reasoningTokens != null ? ` · ${fnum(usage.reasoningTokens)} reasoning` : ''}`
+    : usage.totalTokens != null
+      ? `${fnum(usage.totalTokens)} total`
+      : null
+  const context = usage.contextTokens != null
+    ? `${fnum(usage.contextTokens)}${usage.contextWindow != null ? ` / ${fnum(usage.contextWindow)}` : ''} context`
+    : null
+  return [detail, context].filter(Boolean).join(' · ') || null
+}
+
 /** A friendly, expand-on-click payload block (system prompt / user query). */
 function Fold({ title, sub, body }: { title: string; sub?: string; body: string }) {
   return (
@@ -323,6 +339,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
     sessionId: run?.sessionId ?? null,
     dir: detail ? detail.job.exec?.workdir || loopDir(detail.job.taskFile) : null,
     machineName: detail?.machine.name || null,
+    agent: detail?.job.agent ?? null,
     label: 'Continue agent session',
   })
 
@@ -357,6 +374,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
 
   const jobName = detail.summary.name
   const roleChip = run.role || null
+  const usageText = usageSummary(run.usage)
   return (
     <>
       {/* header card - mirrors the loop detail page */}
@@ -444,16 +462,8 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               </Field>
               {run.status && <Field k="Status">{run.status}</Field>}
               {run.durationMs != null && <Field k="Duration">{dur(run.durationMs)}</Field>}
-              {run.costUsd != null && (
-                <Field k="Cost">
-                  {money(run.costUsd)}
-                  {run.usage && (run.usage.inputTokens != null || run.usage.outputTokens != null) && (
-                    <span className="ml-1.5 text-disabled">
-                      ({fnum((run.usage.inputTokens ?? 0) + (run.usage.cacheReadTokens ?? 0) + (run.usage.cacheCreationTokens ?? 0))} in · {fnum(run.usage.outputTokens ?? 0)} out)
-                    </span>
-                  )}
-                </Field>
-              )}
+              {run.costUsd != null && <Field k="Cost">{money(run.costUsd)}</Field>}
+              {usageText && <Field k="Tokens">{usageText}</Field>}
               {run.state != null && (
                 <Field k="Run state">
                   <code className="block break-all font-mono text-label text-secondary">{JSON.stringify(run.state)}</code>

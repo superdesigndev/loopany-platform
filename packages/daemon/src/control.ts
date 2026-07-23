@@ -78,7 +78,9 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
   const server = "server" in injected ? (injected.server ?? "") : resolveServerUrl(undefined);
   const token = "token" in injected ? injected.token : readStored(DEVICE_FILE);
   // The shared pidfile.verifiedRunningPid check (reused-pid safe), fed our seams.
-  const pid = verifiedRunningPid(d);
+  // `status` is read-only. A sandbox may have an incomplete process view, so an
+  // uncertain/stale result may be reported but must never erase the pidfile.
+  const pid = verifiedRunningPid({ ...d, clearStale: false });
 
   d.out("loopany status:\n");
   d.out(
