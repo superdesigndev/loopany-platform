@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OnboardingWizard } from './OnboardingWizard'
 import { savePersisted } from '../lib/onboardingState'
+import { CREATION_STEP_KEYS } from '../lib/creationSteps'
 import type { TemplateInfo } from '../types'
 
 /**
@@ -13,7 +14,7 @@ import type { TemplateInfo } from '../types'
  * and the prompt step only advances to the celebration when `claimStatus.done`.
  * Also pins resume-from-storage and the dev-sim button gating.
  */
-const h = vi.hoisted(() => ({ online: false, done: false, sim: false }))
+const h = vi.hoisted(() => ({ online: false, done: false, sim: false, steps: [] as string[] }))
 
 vi.mock('../server/machineFns', () => ({
   createMachine: vi.fn(async () => ({ id: 'm-1', token: 'dk_test' })),
@@ -24,6 +25,7 @@ vi.mock('../server/loopApi', () => ({
   getConfig: vi.fn(async () => ({ loopanyCli: 'npx @crewlet/loopany@latest', customCli: false, onboardingSim: h.sim })),
   mintClaim: vi.fn(async () => ({ token: 'ck_test' })),
   claimStatus: vi.fn(async () => (h.done ? { done: true, id: 'loop-1' } : { done: false })),
+  claimProgress: vi.fn(async () => ({ steps: h.steps })),
 }))
 vi.mock('../server/onboardingSim', () => ({
   simulateMachineConnect: vi.fn(async () => {
@@ -75,6 +77,7 @@ beforeEach(() => {
   h.online = false
   h.done = false
   h.sim = false
+  h.steps = []
 })
 afterEach(() => {
   act(() => root?.unmount())
@@ -140,6 +143,29 @@ describe('OnboardingWizard step machine', () => {
     await poll(0)
     expect(host!.textContent).toContain('Copy the prompt')
     expect(host!.textContent).toContain('connect-key: ck_test')
+  })
+
+  it('lights up the creation checklist as milestones are reported (best-effort, never gates)', async () => {
+    savePersisted('teamA', { step: 'prompt', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test' })
+    h.steps = []
+    render()
+    await poll(0)
+    // Every milestone label renders; the snippet carries the progress protocol.
+    expect(host!.textContent).toContain('Reading the setup instructions')
+    expect(host!.textContent).toContain('Creating the loop')
+    expect(host!.textContent).toContain('/api/claim/progress')
+    // Nothing reported yet → the first step is the live "working…" cursor.
+    expect(host!.textContent).toContain('working…')
+    // A couple milestones arrive → the checklist advances, still working.
+    h.steps = [CREATION_STEP_KEYS[0]!, CREATION_STEP_KEYS[1]!]
+    await poll(1600)
+    expect(host!.textContent).toContain('working…')
+    // Every milestone reported → all done, no active cursor left.
+    h.steps = [...CREATION_STEP_KEYS]
+    await poll(1600)
+    expect(host!.textContent).not.toContain('working…')
+    // The loop-created signal is still authoritative and independent of the checklist.
+    expect(host!.textContent).not.toContain('Housekeeper is live')
   })
 
   it('hides the dev-sim buttons when onboardingSim is off, shows them when on', async () => {

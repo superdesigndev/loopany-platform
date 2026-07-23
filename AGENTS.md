@@ -851,6 +851,17 @@ computes pure functions. Run instructions: `README.md`.
   `matchMedia`, since the global CSS reduced-motion reset can't stop JS timers) renders a
   separate static-stills path. Decorative only - never gates Continue. `data-act` (0/1/2 or
   "stills") + `data-testid=hk-score` are the test hooks.
+- **Live creation checklist** (round 4): the Create step shows agent-reported
+  milestones lighting up instead of a bare "Waiting…". Fixed enum `lib/creationSteps.ts`
+  (`CREATION_STEPS` + `deriveStepStates`, tolerant of skipped/repeated/out-of-order/
+  absent/junk - keys off the highest reported index). Emit path is ZERO daemon/CLI
+  change: the pasted snippet gains a `curl` progress protocol; the agent POSTs each
+  milestone to `POST /api/claim/progress` (`routes/api.claim.progress.ts`), enum-only +
+  `dk_`-shaped claim + body cap + IP flood guard, stored in a bounded/TTL'd in-memory map
+  keyed by the claim token (`tokens.ts` `recordClaimProgress`/`readClaimProgress`, enum
+  re-validated at storage). The wizard polls `claimProgress` alongside `claimStatus` (the
+  latter stays AUTHORITATIVE - the checklist NEVER gates). Elapsed-aware reassurance after
+  25s quiet. Dev-sim POSTs the real sequence with delays so the checklist comes alive.
 - **DEV-ONLY onboarding sim** lets the flow be clicked locally without a second machine.
   ONE gate, `lib/onboardingSim.ts` `onboardingSimEnabled()` = NOT a production build AND
   `LOOPANY_ONBOARDING_SIM` truthy; `getConfig` echoes it so the wizard's "Simulate …"

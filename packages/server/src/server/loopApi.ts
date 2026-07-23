@@ -433,3 +433,14 @@ export const claimStatus = createServerFn({ method: 'GET' })
     const r = (await backend()).gateway.claimStatus(token)
     return r ? { done: true, id: r.loopId, name: r.name, agent: r.agent } : { done: false }
   })
+
+/** Poll the agent-reported creation milestones for a claim (best-effort live
+ *  checklist in the onboarding wizard). Never authoritative — `claimStatus.done`
+ *  is the real completion signal; this only drives which steps are lit. */
+export const claimProgress = createServerFn({ method: 'GET' })
+  .validator((token: string) => token)
+  .handler(async ({ data: token }): Promise<{ steps: string[] }> => {
+    await backend()
+    const { readClaimProgress } = await import('../gateway/tokens.js')
+    return { steps: readClaimProgress(token) }
+  })

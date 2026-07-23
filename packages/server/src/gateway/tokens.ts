@@ -19,6 +19,7 @@ import { and, eq, isNotNull, lt } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { connectKeys, runLeases, type CodingAgent, type RunRole } from "../db/schema.js";
+import { isCreationStep } from "../lib/creationSteps.js";
 
 export function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
@@ -322,4 +323,53 @@ export function readClaim(token: string): ClaimResult | undefined {
   const r = claimResults.get(token);
   if (r) claimResults.delete(token);
   return r;
+}
+
+// ── Best-effort creation progress (onboarding wizard live checklist) ──────────
+// The coding agent reports creation milestones (fixed enum keys) as it works,
+// keyed by the claim token the wizard polls. BEST-EFFORT + NEVER authoritative:
+// the loop-created claim result above is the real completion signal. Untrusted
+// input — only known enum keys are stored (validated here AND at the wire boundary).
+// In-memory, bounded (LRU by recency) + TTL'd, like the other UI correlations.
+
+interface ClaimProgress {
+  steps: string[];
+  updatedAt: number;
+}
+const claimProgress = new Map<string, ClaimProgress>();
+const CLAIM_PROGRESS_TTL_MS = 30 * 60_000;
+const CLAIM_PROGRESS_MAX = 2000;
+
+/** Record one reported milestone against a claim token. Non-enum steps are dropped
+ *  (defense-in-depth over the route's own validation); repeats are de-duped. */
+export function recordClaimProgress(token: string, step: string): void {
+  if (!isCreationStep(step)) return;
+  const now = Date.now();
+  const cur = claimProgress.get(token) ?? { steps: [], updatedAt: now };
+  if (!cur.steps.includes(step)) cur.steps.push(step);
+  cur.updatedAt = now;
+  // Re-insert so this token becomes the most-recently-used (Map preserves insertion order).
+  claimProgress.delete(token);
+  claimProgress.set(token, cur);
+  // Bound memory: evict the oldest entries once over the cap.
+  while (claimProgress.size > CLAIM_PROGRESS_MAX) {
+    const oldest = claimProgress.keys().next().value;
+    if (oldest === undefined) break;
+    claimProgress.delete(oldest);
+  }
+}
+
+/** The reported milestone keys for a claim (empty if none / expired). */
+export function readClaimProgress(token: string): string[] {
+  const p = claimProgress.get(token);
+  if (!p) return [];
+  if (Date.now() - p.updatedAt > CLAIM_PROGRESS_TTL_MS) {
+    claimProgress.delete(token);
+    return [];
+  }
+  return p.steps;
+}
+
+export function clearClaimProgress(token: string): void {
+  claimProgress.delete(token);
 }
