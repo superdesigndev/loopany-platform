@@ -110,6 +110,10 @@ describe('OnboardingWizard step machine', () => {
 
     click('Continue')
     expect(host!.textContent).toContain('Meet Housekeeper')
+    // The three-act cinematic renders (all acts are in the DOM; they crossfade).
+    expect(host!.textContent).toContain('8:00 AM')
+    expect(host!.textContent).toContain('Merged')
+    expect(host!.textContent).toContain('Cleanliness score')
 
     click('Set it up')
     await poll(0) // flush mintClaim

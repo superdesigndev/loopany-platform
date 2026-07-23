@@ -14,6 +14,7 @@ import {
   type Persisted,
   type Step,
 } from '../lib/onboardingState'
+import { HousekeeperCinematic } from './HousekeeperCinematic'
 import { LoopLogo } from './LoopLogo'
 import { btnPrimary, btnPrimaryPill, btnSm } from './ui'
 
@@ -281,25 +282,13 @@ export function OnboardingWizard({
             <Section>
               <h1 className="text-[22px] font-semibold text-display">Meet Housekeeper</h1>
               <p className="mt-3 text-body leading-relaxed text-secondary">
-                Every morning around 7am, Housekeeper looks for <span className="font-medium text-display">one</span> small,
-                provably safe cleanup in your codebase - dead code, a stale file, an unused dependency, a bit of duplication.
+                Every morning it lands <span className="font-medium text-display">one</span> small, provably safe cleanup -
+                dead code, a stale file, an unused dependency - as a tidy pull request. Here&apos;s a month in fast-forward.
               </p>
-              <ul className="mt-4 flex flex-col gap-2.5">
-                {[
-                  'Proves it is genuinely low-risk before touching anything.',
-                  'Makes the change in a throwaway git worktree, then opens a pull request.',
-                  'One tidy PR a day - never stacks a new one while a previous is still open.',
-                  'Protects active, uncommitted, generated, and uncertain work.',
-                ].map((line) => (
-                  <li key={line} className="flex items-start gap-2.5 text-body leading-snug text-secondary">
-                    <span aria-hidden className="mt-0.5 text-display">
-                      ✓
-                    </span>
-                    {line}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-4 text-body leading-relaxed text-secondary">You review and merge - it never merges for you.</p>
+
+              <div className="mt-5">
+                <HousekeeperCinematic />
+              </div>
 
               <StepFooter onBack={back} canBack>
                 <button className={btnPrimary} onClick={() => goStep('prompt')}>

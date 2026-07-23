@@ -839,7 +839,12 @@ computes pure functions. Run instructions: `README.md`.
   `.online`), the create step reuses `mintClaim`/`claimStatus` + the Housekeeper template
   `description` (auto-advances on `.done`) - never a claimed Next. Step + minted tokens
   persist per team via `lib/onboardingState.ts` (pure, unit-tested) so a mid-flow reload
-  resumes.
+  resumes. The "Meet Housekeeper" step embeds `HousekeeperCinematic` - a tiny in-house
+  (CSS/SVG/JS, no deps) three-act auto-playing storyboard (8:00 AM black frame → a
+  stylized NON-GitHub PR mock, +2/−102 merged clean → a 30→80 cleanliness-score arc)
+  that RESTS on the last act with Replay; `prefers-reduced-motion` (JS `matchMedia`, since
+  the global CSS reduced-motion reset can't stop JS timers) renders static stills, no
+  auto-play. Decorative only - never gates Continue.
 - **DEV-ONLY onboarding sim** lets the flow be clicked locally without a second machine.
   ONE gate, `lib/onboardingSim.ts` `onboardingSimEnabled()` = NOT a production build AND
   `LOOPANY_ONBOARDING_SIM` truthy; `getConfig` echoes it so the wizard's "Simulate …"
