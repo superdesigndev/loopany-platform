@@ -61,5 +61,11 @@ function Onboarding() {
     else void navigate({ to: '/' })
   }
 
-  return <OnboardingWizard teamId={loaded.teamId} housekeeper={loaded.housekeeper} onExit={exit} />
+  // The payoff hand-off: into the created loop's first run (or its Loop page).
+  const seeResult = (loopId: string, runId?: string) => {
+    if (runId) void navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId, runId } })
+    else void navigate({ to: '/loops/$loopId', params: { loopId } })
+  }
+
+  return <OnboardingWizard teamId={loaded.teamId} housekeeper={loaded.housekeeper} onExit={exit} onSeeResult={seeResult} />
 }

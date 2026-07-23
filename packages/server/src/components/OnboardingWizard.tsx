@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { TemplateInfo } from '../types'
 import { createMachine, finalizeMachine, machineStatus } from '../server/machineFns'
-import { claimProgress, claimStatus, getConfig, mintClaim } from '../server/loopApi'
-import { simulateLoopCreated, simulateMachineConnect } from '../server/onboardingSim'
+import { claimProgress, claimStatus, firstRunStatus, getConfig, mintClaim } from '../server/loopApi'
+import { testChannel } from '../server/notifyFns'
+import { simulateFirstRun, simulateLoopCreated, simulateMachineConnect, simulateNotifyBind } from '../server/onboardingSim'
 import { CREATION_STEPS, CREATION_STEP_KEYS, deriveStepStates, type StepState } from '../lib/creationSteps'
+import { ChannelAddForm } from './ChannelAddForm'
 import {
   clearPersisted,
   loadPersisted,
@@ -40,6 +42,7 @@ export function OnboardingWizard({
   teamId,
   housekeeper,
   onExit,
+  onSeeResult,
 }: {
   teamId?: string
   /** The Housekeeper template meta (its `description` is the paste-prompt). Null if
@@ -47,10 +50,12 @@ export function OnboardingWizard({
   housekeeper: TemplateInfo | null
   /** Leave the wizard (skip or finish) — the route navigates back to the dashboard. */
   onExit: () => void
+  /** The payoff hand-off: open the created loop's first run (or the Loop page). */
+  onSeeResult: (loopId: string, runId?: string) => void
 }) {
   const teamKey = teamId ?? 'open'
   const [persisted, setPersisted] = useState<Persisted>(() => loadPersisted(teamKey))
-  const { step, machineId, machineToken, claimToken } = persisted
+  const { step, machineId, machineToken, claimToken, loopId } = persisted
   const [machineOnline, setMachineOnline] = useState(false)
   const [config, setConfig] = useState<{ loopanyCli: string; customCli: boolean; onboardingSim: boolean } | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
@@ -60,6 +65,10 @@ export function OnboardingWizard({
   // "nothing heard for a while" flag for the reassurance copy. Neither ever gates.
   const [steps, setSteps] = useState<string[]>([])
   const [quiet, setQuiet] = useState(false)
+  // The `live` step: first-run wait-state + the notification binding (fills the wait).
+  const [runState, setRunState] = useState<{ state: 'running' | 'done' | 'scheduled'; runId?: string; scheduledHint?: string }>({ state: 'running' })
+  const [bound, setBound] = useState<{ name: string; sim: boolean } | null>(null)
+  const [testResult, setTestResult] = useState<'idle' | 'sending' | 'ok' | 'failed'>('idle')
 
   const patch = useCallback((p: Partial<Persisted>) => setPersisted((prev) => ({ ...prev, ...p })), [])
   const goStep = useCallback((s: Step) => patch({ step: s }), [patch])
@@ -134,12 +143,25 @@ export function OnboardingWizard({
         claimProgress({ data: claimToken }).catch(() => undefined),
       ])
       if (p?.steps) setSteps((prev) => (prev.length === p.steps.length ? prev : p.steps))
-      if (s?.done && s.id) goStep('done')
+      if (s?.done && s.id) patch({ loopId: s.id, step: 'live' })
     }
     void tick()
     const t = setInterval(tick, 1500)
     return () => clearInterval(t)
-  }, [step, claimToken, goStep])
+  }, [step, claimToken, patch])
+
+  // Step "live" — wait on the FIRST run completing (detected reality again), then
+  // surface the payoff CTA into the Loop page. Stops polling once done/scheduled.
+  useEffect(() => {
+    if (step !== 'live' || !loopId || runState.state !== 'running') return
+    const tick = async () => {
+      const r = await firstRunStatus({ data: loopId }).catch(() => undefined)
+      if (r) setRunState(r)
+    }
+    void tick()
+    const t = setInterval(tick, 2000)
+    return () => clearInterval(t)
+  }, [step, loopId, runState.state])
 
   // "Nothing heard for a while" — reset a quiet timer on entry and whenever a new
   // milestone arrives; if it fires, surface elapsed-aware reassurance copy.
@@ -226,12 +248,49 @@ export function OnboardingWizard({
     onExit()
   }
 
+  // The payoff hand-off: into the created loop's first run (or Loop page).
+  function seeResult() {
+    if (!loopId) return
+    markOnboardingDismissed(teamKey)
+    clearPersisted(teamKey)
+    onSeeResult(loopId, runState.runId)
+  }
+
+  // Real bind (via ChannelAddForm) → live test-ping verification (detected reality).
+  async function onBound(ch: { id: string; name: string }) {
+    setBound({ name: ch.name, sim: false })
+    setTestResult('sending')
+    const r = await testChannel({ data: ch.id }).catch(() => ({ ok: false }))
+    setTestResult(r.ok ? 'ok' : 'failed')
+  }
+
+  async function simNotify() {
+    setSimBusy(true)
+    const r = await simulateNotifyBind().catch(() => ({ ok: false, error: 'simulation failed', name: undefined }))
+    if (r.ok && r.name) {
+      setBound({ name: r.name, sim: true })
+      setTestResult('ok')
+    } else setError(r.error ?? 'simulation failed')
+    setSimBusy(false)
+  }
+
+  async function simFirstRun() {
+    if (!loopId) return
+    setSimBusy(true)
+    const r = await simulateFirstRun({ data: loopId }).catch(() => ({ ok: false, error: 'simulation failed' }))
+    if (!r.ok) setError(r.error ?? 'simulation failed')
+    // Nudge the state immediately (the poll also picks it up).
+    const s = await firstRunStatus({ data: loopId }).catch(() => undefined)
+    if (s) setRunState(s)
+    setSimBusy(false)
+  }
+
   const back = () => {
     const prev = prevNumbered(step)
     if (prev) goStep(prev)
   }
 
-  const currentIndex = step === 'done' ? NUMBERED.length : NUMBERED.indexOf(step)
+  const currentIndex = NUMBERED.indexOf(step)
 
   return (
     <div className="min-h-screen bg-paper">
@@ -242,24 +301,22 @@ export function OnboardingWizard({
             <LoopLogo size={26} />
             <span className="text-[16px] font-semibold tracking-[-0.015em] text-display">Loopany</span>
           </div>
-          {step !== 'done' && (
+          {step !== 'live' && (
             <button onClick={skip} className="cursor-pointer text-label text-secondary transition-colors hover:text-display">
               Skip for now
             </button>
           )}
         </div>
 
-        {/* Progress rail */}
-        {step !== 'done' && (
-          <div className="mt-8 flex items-center gap-2" aria-label={`Step ${currentIndex + 1} of ${NUMBERED.length}`}>
-            {NUMBERED.map((s, i) => (
-              <div key={s} className="flex flex-1 flex-col gap-1.5">
-                <div className={`h-1 rounded-full transition-colors ${i <= currentIndex ? 'bg-display' : 'bg-hairline'}`} />
-                <span className={`text-micro font-medium ${i === currentIndex ? 'text-display' : 'text-disabled'}`}>{STEP_LABEL[s]}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Progress rail (all steps numbered; the final `live` step is the payoff) */}
+        <div className="mt-8 flex items-center gap-2" aria-label={`Step ${currentIndex + 1} of ${NUMBERED.length}`}>
+          {NUMBERED.map((s, i) => (
+            <div key={s} className="flex flex-1 flex-col gap-1.5">
+              <div className={`h-1 rounded-full transition-colors ${i <= currentIndex ? 'bg-display' : 'bg-hairline'}`} />
+              <span className={`text-micro font-medium ${i === currentIndex ? 'text-display' : 'text-disabled'}`}>{STEP_LABEL[s]}</span>
+            </div>
+          ))}
+        </div>
 
         <div className="flex flex-1 flex-col justify-center py-10">
           {step === 'welcome' && (
@@ -404,22 +461,61 @@ export function OnboardingWizard({
             </Section>
           )}
 
-          {step === 'done' && (
+          {step === 'live' && (
             <Section>
               <div className="text-center">
-                <div className="text-[44px]" aria-hidden>
+                <div className="text-[40px]" aria-hidden>
                   🎉
                 </div>
-                <h1 className="mt-2 font-pixel text-[clamp(22px,4.5vw,30px)] leading-tight text-display">Housekeeper is live</h1>
-                <p className="mt-4 text-body leading-relaxed text-secondary">
-                  It&apos;s scheduled and will run on your machine every morning. You&apos;ll find it - and every run it produces
-                  - on your dashboard.
+                <h1 className="mt-1 font-pixel text-[clamp(22px,4.5vw,30px)] leading-tight text-display">Housekeeper is live</h1>
+              </div>
+
+              {/* The payoff-in-progress: wait on the first run, then a big CTA into it. */}
+              <FirstRunCard state={runState} onSeeResult={seeResult} />
+
+              {/* Get notified — fills the wait; entirely optional (dashboard/see-result
+                  are always available), so skipping is zero-friction. */}
+              <div className="mt-6 rounded-card border border-hairline bg-surface p-4 shadow-card">
+                <div className="text-label font-semibold text-display">Get notified</div>
+                <p className="mt-1 text-body leading-snug text-secondary">
+                  Your loop reports where you already look - Slack, Telegram, or Feishu. Optional; add or change it anytime in
+                  Notifications on your dashboard.
                 </p>
-                <div className="mt-8">
-                  <button className={btnPrimary} onClick={finish}>
-                    Go to dashboard →
-                  </button>
-                </div>
+                {bound ? (
+                  <div className="mt-3 flex items-center gap-2.5 rounded-control border border-hairline bg-success-soft px-4 py-2.5">
+                    <span
+                      className="flex size-5 shrink-0 items-center justify-center rounded-full bg-rubik-green text-[11px] font-bold text-white"
+                      style={{ animation: 'hk-pop 0.45s var(--hk-spring) both' }}
+                    >
+                      ✓
+                    </span>
+                    <span className="text-body font-medium text-display">Connected: {bound.name}</span>
+                    <span className="ml-auto text-label text-secondary">
+                      {testResult === 'sending'
+                        ? 'sending test…'
+                        : testResult === 'ok'
+                          ? `test sent ✓${bound.sim ? ' (demo)' : ''}`
+                          : testResult === 'failed'
+                            ? 'test failed - check the channel'
+                            : ''}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="mt-3">
+                    <ChannelAddForm onCreated={onBound} />
+                    {config?.onboardingSim && <SimButton busy={simBusy} onClick={() => void simNotify()} label="Simulate connect + test" />}
+                  </div>
+                )}
+              </div>
+
+              {config?.onboardingSim && runState.state !== 'done' && (
+                <SimButton busy={simBusy} onClick={() => void simFirstRun()} label="Simulate first run completed" />
+              )}
+
+              <div className="mt-8 flex items-center justify-center">
+                <button onClick={finish} className="cursor-pointer text-label font-medium text-secondary transition-colors hover:text-display">
+                  Go to dashboard
+                </button>
               </div>
             </Section>
           )}
@@ -433,6 +529,48 @@ export function OnboardingWizard({
 
 function Section({ children }: { children: React.ReactNode }) {
   return <div className="animate-[fadeIn_180ms_ease-out]">{children}</div>
+}
+
+/** The first-run wait/payoff card: waits on the first run (detected reality), then a
+ *  big obvious CTA into the Loop page. Honest scheduled state when it won't run soon -
+ *  never a spinner-trap. */
+function FirstRunCard({
+  state,
+  onSeeResult,
+}: {
+  state: { state: 'running' | 'done' | 'scheduled'; scheduledHint?: string }
+  onSeeResult: () => void
+}) {
+  if (state.state === 'done') {
+    return (
+      <div className="mt-6 rounded-card border border-hairline bg-success-soft p-5 text-center shadow-card">
+        <div className="text-body font-medium text-display">✓ First run complete - your agent already did something.</div>
+        <button onClick={onSeeResult} className={`${btnPrimary} mt-4`} style={{ animation: 'hk-pop 0.5s var(--hk-spring) both' }}>
+          See your first result →
+        </button>
+      </div>
+    )
+  }
+  if (state.state === 'scheduled') {
+    return (
+      <div className="mt-6 rounded-card border border-hairline bg-surface p-5 text-center shadow-card">
+        <div className="text-body font-medium text-display">First run is queued</div>
+        <p className="mt-1.5 text-body leading-snug text-secondary">
+          It&apos;ll start when your machine picks it up{state.scheduledHint ? ` (scheduled ${state.scheduledHint})` : ''}. No
+          need to wait here - the result will appear on the loop&apos;s page.
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="mt-6 flex items-center gap-3 rounded-card border border-hairline bg-surface p-5 shadow-card">
+      <span className="inline-block size-2.5 shrink-0 rounded-full bg-rubik-orange" style={{ animation: 'runPulse 1.4s ease-in-out infinite' }} />
+      <div>
+        <div className="text-body font-medium text-display">Running its first pass now…</div>
+        <div className="text-label text-secondary">We&apos;ll open the result as soon as it finishes.</div>
+      </div>
+    </div>
+  )
 }
 
 /** The live loop-creation checklist: milestones light up as the agent reports them.

@@ -19,14 +19,14 @@ import {
 afterEach(() => window.localStorage.clear())
 
 describe('resume persistence (per team)', () => {
-  it('round-trips the step + minted tokens for resume', () => {
-    const state: Persisted = { step: 'prompt', machineId: 'm1', machineToken: 'dk_x', claimToken: 'ck_y' }
+  it('round-trips the step + minted tokens + loopId for resume', () => {
+    const state: Persisted = { step: 'live', machineId: 'm1', machineToken: 'dk_x', claimToken: 'ck_y', loopId: 'loop-1' }
     savePersisted('teamA', state)
     expect(loadPersisted('teamA')).toEqual(state)
   })
 
   it('scopes state by team key — team B does not see team A progress', () => {
-    savePersisted('teamA', { step: 'meet', machineId: 'm1', machineToken: 't', claimToken: null })
+    savePersisted('teamA', { step: 'meet', machineId: 'm1', machineToken: 't', claimToken: null, loopId: null })
     expect(loadPersisted('teamB')).toEqual(EMPTY)
   })
 
@@ -44,7 +44,7 @@ describe('resume persistence (per team)', () => {
   })
 
   it('clearPersisted removes resume state', () => {
-    savePersisted('t', { step: 'done', machineId: 'm', machineToken: 't', claimToken: 'c' })
+    savePersisted('t', { step: 'live', machineId: 'm', machineToken: 't', claimToken: 'c', loopId: 'loop-1' })
     clearPersisted('t')
     expect(loadPersisted('t')).toEqual(EMPTY)
   })
@@ -68,5 +68,6 @@ describe('prevNumbered (back navigation)', () => {
     expect(prevNumbered('machine')).toBe('welcome')
     expect(prevNumbered('meet')).toBe('machine')
     expect(prevNumbered('prompt')).toBe('meet')
+    expect(prevNumbered('live')).toBe('prompt')
   })
 })

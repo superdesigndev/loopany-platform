@@ -444,3 +444,24 @@ export const claimProgress = createServerFn({ method: 'GET' })
     const { readClaimProgress } = await import('../gateway/tokens.js')
     return { steps: readClaimProgress(token) }
   })
+
+/** The onboarding "first run" wait-state for a just-created loop. READS the loop's
+ *  first exec run (kicked off immediately at creation) + its machine presence and
+ *  derives running/done/scheduled — the wizard waits on `done` to hand off into the
+ *  Loop page. Zero code-exec: never triggers a run, only reads rows. */
+export const firstRunStatus = createServerFn({ method: 'GET' })
+  .validator((loopId: string) => loopId)
+  .handler(async ({ data: loopId }): Promise<{ state: 'running' | 'done' | 'scheduled'; runId?: string; scheduledHint?: string }> => {
+    await backend()
+    const { firstRunStateFrom } = await import('../lib/firstRun.js')
+    const { cronText } = await import('../lib/format.js')
+    const owned = await ownedLoop(loopId)
+    if (!owned) return { state: 'scheduled' }
+    const loop = owned.loop
+    const run = await store.lastExecRun(loopId)
+    const machine = loop.machineId ? await store.getMachine(loop.machineId) : undefined
+    const state = firstRunStateFrom({ phase: run?.phase ?? null, hasRun: !!run, machineOnline: !!machine?.online })
+    if (state === 'done') return { state, runId: run?.id }
+    if (state === 'running') return { state, runId: run?.id }
+    return { state, scheduledHint: cronText(loop.cron) }
+  })

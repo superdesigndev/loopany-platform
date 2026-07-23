@@ -5,17 +5,18 @@
  * step we're on and the tokens minted so far, so a mid-flow reload resumes exactly
  * where the user left off.
  */
-export const STEPS = ['welcome', 'machine', 'meet', 'prompt', 'done'] as const
+export const STEPS = ['welcome', 'machine', 'meet', 'prompt', 'live'] as const
 export type Step = (typeof STEPS)[number]
 
-/** The numbered steps shown in the progress rail (`done` is the terminal celebration). */
-export const NUMBERED: Step[] = ['welcome', 'machine', 'meet', 'prompt']
+/** The numbered steps shown in the progress rail. `live` (celebration + first-run
+ *  wait + notify binding) is the final step; the payoff hands off into the Loop page. */
+export const NUMBERED: Step[] = ['welcome', 'machine', 'meet', 'prompt', 'live']
 export const STEP_LABEL: Record<Step, string> = {
   welcome: 'Welcome',
   machine: 'Connect',
-  meet: 'Housekeeper',
+  meet: 'Preview',
   prompt: 'Create',
-  done: 'Done',
+  live: 'Live',
 }
 
 export interface Persisted {
@@ -23,9 +24,12 @@ export interface Persisted {
   machineId: string | null
   machineToken: string | null
   claimToken: string | null
+  /** The created loop's id (set when claimStatus resolves) — the `live` step waits on
+   *  its first run and hands off into its Loop page. */
+  loopId: string | null
 }
 
-export const EMPTY: Persisted = { step: 'welcome', machineId: null, machineToken: null, claimToken: null }
+export const EMPTY: Persisted = { step: 'welcome', machineId: null, machineToken: null, claimToken: null, loopId: null }
 
 const keyFor = (teamKey: string) => `loopany.onboarding.v1:${teamKey}`
 const dismissKeyFor = (teamKey: string) => `loopany.onboarding.dismissed.v1:${teamKey}`
@@ -43,6 +47,7 @@ export function loadPersisted(teamKey: string): Persisted {
       machineId: typeof p.machineId === 'string' ? p.machineId : null,
       machineToken: typeof p.machineToken === 'string' ? p.machineToken : null,
       claimToken: typeof p.claimToken === 'string' ? p.claimToken : null,
+      loopId: typeof p.loopId === 'string' ? p.loopId : null,
     }
   } catch {
     return EMPTY

@@ -862,6 +862,20 @@ computes pure functions. Run instructions: `README.md`.
   re-validated at storage). The wizard polls `claimProgress` alongside `claimStatus` (the
   latter stays AUTHORITATIVE - the checklist NEVER gates). Elapsed-aware reassurance after
   25s quiet. Dev-sim POSTs the real sequence with delays so the checklist comes alive.
+- **Post-creation `live` step** (rounds 5+6): after the loop is created the wizard does NOT
+  end — a single `live` step folds the celebration, the first-run wait, and notification
+  binding. (1) **First run**: `createLoop` already fires an immediate `scheduler.runNow`, so
+  the wizard polls `firstRunStatus(loopId)` (pure branch table `lib/firstRun.ts`
+  `firstRunStateFrom`: done→payoff, running→live, pending+offline/canceled→honest
+  `scheduled` handoff — never a spinner-trap) and on `done` shows a big CTA into the Loop
+  page (`onSeeResult` → `/loops/$loopId/runs/$runId`) — the payoff. Zero code-exec: it only
+  READS run rows, never triggers a run. (2) **Notify binding** fills the wait, reusing the
+  ONE shared `components/ChannelAddForm.tsx` (extracted from `NotificationsModal`, so the two
+  binding surfaces can't drift; channels are slack/telegram/feishu via `createChannel` +
+  live `testChannel` ping). Fully optional (dashboard/see-result always available). Persisted
+  `loopId` + the `live` step make it resumable; dev-sim adds `simulateFirstRun` (seeds a
+  finished run + report so the Loop page shows content) and `simulateNotifyBind` (a demo
+  channel + test-ok).
 - **DEV-ONLY onboarding sim** lets the flow be clicked locally without a second machine.
   ONE gate, `lib/onboardingSim.ts` `onboardingSimEnabled()` = NOT a production build AND
   `LOOPANY_ONBOARDING_SIM` truthy; `getConfig` echoes it so the wizard's "Simulate …"

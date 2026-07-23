@@ -14,7 +14,13 @@ import type { TemplateInfo } from '../types'
  * and the prompt step only advances to the celebration when `claimStatus.done`.
  * Also pins resume-from-storage and the dev-sim button gating.
  */
-const h = vi.hoisted(() => ({ online: false, done: false, sim: false, steps: [] as string[] }))
+const h = vi.hoisted(() => ({
+  online: false,
+  done: false,
+  sim: false,
+  steps: [] as string[],
+  firstRun: 'running' as 'running' | 'done' | 'scheduled',
+}))
 
 vi.mock('../server/machineFns', () => ({
   createMachine: vi.fn(async () => ({ id: 'm-1', token: 'dk_test' })),
@@ -26,6 +32,13 @@ vi.mock('../server/loopApi', () => ({
   mintClaim: vi.fn(async () => ({ token: 'ck_test' })),
   claimStatus: vi.fn(async () => (h.done ? { done: true, id: 'loop-1' } : { done: false })),
   claimProgress: vi.fn(async () => ({ steps: h.steps })),
+  firstRunStatus: vi.fn(async () => ({ state: h.firstRun, runId: h.firstRun === 'done' ? 'run-1' : undefined, scheduledHint: 'daily at 7:00' })),
+}))
+// ChannelAddForm imports these; only used on interaction, but the module must resolve.
+vi.mock('../server/notifyFns', () => ({
+  createChannel: vi.fn(async () => ({ ok: true, id: 'ch-1' })),
+  listSlackChannels: vi.fn(async () => ({ ok: true, channels: [] })),
+  testChannel: vi.fn(async () => ({ ok: true })),
 }))
 vi.mock('../server/onboardingSim', () => ({
   simulateMachineConnect: vi.fn(async () => {
@@ -36,6 +49,11 @@ vi.mock('../server/onboardingSim', () => ({
     h.done = true
     return { ok: true }
   }),
+  simulateFirstRun: vi.fn(async () => {
+    h.firstRun = 'done'
+    return { ok: true, runId: 'run-1' }
+  }),
+  simulateNotifyBind: vi.fn(async () => ({ ok: true, id: 'ch-1', name: 'Demo Slack · #loopany' })),
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -49,12 +67,13 @@ const HK: TemplateInfo = {
 let root: Root | null = null
 let host: HTMLElement | null = null
 const onExit = vi.fn()
+const onSeeResult = vi.fn()
 
 function render() {
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
-  act(() => root!.render(createElement(OnboardingWizard, { teamId: 'teamA', housekeeper: HK, onExit })))
+  act(() => root!.render(createElement(OnboardingWizard, { teamId: 'teamA', housekeeper: HK, onExit, onSeeResult })))
 }
 /** Advance past a poll interval and flush the async server-fn promises. */
 async function poll(ms = 2600) {
@@ -78,6 +97,7 @@ beforeEach(() => {
   h.done = false
   h.sim = false
   h.steps = []
+  h.firstRun = 'running'
 })
 afterEach(() => {
   act(() => root?.unmount())
@@ -85,6 +105,7 @@ afterEach(() => {
   root = null
   host = null
   onExit.mockClear()
+  onSeeResult.mockClear()
   vi.useRealTimers()
   window.localStorage.clear()
 })
@@ -131,14 +152,24 @@ describe('OnboardingWizard step machine', () => {
     expect(host!.textContent).not.toContain('Housekeeper is live')
     h.done = true
     await poll()
+    // Lands on the `live` step: celebration + first-run wait (still running).
     expect(host!.textContent).toContain('Housekeeper is live')
+    expect(host!.textContent).toContain('Running its first pass')
+    expect(host!.textContent).toContain('Get notified')
+    // Go to dashboard is always available (never trap).
+    expect(findButton('Go to dashboard')).toBeDefined()
 
-    click('Go to dashboard')
-    expect(onExit).toHaveBeenCalled()
+    // First run completes → the payoff CTA into the Loop page appears.
+    h.firstRun = 'done'
+    await poll()
+    const cta = findButton('See your first result')
+    expect(cta).toBeDefined()
+    act(() => cta!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onSeeResult).toHaveBeenCalledWith('loop-1', 'run-1')
   })
 
   it('resumes mid-flow from persisted state (lands on the prompt step)', async () => {
-    savePersisted('teamA', { step: 'prompt', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test' })
+    savePersisted('teamA', { step: 'prompt', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test', loopId: null })
     render()
     await poll(0)
     expect(host!.textContent).toContain('Copy the prompt')
@@ -146,7 +177,7 @@ describe('OnboardingWizard step machine', () => {
   })
 
   it('lights up the creation checklist as milestones are reported (best-effort, never gates)', async () => {
-    savePersisted('teamA', { step: 'prompt', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test' })
+    savePersisted('teamA', { step: 'prompt', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test', loopId: null })
     h.steps = []
     render()
     await poll(0)
@@ -192,5 +223,45 @@ describe('OnboardingWizard step machine', () => {
     click('Simulate connection')
     await poll()
     expect(findButton('Continue')!.disabled).toBe(false)
+  })
+
+  it('shows an honest scheduled handoff when the first run will not run soon (no spinner-trap)', async () => {
+    h.firstRun = 'scheduled'
+    savePersisted('teamA', { step: 'live', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test', loopId: 'loop-1' })
+    render()
+    await poll(0)
+    expect(host!.textContent).toContain('First run is queued')
+    // No forced wait — dashboard is always available; no payoff CTA yet.
+    expect(findButton('Go to dashboard')).toBeDefined()
+    expect(findButton('See your first result')).toBeUndefined()
+  })
+
+  it('the dev-sim "Simulate first run completed" drives the first-run to done', async () => {
+    h.sim = true
+    h.firstRun = 'running'
+    savePersisted('teamA', { step: 'live', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test', loopId: 'loop-1' })
+    render()
+    await poll(0)
+    expect(host!.textContent).toContain('Running its first pass')
+    const simBtn = findButton('Simulate first run completed')
+    expect(simBtn).toBeDefined()
+    act(() => simBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await poll()
+    expect(findButton('See your first result')).toBeDefined()
+  })
+
+  it('binding a notification channel via the sim shows connected + test sent', async () => {
+    h.sim = true
+    h.firstRun = 'running'
+    savePersisted('teamA', { step: 'live', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test', loopId: 'loop-1' })
+    render()
+    await poll(0)
+    expect(host!.textContent).toContain('Get notified')
+    const bind = findButton('Simulate connect')
+    expect(bind).toBeDefined()
+    act(() => bind!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await poll(0)
+    expect(host!.textContent).toContain('Connected: Demo Slack')
+    expect(host!.textContent).toContain('test sent')
   })
 })

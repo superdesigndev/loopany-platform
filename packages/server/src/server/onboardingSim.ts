@@ -60,3 +60,62 @@ export const simulateLoopCreated = createServerFn({ method: 'POST' })
     const body = res.body as { id?: string }
     return { ok: true, id: body?.id }
   })
+
+/** A plausible Housekeeper first-run report, so the Loop page shows real content
+ *  when the captain plays the arc without a live agent. */
+const SEEDED_FIRST_REPORT = [
+  'Ran the first housekeeping pass.',
+  '',
+  'Removed an unused helper module (`src/legacy/priceUtils.ts`) and two stale docs — a 102-line net reduction — in a fresh worktree off `main`. Build, tests, and runtime checks all stayed green, so the change was kept.',
+  '',
+  'Opened PR #1 with the cleanup and refreshed the dashboard. Cleanliness score: 62 → 68.',
+].join('\n')
+
+/** Simulate the loop's FIRST run completing with a seeded report, so the wizard's
+ *  first-run detection flips to done and the Loop page shows a real result. Completes
+ *  the immediate pending run when present, else writes a finished exec run. */
+export const simulateFirstRun = createServerFn({ method: 'POST' })
+  .validator((loopId: string) => loopId)
+  .handler(async ({ data: loopId }): Promise<{ ok: boolean; runId?: string; error?: string }> => {
+    if (!onboardingSimEnabled()) return { ok: false, error: 'simulation disabled' }
+    await ensureServer()
+    const loop = await store.getLoop(loopId)
+    if (!loop) return { ok: false, error: 'loop not found' }
+    const seeded = {
+      phase: 'done' as const,
+      outcome: 'exec' as const,
+      status: 'new' as const,
+      message: SEEDED_FIRST_REPORT,
+      durationMs: 47_000,
+      state: { cleanups: 1, score: 68 },
+      ts: new Date().toISOString(),
+    }
+    // Prefer completing the immediate pending run (what runNow created); else seed one.
+    const open = await store.openRunsForLoop(loopId)
+    const pending = open[0]
+    if (pending) {
+      const r = await store.updateRun(pending.id, seeded)
+      return { ok: true, runId: r?.id ?? pending.id }
+    }
+    const r = await store.addRun({ loopId, userId: loop.userId, machineId: loop.machineId, role: 'exec', ...seeded })
+    return { ok: true, runId: r.id }
+  })
+
+/** Simulate binding a notification channel (+ a successful test ping) so the "Get
+ *  notified" step is playable without a real workspace. Creates a real (demo) channel
+ *  row so it also shows in the dashboard's Notifications manager. */
+export const simulateNotifyBind = createServerFn({ method: 'POST' })
+  .handler(async (): Promise<{ ok: boolean; id?: string; name?: string; error?: string }> => {
+    if (!onboardingSimEnabled()) return { ok: false, error: 'simulation disabled' }
+    await ensureServer()
+    const { requestScope } = await import('../auth.js')
+    const { teamId } = await requestScope()
+    const name = 'Demo Slack · #loopany'
+    const ch = await store.createChannel({
+      teamId,
+      type: 'slack',
+      name,
+      config: { token: 'xoxb-demo-onboarding', channel: '#loopany' },
+    })
+    return { ok: true, id: ch.id, name }
+  })
