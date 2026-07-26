@@ -3,31 +3,39 @@ import { useEffect, useState } from 'react'
 /* ─────────────────────────────────────────────────────────────────────────────
  * "MEET HOUSEKEEPER" CINEMATIC — animation storyboard
  *
- * A single `stage` integer drives the whole sequence (ms after mount, below).
- * Motion is real spring physics: overshoot easings, staggered entrances, a stamp,
- * a celebratory flourish — in-house CSS/SVG/JS, no deps. `prefers-reduced-motion`
- * renders dignified static stills. Decorative only — never gates the wizard.
+ * Story: Housekeeper wakes every morning, lands one small cleanup, and the
+ * compounding effect makes the codebase healthier — a little better every day.
  *
- *     0ms   ACT 1 — black frame blooms; the clock odometer starts rolling
- *  1700ms   clock LANDS on 8:00 with a pulse + flash; caption rises
- *  2700ms   ACT 2 — the PR card swoops up with spring overshoot
- *  3300ms   red deletion lines sweep away (staggered); −102 counts down + pops
- *  5200ms   "Merged" STAMPS down with impact; checks rise in
- *  6600ms   ACT 3 — "30 days later" beat; score odometer runs 30 → 80
- *  8600ms   score LANDS on 80: arc overshoots green, ring + sparks flourish
- *  (rests on Act 3 with a Replay affordance)
+ * Driven by ONE `elapsed` clock (ms) advanced by a frame ticker that only runs
+ * while playing (so hover pauses the whole thing) — every beat is a pure function
+ * of `elapsed`. Motion is real spring physics: overshoot easings, staggered
+ * entrances, a stamp, a per-day rhythm, a celebratory settle. In-house CSS/SVG/JS,
+ * no deps. `prefers-reduced-motion` renders dignified static stills. Decorative
+ * only — never gates the wizard; Replay + pause-on-hover throughout.
+ *
+ *      0ms  ACT 1 — black frame blooms; the clock odometer rolls up…
+ *   1700ms  …LANDS on 8:00 with a pulse + flash; caption rises
+ *   2700ms  ACT 2 — one clean PR: the card swoops up (spring overshoot)
+ *   3300ms  red deletion lines sweep away (staggered); −102 counts down + pops
+ *   5200ms  "Merged" STAMPS down with impact; checks rise in
+ *   6600ms  ACT 3 — day by day: Day 1 → Day 30, a small PR each day, the arc
+ *           filling in STEPS and the score climbing 30 → 80 in daily nudges…
+ *  11400ms  …lands on 80 with a pop + ring/sparks flourish
+ *  11800ms  ACT 4 — the cadence beat: "Every morning · 07:00", rests here
  * ───────────────────────────────────────────────────────────────────────────── */
 
 const TIMING = {
-  clockLand: 1700, // stage 1 — 8:00 lands
-  actTwo: 2700, //    stage 2 — PR card swoops in
+  clockLand: 1700, //  stage 1 — 8:00 lands
+  actTwo: 2700, //     stage 2 — PR card swoops in
   deletions: 3300, //  stage 3 — deletions sweep + −102 rolls
   merged: 5200, //     stage 4 — Merged stamps + checks
-  actThree: 6600, //   stage 5 — "30 days later" + score counts
-  scoreLand: 8600, //  stage 6 — 80 lands + flourish
+  actThree: 6600, //   stage 5 — the day-by-day montage begins
+  actFour: 11800, //   stage 6 — the closing cadence beat (rests)
 }
-const STAGES = [TIMING.clockLand, TIMING.actTwo, TIMING.deletions, TIMING.merged, TIMING.actThree, TIMING.scoreLand]
+const STAGES = [TIMING.clockLand, TIMING.actTwo, TIMING.deletions, TIMING.merged, TIMING.actThree, TIMING.actFour]
 const LAST_STAGE = STAGES.length // 6
+const END = TIMING.actFour + 500 // cap the clock (rest on the last act)
+const FRAME_MS = 1000 / 60
 
 /* ACT 1 — the clock. An odometer that rolls the exact per-minute frames up to 8:00
  * (each digit reel always travels downward, so it reads as a real spinning odometer). */
@@ -38,7 +46,7 @@ function clockFrames(startMin: number, endMin: number): string[] {
 }
 const CLOCK = {
   frames: clockFrames(465, 480), // 7:45 → 8:00 — a long, satisfying spin
-  rollMs: 1650, // reel roll duration (decelerates into 8:00, settles just before clockLand)
+  rollMs: 1550, // reel roll duration (decelerates into 8:00, settles just before clockLand)
   digitH: 58, // px per reel row (matches the clock font line)
 }
 
@@ -53,18 +61,26 @@ const DELETIONS = {
     '// TODO(2019): remove after migration',
   ],
   removed: 102, // the −N stat that counts down
+  countMs: 900,
 }
 
-/* ACT 3 — the payoff gauge. */
-const SCORE = { from: 30, to: 80, runMs: 1700, sparks: 9 }
+/* ACT 3 — the day-by-day compounding montage. */
+const MONTAGE = {
+  days: 30, //        Day 1 → Day 30
+  dur: 4600, //       wall-clock for the whole climb (compact — one act, not a sit)
+  from: 30, //        starting cleanliness score
+  to: 80, //          the score it lands on
+  sparks: 9,
+}
 
 // Easings.
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
 // amber (dull) → healthy green, by score progress.
 const healthColor = (t: number) => {
   const a = [201, 144, 46]
   const b = [46, 160, 67]
-  const k = Math.min(1, Math.max(0, t))
+  const k = clamp01(t)
   const c = a.map((x, i) => Math.round(x + ((b[i] ?? x) - x) * k))
   return `rgb(${c[0]}, ${c[1]}, ${c[2]})`
 }
@@ -85,55 +101,36 @@ function usePrefersReducedMotion(): boolean {
   return reduced
 }
 
-/** A timer-tweened number (setInterval so vitest fake timers can drive it), started
- *  when `active` flips true and restarted whenever `runId` changes. */
-function useTween(active: boolean, from: number, to: number, duration: number, runId: number): number {
-  const [value, setValue] = useState(from)
-  useEffect(() => {
-    if (!active) {
-      setValue(from)
-      return
-    }
-    const start = Date.now()
-    setValue(from)
-    const id = setInterval(() => {
-      const p = Math.min(1, (Date.now() - start) / duration)
-      setValue(from + (to - from) * easeOutCubic(p))
-      if (p >= 1) clearInterval(id)
-    }, 1000 / 60)
-    return () => clearInterval(id)
-  }, [active, from, to, duration, runId])
-  return value
-}
-
 export function HousekeeperCinematic() {
   const reduced = usePrefersReducedMotion()
-  const [stage, setStage] = useState(0)
+  const [elapsed, setElapsed] = useState(0)
+  const [paused, setPaused] = useState(false)
   const [runId, setRunId] = useState(0)
 
-  // Drive the whole sequence off one stage integer (storyboard pattern).
+  // ONE frame ticker drives the whole cinematic; it advances `elapsed` only while
+  // playing, so hover pauses everything and Replay (runId) restarts the clock.
   useEffect(() => {
-    if (reduced) return
-    setStage(0)
-    const timers = STAGES.map((at, i) => setTimeout(() => setStage(i + 1), at))
-    return () => timers.forEach(clearTimeout)
-  }, [reduced, runId])
+    if (reduced || paused) return
+    const id = setInterval(() => setElapsed((e) => Math.min(END, e + FRAME_MS)), FRAME_MS)
+    return () => clearInterval(id)
+  }, [reduced, paused, runId])
 
   const replay = () => {
-    setStage(0)
+    setElapsed(0)
     setRunId((r) => r + 1)
   }
 
-  // Which act owns the stage → drives the layer choreography.
-  const activeAct = stage >= 5 ? 2 : stage >= 2 ? 1 : 0
+  // Everything below is a pure function of `elapsed`.
+  const stage = STAGES.filter((t) => elapsed >= t).length
+  const activeAct = stage >= 6 ? 3 : stage >= 5 ? 2 : stage >= 2 ? 1 : 0
 
   if (reduced) {
     return (
       <div data-testid="hk-cinematic" data-act="stills" className="flex flex-col gap-3">
-        {[<StillMorning key="s0" />, <StillPr key="s1" />, <StillScore key="s2" />].map((node, i) => (
-          <div key={i} className="relative h-52 overflow-hidden rounded-card border border-hairline">
+        {[<StillMorning key="s0" />, <StillPr key="s1" />, <StillDays key="s2" />, <StillCadence key="s3" />].map((node, i) => (
+          <div key={i} className="relative h-48 overflow-hidden rounded-card border border-hairline">
             <span className="absolute left-3 top-3 z-10 rounded-full bg-black/45 px-2 py-0.5 text-micro font-medium text-white">
-              {i + 1} / 3
+              {i + 1} / 4
             </span>
             {node}
           </div>
@@ -143,13 +140,20 @@ export function HousekeeperCinematic() {
   }
 
   const acts = [
-    <ActMorning key="a0" stage={stage} runId={runId} />,
-    <ActPr key="a1" stage={stage} runId={runId} />,
-    <ActScore key="a2" stage={stage} runId={runId} />,
+    <ActMorning key="a0" elapsed={elapsed} runId={runId} />,
+    <ActPr key="a1" elapsed={elapsed} runId={runId} />,
+    <ActDays key="a2" elapsed={elapsed} runId={runId} />,
+    <ActCadence key="a3" runId={runId} />,
   ]
 
   return (
-    <div data-testid="hk-cinematic" data-act={String(activeAct)} data-stage={String(stage)}>
+    <div
+      data-testid="hk-cinematic"
+      data-act={String(activeAct)}
+      data-stage={String(stage)}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+    >
       {/* Fixed stage; acts choreograph in/out on a shared spring (continuity). */}
       <div className="relative h-64 overflow-hidden rounded-card border border-hairline shadow-card">
         {acts.map((node, i) => {
@@ -180,7 +184,7 @@ export function HousekeeperCinematic() {
       </div>
       <div className="mt-3 flex items-center justify-between">
         <div className="flex items-center gap-1.5" aria-hidden>
-          {[0, 1, 2].map((i) => (
+          {[0, 1, 2, 3].map((i) => (
             <span
               key={i}
               className="h-1.5 rounded-full"
@@ -203,16 +207,15 @@ export function HousekeeperCinematic() {
 }
 
 /* ── ACT 1 — the quiet morning ─────────────────────────────────────────────── */
-function ActMorning({ stage, runId }: { stage: number; runId: number }) {
-  const landed = stage >= 1
-  // Roll the reel index 0 → last frame; JS tween so fake timers can drive it.
-  const idx = useTween(true, 0, CLOCK.frames.length - 1, CLOCK.rollMs, runId)
+function ActMorning({ elapsed, runId }: { elapsed: number; runId: number }) {
+  const landed = elapsed >= TIMING.clockLand
+  // Roll the reel index 0 → last frame, derived from the shared clock (decelerating).
+  const idx = easeOutCubic(clamp01(elapsed / CLOCK.rollMs)) * (CLOCK.frames.length - 1)
   const hours = CLOCK.frames.map((f) => f.charAt(0))
   const tens = CLOCK.frames.map((f) => f.charAt(2))
   const ones = CLOCK.frames.map((f) => f.charAt(3))
   return (
     <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-black text-center">
-      {/* The frame blooming to life. */}
       <div
         className="pointer-events-none absolute inset-0"
         style={{
@@ -220,7 +223,6 @@ function ActMorning({ stage, runId }: { stage: number; runId: number }) {
           animation: 'hk-bloom 1.6s var(--hk-out) both',
         }}
       />
-      {/* The white flash when 8:00 lands. */}
       {landed && (
         <div
           key={`flash-${runId}`}
@@ -264,10 +266,12 @@ function Reel({ items, index }: { items: string[]; index: number }) {
 }
 
 /* ── ACT 2 — a PR, handled clean ───────────────────────────────────────────── */
-function ActPr({ stage, runId }: { stage: number; runId: number }) {
-  // Start rolling the instant the card lands (stage 2) so the stat never sits at −0.
-  const removed = Math.round(useTween(stage >= 2, 0, DELETIONS.removed, 900, runId))
-  const removedLanded = removed >= DELETIONS.removed
+function ActPr({ elapsed, runId }: { elapsed: number; runId: number }) {
+  const counting = elapsed >= TIMING.actTwo
+  const removed = Math.round(easeOutCubic(clamp01((elapsed - TIMING.actTwo) / DELETIONS.countMs)) * DELETIONS.removed)
+  const removedLanded = counting && removed >= DELETIONS.removed
+  const sweeping = elapsed >= TIMING.deletions
+  const merged = elapsed >= TIMING.merged
   return (
     <div className="flex h-full items-center justify-center bg-raised p-4">
       <div
@@ -277,7 +281,7 @@ function ActPr({ stage, runId }: { stage: number; runId: number }) {
         <div className="flex items-center gap-2 border-b border-hairline px-3.5 py-2.5" style={{ animation: 'hk-rise-in 0.5s var(--hk-out) 0.12s both' }}>
           <MergeGlyph />
           <span className="min-w-0 flex-1 truncate font-mono text-caption text-secondary">housekeeper/cleanup → main</span>
-          {stage >= 4 && (
+          {merged && (
             <span
               key={`merged-${runId}`}
               className="relative shrink-0 rounded-full bg-success-soft px-2 py-0.5 text-micro font-semibold text-success"
@@ -306,7 +310,6 @@ function ActPr({ stage, runId }: { stage: number; runId: number }) {
               <span className="bg-rubik-red" style={{ width: '97%' }} />
             </span>
           </div>
-          {/* The deletion snippet — red lines that sweep away, line by line. */}
           <div
             className="mt-2.5 overflow-hidden rounded-control border border-hairline px-2.5 py-2 font-mono text-micro leading-relaxed"
             style={{ backgroundColor: 'color-mix(in srgb, var(--color-rubik-red) 7%, transparent)' }}
@@ -315,19 +318,19 @@ function ActPr({ stage, runId }: { stage: number; runId: number }) {
               <div
                 key={i}
                 className="flex gap-2 whitespace-pre text-accent"
-                style={stage >= 3 ? { animation: `hk-dissolve 0.5s var(--hk-out) ${i * DELETIONS.stagger}ms both` } : undefined}
+                style={sweeping ? { animation: `hk-dissolve 0.5s var(--hk-out) ${i * DELETIONS.stagger}ms both` } : undefined}
               >
                 <span className="select-none opacity-60">−</span>
                 <span className="truncate">{line}</span>
               </div>
             ))}
-            {stage >= 3 && (
+            {sweeping && (
               <div key={`clean-${runId}`} className="text-caption text-success" style={{ animation: 'hk-caption-in 0.5s var(--hk-out) 0.9s both' }}>
                 ✓ all clear
               </div>
             )}
           </div>
-          {stage >= 4 && (
+          {merged && (
             <div
               key={`checks-${runId}`}
               className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-success"
@@ -356,38 +359,64 @@ function MergeGlyph() {
   )
 }
 
-/* ── ACT 3 — 30 days later ─────────────────────────────────────────────────── */
-function ActScore({ stage, runId }: { stage: number; runId: number }) {
-  const active = stage >= 5
-  const score = useTween(active, SCORE.from, SCORE.to, SCORE.runMs, runId)
-  const landed = stage >= LAST_STAGE
+/* ── ACT 3 — day by day (the compounding montage) ──────────────────────────── */
+function ActDays({ elapsed, runId }: { elapsed: number; runId: number }) {
+  // Discrete daily progress: the day counter ticks Day 1 → Day 30, the score steps
+  // up a few points each day (arc fills in STEPS), one grid cell fills per day.
+  const dayP = clamp01((elapsed - TIMING.actThree) / MONTAGE.dur)
+  const day = dayP <= 0 ? 0 : Math.min(MONTAGE.days, Math.ceil(dayP * MONTAGE.days))
+  const score = MONTAGE.from + Math.round((day / MONTAGE.days) * (MONTAGE.to - MONTAGE.from))
+  const landed = day >= MONTAGE.days
   return (
-    <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-surface text-center">
-      <div className="text-micro font-semibold uppercase text-secondary" style={{ animation: 'hk-beat-in 0.6s var(--hk-out) both' }}>
-        30 days later
+    <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-surface px-5 text-center">
+      <div className="text-micro font-semibold uppercase tracking-[0.14em] text-secondary" style={{ animation: 'hk-beat-in 0.6s var(--hk-out) both' }}>
+        A little better every day
       </div>
-      <div className="relative mt-3">
-        <ScoreGauge score={score} active={active} runId={runId} />
-        {landed && <Flourish runId={runId} />}
+      <div className="mt-3 flex items-center gap-6">
+        <div className="relative">
+          <ScoreGauge score={score} landed={landed} runId={runId} />
+          {landed && <Flourish runId={runId} />}
+        </div>
+        <div className="flex flex-col items-start">
+          <div className="font-pixel text-[22px] leading-none text-display" data-testid="hk-day">
+            Day {Math.max(1, day)}
+          </div>
+          <div className="mt-0.5 text-micro text-disabled">of {MONTAGE.days}</div>
+          {/* One cell per day — a small cleanup landing, the repo getting cleaner. */}
+          <div className="mt-2.5 grid grid-cols-6 gap-1">
+            {Array.from({ length: MONTAGE.days }).map((_, i) => {
+              const filled = i < day
+              return (
+                <span
+                  key={`${i}-${filled}`}
+                  className="size-[9px] rounded-[2px]"
+                  style={
+                    filled
+                      ? { background: 'var(--color-rubik-green)', animation: 'hk-pop 0.4s var(--hk-spring) both' }
+                      : { background: 'var(--color-hairline)' }
+                  }
+                />
+              )
+            })}
+          </div>
+        </div>
       </div>
-      <div className="mt-3 text-label text-secondary" style={active ? { animation: 'hk-caption-in 0.6s var(--hk-out) 0.9s both' } : { opacity: 0 }}>
-        Cleanliness score · <span className="font-medium text-success">+{SCORE.to - SCORE.from}</span> over 30 tidy PRs
+      <div className="mt-3 text-label text-secondary">
+        Cleanliness score · <span className="font-medium text-success">+{MONTAGE.to - MONTAGE.from}</span> over {MONTAGE.days} tidy PRs
       </div>
     </div>
   )
 }
 
-/** The gauge: a track + a green arc that overshoots to `score` (CSS spring), number centred. */
-function ScoreGauge({ score, active, runId }: { score: number; active: boolean; runId?: number }) {
-  const size = 132
-  const stroke = 11
+/** The gauge: a track + a green arc that STEPS to `score` each day, number centred. */
+function ScoreGauge({ score, landed, runId }: { score: number; landed: boolean; runId?: number }) {
+  const size = 116
+  const stroke = 10
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
-  const target = active ? SCORE.to : SCORE.from
-  const offset = c * (1 - target / 100)
-  const t = (score - SCORE.from) / (SCORE.to - SCORE.from)
+  const offset = c * (1 - clamp01(score / 100))
+  const t = (score - MONTAGE.from) / (MONTAGE.to - MONTAGE.from)
   const color = healthColor(t)
-  const landed = Math.round(score) >= SCORE.to
   return (
     <div className="relative" style={{ width: size, height: size }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
@@ -402,14 +431,15 @@ function ScoreGauge({ score, active, runId }: { score: number; active: boolean; 
           strokeLinecap="round"
           strokeDasharray={c}
           strokeDashoffset={offset}
-          style={{ transition: 'stroke-dashoffset 1.6s var(--hk-spring)' }}
+          // Short transition → the arc nudges then holds each day (steps, not a pour).
+          style={{ transition: 'stroke-dashoffset 0.16s var(--hk-out), stroke 0.4s ease' }}
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span
-          key={active && landed ? `land-${runId}` : 'run'}
-          className="font-pixel text-[36px] leading-none"
-          style={{ color, ...(active && landed ? { animation: 'hk-pop 0.5s var(--hk-spring) both' } : {}) }}
+          key={landed ? `land-${runId}` : 'run'}
+          className="font-pixel text-[32px] leading-none"
+          style={{ color, ...(landed ? { animation: 'hk-pop 0.5s var(--hk-spring) both' } : {}) }}
           data-testid="hk-score"
         >
           {Math.round(score)}
@@ -425,9 +455,9 @@ function Flourish({ runId }: { runId: number }) {
   return (
     <div key={`flourish-${runId}`} className="pointer-events-none absolute inset-0">
       <span className="absolute inset-0 rounded-full" style={{ boxShadow: '0 0 0 2px var(--color-rubik-green)', animation: 'hk-ring 0.7s var(--hk-out) both' }} />
-      {Array.from({ length: SCORE.sparks }).map((_, i) => {
-        const angle = (i / SCORE.sparks) * Math.PI * 2
-        const dist = 62
+      {Array.from({ length: MONTAGE.sparks }).map((_, i) => {
+        const angle = (i / MONTAGE.sparks) * Math.PI * 2
+        const dist = 56
         return (
           <span
             key={i}
@@ -446,11 +476,38 @@ function Flourish({ runId }: { runId: number }) {
   )
 }
 
+/* ── ACT 4 — the cadence beat (rests here) ─────────────────────────────────── */
+function ActCadence({ runId }: { runId: number }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center bg-black text-center">
+      <div key={`c-loop-${runId}`} aria-hidden style={{ animation: 'hk-pop 0.6s var(--hk-spring) both' }}>
+        <LoopMark />
+      </div>
+      <div className="mt-4 font-pixel text-[26px] leading-none text-white" style={{ animation: 'hk-caption-in 0.6s var(--hk-out) 0.15s both' }}>
+        Every morning · 07:00
+      </div>
+      <div className="mt-3 max-w-xs text-label leading-relaxed text-white/55" style={{ animation: 'hk-caption-in 0.6s var(--hk-out) 0.3s both' }}>
+        Housekeeper keeps your codebase a little cleaner, every day.
+      </div>
+    </div>
+  )
+}
+
+/** A simple recurring-loop mark (the daily cadence), drawn in the brand green. */
+function LoopMark() {
+  return (
+    <svg aria-hidden width="40" height="40" viewBox="0 0 30 30" fill="none" stroke="var(--color-rubik-green)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M25.5 15a10.5 10.5 0 1 1-3.1-7.4" />
+      <path d="M25.5 3.5v5.2h-5.2" />
+    </svg>
+  )
+}
+
 /* ── Reduced-motion static stills (final resting states) ───────────────────── */
 function StillMorning() {
   return (
     <div className="flex h-full flex-col items-center justify-center bg-black text-center">
-      <div className="font-pixel text-[46px] leading-none text-white">8:00 AM</div>
+      <div className="font-pixel text-[42px] leading-none text-white">8:00 AM</div>
       <div className="mt-3 text-label text-white/50">Housekeeper wakes up. You don&apos;t have to.</div>
     </div>
   )
@@ -459,14 +516,14 @@ function StillPr() {
   return (
     <div className="flex h-full items-center justify-center bg-raised p-4">
       <div className="w-full max-w-md overflow-hidden rounded-card border border-hairline bg-paper shadow-card">
-        <div className="flex items-center gap-2 border-b border-hairline px-3.5 py-2.5">
+        <div className="flex items-center gap-2 border-b border-hairline px-3.5 py-2">
           <MergeGlyph />
           <span className="min-w-0 flex-1 truncate font-mono text-caption text-secondary">housekeeper/cleanup → main</span>
           <span className="shrink-0 rounded-full bg-success-soft px-2 py-0.5 text-micro font-semibold text-success">✓ Merged</span>
         </div>
-        <div className="px-3.5 py-3">
+        <div className="px-3.5 py-2.5">
           <div className="text-label font-semibold text-display">Remove dead code and two stale files</div>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-1.5 flex items-center gap-2">
             <span className="font-mono text-caption font-semibold text-success">+2</span>
             <span className="font-mono text-caption font-semibold text-accent">−102</span>
             <span className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-hairline">
@@ -474,7 +531,7 @@ function StillPr() {
               <span className="bg-rubik-red" style={{ width: '97%' }} />
             </span>
           </div>
-          <div className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-success">
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-caption text-success">
             <span>✓ build</span>
             <span>✓ tests</span>
             <span>✓ runtime checks</span>
@@ -484,15 +541,32 @@ function StillPr() {
     </div>
   )
 }
-function StillScore() {
+function StillDays() {
   return (
-    <div className="flex h-full flex-col items-center justify-center bg-surface text-center">
-      <div className="text-micro font-semibold uppercase tracking-[0.12em] text-secondary">30 days later</div>
-      <div className="mt-2">
-        <ScoreGauge score={SCORE.to} active />
+    <div className="flex h-full items-center justify-center gap-6 bg-surface px-5 text-center">
+      <ScoreGauge score={MONTAGE.to} landed runId={0} />
+      <div className="flex flex-col items-start">
+        <div className="font-pixel text-[22px] leading-none text-display">Day 30</div>
+        <div className="mt-0.5 text-micro text-disabled">of 30</div>
+        <div className="mt-2.5 grid grid-cols-6 gap-1">
+          {Array.from({ length: MONTAGE.days }).map((_, i) => (
+            <span key={i} className="size-[9px] rounded-[2px]" style={{ background: 'var(--color-rubik-green)' }} />
+          ))}
+        </div>
+        <div className="mt-2 text-label text-secondary">
+          Cleanliness score · <span className="font-medium text-success">+{MONTAGE.to - MONTAGE.from}</span> over {MONTAGE.days} tidy PRs
+        </div>
       </div>
-      <div className="mt-2 text-label text-secondary">
-        Cleanliness score · <span className="font-medium text-success">+{SCORE.to - SCORE.from}</span> over 30 tidy PRs
+    </div>
+  )
+}
+function StillCadence() {
+  return (
+    <div className="flex h-full flex-col items-center justify-center bg-black text-center">
+      <LoopMark />
+      <div className="mt-3 font-pixel text-[24px] leading-none text-white">Every morning · 07:00</div>
+      <div className="mt-2 max-w-xs text-label leading-relaxed text-white/55">
+        Housekeeper keeps your codebase a little cleaner, every day.
       </div>
     </div>
   )

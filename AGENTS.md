@@ -840,17 +840,20 @@ computes pure functions. Run instructions: `README.md`.
   `description` (auto-advances on `.done`) - never a claimed Next. Step + minted tokens
   persist per team via `lib/onboardingState.ts` (pure, unit-tested) so a mid-flow reload
   resumes. The "Meet Housekeeper" step embeds `HousekeeperCinematic` - a spring-physics
-  three-act storyboard (in-house CSS/SVG/JS, NO framer-motion): odometer clock rolling to
-  8:00, a stylized NON-GitHub PR mock (staggered deletion-line sweep, −102 odometer, a
-  "Merged" STAMP) and a 30→80 cleanliness arc with overshoot + a spark flourish. It follows
-  the storyboard pattern (ONE `stage` integer + a `TIMING` map + config objects); springs
-  are CSS back-out cubic-beziers (`--hk-spring` in app.css, `hk-*` keyframes), numeric
-  counters are `useTween` (setInterval + `Date.now`, so vitest fake timers drive them - do
-  NOT switch to rAF or the tests can't advance it). Acts crossfade+transform for
-  choreographed handoff. RESTS on the last act with Replay; `prefers-reduced-motion` (JS
-  `matchMedia`, since the global CSS reduced-motion reset can't stop JS timers) renders a
-  separate static-stills path. Decorative only - never gates Continue. `data-act` (0/1/2 or
-  "stills") + `data-testid=hk-score` are the test hooks.
+  FOUR-act storyboard (in-house CSS/SVG/JS, NO framer-motion): (1) odometer clock rolling
+  to 8:00, (2) a stylized NON-GitHub PR mock (staggered deletion-line sweep, −102 odometer,
+  a "Merged" STAMP), (3) a DAY-BY-DAY compounding montage - Day 1→30 counter + a per-day
+  grid filling one cell/day + the score STEPPING 30→80 (arc nudges then holds each day) with
+  a landing pop + ring/spark flourish, (4) a cadence beat ("Every morning · 07:00", rests).
+  Driven by ONE `elapsed`-ms clock advanced by a frame `setInterval` that runs only while
+  playing - so every beat is a pure function of `elapsed` and hover PAUSES the whole thing
+  (`onMouseEnter/Leave` → `paused`; React synthesizes those from delegated mouseover/mouseout,
+  so tests dispatch THOSE, not raw enter/leave). Springs are CSS back-out cubic-beziers
+  (`--hk-spring` in app.css, `hk-*` keyframes); using `elapsed` (not `Date.now`/rAF) keeps
+  vitest fake timers driving it. Acts crossfade+transform for choreographed handoff; RESTS on
+  the last act with Replay; `prefers-reduced-motion` (JS `matchMedia`) renders a separate
+  4-frame static-stills path. Decorative only - never gates Continue. `data-act`
+  (0/1/2/3 or "stills") + `data-testid=hk-score`/`hk-day` are the test hooks.
 - **Live creation checklist** (round 4): the Create step shows agent-reported
   milestones lighting up instead of a bare "Waiting…". Fixed enum `lib/creationSteps.ts`
   (`CREATION_STEPS` + `deriveStepStates`, tolerant of skipped/repeated/out-of-order/

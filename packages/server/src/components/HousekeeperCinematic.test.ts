@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HousekeeperCinematic } from './HousekeeperCinematic'
 
 /**
- * The "Meet Housekeeper" cinematic: a three-act, stage-driven storyboard that
- * auto-advances with cinematic pacing and rests on the last act, plus a
- * `prefers-reduced-motion` fallback that shows static stills with no auto-play.
- * `data-act` (0/1/2) tracks which act owns the current stage.
+ * The "Meet Housekeeper" cinematic: a four-act, elapsed-clock storyboard —
+ * morning wake-up → one clean PR → a day-by-day compounding montage (score climbs
+ * 30 → 80 over Day 1…30) → the cadence beat. Auto-plays, pauses on hover, rests on
+ * the last act with Replay, and falls back to static stills for reduced-motion.
  */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -28,6 +28,12 @@ async function advance(ms: number) {
 const cine = () => host!.querySelector('[data-testid="hk-cinematic"]')!
 const dataAct = () => cine().getAttribute('data-act')
 const score = () => host!.querySelector('[data-testid="hk-score"]')!.textContent
+const dayText = () => host!.querySelector('[data-testid="hk-day"]')!.textContent
+// React synthesizes onMouseEnter/Leave from delegated mouseover/mouseout (with a
+// relatedTarget outside the element), so drive those rather than raw enter/leave.
+function hover(enter: boolean) {
+  act(() => cine().dispatchEvent(new MouseEvent(enter ? 'mouseover' : 'mouseout', { bubbles: true, relatedTarget: enter ? null : document.body })))
+}
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => {
@@ -40,48 +46,66 @@ afterEach(() => {
 })
 
 describe('motion mode (auto-play)', () => {
-  it('renders all three acts and starts on act 0', () => {
+  it('renders all four acts and starts on act 0', () => {
     render()
     expect(dataAct()).toBe('0')
-    // Content present from the first frame (staged beats like Merged arrive later).
     expect(host!.textContent).toContain('8:00 AM')
     expect(host!.textContent).toContain('Remove dead code')
-    expect(host!.textContent).toContain('30 days later')
+    expect(host!.textContent).toContain('A little better every day')
     expect(host!.textContent).toContain('Cleanliness score')
+    expect(host!.textContent).toContain('Every morning · 07:00')
   })
 
-  it('auto-advances act 0 → 1 → 2 with cinematic pacing, then rests', async () => {
+  it('auto-advances act 0 → 1 → 2 → 3 with cinematic pacing, then rests', async () => {
     render()
     expect(dataAct()).toBe('0')
-    await advance(2800) // past the PR swoop (stage 2)
+    await advance(2800) // PR (act 1)
     expect(dataAct()).toBe('1')
-    await advance(4000) // past "30 days later" (stage 5)
+    await advance(4000) // day montage (act 2)
     expect(dataAct()).toBe('2')
+    await advance(5500) // cadence (act 3)
+    expect(dataAct()).toBe('3')
     // Rests on the last act — no wraparound.
     await advance(4000)
-    expect(dataAct()).toBe('2')
+    expect(dataAct()).toBe('3')
   })
 
-  it('reveals the Merged stamp only after the deletions stage', async () => {
+  it('climbs the day counter Day 1 → Day 30 as the montage plays', async () => {
     render()
-    expect(host!.textContent).not.toContain('Merged')
-    await advance(6000) // past the merged stage (5200ms)
-    expect(host!.textContent).toContain('Merged')
+    await advance(6800) // into the montage
+    expect(dataAct()).toBe('2')
+    expect(dayText()).toMatch(/^Day [1-9]/)
+    await advance(5000) // through to the last day
+    expect(dayText()).toBe('Day 30')
   })
 
-  it('runs the cleanliness score up to 80 once act 3 lands', async () => {
+  it('steps the cleanliness score up to 80 by the last day', async () => {
     render()
     expect(score()).toBe('30')
-    await advance(6800) // reach act 3 (score starts counting)
-    expect(dataAct()).toBe('2')
-    await advance(2200) // let the odometer finish
+    await advance(7000) // mid-montage — climbing, not yet 80
+    const mid = Number(score())
+    expect(mid).toBeGreaterThan(30)
+    expect(mid).toBeLessThan(80)
+    await advance(5000) // land on 80
     expect(score()).toBe('80')
   })
 
-  it('offers a Replay on the final stage that restarts the story', async () => {
+  it('pauses the clock on hover and resumes on leave', async () => {
     render()
-    await advance(9000) // through to the score landing (stage 6)
-    expect(dataAct()).toBe('2')
+    await advance(2800)
+    expect(dataAct()).toBe('1')
+    hover(true)
+    await advance(8000) // paused — nothing advances
+    expect(dataAct()).toBe('1')
+    hover(false)
+    await advance(8000) // resumes and reaches the montage
+    expect(dataAct()).not.toBe('1')
+  })
+
+  it('offers a Replay on the final act that restarts the story', async () => {
+    render()
+    await advance(13000)
+    expect(dataAct()).toBe('3')
     const replay = [...host!.querySelectorAll('button')].find((b) => /Replay/i.test(b.textContent ?? ''))
     expect(replay).toBeDefined()
     act(() => replay!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
@@ -104,15 +128,16 @@ describe('prefers-reduced-motion (static stills)', () => {
     })
   })
 
-  it('shows the three acts as stills, no auto-play, score pinned at its final value', async () => {
+  it('shows the acts as stills, no auto-play, score pinned at its final value', async () => {
     render()
     expect(dataAct()).toBe('stills')
     expect(score()).toBe('80')
     expect(host!.textContent).toContain('8:00 AM')
     expect(host!.textContent).toContain('Merged')
-    expect(host!.textContent).toContain('30 days later')
+    expect(host!.textContent).toContain('Day 30')
+    expect(host!.textContent).toContain('Every morning · 07:00')
     // Advancing time changes nothing — there is no auto-play.
-    await advance(9000)
+    await advance(13000)
     expect(dataAct()).toBe('stills')
     expect(score()).toBe('80')
   })
