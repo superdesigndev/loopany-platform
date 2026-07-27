@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { TemplateInfo } from '../types'
 import { createMachine, finalizeMachine, machineStatus } from '../server/machineFns'
-import { claimProgress, claimStatus, firstRunStatus, getConfig, mintClaim } from '../server/loopApi'
+import { claimStatus, firstRunStatus, getConfig, mintClaim } from '../server/loopApi'
 import { testChannel } from '../server/notifyFns'
 import { simulateFirstRun, simulateLoopCreated, simulateMachineConnect, simulateNotifyBind } from '../server/onboardingSim'
-import { CREATION_STEPS, CREATION_STEP_KEYS, deriveStepStates, type StepState } from '../lib/creationSteps'
+import { CREATION_STEP_KEYS } from '../lib/creationSteps'
 import { ChannelAddForm } from './ChannelAddForm'
+import { CreationChecklist, useCreationProgress } from './CreationChecklist'
 import {
   clearPersisted,
   loadPersisted,
@@ -61,9 +62,7 @@ export function OnboardingWizard({
   const [copied, setCopied] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [simBusy, setSimBusy] = useState(false)
-  // Best-effort creation milestones the agent reports (the live checklist), and a
-  // "nothing heard for a while" flag for the reassurance copy. Neither ever gates.
-  const [steps, setSteps] = useState<string[]>([])
+  // A "nothing heard for a while" flag for the reassurance copy (never gates).
   const [quiet, setQuiet] = useState(false)
   // The `live` step: first-run wait-state + the notification binding (fills the wait).
   const [runState, setRunState] = useState<{ state: 'running' | 'done' | 'scheduled'; runId?: string; scheduledHint?: string }>({ state: 'running' })
@@ -132,17 +131,17 @@ export function OnboardingWizard({
     }
   }, [step, claimToken, teamId, patch])
 
+  // The live milestone checklist (best-effort) — the SHARED hook, identical to the
+  // dashboard's New-Loop waiting state, so the two surfaces can't drift.
+  const steps = useCreationProgress(claimToken, step === 'prompt')
+
   // Step "prompt" — poll until the loop record actually lands (detected reality),
-  // then advance to the celebration. The AUTHORITATIVE signal is claimStatus.done;
-  // the progress poll alongside it only lights up the checklist (best-effort).
+  // then advance to the celebration. claimStatus.done is the AUTHORITATIVE signal;
+  // the checklist above is best-effort and never gates.
   useEffect(() => {
     if (step !== 'prompt' || !claimToken) return
     const tick = async () => {
-      const [s, p] = await Promise.all([
-        claimStatus({ data: claimToken }).catch(() => undefined),
-        claimProgress({ data: claimToken }).catch(() => undefined),
-      ])
-      if (p?.steps) setSteps((prev) => (prev.length === p.steps.length ? prev : p.steps))
+      const s = await claimStatus({ data: claimToken }).catch(() => undefined)
       if (s?.done && s.id) patch({ loopId: s.id, step: 'live' })
     }
     void tick()
@@ -171,11 +170,6 @@ export function OnboardingWizard({
     const t = setTimeout(() => setQuiet(true), 25_000)
     return () => clearTimeout(t)
   }, [step, claimToken, steps.length])
-
-  // Reset the checklist when the prompt is left (so a resume/replay starts clean).
-  useEffect(() => {
-    if (step !== 'prompt') setSteps([])
-  }, [step])
 
   const connectCommand = machineToken ? `${cli} up --server-url ${origin} --connect-key ${machineToken}` : ''
   const instruction = `Fetch ${origin}/api/bootstrap and help me build a loop.`
@@ -563,51 +557,6 @@ function FirstRunCard({
   )
 }
 
-/** The live loop-creation checklist: milestones light up as the agent reports them.
- *  Best-effort and tolerant — an unreported/absent agent just shows the first step
- *  pulsing (a richer "waiting"); it never gates the flow. */
-function CreationChecklist({ steps }: { steps: string[] }) {
-  const states = deriveStepStates(steps)
-  return (
-    <ul className="mt-4 flex flex-col gap-1">
-      {CREATION_STEPS.map((s, i) => {
-        const state = states[i] ?? 'pending'
-        return (
-          <li key={s.key} className="flex items-center gap-3 py-1">
-            <StepIcon state={state} />
-            <span
-              className={`text-body leading-snug transition-colors duration-300 ${state === 'pending' ? 'text-disabled' : 'text-display'}`}
-            >
-              {s.label}
-            </span>
-            {state === 'active' && <span className="ml-auto text-caption text-secondary">working…</span>}
-          </li>
-        )
-      })}
-    </ul>
-  )
-}
-
-function StepIcon({ state }: { state: StepState }) {
-  if (state === 'done') {
-    return (
-      <span
-        className="flex size-5 shrink-0 items-center justify-center rounded-full bg-rubik-green text-[11px] font-bold leading-none text-white"
-        style={{ animation: 'hk-pop 0.45s var(--hk-spring) both' }}
-      >
-        ✓
-      </span>
-    )
-  }
-  if (state === 'active') {
-    return (
-      <span className="flex size-5 shrink-0 items-center justify-center">
-        <span className="size-2.5 rounded-full bg-rubik-orange" style={{ animation: 'runPulse 1.4s ease-in-out infinite' }} />
-      </span>
-    )
-  }
-  return <span className="size-5 shrink-0 rounded-full border border-hairline" />
-}
 
 /** The dev-only "simulate this step" affordance — visually set apart as a debug tool. */
 function SimButton({ busy, onClick, label }: { busy: boolean; onClick: () => void; label: string }) {

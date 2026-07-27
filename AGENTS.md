@@ -861,7 +861,12 @@ computes pure functions. Run instructions: `README.md`.
   reports each milestone to `POST /api/claim/progress` (`routes/api.claim.progress.ts`),
   enum-only + `dk_`-shaped claim + body cap + IP flood guard, stored in a bounded/TTL'd
   in-memory map keyed by the claim token (`tokens.ts` `recordClaimProgress`/
-  `readClaimProgress`, enum re-validated at storage). **Emit path (round 8): the
+  `readClaimProgress`, enum re-validated at storage). **The checklist + its polling are
+  ONE shared surface** (`components/CreationChecklist.tsx`: `CreationChecklist` +
+  `useCreationProgress(token, active)`), used by BOTH the onboarding wizard's Create step
+  AND the dashboard's regular New-Loop `ComposeModal` "Waiting for your coding agent…"
+  state (round 9) — so the two can't drift (same pattern as the shared `ChannelAddForm`).
+  **Emit path (round 8): the
   loop-creation SKILL, not the pasted prompt.** `references/create.md` tells the agent to
   run `loopany progress <step> --connect-key <key>` per milestone (best-effort); the daemon
   subcommand (`progress-cli.ts` → `runProgress`, route `progress`) POSTs the same contract,

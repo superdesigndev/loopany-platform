@@ -3,6 +3,7 @@ import type { CodingAgent, TemplateInfo } from '../types'
 import { claimStatus, getConfig, mintClaim } from '../server/loopApi'
 import { Modal, ModalHead } from './Modal'
 import { LoopFlow, hasLoopFlow } from './LoopFlow'
+import { CreationChecklist, useCreationProgress } from './CreationChecklist'
 import { btn, btnPrimary, btnPrimaryPill, btnSm } from './ui'
 
 // How long to wait on a silent paste before nudging the user to check things.
@@ -252,6 +253,12 @@ export function ComposeModal({
       }
     : { dot: 'animate-pulse bg-rubik-orange', text: 'Waiting for your coding agent…' }
 
+  // Live milestone checklist — the SAME shared component + polling the onboarding
+  // wizard uses (so the surfaces can't drift). Best-effort: the agent reports via
+  // `loopany progress`; an agent that reports nothing just shows the first step
+  // pulsing. Never gates — the claim poll above is the authoritative signal.
+  const steps = useCreationProgress(token, open && host === 'local' && !created)
+
   // The primary CTA, shared by both compose modals: copies the full snippet, with
   // the supported-agent marks. Sits flush-right in the waiting row.
   const copyPromptButton = (
@@ -263,6 +270,19 @@ export function ComposeModal({
       </span>
       {copied ? '✓ Copied' : 'Copy prompt'}
     </button>
+  )
+
+  // The waiting row + the live checklist, shared by both compose screens (template
+  // and blank), so the two show the identical progress surface.
+  const waitingBlock = (
+    <div>
+      <div className="flex items-start gap-3">
+        <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${wait.dot}`} />
+        <span className="text-label leading-relaxed text-secondary">{wait.text}</span>
+        {copyPromptButton}
+      </div>
+      <CreationChecklist steps={steps} />
+    </div>
   )
 
   if (created) {
@@ -292,11 +312,7 @@ export function ComposeModal({
       <div className="min-w-0">
         {snippetBox(false)}
         {error && <div className="mt-3 text-body text-accent">Error: {error}</div>}
-        <div className="mt-6 flex items-start gap-3">
-          <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${wait.dot}`} />
-          <span className="text-label leading-relaxed text-secondary">{wait.text}</span>
-          {copyPromptButton}
-        </div>
+        <div className="mt-6">{waitingBlock}</div>
       </div>
     )
     return (
@@ -410,13 +426,7 @@ export function ComposeModal({
 
       {error && <div className="mt-3 text-body text-accent">Error: {error}</div>}
 
-      <div className="mt-6 flex items-start gap-3">
-        <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${wait.dot}`} />
-        <span className="text-label leading-relaxed text-secondary">
-          {wait.text}
-        </span>
-        {copyPromptButton}
-      </div>
+      <div className="mt-6">{waitingBlock}</div>
     </Modal>
   )
 }
