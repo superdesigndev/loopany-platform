@@ -208,12 +208,18 @@ export function ChannelAddForm({
         if (f.requires && !fields[f.requires]?.trim()) return null
         const isSlackChannel = adding === 'slack' && f.key === 'channel'
         const picked = isSlackChannel ? slackChannels?.find((c) => c.id === fields.channel) : undefined
+        // One id per field, shared by the two mutually exclusive control branches
+        // below (only ever one is rendered), so the visible label names the control.
+        const fieldId = `channel-add-${f.key}`
         return (
           <div key={f.key}>
-            <label className={labelCls}>{f.label}</label>
+            <label className={labelCls} htmlFor={fieldId}>
+              {f.label}
+            </label>
             {isSlackChannel && !slackManual && slackChannels ? (
               <>
                 <select
+                  id={fieldId}
                   className={inputCls}
                   value={fields.channel ?? ''}
                   onChange={(e) => setFields((s) => ({ ...s, channel: e.target.value }))}
@@ -236,6 +242,7 @@ export function ChannelAddForm({
             ) : (
               <>
                 <input
+                  id={fieldId}
                   className={`${inputCls} font-mono`}
                   value={fields[f.key] ?? ''}
                   onChange={(e) => setFields((s) => ({ ...s, [f.key]: e.target.value }))}
