@@ -5,6 +5,21 @@ or the daemon that's been running since. Decide what to build, author it, create
 Use the **loopany-cli** prefix the user pasted (default `npx @crewlet/loopany@latest`)
 and, on the first-capture path, the **connect-key** from the capture snippet.
 
+## As you go · report progress (best-effort)
+
+When the capture came from the web (there's a **connect-key**), a live checklist is
+waiting on the other side. As you pass each milestone below, report it so the user
+watches it light up — reusing that same connect-key:
+
+    <loopany-cli> progress <milestone> --connect-key <connect-key>
+
+Milestones, in order (skip any that don't apply): `reading` (reading these
+instructions), `inspecting` (looking at the project), `configuring` (settling the
+schedule/config in §2/§4), `authoring` (writing the task file + dashboard in §3),
+`creating` (running `loopany new` in §5). This is **best-effort only** — it never
+blocks or fails the real work; if the command isn't there or errors, carry on. With no
+connect-key (a non-capture create), skip reporting entirely.
+
 ## 1 · Decide what to build
 
 A loop only makes sense with a real task behind it. Read the session you're in and

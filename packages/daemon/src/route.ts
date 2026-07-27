@@ -25,7 +25,7 @@ const FORWARD_VERBS = new Set(["report", "finish", "complete"]);
 // short-circuits to that verb's usage BEFORE its handler runs — so a foot-gun like
 // `update` (immediate daemon handover) is always safe to inspect, and a NEW verb inherits
 // the guarantee by being added here alongside its branch.
-const COMMAND_VERBS = new Set(["up", "new", "skill", "setup", "update", "status", "down", "log", "show", ...INTERACTIVE_VERBS, ...FORWARD_VERBS]);
+const COMMAND_VERBS = new Set(["up", "new", "skill", "setup", "update", "status", "down", "log", "show", "progress", ...INTERACTIVE_VERBS, ...FORWARD_VERBS]);
 
 function hasHelpFlag(args: string[]): boolean {
   return args.some((a) => HELP_FLAG_ARGS.has(a));
@@ -45,6 +45,7 @@ export type Route =
   | { kind: "down"; args: string[] }
   | { kind: "log"; args: string[] }
   | { kind: "show"; args: string[] }
+  | { kind: "progress"; args: string[] } // report a loop-creation milestone (best-effort)
   | { kind: "interactive"; argv: string[] }
   | { kind: "forward"; argv: string[] } // run-only verb out-of-run → device-cred 403
   | { kind: "home" } // bare `loopany` out-of-run → content-first home (device cred)
@@ -80,6 +81,7 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   if (verb === "down") return { kind: "down", args: argv.slice(1) };
   if (verb === "log") return { kind: "log", args: argv.slice(1) };
   if (verb === "show") return { kind: "show", args: argv.slice(1) };
+  if (verb === "progress") return { kind: "progress", args: argv.slice(1) };
   if (verb !== undefined && INTERACTIVE_VERBS.has(verb)) return { kind: "interactive", argv };
   // report/finish/complete OUTSIDE a run are run-only (F3): forward on the device
   // credential so the server's crafted 403 reaches the agent, not a generic unknown.

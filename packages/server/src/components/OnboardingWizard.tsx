@@ -183,17 +183,12 @@ export function OnboardingWizard({
     ? [`server-url: ${origin}`, `connect-key: ${claimToken}`, ...(config?.customCli ? [`loopany-cli: ${cli}`] : [])].join('\n')
     : ''
   const description = housekeeper?.description?.trim() ?? ''
-  // A concise, OPTIONAL progress protocol so the agent can report milestones live
-  // (zero daemon/CLI change — it just curls a claim-bound endpoint from its shell).
-  const progressProtocol = claimToken
-    ? [
-        'While you set this up, report progress so I can watch it live. After each milestone, run (best-effort, never let it block the work):',
-        `  curl -s -X POST ${origin}/api/claim/progress -H 'content-type: application/json' -d '{"claim":"${claimToken}","step":"STEP"}'`,
-        `STEP in order: ${CREATION_STEP_KEYS.join(', ')}. Skip any that don't apply.`,
-      ].join('\n')
-    : ''
+  // The milestone-reporting protocol now lives in the loop-creation SKILL (create.md),
+  // invoked via `loopany progress` — so the pasted snippet stays lean (just the
+  // bootstrap line, the connect config, and the template intent). The live checklist
+  // below polls the same endpoint; the agent reports to it through the CLI.
   const snippet = claimToken
-    ? [instruction, '', configLines, ...(description ? ['', description] : []), '', progressProtocol].join('\n')
+    ? [instruction, '', configLines, ...(description ? ['', description] : [])].join('\n')
     : ''
 
   async function copy(text: string, tag: string) {
@@ -422,11 +417,6 @@ export function OnboardingWizard({
                   {description && configLines && (
                     <p className="mt-3 max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-primary">
                       {description}
-                    </p>
-                  )}
-                  {progressProtocol && (
-                    <p className="mt-3 whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-secondary">
-                      {progressProtocol}
                     </p>
                   )}
                 </div>

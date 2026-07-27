@@ -78,6 +78,7 @@ const VERB_USAGE: Record<string, string> = {
   down: "loopany down\n  Stop the detached daemon this machine started with `up`.",
   log: "loopany log [<loop>] [--transcript|--full] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
   show: "loopany show [<id>] [--full] [--json]\n  Show a loop's full editable config + recent state (the device credential inspects\n  any loop on this machine).",
+  progress: "loopany progress <step> --connect-key <key>\n  Best-effort: report a loop-creation milestone (reading|inspecting|configuring|\n  authoring|creating) to the web wizard's live checklist. Never blocks; no key/server → no-op.",
   loops: "loopany loops [--fields a,b] [--json]\n  List your loops (--json emits the raw JSON array). Default columns are\n  id/name/cron/enabled/nextFire.",
   edit: "loopany edit <id> --json '<obj>' [--dry-run] [--workflow-file|--ui-file|--schema-file <path>]\n  Edit a loop (JSON-only + content-file trio). --dry-run previews before/after.",
   report: "loopany report ...\n  In-run only: the running agent reports progress/results. Outside a run this is rejected.",

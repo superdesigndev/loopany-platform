@@ -181,10 +181,12 @@ describe('OnboardingWizard step machine', () => {
     h.steps = []
     render()
     await poll(0)
-    // Every milestone label renders; the snippet carries the progress protocol.
+    // Every milestone label renders. The reporting protocol moved into the skill
+    // (`loopany progress`), so the pasted snippet no longer carries curl/endpoint text.
     expect(host!.textContent).toContain('Reading the setup instructions')
     expect(host!.textContent).toContain('Creating the loop')
-    expect(host!.textContent).toContain('/api/claim/progress')
+    expect(host!.textContent).not.toContain('/api/claim/progress')
+    expect(host!.textContent).not.toContain('curl')
     // Nothing reported yet → the first step is the live "working…" cursor.
     expect(host!.textContent).toContain('working…')
     // A couple milestones arrive → the checklist advances, still working.

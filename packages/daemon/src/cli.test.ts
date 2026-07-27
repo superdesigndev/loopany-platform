@@ -191,6 +191,13 @@ describe("classify — CLI routing table (Batch 6)", () => {
     expect(classify(["show", "loop-1"], {})).toEqual({ kind: "show", args: ["loop-1"] });
   });
 
+  test("`progress` routes to the best-effort milestone reporter", () => {
+    expect(classify(["progress", "reading", "--connect-key", "dk_x"], {})).toEqual({
+      kind: "progress",
+      args: ["reading", "--connect-key", "dk_x"],
+    });
+  });
+
   test("an unknown verb is still `unknown` (→ exit 2), never a silent daemon launch", () => {
     expect(classify(["bogus"], {})).toEqual({ kind: "unknown", verb: "bogus" });
     expect(classify(["--frobnicate"], {})).toEqual({ kind: "unknown", verb: "--frobnicate" });

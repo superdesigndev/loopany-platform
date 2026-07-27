@@ -854,17 +854,22 @@ computes pure functions. Run instructions: `README.md`.
   the last act with Replay; `prefers-reduced-motion` (JS `matchMedia`) renders a separate
   4-frame static-stills path. Decorative only - never gates Continue. `data-act`
   (0/1/2/3 or "stills") + `data-testid=hk-score`/`hk-day` are the test hooks.
-- **Live creation checklist** (round 4): the Create step shows agent-reported
-  milestones lighting up instead of a bare "Waiting…". Fixed enum `lib/creationSteps.ts`
-  (`CREATION_STEPS` + `deriveStepStates`, tolerant of skipped/repeated/out-of-order/
-  absent/junk - keys off the highest reported index). Emit path is ZERO daemon/CLI
-  change: the pasted snippet gains a `curl` progress protocol; the agent POSTs each
-  milestone to `POST /api/claim/progress` (`routes/api.claim.progress.ts`), enum-only +
-  `dk_`-shaped claim + body cap + IP flood guard, stored in a bounded/TTL'd in-memory map
-  keyed by the claim token (`tokens.ts` `recordClaimProgress`/`readClaimProgress`, enum
-  re-validated at storage). The wizard polls `claimProgress` alongside `claimStatus` (the
-  latter stays AUTHORITATIVE - the checklist NEVER gates). Elapsed-aware reassurance after
-  25s quiet. Dev-sim POSTs the real sequence with delays so the checklist comes alive.
+- **Live creation checklist** (round 4, emit path reworked in round 8): the Create step
+  shows agent-reported milestones lighting up instead of a bare "Waiting…". Fixed enum
+  `lib/creationSteps.ts` (`CREATION_STEPS` + `deriveStepStates`, tolerant of skipped/
+  repeated/out-of-order/absent/junk - keys off the highest reported index). The agent
+  reports each milestone to `POST /api/claim/progress` (`routes/api.claim.progress.ts`),
+  enum-only + `dk_`-shaped claim + body cap + IP flood guard, stored in a bounded/TTL'd
+  in-memory map keyed by the claim token (`tokens.ts` `recordClaimProgress`/
+  `readClaimProgress`, enum re-validated at storage). **Emit path (round 8): the
+  loop-creation SKILL, not the pasted prompt.** `references/create.md` tells the agent to
+  run `loopany progress <step> --connect-key <key>` per milestone (best-effort); the daemon
+  subcommand (`progress-cli.ts` → `runProgress`, route `progress`) POSTs the same contract,
+  resolving the claim from the snippet's connect-key and the server-URL ambiently from
+  `~/.loopany` (never throws / always exit 0). The pasted snippet is lean again (bootstrap
+  + config + template intent — NO curl/endpoint text). The wizard polls `claimProgress`
+  alongside `claimStatus` (the latter stays AUTHORITATIVE - the checklist NEVER gates).
+  Elapsed-aware reassurance after 25s quiet. Dev-sim still POSTs the endpoint directly.
 - **Post-creation `live` step** (rounds 5+6): after the loop is created the wizard does NOT
   end — a single `live` step folds the celebration, the first-run wait, and notification
   binding. (1) **First run**: `createLoop` already fires an immediate `scheduler.runNow`, so

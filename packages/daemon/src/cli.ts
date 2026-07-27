@@ -78,6 +78,8 @@ async function main(): Promise<number> {
       return (await import("./log.js")).runLog(r.args);
     case "show":
       return (await import("./show.js")).runShow(r.args);
+    case "progress":
+      return (await import("./progress-cli.js")).runProgress(r.args);
     case "interactive":
       return (await import("./interactive.js")).runInteractive(r.argv);
     case "forward":
