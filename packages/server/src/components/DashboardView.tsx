@@ -19,6 +19,9 @@ import { DISCORD_URL, DiscordIcon, GITHUB_URL, GitHubIcon } from './SocialLinks'
  *  static-per-deploy templates. Both `/` (open mode) and `/t/<id>` render from it. */
 export interface DashboardData {
   jobs: JobSummary[]
+  /** Cron-null tasks in scope. Not rendered as cards (they have no schedule);
+   *  surfaced as one line so the rows never seem to disappear. */
+  inert: number
   templates: TemplateInfo[]
   machines: MachineSummary[]
   teams: TeamsView | undefined
@@ -32,12 +35,12 @@ export interface DashboardData {
  *  scopes every list fn EXPLICITLY - so a tab on /t/A and one on /t/B show
  *  different teams simultaneously, independent of the shared last-used cookie. */
 export async function fetchLiveData(teamId?: string) {
-  const [jobs, machines, teams] = await Promise.all([
+  const [loops, machines, teams] = await Promise.all([
     listJobs({ data: teamId }),
     listMachines({ data: teamId }),
     listMyTeams({ data: teamId }),
   ])
-  return { jobs, machines, teams }
+  return { jobs: loops.jobs, inert: loops.inert, machines, teams }
 }
 
 /**
@@ -53,11 +56,12 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
   // so this state is the single source the page renders from.
   const [data, setData] = useState(() => ({
     jobs: initial?.jobs ?? [],
+    inert: initial?.inert ?? 0,
     templates: initial?.templates ?? [],
     machines: initial?.machines ?? [],
     teams: initial?.teams,
   }))
-  const { jobs, templates, machines, teams } = data
+  const { jobs, inert, templates, machines, teams } = data
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
   // Compose carries an optional template: null = blank New Loop; a TemplateInfo =
@@ -137,6 +141,9 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
               Teams
             </button>
           )}
+          <Link to="/tasks" className={headerBtn}>
+            Tasks
+          </Link>
           {/* The cross-loop timeline is a PAGE, not a modal (it owns a zoom +
               window in its own right). Open mode has no /t/<id>, so it links to
               the bare /timeline route instead — the view must be reachable in
@@ -190,11 +197,19 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
           </div>
         </section>
 
-        <div className="mb-5 mt-12 flex items-baseline gap-2.5">
+        <div className="mb-5 mt-12 flex min-w-0 items-baseline gap-2.5">
           <h2 className="text-body font-semibold text-display">Active loops</h2>
           <span className="text-label text-secondary">
             {active.length ? `${activeOn} scheduled · ${active.length} total` : ''}
           </span>
+          {/* Cron-null tasks are deliberately not cards here, but they must not
+              seem to vanish — disarming a cron moves a row to /tasks, and the
+              dashboard is the only page most users visit. */}
+          {inert > 0 && (
+            <Link to="/tasks" className="ml-auto shrink-0 text-label text-secondary underline-offset-2 hover:underline">
+              {inert} {inert === 1 ? 'task' : 'tasks'} with no schedule →
+            </Link>
+          )}
         </div>
 
         {active.length ? (

@@ -140,12 +140,28 @@ describe("loopany CLI dispatch", () => {
     expect(r.stdout).toContain("not connected — run `loopany up`");
   });
 
-  test("help lists the new surface (bare = home, up --foreground, setup, device show)", async () => {
+  test("help shows the simplified 12-verb surface; hidden aliases stay OUT of it", async () => {
     const r = await runCli(["--help"]);
-    expect(r.stdout).toContain("content-first HOME");
+    // Home + machinery + the canonical task grammar.
+    expect(r.stdout).toContain("HOME");
     expect(r.stdout).toContain("up [--foreground]");
     expect(r.stdout).toContain("setup hooks");
-    expect(r.stdout).toContain("show [<id>]");
+    expect(r.stdout).toContain('create "<title>"');
+    expect(r.stdout).toContain('--cron "0 9 * * *"');
+    expect(r.stdout).toContain("run <id> [--wait]");
+    // Hidden aliases are absent as documented verbs (one aliases-exist line remains).
+    expect(r.stdout).not.toContain("show [<id>]");
+    expect(r.stdout).not.toContain("loops [--fields");
+    expect(r.stdout).not.toContain("new --json");
+    expect(r.stdout).not.toContain("edit <id> --json");
+    expect(r.stdout).not.toContain("mv <id>");
+    expect(r.stdout).toContain("still work as silent aliases");
+  });
+
+  test("hidden aliases keep working: `loopany show --help` prints its alias usage", async () => {
+    const r = await runCli(["show", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("Alias of `get`");
   });
 });
 
@@ -182,6 +198,7 @@ describe("classify — CLI routing table (Batch 6)", () => {
 
   test("run-only verbs OUTSIDE a run are FORWARDED (device cred → server 403), not unknown", () => {
     expect(classify(["report", "--status", "new"], {})).toEqual({ kind: "forward", argv: ["report", "--status", "new"] });
+    expect(classify(["done", "--status", "new"], {})).toEqual({ kind: "forward", argv: ["done", "--status", "new"] });
     expect(classify(["finish"], {})).toEqual({ kind: "forward", argv: ["finish"] });
     expect(classify(["complete"], {})).toEqual({ kind: "forward", argv: ["complete"] });
   });

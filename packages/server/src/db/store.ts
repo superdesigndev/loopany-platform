@@ -12,6 +12,7 @@ import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray,
 
 import { db } from "./index.js";
 import { user } from "./auth-schema.js";
+import { taskMeta } from "../server/frontmatter.js";
 import {
   loops,
   machines,
@@ -24,6 +25,13 @@ import {
   artifactFiles,
   runSnapshots,
   runLeases,
+  events,
+  reviewMarks,
+  agents,
+  type AgentRow,
+  type CodingAgent,
+  type EventRow,
+  type NewEvent,
   type ArtifactFile,
   type ArtifactMeta,
   type Loop,
@@ -112,9 +120,85 @@ export async function loopsForMachine(machineId: string): Promise<Loop[]> {
   return db.select().from(loops).where(eq(loops.machineId, machineId));
 }
 
+/** Loops across a membership set (team-wide device reads). Empty in → empty out. */
+export async function loopsForTeams(teamIds: string[]): Promise<Loop[]> {
+  if (!teamIds.length) return [];
+  return db.select().from(loops).where(inArray(loops.teamId, teamIds));
+}
+
+// ---- events (the append-only per-node record) ----
+
+/** Append one immutable event. The ONLY write path — there is no update/delete
+ *  by design; the stream is the record plane the Timeline renders from. */
+export async function addEvent(input: Omit<NewEvent, "id" | "at"> & { id?: string; at?: string }): Promise<EventRow> {
+  const row: NewEvent = { ...input, id: input.id ?? `ev-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`, at: input.at ?? nowIso() };
+  return (await db.insert(events).values(row).returning())[0]!;
+}
+
+/** A node's events, NEWEST first, bounded. `since` filters strictly-after (the
+ *  incremental-poll shape); `limit` is the anchor window. Callers render a
+ *  truncation hint when exactly `limit` rows return. */
+export async function listEvents(loopId: string, opts: { since?: string; limit?: number } = {}): Promise<EventRow[]> {
+  const cap = Math.min(Math.max(opts.limit ?? 20, 1), 200);
+  const cond = opts.since ? and(eq(events.loopId, loopId), gt(events.at, opts.since)) : eq(events.loopId, loopId);
+  return db.select().from(events).where(cond).orderBy(desc(events.at), desc(events.id)).limit(cap);
+}
+
+/** Events emitted during one run (the close endpoint's record-synthesis input). */
+export async function eventsForRun(runId: string): Promise<EventRow[]> {
+  return db.select().from(events).where(eq(events.runId, runId)).orderBy(events.at);
+}
+
+/** Total events for a node — the `count: N of M` aggregate (AXI §4). */
+export async function countEvents(loopId: string): Promise<number> {
+  const r = (await db.select({ n: sql<number>`count(*)` }).from(events).where(eq(events.loopId, loopId)))[0];
+  return Number(r?.n ?? 0);
+}
+
+// ---- agents (the executor registry) ----
+
+function agentSlug(runtime: string, machineName: string): string {
+  const short = runtime === "claude-code" ? "claude" : runtime;
+  const m = machineName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "machine";
+  return `${short}-${m}`;
+}
+
+/** Idempotent auto-registration from the daemon's poll-reported runtime list.
+ *  Existing rows keep their (possibly renamed) name/slug — registration never
+ *  clobbers a rename. Rows for runtimes that stop being reported are KEPT
+ *  (loops may still reference the pair; presence comes from the machine). */
+export async function upsertAgents(machineId: string, machineName: string, runtimes: string[]): Promise<void> {
+  const ts = nowIso();
+  for (const runtime of runtimes) {
+    await db
+      .insert(agents)
+      .values({
+        id: `${machineId}:${runtime}`,
+        machineId,
+        runtime: runtime as CodingAgent,
+        slug: agentSlug(runtime, machineName),
+        name: `${runtime === "claude-code" ? "Claude" : runtime === "codex" ? "Codex" : "Grok"} · ${machineName || machineId}`,
+        createdAt: ts,
+        updatedAt: ts,
+      })
+      .onConflictDoNothing();
+  }
+}
+
+export async function agentsForMachines(machineIds: string[]): Promise<AgentRow[]> {
+  if (!machineIds.length) return [];
+  return db.select().from(agents).where(inArray(agents.machineId, machineIds));
+}
+
+/** Rename an agent's display name (R8). Slug stays stable — it's the address. */
+export async function renameAgent(id: string, name: string): Promise<AgentRow | undefined> {
+  return (await db.update(agents).set({ name, updatedAt: nowIso() }).where(eq(agents.id, id)).returning())[0];
+}
+
 export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "updatedAt"> & { id?: string }): Promise<Loop> {
   const ts = nowIso();
   const row: NewLoop = { ...input, id: input.id ?? newLoopId(), createdAt: ts, updatedAt: ts };
+  if (typeof row.taskFileContent === "string") row.taskMeta = taskMeta(row.taskFileContent);
   return (await db.insert(loops).values(row).returning())[0]!;
 }
 
@@ -130,29 +214,65 @@ export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "upda
  *    stamps so it resumes as an ordinary active loop. A plain pause (`enabled:
  *    false`) leaves the stamps untouched. An explicit `completedAt` in the same
  *    patch (the finish verb) wins over the reopen clear.
+ *  - a patch carrying `taskFileContent` re-derives `taskMeta` in the same write
+ *    (the task-tree index is a pure function of the file; deriving here means
+ *    every ingress — report, enrich, sync, create-inline — behaves identically).
  *
  * Wrapped in a transaction so the completion-state read (does this loop currently
  * carry a `completedAt`?) and the dependent write stay consistent.
  */
-export async function updateLoop(id: string, patch: Partial<NewLoop>): Promise<Loop | undefined> {
+export async function updateLoop(
+  id: string,
+  patch: Partial<NewLoop>,
+  /** Event attribution for the state changes this write causes. Callers that
+   *  know the credential pass a real actor (email / executor label); the
+   *  default is "system". `runId` links the event to an in-flight run. */
+  opts: { actor?: string; runId?: string } = {},
+): Promise<Loop | undefined> {
   return db.transaction(async (tx) => {
+    const before = (await tx.select().from(loops).where(eq(loops.id, id)))[0];
+    if (!before) return undefined;
     const extra: Partial<NewLoop> = {};
+    if (typeof patch.taskFileContent === "string") {
+      extra.taskMeta = taskMeta(patch.taskFileContent);
+    } else if (patch.taskFileContent === null) {
+      extra.taskMeta = null;
+    }
     if (patch.goal === null) {
       extra.completedAt = null;
       extra.completionReason = null;
     }
-    if (patch.enabled === true && patch.completedAt === undefined) {
-      const current = (await tx.select().from(loops).where(eq(loops.id, id)))[0];
-      if (current?.completedAt) {
-        extra.completedAt = null;
-        extra.completionReason = null;
-      }
+    if (patch.enabled === true && patch.completedAt === undefined && before.completedAt) {
+      extra.completedAt = null;
+      extra.completionReason = null;
     }
     await tx
       .update(loops)
       .set({ ...patch, ...extra, updatedAt: nowIso() })
       .where(eq(loops.id, id));
-    return (await tx.select().from(loops).where(eq(loops.id, id)))[0];
+    const after = (await tx.select().from(loops).where(eq(loops.id, id)))[0];
+
+    // Chokepoint event emission: state changes become record rows in the SAME
+    // transaction as the write, so the stream can never disagree with the row.
+    // Status/assignee live in taskMeta today (derived above) and become plain
+    // fields later — diffing the derived values covers both eras.
+    if (after) {
+      const ts = nowIso();
+      const actor = opts.actor ?? "system";
+      const changes: NewEvent[] = [];
+      const bs = before.taskMeta?.status ?? null;
+      const as = after.taskMeta?.status ?? null;
+      if (bs !== as) {
+        changes.push({ id: `ev-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`, loopId: id, runId: opts.runId ?? null, type: "status-changed", actor, at: ts, text: null, data: { from: bs, to: as } });
+      }
+      const ba = before.taskMeta?.assignee ?? null;
+      const aa = after.taskMeta?.assignee ?? null;
+      if (ba !== aa) {
+        changes.push({ id: `ev-${Date.now().toString(36)}-${randomUUID().slice(1, 9)}`, loopId: id, runId: opts.runId ?? null, type: "assignee-changed", actor, at: ts, text: null, data: { from: ba, to: aa } });
+      }
+      if (changes.length) await tx.insert(events).values(changes);
+    }
+    return after;
   });
 }
 
@@ -171,6 +291,8 @@ export async function deleteLoop(id: string): Promise<boolean> {
       await tx.delete(runLeases).where(eq(runLeases.loopId, id));
       await tx.delete(artifactFiles).where(eq(artifactFiles.loopId, id));
       await tx.delete(runSnapshots).where(eq(runSnapshots.loopId, id));
+      await tx.delete(events).where(eq(events.loopId, id));
+      await tx.delete(reviewMarks).where(eq(reviewMarks.loopId, id));
     }
     return deleted.length > 0;
   });
@@ -404,14 +526,20 @@ export async function supersedePendingRun(runId: string, message: string): Promi
 }
 
 export async function hasOpenRun(loopId: string): Promise<boolean> {
-  const r = (
+  return (await openRunForLoop(loopId)) != null;
+}
+
+/** The loop's open (pending/running) run, if any — callers that must NAME the
+ *  run in a refusal (e.g. a doc push during an active run) need the row, not
+ *  just the boolean. */
+export async function openRunForLoop(loopId: string): Promise<Run | undefined> {
+  return (
     await db
-      .select({ id: runs.id })
+      .select()
       .from(runs)
       .where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])))
       .limit(1)
   )[0];
-  return !!r;
 }
 
 // ---- machines ----
@@ -580,6 +708,13 @@ export async function userByEmail(email: string): Promise<{ id: string; email: s
       .where(sql`lower(${user.email}) = lower(${email})`)
   )[0];
   return r ? { id: r.id, email: r.email } : undefined;
+}
+
+/** A user's email for event attribution (actor lines). Undefined ⇒ no account
+ *  (open-mode "shared" owner) — callers fall back to the raw id. */
+export async function userEmail(userId: string): Promise<string | undefined> {
+  const r = (await db.select({ email: user.email }).from(user).where(eq(user.id, userId)))[0];
+  return r?.email ?? undefined;
 }
 
 /** Add a member (idempotent — a re-add is a no-op, not a duplicate row). */
@@ -766,6 +901,13 @@ export async function deleteInvite(token: string): Promise<void> {
 
 export async function getTeam(id: string): Promise<Team | undefined> {
   return (await db.select().from(teams).where(eq(teams.id, id)))[0];
+}
+
+/** Every team, newest first. OPEN-MODE ONLY (the unauthenticated single-workspace
+ *  tier, where `listLoops` already returns everything) — under the gate always go
+ *  through `listTeamsForUser`, which is membership-scoped. */
+export async function listTeams(): Promise<Team[]> {
+  return db.select().from(teams).orderBy(desc(teams.createdAt));
 }
 
 /** Teams the user belongs to (membership join), newest first. Drives the team
@@ -1222,4 +1364,134 @@ export async function liveArtifactSizes(loopId: string): Promise<Map<string, num
       ),
     );
   return new Map(rows.map((r) => [r.path, Number(r.size ?? 0)]));
+}
+
+// ---- review queue (F7): needs-review artifacts minus dismissals ----
+
+export interface ReviewQueueItem {
+  loopId: string;
+  path: string;
+  hash: string;
+  updatedAt: string;
+  meta: ArtifactMeta | null;
+}
+
+/** One wire/UI row for a queue item — shared by the gateway verb and the web
+ *  server fn so the two surfaces can't drift on labels or fields. */
+export function toReviewRow(item: ReviewQueueItem, loop: Loop | undefined) {
+  return {
+    loopId: item.loopId,
+    task: loop?.taskMeta?.id ?? loop?.name ?? item.loopId,
+    path: item.path,
+    hash: item.hash,
+    title: item.meta?.title ?? null,
+    type: item.meta?.type ?? null,
+    due: item.meta?.due ?? null,
+    updatedAt: item.updatedAt,
+  };
+}
+
+/** Live artifacts flagged `status: needs-review` (blob front-matter, indexed at
+ *  byte ingress) across the given loops, minus content-hash-keyed dismissals —
+ *  a redrafted file (new hash) re-surfaces for fresh eyes. Newest first. */
+export async function reviewQueueForLoops(loopIds: string[], opts: { limit?: number } = {}): Promise<ReviewQueueItem[]> {
+  if (!loopIds.length) return [];
+  const q = db
+    .select({
+      loopId: artifactFiles.loopId,
+      path: artifactFiles.path,
+      hash: artifactFiles.hash,
+      updatedAt: artifactFiles.updatedAt,
+      meta: blobs.meta,
+    })
+    .from(artifactFiles)
+    .innerJoin(blobs, eq(artifactFiles.hash, blobs.hash))
+    .leftJoin(
+      reviewMarks,
+      and(eq(reviewMarks.loopId, artifactFiles.loopId), eq(reviewMarks.path, artifactFiles.path), eq(reviewMarks.hash, blobs.hash)),
+    )
+    .where(
+      and(
+        inArray(artifactFiles.loopId, loopIds),
+        eq(artifactFiles.deleted, false),
+        sql`${blobs.meta}->>'status' = 'needs-review'`,
+        isNull(reviewMarks.id),
+      ),
+    )
+    .orderBy(desc(artifactFiles.updatedAt));
+  const rows = await (opts.limit ? q.limit(opts.limit) : q);
+  return rows.map((r) => ({ ...r, hash: r.hash!, meta: r.meta ?? null }));
+}
+
+/** Queue size only — the web badge and hot paths need the number, not the rows. */
+export async function countReviewQueue(loopIds: string[]): Promise<number> {
+  if (!loopIds.length) return 0;
+  const r = (
+    await db
+      .select({ n: sql<number>`count(*)` })
+      .from(artifactFiles)
+      .innerJoin(blobs, eq(artifactFiles.hash, blobs.hash))
+      .leftJoin(
+        reviewMarks,
+        and(eq(reviewMarks.loopId, artifactFiles.loopId), eq(reviewMarks.path, artifactFiles.path), eq(reviewMarks.hash, blobs.hash)),
+      )
+      .where(
+        and(
+          inArray(artifactFiles.loopId, loopIds),
+          eq(artifactFiles.deleted, false),
+          sql`${blobs.meta}->>'status' = 'needs-review'`,
+          isNull(reviewMarks.id),
+        ),
+      )
+  )[0];
+  return Number(r?.n ?? 0);
+}
+
+/** Is `email` a member of any of the user's teams? One join, one boolean —
+ *  the roster-warning check (never an N+1 walk over teams). */
+export async function isTeammateEmail(userId: string, email: string): Promise<boolean> {
+  const mine = db.select({ teamId: teamMembers.teamId }).from(teamMembers).where(eq(teamMembers.userId, userId));
+  const r = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .innerJoin(user, eq(teamMembers.userId, user.id))
+    .where(and(inArray(teamMembers.teamId, mine), sql`lower(${user.email}) = lower(${email})`))
+    .limit(1);
+  return r.length > 0;
+}
+
+/** Markdown artifacts across many loops in ONE query, with the cheap filters
+ *  (live, text, small enough to consider, `.md`) pushed into SQL and a hard
+ *  row cap — the search scan must never be a per-loop N+1. */
+export async function listSearchableArtifacts(
+  loopIds: string[],
+  cap: number,
+): Promise<Array<{ loopId: string; path: string; hash: string; size: number | null; meta: ArtifactMeta | null }>> {
+  if (!loopIds.length) return [];
+  const rows = await db
+    .select({ loopId: artifactFiles.loopId, path: artifactFiles.path, hash: artifactFiles.hash, size: artifactFiles.size, meta: blobs.meta })
+    .from(artifactFiles)
+    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
+    .where(
+      and(
+        inArray(artifactFiles.loopId, loopIds),
+        eq(artifactFiles.deleted, false),
+        eq(artifactFiles.binary, false),
+        eq(artifactFiles.oversize, false),
+        isNotNull(artifactFiles.hash),
+        sql`(${artifactFiles.path} ILIKE '%.md' OR ${artifactFiles.path} ILIKE '%.markdown')`,
+      ),
+    )
+    .orderBy(artifactFiles.loopId, artifactFiles.path)
+    .limit(cap + 1);
+  return rows.map((r) => ({ ...r, hash: r.hash!, meta: r.meta ?? null }));
+}
+
+/** Dismiss one queue item ("mark reviewed" — deliberately NOT "approve": nothing
+ *  downstream consumes it yet). Idempotent per (loop, path, hash). */
+export async function markReviewed(loopId: string, path: string, hash: string, actor: string): Promise<void> {
+  await db
+    .insert(reviewMarks)
+    .values({ id: randomUUID(), loopId, path, hash, actor, at: nowIso() })
+    .onConflictDoNothing();
 }

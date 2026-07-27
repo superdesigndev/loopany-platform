@@ -5,6 +5,7 @@
  * workflow escalates via `agent()` (or the loop has no workflow) do we run
  * claude-code. Finally report the run back to the server.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -37,6 +38,11 @@ export interface Delivery {
      *  ⇒ treated as claude-code. The daemon branches spawn + credentials on this
      *  (`claude-code` | `codex` | `grok`). */
     agent?: CodingAgent;
+    /** Task-run doc (cron-null exec): materialized as TASK.md in the workdir;
+     *  pushed back at close if its bytes changed (hash-compared). */
+    taskDoc?: string;
+    /** The doc's content hash at claim — sent back as the close push's base. */
+    taskDocHash?: string;
   };
   prevState: unknown;
   /** Server-configured workdir jail — may only NARROW the daemon's local env
@@ -78,6 +84,10 @@ interface ReportBody {
   transcript?: TranscriptStep[];
   /** Latest content of the loop's task file (the durable context+log doc). */
   taskFileContent?: string;
+  /** Close push (task runs): the edited TASK.md, sent only when it changed. */
+  taskDoc?: string;
+  /** The delivered doc's hash — the close push's base precondition. */
+  taskDocBase?: string;
   error?: string;
   finalText?: string;
 }
@@ -347,6 +357,33 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     return reportRun({ runId: d.runId, ok: false, durationMs: Date.now() - start, error: msg(err) });
   }
 
+  // Task-run working copy: the doc travels with the run. Materialize TASK.md in
+  // the workdir at claim; at close, hash-compare and attach the edited copy to
+  // the report only when its bytes actually changed (the server applies it as a
+  // base-guarded doc write). Best-effort — a write failure never fails the run.
+  const taskDocPath = path.join(workdir, "TASK.md");
+  let taskDocBase: string | undefined;
+  if (typeof d.loop.taskDoc === "string") {
+    try {
+      fs.mkdirSync(workdir, { recursive: true });
+      fs.writeFileSync(taskDocPath, d.loop.taskDoc);
+      taskDocBase = d.loop.taskDocHash ?? createHash("sha256").update(d.loop.taskDoc).digest("hex");
+    } catch (err) {
+      logger.warn({ err: msg(err) }, "task doc: could not materialize TASK.md");
+    }
+  }
+  /** The close push: `{taskDoc, taskDocBase}` when TASK.md changed, else `{}`. */
+  const taskDocPush = (): Pick<ReportBody, "taskDoc" | "taskDocBase"> => {
+    if (taskDocBase === undefined) return {};
+    try {
+      const current = fs.readFileSync(taskDocPath, "utf8");
+      const hash = createHash("sha256").update(current).digest("hex");
+      return hash === taskDocBase ? {} : { taskDoc: current.slice(0, TASKFILE_CAP), taskDocBase };
+    } catch {
+      return {}; // deleted/unreadable working copy ⇒ nothing to push
+    }
+  };
+
   // 1. Workflow gate (cheap, zero-LLM). Pure result → report directly, no agent.
   // Internal evolution passes skip this gate (they run the loop's coding agent
   // directly) and may update ui/schema/workflow.
@@ -527,6 +564,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     artifacts,
     transcript,
     taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
+    ...taskDocPush(),
     error,
     // Every role sends finalText: the server only uses it as a message FALLBACK
     // when the run didn't `loopany report --message` itself, and evolve/edit are

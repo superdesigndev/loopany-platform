@@ -12,7 +12,9 @@
  * token (env) identifies the machine; LOOPANY_ROOTS is the cwd jail (empty ⇒
  * unrestricted — the bind-time UI is where a user would normally set this).
  */
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
@@ -59,6 +61,35 @@ export function buildPollBody(
   };
 }
 
+/** The coding-agent runtimes this machine can host, detected the same way the
+ *  runner resolves each binary: an explicit `LOOPANY_*_BIN` override wins, else
+ *  a PATH scan for the default bin name. Reported once per daemon process (the
+ *  first poll) so the server can register the machine's agents — pure over
+ *  (env, exists) for tests, no subprocess. */
+export function detectRuntimes(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (p: string) => boolean = (p) => {
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+): string[] {
+  const candidates = [
+    { runtime: "claude-code", envKey: "LOOPANY_CLAUDE_BIN", bin: "claude" },
+    { runtime: "codex", envKey: "LOOPANY_CODEX_BIN", bin: "codex" },
+    { runtime: "grok", envKey: "LOOPANY_GROK_BIN", bin: "grok" },
+  ];
+  const dirs = (env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const out: string[] = [];
+  for (const { runtime, envKey, bin } of candidates) {
+    if (env[envKey] || dirs.some((d) => exists(path.join(d, bin)))) out.push(runtime);
+  }
+  return out;
+}
+
 /** Elapsed-based cadence: a response that consumed the poll interval was a
  *  server-held long-poll — re-poll almost immediately (the hold WAS the wait).
  *  A fast response (work delivered, old server, short mode, or an error) keeps
@@ -100,6 +131,9 @@ export async function runDaemon(): Promise<number> {
   // `version` is this daemon's own package version, so the web can flag an
   // outdated daemon and show the exact update command.
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
+  // Announce the hostable runtimes ONCE (registration is durable server-side);
+  // dropping it after the first successful poll keeps the heartbeat body lean.
+  let announceAgents: string[] | undefined = detectRuntimes();
 
   // Refuse to boot when a live, VERIFIED daemon already owns the pidfile — a
   // second daemon (e.g. a bare `loopany` in a terminal) would overwrite it, and
@@ -156,9 +190,10 @@ export async function runDaemon(): Promise<number> {
       const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest)),
+        body: JSON.stringify(buildPollBody(announceAgents?.length ? { ...info, agents: announceAgents } : info, progress, inFlight.size === 0, watchDigest)),
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
+        announceAgents = undefined;
         const data = (await res.json()) as { deliveries?: Delivery[]; watch?: WatchSpec[]; watchDigest?: string };
         // Reconcile the loop-folder watchers against the server's current set.
         // An ABSENT `watch` means "unchanged since the digest you echoed" (the

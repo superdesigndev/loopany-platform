@@ -860,3 +860,84 @@ describe("runDelivery — a grok loop RUNS and reports ok despite degraded telem
     expect(rep.sessionId).toBeUndefined();
   }, 20000);
 });
+
+describe("runDelivery — task-run doc working copy (TASK.md)", () => {
+  test("materializes TASK.md at claim; pushes it back with the claim base only when edited", async () => {
+    // Fake claude edits TASK.md before exiting (the run works IN the doc).
+    const p = path.join(root, "fake-claude-doc.sh");
+    fs.writeFileSync(
+      p,
+      [
+        "#!/bin/sh",
+        'printf "\\n## Current understanding\\nlearned\\n" >> TASK.md',
+        `echo '{"type":"result","is_error":false,"subtype":"success","result":"ok","session_id":"sess-doc"}'`,
+        "exit 0",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(p, 0o755);
+    process.env.LOOPANY_CLAUDE_BIN = p;
+
+    const reports: any[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        reports.push(JSON.parse(body));
+        res.end("{}");
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    try {
+      const port = (srv.address() as AddressInfo).port;
+      await runDelivery(
+        delivery({ loop: { ...delivery().loop, workflow: null, taskDoc: "## Spec\ndo it\n", taskDocHash: "claimhash" } }),
+        `http://127.0.0.1:${port}`,
+        [],
+      );
+    } finally {
+      srv.close();
+    }
+    // Materialized at claim…
+    expect(fs.readFileSync(path.join(workdir, "TASK.md"), "utf8")).toContain("learned");
+    // …and the edited copy rides the close with the claim hash as its base.
+    const rep = reports.find((r) => r.runId === "run-1");
+    expect(rep.taskDoc).toContain("## Current understanding");
+    expect(rep.taskDocBase).toBe("claimhash");
+  }, 20000);
+
+  test("unchanged TASK.md sends no push; no taskDoc delivered writes no file", async () => {
+    process.env.LOOPANY_CLAUDE_BIN = writeFakeClaude(); // does not touch TASK.md
+    const reports: any[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        reports.push(JSON.parse(body));
+        res.end("{}");
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    try {
+      const port = (srv.address() as AddressInfo).port;
+      const { createHash } = await import("node:crypto");
+      const doc = "## Spec\nsteady\n";
+      await runDelivery(
+        delivery({ loop: { ...delivery().loop, workflow: null, taskDoc: doc, taskDocHash: createHash("sha256").update(doc).digest("hex") } }),
+        `http://127.0.0.1:${port}`,
+        [],
+      );
+      const rep = reports.find((r) => r.runId === "run-1");
+      expect(rep.taskDoc).toBeUndefined();
+      expect(rep.taskDocBase).toBeUndefined();
+
+      // A loop delivery (no taskDoc) never writes a TASK.md.
+      fs.rmSync(path.join(workdir, "TASK.md"));
+      await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null } }), `http://127.0.0.1:${port}`, []);
+      expect(fs.existsSync(path.join(workdir, "TASK.md"))).toBe(false);
+    } finally {
+      srv.close();
+    }
+  }, 20000);
+});

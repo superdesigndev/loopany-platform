@@ -161,7 +161,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     };
     const r = await postCli(cliArgv, legacy, cliDeps);
     if (r.kind === "not-configured") return notConnected(), 2;
-    if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
+    if (r.kind === "read-error") return err(r.detail ?? `loopany: cannot read ${r.path}\n`), 1;
     if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
     // Text-sink: the server renders the TOON list, the JSON escape hatch (`--json`), and
     // the empty/error states; we just print `text`. A too-old server (no `text`) → a
@@ -200,7 +200,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     };
     const r = await postCli(cliArgv, legacy, cliDeps);
     if (r.kind === "not-configured") return notConnected(), 2;
-    if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
+    if (r.kind === "read-error") return err(r.detail ?? `loopany: cannot read ${r.path}\n`), 1;
     if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
     // Text-sink: the server renders the apply / dry-run / rejection / error TOON (and
     // pins exit 1 for rejections via `exitCode`); we just print it. A too-old server

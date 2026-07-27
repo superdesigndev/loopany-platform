@@ -92,7 +92,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
     out(notConnectedHome(bin));
     return 0;
   }
-  if (r.kind === "read-error") return out(`error: "cannot read ${r.path}"\ncode: ERROR\n`), 1;
+  if (r.kind === "read-error") return out(r.detail ?? `error: "cannot read ${r.path}"\ncode: ERROR\n`), 1;
   // Unreachable / hung server (incl. a bounded-fetch timeout on the SessionStart hot
   // path): render a DEFINITIVE degraded home — never hang, never empty, never a raw
   // error line that would surface the ambient hook as a failure.

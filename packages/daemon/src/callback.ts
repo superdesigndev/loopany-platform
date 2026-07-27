@@ -14,7 +14,7 @@ export async function runCallback(argv: string[]): Promise<number> {
     return 2;
   }
   if (r.kind === "read-error") {
-    process.stderr.write(`loopany: cannot read ${r.path}\n`);
+    process.stderr.write(r.detail ?? `loopany: cannot read ${r.path}\n`);
     return 1;
   }
   if (r.kind === "network-error") {

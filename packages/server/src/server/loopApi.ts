@@ -32,8 +32,9 @@ import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
-import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
+import { projectFires, projectedMark, runToMark, sumCosts, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
+import { toTaskRow, type TaskRow } from './taskTree.js'
 
 function backend() {
   return ensureServer()
@@ -127,20 +128,130 @@ export const getDefaultTeam = createServerFn({ method: 'GET' }).handler(async ()
 /** GET — the signed-in user's loops as compact summaries (newest first).
  *  Gate on ⇒ only the given/active team's loops; open mode ⇒ the full shared list.
  *  An explicit `teamId` (the `/t/<id>` route) scopes this request independent of
- *  the cookie, so different tabs on /t/A and /t/B list different teams at once. */
+ *  the cookie, so different tabs on /t/A and /t/B list different teams at once.
+ *  The dashboard is the LOOPS view: cron-null rows are inert tasks (tracked
+ *  work, no schedule) and live on the /tasks page instead — a manual task on
+ *  the loops dashboard is noise, not a loop. They are COUNTED here rather than
+ *  merely dropped: disarming a loop's cron would otherwise make the row vanish
+ *  from the only page most users visit, which reads as data loss. The count is
+ *  free (same `listLoops` read) — never a second query on a 3s poll. */
 export const listJobs = createServerFn({ method: 'GET' })
   .validator((teamId?: string) => teamId)
-  .handler(async ({ data: teamId }) => {
+  .handler(async ({ data: teamId }): Promise<{ jobs: JobSummary[]; inert: number }> => {
     await backend()
     const { enforce, userId, teamId: active } = await requestScope(teamId)
-    if (enforce && !userId) return [] as JobSummary[]
+    if (enforce && !userId) return { jobs: [], inert: 0 }
     // Scope to the resolved active team (open mode ⇒ no team filter, the single
     // shared workspace).
-    const loops = (await store.listLoops(enforce ? active : undefined)).sort((a, b) =>
-      a.createdAt < b.createdAt ? 1 : -1,
-    )
-    return (await Promise.all(loops.map(toJobSummary))) as JobSummary[]
+    const all = await store.listLoops(enforce ? active : undefined)
+    const loops = all.filter((l) => l.cron != null).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    return {
+      jobs: (await Promise.all(loops.map(toJobSummary))) as JobSummary[],
+      inert: all.length - loops.length,
+    }
   })
+
+/** GET — the active team's loops projected as TASK rows (slug/status/priority/
+ *  parent from the derived `taskMeta` index). The Tasks page builds its tree
+ *  CLIENT-side with the same shared builder (`server/taskTree.ts`) the machine
+ *  gateway uses — the CLI's tree and the web's tree cannot drift. Machine paths
+ *  (taskFile) are projected OUT of the team-visible payload. */
+export const listTasks = createServerFn({ method: 'GET' })
+  .validator((teamId?: string) => teamId)
+  .handler(async ({ data: teamId }): Promise<TaskRow[]> => {
+    await backend()
+    const { enforce, userId, teamId: active } = await requestScope(teamId)
+    if (enforce && !userId) return []
+    return (await store.listLoops(enforce ? active : undefined)).map((l) => ({ ...toTaskRow(l), taskFile: null }))
+  })
+
+/** GET — display names for the Tasks page's team/device pickers.
+ *
+ *  Scoped exactly like `listTasks`: under the gate only the caller's active team
+ *  (so the picker can never enumerate teams they aren't in); in open mode — a
+ *  single unauthenticated workspace where `listLoops` already returns everything
+ *  — the full set, so the filters are useful against a local mirror. Names only;
+ *  no membership, no tokens. */
+/** One review-queue row for the web worklist (F7). */
+export interface ReviewQueueRow {
+  loopId: string
+  task: string
+  path: string
+  hash: string
+  title: string | null
+  type: string | null
+  due: string | null
+  updatedAt: string
+}
+
+/** GET — the cross-loop review worklist: artifacts flagged `status: needs-review`,
+ *  team-scoped like `listTasks`, minus hash-keyed dismissals. */
+export const listReviewQueue = createServerFn({ method: 'GET' })
+  .validator((teamId?: string) => teamId)
+  .handler(async ({ data: teamId }): Promise<ReviewQueueRow[]> => {
+    await backend()
+    const { enforce, userId, teamId: active } = await requestScope(teamId)
+    if (enforce && !userId) return []
+    const loops = await store.listLoops(enforce ? active : undefined)
+    const byId = new Map(loops.map((l) => [l.id, l]))
+    const items = await store.reviewQueueForLoops(loops.map((l) => l.id))
+    // Same row mapper as the CLI verb — the two surfaces cannot drift on labels.
+    return items.map((i) => store.toReviewRow(i, byId.get(i.loopId)))
+  })
+
+/** GET — queue size only, for the /tasks header badge (the /review page fetches rows). */
+export const countReviewQueue = createServerFn({ method: 'GET' })
+  .validator((teamId?: string) => teamId)
+  .handler(async ({ data: teamId }): Promise<number> => {
+    await backend()
+    const { enforce, userId, teamId: active } = await requestScope(teamId)
+    if (enforce && !userId) return 0
+    const loops = await store.listLoops(enforce ? active : undefined)
+    return store.countReviewQueue(loops.map((l) => l.id))
+  })
+
+/** POST — dismiss one review item ("Mark reviewed" — deliberately not "Approve":
+ *  nothing downstream consumes the verdict; the human does the action themselves.
+ *  Keyed to the content hash, so a changed file re-surfaces). */
+export const markArtifactReviewed = createServerFn({ method: 'POST' })
+  .validator((d: { loopId: string; path: string }) => d)
+  .handler(async ({ data }): Promise<{ ok: boolean }> => {
+    await backend()
+    // One loop read + the shared access rule — never a full team list per click.
+    const owned = await ownedLoop(data.loopId)
+    if (!owned) throw new Error('This loop does not exist, or you do not have access to it.')
+    // The hash is derived SERVER-side from the artifact's current content (the
+    // CLI's reviewClear does the same) — a client can never dismiss a version
+    // it hasn't seen, and a stale page click simply re-marks the current one.
+    const f = await store.getArtifactFile(data.loopId, data.path)
+    if (!f || f.deleted || !f.hash) throw new Error('No such artifact.')
+    const { currentUser } = await import('../auth.js')
+    const email = owned.enforce ? (await currentUser())?.email : undefined
+    await store.markReviewed(data.loopId, data.path, f.hash, email ?? 'shared')
+    return { ok: true }
+  })
+
+export const listTaskScopes = createServerFn({ method: 'GET' })
+  .validator((teamId?: string) => teamId)
+  .handler(
+    async ({
+      data: teamId,
+    }): Promise<{ teams: Array<{ id: string; name: string }>; machines: Array<{ id: string; name: string }> }> => {
+      await backend()
+      const { enforce, userId, teamId: active } = await requestScope(teamId)
+      if (enforce && !userId) return { teams: [], machines: [] }
+      const scope = enforce ? active : undefined
+      const [teams, machines] = await Promise.all([
+        enforce ? store.getTeam(active).then((t) => (t ? [t] : [])) : store.listTeams(),
+        store.listMachines(scope),
+      ])
+      return {
+        teams: teams.map((t) => ({ id: t.id, name: t.name || t.id })),
+        // `machines.name` is notNull but empty until the daemon reports one.
+        machines: machines.map((m) => ({ id: m.id, name: m.name || m.id })),
+      }
+    },
+  )
 
 /** Runaway guard on the cross-loop run query. A month of busy loops stays well
  *  under this; hitting it flags `truncated` rather than silently clipping. */
@@ -162,7 +273,6 @@ export const listTimeline = createServerFn({ method: 'GET' })
       from: data.from,
       to: data.to,
       loops: [],
-      machines: [],
       marks: [],
       totals: { runCount: 0, costUsd: 0, byLoop: {} },
       truncated: false,
@@ -175,10 +285,7 @@ export const listTimeline = createServerFn({ method: 'GET' })
 
     const scoped = enforce ? active : undefined
     const loops = (await store.listLoops(scoped)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-    const [rows, machineRows] = await Promise.all([
-      store.listTeamRunsInRange(scoped, data.from, data.to, TIMELINE_RUN_CAP),
-      store.listMachines(scoped),
-    ])
+    const rows = await store.listTeamRunsInRange(scoped, data.from, data.to, TIMELINE_RUN_CAP)
 
     const marks: TimelineMark[] = rows.map(runToMark)
     // Project only forward of now — the past half of the window is history, and a
@@ -192,12 +299,10 @@ export const listTimeline = createServerFn({ method: 'GET' })
     }
     marks.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
 
-    const timelineLoops = loops.map(toTimelineLoop)
     return {
       from: data.from,
       to: data.to,
-      loops: timelineLoops,
-      machines: timelineMachines(timelineLoops, machineRows),
+      loops: loops.map(toTimelineLoop),
       marks,
       totals: sumCosts(marks),
       truncated: rows.length >= TIMELINE_RUN_CAP,

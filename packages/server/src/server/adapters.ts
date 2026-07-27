@@ -15,6 +15,7 @@ const SUMMARY_RUNS = 18;
 
 function nextRun(loop: Loop): string | null {
   if (loop.nextRunAt) return loop.nextRunAt;
+  if (!loop.cron) return null; // inert task — nothing scheduled
   try {
     const probe = new Cron(loop.cron, { paused: true, ...(loop.timezone ? { timezone: loop.timezone } : {}) });
     const n = probe.nextRun()?.toISOString() ?? null;

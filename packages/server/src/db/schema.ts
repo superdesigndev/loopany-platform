@@ -15,7 +15,7 @@
 import { sql } from "drizzle-orm";
 import { pgTable, text, integer, doublePrecision, boolean, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 
-import type { ArtifactMeta } from "../server/frontmatter.js";
+import type { ArtifactMeta, TaskMeta } from "../server/frontmatter.js";
 // The coding-agent enum's SINGLE SOURCE lives in `../types` (client-safe, no db
 // deps); this schema DERIVES both the `CodingAgent` type and the `loops.agent`
 // column enum from it, so widening the set (e.g. adding `grok`) is a one-line edit
@@ -23,7 +23,7 @@ import type { ArtifactMeta } from "../server/frontmatter.js";
 // this introduces no import cycle.
 import { CODING_AGENTS } from "../types.js";
 
-export type { ArtifactMeta } from "../server/frontmatter.js";
+export type { ArtifactMeta, TaskMeta } from "../server/frontmatter.js";
 
 // ---- shared value shapes (mirror the carried-over scheduler types) ----
 
@@ -161,7 +161,10 @@ export const loops = pgTable(
     /** Execution machine (set at creation; no cross-machine fallback). */
     machineId: text("machine_id").notNull(),
     name: text("name"),
-    cron: text("cron").notNull(),
+    /** Schedule, or NULL ⇒ an inert task (a "loop" is just a task with cron set).
+     *  The scheduler skips cron-null rows entirely; run-now still works via the
+     *  one-shot `nextRunAt` path. Setting/clearing this is the arm/disarm lever. */
+    cron: text("cron"),
     /** IANA tz the cron is interpreted in (e.g. "Asia/Shanghai"). Null ⇒ server local (UTC in prod). */
     timezone: text("timezone"),
     /** Absolute project dir ON THE MACHINE the agent runs in (cwd). Null ⇒ daemon scratch dir. */
@@ -173,6 +176,12 @@ export const loops = pgTable(
     taskFileContent: text("task_file_content"),
     /** When `taskFileContent` was last synced from the machine (ISO). */
     taskFileSyncedAt: text("task_file_synced_at"),
+    /** Parsed task front-matter subset of `taskFileContent` (slug/status/priority/
+     *  parent/…) — the task-tree index. Derived at the updateLoop/createLoop write
+     *  chokepoint whenever taskFileContent lands (mirror of `blobs.meta`: a pure
+     *  function of content, parsed once at ingress). The FILE is the source of
+     *  truth; this row is a read index. Old rows stay null — zero backfill. */
+    taskMeta: jsonb("task_meta").$type<TaskMeta>(),
     /** Zero-LLM pre-filter JS (authored by human / evolve). Runs on the machine. */
     workflow: text("workflow"),
     /** Generative-UI template (authored by evolve; sanitized at render). */
@@ -312,6 +321,35 @@ export const runLeases = pgTable(
   // terminalizeLease targets by runId; the loop cascade deletes by loopId.
   (t) => [index("run_leases_run_idx").on(t.runId), index("run_leases_loop_idx").on(t.loopId)],
 );
+
+// ---- review_marks: "seen it" state for the review queue (F7) ----
+//
+// A run flags a product for human eyes via front-matter `status: needs-review`
+// (indexed into blobs.meta at byte ingress). The human's dismissal is SERVER-side
+// view state — never written back into the artifact's front matter, because the
+// file is machine-authored and the next sync would resurrect the flag (the
+// two-writers rule). Keyed to the CONTENT hash: dismissing clears the item until
+// the file's content changes, at which point it re-surfaces (a redrafted reply
+// deserves fresh eyes). Rows are tiny and pruned with their loop (deleteLoop
+// cascade).
+
+export const reviewMarks = pgTable(
+  "review_marks",
+  {
+    id: text("id").primaryKey(),
+    loopId: text("loop_id").notNull(),
+    /** The artifact's loop-relative path (artifact_files.path). */
+    path: text("path").notNull(),
+    /** Content hash the dismissal applies to — new content ⇒ new review. */
+    hash: text("hash").notNull(),
+    /** Who dismissed (email under the gate; "shared" in open mode). */
+    actor: text("actor").notNull(),
+    at: text("at").notNull(),
+  },
+  (t) => [uniqueIndex("review_marks_loop_path_hash_idx").on(t.loopId, t.path, t.hash)],
+);
+
+export type ReviewMark = typeof reviewMarks.$inferSelect;
 
 // ---- connect_keys: a minted connect-key's owner + team binding (durable) ----
 //
@@ -525,8 +563,65 @@ export type NewRunSnapshot = typeof runSnapshots.$inferInsert;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type ConnectKeyRow = typeof connectKeys.$inferSelect;
 
+/** The typed event vocabulary — one append-only stream per task/loop. The
+ *  Timeline is a RENDER of this stream (web pane, CLI --log, prompt context are
+ *  three renders of the same rows); it is never an authored document. */
+export const EVENT_TYPES = ["note", "status-changed", "assignee-changed", "doc-updated", "run-started", "run-returned"] as const;
+export type EventType = (typeof EVENT_TYPES)[number];
+
+/** Append-only per-node event stream. Rows are immutable once written — there
+ *  is no update path by design (a note can be superseded by another note, never
+ *  edited). `runId` links events emitted during a run so the close endpoint can
+ *  synthesize the run record from them; null for session/owner events. */
+export const events = pgTable(
+  "events",
+  {
+    id: text("id").primaryKey(),
+    loopId: text("loop_id").notNull(),
+    /** Nullable run linkage: stamped by run-credential chokepoints. */
+    runId: text("run_id"),
+    type: text("type", { enum: EVENT_TYPES }).notNull(),
+    /** Actor reference — an email, an executor/agent label, or "system". */
+    actor: text("actor").notNull(),
+    at: text("at").notNull(),
+    /** Human text (a note's body; a status change's evidence note). Clipped at
+     *  the wire boundary (MESSAGE_CAP) — row-bloat budget, not security. */
+    text: text("text"),
+    /** Typed payload (e.g. {from,to} for status-changed). */
+    data: jsonb("data").$type<Record<string, unknown>>(),
+  },
+  (t) => [index("events_loop_at_idx").on(t.loopId, t.at), index("events_run_idx").on(t.runId)],
+);
+
+export type EventRow = typeof events.$inferSelect;
+export type NewEvent = typeof events.$inferInsert;
+
+/** The executor registry: one row per (machine × detected runtime), auto-created
+ *  from the daemon's poll-reported runtime list and auto-named. Agents are the
+ *  sole ASSIGNABLE executor concept — devices are infrastructure behind them.
+ *  Presence derives from the machine; loops keep their (machineId, runtime)
+ *  columns and resolve through this registry (no FK re-keying until personas). */
+export const agents = pgTable(
+  "agents",
+  {
+    /** Natural key `<machineId>:<runtime>` — auto-registration is idempotent. */
+    id: text("id").primaryKey(),
+    machineId: text("machine_id").notNull(),
+    runtime: text("runtime", { enum: CODING_AGENTS }).notNull(),
+    /** Addressable handle (assignee=<slug>), auto-derived, stable. */
+    slug: text("slug").notNull(),
+    /** Display name — renamable (`loopany team rename <agent> "<name>"`). */
+    name: text("name").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("agents_machine_idx").on(t.machineId), index("agents_slug_idx").on(t.slug)],
+);
+
+export type AgentRow = typeof agents.$inferSelect;
+
 /** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, connectKeys };
+export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, connectKeys, events, agents };
 
 // Keep a default no-op SQL reference so `sql` import isn't flagged before use.
 export const _schemaVersion = sql`1`;

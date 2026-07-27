@@ -1,17 +1,23 @@
-# Create a loop
+# Create a task (and optionally make it a loop)
 
-This machine is already connected — `loopany up` on first capture (see `bootstrap.md`)
-or the daemon that's been running since. Decide what to build, author it, create it.
-Use the **loopany-cli** prefix the user pasted (default `npx @crewlet/loopany@latest`)
-and, on the first-capture path, the **connect-key** from the capture snippet.
+This machine is already connected — `loopany daemon up` on first capture (see
+`bootstrap.md`) or the daemon that's been running since. Decide what to build,
+author it, create it. Use the **loopany-cli** prefix the user pasted (default
+`npx @crewlet/loopany@latest`) and, on the first-capture path, the **connect-key**
+from the capture snippet.
+
+Everything here creates a **task**: a folder (`<slug>/README.md` + artifacts
+beside it) registered in the owner's task tree. A task with `cron` set is a
+**loop** — it runs on schedule; without one it's inert tracked work. Recurrence
+is a field you can add or remove later (`loopany update <id> cron=…`).
 
 ## 1 · Decide what to build
 
-A loop only makes sense with a real task behind it. Read the session you're in and
+A task only makes sense with real intent behind it. Read the session you're in and
 pick the starting point:
 
 - **The user already did a clear task this session** (the common case — they just
-  finished something and want it to keep happening). Turn *that task* into the loop:
+  finished something and want it captured or recurring). Turn *that* into the task:
   recap it in one line, then build around the real URLs, paths, commands, and
   thresholds from what you just did together.
 - **The capture snippet itself carries a task description** (the user started from a
@@ -27,19 +33,23 @@ pick the starting point:
     only when it's down."
   - "Iterate on <the failing test suite> until it's green, then finish."
 
-Only continue once there's a real intent — the task already in this session, or the
-loop the user picked.
+**Dedup and place before you create.** Run `loopany search <keywords>` (it looks
+across ALL the user's devices, not just this one) — a similar
+task may already exist (update it instead of duplicating). Then pick the parent:
+`loopany list` shows the tree; a new experiment/task usually hangs under the
+strategy or goal it serves (`--parent <slug>`). A node with no parent is a
+top-level goal. Only continue once there's a real intent and a chosen place.
 
 ## 2 · Settle cadence, output, and the finish line
 
-**Never silently guess** how often the loop runs or what each run produces. Reason
+**Never silently guess** how often a loop runs or what each run produces. Reason
 out sensible defaults for *this specific task*, propose them in plain language in
 one short message, and get a yes (or an adjustment) before you create — **propose →
-confirm → build**.
+confirm → build**. (An inert, non-recurring task needs none of this — just create it.)
 
 - **Cadence.** Propose a schedule that fits the task: a daily digest → "every day at
   9am your time"; a monitor → "every hour"; a weekly roundup → "Monday mornings".
-  State it in human terms; you turn it into cron in §4.
+  State it in human terms; it becomes the `cron` field in §4.
 - **Per-run output.** Propose a concrete artifact or message format: "a short markdown
   summary in `report.md`", "a one-line status, alert only when something looks off",
   "an article at `articles/<date>.md`". This becomes the Spec + notify rule.
@@ -78,12 +88,11 @@ suite is green — sound good?"* — so the user confirms in one reply. (This pa
 §1: no task → ask first; loose parameters → propose and confirm. Quick check-ins,
 not an interview.)
 
-## 3 · Create the loop's folder and task file
+## 3 · Create it, then write the real Spec
 
-Every loop gets its **own folder** under the project: `<project>/loopany/<slug>/`
-(make it if needed; pick a short `<slug>` from the loop name). Its task file lives
-there, and by default the lightweight products it produces (reports, exports, dashboard
-`ui`, small artifacts) land there too, so its output stays self-contained.
+Every task gets its **own folder** (`<slug>/README.md` + artifacts beside it), and by
+default the lightweight products it produces (reports, exports, dashboard `ui`, small
+artifacts) land there too, so its output stays self-contained.
 
 **This folder is a synced content home, not a scratch workspace.** The daemon
 continuously syncs it to the server, so heavy work products MUST live elsewhere: when a
@@ -93,37 +102,51 @@ temp dir) and writes only the finished report/artifact back in. Author the Spec 
 naturally keep bulk out — e.g. *"do the fix in a git worktree created outside this loop
 folder"*, never inside it. A repo checkout dropped in the loop folder floods the sync.
 
-Write the **task file** at `<project>/loopany/<slug>/README.md` — the loop's durable
-brief and running memory. Each scheduled run reads it for context and maintains it
-(see `evolve.md`). Fill it from what we ACTUALLY just did — real URLs, paths,
-commands, thresholds:
+`loopany create` scaffolds the folder + README and registers the task in one step
+(idempotent on the slug; a fuzzy-duplicate title warns unless `--force`):
 
-```markdown
-# <Loop name>
-
-## Spec
-What this loop checks or does and why, plus the concrete steps / commands /
-endpoints / files involved — the real ones from this session. State when to message
-the user vs. stay silent. If the loop writes markdown products, state their
-front-matter convention here too: the fixed `type:` vocabulary this loop uses and
-whether products carry a `date:` (see §2). For a goal-driven (closed) loop, open the
-Spec with a sentence or two restating the mission and the finish line — prose only;
-the authoritative, checkable setpoint lives in the config `goal`, not here. There is
-NO `## Goal` section.
-
-## Current understanding
-The baseline / known state / open issues — what the loop currently expects. Seed it
-with what we established this session; each run updates it.
-
-## Timeline
-<!-- one dated entry per run, appended below by the loop -->
+```bash
+<loopany-cli> create "Reddit AI-citation brief" \
+  --parent acquisition --type experiment --priority P1 \
+  --cron "0 5 * * *" \
+  --json '<envelope from §4 — for goal/workflow/ui etc.>'
 ```
 
-Keep the absolute path to `README.md` — it goes in the config as `taskFile`.
+`--cron` is what makes it a **loop** — omit it (and any envelope `cron`) for an
+inert task with no schedule. A simple daily loop needs nothing but the title and
+`--cron`; reach for `--json` only when the envelope carries more (goal, workflow,
+dashboard). `--assignee <email>` records the responsible person in the front
+matter (handing the task to an agent-on-a-device is a post-create step:
+`loopany update <id> assignee=<machine>/<agent>`, see `update.md`).
 
-## 4 · Author the loop config
+It prints the created folder (default `~/loopany/<slug>/`; override the root with
+`LOOPANY_TASKS_DIR`). The scaffolded `README.md` is the task's durable brief and
+running memory — front-matter work-state on top, then the three sections every run
+maintains:
 
-A loop fires on a cron schedule. Each run is **either**:
+```markdown
+---
+id: <slug>            title: <name>       type: goal|strategy|experiment|task|idea
+status: idea|todo     priority: P0-P3     parent: <parent slug>
+---
+
+## Spec
+## Current understanding
+## Timeline
+```
+
+**Now open that README and replace the placeholder `## Spec`** with the real brief
+from this session — concrete URLs, paths, commands, thresholds; when to message the
+user vs. stay silent; the product front-matter convention from §2 if the loop writes
+markdown. Seed `## Current understanding` with what you established this session.
+For a goal-driven (closed) loop, open the Spec with a sentence or two restating the
+mission and the finish line — prose only; the authoritative, checkable setpoint
+lives in the `goal` field, not here. There is NO `## Goal` section. The file syncs
+automatically; it is the task's source of truth.
+
+## 4 · The envelope (`--json`) — only for a RECURRING task
+
+The envelope carries the execution fields. Each scheduled run is **either**:
 
 - **workflow** *(preferred when the task is deterministic — zero-LLM, cheap)*: a JS
   **function body** run in Node with global `fetch`, a `prev` cursor (the last run's
@@ -158,7 +181,7 @@ A workflow is **NOT an ES module** and **not the Claude Code `Workflow` tool**. 
 parse error that fails the whole run before any line executes. Need a module? Use
 dynamic `await import('node:os')`. There is no `require`. The server parse-checks
 the body at write time and rejects a bad one with this same guidance — a rejected
-`loopany new`/`edit`/`set-workflow` means fix the syntax.
+`loopany create`/`update` means fix the syntax.
 
 **Canonical example** (the whole surface — no header, no imports):
 
@@ -170,17 +193,14 @@ agent("summarize what changed", rows);                            // escalate to
 return { message: `${rows.length} rows`, state: { count: rows.length } };
 ```
 
-Author the config **inline** and pass it to `loopany new --json` (§5) — no config
-file to write. Only the loop's real intent goes in it; the CLI fills the envelope:
+The envelope keys (pass only what applies — the CLI fills identity/paths):
 
 ```json
 {
-  "name": "short human name",
   "cron": "m h dom mon dow",
-  "workflow": "<JS function body>",
   "goal": "<one-line checkable finish line — omit for a monitor loop>",
-  "workdir": "<absolute project dir>",
-  "taskFile": "<absolute path to the task file above>",
+  "workflow": "<JS function body>",
+  "workdir": "<absolute dir runs execute in — defaults to the task's folder>",
   "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
   "ui": "<small dashboard HTML — optional; see 'Dashboard at create' below>",
   "notify": "auto"
@@ -188,10 +208,6 @@ file to write. Only the loop's real intent goes in it; the CLI fills the envelop
 ```
 
 Rules:
-- Include **`workflow` or `taskFile`** (or both, if the workflow escalates to the
-  agent). There is no `task` field — the agent's brief is the task file, so set
-  `workdir` + `taskFile` for any agent loop. Make any `workflow` self-contained and
-  defensive (handle fetch failures).
 - **`goal` makes the loop closed**: with a goal set, each run judges it and calls
   `loopany finish` when met, ending the loop. Omit `goal` for a monitor/digest loop
   that runs indefinitely (§2).
@@ -199,9 +215,12 @@ Rules:
 - `ui` is optional — the loop's dashboard panel as small HTML (see **Dashboard at
   create** below).
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
-- **Don't add `timezone`, `claim`, or any auth** — `loopany new` injects the
-  timezone, the connect-key claim, and this machine's device token. (If the user
-  states a different zone, pass `--tz <IANA>` in §5.)
+- **Don't add `timezone` or any auth** — the CLI injects the timezone and this
+  machine's device token. (If the user states a different zone, put
+  `"timezone": "<IANA>"` in the envelope.)
+- **First-capture path only** (bootstrap.md): also put the pasted connect-key and
+  your agent identity in the envelope — `"claim": "<connect-key>",
+  "agent": "claude-code"` — so the waiting web dialog learns the loop was created.
 
 ### Dashboard at create — when the product shape is already known
 
@@ -226,37 +245,32 @@ with the user, rather than composing a dashboard from scratch.
 
 ## 5 · Validate, then create
 
-Preview first with `--dry-run` — the server validates the config and echoes the
-normalized envelope, detected timezone, the next 3 fire times, and the open/closed
+Preview with `--dry-run` first — the server validates the envelope and echoes the
+normalized config, detected timezone, the next 3 fire times, and the open/closed
 classification, persisting nothing:
 
 ```bash
-<loopany-cli> new --json '<config>' --dry-run
+<loopany-cli> create "<title>" --parent <slug> --json '<envelope>' --dry-run
 ```
 
-Check the classification matches your intent (a `goal` → `closed: will self-finish`;
 no goal → `open: runs until paused`) and the fire times look right. `workflow` and
 `ui` are echoed as presence flags (`yes`/`no`), not their source — if you authored a
 `ui` and the preview says `ui: no` (plus a warning), it validated to nothing; fix the
-HTML before creating. Then create for real — pass the connect-key so the web dialog
-learns the loop was created, and declare which coding agent you are:
+HTML before creating. Then create for real (drop `--dry-run`). On success the task
+appears in the tree (`loopany list`) and — when it has a cron — runs once immediately;
+if a `ui` was dropped the response still carries a `loopany: warning:`, so re-check and
+push a fix with `loopany update <id> --ui-file <path>` (`update.md`). On `loopany:
+<error>`, fix and re-run (create is idempotent on the slug — a retry never duplicates).
 
-```bash
-<loopany-cli> new \
-  --json '<config>' \
-  --connect-key <connect-key> \
-  --agent claude-code          # which coding agent you are (claude-code | codex | grok); omit to auto-detect
-```
+Finally, tell the user it's created (name + cadence if recurring) and — for a loop —
+that the first run comes automatically shortly; point them at the Loopany web UI
+(the Tasks page shows the tree; the loop page shows runs) to watch for the result.
 
-`loopany new` detects the IANA timezone, injects the claim, records the coding agent
-(the `--agent` you pass, or — preferred — the host it sniffs from its own env),
-authenticates, validates, and POSTs it. On success it prints `created loop <name> —
-<cron> <timezone>`; the loop now appears in the web UI and runs on schedule. If the
-config carried a `ui`, it also prints `dashboard ui: applied` — `not applied` plus a
-`loopany: warning:` means the dashboard was dropped (the loop was still created);
-fix the HTML and push it with `loopany edit <id> --ui-file <path>` (`update.md`).
-(For a large inline config, `--json -` reads it from stdin.) On `loopany: <error>`,
-fix the config and re-run.
+## Cloud-born tasks
 
-Finally, tell the user it's created (name + cadence) and that the first run comes
-automatically shortly — point them at the Loopany web UI to watch for the result.
+`loopany create "<title>"` births the task in the CLOUD — no local folder or
+README is written. Seed the brief with `--spec "<text>"` or `--spec-file <path>`
+(the doc's `## Spec`). The task's folder appears lazily when a run first writes
+artifacts into it. Attach external material with `refs:` in the work-state
+(URLs, tickets, repo paths) instead of copying files — state gets a row; bytes
+stay files.

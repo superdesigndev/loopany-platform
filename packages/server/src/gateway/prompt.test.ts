@@ -135,7 +135,7 @@ test("evolve task inlines a COMPACT run survey: keys not values, clipped message
 
 test("edit task turn is a short CORE: apply one change, don't run/finish, report", () => {
   const t = buildEditTask(loop(), "run at 9am on weekdays");
-  // The edit CORE contract: ONE change, don't run the task, don't finish, then report.
+  // The edit CORE contract: ONE change, don't run the task, don't finish, then done.
   expect(t).toMatch(/ONE owner-requested change/i);
   expect(t).toMatch(/NOT\s+running the loop's normal task/i);
   expect(t).toMatch(/do NOT finish the loop/i);
@@ -167,7 +167,7 @@ test("edit task keeps the current ui/workflow inlined (config, not history — �
 // is now empty so the daemon's `--append-system-prompt-file` becomes a harmless
 // no-op on every existing daemon (design §5.2) — this ships server-first, no daemon
 // change. These assertions lock that move: an empty system prompt, and the full CORE
-// (identity + untrusted-data guard + non-negotiable fallback core + report grammar +
+// (identity + untrusted-data guard + non-negotiable fallback core + done grammar +
 // per-run trigger + skill pointer) carried in the user turn.
 test("exec system prompt is empty (instructions moved to the user turn)", () => {
   expect(buildLoopSystemPrompt(loop())).toBe("");
@@ -209,7 +209,7 @@ test("exec task keeps the untrusted-data guard prominent in the user turn", () =
 });
 
 test("exec task report grammar is schema-derived (stateLine)", () => {
-  // No schema → a plain report line with no metrics grammar; points at defining a schema.
+  // No schema → a plain done line with no metrics grammar; points at defining a schema.
   const open = buildExecTask(loop());
   expect(open).toContain("loopany report --status new");
   expect(open).toContain("no metric schema");

@@ -67,7 +67,7 @@ async function boot(): Promise<Booted> {
   // GC bytes the other half just wrote.
   const blobStore = createBlobStore();
   gateway = new MachineGateway(scheduler, blobStore);
-  const artifactSync = new ArtifactSync(blobStore);
+  const artifactSync = new ArtifactSync(blobStore, (loopId, content) => gateway.ingestTaskFileContent(loopId, content));
   // CLI verb dispatch (unified /api/machine/cli + legacy /agent-api/loop) over
   // the same core gateway instance.
   const cliGateway = new CliGateway(gateway);

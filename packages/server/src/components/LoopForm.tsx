@@ -39,7 +39,8 @@ export interface LoopFormHandle {
 /** Loose seed accepted by the form — a full job (edit) or a partial draft (create). */
 export interface LoopFormSeed {
   name?: string
-  cron?: string
+  /** Null ⇒ a cron-less task; the form seeds its default schedule instead. */
+  cron?: string | null
   taskFile?: string
   notify?: string
   channelId?: string | null
@@ -69,7 +70,9 @@ function initState(initial?: LoopFormSeed): FormState {
   const e = initial?.exec
   return {
     name: initial?.name ?? '',
-    cron: initial?.cron ?? '0 */3 * * *',
+    // Explicit null = an inert (manual) task — show it as empty/manual, never
+    // seed the create-flow default over it. Undefined = a fresh draft → default.
+    cron: initial?.cron === null ? '' : (initial?.cron ?? '0 */3 * * *'),
     taskFile: initial?.taskFile ?? '',
     notify: initial?.notify ?? 'auto',
     channelId: initial?.channelId ?? '',
@@ -169,7 +172,8 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
         }
         return {
           name: f.name.trim(),
-          cron: f.cron.trim(),
+          // Empty = manual (no schedule) — persist as null, never as ''.
+          cron: f.cron.trim() || null,
           taskFile: f.taskFile.trim(),
           notify: f.notify,
           channelId: f.channelId || null,

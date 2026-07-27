@@ -83,7 +83,7 @@ export function LoopCard({
         )}
         {!completed && !en && <Pill>Paused</Pill>}
         <div className="ml-auto whitespace-nowrap text-meta text-secondary">
-          <span className="text-primary" title={job.cron}>
+          <span className="text-primary" title={job.cron ?? undefined}>
             {cronText(job.cron)}
           </span>
           <span className="mx-2.5 text-wire">·</span>

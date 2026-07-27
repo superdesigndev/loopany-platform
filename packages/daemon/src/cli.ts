@@ -84,6 +84,27 @@ async function main(): Promise<number> {
       return (await import("./callback.js")).runCallback(r.argv);
     case "home":
       return (await import("./home.js")).runHome();
+    case "task": {
+      const tasks = await import("./tasks.js");
+      switch (r.verb) {
+        case "create": return tasks.runTaskCreate(r.args);
+        case "get": return tasks.runTaskGet(r.args);
+        case "list": return tasks.runTaskList(r.args);
+        case "search": return tasks.runTaskSearch(r.args);
+        case "update": return tasks.runTaskUpdate(r.args);
+        case "mv": return tasks.runTaskMv(r.args);
+        case "run": return tasks.runTaskRun(r.args);
+        case "review": return tasks.runTaskReview(r.args);
+      }
+      return 2;
+    }
+    case "task-delete":
+      process.stderr.write("loopany: tasks are never deleted — set `status: archived` in the task's README instead (loopany update <id> status=archived)\n");
+      return 2;
+    case "agent-context":
+      return (await import("./agent-context.js")).runAgentContext();
+    case "daemon-group":
+      return (await import("./daemon-cli.js")).runDaemonGroup(r.args);
     case "unknown":
       process.stderr.write(`loopany: unknown command '${r.verb}' — try \`loopany --help\`\n`);
       return 2;

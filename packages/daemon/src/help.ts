@@ -15,46 +15,66 @@
  */
 import { daemonVersion } from "./version.js";
 
-const HELP_BODY = ` connects this machine to a Loopany
-server and runs your scheduled agent loops locally with your own coding agent.
+const HELP_BODY = ` tracks your work as a task tree and
+runs the recurring parts on this machine with your own coding agent. Every task
+is a folder (README + artifacts); a task with cron set is a loop.
 
-Usage: loopany [command] [options]
+Usage: loopany <command> [options]
 
-  loopany                 Show the content-first HOME: this machine's live loops +
-                          recent runs (the poll loop moved to \`up --foreground\`).
+  loopany                 HOME: this machine's live loops + recent runs.
 
-Setup
+Machinery
   up [--foreground]       Connect this machine / ensure its daemon is running
                           (idempotent; refreshes the loopany skill, the SessionStart
                           hook, and the \`loopany\` PATH shim). --foreground runs the
                           poll loop attached in this terminal instead of detached.
-  new --json '<config>'   Create a loop from an inline JSON config (--json - reads
-    [--dry-run]           stdin). --dry-run validates + previews, creates nothing.
-  setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
-                          view as ambient context each session (--remove uninstalls).
+  down                    Stop the detached daemon this machine started with up.
+  status                  Is this machine's daemon running? Show pid + connection.
+  update                  Update this machine's daemon to the version you invoked
+                          (run via npx @crewlet/loopany@latest update).
   skill [status|install]  Manage the loopany agent skill install (user scope by
     [--project]           default; --project installs into the current directory).
-  update                  Update this machine's daemon to the version you invoked
-                          (run via npx @crewlet/loopany@latest update): stops the
-                          running daemon, starts the new one, refreshes the skill/hook/shim.
+  setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
+                          view as ambient context each session.
 
-Management
-  status                  Is this machine's daemon running? Show pid + connection.
-  down                    Stop the detached daemon this machine started with up.
-  show [<id>]             Show a loop's full editable config + recent state (the
-                          device credential inspects any loop on this machine).
-  log [<loop>]            Show a loop's recent runs (concise: status + metrics +
-    [--transcript]        session id; --transcript/--full adds the transcript).
-                          Defaults to the loop for the current directory (--json,
-                          --limit N).
+Read
+  list [<id|slug>]        The tree (no filters, depth 2) or a filtered
+    [--status S] [--priority Px] [--due] [--recurring]
+    [--tree|--flat] [--depth N] [--here] [--team <id>]  worklist with breadcrumb paths.
+                          Team-wide by default; --here = this machine only.
+  get <id|slug>           One task in full + its children. --checkout writes a
+    [--runs [--limit N] [--transcript]] [--json] [--log] [--checkout]
+                          local working copy (<slug>.md + .base) for doc edits.
+  search <keywords>       Full-text search — dedup BEFORE creating.
+  note <ref> "<text>"     Append an immutable comment event to a task — from any
+                          machine; the record the Timeline renders from.
+  team                    Who can work here: teammates (humans) + registered
+                          agents (machine × runtime) with presence — the roster
+                          assignee= accepts. \`team rename <agent> "<name>"\`.
+  log [<loop>]            A loop's recent runs (status + metrics + session id;
+    [--transcript]        --transcript/--full adds the transcript). Defaults to
+                          the loop for the current directory (--json, --limit N).
 
-Interactive (edit loops from your own agent session, using the stored device token)
-  loops [--fields a,b]    List your loops (--json emits the raw JSON array).
-    [--json]              Default columns are id/name/cron/enabled/nextFire;
-                          --fields adds any of timezone,notify,model,goal,
-                          taskFile,runs,lastOutcome.
-  edit <id> --json '<obj>'  Edit a loop (JSON-only + --workflow-file/--ui-file/
-    [--dry-run]           --schema-file; --dry-run previews before/after).
+Write
+  create "<title>"        Start a task in the cloud (no local files — artifacts
+    [--cron "0 9 * * *"]  land in <root>/<slug>/ when a run writes them).
+    [--parent <slug>] [--type goal|strategy|experiment|task|idea]
+    [--priority P0-P3] [--status idea|todo] [--spec "…"|--spec-file <p>]
+    [--assignee <email>] [--json '<envelope>'] [--dry-run] [--force]
+                          Idempotent on slug. --cron makes it a LOOP;
+                          without it, an inert task.
+  update <id> [k=v …]     Change fields: work-state (status/priority/parent/
+    [--note "<line>"]     follow_up_date/…) edits the README; envelope keys
+    [--dry-run]           (cron/tz/notify/goal/enabled/…) go to the server.
+                          cron="0 9 * * 1" arms the schedule; cron=null stops it.
+                          assignee=<email> sets the responsible person;
+                          assignee=<agent> hands the task to a registered agent
+                          (\`loopany team\` lists them; auto-dispatches at status todo).
+                          --note appends a dated, attributed Timeline line.
+  run <id> [--wait]       Dispatch an agent at this task NOW (any task).
+
+Tasks are never deleted: \`update <id> status=archived\` is the terminal state.
+Older spellings (new, edit, show, loops, mv) still work as silent aliases.
 
   -h, --help              Show this help.
   -v, --version           Print the daemon version and exit.
@@ -69,18 +89,38 @@ Interactive (edit loops from your own agent session, using the stored device tok
  * degrades to the full usage screen rather than throwing.
  */
 const VERB_USAGE: Record<string, string> = {
+  review: `loopany review [--json]
+  The cross-loop worklist: artifacts runs flagged \`status: needs-review\`,
+  minus what you've marked reviewed.
+  loopany review clear <task> <path>   marks one handled (re-surfaces if the
+  file's content changes later).`,
   up: "loopany up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  loopany skill, the SessionStart hook, and the PATH shim). --foreground runs the\n  poll loop attached in this terminal instead of detached.",
-  new: "loopany new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing.",
   skill: "loopany skill [status|install] [--project]\n  Manage the loopany agent skill install (user scope by default; --project installs\n  into the current directory).",
   setup: "loopany setup hooks [--remove]\n  Install/refresh (or --remove) the SessionStart hook that lands the home view as\n  ambient context each session.",
-  update: "loopany update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.",
+  update: "loopany update            (daemon self-update; `loopany update <id> …` updates a TASK)\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.\n\nloopany update <id|slug> [key=value …] [--note \"<timeline line>\"] [--dry-run]\n  Change a task's fields: work-state (status/priority/parent/follow_up_date/…) edits\n  the README; envelope keys (cron/tz/notify/goal/enabled/…) go to the server.\n  cron=\"0 9 * * 1\" arms a schedule; cron=null stops it. assignee=<email> sets the\n  responsible person; assignee=<agent> re-binds the task to a registered agent\n  (`loopany team` lists them; <machine>/<runtime> also accepted) and auto-dispatches\n  once when it sits at status todo. --note appends a dated, attributed Timeline line.\n  --doc-file <path> pushes a doc working copy back (from `get --checkout`; sent alone,\n  guarded by the checkout's base hash — a conflict returns the server diff).",
   status: "loopany status\n  Report whether this machine's daemon is running (local pid) + its connection state.",
   down: "loopany down\n  Stop the detached daemon this machine started with `up`.",
   log: "loopany log [<loop>] [--transcript|--full] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
-  show: "loopany show [<id>] [--full] [--json]\n  Show a loop's full editable config + recent state (the device credential inspects\n  any loop on this machine).",
-  loops: "loopany loops [--fields a,b] [--json]\n  List your loops (--json emits the raw JSON array). Default columns are\n  id/name/cron/enabled/nextFire.",
-  edit: "loopany edit <id> --json '<obj>' [--dry-run] [--workflow-file|--ui-file|--schema-file <path>]\n  Edit a loop (JSON-only + content-file trio). --dry-run previews before/after.",
-  report: "loopany report ...\n  In-run only: the running agent reports progress/results. Outside a run this is rejected.",
+  // Canonical task-object verbs.
+  create:
+    'loopany create "<title>" [--cron "0 9 * * *"] [--parent <slug>] [--type goal|strategy|experiment|task|idea] [--priority P0-P3] [--status idea|todo] [--assignee <email>] [--spec "…"|--spec-file <p>] [--json \'<envelope>\'] [--dry-run] [--force]\n  Start a task in the cloud (no local files; artifacts land in <root>/<slug>/ when a\n  run writes them). Idempotent on slug. --cron makes it a LOOP (runs on a schedule); without it, an inert task.\n  --assignee records the responsible PERSON; handing it to an agent is a\n  post-create step: loopany update <slug> assignee=<agent> (see `loopany team`).',
+  get: "loopany get <id|slug> [--runs [--limit N] [--transcript]] [--json] [--log] [--checkout]\n  One task in full + its immediate children. --checkout writes <slug>.md + a .base\n  sidecar (the doc working copy); push edits back with update --doc-file.",
+  list: "loopany list [<id|slug>] [--status S] [--priority Px] [--due] [--recurring] [--tree|--flat] [--depth N] [--here] [--team <id>]\n  The tree (no filters, depth 2) or a filtered worklist with breadcrumb paths.",
+  search: "loopany search <keywords>\n  Full-text search over titles + task files — dedup BEFORE creating.",
+  run: "loopany run <id|slug> [--wait]\n  Dispatch an agent at this task NOW (any task; --wait polls until the run ends).",
+  mv: "loopany mv <id|slug> --before <sib> | --after <sib> | --top | --bottom | --priority Px\n  Reorder within the (parent, priority) band.",
+  "agent-context": "loopany agent-context\n  Machine-readable verbs/fields/enums (JSON) for agent consumption.",
+  daemon: "loopany daemon up|down|status|update\n  Grouped spellings of the machinery verbs (same behavior).",
+  // Hidden aliases — kept working forever, absent from the main help screen.
+  new: 'loopany new --json \'<config>\' [--dry-run]\n  Alias of `create` — prefer: loopany create "<title>" --cron "…" [--json \'<envelope>\'].',
+  edit: "loopany edit <id> --json '<obj>' [--dry-run] [--workflow-file|--ui-file|--schema-file <path>]\n  Alias of `update` — prefer: loopany update <id> key=value … (same envelope keys).",
+  show: "loopany show [<id>] [--full] [--json]\n  Alias of `get` — shows a loop's full editable config + recent state.",
+  loops: "loopany loops [--fields a,b] [--json]\n  Alias of `list --recurring` — lists the scheduled loops.",
+  // Run-only verbs (rejected outside a run).
+  note: 'loopany note <ref> "<text>"\n  Append one immutable comment event to a task (any of your machines; team-scoped).\n  In a run, `loopany note "<text>"` notes the run\'s own task.',
+  team: 'loopany team [--json]\n  The roster: teammates (humans, `assignee: <email>` in the README) + registered\n  agents (machine × runtime, `update <id> assignee=<agent>`) with presence.\n  `loopany team rename <agent> "<name>"` relabels an agent (its slug stays stable).',
+  report: "loopany report ...\n  In-run only: the run's terminal record (status + message + metrics). Outside a run this is rejected.",
+  done: "loopany done ...\n  In-run only alias of `report`. Outside a run this is rejected.",
   finish: "loopany finish ...\n  In-run only: the running agent marks a closed loop's goal met. Outside a run this is rejected.",
   complete: "loopany complete ...\n  In-run only alias of `finish`. Outside a run this is rejected.",
 };

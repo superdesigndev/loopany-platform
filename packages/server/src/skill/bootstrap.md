@@ -10,8 +10,8 @@ This bootstrap doc is served over HTTP on first contact, before the loopany skil
 installed on disk. Do the two steps below, then hand off to the create reference,
 which owns everything from "what should this loop be?" onward. (`loopany up`
 installs the skill at USER scope for each coding agent loopany knows about (Claude
-Code `~/.claude/skills/loopany/`, Codex `~/.agents/skills/loopany/`) and `loopany
-new` refreshes it, so a later session in ANY folder on this machine auto-triggers the
+Code `~/.claude/skills/loopany/`, Codex `~/.agents/skills/loopany/`) and refreshes it
+on later connects, so a later session in ANY folder on this machine auto-triggers the
 installed skill and reads the same references from disk.)
 
 ## The pasted values
@@ -60,12 +60,11 @@ The skill isn't on disk yet, so fetch it over HTTP from the **server-url**:
 
 Follow it from its §1: it decides *what* loop to build (the task already in this
 session, or — if the session is empty — brainstorming loops for this project and
-letting the user pick), settles the cadence and per-run output, authors the loop's
-task file and config, and runs `loopany new`. Pass the **connect-key** as
-`--connect-key` so the created loop resolves back to the web dialog, and declare
-which coding agent you are with `--agent claude-code` (or `--agent codex` / `--agent grok`).
-create.md carries the flow through to telling the user it's live — you don't need
-to add anything here.
+letting the user pick), settles the cadence and per-run output, authors the task's
+Spec and envelope, and runs `loopany create`. Put the **connect-key** and your
+agent identity in the envelope (`"claim": "<connect-key>", "agent": "claude-code"`)
+so the created loop resolves back to the waiting web dialog. create.md carries the
+flow through to telling the user it's live — you don't need to add anything here.
 
 ## Editing and evolving, later
 

@@ -23,7 +23,7 @@ If the loop has a **goal** (a closed loop working toward a finish line — the r
 Let that read *direct* the three levers below; it doesn't add a new one. (You still never call `finish` — you make the *next exec run* better able to judge and reach the goal.) Open/monitor loops have no goal and no convergence to assess — go straight to the levers.
 
 ## 1. The task — sharpen the loop's own brief  →  edit the task file on disk
-The task file (`loopany/<slug>/README.md`) is the loop's brief and running memory: `## Spec` (what it checks and when it speaks), `## Current understanding` (its live model of the world), and an append-only `## Timeline`. Normal runs keep it current by appending to the Timeline and nudging Current understanding. The evolution pass does the deeper thing a single run never steps back to do: **refactor the brief itself** against the whole recent history.
+The task file (the loop's folder `README.md`) is the loop's brief and running memory: front-matter work-state (`status`/`priority`/`parent`/… — the loop's node in the owner's task tree), `## Spec` (what it checks and when it speaks), `## Current understanding` (its live model of the world), and an append-only `## Timeline`. Normal runs keep it current by appending to the Timeline and nudging Current understanding. The evolution pass does the deeper thing a single run never steps back to do: **refactor the brief itself** against the whole recent history.
 
 Read the runs (survey them per the two lenses above, then deep-dive the sessions) and ask what they reveal about the Spec:
 - **Drift** — the runs keep doing something the Spec doesn't ask for, or keep ignoring something it does. Reconcile the Spec to what the loop has learned actually matters.

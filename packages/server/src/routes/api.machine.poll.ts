@@ -19,6 +19,8 @@ export const Route = createFileRoute('/api/machine/poll')({
           platform?: string
           arch?: string
           version?: string
+          /** Hostable coding-agent runtimes (sent on the daemon's first poll). */
+          agents?: string[]
           progress?: Array<{ runId: string; step: number; label: string }>
           /** Long-poll opt-in: hold the request until work arrives (bounded server-side). */
           wait?: boolean

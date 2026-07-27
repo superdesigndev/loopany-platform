@@ -27,7 +27,8 @@ const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
  * outside these common shapes falls back to the raw expression (shown verbatim,
  * with the literal cron always available on hover at the call site).
  */
-export function cronText(cron: string): string {
+export function cronText(cron: string | null): string {
+  if (!cron) return 'manual' // cron-null task — no schedule, dispatched on demand
   const p = (cron || '').trim().split(/\s+/)
   if (p.length !== 5) return cron
   const [mi, ho, dom, mon, dow] = p as [string, string, string, string, string]
@@ -90,23 +91,8 @@ export const tsShort = (t: string | null | undefined): string => {
 export const fnum = (n: number): string =>
   Math.abs(n) >= 1000 ? `${Math.round(n / 100) / 10}k` : `${Math.round(n * 100) / 100}`
 
-/**
- * Duration in ms → magnitude-aware: "45s" / "7m 30s" / "3h 0m" (empty for null/0).
- *
- * Runs legitimately last hours — a big agent task, or (commonly) a laptop that
- * slept mid-run, since durationMs is wall-clock. The old unconditional
- * `${seconds}s` rendered those as "10800s", which reads as noise rather than
- * three hours, so long runs were effectively invisible everywhere this is shown
- * (run page, loop card tooltip, timeline tooltip).
- */
-export const dur = (ms: number | null | undefined): string => {
-  if (!ms) return ''
-  const s = Math.round(ms / 1000)
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${s % 60}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
+/** Duration in ms → "Ns" (empty for null/0). */
+export const dur = (ms: number | null | undefined): string => (ms ? `${Math.round(ms / 1000)}s` : '')
 
 /** Run cost in USD → "$1.24" (sub-cent values keep a meaningful figure: "$0.004";
  *  empty for null/undefined — a zero-cost run still reads "$0.00"). */

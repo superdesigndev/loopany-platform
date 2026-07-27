@@ -16,10 +16,11 @@
  * shared ui/workflow/schema validators live in `gateway/validate.ts`.
  */
 import { Cron } from "croner";
+import { createTwoFilesPatch } from "diff";
 
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
-import type { CodingAgent, Loop, NewLoop, Run, RunArtifact, RunRole, RunUsage, TranscriptStep } from "../db/schema.js";
+import type { CodingAgent, EventRow, Loop, Machine, NewLoop, Run, RunArtifact, RunRole, RunStatus, RunUsage, TranscriptStep } from "../db/schema.js";
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
@@ -29,6 +30,9 @@ import { maintainStorage, type MaintainResult } from "./retention.js";
 import { machinePresence } from "../lib/machinePresence.js";
 import { loginGateEnabled } from "../lib/loginGate.js";
 import { snapshotRetention } from "../env.js";
+import { TASK_STATUSES, TASK_PRIORITIES, parseFrontMatter, patchFrontMatterContent } from "../server/frontmatter.js";
+import { splitTaskDoc } from "../server/docSplit.js";
+import { buildTaskTree, childrenOf, filterTasks, resolveRows, toTaskRow, type TaskRow } from "../server/taskTree.js";
 import {
   machineIdFromToken,
   isDeviceTokenShape,
@@ -91,9 +95,20 @@ export const MAX_NEXT_MS = 30 * 86_400_000;
  *  and identity/ownership columns (id/teamId/userId/machineId/timestamps) can
  *  never be patched over the device-token edit surface. Exported for `cli.ts`
  *  (the `new`/`edit` verb help lists these keys). */
+/** First content line containing `term` (case-insensitive), trimmed + capped —
+ *  the ONE snippet shape for task and artifact search hits. */
+function firstMatchLine(content: string, term: string): string | null {
+  const line = content.split("\n").find((l) => l.toLowerCase().includes(term));
+  return line ? line.trim().slice(0, 160) : null;
+}
+
 export const EDITABLE_LOOP_FIELDS = new Set([
   "name",
   "cron",
+  // The owner CLI (`loopany update`) pushes the README it just edited so the
+  // task-tree index refreshes immediately (not only on the next watcher sync);
+  // store.updateLoop derives taskMeta from it at the write chokepoint.
+  "taskFileContent",
   "timezone",
   "notify",
   "model",
@@ -107,6 +122,52 @@ export const EDITABLE_LOOP_FIELDS = new Set([
   "goal",
   "agent",
 ]);
+
+/**
+ * The CONFIG keys a device credential may write on a loop bound to a DIFFERENT
+ * machine in the owner's scope. Everything else in EDITABLE_LOOP_FIELDS is
+ * machine-local: workflow/ui/stateSchema are content the loop's daemon executes/
+ * serves, taskFile/taskFileContent live on its filesystem, agent/model/
+ * allowControl shape the executor. Enforced in editLoop, server-side — the CLI
+ * cannot bypass it.
+ */
+export const TEAM_WRITE_KEYS = new Set(["name", "cron", "timezone", "notify", "goal", "enabled", "runAt"]);
+
+/** Max pending runs a machine may hold before executor-assignment stops
+ *  auto-dispatching (assign 10 todo tasks ≠ launch 10 concurrent agents — the
+ *  rest wait for an explicit `loopany run`). */
+export const ASSIGN_DISPATCH_MACHINE_CAP = 2;
+
+/**
+ * The full editable envelope keyed EXACTLY as `edit --json` accepts (read/write
+ * identity, F6/§4.1 batch 2): `id` + every EDITABLE_LOOP_FIELDS key with its raw
+ * stored value (full bodies, no truncation). `show --json` emits this verbatim;
+ * dropping `id` yields a no-op `edit` patch (pinned by the roundtrip test). The
+ * pinned next-run OVERRIDE is keyed `runAt` (matching the edit key; the DB column
+ * stays `nextRunAt`), NOT the derived read-only `nextFire` aggregate.
+ *
+ * Lives HERE (not cli.ts) because `taskGet` also embeds it — `get` absorbed
+ * `show`, and index.ts never imports its satellites (layout.test.ts).
+ */
+export function loopEnvelope(loop: Loop): Record<string, unknown> {
+  return {
+    id: loop.id,
+    name: loop.name ?? null,
+    cron: loop.cron,
+    timezone: loop.timezone ?? null,
+    notify: loop.notify,
+    model: loop.model ?? null,
+    agent: loop.agent,
+    allowControl: loop.allowControl,
+    taskFile: loop.taskFile ?? null,
+    enabled: loop.enabled,
+    runAt: loop.nextRunAt ?? null,
+    goal: loop.goal ?? null,
+    workflow: loop.workflow ?? null,
+    ui: loop.ui ?? null,
+    stateSchema: loop.stateSchema ?? null,
+  };
+}
 const MIN_INTERVAL_MS = 60_000;
 const MAX_ARTIFACTS = 200;
 const MAX_TRANSCRIPT_STEPS = 200;
@@ -403,6 +464,33 @@ export class MachineGateway {
     }
     // Drop terminal-grace leases whose wake-report window has elapsed (bounded memory).
     await pruneExpiredLeases(now);
+    await this.followUpSweep(now);
+  }
+
+  /**
+   * Date-triggered auto-check: a task at `status: follow-up` is shipped-but-
+   * unproven, and its `follow_up_date` names when to verify the outcome. When
+   * the date arrives, dispatch ONE agent run at the task (on its own machine
+   * binding — that is what the binding is for) to check whether the shipped
+   * thing held and update the status. Fires at most once per arrived date: a
+   * run STARTED on/after the date is the dedup stamp, so a check that pushes
+   * the date out re-arms naturally, and a completed check never re-fires.
+   * Cron-null tasks only (a loop's own schedule already re-visits it); same
+   * per-machine pending cap as executor assignment.
+   */
+  private async followUpSweep(now: number): Promise<void> {
+    const today = new Date(now).toISOString().slice(0, 10);
+    for (const loop of await store.listLoops()) {
+      if (loop.cron != null || !loop.enabled) continue;
+      const m = loop.taskMeta;
+      if (m?.status !== "follow-up" || !m.follow_up_date || m.follow_up_date > today) continue;
+      if (await store.hasOpenRun(loop.id)) continue;
+      const last = await store.lastExecRun(loop.id);
+      if (last && last.ts >= `${m.follow_up_date}T00:00:00`) continue; // already checked for this date
+      if ((await store.pendingRunsForMachine(loop.machineId)).length >= ASSIGN_DISPATCH_MACHINE_CAP) continue;
+      await this.scheduler.runNow(loop.id);
+      log.info({ loopId: loop.id, followUpDate: m.follow_up_date }, "follow-up date arrived — dispatching outcome check");
+    }
   }
 
   /** Finalize one stuck run as an error (the sweep's reclaim path): persist the
@@ -455,7 +543,7 @@ export class MachineGateway {
 
   async poll(
     deviceToken: string,
-    info?: { host?: string; platform?: string; arch?: string; version?: string },
+    info?: { host?: string; platform?: string; arch?: string; version?: string; agents?: unknown },
     progress?: Array<{ runId: string; step: number; label: string }>,
     /** The daemon's echo of the last watch digest it applied — matching ⇒ the
      *  watch array is omitted from the response (an old daemon never echoes). */
@@ -529,6 +617,14 @@ export class MachineGateway {
         ...(info.host && !machine.name?.trim() ? { name: info.host } : {}),
       };
       if (Object.keys(patch).length) await store.updateMachine(machineId, patch);
+      // Executor registry: the daemon reports which coding-agent runtimes this
+      // machine can host (sent only when detection ran, not on every heartbeat).
+      // Untrusted wire input — validate each entry against the known enum and cap
+      // the list at the enum's cardinality; unknown values are silently dropped.
+      if (Array.isArray(info.agents)) {
+        const runtimes = [...new Set(info.agents.slice(0, CODING_AGENTS.length * 2).map(coerceCodingAgent).filter((a): a is NonNullable<typeof a> => a != null))];
+        if (runtimes.length) await store.upsertAgents(machineId, machine.name || info.host || machineId, runtimes);
+      }
     }
 
     // Live progress for in-flight runs (slim activity line, not the transcript).
@@ -586,7 +682,9 @@ export class MachineGateway {
         // of allowControl (like the structural caps). Evolve/edit never finish.
         canFinish: run.role === "exec" && loop.goal != null,
       });
-      deliveries.push(await buildDelivery(loop, run.id, token, machine.roots ?? []));
+      // Record plane: the claim IS the run starting (the daemon spawns on receipt).
+      await store.addEvent({ loopId: loop.id, runId: run.id, type: "run-started", actor: `agent:${loop.agent}`, data: { role: run.role } });
+      deliveries.push(await buildDelivery(loop, run.id, token, machine.roots ?? [], { daemonVersion: machine.daemonVersion }));
     }
 
     // Watch set: every loop bound to this machine (not just those with a pending
@@ -632,7 +730,7 @@ export class MachineGateway {
    */
   async pollWait(
     deviceToken: string,
-    info?: { host?: string; platform?: string; arch?: string; version?: string },
+    info?: { host?: string; platform?: string; arch?: string; version?: string; agents?: unknown },
     progress?: Array<{ runId: string; step: number; label: string }>,
     opts?: { wait?: boolean; watchDigest?: string; waitMs?: number },
   ): Promise<HttpResult> {
@@ -692,6 +790,13 @@ export class MachineGateway {
       workflow?: unknown;
       workdir?: unknown;
       taskFile?: unknown;
+      /** Optional inline initial README content (task create path) — indexed into
+       *  taskMeta immediately so the tree is correct before the first folder sync. */
+      taskFileContent?: unknown;
+      /** Optional task slug — makes create IDEMPOTENT per machine: a slug already
+       *  present (taskMeta.id) returns the existing task with `existing: true`
+       *  instead of duplicating, so a retried create is always safe. */
+      slug?: unknown;
       stateSchema?: unknown;
       /** Optional initial dashboard UI (small HTML, same surface as `set-ui`). Lets a
        *  template-driven loop ship a day-one dashboard instead of waiting for an
@@ -720,16 +825,29 @@ export class MachineGateway {
     const machine = await store.getMachine(machineId);
     if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
 
-    const cron = str(body.cron);
-    if (!cron) return { status: 400, body: { error: "cron required (5-field, e.g. \"0 8 * * *\")" } };
+    // Idempotency on slug (natural key, per-machine): re-creating an existing
+    // task returns it rather than erroring or duplicating — safe retries.
+    const slug = str(body.slug);
+    if (slug) {
+      const existing = resolveRows(await this.machineTaskRows(machineId), slug).find((r) => r.slug === slug);
+      if (existing) {
+        return { status: 200, body: { ok: true, id: existing.loopId, name: existing.title, existing: true } };
+      }
+    }
+
+    // Cron is OPTIONAL: absent ⇒ an inert TASK (recurrence is a field, not a
+    // kind — set it later via edit to arm the schedule). When present, validate.
+    const cron = str(body.cron) ?? null;
     // Timezone first: the cadence is validated IN the loop's timezone (a cron's
     // fire times shift with it), so the tz must be known-good before the probe.
     const timezone = str(body.timezone);
     if (timezone && !validTimezone(timezone)) {
       return { status: 400, body: { error: invalidTimezoneError(timezone) } };
     }
-    const cadence = validCadence(cron, timezone);
-    if (!cadence.ok) return { status: 400, body: { error: `invalid cron: ${cadence.detail}` } };
+    if (cron) {
+      const cadence = validCadence(cron, timezone);
+      if (!cadence.ok) return { status: 400, body: { error: `invalid cron: ${cadence.detail}` } };
+    }
 
     // Untrusted wire input — clip the free-text fields defensively (same
     // discipline as taskFileContent on report). The `task` column is GONE (batch 2):
@@ -746,7 +864,18 @@ export class MachineGateway {
     if (!wf.ok) return { status: 400, body: { error: wf.detail } };
     const workflow = wf.value;
     const taskFile = str(body.taskFile);
-    if (!workflow && !taskFile) return { status: 400, body: { error: "provide a workflow (JS) or a taskFile (path to the loop's Spec)" } };
+    if (!workflow && !taskFile && typeof body.taskFileContent !== "string") {
+      return { status: 400, body: { error: "provide a workflow (JS), a taskFile path, or the doc content (taskFileContent) — the doc IS the task" } };
+    }
+    // A schedule-less row is a TASK: its README is the whole point — require it.
+    // A task is born in the CLOUD: its doc (taskFileContent) is the task. The
+    // machine-file path is the legacy anchor — either identifies an inert task.
+    if (!cron && !taskFile && typeof body.taskFileContent !== "string") {
+      return { status: 400, body: { error: "a task without a cron needs a doc (taskFileContent) — the doc IS the task" } };
+    }
+    // Optional inline README content (the CLI sends it at create so the task-tree
+    // index is correct immediately, before the first ~3s folder sync arrives).
+    const taskFileContent = typeof body.taskFileContent === "string" ? body.taskFileContent.slice(0, WIRE_TEXT_CAP) : null;
     // Optional setpoint (clipped one-liner); absent/blank ⇒ open loop.
     const goal = str(body.goal)?.slice(0, GOAL_CAP) ?? null;
 
@@ -754,8 +883,9 @@ export class MachineGateway {
     // Recorded coding agent: trust the daemon's resolved value when it's a known
     // agent, else default to claude-code (older daemons omit it; an unrecognized /
     // "unknown" value also degrades to the default rather than rejecting the loop).
-    const agent: CodingAgent =
-      body.agent === "codex" || body.agent === "grok" ? body.agent : "claude-code";
+    // `runtime` is an accepted alias for the same key (the registry's vocabulary:
+    // an "agent" there is machine × runtime, so the bare column reads as runtime).
+    const agent: CodingAgent = coerceCodingAgent(body.agent ?? (body as { runtime?: unknown }).runtime) ?? "claude-code";
 
     const stateSchema = store.coerceStateSchema(body.stateSchema) ?? null;
     // Optional day-one dashboard — same validate/clip surface as `set-ui` (editLoop).
@@ -788,7 +918,7 @@ export class MachineGateway {
         agent,
         stateSchema,
       };
-      const nextRuns = nextFires(cron, timezone, 3);
+      const nextRuns = cron ? nextFires(cron, timezone, 3) : [];
       return {
         status: 200,
         body: {
@@ -874,6 +1004,7 @@ export class MachineGateway {
       workflow,
       workdir: str(body.workdir),
       taskFile,
+      ...(taskFileContent ? { taskFileContent, taskFileSyncedAt: nowIso() } : {}),
       stateSchema,
       ui,
       notify,
@@ -882,10 +1013,18 @@ export class MachineGateway {
       enabled: true,
     });
     this.scheduler.addLoop(loop);
+    // Birth record: creation lives in the EVENTS plane (the scaffold no longer
+    // bakes a `- Created.` Timeline line into the doc). Same (day, "Created.")
+    // dedup key as the legacy seeding, so an old-scaffold doc that still
+    // carries the line never renders it twice. `machine` is already in scope.
+    const creator = (machine.userId !== "shared" ? await store.userEmail(machine.userId) : undefined) ?? machine.userId;
+    await store.addEvent({ loopId: loop.id, type: "note", actor: creator, text: "Created." });
     this.invalidateWatch(machineId); // a new loop folder must be watched promptly
-    // Run once immediately so a freshly-created loop produces output without
-    // waiting for its first cron tick (gated on `enabled`).
-    if (loop.enabled) await this.scheduler.runNow(loop.id);
+    // Run once immediately so a freshly-created LOOP produces output without
+    // waiting for its first cron tick (gated on `enabled`). A cron-null TASK is
+    // inert data — creating one must not spawn an exec run (dispatch it
+    // deliberately via run-now later).
+    if (loop.enabled && loop.cron) await this.scheduler.runNow(loop.id);
     const name = loop.name ?? loop.id;
     if (typeof body.claim === "string" && body.claim.trim()) {
       fulfillClaim(body.claim.trim(), { loopId: loop.id, name, machineId, agent });
@@ -896,6 +1035,9 @@ export class MachineGateway {
     log.info({ machineId, loopId: loop.id, agent, ui: ui != null }, "createLoop: created from a coding agent");
     // Echo `ui` presence (like dry-run) + a warning when a provided dashboard was
     // dropped, so the CLI/response can surface it — never a silent no-dashboard.
+    // A human assignee off the team roster warns the same way (applied, not blocked).
+    const rosterWarning = await this.assigneeRosterWarning(machine, loop.taskMeta?.assignee);
+    const createWarning = [uiWarning, rosterWarning].filter(Boolean).join(" · ") || undefined;
     return {
       status: 200,
       body: {
@@ -903,8 +1045,8 @@ export class MachineGateway {
         id: loop.id,
         name,
         ui: ui != null,
-        ...(uiWarning ? { warning: uiWarning } : {}),
-        text: renderCreatedText(name, loop.id, cron, timezone ?? null, goal, ui != null, uiWarning),
+        ...(createWarning ? { warning: createWarning } : {}),
+        text: renderCreatedText(name, loop.id, cron, timezone ?? null, goal, ui != null, createWarning),
       },
     };
   }
@@ -941,11 +1083,19 @@ export class MachineGateway {
     const wantRuns = json || fields.includes("runs");
     const wantLastOutcome = json || fields.includes("lastOutcome");
 
+    // Team-wide reads: the owner's whole membership scope, own machine first. The
+    // machine display name backs the `machine` column (`--fields machine`).
+    const scopedLoops = await this.ownerScopedLoops(machineId);
+    const machineNames: Record<string, string> = {};
+    for (const mid of new Set(scopedLoops.map((l) => l.machineId))) {
+      const m = await store.getMachine(mid);
+      machineNames[mid] = m?.name || mid;
+    }
     const loops: LoopListRecord[] = await Promise.all(
-      (await store.loopsForMachine(machineId)).map(async (l) => {
+      scopedLoops.map(async (l) => {
         // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
         // paused loop shows no next fire (— in the cell), matching §4.2.
-        const nextFire = l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null;
+        const nextFire = l.enabled && l.cron ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null;
         // The last-outcome cell tracks the newest EXEC (scheduled) run, aligning with
         // `show` — a later successful evolve/edit must never mask a failed scheduled run.
         const last = wantLastOutcome ? await store.lastExecRun(l.id) : undefined;
@@ -966,6 +1116,8 @@ export class MachineGateway {
           nextFire,
           runs: wantRuns ? await store.countRuns(l.id) : 0,
           lastOutcome: last ? runOutcomeToken(last) : null,
+          machineId: l.machineId,
+          machine: machineNames[l.machineId] ?? l.machineId,
         };
       }),
     );
@@ -1005,9 +1157,17 @@ export class MachineGateway {
   async renderLoopLog(machineId: string, loopId: unknown, limit?: unknown): Promise<HttpResult> {
     if (typeof loopId !== "string" || !loopId) return { status: 400, body: { error: "loopId required" } };
     const loop = await store.getLoop(loopId);
-    // Loop+device scoping: only a loop bound to this machine is visible. A token
-    // for device A, or for a different loop, gets a flat 404 (existence never leaks).
-    if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
+    // Scoping (team-wide reads): a loop bound to this machine, OR any loop in
+    // the owner's membership scope (reads ≤ what the owner's browser shows —
+    // members already see run history on the web). Everything else stays a flat
+    // 404, existence never leaks. The RUN-credential branch passes the lease's
+    // own machineId+loopId, which always hits the first (own-machine) check, so
+    // its scope is UNCHANGED by the widening.
+    if (!loop) return { status: 404, body: { error: "no such loop" } };
+    if (loop.machineId !== machineId) {
+      const inScope = (await this.ownerScopedLoops(machineId)).some((l) => l.id === loop.id);
+      if (!inScope) return { status: 404, body: { error: "no such loop" } };
+    }
 
     const want = Number(limit);
     const n = Math.min(Math.max(Number.isFinite(want) && want > 0 ? Math.floor(want) : LOG_RUNS_DEFAULT, 1), LOG_RUNS_MAX);
@@ -1049,6 +1209,581 @@ export class MachineGateway {
     return { status: 200, body: { ok: true, loopId: loop.id, name: loop.name ?? loop.id, runs, text: survey } };
   }
 
+  // ---- device-token task surface (`loopany list/get/search/run`) ----
+
+  /**
+   * The device credential's READ scope (team-wide reads): this machine's
+   * own loops PLUS every loop in the teams its OWNER belongs to, membership
+   * resolved PER REQUEST so a removal revokes the CLI view instantly. The
+   * governing invariant: **CLI reads ≤ what the owner could see in the browser;
+   * CLI writes stay machine-scoped** (except the config-key allowlist — see
+   * editLoop). The "shared" open-mode owner keeps the classic machine scope
+   * (open mode's web surface already shows the whole workspace).
+   */
+  async ownerScopedLoops(machineId: string): Promise<Loop[]> {
+    const own = await store.loopsForMachine(machineId);
+    const machine = await store.getMachine(machineId);
+    if (!machine || machine.userId === "shared") return own;
+    const teams = (await store.listTeamsForUser(machine.userId)).map((t) => t.id);
+    const seen = new Set(own.map((l) => l.id));
+    const teamLoops = (await store.loopsForTeams(teams)).filter((l) => !seen.has(l.id));
+    return [...own, ...teamLoops];
+  }
+
+  /** Owner-scoped rows with the read filters (`--here` = this machine only;
+   *  `--team <id>` = one membership team — a non-membership id is a flat 404,
+   *  existence never leaks). */
+  async scopedTaskRows(machineId: string, opts: { here?: boolean; team?: string } = {}): Promise<TaskRow[] | { err: HttpResult }> {
+    if (opts.team) {
+      const machine = await store.getMachine(machineId);
+      const member =
+        machine && machine.userId !== "shared" && (await store.listTeamsForUser(machine.userId)).some((t) => t.id === opts.team);
+      if (!member) return { err: { status: 404, body: { error: "no such team" } } };
+    }
+    let loops = await this.ownerScopedLoops(machineId);
+    if (opts.here) loops = loops.filter((l) => l.machineId === machineId);
+    if (opts.team) loops = loops.filter((l) => l.teamId === opts.team);
+    return loops.map(toTaskRow);
+  }
+
+  /** The machine's OWN tasks, projected (every loop row IS a task; taskMeta may
+   *  be null). Still machine-scoped on purpose: createLoop's slug idempotency is
+   *  a per-machine identity (folder = slug on THAT machine), so the create path
+   *  must never see a teammate's slugs. Reads go through scopedTaskRows. */
+  async machineTaskRows(machineId: string): Promise<TaskRow[]> {
+    return (await store.loopsForMachine(machineId)).map(toTaskRow);
+  }
+
+  /** Resolve slug-or-loop-id within one machine's tasks. Flat 404 on a miss
+   *  (existence never leaks), 409 with candidates on a slug collision. */
+  async resolveTaskRow(machineId: string, idOrSlug: string): Promise<{ row: TaskRow } | { err: HttpResult }> {
+    const rows = await this.ownerScopedLoops(machineId).then((ls) => ls.map(toTaskRow));
+    // Machine-qualified form `<machine>/<slug>`: slug uniqueness is PER-MACHINE
+    // by design, so a team-wide read needs a disambiguator (two people both run
+    // `react-doctor-daily`). The prefix matches a machine id or its name.
+    let scope = rows;
+    let bare = idOrSlug;
+    const slash = idOrSlug.indexOf("/");
+    if (slash > 0 && !rows.some((r) => r.loopId === idOrSlug || r.slug === idOrSlug)) {
+      const prefix = idOrSlug.slice(0, slash);
+      const ids = new Set(rows.map((r) => r.machineId));
+      const named = (await Promise.all([...ids].map((id) => store.getMachine(id))))
+        .filter((m) => m != null)
+        .filter((m) => m.id === prefix || m.name === prefix)
+        .map((m) => m.id);
+      if (named.length) {
+        scope = rows.filter((r) => named.includes(r.machineId));
+        bare = idOrSlug.slice(slash + 1);
+      }
+    }
+    const matches = resolveRows(scope, bare);
+    if (matches.length === 1) return { row: matches[0]! };
+    if (matches.length === 0) return { err: { status: 404, body: { error: "no such task" } } };
+    // Ambiguous → 409 listing candidates WITH their machine, never a silent pick.
+    return {
+      err: {
+        status: 409,
+        body: {
+          error: `slug "${idOrSlug}" is ambiguous — use a loop id, or qualify as <machine>/<slug>`,
+          candidates: matches.map((m) => ({ id: m.loopId, title: m.title, machineId: m.machineId })),
+        },
+      },
+    };
+  }
+
+  /**
+   * `loopany list` — the task tree (unfiltered → nested tree, default depth 2)
+   * or a flat filtered worklist with breadcrumb ancestor paths. The shape
+   * follows the query; `flat`/`tree` force it. Rows are PROJECTED (no
+   * taskFileContent) so the response stays bounded at any tree size.
+   */
+  async taskList(
+    deviceToken: string,
+    opts: {
+      id?: string;
+      status?: string;
+      priority?: string;
+      due?: boolean;
+      recurring?: boolean;
+      tree?: boolean;
+      flat?: boolean;
+      depth?: number;
+      here?: boolean;
+      team?: string;
+      assignee?: string;
+    } = {},
+  ): Promise<HttpResult> {
+    const machineId = machineIdFromToken(deviceToken);
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (opts.status && !TASK_STATUSES.includes(opts.status as (typeof TASK_STATUSES)[number])) {
+      return { status: 400, body: { error: `status must be one of: ${TASK_STATUSES.join(", ")} (got: '${opts.status}')` } };
+    }
+    if (opts.priority && !TASK_PRIORITIES.includes(opts.priority as (typeof TASK_PRIORITIES)[number])) {
+      return { status: 400, body: { error: `priority must be one of: ${TASK_PRIORITIES.join(", ")} (got: '${opts.priority}')` } };
+    }
+    const scoped = await this.scopedTaskRows(machineId, { here: opts.here, team: opts.team });
+    if ("err" in scoped) return scoped.err;
+    const rows = scoped;
+    if (opts.id) {
+      const r = await this.resolveTaskRow(machineId, opts.id);
+      if ("err" in r) return r.err;
+    }
+    // Display support for the team-wide view: machine display names + the
+    // requester's own machine id, so the client can mark rows that live
+    // elsewhere (`@machine`) without knowing the id-derivation scheme.
+    const machineNames: Record<string, string> = {};
+    for (const mid of new Set(rows.map((r) => r.machineId))) {
+      const m = await store.getMachine(mid);
+      machineNames[mid] = m?.name || mid;
+    }
+    const scopeMeta = { requester: machineId, machines: machineNames };
+
+    const filtered = !!(opts.status || opts.priority || opts.due || opts.recurring || opts.assignee);
+    const wantTree = opts.tree === true || (!filtered && opts.flat !== true);
+    if (wantTree) {
+      const tree = buildTaskTree(
+        opts.status || opts.priority || opts.due || opts.recurring || opts.assignee
+          ? filterTasks(rows, { status: opts.status, priority: opts.priority, due: opts.due, recurring: opts.recurring, assignee: opts.assignee })
+          : rows,
+        { rootId: opts.id, depth: opts.depth },
+      );
+      return { status: 200, body: { ok: true, mode: "tree", depth: opts.depth ?? 2, tree, ...scopeMeta } };
+    }
+    const flat = filterTasks(rows, {
+      status: opts.status,
+      priority: opts.priority,
+      due: opts.due,
+      recurring: opts.recurring,
+      assignee: opts.assignee,
+      parentId: opts.id,
+    });
+    return { status: 200, body: { ok: true, mode: "flat", rows: flat, ...scopeMeta } };
+  }
+
+  /** How many children rows `get` inlines before deferring to `list <id>`. */
+  static readonly GET_CHILDREN_CAP = 10;
+
+  /**
+   * `loopany get <id>` — ONE node in full (envelope + taskMeta + README content)
+   * plus one level of shallow context: immediate children as summary rows
+   * (capped, with a truncation hint) so placement/dedup mistakes don't happen
+   * just because the agent read the node instead of listing it.
+   */
+  /**
+   * The task's ONE displayed timeline: stored events ∪ the doc's legacy
+   * `## Timeline` lines, chronological. Read-side merge only — never writes.
+   * Same `(day, clipped text)` dedup key as the ingest-side seeding
+   * (refreshTaskFileContent), so the two views can never disagree about
+   * whether a line is "already recorded". Covers both worlds: a cloud-born
+   * task's record is all events; a legacy-file task's daemon still appends doc
+   * lines that ingest may not have seeded yet.
+   */
+  private async mergedTimeline(
+    loop: Loop,
+    /** Pre-fetched newest-first events (taskGet shares ONE query across its
+     *  timeline/recentEvents/--log needs — never three). */
+    stored: EventRow[],
+  ): Promise<{ entries: Array<{ at: string | null; actor: string | null; type: string; text: string | null }>; truncated: number }> {
+    // One display line per event: text when present (newlines flattened — a
+    // doc-parsed continuation line must not break the column layout), else a
+    // label synthesized from type+data so typed events (status/assignee/doc)
+    // never render as blank rows.
+    const line = (type: string, text: string | null, data: unknown): string | null => {
+      if (text) return text.replace(/\s*\n\s*/g, " · ").slice(0, MESSAGE_CAP);
+      const d = (data ?? {}) as { from?: unknown; to?: unknown; bytes?: unknown; role?: unknown };
+      switch (type) {
+        case "status-changed": return `status → ${String(d.to ?? "?")}`;
+        case "assignee-changed": return `assignee → ${String(d.to ?? "(cleared)")}`;
+        case "doc-updated": return `doc updated${typeof d.bytes === "number" ? ` (${d.bytes}B)` : ""}`;
+        case "run-started": return `run started${d.role ? ` (${String(d.role)})` : ""}`;
+        case "run-returned": return "run returned";
+        default: return null;
+      }
+    };
+    const seen = new Set(stored.map((e) => `${e.at?.slice(0, 10)}|${e.text ?? ""}`));
+    const out: Array<{ at: string | null; actor: string | null; type: string; text: string | null }> = stored.map((e) => ({
+      at: e.at ?? null,
+      actor: e.actor ?? null,
+      type: e.type,
+      text: line(e.type, e.text ?? null, e.data),
+    }));
+    // Cheap pre-check: cloud-born docs have no Timeline section — skip the full
+    // split parse (the common case) when the word never appears.
+    const content = loop.taskFileContent ?? "";
+    const parsed = /timeline/i.test(content) ? splitTaskDoc(content).events : [];
+    for (const e of parsed) {
+      const text = e.text.slice(0, MESSAGE_CAP);
+      if (e.at && seen.has(`${e.at.slice(0, 10)}|${text}`)) continue;
+      out.push({ at: e.at ?? null, actor: e.actor ?? null, type: "note", text: line("note", text, null) });
+    }
+    // Chronological; undated legacy lines (no parseable date) sort first, in
+    // file order — they predate anything datable. Output is CAPPED like every
+    // other get aggregate (children/log): newest entries win, truncation visible.
+    const sorted = out.sort((a, b) => String(a.at ?? "").localeCompare(String(b.at ?? "")));
+    const truncated = Math.max(0, sorted.length - MachineGateway.TIMELINE_CAP);
+    return { entries: sorted.slice(-MachineGateway.TIMELINE_CAP), truncated };
+  }
+
+  /** Merged-timeline output cap (matches GET_CHILDREN_CAP/SEARCH_CAP conventions). */
+  static readonly TIMELINE_CAP = 100;
+
+  async taskGet(
+    deviceToken: string,
+    idOrSlug: unknown,
+    opts: { runs?: boolean; limit?: number; transcript?: boolean; log?: boolean; since?: string; recent?: number } = {},
+  ): Promise<HttpResult> {
+    const machineId = machineIdFromToken(deviceToken);
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (typeof idOrSlug !== "string" || !idOrSlug) return { status: 400, body: { error: "task id or slug required" } };
+    const r = await this.resolveTaskRow(machineId, idOrSlug);
+    if ("err" in r) return r.err;
+    const loop = (await store.getLoop(r.row.loopId))!;
+    // Children resolve across the OWNER scope: a parent on this machine may have
+    // children captured on a teammate machine (the tree is a team object).
+    const all = (await this.ownerScopedLoops(machineId)).map(toTaskRow);
+    const kids = childrenOf(all, r.row);
+    const cap = MachineGateway.GET_CHILDREN_CAP;
+
+    // ONE newest-first events window feeds the merged timeline, the recentEvents
+    // aggregate, and the default --log view (a deeper `since`/`recent` still
+    // queries). Was three separate listEvents round trips.
+    const storedEvents = await store.listEvents(loop.id, { limit: 200 });
+
+    let runs: unknown;
+    if (opts.runs) {
+      const logRes = await this.loopLog(deviceToken, loop.id, opts.limit ?? 5);
+      const body = logRes.body as { runs?: Array<Record<string, unknown>> };
+      runs = (body.runs ?? []).map((run) =>
+        opts.transcript ? run : { ...run, transcript: undefined, transcriptTruncated: undefined },
+      );
+    }
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        task: {
+          ...r.row,
+          timezone: loop.timezone ?? null,
+          notify: loop.notify,
+          goal: loop.goal ?? null,
+          completedAt: loop.completedAt ?? null,
+          nextRunAt: loop.nextRunAt ?? null,
+          taskFile: loop.taskFile ?? null,
+          content: loop.taskFileContent ?? null,
+          // Content hash of the doc — `get --checkout` records it as the base a
+          // later `update --doc-file` push must present (optimistic concurrency).
+          docHash: sha256(loop.taskFileContent ?? ""),
+        },
+        // The full editable envelope (`get` absorbed `show`): keyed exactly as
+        // `edit --json` accepts, so dropping `id` roundtrips to a no-op patch.
+        envelope: loopEnvelope(loop),
+        children: kids.slice(0, cap).map((c) => ({ ...c })),
+        ...(kids.length > cap ? { childrenTruncated: kids.length - cap } : {}),
+        // Rollup (R13): children grouped by status with counts + a few named per
+        // group — the loop-as-parent visibility surface. Terminal groups
+        // (done/archived) are summarized by count, never enumerated.
+        ...(kids.length
+          ? {
+              rollup: (() => {
+                const groups = new Map<string, string[]>();
+                for (const k of kids) {
+                  const s = k.status ?? "unset";
+                  if (!groups.has(s)) groups.set(s, []);
+                  groups.get(s)!.push(k.slug ?? k.loopId);
+                }
+                return [...groups.entries()].map(([status, slugs]) => ({
+                  status,
+                  count: slugs.length,
+                  ...(status === "done" || status === "archived" ? {} : { top: slugs.slice(0, 3) }),
+                }));
+              })(),
+            }
+          : {}),
+        // A recurring node's recent record (the rollup's activity line) — always
+        // present for loops so the get view shows life without a second call.
+        ...(loop.cron != null ? { recentEvents: storedEvents.slice(0, 3) } : {}),
+        // The ONE displayed timeline (stored events ∪ legacy doc lines, deduped,
+        // chronological, capped) — what `get` renders instead of the doc's frozen
+        // `## Timeline` section, matching the web pane's composed view. `doc` is
+        // the split's Timeline-free body so the CLI needn't re-parse (its local
+        // strip stays only as an old-server fallback).
+        ...(await (async () => {
+          const t = await this.mergedTimeline(loop, storedEvents);
+          return { timeline: t.entries, ...(t.truncated ? { timelineTruncated: t.truncated } : {}) };
+        })()),
+        doc: /timeline/i.test(loop.taskFileContent ?? "") ? splitTaskDoc(loop.taskFileContent ?? "").doc : (loop.taskFileContent ?? ""),
+        ...(runs !== undefined ? { runs } : {}),
+        // The record plane (--log): bounded newest-first window + the total, so
+        // the render can say `count: N of M` (AXI §4) and truncation is visible.
+        ...(opts.log
+          ? {
+              events: opts.since ? await store.listEvents(loop.id, { since: opts.since, limit: opts.recent ?? 20 }) : storedEvents.slice(0, opts.recent ?? 20),
+              eventsTotal: await store.countEvents(loop.id),
+            }
+          : {}),
+      },
+    };
+  }
+
+  /** How many search hits come back before the narrower-query hint. */
+  static readonly SEARCH_CAP = 20;
+
+  /** `loopany search <keywords>` — case-insensitive all-terms match over slug /
+   *  title / README content, with a one-line snippet per hit. The dedup-before-
+   *  create step, so it must see CONTENT, not just titles. */
+  async taskSearch(deviceToken: string, keywords: unknown): Promise<HttpResult> {
+    const machineId = machineIdFromToken(deviceToken);
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const q = typeof keywords === "string" ? keywords.trim() : "";
+    if (!q) return { status: 400, body: { error: "search keywords required" } };
+    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    // Team-wide: search is the dedup-before-create step, and a duplicate on
+    // a teammate's machine is exactly what it exists to catch.
+    const loops = await this.ownerScopedLoops(machineId);
+    const hits: Array<TaskRow & { snippet: string | null }> = [];
+    for (const loop of loops) {
+      const row = toTaskRow(loop);
+      const content = loop.taskFileContent ?? "";
+      const haystack = `${row.slug ?? ""}\n${row.title}\n${content}`.toLowerCase();
+      if (!terms.every((t) => haystack.includes(t))) continue;
+      hits.push({ ...row, snippet: firstMatchLine(content, terms[0]!) });
+    }
+    // Artifact hits (F5): the loops' PRODUCTS — reports, findings, cards — are
+    // where "has any loop already covered X?" actually lives. Markdown only;
+    // path/title match from the joined meta (no byte fetch), content match
+    // reads blob bytes for small text files. Bounded on both axes (files
+    // scanned + bytes per file) and truncation is surfaced, never silent.
+    const artifactHits: Array<{ loopId: string; task: string; path: string; title: string | null; snippet: string | null }> = [];
+    const loopById = new Map(loops.map((l) => [l.id, l]));
+    // ONE batched query with the cheap filters (live/text/.md) in SQL — never a
+    // per-loop N+1. Over-cap rows are dropped with the truncation surfaced.
+    const files = await store.listSearchableArtifacts(loops.map((l) => l.id), MachineGateway.ARTIFACT_SCAN_CAP);
+    const scanTruncated = files.length > MachineGateway.ARTIFACT_SCAN_CAP;
+    for (const f of files.slice(0, MachineGateway.ARTIFACT_SCAN_CAP)) {
+      const loop = loopById.get(f.loopId);
+      if (!loop) continue;
+      // The task doc is already searched via taskFileContent above.
+      if (loop.taskFile && loop.taskFile.endsWith(`/${f.path}`)) continue;
+      const title = f.meta?.title ?? null;
+      const metaHay = `${f.path}\n${title ?? ""}`.toLowerCase();
+      let content: string | null = null;
+      if (!terms.every((t) => metaHay.includes(t))) {
+        if ((f.size ?? 0) > MachineGateway.ARTIFACT_BYTES_CAP) continue;
+        const bytes = await this.blobStore.get(f.hash);
+        if (!bytes) continue;
+        content = bytes.toString("utf8");
+        const hay = `${metaHay}\n${content.toLowerCase()}`;
+        if (!terms.every((t) => hay.includes(t))) continue;
+      }
+      const row = toTaskRow(loop);
+      artifactHits.push({ loopId: f.loopId, task: row.slug ?? row.title, path: f.path, title, snippet: content ? firstMatchLine(content, terms[0]!) : null });
+    }
+    const cap = MachineGateway.SEARCH_CAP;
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        rows: hits.slice(0, cap),
+        ...(hits.length > cap ? { truncated: hits.length - cap, hint: "narrow the keywords" } : {}),
+        artifacts: artifactHits.slice(0, cap),
+        ...(artifactHits.length > cap ? { artifactsTruncated: artifactHits.length - cap } : {}),
+        ...(scanTruncated ? { artifactScanTruncated: true } : {}),
+      },
+    };
+  }
+
+  /** Artifact-search bounds: files scanned per search across the whole scope,
+   *  and the largest text file whose CONTENT is read (path/title matches are
+   *  metadata-only and free). Over-cap ⇒ surfaced, never silently clipped. */
+  static readonly ARTIFACT_SCAN_CAP = 400;
+  static readonly ARTIFACT_BYTES_CAP = 64 * 1024;
+
+  /**
+   * `loopany review` — the cross-loop worklist (F7, notice+decide): every live
+   * artifact a run flagged `status: needs-review`, owner-scoped like every
+   * other read, minus hash-keyed dismissals. A WORKLIST, not approvals — the
+   * human does the action themselves and clears the item.
+   */
+  async reviewQueue(deviceToken: string): Promise<HttpResult> {
+    const machineId = machineIdFromToken(deviceToken);
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const loops = await this.ownerScopedLoops(machineId);
+    const byId = new Map(loops.map((l) => [l.id, l]));
+    const items = await store.reviewQueueForLoops(loops.map((l) => l.id));
+    // ONE row mapper shared with the web server fn — labels cannot drift.
+    return { status: 200, body: { ok: true, items: items.map((i) => store.toReviewRow(i, byId.get(i.loopId))) } };
+  }
+
+  /** Dismiss one review item ("mark reviewed"). Keyed to the CURRENT content
+   *  hash — if the file changes later it re-surfaces for fresh eyes. */
+  async reviewClear(deviceToken: string, idOrSlug: unknown, path: unknown): Promise<HttpResult> {
+    const machineId = machineIdFromToken(deviceToken);
+    const machine = await store.getMachine(machineId);
+    if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (typeof idOrSlug !== "string" || !idOrSlug || typeof path !== "string" || !path) {
+      return { status: 400, body: { error: "usage: loopany review clear <task> <path>" } };
+    }
+    const r = await this.resolveTaskRow(machineId, idOrSlug);
+    if ("err" in r) return r.err;
+    const f = await store.getArtifactFile(r.row.loopId, path);
+    if (!f || f.deleted || !f.hash) return { status: 404, body: { error: `no such artifact: ${path} (loopany review lists the queue)` } };
+    const actor = (machine.userId !== "shared" ? await store.userEmail(machine.userId) : undefined) ?? machine.userId;
+    await store.markReviewed(r.row.loopId, path, f.hash, actor);
+    return { status: 200, body: { ok: true, text: `reviewed: ${idOrSlug} :: ${path} — re-surfaces if the file changes` } };
+  }
+
+  /** `loopany run <id>` — one-shot dispatch of any task (cron or not) via the
+   *  scheduler's nextRunAt path. Refuses while a run is already open so the CLI
+   *  gets a message instead of the scheduler's silent skip. */
+  /**
+   * Executor assignment: `update <id> assignee=<machine>/<agent>` re-binds
+   * an INERT task (cron-null) to another of the owner's OWN devices, and — the
+   * EDGE trigger — arms exactly ONE dispatch when the task sits at `status:
+   * todo`. The assignment call IS the edge: a run that ends still-todo does NOT
+   * re-fire (that's a visible signal, not a retry loop); re-fire = re-assign or
+   * `loopany run`. Cross-PERSON assignment is deliberately absent in V1 — a Spec
+   * is a prompt an agent obeys with bypassPermissions, so assigning execution to
+   * someone else's device is code execution on their machine and needs a consent
+   * handshake first ("my compromise ≠ your code execution", same fence as
+   * content writes).
+   */
+  /**
+   * Warn — never block — when a HUMAN assignee (an email in the doc's front
+   * matter) isn't on the owner's team roster: a typo'd email would otherwise
+   * dangle silently with nobody ever seeing the task as theirs. Fires only when
+   * the assignee actually CHANGED to an unknown email. Open mode ("shared"
+   * owner) has no membership concept, so it never warns there.
+   */
+  private async assigneeRosterWarning(machine: Machine | undefined, assignee: string | null | undefined, prev?: string | null): Promise<string | undefined> {
+    if (!assignee || assignee === prev || !assignee.includes("@")) return undefined;
+    if (!machine || machine.userId === "shared") return undefined;
+    // One indexed join (case-insensitive), never an N+1 walk over teams.
+    if (await store.isTeammateEmail(machine.userId, assignee)) return undefined;
+    return `assignee '${assignee}' is not on your team roster (\`loopany team\`) — applied anyway; check for a typo, or invite them to the team`;
+  }
+
+  private async assignExecutor(machineId: string, loop: Loop, value: unknown, dryRun: boolean): Promise<HttpResult> {
+    if (typeof value !== "string" || !value.trim()) {
+      return { status: 400, body: { error: "assignee needs a value: <machine>/<agent> (executor) — a human assignee lives in the README front matter (assignee: <email>)" } };
+    }
+    const raw = value.trim();
+    if (loop.cron != null) {
+      return { status: 400, body: { error: "a LOOP's executor is fixed (V1): its Spec references machine-local paths/credentials, so moving it is a migration, not a field write — pause it, or capture the work as a task instead" } };
+    }
+    const requester = (await store.getMachine(machineId))!;
+    // Own devices only: resolve the target among machines with the SAME owner.
+    // Anything else — including a teammate's machine — is a flat 404.
+    const mine = (await store.listMachines()).filter((m) => m.userId === requester.userId);
+    let target: (typeof mine)[number];
+    let agent: CodingAgent;
+    // The registry is the primary address space: try the WHOLE ref as an agent
+    // (slug, display name, or id) before falling back to the `<machine>/<runtime>`
+    // form (kept as a working alias).
+    const registered = await store.agentsForMachines(mine.map((m) => m.id));
+    const hits = registered.filter((a) => a.slug === raw || a.name === raw || a.id === raw);
+    if (hits.length > 1) {
+      return {
+        status: 409,
+        body: {
+          error: `agent '${raw}' is ambiguous — use the slug or id`,
+          candidates: hits.map((a) => ({ id: a.id, slug: a.slug, name: a.name, machine: mine.find((m) => m.id === a.machineId)?.name ?? a.machineId })),
+        },
+      };
+    }
+    if (hits.length === 1) {
+      const hit = hits[0]!;
+      agent = hit.runtime;
+      target = mine.find((m) => m.id === hit.machineId)!;
+    } else {
+      const cut = raw.lastIndexOf("/");
+      if (cut <= 0 || cut === raw.length - 1) {
+        const known = registered.map((a) => a.slug).join(", ");
+        return { status: 400, body: { error: `no such agent of yours: '${raw}'${known ? ` (your agents: ${known}; also accepts <machine>/<runtime>)` : ` — use an agent slug from \`loopany team\` or <machine>/<runtime> (${CODING_AGENTS.join("|")})`}. A human assignee is set in the README front matter, not here.` } };
+      }
+      const runtime = coerceCodingAgent(raw.slice(cut + 1));
+      if (!runtime) return { status: 400, body: { error: `agent must be one of: ${CODING_AGENTS.join(", ")} (got: '${raw.slice(cut + 1)}')` } };
+      agent = runtime;
+      const machinePart = raw.slice(0, cut);
+      const targets = mine.filter((m) => m.id === machinePart || m.name === machinePart);
+      if (!targets.length) return { status: 404, body: { error: `no such device of yours: '${machinePart}' (your devices: ${mine.map((m) => m.name || m.id).join(", ")})` } };
+      if (targets.length > 1) {
+        return {
+          status: 409,
+          body: { error: `device name '${machinePart}' is ambiguous — use the machine id`, candidates: targets.map((m) => ({ id: m.id, name: m.name })) },
+        };
+      }
+      target = targets[0]!;
+    }
+    const changes = [
+      { key: "machineId", from: loop.machineId, to: target.id },
+      { key: "agent", from: loop.agent, to: agent },
+    ];
+    if (dryRun) {
+      return {
+        status: 200,
+        body: { ok: true, dryRun: true, id: loop.id, name: loop.name ?? loop.id, changes, rejections: [], exitCode: 0, text: `would assign → ${target.name || target.id}/${agent}` },
+      };
+    }
+    const updated = await store.updateLoop(loop.id, { machineId: target.id, agent });
+    if (!updated) return { status: 404, body: { error: "loop not found" } };
+    // Both watch lists shift: the old machine stops watching the folder, the new
+    // one must pick it up promptly (the dispatch prompt can also materialize it).
+    this.invalidateWatch(loop.machineId);
+    this.invalidateWatch(target.id);
+
+    let dispatched = false;
+    let note: string | undefined;
+    const status = updated.taskMeta?.status;
+    if (status !== "todo") note = `status is ${status ?? "unset"} — only a todo task auto-dispatches (loopany run <id> starts it manually)`;
+    else if (!updated.enabled) note = "task is paused (enabled=false) — resume it to dispatch";
+    else if (await store.hasOpenRun(updated.id)) note = "a run is already open for this task";
+    else if ((await store.pendingRunsForMachine(target.id)).length >= ASSIGN_DISPATCH_MACHINE_CAP) {
+      note = `${target.name || target.id} already has ${ASSIGN_DISPATCH_MACHINE_CAP}+ runs queued — start this one later with \`loopany run\``;
+    } else {
+      await this.scheduler.runNow(updated.id);
+      dispatched = true;
+    }
+    log.info({ loopId: updated.id, target: target.id, agent, dispatched, note }, "assignExecutor: applied");
+    const label = `${target.name || target.id}/${agent}`;
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        id: updated.id,
+        name: updated.name ?? updated.id,
+        applied: ["assignee"],
+        assignee: label,
+        dispatched,
+        ...(note ? { note } : {}),
+        text: `assignee → ${label}${dispatched ? " · dispatched now" : note ? ` · not dispatched (${note})` : ""}`,
+      },
+    };
+  }
+
+  async runLoopNow(deviceToken: string, idOrSlug: unknown): Promise<HttpResult> {
+    const machineId = machineIdFromToken(deviceToken);
+    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (typeof idOrSlug !== "string" || !idOrSlug) return { status: 400, body: { error: "task id or slug required" } };
+    const r = await this.resolveTaskRow(machineId, idOrSlug);
+    if ("err" in r) return r.err;
+    const loop = (await store.getLoop(r.row.loopId))!;
+    if (!loop.enabled) return { status: 409, body: { error: "task is paused (enabled=false) — resume it first" } };
+    if (await store.hasOpenRun(loop.id)) return { status: 409, body: { error: "a run is already open for this task — wait for it to finish" } };
+    await this.scheduler.runNow(loop.id);
+    log.info({ machineId, loopId: loop.id }, "runLoopNow: one-shot dispatch");
+    // Echo the EXECUTING machine's presence (the loop's bound machine, which may
+    // not be the requester): a dispatch onto an offline/asleep machine parks as
+    // a pending run until its daemon connects — the CLI uses this to warn
+    // instead of silently waiting on a run nothing will claim.
+    const host = await store.getMachine(loop.machineId);
+    const presence = host ? machinePresence(host.online, host.lastSeen) : "offline";
+    return {
+      status: 200,
+      body: { ok: true, id: loop.id, name: loop.name ?? loop.id, machine: { id: loop.machineId, name: host?.name || loop.machineId, presence } },
+    };
+  }
+
   /**
    * Edit a loop's scheduling envelope from the owner's interactive agent
    * (`loopany edit`). Authed by the machine's device token and scoped to loops
@@ -1056,6 +1791,70 @@ export class MachineGateway {
    * governs a running run rescheduling ITSELF; the human owner may always edit).
    * Task CONTENT lives in the loop's README.md on the machine, so it's edited there, not here.
    */
+  /**
+   * Doc push — the doc column's ONE write path for working-copy edits. The
+   * caller edited from a known base (`get --checkout` records its hash); a
+   * mismatched base means the server moved underneath them → 409 carrying a
+   * unified diff of server-current vs the submitted content, never a silent
+   * clobber. While a run is open on the task the push is refused (the run's
+   * own close is the sole writer in that window). Success rewrites the doc,
+   * emits a `doc-updated` event, and returns the new hash for the sidecar.
+   */
+  private async pushDoc(machineId: string, loop: Loop, docRaw: unknown, baseRaw: unknown, dryRun: boolean): Promise<HttpResult> {
+    if (typeof docRaw !== "string") return { status: 400, body: { error: "doc must be the full markdown content (use --doc-file <path>)" } };
+    if (docRaw.length > WIRE_TEXT_CAP) {
+      return { status: 400, body: { error: `doc too large: ${docRaw.length} bytes (cap ${WIRE_TEXT_CAP}) — keep heavy material in artifact files, the doc is the working record` } };
+    }
+    if (typeof baseRaw !== "string" || !baseRaw) {
+      return { status: 400, body: { error: "docBase (the checked-out content hash) is required — re-run `loopany get <id> --checkout` to get a fresh copy" } };
+    }
+    const current = loop.taskFileContent ?? "";
+    const currentHash = sha256(current);
+    if (baseRaw !== currentHash) {
+      const patch = createTwoFilesPatch("your base", "server", docRaw, current, undefined, undefined, { context: 2 });
+      return {
+        status: 409,
+        body: {
+          error: "doc changed on the server since your checkout — re-checkout, merge, and push again",
+          docHash: currentHash,
+          diff: patch.slice(0, 20_000),
+        },
+      };
+    }
+    // The doc-lease window starts at CLAIM, not dispatch: a PENDING run hasn't
+    // received the doc yet (delivery reads taskFileContent at claim time), so a
+    // push now is simply what the eventual claim will deliver. Only a RUNNING
+    // run owns the doc — its close is the sole writer until it ends. Without
+    // this distinction an unclaimed run (daemon offline) freezes the doc
+    // indefinitely with nothing actually working on it.
+    const open = await store.openRunForLoop(loop.id);
+    if (open && open.phase === "running") {
+      return { status: 409, body: { error: `a run is active on this task (run ${open.id}) — its close owns the doc until it ends`, runId: open.id } };
+    }
+    const newHash = sha256(docRaw);
+    if (dryRun) {
+      return { status: 200, body: { ok: true, dryRun: true, id: loop.id, docHash: newHash, exitCode: 0, text: `would update doc (${docRaw.length} bytes)` } };
+    }
+    const machine = await store.getMachine(machineId);
+    const actor = (machine && machine.userId !== "shared" ? await store.userEmail(machine.userId) : undefined) ?? machine?.userId ?? "unknown";
+    if (newHash !== currentHash) {
+      await store.updateLoop(loop.id, { taskFileContent: docRaw }, { actor });
+      await store.addEvent({ loopId: loop.id, type: "doc-updated", actor, data: { bytes: docRaw.length } });
+    }
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        id: loop.id,
+        docHash: newHash,
+        text:
+          newHash === currentHash
+            ? "doc: unchanged (already at this content)"
+            : `doc: updated (${docRaw.length} bytes)\nhelp[1]:\n  Run \`loopany get ${loop.taskMeta?.id ?? loop.id} --log\` to see the recorded doc-updated event`,
+      },
+    };
+  }
+
   async editLoop(
     deviceToken: string,
     id: unknown,
@@ -1067,6 +1866,9 @@ export class MachineGateway {
       model?: unknown;
       allowControl?: unknown;
       taskFile?: unknown;
+      /** The owner CLI's README push (work-state edits) — the tree index
+       *  re-derives taskMeta from it at the store chokepoint. */
+      taskFileContent?: unknown;
       enabled?: unknown;
       runAt?: unknown;
       workflow?: unknown;
@@ -1074,6 +1876,13 @@ export class MachineGateway {
       stateSchema?: unknown;
       goal?: unknown;
       agent?: unknown;
+      /** Executor assignment operation (slug | name | id | `<machine>/<runtime>`)
+       *  — see assignExecutor. May combine with field writes (fields first). */
+      assignee?: unknown;
+      /** Doc push operation: full doc content + the base hash it was edited from
+       *  (optimistic concurrency) — see pushDoc. */
+      doc?: unknown;
+      docBase?: unknown;
     },
     /** Validate-only (`loopany edit --dry-run`): compute the per-key before→after
      *  preview + rejections, persist NOTHING. */
@@ -1083,9 +1892,93 @@ export class MachineGateway {
     if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     if (typeof id !== "string" || !id) return { status: 400, body: { error: "loop id required" } };
     const loop = await store.getLoop(id);
-    if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
+    if (!loop) return { status: 404, body: { error: "no such loop" } };
 
     const p = (patch ?? {}) as Record<string, unknown>;
+
+    // Write scoping — the lateral-movement fence. CONFIG keys (reversible
+    // settings) may be written team-wide: "pause my other laptop's loop from
+    // here" is the common single-owner-two-machines case, and the authority
+    // already exists via the owner's browser session. CONTENT keys stay
+    // machine-local: `workflow` is arbitrary JS the daemon EXECUTES on the
+    // loop's machine, so a stolen device token on machine A must never plant
+    // code that runs on machine B ("my compromise ≠ your code execution").
+    // taskFile/taskFileContent are file paths/bytes on the loop's own machine;
+    // agent is part of the executor identity — both machine-local too.
+    if (loop.machineId !== machineId) {
+      const inScope = (await this.ownerScopedLoops(machineId)).some((l) => l.id === loop.id);
+      if (!inScope) return { status: 404, body: { error: "no such loop" } };
+      // `doc`/`docBase` are exempt: the doc is the shared work record (team-
+      // writable like the config keys), guarded by its own base-hash + open-run
+      // checks — it is content ABOUT the work, never code the daemon executes.
+      const contentKeys = Object.keys(p).filter((k) => !TEAM_WRITE_KEYS.has(k) && k !== "assignee" && k !== "doc" && k !== "docBase");
+      if (contentKeys.length) {
+        return {
+          status: 403,
+          body: {
+            error: `${contentKeys.join(", ")}: machine-local field(s) — content/executor changes only apply from the loop's own machine (cross-machine edits may touch: ${[...TEAM_WRITE_KEYS].join(", ")})`,
+          },
+        };
+      }
+    }
+
+    // Executor assignment. `assignee=<agent>` is an OPERATION (re-bind + maybe
+    // dispatch), not a field write. It MAY combine with field writes — the
+    // defined order is FIELDS FIRST, then the op against the NEW state, so
+    // `update X status=todo assignee=claude` means "make it ready and hand it
+    // off" in one command (the old "send it alone" 400 created an ordering trap:
+    // assign-then-todo silently never dispatched). Partial failure is explicit:
+    // applied fields STAND and the error names the failed part.
+    // Doc pushes ride alone — checked BEFORE the assignee branch so the rule
+    // (and its error string) exists exactly once.
+    if ((p.doc !== undefined || p.docBase !== undefined) && Object.keys(p).some((k) => k !== "doc" && k !== "docBase")) {
+      return { status: 400, body: { error: "doc is an operation — send it alone (loopany update <id> --doc-file <path>)" } };
+    }
+    if (p.assignee !== undefined) {
+      const rest: Record<string, unknown> = { ...p };
+      delete rest.assignee;
+      if (Object.keys(rest).length === 0) return this.assignExecutor(machineId, loop, p.assignee, dryRun);
+      const fields = await this.editLoop(deviceToken, id, rest, dryRun);
+      if (fields.status >= 400) return fields; // fields failed → nothing applied, op not attempted
+      const fieldBody = fields.body as { applied?: string[]; text?: string; warning?: string };
+      if (dryRun) {
+        // Preview both halves; the op previews against the CURRENT loop (the
+        // fields aren't applied in a dry-run, so "new state" doesn't exist yet).
+        const opPrev = await this.assignExecutor(machineId, loop, p.assignee, true);
+        const opText = (opPrev.body as { text?: string; error?: string }).text ?? (opPrev.body as { error?: string }).error ?? "";
+        // HTTP stays 200 (the PREVIEW succeeded) but a failing op half signals
+        // exit 1, mirroring edit --dry-run's rejection convention.
+        return { status: 200, body: { ...fieldBody, ok: opPrev.status < 400, exitCode: opPrev.status < 400 ? 0 : 1, text: `${fieldBody.text ?? ""}\n${opText}`.trim() } };
+      }
+      const fresh = await store.getLoop(id);
+      if (!fresh) return { status: 404, body: { error: "loop not found" } };
+      const op = await this.assignExecutor(machineId, fresh, p.assignee, false);
+      const applied = fieldBody.applied ?? Object.keys(rest);
+      if (op.status >= 400) {
+        const opErr = (op.body as { error?: string }).error ?? "assignment failed";
+        return { status: op.status, body: { applied, error: `${applied.join(", ")} applied · assignee failed: ${opErr}` } };
+      }
+      const opBody = op.body as { assignee?: string; dispatched?: boolean; note?: string; text?: string };
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          id: loop.id,
+          name: loop.name ?? loop.id,
+          applied: [...applied, "assignee"],
+          assignee: opBody.assignee,
+          dispatched: opBody.dispatched,
+          ...(opBody.note ? { note: opBody.note } : {}),
+          ...(fieldBody.warning ? { warning: fieldBody.warning } : {}),
+          text: `${fieldBody.text ?? ""}\n${opBody.text ?? ""}`.trim(),
+        },
+      };
+    }
+    // Doc push. Like assignee, an OPERATION with its own guards (base-hash
+    // precondition + open-run refusal), not a plain field write — sent alone.
+    if (p.doc !== undefined || p.docBase !== undefined) {
+      return this.pushDoc(machineId, loop, p.doc, p.docBase, dryRun); // companions already rejected above
+    }
     // Whitelist: a typo in `--json` must fail loudly, never silently no-op, and
     // no non-listed field (id/teamId/userId/machineId/timestamps/…) may be touched.
     const unknownKeys = Object.keys(p).filter((k) => !EDITABLE_LOOP_FIELDS.has(k));
@@ -1152,7 +2045,11 @@ export class MachineGateway {
       };
     }
 
-    const updated = await store.updateLoop(id, update);
+    // Attribute the write: the chokepoint's status/assignee-changed events carry
+    // the OWNER's email (this is the device-credential edit surface).
+    const editorMachine = await store.getMachine(machineId);
+    const editorActor = (editorMachine && editorMachine.userId !== "shared" ? await store.userEmail(editorMachine.userId) : undefined) ?? editorMachine?.userId ?? "owner";
+    const updated = await store.updateLoop(id, update, { actor: editorActor });
     if (!updated) return { status: 404, body: { error: "loop not found" } };
     // Re-arm the scheduler: an enabled flip toggles add/remove, any other change re-adds.
     if (updated.enabled) this.scheduler.addLoop(updated);
@@ -1160,6 +2057,18 @@ export class MachineGateway {
     this.invalidateWatch(machineId); // taskFile may have moved the watched folder
     log.info({ machineId, loopId: id, fields: Object.keys(update) }, "editLoop: applied");
     const applied = Object.keys(update);
+    // A taskFileContent write may have CHANGED the human assignee (front-matter
+    // plane) — warn when the new email isn't on the roster, without blocking.
+    const rosterWarning = await this.assigneeRosterWarning(editorMachine, updated.taskMeta?.assignee, loop.taskMeta?.assignee);
+    // Teach at the moment of confusion: status is BOOKKEEPING and never
+    // dispatches ("assignment dispatches; status never does") — a bare flip to
+    // todo on an inert task gets a pointer instead of silence. Only this
+    // explicit-verb path hints; watcher sync / a run's own close never do.
+    const hint =
+      updated.taskMeta?.status === "todo" && loop.taskMeta?.status !== "todo" && updated.cron == null
+        ? `status alone never dispatches — \`loopany run ${updated.taskMeta?.id ?? updated.id}\` starts it now, or hand it off with assignee=<agent>`
+        : undefined;
+    const appliedText = renderEditAppliedText(updated.id, updated.name ?? updated.id, applied);
     return {
       status: 200,
       body: {
@@ -1167,7 +2076,9 @@ export class MachineGateway {
         id: updated.id,
         name: updated.name ?? updated.id,
         applied,
-        text: renderEditAppliedText(updated.id, updated.name ?? updated.id, applied),
+        ...(rosterWarning ? { warning: rosterWarning } : {}),
+        ...(hint ? { hint } : {}),
+        text: `${appliedText}${rosterWarning ? `\nwarning: ${rosterWarning}` : ""}${hint ? `\nhint: ${hint}` : ""}`,
       },
     };
   }
@@ -1206,17 +2117,31 @@ export class MachineGateway {
       else set("timezone", tz, loop.timezone);
     }
     if (p.cron !== undefined) {
-      const cron = str(p.cron);
-      if (!cron) rejections.push({ key: "cron", reason: "cron cannot be empty" });
-      else {
-        const c = validCadence(cron, p.timezone !== undefined ? update.timezone : loop.timezone);
-        if (!c.ok) rejections.push({ key: "cron", reason: `invalid cron: ${c.detail}` });
-        else set("cron", cron, loop.cron);
+      if (p.cron === null) {
+        // Explicit disarm: the task keeps existing, the schedule stops. (An empty
+        // string is still rejected — a typo must not silently disarm a loop.)
+        set("cron", null, loop.cron);
+      } else {
+        const cron = str(p.cron);
+        if (!cron) rejections.push({ key: "cron", reason: "cron cannot be empty (use cron: null to stop the schedule)" });
+        else {
+          const c = validCadence(cron, p.timezone !== undefined ? update.timezone : loop.timezone);
+          if (!c.ok) rejections.push({ key: "cron", reason: `invalid cron: ${c.detail}` });
+          else set("cron", cron, loop.cron);
+        }
       }
     }
     if (p.name !== undefined) set("name", str(p.name), loop.name);
     if (p.model !== undefined) set("model", str(p.model), loop.model);
     if (p.taskFile !== undefined) set("taskFile", str(p.taskFile), loop.taskFile);
+    if (p.taskFileContent !== undefined) {
+      if (typeof p.taskFileContent !== "string") rejections.push({ key: "taskFileContent", reason: "taskFileContent must be a string (the README body)" });
+      else {
+        (update as Record<string, unknown>)["taskFileContent"] = p.taskFileContent.slice(0, WIRE_TEXT_CAP);
+        (update as Record<string, unknown>)["taskFileSyncedAt"] = nowIso();
+        changes.push({ key: "taskFileContent", from: `${loop.taskFileContent?.length ?? 0} bytes`, to: `${p.taskFileContent.length} bytes` });
+      }
+    }
     if (p.notify !== undefined) {
       const v = p.notify;
       if (v !== "always" && v !== "auto" && v !== "never") rejections.push({ key: "notify", reason: "notify must be always|auto|never" });
@@ -1286,6 +2211,58 @@ export class MachineGateway {
     return readClaim(token);
   }
 
+  /**
+   * Single ingress for a machine-pushed task-file snapshot (report finalize,
+   * report enrich, and the sync-path field). store.updateLoop derives `taskMeta`
+   * in the same write; this layer owns the one lifecycle rule the store can't
+   * (it holds the scheduler): a task whose file now says `status: done|archived`
+   * has its schedule PAUSED — the file is the source of truth, the loop follows.
+   */
+  async ingestTaskFileContent(loopId: string, content: string): Promise<void> {
+    const updated = await store.updateLoop(loopId, {
+      taskFileContent: clipText(content, WIRE_TEXT_CAP),
+      taskFileSyncedAt: nowIso(),
+    });
+    if (!updated) return;
+    // Legacy record advance: a file-era daemon keeps appending to the README's
+    // Timeline section instead of emitting events — seed each NEW dated entry
+    // into the event stream (dedup on at+text against what's already recorded),
+    // so the record plane advances for legacy loops too. Best-effort, bounded.
+    try {
+      const { events: parsed } = splitTaskDoc(updated.taskFileContent ?? "");
+      const dated = parsed.filter((e) => e.at);
+      if (dated.length) {
+        const existing = await store.listEvents(loopId, { limit: 200 });
+        const seen = new Set(existing.map((e) => `${e.at?.slice(0, 10)}|${e.text ?? ""}`));
+        for (const e of dated) {
+          // Key on the CLIPPED text — the stored row is clipped, so an unclipped
+          // key would re-seed every over-cap entry on the next sync.
+          const text = e.text.slice(0, MESSAGE_CAP);
+          const key = `${e.at!.slice(0, 10)}|${text}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          await store.addEvent({
+            loopId,
+            type: "note",
+            actor: e.actor ?? `agent:${updated.agent}`,
+            at: e.at,
+            text,
+            data: { source: "timeline" },
+          });
+        }
+      }
+    } catch (err) {
+      log.warn({ loopId, err: err instanceof Error ? err.message : String(err) }, "timeline event seeding failed");
+    }
+    const status = updated.taskMeta?.status;
+    if ((status === "done" || status === "archived") && updated.cron && updated.enabled) {
+      await store.updateLoop(loopId, { enabled: false });
+      this.scheduler.removeLoop(loopId);
+      log.info({ loopId, status }, "task file marked terminal — schedule paused");
+    }
+  }
+
+
   // ---- POST /machine/report ----
 
   async report(
@@ -1300,6 +2277,11 @@ export class MachineGateway {
       transcript?: unknown;
       /** Latest content of the loop's task file (durable context+log doc). */
       taskFileContent?: unknown;
+      /** Close push (task runs): the run's edited TASK.md working copy, sent only
+       *  when its bytes changed from the delivered doc. */
+      taskDoc?: unknown;
+      /** The delivered doc's content hash — the close push's base precondition. */
+      taskDocBase?: unknown;
       error?: string;
       finalText?: string;
       /** "direct"/"silent" (workflow), "exec" (claude), or "evolve". Defaults by role. */
@@ -1354,10 +2336,7 @@ export class MachineGateway {
         ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
       });
       if (typeof body.taskFileContent === "string") {
-        await store.updateLoop(lease.loopId, {
-          taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
-          taskFileSyncedAt: nowIso(),
-        });
+        await this.ingestTaskFileContent(lease.loopId, body.taskFileContent);
       }
       await retireLease(runToken);
       log.info({ runId: lease.runId }, "report: enriched a finished run (durationMs/sessionId)");
@@ -1464,13 +2443,42 @@ export class MachineGateway {
     }
     if (cursor !== undefined) await store.updateLoop(lease.loopId, { state: cursor });
 
-    // Sync the machine's task file onto the loop (untrusted wire input — clip
-    // defensively even though the daemon already caps it).
-    if (typeof body.taskFileContent === "string") {
-      await store.updateLoop(lease.loopId, {
-        taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
-        taskFileSyncedAt: nowIso(),
-      });
+    // Close push (task runs): the run's edited TASK.md, guarded by the hash the
+    // doc had at claim. The lease window made the run the sole doc writer, so a
+    // matching base is the normal case; a mismatch means the doc advanced after
+    // a reclaim (an owner merged meanwhile) — a stale close must never clobber
+    // it, so it's dropped with a log, never applied.
+    if (typeof body.taskDoc === "string" && typeof body.taskDocBase === "string") {
+      const cur = await store.getLoop(lease.loopId);
+      const current = cur?.taskFileContent ?? "";
+      let apply: string | null = null;
+      if (sha256(current) === body.taskDocBase) {
+        apply = clipText(body.taskDoc, WIRE_TEXT_CAP);
+      } else {
+        // The doc moved since claim. The run's OWN server-side field writes
+        // (`update status=done` patches the front matter) are the normal cause —
+        // merge: take the pushed body, then re-impose the server's CURRENT front
+        // matter so the run's stale working copy never reverts its own field
+        // writes. A change NOT authored by this run (an owner merge after a
+        // reclaim) wins outright: the stale push drops with a log.
+        const foreign = (await store.listEvents(lease.loopId, { since: run?.ts, limit: 100 })).some(
+          (e) => e.runId !== lease.runId && (e.type === "doc-updated" || e.type === "status-changed" || e.type === "assignee-changed"),
+        );
+        if (foreign) {
+          log.warn({ runId: lease.runId, loopId: lease.loopId }, "report: stale task-doc close push ignored (doc advanced since claim by another writer)");
+        } else {
+          apply = patchFrontMatterContent(clipText(body.taskDoc, WIRE_TEXT_CAP), parseFrontMatter(current) ?? {});
+        }
+      }
+      if (apply != null && apply !== current) {
+        const actor = `agent:${cur?.agent ?? "unknown"}`;
+        await store.updateLoop(lease.loopId, { taskFileContent: apply, taskFileSyncedAt: nowIso() }, { actor, runId: lease.runId });
+        await store.addEvent({ loopId: lease.loopId, runId: lease.runId, type: "doc-updated", actor, data: { bytes: apply.length } });
+      }
+    } else if (typeof body.taskFileContent === "string") {
+      // Sync the machine's task file onto the loop (untrusted wire input — the
+      // ingest helper clips + derives taskMeta + applies the done-pauses rule).
+      await this.ingestTaskFileContent(lease.loopId, body.taskFileContent);
     }
 
     // Message: a workflow reports it here; a claude run already set it via the
@@ -1490,6 +2498,32 @@ export class MachineGateway {
     // clobber a state the run already reported (e.g. a workflow that escalated).
     const runState = ok && !run?.state ? scalarState(cursor) : undefined;
 
+    // Task-run record synthesis (auto-close): a cron-null exec run has no
+    // terminal verb — its record derives from the exit + the events it emitted
+    // (status changes, notes, the doc push above). A run that ends with nothing
+    // recorded gets an honest "task unchanged" line, never a fabricated summary.
+    // The synthesized status drives the standard notify gate: a terminal status
+    // change notifies (as "resolved"); anything else is quiet ("nothing-new").
+    let synthMessage: string | undefined;
+    let synthStatus: RunStatus | undefined;
+    if (ok && lease.role === "exec" && message === undefined && !run?.message) {
+      const taskLoop = await store.getLoop(lease.loopId);
+      if (taskLoop && taskLoop.cron == null) {
+        const evs = await store.eventsForRun(lease.runId);
+        const statusEv = [...evs].reverse().find((e) => e.type === "status-changed");
+        const to = statusEv ? ((statusEv.data as { to?: string } | null)?.to ?? "?") : undefined;
+        const notes = evs.filter((e) => e.type === "note").length;
+        const docChanged = evs.some((e) => e.type === "doc-updated");
+        const bits = [
+          ...(to ? [`status → ${to}`] : []),
+          ...(notes ? [`${notes} note${notes === 1 ? "" : "s"}`] : []),
+          ...(docChanged ? ["doc updated"] : []),
+        ];
+        synthMessage = bits.length ? bits.join(" · ") : "run ended with no recorded outcome — task unchanged";
+        synthStatus = to === "done" || to === "archived" ? "resolved" : "nothing-new";
+      }
+    }
+
     // Whitelist the claimed outcome (untrusted wire input) — anything outside the
     // known enum falls back to the role default rather than landing in the column.
     const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
@@ -1503,10 +2537,21 @@ export class MachineGateway {
       ...(transcript ? { transcript } : {}),
       ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
       ...(runState ? { state: runState } : {}),
-      ...(message !== undefined ? { message } : {}),
+      ...(message !== undefined ? { message } : synthMessage !== undefined ? { message: synthMessage } : {}),
+      ...(synthStatus !== undefined ? { status: synthStatus } : {}),
       ...(ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
       progress: null, // live signal done — the full transcript supersedes it
       ts: nowIso(),
+    });
+    // Record plane: the run's return is an event like everything else — the
+    // Timeline render, the prompt context, and record synthesis all read it.
+    await store.addEvent({
+      loopId: lease.loopId,
+      runId: lease.runId,
+      type: "run-returned",
+      actor: `agent:${(await store.getLoop(lease.loopId))?.agent ?? "unknown"}`,
+      text: message ?? null,
+      data: { ok, outcome: finalized?.outcome ?? null },
     });
     await retireLease(runToken);
 
@@ -1710,7 +2755,7 @@ export function fmtTimeZoned(iso: string, timezone: string | null, opts: { secon
 const LIST_DEFAULT_FIELDS: string[] = ["id", "name", "cron", "enabled", "nextFire"];
 /** The optional columns `--fields` may add (the "available" set an unknown field is
  *  measured against, §4.2). `runs`/`lastOutcome` are derived per loop. */
-const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "goal", "taskFile", "runs", "lastOutcome"];
+const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "goal", "taskFile", "runs", "lastOutcome", "machine"];
 
 /** A loop's row for `loopany loops`: every renderable cell precomputed once (so the
  *  `--fields` selection is a pure column pick). The structured `loops` body carries the
@@ -1719,7 +2764,7 @@ const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "goal", "
 interface LoopListRecord {
   id: string;
   name: string;
-  cron: string;
+  cron: string | null;
   timezone: string | null;
   enabled: boolean;
   notify: string;
@@ -1734,6 +2779,9 @@ interface LoopListRecord {
   runs: number;
   /** Derived: the most recent run's outcome token, or null (no runs yet). */
   lastOutcome: string | null;
+  /** Team-wide reads: which machine the loop is bound to (display name + id). */
+  machineId: string;
+  machine: string;
 }
 
 /** One `loops` cell for a named column (scalar-rendered by `listBlock`). */
@@ -1751,6 +2799,7 @@ function loopCell(rec: LoopListRecord, field: string): Scalar {
     case "taskFile": return rec.taskFile;
     case "runs": return rec.runs;
     case "lastOutcome": return rec.lastOutcome;
+    case "machine": return rec.machine;
     default: return null;
   }
 }
@@ -1856,15 +2905,15 @@ function renderLogText(name: string, loopId: string, runs: LogRun[], total: numb
 function renderCreatedText(
   name: string,
   loopId: string,
-  cron: string,
+  cron: string | null,
   timezone: string | null,
   goal: string | null,
   uiApplied: boolean,
   warning: string | undefined,
 ): string {
   // Render the fire preview in the loop's OWN tz with a zone label (F9), matching
-  // `show`'s `nextFire` — not raw, unlabeled UTC.
-  const nextRuns = nextFires(cron, timezone, 3).map((iso) => fmtTimeZoned(iso, timezone));
+  // `show`'s `nextFire` — not raw, unlabeled UTC. A cron-null TASK has no fires.
+  const nextRuns = cron ? nextFires(cron, timezone, 3).map((iso) => fmtTimeZoned(iso, timezone)) : [];
   return doc(
     `created: ${scalar(name)} (${loopId})`,
     `classification: ${goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
@@ -1891,7 +2940,7 @@ function renderReplayText(name: string, loopId: string, goal: string | null): st
 
 /** `loopany new --dry-run` — the normalized config + fire preview (no persistence). */
 function renderCreateDryRunText(
-  config: { name: string | null; cron: string; timezone: string | null; taskFile: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
+  config: { name: string | null; cron: string | null; timezone: string | null; taskFile: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
   nextRuns: string[],
   warning: string | undefined,
 ): string {

@@ -74,11 +74,11 @@ re-describe the whole picture each time. A known issue that simply persists is n
 news. Then it maintains the file: update `## Current understanding` to the new reality,
 append one concise Timeline entry (finding + status), and compress as in §1.
 
-## 3. Ending a run: report, or finish
+## 3. Ending a run: done, or finish
 
 Every run ends with exactly ONE terminal call, made at the very end even when nothing
 happened. In almost every run that call is `loopany report` — the run's single channel
-to the user and the run log:
+to the user and the run log (`done` is accepted as an alias):
 
     loopany report --status nothing-new
     loopany report --status new --message "<one short message to the user>"
@@ -90,7 +90,7 @@ to the user and the run log:
 - `nothing-new` — nothing worth saying (a known issue that simply persists is still
   `nothing-new`).
 
-Always report, even `nothing-new`, so the run is on record. Whether the user is
+Always call it, even `nothing-new`, so the run is on record. Whether the user is
 actually messaged is the scheduler's call — it follows this loop's notify policy, not
 the run's. Keep `--message` short and human, and never dump logs into it; a long body
 belongs in a file passed with `--message-file <path>`.
@@ -98,7 +98,7 @@ belongs in a file passed with `--message-file <path>`.
 **Finishing a goal-driven loop.** A closed loop carries a goal — a finish line
 delivered in the run's prompt as a `Goal (finish line): <goal>` line — and each run is
 the judge of whether that setpoint has been reached. When a run believes the goal is
-met, it ends with `finish` instead of `report`:
+met, it ends with `finish` instead of `done`:
 
     loopany finish --message "<what was achieved>" --reason "<one line: why the goal is met>"
 
@@ -107,14 +107,14 @@ user is told. Because it is terminal and irreversible for the loop, hold to a st
 bar:
 
 - Run `loopany show` and confirm `goal` shows a setpoint and `selfFinish: allowed`.
-  If either is off, you cannot finish — `report` as normal.
+  If either is off, you cannot finish — `done` as normal.
 - Judge the setpoint met per the Spec's own definition of done, from real evidence
   gathered *this run*, not a hunch.
-- If you are close but not there, `report` the progress and let the loop run again.
+- If you are close but not there, `done` the progress and let the loop run again.
   Never finish early — a premature finish silently ends a loop the user still needs.
-  When unsure, report.
+  When unsure, `done`.
 
-Only one terminal call per run — `report` OR `finish`, never both.
+Only one terminal call per run — `done` OR `finish`, never both.
 
 **Reporting is one-way.** `loopany report`/`finish` cannot ask a question and get an
 answer back within the run. If a run is blocked — missing credentials, an API down or
@@ -172,3 +172,38 @@ into a coherent dashboard over time.
 A run is one pass, not a session. It does its work once and exits; the scheduler wakes
 it again on cadence. A run never polls, sleeps, or waits for more — if there is nothing
 to do this pass, it reports `nothing-new` and stops.
+
+## The record plane (events) and task runs
+
+Every task/loop carries an append-only EVENT LOG beside its doc — notes, status
+changes, doc updates, run starts/returns. It is the cross-run, cross-machine
+record the web timeline renders from:
+
+- `loopany note "<one line>"` (in-run) appends one immutable, attributed entry
+  for the run's own task; `loopany note <ref> "<text>"` works from any of the
+  owner's machines. Use it for observations worth keeping — decisions, blockers,
+  results.
+- `loopany get <id> --log [--since <iso>] [--recent N]` reads the recent record
+  (`events: N of M total`; an empty log states the zero definitively).
+
+**Task runs (no cron) have NO terminal verb.** The run closes itself when the
+process exits; the record synthesizes from what actually happened (status
+changes, notes, doc edits). End by setting the status honestly:
+
+    loopany update <id> status=done --note "<what you delivered + how verified>"
+    loopany update <id> status=follow-up follow_up_date=<YYYY-MM-DD> --note "<what to check>"
+    loopany update <id> status=in-progress --note "<the blocker>"
+
+`report` stays the per-tick record for RECURRING loop runs only. On a GOAL
+loop, `loopany update <id> status=done --note "<evidence>"` is the same guarded
+transition as `loopany finish` — it requires the completion evidence, completes
+exactly once, and pauses the schedule.
+
+## Doc working copies
+
+The doc (Spec + Current understanding) is server-authoritative and editable via
+working copies: `loopany get <id> --checkout` writes `<slug>.md` + a `.base`
+hash sidecar; edit it, then `loopany update <id> --doc-file <slug>.md` pushes it
+back. A conflicting push returns the server diff (your merge input), never a
+silent clobber. Inside a task run, the delivered `TASK.md` IS the working copy —
+edits push back automatically at close.

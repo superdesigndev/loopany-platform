@@ -19,7 +19,7 @@
 import path from "node:path";
 
 import * as store from "../db/store.js";
-import type { ControlAction, Loop, NotifyPolicy, RunRole, RunStatus, StateField } from "../db/schema.js";
+import type { ControlAction, Loop, NewLoop, NotifyPolicy, RunRole, RunStatus, StateField } from "../db/schema.js";
 import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
 import { selfCronFloorMinutes, selfRescheduleFloorMinutes } from "../env.js";
 import { machineIdFromToken, resolveLease, type RunLease } from "./tokens.js";
@@ -46,6 +46,7 @@ import {
   fmtTime,
   fmtTimeZoned,
   invalidTimezoneError,
+  loopEnvelope,
   nextFires,
   parseWhen,
   runMetricsToken,
@@ -56,7 +57,9 @@ import {
   type MachineGateway,
 } from "./index.js";
 import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
-import { nowIso, stripNul, type HttpResult } from "./http.js";
+import { WIRE_TEXT_CAP, nowIso, stripNul, type HttpResult } from "./http.js";
+import { TASK_PRIORITIES, TASK_STATUSES, TASK_TYPES, patchFrontMatterContent } from "../server/frontmatter.js";
+import { childrenOf, filterTasks, resolveRows, toTaskRow, type TaskRow } from "../server/taskTree.js";
 
 export class CliGateway {
   constructor(
@@ -144,6 +147,84 @@ export class CliGateway {
       }
       case "log":
         return this.gateway.loopLog(deviceToken, loopArg, flags["limit"]);
+      case "note": {
+        // `loopany note <ref> "<text>"` — append one immutable comment event.
+        // Team-wide by design (R4): the note is the cross-machine/cross-person
+        // write the file era could never do. Actor = the machine owner's email.
+        const [ref, ...rest] = argv.slice(1).filter((a) => !a.startsWith("--"));
+        const unknown = Object.keys(flags).filter((k) => !["_", "help"].includes(k));
+        if (unknown.length) {
+          return { status: 400, body: { error: `unknown flag(s) for note: ${unknown.map((f) => `--${f}`).join(", ")} — note takes none (loopany note <ref> "<text>")`, exitCode: 2 } };
+        }
+        const text = rest.join(" ").trim();
+        if (!ref || !text) return { status: 400, body: { error: 'usage: loopany note <ref> "<text>"', exitCode: 2 } };
+        const r = await this.gateway.resolveTaskRow(machineId, ref);
+        if ("err" in r) return r.err;
+        const machine = await store.getMachine(machineId);
+        const actor = (machine && machine.userId !== "shared" ? await store.userEmail(machine.userId) : undefined) ?? machine?.userId ?? "unknown";
+        await store.addEvent({ loopId: r.row.loopId, type: "note", actor, text: text.slice(0, MESSAGE_CAP) });
+        return {
+          status: 200,
+          body: { ok: true, text: `note: added to ${r.row.slug ?? r.row.loopId} (as ${actor})\nhelp[1]:\n  Run \`loopany get ${r.row.slug ?? r.row.loopId} --log\` to see the task's recent events` },
+        };
+      }
+      case "team": {
+        // `loopany team` — who can work here: teammates (humans, assignable via the
+        // README `assignee:` front matter) and registered agents (machine × runtime
+        // executors, assignable via `update <id> assignee=<agent-slug>`). The agent
+        // list is scoped to the OWNER's machines; `team rename <agent> "<name>"`
+        // relabels one (the slug — the address — stays stable).
+        const unknown = Object.keys(flags).filter((k) => !["_", "help", "json"].includes(k));
+        if (unknown.length) {
+          return { status: 400, body: { error: `unknown flag(s) for team: ${unknown.map((f) => `--${f}`).join(", ")} — team takes only --json`, exitCode: 2 } };
+        }
+        const pos = argv.slice(1).filter((a) => !a.startsWith("--"));
+        const machine = (await store.getMachine(machineId))!;
+        const mine = (await store.listMachines()).filter((m) => m.userId === machine.userId);
+        if (pos[0] === "rename") {
+          const ref = pos[1];
+          const name = pos.slice(2).join(" ").trim();
+          if (!ref || !name) return { status: 400, body: { error: 'usage: loopany team rename <agent> "<name>"', exitCode: 2 } };
+          const rows = await store.agentsForMachines(mine.map((m) => m.id));
+          const hits = rows.filter((a) => a.slug === ref || a.id === ref || a.name === ref);
+          if (!hits.length) return { status: 404, body: { error: `no such agent of yours: '${ref}' — run \`loopany team\` to list them` } };
+          if (hits.length > 1) {
+            return { status: 409, body: { error: `agent '${ref}' is ambiguous — use the slug or id`, candidates: hits.map((a) => ({ id: a.id, slug: a.slug, name: a.name })) } };
+          }
+          const updated = (await store.renameAgent(hits[0]!.id, name.slice(0, 120)))!;
+          return { status: 200, body: { ok: true, text: `agent renamed: ${updated.slug} → ${scalar(updated.name)}\nhelp[1]:\n  Run \`loopany team\` to see the roster` } };
+        }
+        if (pos.length) return { status: 400, body: { error: `loopany: unknown team subcommand "${pos[0]}" (try: team, team rename <agent> "<name>")`, exitCode: 2 } };
+        // People: every member of the owner's teams, deduped. Open mode ("shared"
+        // owner) has no membership concept — the people list is definitively empty.
+        const people = new Map<string, { email: string; name: string }>();
+        if (machine.userId !== "shared") {
+          for (const team of await store.listTeamsForUser(machine.userId)) {
+            for (const m of await store.listTeamMembers(team.id)) {
+              const email = m.email ?? m.userId;
+              if (!people.has(email)) people.set(email, { email, name: m.displayName ?? "" });
+            }
+          }
+        }
+        const agents = (await store.agentsForMachines(mine.map((m) => m.id))).map((a) => {
+          const host = mine.find((m) => m.id === a.machineId);
+          return { agent: a.slug, name: a.name, runtime: a.runtime, machine: host?.name || a.machineId, presence: host ? machinePresence(host.online, host.lastSeen) : "offline" };
+        }).sort((a, b) => a.agent.localeCompare(b.agent));
+        if (flags["json"] === true) {
+          return { status: 200, body: { ok: true, text: JSON.stringify({ people: [...people.values()], agents }, null, 2) } };
+        }
+        const lines: string[] = [];
+        const ppl = [...people.values()];
+        lines.push(ppl.length ? listBlock("people", ["email", "name"], ppl.map((p) => [p.email, p.name || ABSENT])) : emptyList("people"));
+        lines.push(agents.length
+          ? listBlock("agents", ["agent", "name", "runtime", "machine", "presence"], agents.map((a) => [a.agent, a.name, a.runtime, a.machine, a.presence]))
+          : emptyList("agents"));
+        lines.push(helpBlock([
+          "Run `loopany update <id> assignee=<agent>` to hand a task to an agent",
+          "Run `loopany team rename <agent> \"<name>\"` to relabel one",
+        ]));
+        return { status: 200, body: { ok: true, text: lines.join("\n") } };
+      }
       case "show": {
         // Device `show` may inspect ANY loop bound to the machine; the machine-scope
         // check mirrors loopLog/editLoop (flat 404, existence never leaks).
@@ -159,12 +240,13 @@ export class CliGateway {
         return { status: 200, body: { ok: true, text: await this.describe(loop.id, { full: flags["full"] === true }) } };
       }
       case "report":
+      case "done":
       case "finish":
       case "complete":
         // Per §4.1: there is no run to attribute a device-credential report/finish to.
         return { status: 403, body: { error: `loopany: "${verb}" is a run-only verb — a run reports/finishes itself; the owner edits via "edit"` } };
       default:
-        return { status: 400, body: { error: `loopany: unknown command "${verb}" for the device credential (try: new, loops, edit, log, show)` } };
+        return { status: 400, body: { error: `loopany: unknown command "${verb}" for the device credential (try: new, loops, edit, log, show, note, team)` } };
     }
   }
 
@@ -257,7 +339,23 @@ export class CliGateway {
       case "--help":
       case "help":
         return { code: 200, text: this.helpText(lease) };
+      // `done` is the forward name for the run-finalization verb (`report` kept
+      // as an alias — the collision with report-the-artifact confused agents).
+      case "done":
       case "report": {
+        // `report` is a LOOP-run record (per-tick outcome of a recurring node).
+        // A task run's outcome lives on the node: status + events. Teach the
+        // grammar instead of accepting a record nothing renders.
+        if (lease.role === "exec") {
+          const repLoop = await store.getLoop(lease.loopId);
+          if (repLoop && repLoop.cron == null) {
+            return derr(
+              400,
+              `this is a task run — record the outcome on the task itself: \`loopany update ${repLoop.taskMeta?.id ?? lease.loopId} status=done --note "<what happened>"\` (or a plain \`loopany note "<progress>"\`); the run closes automatically`,
+              "VALIDATION_ERROR",
+            );
+          }
+        }
         const rawState = str("state") ?? str("state-content");
         let state: Record<string, number | string> | undefined;
         if (rawState !== undefined) {
@@ -296,6 +394,17 @@ export class CliGateway {
         const res = await this.gateway.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
         return { code: res.status, text: (res.body as { text?: string }).text ?? "" };
       }
+      case "note": {
+        // In-run note: appends to the run's OWN loop (dispatch never reads a loop
+        // id, same fence as `log`), linked to the run via runId so the close
+        // endpoint's record synthesis sees it. Actor = the loop's executor label.
+        const text = argv.slice(1).filter((a) => !a.startsWith("--")).join(" ").trim();
+        if (!text) return { code: 400, text: errorBlock('usage: loopany note "<text>"', "VALIDATION_ERROR") };
+        const noteLoop = await store.getLoop(lease.loopId);
+        const actor = `agent:${noteLoop?.agent ?? "unknown"}`;
+        await store.addEvent({ loopId: lease.loopId, runId: lease.runId, type: "note", actor, text: text.slice(0, MESSAGE_CAP) });
+        return { code: 200, text: `note: added (as ${actor})` };
+      }
       case "finish":
       case "complete": {
         if (!lease.canFinish) {
@@ -323,9 +432,19 @@ export class CliGateway {
           state = v.value;
         }
         const message = str("message")?.slice(0, MESSAGE_CAP);
-        const reason = str("reason")?.slice(0, MESSAGE_CAP) ?? null;
+        // `finish` is now an ALIAS of the guarded done-transition — --reason (or
+        // --note) is the completion evidence the transition requires.
+        const reason = (str("reason") ?? str("note"))?.slice(0, MESSAGE_CAP) ?? null;
         const r = await this.gateway.finishLoop(lease, { message, reason, state });
-        return r.ok ? { code: 200, text: await renderFinishedText(lease.loopId) } : derr(400, r.detail ?? "rejected", r.code);
+        if (!r.ok) return derr(r.code === "CONFLICT" ? 409 : 400, r.detail ?? "rejected", r.code);
+        // Stamp the field plane too (same as `update status=done --note`), so both
+        // spellings leave identical state and the status-changed event is recorded.
+        const finLoop = await store.getLoop(lease.loopId);
+        if (finLoop && finLoop.taskMeta?.status !== "done") {
+          const stamped = patchFrontMatterContent(finLoop.taskFileContent ?? "", { status: "done" });
+          await store.updateLoop(finLoop.id, { taskFileContent: stamped }, { actor: `agent:${finLoop.agent}`, runId: lease.runId });
+        }
+        return { code: 200, text: await renderFinishedText(lease.loopId) };
       }
       case "set-ui": {
         if (!lease.canSetUi) return derr(403, "only the evolution or edit pass may set the UI", "FORBIDDEN");
@@ -351,6 +470,28 @@ export class CliGateway {
         await this.audit(lease, "set-workflow", { bytes: String(body.length) }, r);
         return r.ok ? { code: 200, text: r.detail ?? "workflow updated" } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
       }
+      // Task-tree subset (Rules 1–2 from inside a run): read the tree, register a
+      // new task. Machine-scoped via the lease — the same boundary the device
+      // token has. Both bare and task- prefixed spellings are accepted (agents
+      // type the bare ones; the prefix keeps them collision-proof forever).
+      case "get":
+      case "task-get":
+        return this.runTaskGet(lease, str("_") ?? str("id"));
+      case "search":
+      case "task-search":
+        return this.runTaskSearch(lease, argv.slice(1).filter((a) => !a.startsWith("--")).join(" "));
+      case "list":
+      case "task-list":
+        return this.runTaskList(lease, str("_") ?? str("id"), { due: flags["due"] === true, status: str("status") });
+      case "create":
+      case "task-create":
+        return this.runTaskCreate(lease, str, flags);
+      case "update":
+      case "task-update":
+        return this.runTaskUpdate(lease, argv.slice(1));
+      case "delete":
+      case "task-delete":
+        return derr(400, "tasks are never deleted — set `status: archived` in the task's README instead", "VALIDATION_ERROR");
     }
 
     if (MUTATION_VERBS.has(verb ?? "")) {
@@ -360,6 +501,215 @@ export class CliGateway {
       return r.ok ? { code: 200, text: r.detail ?? `${verb} applied` } : derr(400, r.detail ?? "rejected", "VALIDATION_ERROR");
     }
     return derr(400, `unknown command "${verb ?? ""}" (try: loopany help)`, "VALIDATION_ERROR");
+  }
+
+  // ---- run-token task verbs (machine-scoped via the lease) ----
+
+  /** One task as a compact agent-readable line. */
+  private static taskLine(r: TaskRow, indent = ""): string {
+    const bits = [r.type ?? "-", r.status ?? "-", r.priority ?? "-"];
+    const sched = r.cron ? ` ⟳ ${r.cron}${r.enabled ? "" : " (paused)"}` : "";
+    return `${indent}${r.slug ?? r.loopId} — ${r.title} · ${bits.join(" · ")}${sched}`;
+  }
+
+  private async runTaskGet(lease: RunLease, idOrSlug: string | undefined): Promise<{ code: number; text: string }> {
+    if (!idOrSlug) return derr(400, "get needs a task id/slug", "VALIDATION_ERROR");
+    const r = await this.gateway.resolveTaskRow(lease.machineId, idOrSlug);
+    if ("err" in r) return { code: r.err.status, text: errorBlock((r.err.body as { error: string }).error, codeForStatus(r.err.status)) };
+    const loop = (await store.getLoop(r.row.loopId))!;
+    const kids = childrenOf(await this.gateway.machineTaskRows(lease.machineId), r.row);
+    const cap = 10; // mirrors MachineGateway.GET_CHILDREN_CAP
+    const lines = [
+      CliGateway.taskLine(r.row),
+      `parent: ${r.row.parent ?? ABSENT} · owner: ${r.row.owner ?? ABSENT} · follow_up: ${r.row.follow_up_date ?? ABSENT}`,
+      `file: ${loop.taskFile ?? ABSENT} (read/edit the file directly — it is the task's source of truth)`,
+    ];
+    if (kids.length) {
+      lines.push(`children (${kids.length}):`);
+      for (const k of kids.slice(0, cap)) lines.push(CliGateway.taskLine(k, "  "));
+      if (kids.length > cap) lines.push(`  … ${kids.length - cap} more — loopany list ${idOrSlug}`);
+    }
+    return { code: 200, text: lines.join("\n") };
+  }
+
+  private async runTaskSearch(lease: RunLease, q: string): Promise<{ code: number; text: string }> {
+    if (!q.trim()) return derr(400, "search needs keywords", "VALIDATION_ERROR");
+    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const hits = (await store.loopsForMachine(lease.machineId))
+      .filter((l) => {
+        const row = toTaskRow(l);
+        return terms.every((t) => `${row.slug ?? ""}\n${row.title}\n${l.taskFileContent ?? ""}`.toLowerCase().includes(t));
+      })
+      .map(toTaskRow);
+    if (!hits.length) return { code: 200, text: "no matching tasks" };
+    const cap = 20; // mirrors MachineGateway.SEARCH_CAP
+    const lines = hits.slice(0, cap).map((h) => CliGateway.taskLine(h));
+    if (hits.length > cap) lines.push(`… ${hits.length - cap} more — narrow the keywords`);
+    return { code: 200, text: lines.join("\n") };
+  }
+
+  private async runTaskList(lease: RunLease, idOrSlug: string | undefined, f: { due?: boolean; status?: string }): Promise<{ code: number; text: string }> {
+    if (f.status && !TASK_STATUSES.includes(f.status as (typeof TASK_STATUSES)[number])) {
+      return derr(400, `status must be one of: ${TASK_STATUSES.join(", ")} (got: '${f.status}')`, "VALIDATION_ERROR");
+    }
+    const rows = filterTasks(await this.gateway.machineTaskRows(lease.machineId), { due: f.due, status: f.status, parentId: idOrSlug });
+    if (!rows.length) return { code: 200, text: "no tasks match" };
+    const lines = rows.slice(0, 50).map((r) => {
+      const crumb = r.breadcrumb.length ? `${r.breadcrumb.join(" › ")} › ` : "";
+      return `${crumb}${CliGateway.taskLine(r)}${r.follow_up_date ? ` ⏰ ${r.follow_up_date}` : ""}`;
+    });
+    if (rows.length > 50) lines.push(`… ${rows.length - 50} more — add filters`);
+    return { code: 200, text: lines.join("\n") };
+  }
+
+  /** Rule-1 capture from inside a run: REGISTER a task the agent already wrote
+   *  to disk (folder + README first, then this). Deliberately cannot arm a
+   *  schedule — an exec run must not mint schedulers (same spirit as the
+   *  set-cron cadence floors; the owner arms recurrence via edit). */
+  private async runTaskCreate(lease: RunLease, str: (k: string) => string | undefined, flags: Flags): Promise<{ code: number; text: string }> {
+    if (flags["cron"] !== undefined) {
+      return derr(403, "a run may not create a SCHEDULED task — create it plain; the owner arms recurrence via `loopany update <id> cron=…`", "FORBIDDEN");
+    }
+    const title = str("title") ?? str("_");
+    if (!title) return derr(400, "create needs --title", "VALIDATION_ERROR");
+    const taskFile = str("task-file");
+    if (!taskFile) return derr(400, "create needs --task-file <path to the README you wrote>", "VALIDATION_ERROR");
+    const slug = str("slug");
+    if (slug) {
+      const existing = resolveRows(await this.gateway.machineTaskRows(lease.machineId), slug).find((x) => x.slug === slug);
+      if (existing) return { code: 200, text: `already exists: ${CliGateway.taskLine(existing)}` };
+    }
+    const current = await store.getLoop(lease.loopId);
+    if (!current) return derr(404, "current loop not found", "NOT_FOUND");
+    const content = str("file-content") ?? str("body");
+    const loop = await store.createLoop({
+      userId: current.userId,
+      teamId: current.teamId,
+      channelId: current.channelId,
+      machineId: lease.machineId,
+      name: title.slice(0, 200),
+      cron: null,
+      timezone: current.timezone,
+      taskFile: taskFile.slice(0, 1000),
+      ...(content ? { taskFileContent: content.slice(0, WIRE_TEXT_CAP), taskFileSyncedAt: nowIso() } : {}),
+      notify: "auto",
+      agent: current.agent,
+      enabled: true,
+    });
+    await this.audit(lease, "task-create", { title, taskFile }, { ok: true });
+    return { code: 200, text: `created ${loop.id}${slug ? ` (${slug})` : ""} — inert task, no schedule` };
+  }
+
+  /** A run's `update` — ONE write verb over fields + the guarded transitions.
+   *  Work-state (status/priority/parent/type/follow_up_date/order) writes are
+   *  server-side field writes now (the file-era "edit the README" rejections are
+   *  gone). Transitions are unguarded EXCEPT the one that means "this recurring
+   *  goal is met": run + recurring node + status=done requires the finish
+   *  capability AND a `--note` with the completion evidence, completes once
+   *  (CONFLICT on repeat), and atomically pauses the schedule + stamps
+   *  completion + notifies — exactly what `finish` did; `finish` is now an
+   *  alias emitting this same transition. Cron stays owner-only from a run. */
+  private async runTaskUpdate(lease: RunLease, args: string[]): Promise<{ code: number; text: string }> {
+    const flags = parseFlags(args);
+    const str = (k: string) => (typeof flags[k] === "string" ? (flags[k] as string) : undefined);
+    // The task grammar sends work-state as `k=v` positionals; flags also work.
+    // Scan mirrors parseFlags so a flag's VALUE token never reads as a positional.
+    const kvPairs: Record<string, string> = {};
+    const plain: string[] = [];
+    const isFlagToken = (t: string): boolean => t.startsWith("--") && !t.startsWith("---");
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]!;
+      if (isFlagToken(a)) {
+        if (args[i + 1] !== undefined && !isFlagToken(args[i + 1]!)) i++;
+        continue;
+      }
+      const eq = a.indexOf("=");
+      if (eq > 0) kvPairs[a.slice(0, eq)] = a.slice(eq + 1);
+      else plain.push(a);
+    }
+    const id = str("id") ?? plain[0];
+    if (!id) return derr(400, "update needs a task id/slug (loopany update <id> k=v …)", "VALIDATION_ERROR");
+    if (str("cron") !== undefined || kvPairs["cron"] !== undefined) {
+      return derr(403, "a run may not change a task's schedule — the owner sets cron via `loopany update`", "FORBIDDEN");
+    }
+    const r = await this.gateway.resolveTaskRow(lease.machineId, id);
+    if ("err" in r) return { code: r.err.status, text: errorBlock((r.err.body as { error: string }).error, codeForStatus(r.err.status)) };
+    const loop = (await store.getLoop(r.row.loopId))!;
+    const actor = `agent:${loop.agent}`;
+    const note = str("note");
+
+    // Collect the work-state patch (flag or k=v spelling; "null"/"" clears).
+    const workState: Record<string, string | null> = {};
+    const wsKeys: Array<[string, string]> = [
+      ["status", "status"], ["priority", "priority"], ["parent", "parent"], ["type", "type"],
+      ["follow-up-date", "follow_up_date"], ["follow_up_date", "follow_up_date"], ["order", "order"],
+    ];
+    for (const [spelling, key] of wsKeys) {
+      const v = str(spelling) ?? kvPairs[spelling];
+      if (v !== undefined) workState[key] = v === "null" || v === "" ? null : v;
+    }
+    const enumChecks: Array<[string, readonly string[]]> = [["status", TASK_STATUSES], ["priority", TASK_PRIORITIES], ["type", TASK_TYPES]];
+    for (const [key, allowed] of enumChecks) {
+      const v = workState[key];
+      if (typeof v === "string" && !allowed.includes(v)) {
+        return derr(400, `${key} must be one of: ${allowed.join(", ")} (got: '${v}')`, "VALIDATION_ERROR");
+      }
+    }
+    if (workState["status"] === "follow-up" && !workState["follow_up_date"] && !loop.taskMeta?.follow_up_date) {
+      return derr(400, "status=follow-up requires a follow_up_date=<YYYY-MM-DD> (when to check whether it worked)", "VALIDATION_ERROR");
+    }
+
+    // The GUARDED transition: a run declaring a RECURRING node done means "the
+    // goal is met" — authority stays with the server-enforced rules, not the verb.
+    if (workState["status"] === "done" && loop.cron != null) {
+      if (r.row.loopId !== lease.loopId) {
+        return derr(403, "a run may only close its OWN recurring loop — another loop's schedule is its owner's", "FORBIDDEN");
+      }
+      if (!lease.canFinish) {
+        return derr(403, "this loop has no goal (open/monitor) — a run may not close it; report what you observed and let the owner decide", "FORBIDDEN");
+      }
+      if (!note) {
+        return derr(400, 'closing a goal loop needs the completion evidence: add --note "<why the goal is met>"', "VALIDATION_ERROR");
+      }
+      const fin = await this.gateway.finishLoop(lease, { reason: note.slice(0, MESSAGE_CAP) });
+      if (!fin.ok) return derr(fin.code === "CONFLICT" ? 409 : 400, fin.detail ?? "rejected", fin.code);
+      // Stamp the field plane too so the tree shows `done` (the chokepoint diff
+      // emits the status-changed event, attributed to this run).
+      const stamped = patchFrontMatterContent(loop.taskFileContent ?? "", { status: "done" });
+      await store.updateLoop(loop.id, { taskFileContent: stamped }, { actor, runId: lease.runId });
+      await this.audit(lease, "task-update", { id, fields: "status=done (goal met)" }, { ok: true });
+      return { code: 200, text: `done: goal met — completion recorded, schedule paused\nhelp[1]:\n  Run \`loopany get ${id} --log\` to see the recorded transition` };
+    }
+
+    // Envelope subset a run may touch (unchanged).
+    const patch: Partial<NewLoop> = {};
+    const name = str("name") ?? kvPairs["name"];
+    if (name !== undefined) patch.name = name.trim() || null;
+    const notify = str("notify") ?? kvPairs["notify"];
+    if (notify !== undefined) {
+      if (notify !== "always" && notify !== "auto" && notify !== "never") return derr(400, "notify must be always|auto|never", "VALIDATION_ERROR");
+      patch.notify = notify;
+    }
+
+    if (!Object.keys(workState).length && !Object.keys(patch).length && !note) {
+      return derr(400, "nothing to change (work-state: status/priority/parent/type/follow_up_date/order · envelope: name, notify · --note adds a comment)", "VALIDATION_ERROR");
+    }
+
+    // Unguarded field writes: patch the work-state into the node (server-side —
+    // the run has no local file), then the envelope keys. A terminal status on a
+    // recurring node pauses its schedule (node is source of truth).
+    if (Object.keys(workState).length) {
+      patch.taskFileContent = patchFrontMatterContent(loop.taskFileContent ?? "", workState);
+      const terminal = workState["status"] === "done" || workState["status"] === "archived";
+      if (terminal && loop.cron != null && patch.enabled === undefined) patch.enabled = false;
+    }
+    await store.updateLoop(loop.id, patch, { actor, runId: lease.runId });
+    if (note) {
+      await store.addEvent({ loopId: loop.id, runId: lease.runId, type: "note", actor, text: note.slice(0, MESSAGE_CAP) });
+    }
+    const applied = [...Object.keys(workState), ...Object.keys(patch).filter((k) => k !== "taskFileContent"), ...(note ? ["note"] : [])];
+    await this.audit(lease, "task-update", { id, fields: applied.join(",") }, { ok: true });
+    return { code: 200, text: `updated ${id} (${applied.join(", ")})` };
   }
 
   /** Usage for `loopany help` / `--help` / a bare invocation, rendered as the §4.9
@@ -378,9 +728,19 @@ export class CliGateway {
     // under the `verbs:` top key (matching the reference tool's nested shape).
     const always = indent(
       listBlock("always", ["verb", "syntax"], [
-        ["report", "[--status new|resolved|nothing-new] [--message <s>] [--state '{\"k\":n}' | --state-file <p>]"],
+        ["done", "[--status new|resolved|nothing-new] [--message <s>] [--state '{\"k\":n}' | --state-file <p>]   (`report` is an alias)"],
         ["show", "print this loop's config + recent state"],
         ["log", "recent run survey for this loop"],
+      ]),
+    );
+    // Task-tree subset (this machine's tasks; work-state lives in each task's
+    // README — edit files, they sync). Always available to a run.
+    const tasks = indent(
+      listBlock("tasks", ["verb", "syntax"], [
+        ["get", "<id|slug>   one task + its children"],
+        ["list", "[<id>] [--due] [--status <s>]   the tree / a filtered worklist"],
+        ["search", "<keywords>   find tasks before creating (dedup)"],
+        ["create", "--title <t> --task-file <path> [--slug <s>]   register a task you wrote to disk (never scheduled)"],
       ]),
     );
     // The schedule group is a typed list whose HEADER carries the availability tag
@@ -401,6 +761,7 @@ export class CliGateway {
     return doc(
       "verbs:",
       always,
+      tasks,
       `  finish: ${finishTag}`,
       `  dashboard/gate: ${structural}`,
       schedule,
@@ -549,24 +910,51 @@ export class CliGateway {
       cwd: typeof flags["cwd"] === "string" ? (flags["cwd"] as string) : null,
       home: typeof flags["home"] === "string" ? (flags["home"] as string) : null,
     };
-    if (!machine) return renderHomeText(ctx, null, [], 0, []);
+    if (!machine) return renderHomeText(ctx, null, [], 0, [], []);
     const presence = machinePresence(machine.online, machine.lastSeen);
     const loops = await store.loopsForMachine(machineId);
     const scoped = scopeLoopsByCwd(loops, ctx.cwd, ctx.home);
+    // `needs you[N]` — the ambient inbox (R12): the caller's open assigned tasks
+    // plus arrived follow-ups, across the OWNER scope (attention is a team
+    // object, not a machine one). Absent entirely when there's nothing.
+    const ownerEmail = machine.userId !== "shared" ? await store.userEmail(machine.userId) : undefined;
+    const today = new Date().toISOString().slice(0, 10);
+    const scopedLoops = await this.gateway.ownerScopedLoops(machineId);
+    const scopedRows = scopedLoops.map(toTaskRow); // ONE projection, reused below
+    const needsYou = scopedRows
+      .flatMap((r) => {
+        if (r.status === "follow-up" && r.follow_up_date && r.follow_up_date <= today) {
+          return [{ task: r.slug ?? r.loopId, why: `follow-up due ${r.follow_up_date}` }];
+        }
+        if (ownerEmail && r.assignee === ownerEmail && (r.status === "todo" || r.status === "in-progress")) {
+          return [{ task: r.slug ?? r.loopId, why: `assigned · ${r.status}` }];
+        }
+        return [];
+      });
+    // Review queue (F7 notice): flagged products ride the same needs-you rail —
+    // no new section, no new channel. LIMIT-bounded — this renders on the
+    // SessionStart hook hot path, so it must never fetch an unbounded queue.
+    const reviewItems = await store.reviewQueueForLoops(scopedLoops.map((l) => l.id), { limit: 6 });
+    const rowById = reviewItems.length ? new Map(scopedRows.map((r) => [r.loopId, r])) : null;
+    for (const i of reviewItems.slice(0, 5)) {
+      const row = rowById?.get(i.loopId);
+      needsYou.push({ task: row?.slug ?? row?.title ?? i.loopId, why: `needs review · ${i.path}` });
+    }
+    if (reviewItems.length > 5) needsYou.push({ task: "…", why: "more waiting — loopany review" });
     const here: HomeLoop[] = await Promise.all(
       scoped.here.map(async (l) => ({
         id: l.id,
         name: l.name ?? l.id,
         cron: l.cron,
         enabled: l.enabled,
-        nextFire: l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null,
+        nextFire: l.enabled && l.cron ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null,
         lastOutcome: await (async () => {
           const last = await store.lastExecRun(l.id);
           return last ? runOutcomeToken(last) : null;
         })(),
       })),
     );
-    return renderHomeText(ctx, presence, here, scoped.elsewhere, await recentMachineRuns(loops, 3));
+    return renderHomeText(ctx, presence, here, scoped.elsewhere, await recentMachineRuns(loops, 3), needsYou);
   }
 
   /** `loopany` (bare) inside a run — the RUN credential's own-loop home (§5.1). */
@@ -611,7 +999,7 @@ const RECLAIMED_MSG =
 /** Verbs that require OWNER (device) authority — a run credential is 403'd on these
  *  in the unified `cli` dispatch (§4.1). `report`/`finish` are the mirror image
  *  (run-only, 403 for a device credential) and are handled inline in `deviceCli`. */
-const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "status"]);
+const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "status", "team"]);
 
 /** Parse a `--json '<obj>'` flag into an object. Absent → an empty object (the
  *  downstream createLoop/editLoop validators then produce the precise error, e.g.
@@ -834,6 +1222,8 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
 };
 // `complete` is a documented alias of `finish` (§6.2).
 RUN_VERB_HELP.complete = RUN_VERB_HELP.finish!;
+// `done` is the forward name of `report` (task-first grammar; report stays an alias).
+RUN_VERB_HELP.done = RUN_VERB_HELP.report!;
 
 /** DEVICE-credential verb help (owner `dk_` device token). */
 const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
@@ -885,33 +1275,8 @@ function verbHelpText(verb: string, lease?: RunLease): string | undefined {
   );
 }
 
-/**
- * The full editable envelope keyed EXACTLY as `edit --json` accepts (read/write
- * identity, F6/§4.1 batch 2): `id` + every EDITABLE_LOOP_FIELDS key with its raw
- * stored value (full bodies, no truncation). `show --json` emits this verbatim;
- * dropping `id` yields a no-op `edit` patch (pinned by the roundtrip test). The
- * pinned next-run OVERRIDE is keyed `runAt` (matching the edit key; the DB column
- * stays `nextRunAt`), NOT the derived read-only `nextFire` aggregate.
- */
-function loopEnvelope(loop: Loop): Record<string, unknown> {
-  return {
-    id: loop.id,
-    name: loop.name ?? null,
-    cron: loop.cron,
-    timezone: loop.timezone ?? null,
-    notify: loop.notify,
-    model: loop.model ?? null,
-    agent: loop.agent,
-    allowControl: loop.allowControl,
-    taskFile: loop.taskFile ?? null,
-    enabled: loop.enabled,
-    runAt: loop.nextRunAt ?? null,
-    goal: loop.goal ?? null,
-    workflow: loop.workflow ?? null,
-    ui: loop.ui ?? null,
-    stateSchema: loop.stateSchema ?? null,
-  };
-}
+// loopEnvelope moved to index.ts (taskGet embeds it too — `get` absorbed `show`);
+// imported above with the other core helpers.
 
 /** Render a large content field (ui/workflow) for the `show` detail block: `absent`
  *  when unset, the full body (scalar-quoted) under `--full`, else a presence + size
@@ -934,7 +1299,8 @@ function schemaField(schema: StateField[] | null): { key: string; value: Scalar 
 /** The next cadence fire (the derived read-only aggregate), formatted in the loop's
  *  OWN timezone with a short zone name (`2026-07-13 06:00:00 PDT`) — matching how the
  *  scheduler arms it. Distinct from the writable `runAt` override (F4). */
-function nextFireDisplay(cron: string, timezone: string | null): string {
+function nextFireDisplay(cron: string | null, timezone: string | null): string {
+  if (!cron) return "(manual — no cron)";
   const iso = nextFires(cron, timezone, 1)[0];
   if (!iso) return "(never)";
   return fmtTimeZoned(iso, timezone, { seconds: true });
@@ -1028,7 +1394,7 @@ interface HomeContext {
 interface HomeLoop {
   id: string;
   name: string;
-  cron: string;
+  cron: string | null;
   enabled: boolean;
   nextFire: string | null;
   lastOutcome: string | null;
@@ -1100,6 +1466,7 @@ function renderHomeText(
   here: HomeLoop[],
   elsewhere: number,
   recent: Array<{ ts: string; loop: string; outcome: string }>,
+  needsYou: Array<{ task: string; why: string }> = [],
 ): string {
   const machineLine =
     presence === null
@@ -1136,10 +1503,21 @@ function renderHomeText(
   const recentBlock = recent.length
     ? listBlock("recent", ["ts", "loop", "outcome"], recent.map((r) => [fmtTime(r.ts), r.loop, r.outcome]))
     : null;
+  // The ambient inbox: present ONLY when something needs the caller (a zero
+  // inbox renders nothing — absence of the line IS the answer). Capped, with a
+  // hint pointing at the full worklist.
+  const NEEDS_CAP = 5;
+  const needsBlock = needsYou.length
+    ? [
+        listBlock("needs you", ["task", "why"], needsYou.slice(0, NEEDS_CAP).map((n) => [n.task, n.why])),
+        ...(needsYou.length > NEEDS_CAP ? [`  … ${needsYou.length - NEEDS_CAP} more — run \`loopany list --due\``] : []),
+      ].join("\n")
+    : null;
   return doc(
     binLineText,
     kvLine("description", HOME_DESCRIPTION),
     machineLine,
+    needsBlock,
     loopsBlock,
     elsewhere > 0 ? `loops elsewhere: ${elsewhere} more on this machine` : null,
     recentBlock,
@@ -1215,12 +1593,17 @@ function validateState(
  *  NUL (SQLite tolerated it). One chokepoint covers every verb at once. */
 function parseFlags(args: string[]): Flags {
   const out: Flags = {};
+  // A next-token starting with `--` is normally the NEXT flag, not this flag's
+  // value — except `---…`: no flag key starts with `-`, and front-matter'd
+  // markdown (a task README inlined via --file/--file-content) always opens
+  // with a `---` fence, which must read as a VALUE or the content silently drops.
+  const isFlagToken = (t: string): boolean => t.startsWith("--") && !t.startsWith("---");
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
-    if (a.startsWith("--")) {
+    if (isFlagToken(a)) {
       const key = stripNul(a.slice(2));
       const next = args[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
+      if (next !== undefined && !isFlagToken(next)) {
         out[key] = stripNul(next);
         i++;
       } else {

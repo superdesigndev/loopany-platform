@@ -29,6 +29,10 @@ export class ArtifactSync {
   constructor(
     /** Artifact blob byte store (R2 in prod; injectable in-memory store for tests). */
     private readonly blobStore: BlobStore = createBlobStore(),
+    /** Task-file ingest chokepoint (the gateway's `ingestTaskFileContent`): clips,
+     *  derives `taskMeta`, and applies the done/archived-pauses-the-schedule rule
+     *  (ArtifactSync has no scheduler). Absent (tests) → plain store.updateLoop. */
+    private readonly taskFileIngest?: (loopId: string, content: string) => Promise<void>,
   ) {}
 
   // ---- POST /api/machine/sync ----
@@ -265,7 +269,8 @@ export class ArtifactSync {
     if (!bytes || looksBinary(bytes)) return;
     const text = clipText(bytes.toString("utf8"), WIRE_TEXT_CAP);
     if (text === loop.taskFileContent) return; // unchanged → no row churn per flush
-    await store.updateLoop(loop.id, { taskFileContent: text, taskFileSyncedAt: nowIso() });
+    if (this.taskFileIngest) await this.taskFileIngest(loop.id, text);
+    else await store.updateLoop(loop.id, { taskFileContent: text, taskFileSyncedAt: nowIso() });
   }
 
   // ---- PUT /api/machine/blob/:hash ----

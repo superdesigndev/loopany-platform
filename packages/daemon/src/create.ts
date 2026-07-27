@@ -243,7 +243,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
       deviceToken: token,
     });
     if (r.kind !== "ok") {
-      const detail = r.kind === "network-error" ? r.message : r.kind === "read-error" ? `cannot read ${r.path}` : "machine not connected";
+      const detail = r.kind === "network-error" ? r.message : r.kind === "read-error" ? (r.detail ?? `cannot read ${r.path}`) : "machine not connected";
       process.stderr.write(`loopany: ${detail}\n`);
       return 1;
     }

@@ -91,6 +91,7 @@ export class Scheduler {
    */
   private async catchUpMissedFire(loop: Loop): Promise<void> {
     try {
+      if (!loop.cron) return; // an inert task has no cron occurrences to catch up
       if (loop.nextRunAt && Date.parse(loop.nextRunAt) <= Date.now()) return;
       const prev = new Cron(loop.cron, loop.timezone ? { timezone: loop.timezone } : {}).previousRuns(1)[0];
       if (!prev) return;
@@ -199,6 +200,12 @@ export class Scheduler {
   // ---- internals ----
 
   private schedule(loop: Loop): void {
+    // A cron-null row is an inert TASK, not a schedule bug: never construct a
+    // Cron for it, but still arm the one-shot path so run-now works on any task.
+    if (!loop.cron) {
+      this.armNextRunAt(loop);
+      return;
+    }
     try {
       const cron = new Cron(
         loop.cron,

@@ -132,7 +132,9 @@ export interface MachineSummary {
 export interface TimelineLoop {
   id: string
   name: string
-  cron: string
+  /** null ⇒ an inert task (tracked work, no schedule). It still owns a lane —
+   *  its past runs are real history — it just projects no future fires. */
+  cron: string | null
   /** IANA zone the cron fires in (null ⇒ server local). Carried so the UI can
    *  tell the viewer when a loop's own zone differs from theirs. */
   timezone: string | null
@@ -141,19 +143,6 @@ export interface TimelineLoop {
   /** Human cadence derived from the cron ("Daily 05:00", "Every 30 min") — the
    *  lane label. Computed server-side so the client never parses cron. */
   cadence: string
-  /** The machine this loop is bound to and executes on — backs the device filter. */
-  machineId: string
-}
-
-/** A machine offered in the timeline's device filter. */
-export interface TimelineMachine {
-  id: string
-  /** Friendly name, else hostname, else a short id — never blank (an unnamed
-   *  machine has `name: ""` until its daemon connects). */
-  label: string
-  /** How many of the window's lanes are bound to it (the filter shows counts so
-   *  an empty selection is obvious before you make it). */
-  loopCount: number
 }
 
 /** One mark in a lane: a real run, or a projected future fire. */
@@ -183,10 +172,6 @@ export interface TimelineData {
   from: string
   to: string
   loops: TimelineLoop[]
-  /** Machines owning at least one of the returned loops — the device filter's
-   *  options. Derived from the loops in scope, so it never offers a machine that
-   *  would filter the view down to nothing. */
-  machines: TimelineMachine[]
   marks: TimelineMark[]
   totals: {
     runCount: number
@@ -202,7 +187,8 @@ export interface TimelineData {
 export interface JobSummary {
   id: string
   name: string
-  cron: string
+  /** Schedule; null ⇒ an inert task (no cron — "a loop is a task with cron set"). */
+  cron: string | null
   kind: string
   /** True when the job carries an agent-authored generative-UI template (Job.ui). */
   hasUi?: boolean
@@ -242,7 +228,8 @@ export interface StateField {
 export interface JobFull {
   id: string
   name?: string
-  cron: string
+  /** Schedule; null ⇒ an inert task (no cron). */
+  cron: string | null
   enabled: boolean
   notify: 'auto' | 'always' | 'never' | string
   /** CLOSED-loop setpoint (one-line goal); null/absent ⇒ OPEN loop. */
@@ -383,7 +370,8 @@ export interface ExecPayload {
 /** The create/edit payload the form POSTs/PATCHes to the daemon. */
 export interface JobPayload {
   name?: string
-  cron?: string
+  /** Schedule; null clears it (the loop becomes an inert task — "manual"). */
+  cron?: string | null
   taskFile?: string
   notify?: 'auto' | 'always' | 'never' | string
   /** Set (non-empty) / clear (null|'') the closed-loop goal. Clearing also drops

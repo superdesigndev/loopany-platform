@@ -5,6 +5,7 @@
  */
 import type { CodingAgent, Loop } from "../db/schema.js";
 import * as store from "../db/store.js";
+import { sha256 } from "./tokens.js";
 import {
   buildEditPrompt,
   buildEditTask,
@@ -31,6 +32,12 @@ export interface Delivery {
     /** Coding agent to EXECUTE this loop with (the daemon branches spawn +
      *  credentials on this — claude-code | codex | grok). */
     agent: CodingAgent;
+    /** The task's doc (cron-null exec runs only): the daemon materializes it as
+     *  TASK.md in the run workdir and pushes it back at close if it changed. */
+    taskDoc?: string;
+    /** Content hash of `taskDoc` at claim — the close push's base (a stale close
+     *  must never overwrite a doc that advanced after a reclaim). */
+    taskDocHash?: string;
   };
   /** Cursor (prev state) for the workflow gate. */
   prevState: unknown;
@@ -40,7 +47,24 @@ export interface Delivery {
   task: string;
 }
 
-export async function buildDelivery(loop: Loop, runId: string, runToken: string, roots: string[]): Promise<Delivery> {
+/** First daemon release that materializes a delivered `taskDoc` as TASK.md and
+ *  pushes it back at close — prompts degrade below this (doc inlined read-only). */
+const TASK_DOC_DAEMON_VERSION = [0, 17];
+
+function supportsTaskDoc(daemonVersion: string | null | undefined): boolean {
+  const m = /^(\d+)\.(\d+)/.exec(daemonVersion ?? "");
+  if (!m) return false;
+  const [maj, min] = [Number(m[1]), Number(m[2])];
+  return maj > TASK_DOC_DAEMON_VERSION[0]! || (maj === TASK_DOC_DAEMON_VERSION[0]! && min >= TASK_DOC_DAEMON_VERSION[1]!);
+}
+
+export async function buildDelivery(
+  loop: Loop,
+  runId: string,
+  runToken: string,
+  roots: string[],
+  opts: { daemonVersion?: string | null } = {},
+): Promise<Delivery> {
   const raw = (await store.getRun(runId))?.role;
   const role: Delivery["role"] = raw === "evolve" ? "evolve" : raw === "edit" ? "edit" : "exec";
   let systemPrompt: string;
@@ -58,7 +82,7 @@ export async function buildDelivery(loop: Loop, runId: string, runToken: string,
       break;
     default:
       systemPrompt = buildLoopSystemPrompt(loop);
-      task = buildExecTask(loop);
+      task = buildExecTask(loop, { taskDocCapable: supportsTaskDoc(opts.daemonVersion) });
   }
   return {
     runId,
@@ -74,6 +98,11 @@ export async function buildDelivery(loop: Loop, runId: string, runToken: string,
       model: loop.model ?? null,
       allowControl: loop.allowControl,
       agent: loop.agent,
+      // Task runs carry their doc: the daemon writes TASK.md into the workdir
+      // and hash-compares at close (the run edits the record where it stands).
+      ...(role === "exec" && loop.cron == null
+        ? { taskDoc: loop.taskFileContent ?? "", taskDocHash: sha256(loop.taskFileContent ?? "") }
+        : {}),
     },
     prevState: loop.state ?? null,
     systemPrompt,

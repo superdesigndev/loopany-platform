@@ -22,6 +22,34 @@
       "when": 1783502268448,
       "tag": "0002_funny_sage",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783917852313,
+      "tag": "0003_clumsy_midnight",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784899766149,
+      "tag": "0004_calm_salo",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784900405495,
+      "tag": "0005_elite_catseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785132531874,
+      "tag": "0006_brief_energizer",
+      "breakpoints": true
     }
   ]
 }

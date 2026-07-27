@@ -13,6 +13,7 @@
 import fs from "node:fs";
 
 import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
+import { ALLOW_EXTERNAL_FLAG, fenceFileFlag } from "./filefence.js";
 
 /**
  * In-run file flags: claude writes a large body to a temp file and passes its path;
@@ -26,18 +27,37 @@ const FILE_FLAGS: Record<string, string> = {
   "--file": "--file-content",
 };
 
-export type InlineResult = { ok: true; argv: string[] } | { ok: false; path: string };
+/**
+ * Flags whose content PERSISTS as loop config (workflow JS the daemon executes,
+ * dashboard ui, state schema — `--file` feeds the set-* verbs). These are
+ * cwd-fenced: a stale /tmp file from another run silently becoming a loop's
+ * workflow is the incident class the fence exists for. The ephemeral flags
+ * (`--message-file`, `--state-file` — display text + one run's metrics) stay
+ * unfenced for now: live agents habitually mktemp those, and breaking running
+ * loops on a daemon upgrade is worse than the residual risk. Fence them when
+ * the skill prose teaching cwd payloads has shipped.
+ */
+const FENCED_FILE_FLAGS = new Set(["--file"]);
+
+export type InlineResult = { ok: true; argv: string[] } | { ok: false; path: string; detail?: string };
 
 /** Replace each `--*-file <path>` with `--* <file-contents>`. The read is the only
- *  impure bit (injectable for tests); an unreadable path fails the whole call. */
+ *  impure bit (injectable for tests); an unreadable path fails the whole call.
+ *  Paths are FENCED to the cwd (see filefence.ts) — a /tmp path shared across
+ *  runs is refused unless `--allow-external-file` rides the argv. The escape flag
+ *  is consumed here, never forwarded to the server. */
 export function inlineFileFlags(
   argv: string[],
   readFile: (p: string) => string = (p) => fs.readFileSync(p, "utf8"),
+  cwd: string = process.cwd(),
 ): InlineResult {
-  const out = [...argv];
+  const allowExternal = argv.includes(ALLOW_EXTERNAL_FLAG);
+  const out = argv.filter((a) => a !== ALLOW_EXTERNAL_FLAG);
   for (let i = 0; i < out.length - 1; i++) {
     const repl = FILE_FLAGS[out[i]!];
     if (repl) {
+      const fenced = FENCED_FILE_FLAGS.has(out[i]!) ? fenceFileFlag(out[i]!, out[i + 1]!, cwd, allowExternal) : null;
+      if (fenced) return { ok: false, path: out[i + 1]!, detail: fenced };
       try {
         out[i + 1] = readFile(out[i + 1]!);
         out[i] = repl;
@@ -83,7 +103,7 @@ export interface PostCliDeps {
 export type PostCliResult =
   | { kind: "ok"; status: number; body: Record<string, unknown> }
   | { kind: "not-configured" }
-  | { kind: "read-error"; path: string }
+  | { kind: "read-error"; path: string; detail?: string }
   | { kind: "network-error"; message: string };
 
 /**
@@ -113,7 +133,7 @@ export async function postCli(argv: string[], legacy: LegacyFallback, deps: Post
   const fetchImpl = deps.fetchImpl ?? fetch;
 
   const inlined = inlineFileFlags(argv, deps.readFile);
-  if (!inlined.ok) return { kind: "read-error", path: inlined.path };
+  if (!inlined.ok) return { kind: "read-error", path: inlined.path, detail: inlined.detail };
 
   try {
     const res = await fetchImpl(`${server}/api/machine/cli`, {

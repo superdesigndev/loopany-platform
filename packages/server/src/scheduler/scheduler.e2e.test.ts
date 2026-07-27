@@ -358,3 +358,39 @@ test("evolveDue tick creates a dedicated evolve run", async () => {
   expect(runs[0]!.role).toBe("evolve");
   expect(runs[0]!.phase).toBe("pending");
 });
+
+test("a cron-null task is never scheduled, but runNow still dispatches it", async () => {
+  const machine = await store.createMachine({ id: "m-cron-null", userId: "u1", name: "M", tokenHash: "h", online: true });
+  const loop = await store.createLoop({
+    userId: "u1",
+    machineId: machine.id,
+    name: "inert task",
+    cron: null, // a TASK: no schedule at all
+    enabled: true,
+    notify: "auto",
+    taskFile: "/home/u/loopany/inert/README.md",
+  });
+  const seen: Run[] = [];
+  const ac = new AbortController();
+  const s = new sched.Scheduler({
+    dispatch(_l: Loop, r: Run): void {
+      seen.push(r);
+    },
+  });
+  await s.start(ac.signal);
+
+  // Startup scheduling must not create a run (and must not blow up on new Cron(null)).
+  await new Promise((r) => setTimeout(r, 100));
+  expect(await store.listRuns(loop.id)).toHaveLength(0);
+
+  // One-shot dispatch works on a schedule-less task (the `loopany run` path).
+  await s.runNow(loop.id);
+  await waitFor(async () => (await store.listRuns(loop.id)).length === 1);
+  ac.abort();
+
+  const runs = await store.listRuns(loop.id);
+  expect(runs[0]!.role).toBe("exec");
+  expect(seen).toHaveLength(1);
+  // The one-shot was consumed; nothing further is armed.
+  expect((await store.getLoop(loop.id))!.nextRunAt).toBeNull();
+});

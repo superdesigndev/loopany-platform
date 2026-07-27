@@ -39,7 +39,7 @@ import { watch, type FSWatcher } from "chokidar";
 
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
-import { resolveLoopDir } from "./loopdir.js";
+import { expandTilde, resolveLoopDir } from "./loopdir.js";
 import { isScratchDir, isWithinResolvedRoots, resolveRoots } from "./roots.js";
 
 const log = logger.child({ mod: "watcher" });

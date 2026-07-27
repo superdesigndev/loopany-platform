@@ -23,6 +23,11 @@ names and rules here are sufficient.
   directly in the repo, keeping its `## Spec` / `## Current understanding` /
   `## Timeline` structure and changing only what was asked. For a goal-driven (closed)
   loop, the Spec's opening prose should still restate the mission and finish line.
+- **Work-state** (the task-tree fields: `status`, `priority`, `parent`, `owner`,
+  `follow_up_date`, `refs`, `title`) — these live in the task file's FRONT MATTER;
+  edit them in place there (the file is the source of truth and syncs
+  automatically). `status: follow-up` must carry a `follow_up_date:`; `status: done`
+  or `archived` also pauses the schedule. Never hand-set `order`.
 - **Dashboard UI / metric schema / workflow** — only if the requested change calls for
   it. Each writes a file, then passes `--file <path>` (never bare/inline):
   `loopany set-ui --file <path>` (the panel as small plain HTML — no
@@ -37,6 +42,5 @@ no `set-goal` verb here. If asked, say so in your report so the owner can run
 
 Do not run the loop's task. Do not message the user out of band. When the change is
 applied, end with exactly ONE terminal call —
-`loopany report --status resolved --message "<one line: what you changed>"` — and stop.
-If the request is ambiguous, make the most reasonable minimal change and say what you
-assumed in the report message.
+`loopany report --status resolved --message "<one line: what you changed>"` — and stop. If the request is ambiguous, make the most reasonable
+minimal change and say what you assumed in the report message.

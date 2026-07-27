@@ -73,6 +73,17 @@ describe("poll transport helpers", () => {
     });
   });
 
+  test("detectRuntimes: env override wins; PATH scan finds default bins; nothing ⇒ empty", async () => {
+    const { detectRuntimes } = await import("./daemon.js");
+    const sep = (await import("node:path")).delimiter;
+    // Explicit bin overrides register regardless of PATH.
+    expect(detectRuntimes({ LOOPANY_CODEX_BIN: "/opt/codex", PATH: "" }, () => false)).toEqual(["codex"]);
+    // PATH scan: only dirs actually holding the default bin name count.
+    const exists = (p: string) => p === "/bin/claude" || p === "/bin/grok";
+    expect(detectRuntimes({ PATH: ["/bin", "/usr/bin"].join(sep) }, exists)).toEqual(["claude-code", "grok"]);
+    expect(detectRuntimes({ PATH: "/usr/bin" }, () => false)).toEqual([]);
+  });
+
   test("nextPollDelayMs: a held long-poll re-polls immediately; a fast answer keeps the cadence", async () => {
     const { nextPollDelayMs } = await import("./daemon.js");
     // Old server / short mode: instant answer ⇒ sleep out the remaining interval.

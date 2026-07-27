@@ -1015,7 +1015,7 @@ test("finish is single-shot: a second finish on the same still-live run refuses,
 
   // The token is still live (for the enriching report), so a second finish is attempted.
   const res = (await gw.agentApi(rt, ["finish", "--message", "second", "--reason", "again"]));
-  expect(res.status).toBe(400);
+  expect(res.status).toBe(409);
   expect((res.body as { text: string }).text).toMatch(/already finished/i);
 
   // Loop stamps unchanged (no re-stamp), run message unchanged, no second notification.
@@ -2565,7 +2565,7 @@ test("cli finish [R]: success renders the goal-met detail; a second finish is a 
   expect(text).toContain("completionReason: shipped");
   // The lease stays live for one enriching report, so a second finish is a legible CONFLICT.
   const again = (await gateway().cli(closed.runToken, ["finish", "--message", "again"]));
-  expect(again.status).toBe(400);
+  expect(again.status).toBe(409);
   expect(textOf(again)).toContain("code: CONFLICT");
 });
 

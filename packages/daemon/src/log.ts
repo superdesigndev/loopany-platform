@@ -227,7 +227,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   };
   const listed = await postCli(["loops"], legacyLoops, cliDeps);
   if (listed.kind === "not-configured") return notConnected(), 2;
-  if (listed.kind === "read-error") return d.err(`loopany: cannot read ${listed.path}\n`), 1;
+  if (listed.kind === "read-error") return d.err(listed.detail ?? `loopany: cannot read ${listed.path}\n`), 1;
   if (listed.kind === "network-error") return d.err(`loopany: ${listed.message}\n`), 1;
   const listData = listed.body as { loops?: LoopRow[]; error?: string };
   if (listed.status >= 400 || !listData.loops) {
@@ -247,7 +247,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   };
   const got = await postCli(logArgv, legacyLog, cliDeps);
   if (got.kind === "not-configured") return notConnected(), 2;
-  if (got.kind === "read-error") return d.err(`loopany: cannot read ${got.path}\n`), 1;
+  if (got.kind === "read-error") return d.err(got.detail ?? `loopany: cannot read ${got.path}\n`), 1;
   if (got.kind === "network-error") return d.err(`loopany: ${got.message}\n`), 1;
   const data = got.body as { runs?: RunRow[]; error?: string };
 

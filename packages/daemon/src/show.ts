@@ -81,7 +81,7 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   };
   const listed = await postCli(["loops"], legacyLoops, cliDeps);
   if (listed.kind === "not-configured") return notConnected(), 2;
-  if (listed.kind === "read-error") return err(`loopany: cannot read ${listed.path}\n`), 1;
+  if (listed.kind === "read-error") return err(listed.detail ?? `loopany: cannot read ${listed.path}\n`), 1;
   if (listed.kind === "network-error") return err(`loopany: ${listed.message}\n`), 1;
   const listData = listed.body as { loops?: LoopRow[]; error?: string };
   if (listed.status >= 400 || !listData.loops) {
@@ -98,7 +98,7 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   const legacyShow: LegacyFallback = async () => ({ status: 501, body: { error: "show needs a newer server — upgrade the Loopany server" } });
   const got = await postCli(showArgv, legacyShow, cliDeps);
   if (got.kind === "not-configured") return notConnected(), 2;
-  if (got.kind === "read-error") return err(`loopany: cannot read ${got.path}\n`), 1;
+  if (got.kind === "read-error") return err(got.detail ?? `loopany: cannot read ${got.path}\n`), 1;
   if (got.kind === "network-error") return err(`loopany: ${got.message}\n`), 1;
   // Text-sink: the server renders the envelope TOON (or the JSON envelope under
   // `--json`); we just print it. A too-old server (no device `show`, no `text`) → a

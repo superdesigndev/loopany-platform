@@ -36,7 +36,7 @@ describe('/api/skill/references/$', () => {
 
   test('serves the real create.md body (the create flow)', async () => {
     const body = await (await call('/api/skill/references/create.md')).text()
-    expect(body).toContain('loopany new')
+    expect(body).toContain('loopany create')
   })
 
   test('create.md carries the §2 propose → confirm → build guidance', async () => {
@@ -45,7 +45,7 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('2 · Settle cadence, output')
     expect(body).toContain('propose → confirm → build')
     expect(body).toContain('Never silently guess')
-    // The parameters the agent must settle before `loopany new`.
+    // The parameters the agent must settle before `loopany create`.
     expect(body).toContain('Cadence.')
     expect(body).toContain('Per-run output.')
     // Batch 3: a goal-shaped task also proposes a finish line (closed loop); a
@@ -69,10 +69,10 @@ describe('/api/skill/references/$', () => {
   test('create.md drops the removed `task` field + tmp.json ritual, uses inline --json', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // Batch 2 removed the `task` column and the loop.tmp.json config file; create.md
-    // now authors an inline config passed to `loopany new --json` and previews with --dry-run.
+    // authors an inline envelope passed via `--json` and previews with --dry-run.
     expect(body).not.toContain('loop.tmp.json')
     expect(body).not.toContain('--config')
-    expect(body).toContain('loopany new --json')
+    expect(body).toContain("--json '<envelope>'")
     expect(body).toContain('--dry-run')
   })
 
@@ -98,7 +98,7 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('Compress, don\'t append forever')
     // Surface-only-what-changed nuance.
     expect(body).toContain('surfaces only what is new or changed')
-    // The report/finish grammar and the strict finish bar.
+    // The done/finish grammar and the strict finish bar.
     expect(body).toContain('loopany report --status nothing-new')
     expect(body).toContain('loopany finish --message')
     expect(body).toContain('selfFinish: allowed')

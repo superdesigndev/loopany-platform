@@ -16,16 +16,24 @@ const VERSION_FLAGS = new Set(["--version", "-v"]);
 // path is PRESERVED unchanged by the Batch-6 bare-command move — only the truly-bare
 // `loopany` (no args, no flags) changed meaning (bare → home, not daemon).
 const DAEMON_FLAGS = new Set(["--server-url", "--api-key"]);
-// Run-ONLY verbs typed OUTSIDE a run (F3): forward them to the server on the device
-// credential so its crafted run-only 403 reaches the agent, instead of a generic
-// "unknown command". A run report/finishes ITSELF; the owner edits via `edit`.
-const FORWARD_VERBS = new Set(["report", "finish", "complete"]);
+// Verbs forwarded VERBATIM to the server on the device credential and rendered as
+// text: the run-only verbs typed outside a run (F3 — the crafted run-only 403
+// reaches the agent instead of a generic unknown), plus `note` and `team` —
+// real device verbs served entirely by the unified dispatch (the text-sink path).
+const FORWARD_VERBS = new Set(["report", "done", "finish", "complete", "note", "team"]);
 // Every command word the router recognizes below (the daemon-flag re-exec is a leading
 // FLAG, not a verb, so it is deliberately absent). Any of these carrying `--help`/`-h`
 // short-circuits to that verb's usage BEFORE its handler runs — so a foot-gun like
 // `update` (immediate daemon handover) is always safe to inspect, and a NEW verb inherits
 // the guarantee by being added here alongside its branch.
-const COMMAND_VERBS = new Set(["up", "new", "skill", "setup", "update", "status", "down", "log", "show", ...INTERACTIVE_VERBS, ...FORWARD_VERBS]);
+// Canonical task-object verbs (docs/task-tree-plan.md): the task-first grammar.
+// `update` is NOT here — it disambiguates below (zero args = daemon self-update,
+// `update <id> …` = task update, friction D).
+type TaskVerb = "create" | "get" | "list" | "search" | "update" | "mv" | "run" | "review";
+// Construction is typed against TaskVerb (a wrong member fails to compile);
+// the read side widens to string so `.has(verb)` accepts unvalidated input.
+const TASK_VERBS: ReadonlySet<string> = new Set<TaskVerb>(["create", "get", "list", "search", "mv", "run", "review"]);
+const COMMAND_VERBS = new Set(["up", "new", "skill", "setup", "update", "status", "down", "log", "show", "daemon", "agent-context", ...TASK_VERBS, ...INTERACTIVE_VERBS, ...FORWARD_VERBS]);
 
 function hasHelpFlag(args: string[]): boolean {
   return args.some((a) => HELP_FLAG_ARGS.has(a));
@@ -48,6 +56,10 @@ export type Route =
   | { kind: "interactive"; argv: string[] }
   | { kind: "forward"; argv: string[] } // run-only verb out-of-run → device-cred 403
   | { kind: "home" } // bare `loopany` out-of-run → content-first home (device cred)
+  | { kind: "task"; verb: TaskVerb; args: string[] }
+  | { kind: "task-delete" } // teaching error: tasks are archived, never deleted
+  | { kind: "agent-context" }
+  | { kind: "daemon-group"; args: string[] } // `loopany daemon up|down|status|update`
   | { kind: "unknown"; verb: string };
 
 export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
@@ -72,6 +84,17 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   // `up --foreground` runs the poll loop attached (the old bare behavior); plain `up`
   // ensures a detached daemon (idempotent) as before.
   if (verb === "up") return argv.includes("--foreground") ? { kind: "daemon" } : { kind: "ensure", args: argv.slice(1) };
+  // `update` disambiguation (friction D): a positional arg means a TASK update
+  // (`loopany update <id> k=v …`); bare `update` stays the daemon self-update.
+  if (verb === "update" && argv[1] !== undefined && !argv[1].startsWith("-")) {
+    return { kind: "task", verb: "update", args: argv.slice(1) };
+  }
+  if (verb !== undefined && TASK_VERBS.has(verb)) {
+    return { kind: "task", verb: verb as TaskVerb, args: argv.slice(1) };
+  }
+  if (verb === "delete") return { kind: "task-delete" };
+  if (verb === "agent-context") return { kind: "agent-context" };
+  if (verb === "daemon") return { kind: "daemon-group", args: argv.slice(1) };
   if (verb === "new") return { kind: "create", args: argv.slice(1) };
   if (verb === "skill") return { kind: "skill", args: argv.slice(1) };
   if (verb === "setup") return { kind: "setup", args: argv.slice(1) };

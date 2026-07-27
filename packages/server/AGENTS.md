@@ -459,6 +459,43 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   unauthenticated). The destination restriction closes the SSRF regardless of creator;
   tightening create to team-owner-only is a separate change.
 
+## v2 cloud-first invariants (task tree)
+
+- **Three planes per node**: FIELDS (work-state, derived at the store chokepoint
+  from the doc's front matter — the front-matter block is the field plane's
+  serialization for now), the DOC (`taskFileContent` — `## Spec` + `## Current
+  understanding`; server-authoritative), and EVENTS (`events` table, append-only:
+  note / status-changed / assignee-changed / doc-updated / run-started /
+  run-returned; run-credential writes stamp `run_id`). `store.updateLoop` emits
+  status/assignee-changed events in-transaction on real diffs only.
+- **Doc authority**: owner edits go through working copies — `get --checkout`
+  (writes `<slug>.md` + `.base` hash sidecar) → `update --doc-file` (base-hash
+  precondition; stale base = 409 carrying the server diff). A push during an
+  open run is refused naming the run; the run's close is the sole writer in the
+  lease window. Task runs get the doc as `TASK.md` (delivery `taskDoc`/`taskDocHash`,
+  gated on daemon >= 0.17 for the PROMPT wording only); the close report pushes it
+  back base-guarded — the run's own server-side field writes MERGE (pushed body +
+  current front matter), foreign drift drops the push.
+- **Transitions, not verbs**: run `update` writes work-state server-side
+  (patchFrontMatterContent). The guarded transition = run + recurring node +
+  `status=done` → requires canFinish + `--note` evidence, once-only (409
+  CONFLICT), TOCTOU on goal, atomic pause/completedAt/notify. `finish` is an
+  alias of that transition (stamps `status: done` too — equivalence pinned).
+  `report` is loop-run-only; a task run's record SYNTHESIZES from its events at
+  close (terminal status change → one notification; else quiet).
+- **Agents registry** (`agents` table): rows auto-register from the daemon's
+  first-poll `agents` list (validated via `coerceCodingAgent`); id =
+  `<machineId>:<runtime>`, stable auto-slug, renamable name (registration never
+  clobbers a rename). `assignee=<agent-slug>` resolves registry-first;
+  `<machine>/<runtime>` stays an alias. `loopany team` renders the roster.
+- **Legacy advance**: every task-file ingest (old-daemon sync/report) also seeds
+  NEW dated Timeline entries as events, deduped on (day, clipped text) — the
+  same rule `scripts/migrate-v2-split.ts --execute` used for the one-time
+  history seed (conservative: doc left byte-identical; re-run is a no-op).
+- **Cloud-born create**: `loopany create` writes no local files; the doc rides
+  the registration; createLoop accepts doc-only inert tasks. Folders appear
+  lazily with artifacts.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp
@@ -466,3 +503,27 @@ edges) — not task narration. Prefer a pointer to the authoritative file/comman
 over copying detail. Update or prune an entry when the code it describes changes; delete
 what no longer holds rather than letting it drift. `CLAUDE.md` symlinks here, so one edit
 serves both. English only, tight prose.
+
+## Team-wide device reads (the scoping invariant)
+
+- **The device credential's READ surface may grow to what the machine's OWNER
+  could see in the browser — never more; its WRITE surface stays machine-scoped**
+  except the `TEAM_WRITE_KEYS` config allowlist (name/cron/timezone/notify/goal/
+  enabled/runAt). Content keys (workflow/ui/stateSchema) + executor keys
+  (agent/model/allowControl) + file keys (taskFile/taskFileContent) are
+  machine-local, enforced SERVER-side in `editLoop` — `workflow` is JS the
+  daemon EXECUTES on the loop's machine, so a stolen device token on machine A
+  must never plant code that runs on machine B.
+- `MachineGateway.ownerScopedLoops(machineId)` is the ONE scope resolver
+  (token → machine.userId → listTeamsForUser per REQUEST, so a membership
+  removal revokes the CLI view instantly; "shared" open-mode owner keeps the
+  classic machine scope). Reads (`listLoops`/`taskList`/`taskGet` children/
+  `taskSearch`/`renderLoopLog`) all flow through it; `machineTaskRows` stays
+  machine-scoped ON PURPOSE for createLoop's per-machine slug idempotency.
+- Everything out of scope is a FLAT 404 (existence never leaks) — including
+  `--team <non-membership-id>`. Slug ambiguity across machines → 409 with
+  machine-tagged candidates; `<machine>/<slug>` (name or id prefix) qualifies.
+- `taskList` responses carry `requester` + `machines` (id→name) so the daemon
+  renders `@machine` markers without knowing the id-derivation scheme; `loops`
+  gains the `machine` optional field. No stored team switcher: `--team` is
+  per-invocation, `--here` narrows to the requesting machine.

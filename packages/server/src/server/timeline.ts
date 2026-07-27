@@ -14,7 +14,7 @@ import { Cron } from 'croner'
 
 import type { TimelineRun } from '../db/store.js'
 import type { Loop } from '../db/schema.js'
-import type { TimelineData, TimelineLoop, TimelineMachine, TimelineMark } from '../types.js'
+import type { TimelineData, TimelineLoop, TimelineMark } from '../types.js'
 import { cronText } from '../lib/format.js'
 
 /** Hard ceiling on projected fires PER LOOP per window. A `* * * * *` loop over a
@@ -31,42 +31,17 @@ export function toTimelineLoop(loop: Loop): TimelineLoop {
     enabled: loop.enabled,
     completedAt: loop.completedAt ?? null,
     cadence: cronText(loop.cron),
-    machineId: loop.machineId,
   }
-}
-
-/**
- * The device-filter options, derived from the loops in scope (never the full
- * machine list) so the filter can't offer a machine that empties the view.
- *
- * A machine's `name` is empty until its daemon connects, so fall back to
- * hostname, then a short id — a blank option is unpickable.
- */
-export function timelineMachines(
-  loops: TimelineLoop[],
-  machines: Array<{ id: string; name: string; hostname: string | null }>,
-): TimelineMachine[] {
-  const counts = new Map<string, number>()
-  for (const l of loops) counts.set(l.machineId, (counts.get(l.machineId) ?? 0) + 1)
-  const byId = new Map(machines.map((m) => [m.id, m]))
-  return [...counts.entries()]
-    .map(([id, loopCount]) => {
-      const m = byId.get(id)
-      // A loop can outlive its machine row (deleted machine); label it honestly
-      // rather than dropping the option and orphaning those lanes from the filter.
-      const label = m?.name?.trim() || m?.hostname?.trim() || `${id.slice(0, 10)}…`
-      return { id, label, loopCount }
-    })
-    .sort((a, b) => a.label.localeCompare(b.label))
 }
 
 /**
  * Future fires for one loop inside `(after, to)`, in the LOOP's own timezone.
  *
- * Returns [] for a disabled or completed loop (it will not fire), and for any
- * cron croner rejects — a bad expression is a lane with no ghosts, never a
- * thrown request. A pinned one-shot (`nextRunAt`) is emitted first and the cron
- * walk continues past it, matching what the scheduler actually does.
+ * Returns [] for a disabled or completed loop (it will not fire), for a
+ * cron-null task (inert work — no recurrence to project), and for any cron
+ * croner rejects — a bad expression is a lane with no ghosts, never a thrown
+ * request. A pinned one-shot (`nextRunAt`) is emitted first and the cron walk
+ * continues past it, matching what the scheduler actually does.
  */
 export function projectFires(loop: Loop, after: Date, to: Date): string[] {
   if (!loop.enabled || loop.completedAt) return []
@@ -75,6 +50,9 @@ export function projectFires(loop: Loop, after: Date, to: Date): string[] {
     const pinned = new Date(loop.nextRunAt)
     if (pinned > after && pinned <= to) out.push(pinned.toISOString())
   }
+  // A cron-null task never recurs — but a pinned one-shot still shows, so this
+  // sits AFTER the nextRunAt emission above.
+  if (!loop.cron) return out
   let probe: Cron | undefined
   try {
     probe = new Cron(loop.cron, { paused: true, ...(loop.timezone ? { timezone: loop.timezone } : {}) })
