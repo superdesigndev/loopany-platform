@@ -301,18 +301,19 @@
 }
 
 /*
- * Dashboard template-catalog teaser (`TemplatesPreview`, the band right above the
- * playbook). The compact cards are fixed-height (`TemplateCard` `compact`), so clipping
- * the grid to ONE full row plus a peek of the next lands in the same place at every
- * viewport width - 1, 2 or 3 columns - instead of depending on how tall a row happened
- * to render. The mask stays fully opaque through the first row (218px card / 326px box
- * = 67%) and fades the peek row to nothing, which is the "there is more" cue the
- * "Browse all templates" link answers.
+ * Template-catalog teaser (`TemplatesPreview`, the band right above the playbook on both
+ * the dashboard and the pre-login landing). The compact cards are fixed-height
+ * (`TemplateCard` `compact`), so clipping the grid to TWO full rows plus a peek of the
+ * third lands in the same place at every viewport width - 1, 2 or 3 columns - instead of
+ * depending on how tall a row happened to render. Two 218px cards + the 16px gap = 452px
+ * of solid rows; the box is 90px taller for the peek, so the mask stays fully opaque to
+ * 452/558 = 81% and fades the third row to nothing. That is the "there is more" cue the
+ * "Browse all templates" link answers - keep the three numbers in step.
  */
 .templates-peek {
-  max-height: 326px;
-  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 68%, transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 0, #000 68%, transparent 100%);
+  max-height: 558px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 81%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 81%, transparent 100%);
 }
 
 /*

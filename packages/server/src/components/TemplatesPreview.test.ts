@@ -46,11 +46,17 @@ const bundle = (name: string, label: string, accent: BundleView['accent'], membe
   members: members.map(([n, l]) => tmpl(n, l)),
 })
 
-/** Seven bundles' worth of templates: more than the band shows, so the curation
- *  (one lead per category, capped at 6) and the "Browse all N" count both bite. */
+/** More templates than the band shows (10 across 6 bundles), so both the round-robin
+ *  curation + its 9-card cap and the "Browse all N" catalog count bite. Code Health is
+ *  deliberately deep (4) so a flat top-up would be visible as a Code Health cluster. */
 const bundles: BundleView[] = [
-  bundle('code-health', 'Code Health', 'interactive', [['react-doctor', 'React Doctor'], ['housekeeper', 'Housekeeper']]),
-  bundle('ship', 'Ship with Confidence', 'indigo', [['release-notes', 'Release Notes']]),
+  bundle('code-health', 'Code Health', 'interactive', [
+    ['react-doctor', 'React Doctor'],
+    ['housekeeper', 'Housekeeper'],
+    ['docs-sweep', 'Doc Maintainer'],
+    ['dep-triage', 'Dependency Triage'],
+  ]),
+  bundle('ship', 'Ship with Confidence', 'indigo', [['release-notes', 'Release Notes'], ['test-guardian', 'Test Guardian']]),
   bundle('growth', 'Growth', 'rubik-green', [['market-monitor', 'Market Monitor']]),
   bundle('ops', 'Business Ops', 'rubik-orange', [['inbox-triage', 'Inbox Triage']]),
   bundle('personal', 'Personal', 'rubik-yellow', [['reading-list', 'Reading List']]),
@@ -78,15 +84,28 @@ async function mount(data: BundleView[] = bundles): Promise<HTMLDivElement> {
 }
 
 describe('TemplatesPreview (dashboard catalog teaser)', () => {
-  it('shows a curated one-per-category subset, capped at two desktop rows', async () => {
+  it('shows a round-robin curated subset — three desktop rows, two of them full', async () => {
     const el = await mount()
     const cards = [...el.querySelectorAll('article.market-card')]
-    expect(cards.length).toBe(6)
-    // The LEAD of each bundle, in the registry's curated category order — not a slice
-    // of one category (Housekeeper is Code Health's second member, so it is left out).
+    // 9 = 3 columns x 3 rows: two full rows plus the one the fade cuts.
+    expect(cards.length).toBe(9)
+    // Every bundle's LEAD first (curated category order), THEN every bundle's second,
+    // and so on — so the extra rows stay a tour of the catalog instead of turning into
+    // a Code Health cluster (that bundle is 4 deep here).
     const titles = [...el.querySelectorAll('a.market-card-link')].map((a) => a.textContent)
-    expect(titles).toEqual(['React Doctor', 'Release Notes', 'Market Monitor', 'Inbox Triage', 'Reading List', 'Bug Vigil'])
-    expect(el.innerHTML).not.toContain('Housekeeper')
+    expect(titles).toEqual([
+      'React Doctor',
+      'Release Notes',
+      'Market Monitor',
+      'Inbox Triage',
+      'Reading List',
+      'Bug Vigil',
+      'Housekeeper',
+      'Test Guardian',
+      'Doc Maintainer',
+    ])
+    // The 10th+ template stays behind the "Browse all" link.
+    expect(el.innerHTML).not.toContain('Dependency Triage')
   })
 
   it('reuses the market card language: category tag, intro, prompt preview, rating row', async () => {
@@ -96,9 +115,9 @@ describe('TemplatesPreview (dashboard catalog teaser)', () => {
     expect(out).toContain('React Doctor blurb')
     // The monospace prompt-preview texture, one per card, masked at its bottom.
     const pres = [...el.querySelectorAll('article pre')]
-    expect(pres.length).toBe(6)
+    expect(pres.length).toBe(9)
     expect(pres[0]!.textContent).toContain('React Doctor full setup prompt')
-    expect(el.querySelectorAll('article .prompt-preview-mask').length).toBe(6)
+    expect(el.querySelectorAll('article .prompt-preview-mask').length).toBe(9)
     // The compact 3-indicator rating row (same as the market grid).
     expect(out).toContain('Easy start')
     expect(out).toContain('Short cycle')
@@ -119,8 +138,8 @@ describe('TemplatesPreview (dashboard catalog teaser)', () => {
     expect(el.querySelectorAll('.templates-peek').length).toBe(1)
     const browse = [...el.querySelectorAll('a')].filter((a) => (a.textContent ?? '').includes('Browse all'))
     expect(browse.length).toBe(1)
-    // 7 templates across the 6 bundles — the count is the catalog, not the 6 shown.
-    expect(browse[0]!.textContent).toContain('Browse all 7 templates')
+    // 10 templates across the 6 bundles — the count is the CATALOG, not the 9 shown.
+    expect(browse[0]!.textContent).toContain('Browse all 10 templates')
     expect(browse[0]!.getAttribute('href')).toBe('/templates')
   })
 
@@ -159,5 +178,22 @@ describe('placement + shared-card wiring', () => {
     const css = src('../styles/app.css')
     expect(css).toContain('.templates-peek')
     expect(css).toMatch(/\.templates-peek \{[\s\S]*?max-height:[\s\S]*?mask-image: linear-gradient\(to bottom/)
+  })
+
+  it('TWO full rows stay solid; the third is what the fade cuts', () => {
+    // The three numbers that encode "two full rows, third fading" — card height, box
+    // height and the mask's opaque stop — must agree, or the cut drifts off a row edge.
+    const cardH = Number(/compact \? 'h-\[(\d+)px\] overflow-hidden'/.exec(src('./TemplateCard.tsx'))?.[1])
+    const css = /\.templates-peek \{([\s\S]*?)\}/.exec(src('../styles/app.css'))?.[1] ?? ''
+    const boxH = Number(/max-height:\s*(\d+)px/.exec(css)?.[1])
+    const solidPct = Number(/mask-image: linear-gradient\(to bottom, #000 0, #000 (\d+)%/.exec(css)?.[1])
+    const GAP = 16 // the grid's gap-4
+    const twoRows = cardH * 2 + GAP
+    expect(boxH).toBeGreaterThan(twoRows) // room left for the third row to peek
+    expect(boxH).toBeLessThan(twoRows + cardH) // but never a full third row
+    // Opaque through the end of row two, within a pixel of rounding.
+    expect(Math.abs((solidPct / 100) * boxH - twoRows)).toBeLessThanOrEqual(1)
+    // And enough cards to fill all three rows at the 3-column desktop width.
+    expect(src('./TemplatesPreview.tsx')).toMatch(/const PREVIEW_COUNT = 9\b/)
   })
 })

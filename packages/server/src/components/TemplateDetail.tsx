@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import type { TemplateDetailView } from '../types'
 import { PublicHeader } from './TemplatesPage'
 import { RatingChips, categoryTagStyle } from './TemplateRatingChips'
+import { TemplateFlowDiagram } from './TemplateFlowDiagram'
 
 /** What the `/templates/<slug>` loader resolves: the template + its category context.
  *  The shape lives in `types.ts` (the server resolves it by slug); this alias keeps the
@@ -18,7 +19,8 @@ const easeNote: Record<string, string> = {
 /**
  * The PUBLIC template detail (`/templates/<slug>`) — reference-site style. Exposes the
  * loop ITSELF: the full plain-language intro, structured mechanism facts (suggested
- * schedule, open/closed, exit condition, notifications), the rating dimensions with
+ * schedule, open/closed, exit condition, notifications), a drawn workflow diagram when
+ * the template declares a flow spec, the rating dimensions with
  * their honest notes, and the REAL prompt this template feeds the agent (verbatim from
  * the registry) with a Copy button. A primary "Create directly in Loopany" CTA deep-links
  * into the real compose flow with this template preselected. Public: no auth. English only.
@@ -56,6 +58,10 @@ export function TemplateDetail({ data }: { data: TemplateDetailData | null }) {
           </Link>
           <CopyLinkButton slug={t.name} />
         </div>
+
+        {/* How a run actually flows — drawn from the template's own flow spec. Renders
+            nothing for a template that declares none. */}
+        <TemplateFlowDiagram name={t.name} />
 
         {/* Mechanism facts, structured. */}
         {r && (

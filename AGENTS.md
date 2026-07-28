@@ -230,6 +230,17 @@ computes pure functions. Run instructions: `README.md`.
   locally needs the GATE ON - `GITHUB_CLIENT_ID`/`_SECRET` (any non-empty value; see
   `lib/loginGate.ts`) plus `LOOPANY_AUTH_SECRET`, or the app boots open-mode and lands
   straight on the dashboard.
+- **Per-template FLOW SPECS live in `lib/templateFlow.tsx`** (extracted from
+  `components/LoopFlow.tsx`, which now imports them): ONE source, two surfaces - the
+  compose modal's animated vertical preview (`LoopFlow`, `hasLoopFlow`) and the public
+  detail page's STATIC diagram (`components/TemplateFlowDiagram.tsx` on
+  `/templates/<slug>`). The static one is DERIVED, never a second hand-authored list:
+  `templateFlowDiagram(name)` folds a `FlowSpec` into trigger -> steps -> outputs (steps
+  from `nodes`, the `setup` gate split off, `closes` from a `finish` node, outputs from
+  the dashboard WIDGETS the loop maintains, typed by widget kind). It must stay
+  hook-free/measurement-free - that route SSRs for crawlers, and the guard test pins it.
+  A template with no spec renders NEITHER surface (9 of 21 have one); add a spec rather
+  than invent a flow.
 - **Editorial ratings** (`server/templateRatings.ts`, one typed table merged onto
   `TemplateInfo.rating`) drive the market's rating chips and the detail view's mechanism
   rows: ease, cadence + mechanism, effect visibility, plus a humanized `schedule` and -

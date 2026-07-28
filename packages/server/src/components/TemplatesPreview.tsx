@@ -33,8 +33,9 @@ export function TemplatesPreview({ bundles }: { bundles: BundleView[] }) {
         </p>
       </div>
 
-      {/* The teaser: two rows of compact cards, the second one masked away. Cards keep a
-          fixed height, so the clip lands in the same place at every viewport width. */}
+      {/* The teaser: TWO full rows of compact cards, with the third starting the fade.
+          Cards keep a fixed height, so the clip lands in the same place at every
+          viewport width (the row COUNT changes with the columns, the cut does not). */}
       <div className="templates-peek mt-8 overflow-hidden">
         <div className="grid min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {shown.map((it) => (
@@ -56,32 +57,26 @@ export function TemplatesPreview({ bundles }: { bundles: BundleView[] }) {
   )
 }
 
-/** Two rows at the 3-column desktop width. */
-const PREVIEW_COUNT = 6
+/** Three rows at the 3-column desktop width: two full, the third under the fade. */
+const PREVIEW_COUNT = 9
 
 /**
- * The curated subset: each bundle's LEAD template, in the registry's curated category
- * order (Code Health -> ... -> Others), so the strip reads as a tour of the catalog
- * rather than a slice of one category. Tops up from the remaining templates (flat bundle
- * order) if there are fewer bundles than slots.
+ * The curated subset, picked ROUND-ROBIN across bundles: every bundle's lead first (in
+ * the registry's curated category order, Code Health -> ... -> Others), then every
+ * bundle's second, and so on. So the band reads as a tour of the catalog at any count -
+ * a flat top-up would fill the extra rows from whichever bundle happens to be first.
  */
 function pickPreview(bundles: BundleView[], count: number): MarketItem[] {
   const flat = flattenBundles(bundles)
+  const byBundle = bundles.map((b) => flat.filter((i) => i.categoryName === b.name))
+  const deepest = byBundle.reduce((n, m) => Math.max(n, m.length), 0)
   const picked: MarketItem[] = []
-  const taken = new Set<string>()
-  for (const b of bundles) {
-    if (picked.length >= count) break
-    const lead = flat.find((i) => i.categoryName === b.name)
-    if (!lead) continue
-    picked.push(lead)
-    taken.add(lead.template.name)
-  }
-  for (const i of flat) {
-    if (picked.length >= count) break
-    if (!taken.has(i.template.name)) {
-      picked.push(i)
-      taken.add(i.template.name)
+  for (let rank = 0; rank < deepest && picked.length < count; rank++) {
+    for (const members of byBundle) {
+      if (picked.length >= count) break
+      const item = members[rank]
+      if (item) picked.push(item)
     }
   }
-  return picked.slice(0, count)
+  return picked
 }
