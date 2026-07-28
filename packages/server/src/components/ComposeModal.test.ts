@@ -23,7 +23,11 @@ vi.mock('./Modal', () => ({
   Modal: ({ open, children }: { open: boolean; children: React.ReactNode }) => (open ? createElement('div', null, children) : null),
   ModalHead: ({ title }: { title: string }) => createElement('div', null, title),
 }))
-vi.mock('./LoopFlow', () => ({ LoopFlow: () => null, hasLoopFlow: () => false }))
+// The flow preview is out of scope here: stub the renderer AND the spec registry it is
+// gated on (`hasLoopFlow` moved to lib/templateFlow), so this test stays on the
+// single-column waiting layout regardless of which fixtures have a FlowSpec.
+vi.mock('./LoopFlow', () => ({ LoopFlow: () => null }))
+vi.mock('../lib/templateFlow', () => ({ hasLoopFlow: () => false }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const HK: TemplateInfo = { name: 'housekeeper', label: 'Tech Debt Cleanup', desc: 'A daily janitor.', description: 'Keep this codebase tidy.' }

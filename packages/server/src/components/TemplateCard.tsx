@@ -11,7 +11,10 @@ import { MicroIndicators, categoryTagStyle } from './TemplateRatingChips'
  *
  * `compact` is the dashboard variant: a shorter prompt-preview block and a fixed card
  * height, so the preview grid's rows are uniform and the section's bottom fade cuts at
- * a predictable place at every viewport width. Everything else is identical markup.
+ * a predictable place at every viewport width. The fixed height leaves no slack, so the
+ * compact title is clamped to ONE line - a longer label (or a type-scale tweak) then
+ * ellipsises instead of silently pushing the rating row and the Create link out of the
+ * card. Everything else is identical markup.
  */
 
 /** One template flattened with its category, for the market grid + filter. */
@@ -22,20 +25,23 @@ export interface MarketItem {
   accent: BundleView['accent']
 }
 
-/** Bundles partition the whole registry, so this IS the flat catalog (in bundle order). */
-export function flattenBundles(bundles: BundleView[]): MarketItem[] {
-  return bundles.flatMap((b) =>
-    b.members.map((template) => ({ template, categoryName: b.name, categoryLabel: b.label, accent: b.accent })),
-  )
+/** One bundle's members flattened to market items, in the bundle's own display order. */
+export function bundleItems(b: BundleView): MarketItem[] {
+  return b.members.map((template) => ({ template, categoryName: b.name, categoryLabel: b.label, accent: b.accent }))
 }
 
-export function TemplateCard({ item, compact }: { item: MarketItem; compact?: boolean }) {
+/** Bundles partition the whole registry, so this IS the flat catalog (in bundle order). */
+export function flattenBundles(bundles: BundleView[]): MarketItem[] {
+  return bundles.flatMap(bundleItems)
+}
+
+export function TemplateCard({ item, compact, className }: { item: MarketItem; compact?: boolean; className?: string }) {
   const { template: t, categoryLabel, accent } = item
   return (
     <article
       className={`market-card group relative flex min-w-0 flex-col rounded-card border border-hairline bg-surface p-4 transition-colors hover:border-wire hover:shadow-[0_14px_30px_-20px_rgba(0,0,0,0.28)] ${
         compact ? 'h-[218px] overflow-hidden' : ''
-      }`}
+      } ${className ?? ''}`}
     >
       {/* Header: category tag + suggested schedule. */}
       <div className="flex items-center gap-2">
@@ -46,7 +52,7 @@ export function TemplateCard({ item, compact }: { item: MarketItem; compact?: bo
       </div>
 
       {/* Title is the stretched link — the WHOLE card navigates to the detail page. */}
-      <h3 className="mt-2 text-[15px] font-semibold leading-snug text-display">
+      <h3 className={`mt-2 text-[15px] font-semibold leading-snug text-display ${compact ? 'line-clamp-1' : ''}`}>
         <Link
           to="/templates/$slug"
           params={{ slug: t.name }}

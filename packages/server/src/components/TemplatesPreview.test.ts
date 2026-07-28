@@ -143,6 +143,20 @@ describe('TemplatesPreview (dashboard catalog teaser)', () => {
     expect(browse[0]!.getAttribute('href')).toBe('/templates')
   })
 
+  it('drops the cards a narrower column count would hide entirely under the clip', async () => {
+    const el = await mount()
+    // Tokenize — the compact card carries `overflow-hidden`, which is not `hidden`.
+    const cls = [...el.querySelectorAll('article.market-card')].map((c) => c.className.split(/\s+/))
+    // The mask has room for THREE rows; the grid is 1 column below `sm`, 2 up to `lg`,
+    // 3 above. So cards 4-6 only exist from `sm` and 7-9 only from `lg` — anything the
+    // clip would hide OUTRIGHT is display:none there, never invisible-but-focusable.
+    expect(cls.slice(0, 3).every((c) => !c.includes('hidden'))).toBe(true)
+    expect(cls.slice(3, 6).every((c) => c.includes('hidden') && c.includes('sm:flex'))).toBe(true)
+    expect(cls.slice(6, 9).every((c) => c.includes('hidden') && c.includes('lg:flex'))).toBe(true)
+    // Desktop is untouched: at `lg` all nine are shown.
+    expect(cls.filter((c) => c.includes('hidden')).length).toBe(6)
+  })
+
   it('renders nothing when the registry is empty (never an orphan heading)', async () => {
     const el = await mount([])
     expect(el.innerHTML).toBe('')
@@ -195,5 +209,25 @@ describe('placement + shared-card wiring', () => {
     expect(Math.abs((solidPct / 100) * boxH - twoRows)).toBeLessThanOrEqual(1)
     // And enough cards to fill all three rows at the 3-column desktop width.
     expect(src('./TemplatesPreview.tsx')).toMatch(/const PREVIEW_COUNT = 9\b/)
+  })
+
+  it('the clipped box is not a scroll container, and its breakpoints match the grid', () => {
+    const preview = src('./TemplatesPreview.tsx')
+    // `overflow-clip`, NOT `overflow-hidden`: a hidden box is still programmatically
+    // scrollable, so focus moving into a clipped card would shift the whole band up
+    // under the mask with no way back.
+    expect(preview).toContain('templates-peek mt-8 overflow-clip')
+    expect(preview).not.toContain('templates-peek mt-8 overflow-hidden')
+    // The per-card visibility must key off the SAME breakpoints as the column count,
+    // and cover every previewed card, or the "three rows at any width" rule breaks.
+    expect(preview).toContain('sm:grid-cols-2 lg:grid-cols-3')
+    const slots = /const PEEK_VISIBILITY[\s\S]*?= \[([\s\S]*?)\n\]/.exec(preview)?.[1] ?? ''
+    expect(slots.split(',').filter((s) => s.trim()).length).toBe(9)
+  })
+
+  it('the compact card clamps its title, so the fixed height cannot silently clip the footer', () => {
+    // 218px leaves no slack for a two-line title; a longer label must ellipsise rather
+    // than push the rating row + Create link out of the card.
+    expect(src('./TemplateCard.tsx')).toContain("compact ? 'line-clamp-1' : ''")
   })
 })

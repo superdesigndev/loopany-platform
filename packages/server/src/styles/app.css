@@ -309,6 +309,12 @@
  * of solid rows; the box is 90px taller for the peek, so the mask stays fully opaque to
  * 452/558 = 81% and fades the third row to nothing. That is the "there is more" cue the
  * "Browse all templates" link answers - keep the three numbers in step.
+ *
+ * Exactly three rows are RENDERED at every column count (`PEEK_VISIBILITY` in
+ * `TemplatesPreview` display:none's the surplus below `lg`), so the clip never hides a
+ * card that is still focusable or read out by a screen reader; the container clips with
+ * `overflow-clip`, not `hidden`, so it is not a scroll container and focus can never
+ * shift the band up under the mask.
  */
 .templates-peek {
   max-height: 558px;

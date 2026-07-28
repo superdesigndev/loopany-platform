@@ -266,8 +266,9 @@ export function DashboardView({
         )}
 
         {/* The catalog teaser, directly above the playbook: the market's own text-first
-            cards over a curated one-per-category subset, fading out into "Browse all
-            templates". Reads off the loader's static bundles, so the poll never touches it. */}
+            cards over a round-robin subset across bundles (two full rows, the third
+            fading), ending in "Browse all N templates". Reads off the loader's static
+            bundles, so the poll never touches it. */}
         <TemplatesPreview bundles={bundles} />
 
         {/* The playbook band - static education/sales content anchoring the page;

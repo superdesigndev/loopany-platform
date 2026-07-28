@@ -214,12 +214,17 @@ computes pure functions. Run instructions: `README.md`.
 - **The market CARD is ONE shared component** (`components/TemplateCard.tsx`:
   `TemplateCard` + `flattenBundles` + `promptPreview`), rendered by THREE surfaces:
   `/templates`, and the catalog teaser `components/TemplatesPreview.tsx` on BOTH the
-  dashboard and the pre-login landing. The teaser shows each bundle's LEAD template (one
-  per category, curated bundle order, capped at 6, topped up from what is left) under
-  `.templates-peek`, a fixed `max-height` + bottom mask fading into "Browse all N
-  templates"; that clip is only deterministic across 1/2/3 columns because the `compact`
-  card is FIXED-HEIGHT - if you change one, change the other (pinned by
-  `TemplatesPreview.test.ts`). Data source differs by surface: the dashboard passes the
+  dashboard and the pre-login landing. The teaser curates ROUND-ROBIN across bundles
+  (every bundle's lead first in curated category order, then every bundle's second, ...)
+  to `PREVIEW_COUNT = 9` = three desktop rows under `.templates-peek`, a fixed
+  `max-height` + bottom mask: TWO rows solid, the THIRD under the fade, then "Browse all
+  N templates" (N = the WHOLE catalog, not the 9). The card height (218px), the box
+  (558px) and the mask stop (81% = (2*218 + 16px gap)/558) are COUPLED - change one,
+  change all three (pinned by `TemplatesPreview.test.ts`). Because the clip is a fixed
+  pixel height, `PEEK_VISIBILITY` `display: none`s the cards a narrower column count
+  would push entirely under it (3 cards at 1 column, 6 at 2, all 9 at `lg`), so no
+  invisible card stays focusable/AT-exposed; the box uses `overflow-clip`, not `hidden`,
+  so it is never a scroll container. Data source differs by surface: the dashboard passes the
   loader's static `bundles` (never re-polled), while `SignIn` fetches `listPublicBundles`
   itself (thumb-stripped, public) rather than threading it through the eight gated routes
   that render it - best-effort, since an empty registry renders no band.
