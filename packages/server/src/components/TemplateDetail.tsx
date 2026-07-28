@@ -1,15 +1,13 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import type { BundleView, TemplateInfo } from '../types'
+import type { TemplateDetailView } from '../types'
 import { PublicHeader } from './TemplatesPage'
 import { RatingChips, categoryTagStyle } from './TemplateRatingChips'
 
-/** What the `/templates/<slug>` loader resolves: the template + its category context. */
-export interface TemplateDetailData {
-  template: TemplateInfo
-  categoryLabel: string
-  accent: BundleView['accent']
-}
+/** What the `/templates/<slug>` loader resolves: the template + its category context.
+ *  The shape lives in `types.ts` (the server resolves it by slug); this alias keeps the
+ *  view's own import surface stable. */
+export type TemplateDetailData = TemplateDetailView
 
 const easeNote: Record<string, string> = {
   easy: 'Runs with almost no setup — confirm a detail or two and go.',

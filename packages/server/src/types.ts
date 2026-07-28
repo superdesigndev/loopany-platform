@@ -513,6 +513,18 @@ export interface BundleView {
   individual?: boolean
 }
 
+/**
+ * ONE resolved market template plus its category context — what the public detail route
+ * (`/templates/<slug>`) renders. Resolved server-side BY SLUG (`server/bundles.ts`
+ * `findPublicTemplate`) so a card hover under `defaultPreload: 'intent'` fetches this one
+ * template, never the whole catalog. Thumb-stripped like the rest of the public payload.
+ */
+export interface TemplateDetailView {
+  template: TemplateInfo
+  categoryLabel: string
+  accent: BundleAccent
+}
+
 /** The team switcher's data: the teams this user may view + the active selection. */
 export interface TeamsView {
   teams: { id: string; name: string }[]

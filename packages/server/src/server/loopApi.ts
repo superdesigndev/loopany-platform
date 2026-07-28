@@ -22,6 +22,7 @@ import type {
   RunSummary,
   BundleView,
   TeamsView,
+  TemplateDetailView,
   TemplateInfo,
   TimelineData,
   TimelineMark,
@@ -36,7 +37,11 @@ import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
 import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
-import { listBundles as listBundlesRegistry, publicBundles as publicBundlesRegistry } from './bundles.js'
+import {
+  findPublicTemplate as findPublicTemplateRegistry,
+  listBundles as listBundlesRegistry,
+  publicBundles as publicBundlesRegistry,
+} from './bundles.js'
 
 function backend() {
   return ensureServer()
@@ -315,6 +320,16 @@ export const listPublicBundles = createServerFn({ method: 'GET' }).handler((): B
   // document; stripping server-side means a client navigation doesn't ship them either.
   return publicBundlesRegistry()
 })
+
+export const getPublicTemplate = createServerFn({ method: 'GET' })
+  .validator((slug: string) => slug)
+  .handler(({ data }): TemplateDetailView | null => {
+    // ONE template + its category context, resolved by slug server-side. The public
+    // detail route preloads on card hover (`defaultPreload: 'intent'`), so resolving a
+    // slug must cost one small payload, not the whole catalog. Unknown slug ⇒ null; the
+    // route turns that into a real 404.
+    return findPublicTemplateRegistry(data)
+  })
 
 // ---- writes (apply via the live in-process Scheduler) ----
 

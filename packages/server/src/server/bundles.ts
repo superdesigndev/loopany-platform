@@ -1,4 +1,4 @@
-import type { BundleInfo, BundleView } from '../types'
+import type { BundleInfo, BundleView, TemplateDetailView } from '../types'
 import { TEMPLATES } from './templates'
 
 /**
@@ -64,4 +64,20 @@ export function publicBundles(): BundleView[] {
     ...b,
     members: b.members.map(({ thumb: _thumb, ...m }) => m),
   }))
+}
+
+/**
+ * Resolve ONE public template by slug, with the category context the detail view needs
+ * (and without the unused thumb). The detail route preloads on card HOVER
+ * (`defaultPreload: 'intent'`), so it must never pull the whole catalog to render a
+ * single template. Unknown slug ⇒ null (the route turns that into a real 404).
+ */
+export function findPublicTemplate(slug: string): TemplateDetailView | null {
+  for (const b of BUNDLES) {
+    const member = b.members.find((m) => m.name === slug)
+    if (!member) continue
+    const { thumb: _thumb, ...template } = member
+    return { template, categoryLabel: b.label, accent: b.accent }
+  }
+  return null
 }

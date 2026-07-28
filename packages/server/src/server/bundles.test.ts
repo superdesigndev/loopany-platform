@@ -9,7 +9,7 @@
  */
 import { describe, expect, test } from 'vitest'
 
-import { BUNDLES, listBundles, publicBundles } from './bundles'
+import { BUNDLES, findPublicTemplate, listBundles, publicBundles } from './bundles'
 import { TEMPLATES } from './templates'
 
 const VALID_ACCENTS = ['interactive', 'indigo', 'rubik-green', 'rubik-orange', 'rubik-yellow', 'secondary']
@@ -112,6 +112,27 @@ describe('bundle registry', () => {
     }
     // Non-destructive: the shared registry keeps its thumbs for the dashboard.
     expect(listBundles().some((b) => b.members.some((m) => m.thumb))).toBe(true)
+  })
+
+  test('findPublicTemplate resolves ONE slug with its category, thumb-stripped', () => {
+    const first = BUNDLES[0]!
+    const member = first.members[0]!
+    const hit = findPublicTemplate(member.name)!
+    expect(hit).toBeTruthy()
+    expect(hit.template.name).toBe(member.name)
+    expect(hit.categoryLabel).toBe(first.label)
+    expect(hit.accent).toBe(first.accent)
+    // No thumb, but the full prompt the detail view renders verbatim survives.
+    expect(hit.template).not.toHaveProperty('thumb')
+    expect(hit.template.description).toBe(member.description)
+    // Every catalog member resolves (the route's 404 is for real unknowns only).
+    for (const b of BUNDLES) {
+      for (const m of b.members) {
+        expect(findPublicTemplate(m.name)?.categoryLabel, m.name).toBe(b.label)
+      }
+    }
+    expect(findPublicTemplate('no-such-template')).toBeNull()
+    expect(findPublicTemplate('')).toBeNull()
   })
 
   test('every template belongs to EXACTLY ONE bundle — no orphan, no duplicate', () => {

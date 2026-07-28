@@ -162,12 +162,24 @@ describe('the public market routes SSR (crawlers/unfurlers see the real page)', 
     expect(detail).toContain('notFoundComponent: () => <TemplateDetail data={null} />')
   })
 
-  it('both public routes take the THUMB-STRIPPED registry, not the dashboard one', () => {
+  it('both public routes take a THUMB-STRIPPED payload, never the dashboard registry', () => {
     // The market is text-first (the card test above pins zero <svg>), and both routes
     // SSR — so the inlined thumb.svg strings would be dead weight in every document.
+    expect(src('./templates.tsx')).toContain('listPublicBundles')
+    expect(src('./templates_.$slug.tsx')).toContain('getPublicTemplate')
     for (const rel of ['./templates.tsx', './templates_.$slug.tsx']) {
-      expect(src(rel)).toContain('listPublicBundles')
       expect(src(rel)).not.toMatch(/\blistBundles\b/)
     }
+  })
+
+  it('the detail loader resolves ONE template by slug — a hover never pulls the catalog', () => {
+    // The grid preloads this route on card hover (`defaultPreload: 'intent'`), so the
+    // loader must not fetch every template to render one.
+    const detail = src('./templates_.$slug.tsx')
+    expect(detail).toContain('await getPublicTemplate({ data: params.slug })')
+    expect(detail).not.toContain('listPublicBundles')
+    // No client-side scan left behind.
+    expect(detail).not.toMatch(/\.members\.find\(/)
+    expect(src('../router.tsx')).toContain("defaultPreload: 'intent'")
   })
 })

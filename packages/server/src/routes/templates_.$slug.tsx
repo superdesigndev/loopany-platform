@@ -1,14 +1,18 @@
 import { createFileRoute, notFound } from '@tanstack/react-router'
 
-import { listPublicBundles } from '../server/loopApi'
+import { getPublicTemplate } from '../server/loopApi'
 import { TemplateDetail, type TemplateDetailData } from '../components/TemplateDetail'
 
 /**
  * The PUBLIC template detail (`/templates/<slug>`) — a shareable, linkable page for one
  * template. Like `/templates` it does NO auth check (renders logged out under the gate)
  * and it SSRs (its loader is the static, auth-free registry), so a shared link unfurls
- * with the real title, description, and prose instead of an empty shell. The payload is
- * the thumb-stripped public registry (`listPublicBundles`) — this view draws no thumb.
+ * with the real title, description, and prose instead of an empty shell.
+ *
+ * The loader resolves ONE template BY SLUG (`getPublicTemplate`, thumb-stripped like the
+ * rest of the public payload) rather than scanning the catalog client-side: the market
+ * grid preloads this route on card HOVER (`defaultPreload: 'intent'`), so a slug must
+ * cost one small payload, not the whole registry per card.
  *
  * An unknown slug throws `notFound()`: the SAME friendly not-found page renders (never an
  * auth redirect, never a crash) but under a REAL HTTP 404, so a crawler can't index
@@ -16,12 +20,9 @@ import { TemplateDetail, type TemplateDetailData } from '../components/TemplateD
  */
 export const Route = createFileRoute('/templates_/$slug')({
   loader: async ({ params }): Promise<{ data: TemplateDetailData }> => {
-    const bundles = await listPublicBundles()
-    for (const b of bundles) {
-      const template = b.members.find((m) => m.name === params.slug)
-      if (template) return { data: { template, categoryLabel: b.label, accent: b.accent } }
-    }
-    throw notFound()
+    const data = await getPublicTemplate({ data: params.slug })
+    if (!data) throw notFound()
+    return { data }
   },
   // Title/description come from the RESOLVED template (a human label, not the raw slug);
   // the slug is only the fallback, since a share card must never read as an internal
