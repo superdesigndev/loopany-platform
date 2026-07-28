@@ -1,4 +1,5 @@
 import type { TemplateInfo } from '../types'
+import { TEMPLATE_RATINGS } from './templateRatings'
 
 /**
  * The template-market registry — canned loop INTENTS a user can mint from the
@@ -61,5 +62,11 @@ const orderOf = (name: string): number => {
 }
 
 export const TEMPLATES: TemplateInfo[] = Object.entries(metas)
-  .map(([path, meta]) => ({ ...meta, thumb: thumbs[path.replace(/meta\.json$/, 'thumb.svg')] }))
+  .map(([path, meta]) => ({
+    ...meta,
+    thumb: thumbs[path.replace(/meta\.json$/, 'thumb.svg')],
+    // Merge the editorial rating (public template list, round 6) from the one ratings
+    // table; a template with no entry simply renders without a rating chip row.
+    rating: TEMPLATE_RATINGS[meta.name],
+  }))
   .sort((a, b) => orderOf(a.name) - orderOf(b.name) || a.name.localeCompare(b.name))

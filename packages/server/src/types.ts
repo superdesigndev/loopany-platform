@@ -425,6 +425,39 @@ export interface TemplateInfo {
    *  and trusted) - a mock screenshot of what the loop produces, drawn with the
    *  theme's CSS variables so it follows light/dark for free. */
   thumb?: string
+  /** Editorial rating (merged in from the ratings table, `server/templateRatings.ts`)
+   *  shown on the public template list. Optional so a brand-new template without a
+   *  rating still renders; the registry test asserts every shipped template has one. */
+  rating?: TemplateRating
+}
+
+/** How much setup/context a new user needs before the loop delivers. */
+export type TemplateEase = 'easy' | 'moderate' | 'advanced'
+/** How often the loop fires / how long a full cycle takes: short-cycle (daily-ish) vs
+ *  long-cycle (weekly+). */
+export type TemplateCadence = 'short' | 'long'
+/** The loop's mechanism — reuses the catalog's open/closed distinction (an OPEN loop is
+ *  an ongoing monitor; a CLOSED loop is goal-bound and finishes itself). The "Others"
+ *  category templates are the closed kind. */
+export type TemplateMechanism = 'open' | 'closed'
+/** How quickly the user sees value: from the first run, over the first several runs, or
+ *  compounding over weeks (or only when it fires). */
+export type TemplateVisibility = 'first-run' | 'few-runs' | 'compounds'
+
+/**
+ * Editorial per-template ratings shown on the public template list (round 6). Three
+ * dimensions the captain asked for: ease of getting started, cycle & mechanism (cadence
+ * + open/closed), and effect visibility (a bucket plus an honest one-line note). Assigned
+ * by hand from each template's real mechanics — kept honest, not everything is easy /
+ * high-impact. The single source is `server/templateRatings.ts`.
+ */
+export interface TemplateRating {
+  ease: TemplateEase
+  cadence: TemplateCadence
+  mechanism: TemplateMechanism
+  visibility: TemplateVisibility
+  /** One honest line on when/how the value shows (hover / detail copy). English only. */
+  visibilityNote: string
 }
 
 /** The accent color a bundle tints its dot + CTA with — one of the app's
