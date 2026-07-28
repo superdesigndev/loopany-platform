@@ -12,9 +12,13 @@ import type { BundleView } from '../types'
  *
  * `listBundles` is public registry data (no membership scoping), and each resolved
  * member carries its editorial `rating` (merged in `templates.ts`).
+ *
+ * SSR is ON here (the app-wide `ssr: false` exists because every other route's loader
+ * needs the browser session cookie — this one is static and auth-free), so crawlers and
+ * link unfurlers get the real card grid + prompt previews in the server HTML alongside
+ * the SEO meta. The interactive bits (category filter, copy buttons) hydrate as usual.
  */
 export const Route = createFileRoute('/templates')({
-  ssr: false,
   head: () => ({
     meta: [
       { title: 'Loopany templates — agent loops that run while you sleep' },

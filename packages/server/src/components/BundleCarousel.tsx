@@ -78,26 +78,33 @@ export function BundleCarousel({
     return () => clearInterval(t)
   }, [autoplaying, next])
 
-  // Arrow keys navigate (and count as a manual stop) — never while typing in a field.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return
-      const el = document.activeElement
-      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault()
-        navManual(-1)
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault()
-        navManual(1)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [navManual])
-
   // Focus within the carousel pauses auto-play; leaving it resumes (unless stopped).
   const rootRef = useRef<HTMLDivElement>(null)
+
+  // Arrow keys navigate (and count as a manual stop) — SCOPED to the carousel (WAI
+  // carousel pattern): the listener sits on the root, so a press only counts when the
+  // event actually originates inside it. Never while typing in a field, and never while
+  // a dialog owns the page (the carousel stays mounted behind every dashboard modal,
+  // where it isn't even visible — stealing the keys there would silently advance it and
+  // kill auto-play for good).
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      const target = e.target as Node | null
+      if (!target || !root.contains(target)) return
+      const el = document.activeElement
+      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return
+      if (document.querySelector('[role="dialog"]')) return
+      e.preventDefault()
+      navManual(e.key === 'ArrowLeft' ? -1 : 1)
+    }
+    root.addEventListener('keydown', onKey)
+    return () => root.removeEventListener('keydown', onKey)
+  }, [navManual])
+
   const onBlurCapture = (e: React.FocusEvent) => {
     if (!rootRef.current?.contains(e.relatedTarget as Node | null)) setFocused(false)
   }

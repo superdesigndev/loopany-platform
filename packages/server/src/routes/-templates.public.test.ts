@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -123,5 +125,30 @@ describe('TemplatesPage (text-first market — round 8 card)', () => {
     // The old full-width black "Create in Loopany" bar + the "Details" button are gone.
     expect(el.innerHTML).not.toContain('Create in Loopany')
     expect([...el.querySelectorAll('a')].some((a) => (a.textContent ?? '').trim() === 'Details')).toBe(false)
+  })
+})
+
+const src = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+
+describe('the public market routes SSR (crawlers/unfurlers see the real page)', () => {
+  it('neither market route opts out of SSR — their loaders are the static, auth-free registry', () => {
+    // Every OTHER route is `ssr: false` because its loader needs the browser session
+    // cookie; these two only read `listBundles()`, so the server HTML carries the real
+    // grid/prose next to the SEO meta.
+    const optOut = /^\s*ssr:\s*false/m
+    expect(src('./templates.tsx')).not.toMatch(optOut)
+    expect(src('./templates_.$slug.tsx')).not.toMatch(optOut)
+    // The gated app routes keep theirs.
+    expect(src('./index.tsx')).toMatch(optOut)
+  })
+
+  it('the detail head titles from the RESOLVED template label, with the slug as fallback', () => {
+    const detail = src('./templates_.$slug.tsx')
+    expect(detail).toContain('head: ({ params, loaderData })')
+    expect(detail).toContain('?.data?.template')
+    expect(detail).toContain('${t.label} — Loopany template')
+    expect(detail).toContain('${params.slug} — Loopany template')
+    // And it ships a description meta, like the grid route.
+    expect(detail).toContain("name: 'description'")
   })
 })

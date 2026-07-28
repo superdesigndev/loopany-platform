@@ -81,6 +81,15 @@ describe('dashboard bundle carousel', () => {
     expect(view).toContain('bundles={bundles}')
   })
 
+  it('ships the template registry ONCE — bundles embed every member, so no second listTemplates', () => {
+    // `listBundles()` already carries every TemplateInfo (thumb SVGs included); fetching
+    // the flat list too duplicated ~90KB on every dashboard load and team switch.
+    for (const s of [src, teamRoute]) expect(s).not.toContain('listTemplates')
+    expect(view).not.toContain('templates: TemplateInfo[]')
+    // The market deep-link resolves out of the bundles instead.
+    expect(view).toContain('bundles.flatMap((b) => b.members)')
+  })
+
   it('is a PLAIN slide carousel — a clipped viewport + translated track, no dial/spin', () => {
     // No page scroll: the viewport clips off-screen slides. No leftover rotating-disc
     // machinery (round-1 dial) survives in the stylesheet.

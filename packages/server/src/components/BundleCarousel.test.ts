@@ -168,6 +168,48 @@ describe('BundleCarousel interaction', () => {
   })
 })
 
+describe('BundleCarousel arrow keys are SCOPED to the carousel', () => {
+  const arrow = () => new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })
+  const cta = (el: HTMLElement) => [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Try this bundle')!
+
+  it('an in-carousel arrow press navigates and counts as a manual stop', async () => {
+    vi.useFakeTimers()
+    const el = await mount({ bundles, onPickTemplate: vi.fn(), onTryBundle: vi.fn() })
+    await act(async () => cta(el).dispatchEvent(arrow()))
+    expect(trackIdx(el)).toBe(1)
+    await act(async () => {
+      vi.advanceTimersByTime(9_200)
+    })
+    expect(trackIdx(el)).toBe(1)
+  })
+
+  it('ignores an arrow press outside the carousel — auto-play keeps running', async () => {
+    vi.useFakeTimers()
+    const el = await mount({ bundles, onPickTemplate: vi.fn(), onTryBundle: vi.fn() })
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    await act(async () => outside.dispatchEvent(arrow()))
+    expect(trackIdx(el)).toBe(0)
+    // Not stopped either: the interval still advances it.
+    await act(async () => {
+      vi.advanceTimersByTime(4_600)
+    })
+    expect(trackIdx(el)).toBe(1)
+    outside.remove()
+  })
+
+  it('ignores arrow presses while a dialog owns the page (the carousel stays mounted behind every modal)', async () => {
+    vi.useFakeTimers()
+    const el = await mount({ bundles, onPickTemplate: vi.fn(), onTryBundle: vi.fn() })
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    document.body.appendChild(dialog)
+    await act(async () => cta(el).dispatchEvent(arrow()))
+    expect(trackIdx(el)).toBe(0)
+    dialog.remove()
+  })
+})
+
 describe('BundleCarousel auto-play', () => {
   it('auto-advances on the interval, and pauses on focus within', async () => {
     vi.useFakeTimers()

@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { getAuthState, getDefaultTeam, listBundles, listTemplates } from '../server/loopApi'
+import { getAuthState, getDefaultTeam, listBundles } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
 import { DashboardView, fetchLiveData, type DashboardData } from '../components/DashboardView'
 import { SignIn } from '../components/SignIn'
@@ -34,8 +34,9 @@ export const Route = createFileRoute('/')({
       throw redirect({ to: '/t/$teamId', params: { teamId }, search: deps.template ? { template: deps.template } : {} })
     }
     // Open mode: one shared workspace, no team segment. Render the dashboard here.
-    const [live, templates, bundles] = await Promise.all([fetchLiveData(), listTemplates(), listBundles()])
-    const initial = { ...live, templates, bundles }
+    // Bundles already embed every TemplateInfo, so the registry ships ONCE.
+    const [live, bundles] = await Promise.all([fetchLiveData(), listBundles()])
+    const initial = { ...live, bundles }
     return { mode: 'dashboard', auth, initial }
   },
   component: Home,

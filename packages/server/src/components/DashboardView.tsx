@@ -18,20 +18,21 @@ import { LoopPlaybook } from './LoopPlaybook'
 import { DISCORD_URL, DiscordIcon, GITHUB_URL, GitHubIcon } from './SocialLinks'
 
 /** The seed the route loader hands the dashboard: the live fan-out plus the
- *  static-per-deploy templates. Both `/` (open mode) and `/t/<id>` render from it. */
+ *  static-per-deploy bundles. Both `/` (open mode) and `/t/<id>` render from it. */
 export interface DashboardData {
   jobs: JobSummary[]
-  templates: TemplateInfo[]
-  /** Curated template groupings for the stage-select dial. Static per deploy (like
-   *  `templates`) — seeded from the route loader only, never re-shipped on the poll. */
+  /** Curated template groupings for the carousel. Each bundle embeds its resolved
+   *  members, so this IS the template registry — seeded from the route loader only,
+   *  never re-shipped on the poll (and never fetched a second time as a flat list). */
   bundles: BundleView[]
   machines: MachineSummary[]
   teams: TeamsView | undefined
 }
 
-/** The LIVE data fan-out - jobs/machines/teams change between polls. Templates
- *  are static per deploy (a compile-time registry), so only the route loader
- *  fetches them; the poll must not re-ship the thumb SVGs every 3-10s.
+/** The LIVE data fan-out - jobs/machines/teams change between polls. Bundles
+ *  (and the templates they embed) are static per deploy (a compile-time registry),
+ *  so only the route loader fetches them; the poll must not re-ship the thumb SVGs
+ *  every 3-10s.
  *
  *  `teamId` (the `/t/<id>` route's team, in id form or undefined in open mode)
  *  scopes every list fn EXPLICITLY - so a tab on /t/A and one on /t/B show
@@ -69,12 +70,11 @@ export function DashboardView({
   // so this state is the single source the page renders from.
   const [data, setData] = useState(() => ({
     jobs: initial?.jobs ?? [],
-    templates: initial?.templates ?? [],
     bundles: initial?.bundles ?? [],
     machines: initial?.machines ?? [],
     teams: initial?.teams,
   }))
-  const { jobs, templates, bundles, machines, teams } = data
+  const { jobs, bundles, machines, teams } = data
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
   // Compose carries an optional template OR bundle: both null = blank New Loop; a
@@ -92,16 +92,16 @@ export function DashboardView({
 
   // Deep-link from the public market: open the single-template compose preselected on
   // `openTemplate` once (guarded so the 3-10s poll re-render never reopens it). The
-  // template object comes from the loader's own registry, so it carries the same shape
-  // the carousel passes.
+  // template object is resolved from the loader's bundles — they partition the whole
+  // registry (pinned by bundles.test.ts), so it carries the same shape the carousel passes.
   const deepLinkedRef = useRef(false)
   useEffect(() => {
     if (deepLinkedRef.current || !openTemplate) return
-    const t = templates.find((x) => x.name === openTemplate)
+    const t = bundles.flatMap((b) => b.members).find((x) => x.name === openTemplate)
     if (!t) return
     deepLinkedRef.current = true
     setCompose({ open: true, template: t, bundle: null })
-  }, [openTemplate, templates])
+  }, [openTemplate, bundles])
 
   // Silent background refresh — fetch-then-set (like the detail pages), NOT
   // router.invalidate: invalidate re-runs the loader, whose Promise.all THROWS
@@ -111,7 +111,7 @@ export function DashboardView({
   const refetch = useCallback(async () => {
     try {
       const live = await fetchLiveData(teamId)
-      // Keep the loader's templates + bundles - static per deploy, never re-polled.
+      // Keep the loader's bundles - static per deploy, never re-polled.
       setData((prev) => ({ ...prev, ...live }))
     } catch {
       /* keep what we have; the next tick retries */

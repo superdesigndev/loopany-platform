@@ -111,7 +111,7 @@ export function ComposeModal({
   const snippet = !token
     ? ''
     : bundle
-      ? buildBundlePrompt({ origin, configLines, bundle })
+      ? buildBundlePrompt({ instruction, configLines, bundle })
       : [instruction, '', configLines, ...(description ? ['', description] : [])].join('\n')
 
   // Reset each time the dialog opens. A template OR a bundle goes straight to the

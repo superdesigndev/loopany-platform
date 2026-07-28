@@ -12,24 +12,24 @@
 import type { BundleView } from '../types'
 
 /**
- * Build the ready-to-paste bundle prompt. `configLines` is the already-assembled
- * machine config block (server-url / connect-key / optional loopany-cli) the modal
- * renders elsewhere — passed in so the copied snippet and the rendered box can't
- * desync. English only.
+ * Build the ready-to-paste bundle prompt. `instruction` (the one bootstrap sentence) and
+ * `configLines` (the assembled machine config block: server-url / connect-key / optional
+ * loopany-cli) are both passed in from the modal that renders them, so the single-template
+ * and bundle snippets share ONE source and can't desync. English only.
  */
 export function buildBundlePrompt({
-  origin,
+  instruction,
   configLines,
   bundle,
 }: {
-  origin: string
+  instruction: string
   configLines: string
   bundle: BundleView
 }): string {
   const { label, members } = bundle
   const n = members.length
   const preamble = [
-    `Fetch ${origin}/api/bootstrap.`,
+    instruction,
     '',
     `I want to set up scheduled Loopany loops for THIS project, from the "${label}" bundle. Below are ${n} candidate loops. First, look at this project - its stack, tooling, and what's actually observable here - and tell me which are genuinely worth running here and which don't fit, one line of reasoning each. Then help me set up only the ones I confirm, one at a time, following each loop's setup below. Propose cadence and config and confirm before creating each; never create a blind loop.`,
   ].join('\n')

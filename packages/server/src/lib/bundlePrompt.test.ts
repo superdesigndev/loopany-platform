@@ -21,13 +21,15 @@ const bundle: BundleView = {
 
 describe('buildBundlePrompt', () => {
   const snippet = buildBundlePrompt({
-    origin: 'https://loopany.ai',
+    instruction: 'Fetch https://loopany.ai/api/bootstrap and help me build a loop.',
     configLines: 'server-url: https://loopany.ai\nconnect-key: ck_abc',
     bundle,
   })
 
-  test('leads with the bootstrap fetch + the exact bundle preamble', () => {
-    expect(snippet).toContain('Fetch https://loopany.ai/api/bootstrap.')
+  test('leads with the caller-supplied bootstrap instruction + the exact bundle preamble', () => {
+    // The instruction is passed IN (one source with the single-template snippet), so the
+    // builder never hardcodes its own bootstrap wording.
+    expect(snippet.startsWith('Fetch https://loopany.ai/api/bootstrap and help me build a loop.')).toBe(true)
     expect(snippet).toContain('from the "Engineering" bundle')
     expect(snippet).toContain('Below are 2 candidate loops')
     expect(snippet).toContain('never create a blind loop')
