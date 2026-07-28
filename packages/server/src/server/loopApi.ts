@@ -36,7 +36,7 @@ import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
 import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
-import { listBundles as listBundlesRegistry } from './bundles.js'
+import { listBundles as listBundlesRegistry, publicBundles as publicBundlesRegistry } from './bundles.js'
 
 function backend() {
   return ensureServer()
@@ -303,9 +303,17 @@ export const listTemplates = createServerFn({ method: 'GET' }).handler((): Templ
 
 export const listBundles = createServerFn({ method: 'GET' }).handler((): BundleView[] => {
   // The file-based bundle registry (server/bundles.ts): curated groupings of templates
-  // shown as the dashboard's stage-select dial. Members are resolved TemplateInfos —
-  // static per deploy, seeded by the route loader (never re-polled).
+  // shown as the dashboard's auto-playing bundle carousel. Members are resolved
+  // TemplateInfos — static per deploy, seeded by the route loader (never re-polled).
   return listBundlesRegistry()
+})
+
+export const listPublicBundles = createServerFn({ method: 'GET' }).handler((): BundleView[] => {
+  // The PUBLIC market payload (`/templates` + `/templates/<slug>`): the same registry
+  // MINUS each template's inlined thumb.svg (server/bundles.ts `publicBundles`). Those
+  // pages are text-first and SSR, so the SVGs would be dead weight in every public
+  // document; stripping server-side means a client navigation doesn't ship them either.
+  return publicBundlesRegistry()
 })
 
 // ---- writes (apply via the live in-process Scheduler) ----

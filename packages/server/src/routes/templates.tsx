@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { listBundles } from '../server/loopApi'
+import { listPublicBundles } from '../server/loopApi'
 import { TemplatesPage } from '../components/TemplatesPage'
 import type { BundleView } from '../types'
 
@@ -10,8 +10,10 @@ import type { BundleView } from '../types'
  * global auth middleware (each route decides for itself; the dashboard/timeline routes
  * gate in their own loaders, this one does not). Shareable, marketing-grade URL.
  *
- * `listBundles` is public registry data (no membership scoping), and each resolved
- * member carries its editorial `rating` (merged in `templates.ts`).
+ * `listPublicBundles` is public registry data (no membership scoping), and each resolved
+ * member carries its editorial `rating` (merged in `templates.ts`) but NOT its inlined
+ * thumb.svg — this market is text-first and draws no illustration, so the SVGs would be
+ * dead weight in the SSR payload.
  *
  * SSR is ON here (the app-wide `ssr: false` exists because every other route's loader
  * needs the browser session cookie — this one is static and auth-free), so crawlers and
@@ -29,7 +31,7 @@ export const Route = createFileRoute('/templates')({
       },
     ],
   }),
-  loader: async (): Promise<{ bundles: BundleView[] }> => ({ bundles: await listBundles() }),
+  loader: async (): Promise<{ bundles: BundleView[] }> => ({ bundles: await listPublicBundles() }),
   component: TemplatesRoute,
 })
 

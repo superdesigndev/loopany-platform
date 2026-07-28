@@ -133,8 +133,8 @@ const src = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta
 describe('the public market routes SSR (crawlers/unfurlers see the real page)', () => {
   it('neither market route opts out of SSR — their loaders are the static, auth-free registry', () => {
     // Every OTHER route is `ssr: false` because its loader needs the browser session
-    // cookie; these two only read `listBundles()`, so the server HTML carries the real
-    // grid/prose next to the SEO meta.
+    // cookie; these two only read the static registry, so the server HTML carries the
+    // real grid/prose next to the SEO meta.
     const optOut = /^\s*ssr:\s*false/m
     expect(src('./templates.tsx')).not.toMatch(optOut)
     expect(src('./templates_.$slug.tsx')).not.toMatch(optOut)
@@ -150,5 +150,24 @@ describe('the public market routes SSR (crawlers/unfurlers see the real page)', 
     expect(detail).toContain('${params.slug} — Loopany template')
     // And it ships a description meta, like the grid route.
     expect(detail).toContain("name: 'description'")
+  })
+
+  it('an unknown slug is a REAL 404, still rendering the friendly not-found page', () => {
+    const detail = src('./templates_.$slug.tsx')
+    // notFound() makes the router mark the match not-found (statusCode 404) instead of
+    // serving a crawlable soft-404 at HTTP 200.
+    expect(detail).toContain('throw notFound()')
+    expect(detail).toContain("import { createFileRoute, notFound } from '@tanstack/react-router'")
+    // The friendly page (Template not found + Browse all templates) still renders.
+    expect(detail).toContain('notFoundComponent: () => <TemplateDetail data={null} />')
+  })
+
+  it('both public routes take the THUMB-STRIPPED registry, not the dashboard one', () => {
+    // The market is text-first (the card test above pins zero <svg>), and both routes
+    // SSR — so the inlined thumb.svg strings would be dead weight in every document.
+    for (const rel of ['./templates.tsx', './templates_.$slug.tsx']) {
+      expect(src(rel)).toContain('listPublicBundles')
+      expect(src(rel)).not.toMatch(/\blistBundles\b/)
+    }
   })
 })

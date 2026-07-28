@@ -3,7 +3,8 @@ import { TEMPLATES } from './templates'
 
 /**
  * The bundle registry — curated groupings of templates surfaced as the dashboard's
- * rotating stage-select dial. A bundle is metadata only (mirror of the template
+ * auto-playing bundle carousel (a plain slide carousel, one bundle in focus at a
+ * time — deliberately not a rotating disc). A bundle is metadata only (mirror of the template
  * system): each is a folder under `../skill/bundles/<name>/` with a static `meta.json`
  * (`BundleInfo`), and `listBundles` resolves the member NAMES to their `TemplateInfo`s
  * from `TEMPLATES`. Adding a bundle is pure content — drop a folder; the Vite glob picks
@@ -49,4 +50,18 @@ export const BUNDLES: BundleView[] = Object.values(metas)
  *  loader (static per deploy, like templates; never re-polled). */
 export function listBundles(): BundleView[] {
   return BUNDLES
+}
+
+/**
+ * The PUBLIC market view of the same registry: every bundle, every member, every
+ * `description` — MINUS each member's inlined `thumb.svg`. The `/templates` market and
+ * its detail page are text-first (they draw no illustration) and they SSR, so shipping
+ * ~54KB of unused SVG in every public document is pure waste. The dashboard carousel
+ * keeps `listBundles`, since it really does render the thumbs.
+ */
+export function publicBundles(): BundleView[] {
+  return BUNDLES.map((b) => ({
+    ...b,
+    members: b.members.map(({ thumb: _thumb, ...m }) => m),
+  }))
 }

@@ -57,7 +57,7 @@ export function ComposeModal({
   onClose: () => void
   onCreated: () => void
   template?: TemplateInfo | null
-  /** A whole bundle picked from the dial: the snippet becomes a self-contained
+  /** A whole bundle picked from the carousel: the snippet becomes a self-contained
    *  candidate menu (each member's full setup inline). Mutually exclusive with
    *  `template`. In bundle mode the modal does NOT auto-close on the first loop —
    *  a bundle yields several loops over one conversation. */

@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
  * route must carry a retryable errorComponent for the first-load failure case.
  */
 // The route file keeps only the loader + errorComponent; the dashboard BODY (poll,
-// switcher, bundle dial) moved to the shared DashboardView (rendered by both `/`
+// switcher, bundle carousel) moved to the shared DashboardView (rendered by both `/`
 // in open mode and `/t/$teamId`), so the body guards read from there.
 const src = readFileSync(fileURLToPath(new URL('./index.tsx', import.meta.url)), 'utf8')
 const teamRoute = readFileSync(fileURLToPath(new URL('./t.$teamId.tsx', import.meta.url)), 'utf8')

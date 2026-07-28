@@ -9,7 +9,7 @@
  */
 import { describe, expect, test } from 'vitest'
 
-import { BUNDLES, listBundles } from './bundles'
+import { BUNDLES, listBundles, publicBundles } from './bundles'
 import { TEMPLATES } from './templates'
 
 const VALID_ACCENTS = ['interactive', 'indigo', 'rubik-green', 'rubik-orange', 'rubik-yellow', 'secondary']
@@ -90,6 +90,28 @@ describe('bundle registry', () => {
     for (const b of BUNDLES.filter((x) => x.name !== 'others')) {
       expect(b.individual).toBe(false)
     }
+  })
+
+  test('publicBundles drops every thumb but keeps the whole catalog + prompts', () => {
+    const full = listBundles()
+    const pub = publicBundles()
+    // Same categories, same members, same order — only the payload is lighter.
+    expect(pub.map((b) => b.name)).toEqual(full.map((b) => b.name))
+    expect(pub.flatMap((b) => b.members.map((m) => m.name))).toEqual(
+      full.flatMap((b) => b.members.map((m) => m.name)),
+    )
+    // The dashboard registry really does carry thumbs (else this guard is vacuous).
+    expect(full.some((b) => b.members.some((m) => m.thumb))).toBe(true)
+    for (const b of pub) {
+      for (const m of b.members) {
+        expect(m).not.toHaveProperty('thumb')
+        // The market card preview + the detail view's verbatim prompt need these.
+        expect(m.description.length).toBeGreaterThan(0)
+        expect(m.desc.length).toBeGreaterThan(0)
+      }
+    }
+    // Non-destructive: the shared registry keeps its thumbs for the dashboard.
+    expect(listBundles().some((b) => b.members.some((m) => m.thumb))).toBe(true)
   })
 
   test('every template belongs to EXACTLY ONE bundle — no orphan, no duplicate', () => {
