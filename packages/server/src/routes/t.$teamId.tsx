@@ -19,6 +19,11 @@ import { LoadErrorCard } from '../components/actionUi'
  */
 export const Route = createFileRoute('/t/$teamId')({
   ssr: false,
+  // `?template=<name>` is forwarded from `/` (the public-market deep link) and preselects
+  // the compose modal on this team's dashboard.
+  validateSearch: (s: Record<string, unknown>): { template?: string } => ({
+    template: typeof s.template === 'string' && s.template ? s.template : undefined,
+  }),
   loader: async ({
     params,
   }): Promise<{ mode: 'signin' | 'dashboard'; auth: { enabled: boolean }; teamId: string; initial?: DashboardData }> => {
@@ -56,10 +61,13 @@ function LoadError({ error }: ErrorComponentProps) {
 
 function TeamDashboard() {
   const loaded = Route.useLoaderData()
+  const { template } = Route.useSearch()
   const { data: session, isPending } = useSession()
-  if (loaded?.auth?.enabled && !isPending && !session) return <SignIn />
-  if (loaded?.mode === 'signin') return <SignIn />
+  // Keep the deep-linked template through the OAuth round-trip back to this team URL.
+  const callbackURL = `/t/${loaded!.teamId}${template ? `?template=${encodeURIComponent(template)}` : ''}`
+  if (loaded?.auth?.enabled && !isPending && !session) return <SignIn callbackURL={callbackURL} />
+  if (loaded?.mode === 'signin') return <SignIn callbackURL={callbackURL} />
   // key={teamId} re-seeds DashboardView's fetch-then-set state when the switcher
   // navigates from /t/A to /t/B (same route, new param ⇒ no natural remount).
-  return <DashboardView key={loaded!.teamId} teamId={loaded!.teamId} initial={loaded!.initial!} />
+  return <DashboardView key={loaded!.teamId} teamId={loaded!.teamId} initial={loaded!.initial!} openTemplate={template} />
 }

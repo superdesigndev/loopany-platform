@@ -52,7 +52,18 @@ export async function fetchLiveData(teamId?: string) {
  * URL's team (multi-tab safe). The route mounts it with `key={teamId}` so a
  * team switch (a `/t/<id>` navigation) re-seeds state from the new loader data.
  */
-export function DashboardView({ teamId, initial }: { teamId?: string; initial: DashboardData }) {
+export function DashboardView({
+  teamId,
+  initial,
+  openTemplate,
+}: {
+  teamId?: string
+  initial: DashboardData
+  /** A template NAME deep-linked from the public market (`/?template=<name>`): on mount
+   *  the compose modal opens preselected on it, reusing the exact single-template flow
+   *  the carousel uses — no parallel creation path. Ignored if it matches no template. */
+  openTemplate?: string
+}) {
   // Loader data seeds the page; the poll refreshes via fetch-then-set below
   // (never router.invalidate — a loader re-run throws the whole page on a blip),
   // so this state is the single source the page renders from.
@@ -78,6 +89,19 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
   const [machinesOpen, setMachinesOpen] = useState(false)
   const [notifyOpen, setNotifyOpen] = useState(false)
   const [teamsOpen, setTeamsOpen] = useState(false)
+
+  // Deep-link from the public market: open the single-template compose preselected on
+  // `openTemplate` once (guarded so the 3-10s poll re-render never reopens it). The
+  // template object comes from the loader's own registry, so it carries the same shape
+  // the carousel passes.
+  const deepLinkedRef = useRef(false)
+  useEffect(() => {
+    if (deepLinkedRef.current || !openTemplate) return
+    const t = templates.find((x) => x.name === openTemplate)
+    if (!t) return
+    deepLinkedRef.current = true
+    setCompose({ open: true, template: t, bundle: null })
+  }, [openTemplate, templates])
 
   // Silent background refresh — fetch-then-set (like the detail pages), NOT
   // router.invalidate: invalidate re-runs the loader, whose Promise.all THROWS

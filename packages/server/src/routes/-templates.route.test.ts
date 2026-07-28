@@ -8,20 +8,24 @@ import { describe, expect, it } from 'vitest'
  * dashboard/timeline routes use. This source-level guard fails if a future edit slips an
  * auth check (or a signin redirect) into the route, silently breaking the shareable URL.
  */
-const routeSrc = readFileSync(fileURLToPath(new URL('./templates.tsx', import.meta.url)), 'utf8')
+const gridSrc = readFileSync(fileURLToPath(new URL('./templates.tsx', import.meta.url)), 'utf8')
+const detailSrc = readFileSync(fileURLToPath(new URL('./templates_.$slug.tsx', import.meta.url)), 'utf8')
 
-describe('/templates route is PUBLIC (no auth gate)', () => {
+describe.each([
+  ['/templates (grid)', gridSrc],
+  ['/templates/$slug (detail)', detailSrc],
+])('%s route is PUBLIC (no auth gate)', (_name, src) => {
   it('does no auth check of any kind in its loader', () => {
-    expect(routeSrc).not.toContain('getAuthState')
-    expect(routeSrc).not.toContain('authClient')
-    expect(routeSrc).not.toContain('requestScope')
-    expect(routeSrc).not.toContain('getSession')
-    expect(routeSrc).not.toContain('SignIn')
-    expect(routeSrc).not.toMatch(/redirect\(/)
+    expect(src).not.toContain('getAuthState')
+    expect(src).not.toContain('authClient')
+    expect(src).not.toContain('requestScope')
+    expect(src).not.toContain('getSession')
+    expect(src).not.toContain('SignIn')
+    expect(src).not.toMatch(/redirect\(/)
   })
 
   it('seeds from the public bundle registry', () => {
-    expect(routeSrc).toContain('listBundles')
-    expect(routeSrc).toContain('createFileRoute')
+    expect(src).toContain('listBundles')
+    expect(src).toContain('createFileRoute')
   })
 })

@@ -15,7 +15,13 @@ import { LoadErrorCard } from '../components/actionUi'
  */
 export const Route = createFileRoute('/')({
   ssr: false,
-  loader: async (): Promise<{ mode: 'signin' | 'dashboard'; auth: { enabled: boolean }; initial?: DashboardData }> => {
+  // `?template=<name>` deep-links from the public market (`/templates`): it rides through
+  // the gated redirect and preselects the compose modal (see DashboardView.openTemplate).
+  validateSearch: (s: Record<string, unknown>): { template?: string } => ({
+    template: typeof s.template === 'string' && s.template ? s.template : undefined,
+  }),
+  loaderDeps: ({ search }) => ({ template: search.template }),
+  loader: async ({ deps }): Promise<{ mode: 'signin' | 'dashboard'; auth: { enabled: boolean }; initial?: DashboardData }> => {
     const auth = await getAuthState()
     if (auth.enabled) {
       const { data: session } = await authClient.getSession()
@@ -23,9 +29,9 @@ export const Route = createFileRoute('/')({
       if (!session) return { mode: 'signin', auth }
       // Signed in ⇒ hand off to the explicit team URL. getDefaultTeam validates the
       // last-used cookie (else the personal team) server-side; a single-team user
-      // lands on their only team with zero friction.
+      // lands on their only team with zero friction. Forward the deep-linked template.
       const teamId = await getDefaultTeam()
-      throw redirect({ to: '/t/$teamId', params: { teamId } })
+      throw redirect({ to: '/t/$teamId', params: { teamId }, search: deps.template ? { template: deps.template } : {} })
     }
     // Open mode: one shared workspace, no team segment. Render the dashboard here.
     const [live, templates, bundles] = await Promise.all([fetchLiveData(), listTemplates(), listBundles()])
@@ -52,8 +58,12 @@ function LoadError({ error }: ErrorComponentProps) {
  *  gated signed-in case never reaches here (the loader threw a redirect). */
 function Home() {
   const loaded = Route.useLoaderData()
+  const { template } = Route.useSearch()
   const { data: session, isPending } = useSession()
-  if (loaded?.auth?.enabled && !isPending && !session) return <SignIn />
-  if (loaded?.mode === 'signin') return <SignIn />
-  return <DashboardView initial={loaded!.initial!} />
+  // Preserve the deep-linked template across the OAuth round-trip so sign-in lands back
+  // on the compose flow for it.
+  const callbackURL = template ? `/?template=${encodeURIComponent(template)}` : '/'
+  if (loaded?.auth?.enabled && !isPending && !session) return <SignIn callbackURL={callbackURL} />
+  if (loaded?.mode === 'signin') return <SignIn callbackURL={callbackURL} />
+  return <DashboardView initial={loaded!.initial!} openTemplate={template} />
 }

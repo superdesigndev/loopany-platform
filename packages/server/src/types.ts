@@ -458,6 +458,13 @@ export interface TemplateRating {
   visibility: TemplateVisibility
   /** One honest line on when/how the value shows (hover / detail copy). English only. */
   visibilityNote: string
+  /** Humanized cadence for the detail view's mechanism rows — the schedule the template
+   *  actually suggests in its prompt (e.g. "Daily · ~6am", "Weekly · Mon"), since a
+   *  template has no fixed cron until you create the loop. English only. */
+  schedule: string
+  /** For a CLOSED loop only: the concrete finish condition it completes on. Absent for
+   *  open (monitor) loops, which run indefinitely. */
+  exitCondition?: string
 }
 
 /** The accent color a bundle tints its dot + CTA with — one of the app's

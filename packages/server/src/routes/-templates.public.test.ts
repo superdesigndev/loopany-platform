@@ -4,10 +4,14 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // The page uses TanStack's <Link>, which needs a router context. Stub it to a plain <a>
-// so the page can render in isolation.
+// (encoding `search` into the href so the deep-link CTA can be asserted).
 vi.mock('@tanstack/react-router', () => ({
-  Link: ({ children, to, ...p }: { children?: unknown; to?: string; [k: string]: unknown }) =>
-    createElement('a', { href: typeof to === 'string' ? to : undefined, ...p }, children as never),
+  Link: ({ children, to, search, params, ...p }: { children?: unknown; to?: string; search?: { template?: string }; params?: { slug?: string }; [k: string]: unknown }) => {
+    let href = typeof to === 'string' ? to : undefined
+    if (href && params?.slug) href = href.replace('$slug', params.slug)
+    if (href && search?.template) href = `${href}?template=${search.template}`
+    return createElement('a', { href, ...p }, children as never)
+  },
 }))
 
 import { TemplatesPage } from '../components/TemplatesPage'
@@ -37,6 +41,7 @@ const bundles: BundleView[] = [
         mechanism: 'open',
         visibility: 'first-run',
         visibilityNote: 'The first scan fixes the worst issue.',
+        schedule: 'Daily · ~6am',
       }),
     ],
   },
@@ -53,6 +58,8 @@ const bundles: BundleView[] = [
         mechanism: 'closed',
         visibility: 'compounds',
         visibilityNote: 'Waits out an intermittent bug.',
+        schedule: 'Patrol cadence (you set it)',
+        exitCondition: 'Finishes on one clean capture.',
       }),
     ],
   },
@@ -78,27 +85,36 @@ async function mount(): Promise<HTMLDivElement> {
   return host
 }
 
-describe('TemplatesPage', () => {
-  it('renders every category + template with its rating chips and a CTA', async () => {
+describe('TemplatesPage (text-first market)', () => {
+  it('renders text-first cards: title, intro, chips, category filter, no thumb art', async () => {
     const el = await mount()
     const out = el.innerHTML
-    // Both categories + both templates show.
+    // Both categories + both templates show (grid + filter chips).
     expect(out).toContain('Code Health')
     expect(out).toContain('Others')
     expect(out).toContain('React Doctor')
     expect(out).toContain('Bug Vigil')
-    // Rating chips scan on the card: ease, cadence, mechanism, visibility.
+    // Rating chips (all three dimensions) scan on the card.
     expect(out).toContain('Easy start')
     expect(out).toContain('Short cycle')
     expect(out).toContain('Open loop')
-    expect(out).toContain('Closed loop') // the closed (Others) template
+    expect(out).toContain('Closed loop')
     expect(out).toContain('Visible first run')
     expect(out).toContain('Compounds over weeks')
-    // Honest note is present (visible + as a hover title).
+    // Honest note rides the visibility chip's hover title.
     expect(out).toContain('The first scan fixes the worst issue.')
-    // Every template has a "Use this template" CTA pointing at the app entry.
-    const ctas = [...el.querySelectorAll('a')].filter((a) => (a.textContent ?? '').includes('Use this template'))
-    expect(ctas.length).toBe(2)
-    for (const a of ctas) expect(a.getAttribute('href')).toBe('/')
+    // Text-first: no template illustration (thumb svg) is inlined on the market.
+    expect(el.querySelectorAll('article svg').length).toBe(0)
+  })
+
+  it('each card has a "Create in Loopany" deep link (?template=<name>) + a Details link', async () => {
+    const el = await mount()
+    const create = [...el.querySelectorAll('a')].filter((a) => (a.textContent ?? '').includes('Create in Loopany'))
+    expect(create.length).toBe(2)
+    expect(create.map((a) => a.getAttribute('href')).sort()).toEqual(['/?template=bug-vigil', '/?template=react-doctor'])
+    // Title + "Details" both link to the shareable detail route.
+    const details = [...el.querySelectorAll('a')].filter((a) => a.getAttribute('href')?.startsWith('/templates/'))
+    expect(details.some((a) => a.getAttribute('href') === '/templates/react-doctor')).toBe(true)
+    expect(details.some((a) => a.getAttribute('href') === '/templates/bug-vigil')).toBe(true)
   })
 })

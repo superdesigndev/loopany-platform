@@ -29,6 +29,22 @@ describe('template ratings', () => {
       expect(VISIBILITY).toContain(r.visibility)
       expect(typeof r.visibilityNote).toBe('string')
       expect(r.visibilityNote.trim().length).toBeGreaterThan(0)
+      // A humanized schedule (for the detail view's mechanism rows) is always present.
+      expect(typeof r.schedule).toBe('string')
+      expect(r.schedule.trim().length).toBeGreaterThan(0)
+    }
+  })
+
+  test('exitCondition is present for CLOSED loops and absent for OPEN ones', () => {
+    for (const t of TEMPLATES) {
+      const r = t.rating
+      if (!r) continue
+      if (r.mechanism === 'closed') {
+        expect(r.exitCondition, `${t.name} (closed) needs an exit condition`).toBeTruthy()
+        expect((r.exitCondition ?? '').trim().length).toBeGreaterThan(0)
+      } else {
+        expect(r.exitCondition, `${t.name} (open) should have no exit condition`).toBeUndefined()
+      }
     }
   })
 
