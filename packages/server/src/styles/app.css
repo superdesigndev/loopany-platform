@@ -301,7 +301,22 @@
 }
 
 /*
- * Public template MARKET card (round 8, `TemplatesPage` `MarketCard`). The card's
+ * Dashboard template-catalog teaser (`TemplatesPreview`, the band right above the
+ * playbook). The compact cards are fixed-height (`TemplateCard` `compact`), so clipping
+ * the grid to ONE full row plus a peek of the next lands in the same place at every
+ * viewport width - 1, 2 or 3 columns - instead of depending on how tall a row happened
+ * to render. The mask stays fully opaque through the first row (218px card / 326px box
+ * = 67%) and fades the peek row to nothing, which is the "there is more" cue the
+ * "Browse all templates" link answers.
+ */
+.templates-peek {
+  max-height: 326px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 68%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 68%, transparent 100%);
+}
+
+/*
+ * Public template MARKET card (round 8, shared `TemplateCard`). The card's
  * visual anchor is a monospace preview of its REAL prompt, faded at the bottom. The
  * WHOLE card navigates to the detail page via a stretched-link overlay on the title
  * (`.market-card-link::after`), while the quiet "Create" affordance sits above it

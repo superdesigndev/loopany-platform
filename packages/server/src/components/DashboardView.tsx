@@ -15,6 +15,7 @@ import { ComposeModal } from './ComposeModal'
 import { OnboardingEntry } from './OnboardingEntry'
 import { LoopLogo } from './LoopLogo'
 import { LoopPlaybook } from './LoopPlaybook'
+import { TemplatesPreview } from './TemplatesPreview'
 import { DISCORD_URL, DiscordIcon, GITHUB_URL, GitHubIcon } from './SocialLinks'
 
 /** The seed the route loader hands the dashboard: the live fan-out plus the
@@ -263,6 +264,11 @@ export function DashboardView({
             ))}
           </>
         )}
+
+        {/* The catalog teaser, directly above the playbook: the market's own text-first
+            cards over a curated one-per-category subset, fading out into "Browse all
+            templates". Reads off the loader's static bundles, so the poll never touches it. */}
+        <TemplatesPreview bundles={bundles} />
 
         {/* The playbook band - static education/sales content anchoring the page;
             its CTA is the same blank-loop compose as the hero button. */}

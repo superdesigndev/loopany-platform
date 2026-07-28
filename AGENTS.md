@@ -211,6 +211,14 @@ computes pure functions. Run instructions: `README.md`.
   `/?template=<name>`, which is forwarded through the gated `/t/<team>` redirect and
   preserved across OAuth via `callbackURL`, then reuses the EXISTING single-template
   compose through `DashboardView.openTemplate` - never a parallel creation path.
+- **The market CARD is ONE shared component** (`components/TemplateCard.tsx`:
+  `TemplateCard` + `flattenBundles` + `promptPreview`), rendered by BOTH `/templates` and
+  the dashboard's catalog teaser `components/TemplatesPreview.tsx` (the band directly
+  above the playbook, off the loader's static `bundles` - the poll never re-ships them).
+  The teaser shows each bundle's LEAD template (one per category, curated bundle order,
+  capped at 6) under `.templates-peek`, a fixed `max-height` + bottom mask; that clip is
+  only deterministic across 1/2/3 columns because the `compact` card is FIXED-HEIGHT - if
+  you change one, change the other (pinned by `TemplatesPreview.test.ts`).
 - **Editorial ratings** (`server/templateRatings.ts`, one typed table merged onto
   `TemplateInfo.rating`) drive the market's rating chips and the detail view's mechanism
   rows: ease, cadence + mechanism, effect visibility, plus a humanized `schedule` and -
