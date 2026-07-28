@@ -65,7 +65,8 @@ import {
   type Scalar,
 } from "./toon.js";
 import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
-import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
+import { clipText, MESSAGE_CAP, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
+import { seedTimelineEvents } from "./timelineSeed.js";
 
 const log = logger.child({ mod: "gateway" });
 
@@ -175,10 +176,9 @@ const STEP_FIELD_MAX = 4000;
 /** A workflow cursor bigger than this (serialized) is ignored rather than persisted
  *  onto the loop row — the run itself still records normally. */
 const CURSOR_CAP = 256 * 1024;
-/** Run messages (report --message / workflow direct message / finalText fallback).
- *  Run errors share the same cap. Exported for `cli.ts` (the report/finish verbs
- *  clip to the same budget). */
-export const MESSAGE_CAP = 2000;
+/** Run messages / event text share ONE cap, defined in the leaf `http.js`.
+ *  Re-exported here because `cli.ts` (report/finish) imports it from this module. */
+export { MESSAGE_CAP };
 /** A claude-code session id is a UUID-ish token — anything longer is garbage. */
 const SESSION_ID_CAP = 200;
 /** A loop's goal (setpoint) is a one-line, checkable statement — clip generously
@@ -2226,31 +2226,13 @@ export class MachineGateway {
     if (!updated) return;
     // Legacy record advance: a file-era daemon keeps appending to the README's
     // Timeline section instead of emitting events — seed each NEW dated entry
-    // into the event stream (dedup on at+text against what's already recorded),
-    // so the record plane advances for legacy loops too. Best-effort, bounded.
+    // into the event stream, so the record plane advances for legacy loops too.
+    // Dedup is keyed on (day, clipped text) against the rows the seeder itself
+    // wrote — see `timelineSeed.ts` for why a newest-N window cannot work here.
+    // This runs on the SYNC path (a task-file snapshot landed), never on the
+    // idle poll hot path. Best-effort.
     try {
-      const { events: parsed } = splitTaskDoc(updated.taskFileContent ?? "");
-      const dated = parsed.filter((e) => e.at);
-      if (dated.length) {
-        const existing = await store.listEvents(loopId, { limit: 200 });
-        const seen = new Set(existing.map((e) => `${e.at?.slice(0, 10)}|${e.text ?? ""}`));
-        for (const e of dated) {
-          // Key on the CLIPPED text — the stored row is clipped, so an unclipped
-          // key would re-seed every over-cap entry on the next sync.
-          const text = e.text.slice(0, MESSAGE_CAP);
-          const key = `${e.at!.slice(0, 10)}|${text}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          await store.addEvent({
-            loopId,
-            type: "note",
-            actor: e.actor ?? `agent:${updated.agent}`,
-            at: e.at,
-            text,
-            data: { source: "timeline" },
-          });
-        }
-      }
+      await seedTimelineEvents(loopId, updated.taskFileContent, (e) => e.actor ?? `agent:${updated.agent}`);
     } catch (err) {
       log.warn({ loopId, err: err instanceof Error ? err.message : String(err) }, "timeline event seeding failed");
     }

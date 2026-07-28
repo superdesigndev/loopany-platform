@@ -378,9 +378,12 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   ArtifactSync never wrote (and vice versa). Tests mirror the sharing
   (`retention.test.ts` `gatewayWithStore`).
 - Import direction: the generic wire plumbing (`HttpResult`, `WIRE_TEXT_CAP`,
-  `clipText`/`stripNul`, `nowIso`) lives in the leaf module `gateway/http.ts`,
-  imported by index/cli/sync alike - one clipping/NUL-stripping discipline, no
-  fork; domain helpers (caps, renders) still flow `index.ts` -> `cli.ts`/`sync.ts`,
+  `MESSAGE_CAP`, `clipText`/`stripNul`, `nowIso`) lives in the leaf module
+  `gateway/http.ts`,
+  imported by index/cli/sync/timelineSeed alike - one clipping/NUL-stripping
+  discipline, no fork (`index.ts` re-exports `MESSAGE_CAP`, which is where
+  `cli.ts` has always imported it from);
+  domain helpers (caps, renders) still flow `index.ts` -> `cli.ts`/`sync.ts`,
   and `index.ts` never imports its satellites, so there is no cycle. The whole
   shape is pinned by `gateway/layout.test.ts`.
 - The legacy `/api/machine/loop` + `/api/machine/log` routes call the owner-verb
@@ -489,9 +492,19 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   clobbers a rename). `assignee=<agent-slug>` resolves registry-first;
   `<machine>/<runtime>` stays an alias. `loopany team` renders the roster.
 - **Legacy advance**: every task-file ingest (old-daemon sync/report) also seeds
-  NEW dated Timeline entries as events, deduped on (day, clipped text) — the
-  same rule `scripts/migrate-v2-split.ts --execute` used for the one-time
-  history seed (conservative: doc left byte-identical; re-run is a no-op).
+  NEW dated Timeline entries as events. `gateway/timelineSeed.ts` is the ONE
+  seeder both surfaces import — the live ingest (`ingestTaskFileContent`) and
+  `scripts/migrate-v2-split.ts --execute` — so they cannot dedup differently
+  (conservative: doc left byte-identical; re-run IS a no-op). Identity is
+  (day, clipped text) per loop, enforced twice: `store.seededTimelineKeys` (a
+  KEYED, unbounded DISTINCT query over the seeder's own rows — `type = note`
+  carrying `data.source = "timeline"`) plus a deterministic row id +
+  `addEventIfAbsent` (ON CONFLICT DO NOTHING) for races/retries. **Never dedup
+  seeding against a `listEvents` window**: a seeded row carries the entry's
+  HISTORICAL `at`, so it is the OLDEST row and ages out of any newest-N window,
+  after which every sync re-seeds the whole Timeline (the fixed bug — a 4-event
+  loop hit 230 after one re-sync past 200). Seeding runs on the SYNC path only,
+  never the idle poll hot path. Guarded by `gateway/timelineSeed.test.ts`.
 - **Cloud-born create**: `loopany create` writes no local files; the doc rides
   the registration; createLoop accepts doc-only inert tasks. Folders appear
   lazily with artifacts.
