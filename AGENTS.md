@@ -145,7 +145,7 @@ computes pure functions. Run instructions: `README.md`.
   prompt-only `.md` edit MUST deploy (`deploy.yml` paths-ignore lists explicit doc
   paths, deliberately not a wholesale `**/*.md`).
 
-## Template market (`packages/server/src/skill/templates/`)
+## Template market (`packages/server/src/skill/templates/` + `skill/bundles/`)
 
 - A template is a **canned loop INTENT expressed as the paste-prompt** the user copies
   from a template card (`ComposeModal` appends `description` under the connect-key config;
@@ -165,22 +165,62 @@ computes pure functions. Run instructions: `README.md`.
   (`routes/api.skill.references.$.ts`, static glob; ONLY `reference.md` is exposed —
   `meta.json`/`thumb.svg` stay off that route, pinned by `-api.skill.references.test.ts`).
   Zero-exec, file-based.
-- **Adding a template is pure content addition - no code change.** The registry
-  (`server/templates.ts`) builds `TEMPLATES` from an `import.meta.glob` over `meta.json`;
-  `listTemplates` returns it. Drop a new folder; the registry test (a non-empty
-  `desc`/`description` per entry) covers it automatically.
-- **Dashboard entry**: the template cards render directly beside "New Loop"
-  (`components/DashboardView.tsx`, `templates.map`). One click opens `ComposeModal` with that
-  `template` - it skips the host chooser, goes straight to the snippet, and appends the
-  template's `description` under the config lines. `ComposeModal` handles BOTH blank
-  loops (`template = null`, the two-step rail) and templates (`template` set) - there is
-  no separate modal. Snippet form:
-  `Fetch <origin>/api/bootstrap and help me build a loop.` + `server-url`/`connect-key` +
-  a blank line + the `description`. Same connect-key machinery as a blank loop
-  (`mintClaim`/`getConfig`/`claimStatus`).
-- **PUBLIC but NOT bundled.** `meta.json` rides to the client via `listTemplates`, and
-  `sync-skill.mjs`'s whitelist stays selective (`skill/templates/` never ships in the
-  daemon npm tarball; guarded by `sync-skill.test.ts`).
+- **Adding a template is content addition + ONE bundle line.** The registry
+  (`server/templates.ts`) builds `TEMPLATES` from an `import.meta.glob` over `meta.json`,
+  pairs each folder's optional `thumb.svg` (`?raw`), and merges the editorial `rating`
+  from `server/templateRatings.ts`; `listTemplates` returns that flat list (its only
+  consumer left is the onboarding wizard's Housekeeper lookup). Every user-facing surface
+  reads BUNDLES instead, so a template in no bundle is INVISIBLE - name it in a bundle
+  meta too. Shape tests (`templates.test.ts`, `bundles.test.ts`, `templateRatings.test.ts`)
+  then cover the new folder automatically.
+- **Bundles** (`skill/bundles/<name>/meta.json` -> `server/bundles.ts`) are curated
+  categories, same file-based/zero-exec mirror of the template system: `BundleInfo` =
+  label + tagline + `accent` + the member template NAMES in display order, plus
+  `individual: true` for the catch-all "Others" (individually created, goal-bound loops -
+  renders NO bundle CTA). `listBundles` resolves members to their `TemplateInfo`s in a
+  curated 6-category order (Code Health -> Ship with Confidence -> Growth -> Business Ops
+  -> Personal -> Others). An accent is a `--color-<accent>` token and deliberately never a
+  red/alarm hue (a category must not read as an error state); Ship with Confidence uses
+  the calm `--color-indigo`, declared in a plain `:root` and NOT `@theme` because Tailwind
+  v4 tree-shakes a var that only appears in a runtime inline style.
+  **Every template belongs to EXACTLY ONE bundle** - pinned by `bundles.test.ts`.
+- **Dashboard entry**: the hero renders `components/BundleCarousel.tsx` - an auto-playing
+  plain slide carousel (one bundle in focus, prev/next arrows, pager dots; pauses on
+  hover/focus and permanently after a manual nav; `prefers-reduced-motion` disables both
+  auto-play and the slide tween; arrow keys are scoped to the carousel root and stand down
+  while a dialog is open). The in-bundle loop-card fan wraps fill-first in rows of up to 3
+  (`splitRows`: 5 -> 3+2, 4 -> 3+1). Clicking one card opens `ComposeModal` with that
+  `template`; "Try this bundle" opens it with the `bundle`, whose snippet is a
+  self-contained candidate menu built by `lib/bundlePrompt.ts` - bundle mode never
+  auto-closes, since one conversation yields several loops. `ComposeModal` handles ALL
+  THREE shapes (blank = the two-step rail, `template`, `bundle`) - there is no separate
+  modal. Template/bundle snippets skip the host chooser and share the blank loop's
+  connect-key machinery (`mintClaim`/`getConfig`/`claimStatus`); the single-template form
+  is `Fetch <origin>/api/bootstrap and help me build a loop.` + `server-url`/`connect-key`
+  + a blank line + the `description`.
+- **Public market** (`routes/templates.tsx` + `routes/templates_.$slug.tsx`): `/templates`
+  and the shareable `/templates/<slug>` do ZERO auth checks BY DESIGN - there is no global
+  auth middleware (each route gates itself), so these render logged out under the login
+  gate - and they SSR (the app-wide `ssr: false` exists only because other loaders need
+  the session cookie) so crawlers and unfurlers get real HTML. They read
+  `listPublicBundles`/`getPublicTemplate`: the same registry MINUS every inlined
+  `thumb.svg`, because the market is text-first (a card's visual anchor is a monospace
+  preview of the REAL prompt, whole-card click to the detail route, quiet hover-revealed
+  "Create"). Detail resolves BY SLUG (`findPublicTemplate`) since the grid preloads on
+  hover; an unknown slug throws `notFound()` for a real HTTP 404. Its CTA deep-links
+  `/?template=<name>`, which is forwarded through the gated `/t/<team>` redirect and
+  preserved across OAuth via `callbackURL`, then reuses the EXISTING single-template
+  compose through `DashboardView.openTemplate` - never a parallel creation path.
+- **Editorial ratings** (`server/templateRatings.ts`, one typed table merged onto
+  `TemplateInfo.rating`) drive the market's rating chips and the detail view's mechanism
+  rows: ease, cadence + mechanism, effect visibility, plus a humanized `schedule` and -
+  for a CLOSED loop only - an `exitCondition`. `mechanism` REUSES the catalog's open/closed
+  distinction (the `individual` "Others" bundle is exactly the closed set);
+  `templateRatings.test.ts` fails a template that lacks a rating or misclassifies it.
+- **PUBLIC but NOT bundled.** `meta.json` rides to the client via `listBundles`/
+  `listPublicBundles`, and `sync-skill.mjs`'s whitelist stays selective (neither
+  `skill/templates/` nor `skill/bundles/` ever ships in the daemon npm tarball; guarded by
+  `sync-skill.test.ts`).
 - **A template `description` SHOULD spell out the specifics that make the loop work** —
   the per-run workflow, the hard rules, the boundaries and quality gates — as a guided
   multi-step setup conversation (`## Step` headers, confirm-each-step-before-creating),
@@ -189,74 +229,32 @@ computes pure functions. Run instructions: `README.md`.
   don't settle for a tight one-paragraph blurb; some older short-paragraph templates
   predate this and are lighter. English only. `templates.test.ts` pins the full name list
   AND asserts each template's defining behaviors stay in its description.
-- **New-template SOP — a template is up to FOUR pieces, only the first required:**
+- **New-template SOP — TWO required pieces plus three optional ones:**
   (1) `meta.json` — the paste-prompt `description`: a guided multi-step setup conversation
   (verify-before-create gates → the loop's rules / boundaries / quality gates → optionally
-  the task-file skeleton to author). (2) OPTIONAL `reference.md` — bulky detail fetched on
+  the task-file skeleton to author). (2) membership in exactly one `skill/bundles/*`
+  meta + an entry in `server/templateRatings.ts` (without either the template ships
+  invisible / fails its shape test). (3) OPTIONAL `reference.md` — bulky detail fetched on
   demand: the artifact contract, the REAL dashboard layout markup (`loop-kanban`/`loop-chart`/
-  `loop-embed`), the metric state schema. (3) OPTIONAL `thumb.svg` — the folder-paired card
-  thumbnail (chrome on theme vars, any brand logo in its real color). (4) OPTIONAL **loop-flow
+  `loop-embed`), the metric state schema. (4) OPTIONAL `thumb.svg` — the folder-paired card
+  thumbnail, hand-drawn in the dashboard/flow visual language (data-mock/flow art on theme
+  vars, any brand logo in its real color - NOT a centered icon); the carousel renders it,
+  the public market does not. (5) OPTIONAL **loop-flow
   + dashboard PREVIEW** — a `FlowSpec` registered in `components/LoopFlow.tsx` `FLOWS` (nodes +
   dashboard widgets, pure data; `hasLoopFlow(name)` flips the modal to its two-column layout
   and renders the Loop-flow / Dashboard tabs). **The LOOP FLOW and the DASHBOARD are the CARD
-  VISUAL in (4) + what create.md/`reference.md` actually author — NOT sections the paste-prompt
-  must enumerate.** The shipping templates (the short-paragraph ones came first):
-  - **React Doctor** (open): daily ~6am `npx react-doctor@latest`, fix the single worst
-    issue in a fresh worktree off `main` (never dirty the checkout), PR via gh,
-    no-stacking while a prior PR is unmerged (still refresh status + score), one
-    `type: open|merged` markdown card per PR for the kanban, daily health score, and a
-    **day-one dashboard set up at creation** (kanban + score chart, via the create-`ui`
-    support - see "Server gotchas"). No react-doctor flags beyond the npx one-liner.
-  - **Market Research** (open): infer the project's product/space, propose a research
-    focus and confirm before creating; every morning ~5am research the day's market
-    developments; exactly ONE dated report per day with `type: report` front matter so
-    reports ride the calendar; dashboard at create = calendar + newest-report embed;
-    sharpen the focus over time.
-  - **Follow-up Tracker** (closed): paste right after shipping something - the session
-    context IS the invocation (no extra discovery machinery; skill-side template
-    fetching is deliberately deferred). Verify a CONCRETE observation path exists
-    (logs/MCP/URL/gh) and smoke-test it once - never create a blind loop; define a
-    concrete finish condition and create the loop CLOSED with it as the goal; confirm
-    cadence; finish only when genuinely met, report regressions plainly; modest
-    dashboard at create (latest-report embed + metric chart when one was defined).
-  The four added later (adapted from top-scoring public loop cases), same disciplines
-  at the same granularity:
-  - **Docs Sweep** (open): weekly Monday ~6am, compare docs against what the code
-    ships now, scoped to drift since the previous sweep; verify commands/links/examples
-    by actually running them; never rewrite accurate docs to create activity (zero
-    drift = clean stop); worktree + PR + no-stacking; drift count as metric; dashboard
-    = latest-summary embed + drift chart.
-  - **Housekeeper** (open): daily ~7am, ONE proven low-risk cleanup per day
-    (prove-before-delete with concrete evidence, keep only if checks stay green);
-    protect active/uncommitted/generated/uncertain work; uncertain candidates go to a
-    deferred-candidates file, never deleted; worktree + PR + no-stacking; `type:
-    open|merged` kanban cards + cleanups-landed metric.
-  - **Dependency Triage** (open): weekly Monday; smoke-test gh sees the repo's
-    Dependabot/Renovate PRs BEFORE creating, and confirm merge authority with the
-    owner (merge low-risk patch/minor vs review-and-report-only); snapshot open PRs,
-    process each exactly once on real evidence at the exact head (version labels are
-    inputs, not proof of safety), tests in a worktree; `type:
-    merged|deferred|blocked` kanban cards + open-PR-count metric.
-  - **Error Sweep** (open monitor): daily ~6am production reliability pass; carries
-    the Follow-up Tracker observation-path discipline (verify + smoke-test an error
-    source, propose source/window and confirm, never a blind loop); separate
-    actionable errors from noise, root-cause, smallest verified fix, one PR per fix,
-    no-stacking; NEVER copy credentials/tokens/PII into reports or PRs; one dated
-    `type: report` per run + actionable-error-count metric; nothing actionable = clean
-    stop.
-  - **Support Triage** (open): a 4-step guided setup — (1) the support source + a WRITE
-    smoke-test (reply/note/tag, not just read), (2) the debugging stack with read access
-    verified per system, (3) the triage contract + the reply-vs-hold-for-approval
-    boundary + the ticket-note artifact contract, (4) outputs/metrics — plus an on-demand
-    `reference.md` carrying the validated dashboard layout + metric state schema.
-  - **Reddit Karma** (open): value-first Reddit comments grounded in the owner's OWN
-    knowledge base — a 5-step guided setup (KB gate two-branch: confirm-or-assemble from
-    the owner's past content, never invent opinions; verify `opencli reddit` + account
-    sign-off; a shared-account ledger FILE enforcing a per-account ≥21-min post gap +
-    ≤5/day cap across every automation on the account; a derived subreddit boundary, not a
-    fixed list; draft-for-review default) plus an embedded task-file skeleton carrying the
-    per-run workflow, the pure-value firewall, and the anti-AI writing rules (no em-dashes
-    / no LLM cadence — the load-bearing "don't read as a bot" discipline).
+  VISUAL in (5) + what create.md/`reference.md` actually author — NOT sections the paste-prompt
+  must enumerate.**
+- **The shipping catalog is the folder list under `skill/templates/`** (21 across the 6
+  bundles); each template's defining behaviors are owned by its own `meta.json`
+  `description` and pinned per-template by `templates.test.ts` - read those, never a
+  summary here. The house disciplines that recur across them, and that a NEW template
+  should carry unless it has a reason not to: verify a CONCRETE observation path (and
+  smoke-test it once) before creating, never a blind loop; do code work in a fresh
+  worktree off `main` and land it as a PR, one at a time, no stacking while a prior PR is
+  unmerged; never manufacture activity - nothing found is a clean stop; one dated
+  `type: report` product per run (or `type:`-tagged kanban cards) plus one metric; author
+  the day-one dashboard at create; never copy credentials/tokens/PII into a report or PR.
 
 ## Workflows (deterministic pre-stage)
 

@@ -231,9 +231,9 @@
 }
 
 /*
- * Template fan - a hand of tilted cards on the dashboard hero. The tilt/lift
- * ride on custom props set inline per card (computed from its index); hover
- * straightens and floats the card above its siblings.
+ * Loop-card fan - the hand of tilted cards inside a bundle slide (BundleCarousel).
+ * The tilt/lift ride on custom props set inline per card (computed from its index);
+ * hover straightens and floats the card above its siblings.
  */
 .fan-card {
   transform: rotate(var(--tilt, 0deg)) translateY(var(--lift, 0px));
