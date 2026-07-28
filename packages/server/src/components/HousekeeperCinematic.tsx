@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react'
  * only — never gates the wizard; Replay + pause-on-hover throughout.
  *
  *      0ms  ACT 1 — black frame blooms; the clock odometer rolls up…
- *   1700ms  …LANDS on 8:00 with a pulse + flash; caption rises
+ *   1700ms  …LANDS on 7:00 with a pulse + flash; caption rises
  *   2700ms  ACT 2 — one clean PR: the card swoops up (spring overshoot)
  *   3300ms  red deletion lines sweep away (staggered); −102 counts down + pops
  *   5200ms  "Merged" STAMPS down with impact; checks rise in
@@ -25,7 +25,7 @@ import { useEffect, useState } from 'react'
  * ───────────────────────────────────────────────────────────────────────────── */
 
 const TIMING = {
-  clockLand: 1700, //  stage 1 — 8:00 lands
+  clockLand: 1700, //  stage 1 — 7:00 lands
   actTwo: 2700, //     stage 2 — PR card swoops in
   deletions: 3300, //  stage 3 — deletions sweep + −102 rolls
   merged: 5200, //     stage 4 — Merged stamps + checks
@@ -37,7 +37,8 @@ const LAST_STAGE = STAGES.length // 6
 const END = TIMING.actFour + 500 // cap the clock (rest on the last act)
 const FRAME_MS = 1000 / 60
 
-/* ACT 1 — the clock. An odometer that rolls the exact per-minute frames up to 8:00
+/* ACT 1 — the clock. An odometer that rolls the exact per-minute frames up to 07:00 —
+ * the Housekeeper loop's real cadence, matching Act 4's "Every morning · 07:00"
  * (each digit reel always travels downward, so it reads as a real spinning odometer). */
 function clockFrames(startMin: number, endMin: number): string[] {
   const out: string[] = []
@@ -45,8 +46,8 @@ function clockFrames(startMin: number, endMin: number): string[] {
   return out
 }
 const CLOCK = {
-  frames: clockFrames(465, 480), // 7:45 → 8:00 — a long, satisfying spin
-  rollMs: 1550, // reel roll duration (decelerates into 8:00, settles just before clockLand)
+  frames: clockFrames(405, 420), // 6:45 → 7:00 — a long, satisfying spin
+  rollMs: 1550, // reel roll duration (decelerates into 7:00, settles just before clockLand)
   digitH: 58, // px per reel row (matches the clock font line)
 }
 
@@ -108,12 +109,16 @@ export function HousekeeperCinematic() {
   const [runId, setRunId] = useState(0)
 
   // ONE frame ticker drives the whole cinematic; it advances `elapsed` only while
-  // playing, so hover pauses everything and Replay (runId) restarts the clock.
+  // playing, so hover pauses everything and Replay (runId) restarts the clock. Once
+  // the clock saturates at END the story rests on the last act, so the ticker stops
+  // rather than firing 60x/sec forever. `finished` is a boolean (not `elapsed`), so
+  // the interval is torn down once — not re-created on every frame.
+  const finished = elapsed >= END
   useEffect(() => {
-    if (reduced || paused) return
+    if (reduced || paused || finished) return
     const id = setInterval(() => setElapsed((e) => Math.min(END, e + FRAME_MS)), FRAME_MS)
     return () => clearInterval(id)
-  }, [reduced, paused, runId])
+  }, [reduced, paused, runId, finished])
 
   const replay = () => {
     setElapsed(0)
@@ -230,7 +235,7 @@ function ActMorning({ elapsed, runId }: { elapsed: number; runId: number }) {
           style={{ background: 'radial-gradient(circle at 50% 42%, rgba(255,255,255,0.5), transparent 55%)', animation: 'hk-flash 0.7s var(--hk-out) both' }}
         />
       )}
-      <span className="sr-only">8:00 AM</span>
+      <span className="sr-only">7:00 AM</span>
       <div
         aria-hidden
         className="flex items-center font-pixel text-[52px] leading-none text-white"
@@ -507,7 +512,7 @@ function LoopMark() {
 function StillMorning() {
   return (
     <div className="flex h-full flex-col items-center justify-center bg-black text-center">
-      <div className="font-pixel text-[42px] leading-none text-white">8:00 AM</div>
+      <div className="font-pixel text-[42px] leading-none text-white">7:00 AM</div>
       <div className="mt-3 text-label text-white/50">Housekeeper wakes up. You don&apos;t have to.</div>
     </div>
   )

@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   done: false,
   sim: false,
   steps: [] as string[],
-  firstRun: 'running' as 'running' | 'done' | 'scheduled',
+  firstRun: 'running' as 'running' | 'done' | 'failed' | 'scheduled',
 }))
 
 vi.mock('../server/machineFns', () => ({
@@ -32,7 +32,11 @@ vi.mock('../server/loopApi', () => ({
   mintClaim: vi.fn(async () => ({ token: 'ck_test' })),
   claimStatus: vi.fn(async () => (h.done ? { done: true, id: 'loop-1' } : { done: false })),
   claimProgress: vi.fn(async () => ({ steps: h.steps })),
-  firstRunStatus: vi.fn(async () => ({ state: h.firstRun, runId: h.firstRun === 'done' ? 'run-1' : undefined, scheduledHint: 'daily at 7:00' })),
+  firstRunStatus: vi.fn(async () => ({
+    state: h.firstRun,
+    runId: h.firstRun === 'scheduled' ? undefined : 'run-1',
+    scheduledHint: 'daily at 7:00',
+  })),
 }))
 // ChannelAddForm imports these; only used on interaction, but the module must resolve.
 vi.mock('../server/notifyFns', () => ({
@@ -136,7 +140,7 @@ describe('OnboardingWizard step machine', () => {
     expect(host!.textContent).toContain('Meet Housekeeper')
     // The three-act cinematic renders (all acts mount; content that is present from
     // the first frame — later beats like the Merged stamp arrive on a timeline).
-    expect(host!.textContent).toContain('8:00 AM')
+    expect(host!.textContent).toContain('7:00 AM')
     expect(host!.textContent).toContain('Remove dead code')
     expect(host!.textContent).toContain('Cleanliness score')
 
@@ -236,6 +240,32 @@ describe('OnboardingWizard step machine', () => {
     // No forced wait — dashboard is always available; no payoff CTA yet.
     expect(findButton('Go to dashboard')).toBeDefined()
     expect(findButton('See your first result')).toBeUndefined()
+  })
+
+  it('a TRANSIENT scheduled read does not strand the wait - polling continues to the payoff', async () => {
+    // The normal window between createLoop's run-now and the daemon claiming the run
+    // reads as 'scheduled'; one such read must not end the wait for the session.
+    h.firstRun = 'scheduled'
+    savePersisted('teamA', { step: 'live', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test', loopId: 'loop-1' })
+    render()
+    await poll(0)
+    expect(host!.textContent).toContain('First run is queued')
+    h.firstRun = 'done'
+    await poll()
+    expect(findButton('See your first result')).toBeDefined()
+  })
+
+  it('a FAILED first run never claims success, but still hands off into the run page', async () => {
+    h.firstRun = 'failed'
+    savePersisted('teamA', { step: 'live', machineId: 'm-1', machineToken: 'dk_test', claimToken: 'ck_test', loopId: 'loop-1' })
+    render()
+    await poll(0)
+    expect(host!.textContent).toContain('First run finished')
+    expect(host!.textContent).not.toContain('First run complete')
+    const cta = findButton('See what happened')
+    expect(cta).toBeDefined()
+    act(() => cta!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onSeeResult).toHaveBeenCalledWith('loop-1', 'run-1')
   })
 
   it('the dev-sim "Simulate first run completed" drives the first-run to done', async () => {

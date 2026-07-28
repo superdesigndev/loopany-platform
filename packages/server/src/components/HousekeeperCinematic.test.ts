@@ -49,7 +49,7 @@ describe('motion mode (auto-play)', () => {
   it('renders all four acts and starts on act 0', () => {
     render()
     expect(dataAct()).toBe('0')
-    expect(host!.textContent).toContain('8:00 AM')
+    expect(host!.textContent).toContain('7:00 AM')
     expect(host!.textContent).toContain('Remove dead code')
     expect(host!.textContent).toContain('A little better every day')
     expect(host!.textContent).toContain('Cleanliness score')
@@ -132,7 +132,7 @@ describe('prefers-reduced-motion (static stills)', () => {
     render()
     expect(dataAct()).toBe('stills')
     expect(score()).toBe('80')
-    expect(host!.textContent).toContain('8:00 AM')
+    expect(host!.textContent).toContain('7:00 AM')
     expect(host!.textContent).toContain('Merged')
     expect(host!.textContent).toContain('Day 30')
     expect(host!.textContent).toContain('Every morning · 07:00')

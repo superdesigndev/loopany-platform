@@ -28,6 +28,7 @@ import type {
   TranscriptStep,
 } from '../types'
 import { coerceCodingAgent } from '../types'
+import type { FirstRunState } from '../lib/firstRun.js'
 import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
@@ -451,7 +452,7 @@ export const claimProgress = createServerFn({ method: 'GET' })
  *  Loop page. Zero code-exec: never triggers a run, only reads rows. */
 export const firstRunStatus = createServerFn({ method: 'GET' })
   .validator((loopId: string) => loopId)
-  .handler(async ({ data: loopId }): Promise<{ state: 'running' | 'done' | 'scheduled'; runId?: string; scheduledHint?: string }> => {
+  .handler(async ({ data: loopId }): Promise<{ state: FirstRunState; runId?: string; scheduledHint?: string }> => {
     await backend()
     const { firstRunStateFrom } = await import('../lib/firstRun.js')
     const { cronText } = await import('../lib/format.js')
@@ -461,7 +462,6 @@ export const firstRunStatus = createServerFn({ method: 'GET' })
     const run = await store.lastExecRun(loopId)
     const machine = loop.machineId ? await store.getMachine(loop.machineId) : undefined
     const state = firstRunStateFrom({ phase: run?.phase ?? null, hasRun: !!run, machineOnline: !!machine?.online })
-    if (state === 'done') return { state, runId: run?.id }
-    if (state === 'running') return { state, runId: run?.id }
-    return { state, scheduledHint: cronText(loop.cron) }
+    if (state === 'scheduled') return { state, scheduledHint: cronText(loop.cron) }
+    return { state, runId: run?.id }
   })

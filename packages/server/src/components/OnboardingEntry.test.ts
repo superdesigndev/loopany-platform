@@ -34,7 +34,14 @@ afterEach(() => {
 describe('OnboardingEntry trigger', () => {
   it('auto-starts the wizard for a genuinely empty workspace (no loops, no machines)', () => {
     render(createElement(OnboardingEntry, { teamId: 'teamA', noLoops: true, noMachines: true }))
-    expect(nav).toHaveBeenCalledWith({ to: '/onboarding' })
+    // The dashboard's team rides along, so the wizard binds to the SAME team the
+    // banner was shown for (never the last-used-team cookie, which can drift).
+    expect(nav).toHaveBeenCalledWith({ to: '/onboarding', search: { team: 'teamA' } })
+  })
+
+  it('open mode (no team) starts the wizard with no team segment', () => {
+    render(createElement(OnboardingEntry, { noLoops: true, noMachines: true }))
+    expect(nav).toHaveBeenCalledWith({ to: '/onboarding', search: {} })
   })
 
   it('does NOT auto-start when the user already has a loop', () => {

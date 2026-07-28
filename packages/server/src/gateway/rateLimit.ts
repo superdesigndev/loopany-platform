@@ -179,6 +179,19 @@ export function machineRouteLimit(
   return null;
 }
 
+/**
+ * The per-credential tier ALONE, for a route whose credential only becomes known
+ * after the body is parsed (`/api/claim/progress`). Such a route calls
+ * `machineRouteLimit(request)` first — the IP flood guard has to reject BEFORE the
+ * body is buffered — and this once the claim is in hand, so the IP bucket is spent
+ * exactly once per request.
+ */
+export function machineCredentialLimit(token: string, opts: { now?: number } = {}): Response | null {
+  if (!rateLimitEnabled()) return null;
+  if (!tokenLimiter.allow(token, opts.now ?? Date.now())) return tooMany();
+  return null;
+}
+
 /** Test seam — reset both limiters between cases. */
 export function __resetMachineRateLimiters(): void {
   ipLimiter.reset();

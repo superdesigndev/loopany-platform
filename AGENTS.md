@@ -834,19 +834,26 @@ computes pure functions. Run instructions: `README.md`.
   import in `DashboardView`): it auto-starts the wizard ONCE for a fully empty workspace
   (no loops AND no machines, `markOnboardingDismissed` set BEFORE the redirect so Back
   can't re-trigger) and otherwise shows a quiet re-entry banner while the user has no
-  loops. The wizard MIRRORS how a loop is really born and advances ONLY on DETECTED
+  loops. Both entry paths carry the DASHBOARD's team as `?team=<id>`; the route prefers it
+  over the cookie-backed `getDefaultTeam()` (validated with the same `canViewTeam` gate as
+  `/t/$teamId`, so a URL team is never trusted) - otherwise a bookmarked `/t/<B>` would
+  mint the machine + claim into whatever team the last-used cookie points at. The wizard
+  MIRRORS how a loop is really born and advances ONLY on DETECTED
   reality: the machine step reuses `createMachine`/`machineStatus` (Continue gated on
   `.online`), the create step reuses `mintClaim`/`claimStatus` + the Housekeeper template
   `description` (auto-advances on `.done`) - never a claimed Next. Step + minted tokens
   persist per team via `lib/onboardingState.ts` (pure, unit-tested) so a mid-flow reload
   resumes. The "Meet Housekeeper" step embeds `HousekeeperCinematic` - a spring-physics
   FOUR-act storyboard (in-house CSS/SVG/JS, NO framer-motion): (1) odometer clock rolling
-  to 8:00, (2) a stylized NON-GitHub PR mock (staggered deletion-line sweep, −102 odometer,
+  to 07:00 (the loop's REAL `0 7 * * *` cadence - act 1, the sr-only label, the still, and
+  act 4's "Every morning · 07:00" must all name the same time), (2) a stylized NON-GitHub PR mock (staggered deletion-line sweep, −102 odometer,
   a "Merged" STAMP), (3) a DAY-BY-DAY compounding montage - Day 1→30 counter + a per-day
   grid filling one cell/day + the score STEPPING 30→80 (arc nudges then holds each day) with
   a landing pop + ring/spark flourish, (4) a cadence beat ("Every morning · 07:00", rests).
   Driven by ONE `elapsed`-ms clock advanced by a frame `setInterval` that runs only while
-  playing - so every beat is a pure function of `elapsed` and hover PAUSES the whole thing
+  playing AND unfinished (the ticker's guard reads a `finished` BOOLEAN, not `elapsed`, so
+  it stops once the story rests without re-creating the interval every frame) - so every
+  beat is a pure function of `elapsed` and hover PAUSES the whole thing
   (`onMouseEnter/Leave` → `paused`; React synthesizes those from delegated mouseover/mouseout,
   so tests dispatch THOSE, not raw enter/leave). Springs are CSS back-out cubic-beziers
   (`--hk-spring` in app.css, `hk-*` keyframes); using `elapsed` (not `Date.now`/rAF) keeps
@@ -859,7 +866,11 @@ computes pure functions. Run instructions: `README.md`.
   `lib/creationSteps.ts` (`CREATION_STEPS` + `deriveStepStates`, tolerant of skipped/
   repeated/out-of-order/absent/junk - keys off the highest reported index). The agent
   reports each milestone to `POST /api/claim/progress` (`routes/api.claim.progress.ts`),
-  enum-only + `dk_`-shaped claim + body cap + IP flood guard, stored in a bounded/TTL'd
+  enum-only + `dk_`-shaped claim + body cap + IP flood guard IN THAT ORDER (the per-IP
+  `machineRouteLimit(request)` runs BEFORE the capped `readJsonBody`, so a limited or
+  oversized request never costs a body read; the per-claim bucket can only key off a
+  parsed claim, so it rides `machineCredentialLimit` - the token tier alone, keeping the
+  IP bucket spent exactly once per request), stored in a bounded/TTL'd
   in-memory map keyed by the claim token (`tokens.ts` `recordClaimProgress`/
   `readClaimProgress`, enum re-validated at storage). **The checklist + its polling are
   ONE shared surface** (`components/CreationChecklist.tsx`: `CreationChecklist` +
@@ -879,10 +890,15 @@ computes pure functions. Run instructions: `README.md`.
   end — a single `live` step folds the celebration, the first-run wait, and notification
   binding. (1) **First run**: `createLoop` already fires an immediate `scheduler.runNow`, so
   the wizard polls `firstRunStatus(loopId)` (pure branch table `lib/firstRun.ts`
-  `firstRunStateFrom`: done→payoff, running→live, pending+offline/canceled→honest
-  `scheduled` handoff — never a spinner-trap) and on `done` shows a big CTA into the Loop
-  page (`onSeeResult` → `/loops/$loopId/runs/$runId`) — the payoff. Zero code-exec: it only
-  READS run rows, never triggers a run. (2) **Notify binding** fills the wait, reusing the
+  `firstRunStateFrom`: done→payoff, error→`failed` (same hand-off, honest non-success
+  copy — never "First run complete" on a failed run), running→live,
+  pending+offline/canceled→honest `scheduled` handoff — never a spinner-trap) and on a
+  finished run (`firstRunFinished`) shows a big CTA into the Loop page (`onSeeResult` →
+  `/loops/$loopId/runs/$runId`) — the payoff. `scheduled` is NOT terminal on the first
+  read: the poll settles into the queued handoff only after `SCHEDULED_SETTLE_POLLS`
+  consecutive scheduled reads, so the transient pending+offline window between
+  `createLoop`'s run-now and the daemon's claim can't strand the user. Zero code-exec: it
+  only READS run rows, never triggers a run. (2) **Notify binding** fills the wait, reusing the
   ONE shared `components/ChannelAddForm.tsx` (extracted from `NotificationsModal`, so the two
   binding surfaces can't drift; channels are slack/telegram/feishu via `createChannel` +
   live `testChannel` ping). Fully optional (dashboard/see-result always available). Persisted

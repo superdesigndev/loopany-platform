@@ -5,6 +5,7 @@ import { claimStatus, firstRunStatus, getConfig, mintClaim } from '../server/loo
 import { testChannel } from '../server/notifyFns'
 import { simulateFirstRun, simulateLoopCreated, simulateMachineConnect, simulateNotifyBind } from '../server/onboardingSim'
 import { CREATION_STEP_KEYS } from '../lib/creationSteps'
+import { firstRunFinished, type FirstRunState } from '../lib/firstRun'
 import { ChannelAddForm } from './ChannelAddForm'
 import { CreationChecklist, useCreationProgress } from './CreationChecklist'
 import {
@@ -23,7 +24,7 @@ import { LoopLogo } from './LoopLogo'
 import { btnPrimary, btnPrimaryPill, btnSm } from './ui'
 
 /**
- * First-run onboarding: from a fresh login to a live Housekeeper loop, in four
+ * First-run onboarding: from a fresh login to a live Housekeeper loop, in a few
  * guided steps. Each step advances on DETECTED reality, never a claimed Next:
  *   - the machine step completes when a daemon actually polls (`machineStatus.online`)
  *   - the loop step completes when a real loop record lands (`claimStatus.done`)
@@ -39,6 +40,11 @@ import { btnPrimary, btnPrimaryPill, btnSm } from './ui'
  * fires the real store write a daemon would — so the whole flow is clickable
  * locally without a second machine. The buttons never render in a production build.
  */
+/** Consecutive 'scheduled' reads before the live step settles into the queued handoff
+ *  (~10s at the 2s poll) — long enough to ride out a machine that is momentarily not
+ *  online while the run is still about to be claimed. */
+const SCHEDULED_SETTLE_POLLS = 5
+
 export function OnboardingWizard({
   teamId,
   housekeeper,
@@ -65,7 +71,12 @@ export function OnboardingWizard({
   // A "nothing heard for a while" flag for the reassurance copy (never gates).
   const [quiet, setQuiet] = useState(false)
   // The `live` step: first-run wait-state + the notification binding (fills the wait).
-  const [runState, setRunState] = useState<{ state: 'running' | 'done' | 'scheduled'; runId?: string; scheduledHint?: string }>({ state: 'running' })
+  const [runState, setRunState] = useState<{ state: FirstRunState; runId?: string; scheduledHint?: string }>({ state: 'running' })
+  // How many CONSECUTIVE 'scheduled' reads we've seen — a queued run on a machine
+  // that hasn't claimed it yet reads as 'scheduled' for a moment in the normal window
+  // between `createLoop`'s run-now and the daemon's claim, so one read must not end
+  // the wait (that stranded the user on "queued" for the rest of the session).
+  const [scheduledPolls, setScheduledPolls] = useState(0)
   const [bound, setBound] = useState<{ name: string; sim: boolean } | null>(null)
   const [testResult, setTestResult] = useState<'idle' | 'sending' | 'ok' | 'failed'>('idle')
 
@@ -149,18 +160,23 @@ export function OnboardingWizard({
     return () => clearInterval(t)
   }, [step, claimToken, patch])
 
-  // Step "live" — wait on the FIRST run completing (detected reality again), then
-  // surface the payoff CTA into the Loop page. Stops polling once done/scheduled.
+  // Step "live" — wait on the FIRST run reaching a terminal outcome (detected reality
+  // again), then surface the hand-off CTA into the run page. Polling stops once the
+  // run finished, or once 'scheduled' has HELD across a bounded number of reads (the
+  // honest "it'll run later" handoff) — never on a single transient read.
+  const runSettled = firstRunFinished(runState.state) || (runState.state === 'scheduled' && scheduledPolls >= SCHEDULED_SETTLE_POLLS)
   useEffect(() => {
-    if (step !== 'live' || !loopId || runState.state !== 'running') return
+    if (step !== 'live' || !loopId || runSettled) return
     const tick = async () => {
       const r = await firstRunStatus({ data: loopId }).catch(() => undefined)
-      if (r) setRunState(r)
+      if (!r) return
+      setRunState(r)
+      setScheduledPolls((n) => (r.state === 'scheduled' ? n + 1 : 0))
     }
     void tick()
     const t = setInterval(tick, 2000)
     return () => clearInterval(t)
-  }, [step, loopId, runState.state])
+  }, [step, loopId, runSettled])
 
   // "Nothing heard for a while" — reset a quiet timer on entry and whenever a new
   // milestone arrives; if it fires, surface elapsed-aware reassurance copy.
@@ -317,7 +333,7 @@ export function OnboardingWizard({
               </p>
               <p className="mt-3 text-body leading-relaxed text-secondary">
                 Let&apos;s set up your first one - <span className="font-medium text-display">Housekeeper</span>, a daily tidy-up
-                for your codebase - in three quick steps.
+                for your codebase - in a few quick steps.
               </p>
               <div className="mt-8">
                 <button className={btnPrimary} onClick={() => goStep('machine')}>
@@ -492,7 +508,7 @@ export function OnboardingWizard({
                 )}
               </div>
 
-              {config?.onboardingSim && runState.state !== 'done' && (
+              {config?.onboardingSim && !firstRunFinished(runState.state) && (
                 <SimButton busy={simBusy} onClick={() => void simFirstRun()} label="Simulate first run completed" />
               )}
 
@@ -516,13 +532,14 @@ function Section({ children }: { children: React.ReactNode }) {
 }
 
 /** The first-run wait/payoff card: waits on the first run (detected reality), then a
- *  big obvious CTA into the Loop page. Honest scheduled state when it won't run soon -
- *  never a spinner-trap. */
+ *  big obvious CTA into the run page. A run that finished with an ERROR still hands
+ *  off there, but the copy never claims success. Honest scheduled state when it won't
+ *  run soon - never a spinner-trap. */
 function FirstRunCard({
   state,
   onSeeResult,
 }: {
-  state: { state: 'running' | 'done' | 'scheduled'; scheduledHint?: string }
+  state: { state: FirstRunState; scheduledHint?: string }
   onSeeResult: () => void
 }) {
   if (state.state === 'done') {
@@ -531,6 +548,20 @@ function FirstRunCard({
         <div className="text-body font-medium text-display">✓ First run complete - your agent already did something.</div>
         <button onClick={onSeeResult} className={`${btnPrimary} mt-4`} style={{ animation: 'hk-pop 0.5s var(--hk-spring) both' }}>
           See your first result →
+        </button>
+      </div>
+    )
+  }
+  if (state.state === 'failed') {
+    return (
+      <div className="mt-6 rounded-card border border-hairline bg-warn-soft p-5 text-center shadow-card">
+        <div className="text-body font-medium text-display">First run finished - see what happened.</div>
+        <p className="mt-1.5 text-body leading-snug text-secondary">
+          It didn&apos;t finish cleanly. The run page shows what your agent did and where it stopped - the loop keeps its normal
+          schedule either way.
+        </p>
+        <button onClick={onSeeResult} className={`${btnPrimary} mt-4`} style={{ animation: 'hk-pop 0.5s var(--hk-spring) both' }}>
+          See what happened →
         </button>
       </div>
     )

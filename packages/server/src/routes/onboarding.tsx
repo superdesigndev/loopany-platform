@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { getAuthState, getDefaultTeam, listTemplates } from '../server/loopApi'
+import { canViewTeam, getAuthState, getDefaultTeam, listTemplates } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
 import type { TemplateInfo } from '../types'
 import { OnboardingWizard } from '../components/OnboardingWizard'
@@ -13,13 +13,23 @@ import { LoadErrorCard } from '../components/actionUi'
  * (two other crews are reworking that surface). The homepage adds only a minimal
  * entry hook that navigates here.
  *
- * Under the auth gate it resolves the caller's default team (so the minted machine
- * + claim bind to the right team) and shows the sign-in CTA when signed out. Open
- * mode renders the wizard with no team segment.
+ * Under the auth gate it binds to a team (so the minted machine + claim land in the
+ * right one) and shows the sign-in CTA when signed out. The team comes from the
+ * `?team=` search param when the entry point knows it — the dashboard the banner was
+ * shown on — because the cookie-backed default can point at a DIFFERENT team on a
+ * bookmarked/shared `/t/<id>`. A team the caller can't view is ignored (never trusted
+ * from the URL), falling back to the default. Open mode renders with no team segment.
  */
 export const Route = createFileRoute('/onboarding')({
   ssr: false,
-  loader: async (): Promise<{
+  validateSearch: (search: Record<string, unknown>): { team?: string } => {
+    const team = typeof search.team === 'string' ? search.team.trim() : ''
+    return team ? { team } : {}
+  },
+  loaderDeps: ({ search }) => ({ team: search.team }),
+  loader: async ({
+    deps,
+  }): Promise<{
     mode: 'signin' | 'wizard'
     auth: { enabled: boolean }
     teamId?: string
@@ -30,7 +40,8 @@ export const Route = createFileRoute('/onboarding')({
     if (auth.enabled) {
       const { data: session } = await authClient.getSession()
       if (!session) return { mode: 'signin', auth, housekeeper }
-      const teamId = await getDefaultTeam()
+      const requested = deps.team
+      const teamId = requested && (await canViewTeam({ data: requested })) ? requested : await getDefaultTeam()
       return { mode: 'wizard', auth, teamId, housekeeper }
     }
     return { mode: 'wizard', auth, housekeeper }
