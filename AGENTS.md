@@ -275,11 +275,12 @@ computes pure functions. Run instructions: `README.md`.
   thumbnail, hand-drawn in the dashboard/flow visual language (data-mock/flow art on theme
   vars, any brand logo in its real color - NOT a centered icon); the carousel renders it,
   the public market does not. (5) OPTIONAL **loop-flow
-  + dashboard PREVIEW** — a `FlowSpec` registered in `components/LoopFlow.tsx` `FLOWS` (nodes +
+  + dashboard PREVIEW** — a `FlowSpec` registered in `lib/templateFlow.tsx` `FLOWS` (nodes +
   dashboard widgets, pure data; `hasLoopFlow(name)` flips the modal to its two-column layout
-  and renders the Loop-flow / Dashboard tabs). **The LOOP FLOW and the DASHBOARD are the CARD
-  VISUAL in (5) + what create.md/`reference.md` actually author — NOT sections the paste-prompt
-  must enumerate.**
+  and renders the Loop-flow / Dashboard tabs; the SAME spec draws the public detail page's
+  static diagram - see the flow-spec bullet above). **The LOOP FLOW and the DASHBOARD are
+  the CARD VISUAL in (5) + what create.md/`reference.md` actually author — NOT sections the
+  paste-prompt must enumerate.**
 - **The shipping catalog is the folder list under `skill/templates/`** (21 across the 6
   bundles); each template's defining behaviors are owned by its own `meta.json`
   `description` and pinned per-template by `templates.test.ts` - read those, never a

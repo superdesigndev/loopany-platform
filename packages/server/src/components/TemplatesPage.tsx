@@ -12,8 +12,9 @@ import { TemplateCard, flattenBundles } from './TemplateCard'
  * intro, a category tag, and the three rating chips — plus a "Create in Loopany" deep
  * link and a link to the shareable detail view (`/templates/<slug>`). English only.
  *
- * The card itself lives in the shared `TemplateCard` — the dashboard's catalog preview
- * strip renders the same one (compact variant), so the two surfaces cannot drift.
+ * The card itself lives in the shared `TemplateCard` — the catalog teaser
+ * (`TemplatesPreview`, on both the dashboard and the pre-login landing) renders the same
+ * one (compact variant), so the surfaces cannot drift.
  */
 export function TemplatesPage({ bundles }: { bundles: BundleView[] }) {
   const items = flattenBundles(bundles)
