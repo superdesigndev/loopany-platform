@@ -293,6 +293,38 @@
 }
 
 /*
+ * Public template MARKET card (round 8, `TemplatesPage` `MarketCard`). The card's
+ * visual anchor is a monospace preview of its REAL prompt, faded at the bottom. The
+ * WHOLE card navigates to the detail page via a stretched-link overlay on the title
+ * (`.market-card-link::after`), while the quiet "Create" affordance sits above it
+ * (`position: relative; z-index`) so it stays independently clickable. The Create
+ * affordance is hidden until hover on hover-capable devices, but ALWAYS visible on
+ * touch (no `:hover`), so it never becomes unreachable.
+ */
+.market-card-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.prompt-preview-mask {
+  -webkit-mask-image: linear-gradient(to bottom, #000 42%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 42%, transparent 100%);
+}
+.market-create {
+  transition: opacity 0.15s ease;
+}
+@media (hover: hover) {
+  .market-card .market-create {
+    opacity: 0;
+  }
+  .market-card:hover .market-create,
+  .market-card:focus-within .market-create {
+    opacity: 1;
+  }
+}
+
+/*
  * Agent-authored dashboard (generative UI, `LoopView`). DEFAULT layout is a
  * responsive grid so independent top-level panels sit side by side on desktop
  * (the motivating case: calendar left, rendered document right) and stack on

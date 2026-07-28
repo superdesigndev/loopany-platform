@@ -85,36 +85,43 @@ async function mount(): Promise<HTMLDivElement> {
   return host
 }
 
-describe('TemplatesPage (text-first market)', () => {
-  it('renders text-first cards: title, intro, chips, category filter, no thumb art', async () => {
+describe('TemplatesPage (text-first market — round 8 card)', () => {
+  it('renders text-first cards: title, intro, prompt preview anchor, 3 micro-indicators', async () => {
     const el = await mount()
     const out = el.innerHTML
-    // Both categories + both templates show (grid + filter chips).
     expect(out).toContain('Code Health')
     expect(out).toContain('Others')
     expect(out).toContain('React Doctor')
     expect(out).toContain('Bug Vigil')
-    // Rating chips (all three dimensions) scan on the card.
+    // The visual anchor: a monospace <pre> preview of the REAL prompt per card.
+    const pres = [...el.querySelectorAll('article pre')]
+    expect(pres.length).toBe(2)
+    expect(pres.some((p) => (p.textContent ?? '').includes('React Doctor full setup'))).toBe(true)
+    // Compact 3-indicator row (ease · cadence · effect) — NOT the wrapping full chips.
     expect(out).toContain('Easy start')
     expect(out).toContain('Short cycle')
-    expect(out).toContain('Open loop')
-    expect(out).toContain('Closed loop')
-    expect(out).toContain('Visible first run')
-    expect(out).toContain('Compounds over weeks')
-    // Honest note rides the visibility chip's hover title.
-    expect(out).toContain('The first scan fixes the worst issue.')
-    // Text-first: no template illustration (thumb svg) is inlined on the market.
+    expect(out).toContain('Visible fast')
+    expect(out).toContain('Moderate')
+    expect(out).toContain('Compounds')
+    // The open/closed mechanism + the full visibility labels move to the detail view.
+    expect(out).not.toContain('Open loop')
+    expect(out).not.toContain('Closed loop')
+    expect(out).not.toContain('Visible first run')
+    // Text-first: still no template illustration on the market.
     expect(el.querySelectorAll('article svg').length).toBe(0)
   })
 
-  it('each card has a "Create in Loopany" deep link (?template=<name>) + a Details link', async () => {
+  it('the whole card links to detail; Create is a quiet deep-link; no Details button', async () => {
     const el = await mount()
-    const create = [...el.querySelectorAll('a')].filter((a) => (a.textContent ?? '').includes('Create in Loopany'))
+    // The stretched title link makes the whole card navigate to the shareable detail.
+    const titleLinks = [...el.querySelectorAll('article a.market-card-link')]
+    expect(titleLinks.map((a) => a.getAttribute('href')).sort()).toEqual(['/templates/bug-vigil', '/templates/react-doctor'])
+    // The demoted "Create" affordance deep-links into the compose flow.
+    const create = [...el.querySelectorAll('a.market-create')]
     expect(create.length).toBe(2)
     expect(create.map((a) => a.getAttribute('href')).sort()).toEqual(['/?template=bug-vigil', '/?template=react-doctor'])
-    // Title + "Details" both link to the shareable detail route.
-    const details = [...el.querySelectorAll('a')].filter((a) => a.getAttribute('href')?.startsWith('/templates/'))
-    expect(details.some((a) => a.getAttribute('href') === '/templates/react-doctor')).toBe(true)
-    expect(details.some((a) => a.getAttribute('href') === '/templates/bug-vigil')).toBe(true)
+    // The old full-width black "Create in Loopany" bar + the "Details" button are gone.
+    expect(el.innerHTML).not.toContain('Create in Loopany')
+    expect([...el.querySelectorAll('a')].some((a) => (a.textContent ?? '').trim() === 'Details')).toBe(false)
   })
 })

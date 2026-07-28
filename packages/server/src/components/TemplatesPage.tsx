@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router'
 import type { BundleView, TemplateInfo } from '../types'
 import { LoopLogo } from './LoopLogo'
 import { DISCORD_URL, DiscordIcon, GITHUB_URL, GitHubIcon } from './SocialLinks'
-import { RatingChips, categoryTagStyle } from './TemplateRatingChips'
+import { MicroIndicators, categoryTagStyle } from './TemplateRatingChips'
 
 /** One template flattened with its category, for the market grid + filter. */
 interface MarketItem {
@@ -58,8 +58,9 @@ export function TemplatesPage({ bundles }: { bundles: BundleView[] }) {
           ))}
         </div>
 
-        {/* Dense text-first grid. */}
-        <div className="mt-6 grid min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {/* Dense text-first grid. `items-start` lets cards keep their natural height
+            (short intros don't get stretched to a tall neighbour). */}
+        <div className="mt-6 grid min-w-0 items-start gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {shown.map((it) => (
             <MarketCard key={it.template.name} item={it} />
           ))}
@@ -76,47 +77,53 @@ export function TemplatesPage({ bundles }: { bundles: BundleView[] }) {
 function MarketCard({ item }: { item: MarketItem }) {
   const { template: t, categoryLabel, accent } = item
   return (
-    <article className="flex min-w-0 flex-col rounded-card border border-hairline bg-surface p-4 transition-colors hover:border-wire">
+    <article className="market-card group relative flex min-w-0 flex-col rounded-card border border-hairline bg-surface p-4 transition-colors hover:border-wire hover:shadow-[0_14px_30px_-20px_rgba(0,0,0,0.28)]">
+      {/* Header: category tag + suggested schedule. */}
       <div className="flex items-center gap-2">
         <span className="inline-flex items-center rounded-full px-2 py-0.5 text-micro font-medium" style={categoryTagStyle(accent)}>
           {categoryLabel}
         </span>
-        <span className="text-micro text-disabled">{t.rating ? scheduleShort(t.rating.schedule) : ''}</span>
+        {t.rating && <span className="min-w-0 truncate text-micro text-disabled">{t.rating.schedule}</span>}
       </div>
 
-      <h3 className="mt-2.5 text-body font-semibold text-display">
-        <Link to="/templates/$slug" params={{ slug: t.name }} className="outline-none hover:underline focus-visible:underline">
-          {t.label}
-        </Link>
-      </h3>
-      <p className="mt-1 line-clamp-3 text-caption leading-snug text-secondary">{t.desc}</p>
-
-      {t.rating && <div className="mt-3">{<RatingChips rating={t.rating} />}</div>}
-
-      <div className="mt-3 flex-1" />
-      <div className="mt-3 flex items-center gap-2">
-        <Link
-          to="/"
-          search={{ template: t.name }}
-          className="inline-flex flex-1 cursor-pointer items-center justify-center rounded-full border border-display bg-display px-3.5 py-1.5 text-meta font-medium text-paper transition-opacity hover:opacity-85"
-        >
-          Create in Loopany
-        </Link>
+      {/* Title is the stretched link — the WHOLE card navigates to the detail page. */}
+      <h3 className="mt-2 text-[15px] font-semibold leading-snug text-display">
         <Link
           to="/templates/$slug"
           params={{ slug: t.name }}
-          className="inline-flex shrink-0 cursor-pointer items-center rounded-full border border-wire bg-surface px-3.5 py-1.5 text-meta font-medium text-primary transition-colors hover:bg-raised"
+          className="market-card-link outline-none group-hover:underline focus-visible:underline"
         >
-          Details
+          {t.label}
+        </Link>
+      </h3>
+      <p className="mt-1 line-clamp-2 text-caption leading-snug text-secondary">{t.desc}</p>
+
+      {/* The visual anchor: a monospace preview of the REAL prompt, faded at the bottom. */}
+      <div className="prompt-preview-mask mt-3 h-[92px] overflow-hidden rounded-control bg-raised px-3 pb-2 pt-2">
+        <pre className="whitespace-pre-wrap font-mono text-[10.5px] leading-[1.45] text-secondary">{promptPreview(t.description)}</pre>
+      </div>
+
+      {/* Footer: 3 compact indicators + the quiet hover-revealed Create affordance. */}
+      <div className="mt-3 flex items-end justify-between gap-3">
+        {t.rating && <MicroIndicators rating={t.rating} />}
+        <Link
+          to="/"
+          search={{ template: t.name }}
+          aria-label={`Create the ${t.label} loop in Loopany`}
+          className="market-create relative z-10 inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-wire bg-surface px-2.5 py-1 text-micro font-medium text-secondary transition-colors hover:border-display hover:text-display"
+        >
+          Create <span aria-hidden>→</span>
         </Link>
       </div>
     </article>
   )
 }
 
-/** Trim a long schedule label so it fits the card's top row; the full text lives on the detail. */
-function scheduleShort(s: string): string {
-  return s.length > 26 ? `${s.slice(0, 24)}…` : s
+/** The first ~220 chars of the REAL prompt for the card's preview block (the mask fades
+ *  the tail, so a mid-sentence cut is invisible). Collapses runs of blank lines so the
+ *  preview stays dense. */
+function promptPreview(description: string): string {
+  return description.replace(/\n{2,}/g, '\n').slice(0, 220)
 }
 
 function FilterChip({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {

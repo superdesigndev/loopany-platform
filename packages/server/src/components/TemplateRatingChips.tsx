@@ -73,6 +73,42 @@ export function VisibilityChip({ visibility, note }: { visibility: TemplateVisib
   return <Chip label={v.label} tone={v.tone} title={note} />
 }
 
+/**
+ * The compact 3-indicator row for the MARKET card (round 8) — one fixed line of
+ * dot-prefixed, colour-coded micro-labels (ease · cadence · effect) instead of the
+ * wrapping full chips. The full chips (incl. the open/closed mechanism) stay on the
+ * detail view. Short labels so three always fit one line at 1-col width.
+ */
+const easeMicro: Record<TemplateEase, { label: string; dot: string }> = {
+  easy: { label: 'Easy start', dot: 'var(--color-rubik-green)' },
+  moderate: { label: 'Moderate', dot: 'var(--color-rubik-orange)' },
+  advanced: { label: 'Advanced', dot: 'var(--color-rubik-red)' },
+}
+const cadenceMicro: Record<TemplateCadence, string> = { short: 'Short cycle', long: 'Long cycle' }
+const visMicro: Record<TemplateVisibility, { label: string; dot: string }> = {
+  'first-run': { label: 'Visible fast', dot: 'var(--color-rubik-green)' },
+  'few-runs': { label: 'Builds up', dot: 'var(--color-interactive)' },
+  compounds: { label: 'Compounds', dot: 'var(--color-secondary)' },
+}
+
+export function MicroIndicators({ rating }: { rating: TemplateRating }) {
+  const items = [
+    { label: easeMicro[rating.ease].label, dot: easeMicro[rating.ease].dot },
+    { label: cadenceMicro[rating.cadence], dot: 'var(--color-secondary)' },
+    { label: visMicro[rating.visibility].label, dot: visMicro[rating.visibility].dot },
+  ]
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5 text-micro text-secondary">
+      {items.map((it) => (
+        <span key={it.label} className="inline-flex items-center gap-1 whitespace-nowrap">
+          <span className="inline-block size-1.5 shrink-0 rounded-full" style={{ background: it.dot }} />
+          {it.label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 /** A soft category tag tinted with the bundle accent (yellow uses a darker ink). */
 export function categoryTagStyle(accent: BundleAccent): React.CSSProperties {
   const fg = accent === 'rubik-yellow' ? 'var(--color-display)' : `var(--color-${accent})`
