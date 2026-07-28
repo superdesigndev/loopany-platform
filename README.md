@@ -52,7 +52,7 @@ Most coding agents can already run on a cron or loop a task themselves. That is 
 
 **Hosted app:** sign in at **[https://loopany.ai](https://loopany.ai)** (or use your own self-hosted instance). You will also, for now, need at least one machine you control to run loops.
 
-1. **Sign in** to the Loopany web app at [loopany.ai](https://loopany.ai) (or your self-hosted instance).
+1. **Sign in** to the Loopany web app at [loopany.ai](https://loopany.ai) (or your self-hosted instance). A brand-new workspace opens a short **guided setup** that walks the steps below and lands you on your first loop's first run - skippable at any point, and re-openable from the dashboard until you have a loop.
 2. **Create a loop.** The *New loop* dialog hands you a short **connect snippet** with a server URL and a one-time connect-key.
 3. **Connect your machine.** Paste the whole snippet into your local coding agent - it connects the machine and builds the loop with you.
 

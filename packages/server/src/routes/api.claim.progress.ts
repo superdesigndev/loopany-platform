@@ -10,9 +10,10 @@ const CLAIM_PROGRESS_BODY_CAP = 1024
  * POST /api/claim/progress — the coding agent reports a loop-creation milestone
  * during a New-loop paste, bound to the claim token the onboarding wizard polls.
  *
- * ZERO daemon/CLI change: the agent already has a shell, so the pasted snippet tells
- * it to `curl` this endpoint per milestone. Pure progress reporting — no code exec,
- * the server only stores an enum key in a bounded in-memory map.
+ * The emit path is the loop-creation SKILL, not the pasted snippet: `references/create.md`
+ * tells the agent to run `loopany progress <step> --connect-key <key>`, and the daemon
+ * subcommand (`progress-cli.ts`) POSTs this contract best-effort. Pure progress
+ * reporting: no code exec, the server only stores an enum key in a bounded in-memory map.
  *
  * Untrusted input, so it is locked down: enum-only `step` (free text rejected),
  * `dk_`-shaped claim, a tiny body cap, and the standard per-IP flood guard. It is
