@@ -12,7 +12,9 @@ import { describe, expect, test } from 'vitest'
 import { BUNDLES, listBundles } from './bundles'
 import { TEMPLATES } from './templates'
 
-const VALID_ACCENTS = ['interactive', 'rubik-green', 'rubik-orange', 'rubik-red', 'rubik-yellow', 'secondary']
+const VALID_ACCENTS = ['interactive', 'indigo', 'rubik-green', 'rubik-orange', 'rubik-yellow', 'secondary']
+// Categories must never read as an error state — no red accent (round 9).
+const ALARM_ACCENTS = ['rubik-red', 'accent']
 
 describe('bundle registry', () => {
   test('is non-empty and every bundle has the BundleView shape', () => {
@@ -25,6 +27,8 @@ describe('bundle registry', () => {
       expect(typeof b.tagline).toBe('string')
       expect(b.tagline.trim().length).toBeGreaterThan(0)
       expect(VALID_ACCENTS).toContain(b.accent)
+      // No category may read as an error state (round 9): never a red/error accent.
+      expect(ALARM_ACCENTS).not.toContain(b.accent)
       // At least one member, and every member is a REAL resolved template (unknown
       // names are dropped by the registry, so this also proves resolution worked).
       expect(b.members.length).toBeGreaterThan(0)
@@ -59,7 +63,7 @@ describe('bundle registry', () => {
     expect(members('code-health')).toEqual(['docs-sweep', 'error-sweep', 'react-doctor', 'housekeeper', 'dependency-triage'])
 
     expect(byName.get('ship-with-confidence')!.label).toBe('Ship with Confidence')
-    expect(byName.get('ship-with-confidence')!.accent).toBe('rubik-red')
+    expect(byName.get('ship-with-confidence')!.accent).toBe('indigo')
     expect(members('ship-with-confidence')).toEqual(['test-guardian', 'security-sweep', 'ci-doctor'])
 
     expect(byName.get('growth')!.label).toBe('Growth')

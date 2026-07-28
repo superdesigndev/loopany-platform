@@ -470,12 +470,14 @@ export interface TemplateRating {
 /** The accent color a bundle tints its dot + CTA with — one of the app's
  *  `--color-<accent>` CSS-var tokens (so light/dark follows the theme for free).
  *  `secondary` is the neutral tint for the catch-all "Others" category; `rubik-yellow`
- *  is a LIGHT accent (the carousel uses dark CTA text for it — see BundleCarousel). */
+ *  is a LIGHT accent (the carousel uses dark CTA text for it — see BundleCarousel).
+ *  Deliberately NO red/orange-alarm accent: categories never read as an error state
+ *  (`indigo` is the calm hue for Ship with Confidence). */
 export type BundleAccent =
   | 'interactive'
+  | 'indigo'
   | 'rubik-green'
   | 'rubik-orange'
-  | 'rubik-red'
   | 'rubik-yellow'
   | 'secondary'
 

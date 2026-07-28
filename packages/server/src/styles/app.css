@@ -148,6 +148,13 @@
  * dark glass).
  */
 :root {
+  /* Calm indigo ink — the text-safe category accent for Ship with Confidence, distinct
+     from blue/green/orange/yellow and free of red/orange alarm semantics. Defined in a
+     plain :root (NOT @theme) so it always emits: it's referenced only at runtime via a
+     `var(--color-indigo)` inline style, which Tailwind's @theme tree-shaking can't see.
+     Lightened in dark mode in the media query below, like the other inks. */
+  --color-indigo: #5b4bc4;
+
   --glass-bg: color-mix(in srgb, var(--color-surface) 55%, transparent);
   --glass-bg-strong: color-mix(in srgb, var(--color-surface) 78%, transparent);
   --glass-border: color-mix(in srgb, var(--color-display) 10%, transparent);
@@ -177,6 +184,7 @@
     --color-success-soft: rgba(0, 155, 72, 0.18);
     --color-interactive: #5c9dff;
     --color-interactive-soft: rgba(92, 157, 255, 0.13);
+    --color-indigo: #a99bf5;
     --color-warn: #ff7a3d;
     --color-warn-soft: rgba(255, 122, 61, 0.14);
     --color-running: #ffd500;
