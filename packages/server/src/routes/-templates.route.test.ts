@@ -12,9 +12,11 @@ const gridSrc = readFileSync(fileURLToPath(new URL('./templates.tsx', import.met
 const detailSrc = readFileSync(fileURLToPath(new URL('./templates_.$slug.tsx', import.meta.url)), 'utf8')
 
 describe.each([
-  ['/templates (grid)', gridSrc],
-  ['/templates/$slug (detail)', detailSrc],
-])('%s route is PUBLIC (no auth gate)', (_name, src) => {
+  // Each route seeds from its own PUBLIC (membership-free) registry server fn — the grid
+  // takes the whole bundle list, the detail resolves ONE template by slug.
+  ['/templates (grid)', gridSrc, 'listPublicBundles'],
+  ['/templates/$slug (detail)', detailSrc, 'getPublicTemplate'],
+])('%s route is PUBLIC (no auth gate)', (_name, src, publicFn) => {
   it('does no auth check of any kind in its loader', () => {
     expect(src).not.toContain('getAuthState')
     expect(src).not.toContain('authClient')
@@ -24,8 +26,9 @@ describe.each([
     expect(src).not.toMatch(/redirect\(/)
   })
 
-  it('seeds from the public bundle registry', () => {
-    expect(src).toContain('listBundles')
+  it('seeds from the public registry', () => {
+    expect(src).toContain(publicFn)
+    expect(src).toContain("from '../server/loopApi'")
     expect(src).toContain('createFileRoute')
   })
 })
