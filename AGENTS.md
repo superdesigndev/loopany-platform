@@ -1021,11 +1021,24 @@ computes pure functions. Run instructions: `README.md`.
   snapshot on disk the seeder STOPS and names both commands - it never silently falls
   back, because "is this the real fleet?" must not be a guess. See the real-data section
   below.
-- **DEV ONLY, gated twice**: `routes/dev.workspace.tsx` throws `notFound()` under
-  `import.meta.env.PROD`, and `routes/api.graph.$.ts` (the whole read API + the one
-  write path) returns 404 when `NODE_ENV === 'production'`. The API gate is checked
-  BEFORE the DB import, and is pinned by `routes/-api.graph.test.ts`. The demo seeds a
-  fixed team id (`team-graph-demo`) and has NO auth, so neither gate is optional.
+- **GATED, and the allowlist FAILS CLOSED.** `lib/graphWorkspace.ts` is the single
+  source of the policy: the surface exists only in local dev or with
+  `LOOPANY_GRAPH_WORKSPACE=on`, and outside local dev the caller must be signed in AND
+  match `LOOPANY_GRAPH_WORKSPACE_LOGINS` (falling back to `LOOPANY_ALLOWED_LOGINS`).
+  **An EMPTY allowlist admits NO ONE** — deliberately inverting the app-wide rule in
+  `auth.ts`, where empty means "any GitHub account". That inversion is the point: this
+  surface renders real customer support tickets, and `LOOPANY_ALLOWED_LOGINS` is unset on
+  loopany-testing, so inheriting the app-wide rule would publish PII to anyone who can
+  sign in. `routes/api.graph.$.ts` `guard()` and the page's `graphWorkspaceAccess` server
+  fn check independently — a page that somehow rendered still gets no data. Both refuse
+  BEFORE importing auth or the db when no allowlist is set. Pinned by
+  `lib/-graphWorkspace.test.ts` + `routes/-api.graph.test.ts`.
+- **Seeding a DEPLOYED app goes through `POST /api/graph/seed`**, not a database URL:
+  loopany-testing runs the embedded pglite tier on a mounted volume, so there is no
+  reachable URL and pglite is single-writer — the running app is the only process that
+  can write it. The request carries ONLY the snapshot; the server fetches artifact bodies
+  from R2 with its own credentials, so no keys cross the wire. It rewrites only the graph
+  tables' rows for the demo team.
 - **Its own database.** `scripts/graph-demo.mjs` points `LOOPANY_DATA_DIR` at
   `.graph-demo-data/` (gitignored) and clears `DATABASE_URL`, so the demo never touches
   `~/.loopany` or a real Postgres. Port 3700 avoids the live review environments on

@@ -25,24 +25,37 @@ const post = (splat: string, body: unknown) =>
     request: new Request(`http://x/api/graph/${splat}`, { method: 'POST', body: JSON.stringify(body) }),
   })
 
-describe('/api/graph dev gate', () => {
-  const saved = process.env.NODE_ENV
+describe('/api/graph enablement gate', () => {
+  const saved = { env: process.env.NODE_ENV, flag: process.env.LOOPANY_GRAPH_WORKSPACE }
   beforeEach(() => {
     process.env.NODE_ENV = 'production'
+    delete process.env.LOOPANY_GRAPH_WORKSPACE
   })
   afterEach(() => {
-    process.env.NODE_ENV = saved
+    process.env.NODE_ENV = saved.env
+    if (saved.flag === undefined) delete process.env.LOOPANY_GRAPH_WORKSPACE
+    else process.env.LOOPANY_GRAPH_WORKSPACE = saved.flag
   })
 
-  test('every read view 404s in a production build', async () => {
+  test('a deployed build without the opt-in serves nothing', async () => {
     for (const view of ['summary', 'system', 'library', 'timeline', 'inbox']) {
       expect((await get(view)).status).toBe(404)
     }
+    expect((await post('verdict', { objectId: 'obj-x', transition: 'approve' })).status).toBe(404)
+    expect((await post('seed', { source: 'loopany-production', files: [], loops: [] })).status).toBe(404)
   })
 
-  test('the write path 404s in a production build', async () => {
-    const res = await post('verdict', { objectId: 'obj-x', transition: 'approve' })
-    expect(res.status).toBe(404)
+  test('enabled but with NO allowlist serves no one — it never opens up', async () => {
+    process.env.LOOPANY_GRAPH_WORKSPACE = 'on'
+    delete process.env.LOOPANY_GRAPH_WORKSPACE_LOGINS
+    delete process.env.LOOPANY_ALLOWED_LOGINS
+    // 401, not 404: the surface exists here, this caller simply may not open it.
+    for (const view of ['summary', 'library', 'inbox']) {
+      const res = await get(view)
+      expect(res.status).toBe(401)
+      expect(await res.json()).toMatchObject({ error: 'unauthorized' })
+    }
+    expect((await post('seed', { source: 'loopany-production', files: [], loops: [] })).status).toBe(401)
   })
 })
 
