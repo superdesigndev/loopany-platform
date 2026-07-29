@@ -220,7 +220,7 @@ export function DashboardView({
               onTryBundle={(b) => setCompose({ open: true, template: null, bundle: b })}
             />
           )}
-          <div className="mt-7">
+          <div className="mt-7 flex flex-wrap items-center justify-center gap-2.5">
             <button
               onClick={() => setCompose({ open: true, template: null, bundle: null })}
               className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-display px-6 py-2.5 text-body font-medium text-paper transition-opacity hover:opacity-85"
@@ -228,6 +228,12 @@ export function DashboardView({
               {bundles.length ? 'Start a blank loop' : 'Start your first loop'}
               <span aria-hidden>→</span>
             </button>
+            <Link
+              to="/templates"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-wire bg-surface px-6 py-2.5 text-body font-medium text-primary transition-colors hover:bg-raised"
+            >
+              Browse loop templates
+            </Link>
           </div>
         </section>
 

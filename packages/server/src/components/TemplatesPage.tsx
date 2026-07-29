@@ -70,6 +70,18 @@ export function TemplatesPage({ bundles }: { bundles: BundleView[] }) {
             />
           </div>
 
+          {/* Community CTA: contributing a template is a PR today — link the folder. */}
+          <div className="mt-6">
+            <a
+              href={`${GITHUB_URL}/tree/main/packages/server/src/skill/templates`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-wire bg-surface px-4 py-1.5 text-meta font-medium text-primary transition-colors hover:bg-raised"
+            >
+              List your loop <span aria-hidden>↗</span>
+            </a>
+          </div>
+
           {/* Category jump-chips — the sections are all expanded, so these navigate. */}
           <nav aria-label="Categories" className="mx-auto mt-5 flex flex-wrap justify-center gap-2">
             {bundles.map((b) => (
