@@ -152,37 +152,53 @@ async function verdict(request: Request, userId: string | null): Promise<Respons
  * pglite is single-writer, so the running app is the only process that can write
  * it. Seeding therefore has to go through the app itself.
  *
- * The request carries only the snapshot (which the operator pulled read-only
- * from production). Artifact BODIES are not uploaded — this server fetches them
- * from the artifact store with its OWN credentials, read-only, so no keys move
- * over the wire.
+ * The snapshot (pulled read-only from production by the operator) arrives either
+ * in the body or as a file already on the data volume. Artifact BODIES are never
+ * uploaded — this server fetches them from the artifact store with its OWN
+ * credentials, read-only, so no keys move over the wire.
  *
  * Scope: `seedFromProdSnapshot` resets and rewrites only the graph tables' rows
  * for the demo team id. Unrelated tables, and every other team, are untouched.
  */
 async function seed(request: Request): Promise<Response> {
-  let body: unknown
-  try {
-    body = await request.json()
-  } catch {
-    return Response.json({ error: 'body must be JSON' }, { status: 400 })
+  // The snapshot may arrive in the body, or already sit on this machine's data
+  // volume (uploaded with `flyctl ssh sftp put`, which is how the deployed app
+  // gets it — a couple of megabytes of JSON is a file transfer, not a POST body).
+  let snapshot: import('../graph/workspace/pull-prod.js').ProdSnapshot
+  const raw = await request.text()
+  if (raw.trim() && raw.trim() !== '{}') {
+    try {
+      snapshot = JSON.parse(raw)
+    } catch {
+      return Response.json({ error: 'body must be JSON' }, { status: 400 })
+    }
+  } else {
+    const { readSnapshot, snapshotPath } = await import('../graph/workspace/pull-prod.js')
+    try {
+      snapshot = readSnapshot()
+    } catch {
+      return Response.json(
+        { error: `no snapshot in the request body and none at ${snapshotPath()}` },
+        { status: 400 },
+      )
+    }
   }
-  const snapshot = (body ?? {}) as { files?: unknown; loops?: unknown; source?: unknown }
-  if (snapshot.source !== 'loopany-production' || !Array.isArray(snapshot.files) || !Array.isArray(snapshot.loops)) {
-    return Response.json({ error: 'body must be a production snapshot (see graph:pull)' }, { status: 400 })
+
+  if (snapshot?.source !== 'loopany-production' || !Array.isArray(snapshot.files) || !Array.isArray(snapshot.loops)) {
+    return Response.json({ error: 'not a production snapshot (see graph:pull)' }, { status: 400 })
   }
 
   const { fetchArtifactBodies } = await import('../graph/workspace/fetch-bodies.js')
   const { seedFromProdSnapshot } = await import('../graph/workspace/seed-real.js')
-  const typed = body as import('../graph/workspace/pull-prod.js').ProdSnapshot
 
   // Read-only GETs against the artifact store, cached on this machine's volume
   // so a re-seed is cheap and offline.
-  const bodies = await fetchArtifactBodies({ files: typed.files })
-  const result = await seedFromProdSnapshot({ snapshot: typed })
+  const bodies = await fetchArtifactBodies({ files: snapshot.files })
+  const result = await seedFromProdSnapshot({ snapshot })
 
   return Response.json({
     ok: true,
+    pulledAt: snapshot.pulledAt,
     bodies: { requested: bodies.requested, fetched: bodies.fetched, cached: bodies.cached, missing: bodies.missing },
     objects: result.objects,
     edges: result.edges,
