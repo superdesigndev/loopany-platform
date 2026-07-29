@@ -99,3 +99,31 @@ export function graphWorkspaceDenialReason(): string {
   }
   return "Your account is not on the graph workspace allowlist.";
 }
+
+/**
+ * OPERATOR SEED AUTHORIZATION.
+ *
+ * Loading a snapshot into a deployed app is an operator action, not a user
+ * action: the app runs the embedded single-writer database, so the seed has to
+ * go through the running process even though whoever is doing it already has
+ * machine-level access. Rather than mint a session for somebody else's account,
+ * the seed accepts a bearer token that only someone who can set the app's
+ * secrets could know.
+ *
+ * Deliberately NARROW:
+ *  - it authorizes the SEED action only. No read path accepts it, so it can
+ *    never be used to pull customer content out of the workspace.
+ *  - unset ⇒ no token is accepted at all (an empty string never matches).
+ *  - the comparison is length-checked and constant-time, so it does not leak
+ *    the token a byte at a time.
+ */
+export function graphSeedTokenMatches(header: string | null): boolean {
+  const expected = process.env.LOOPANY_GRAPH_SEED_TOKEN?.trim();
+  if (!expected) return false;
+  const got = header?.trim().replace(/^Bearer\s+/i, "") ?? "";
+  if (got.length !== expected.length) return false;
+  // Constant-time over equal-length strings.
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ got.charCodeAt(i);
+  return diff === 0;
+}

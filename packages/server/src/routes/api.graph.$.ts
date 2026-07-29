@@ -97,9 +97,20 @@ export const Route = createFileRoute('/api/graph/$')({
       },
 
       POST: async ({ params, request }) => {
+        const action = String((params as { _splat?: string })._splat ?? '')
+
+        // The SEED is an operator action on a deployed app (see `seed()`), so it
+        // also accepts an operator bearer token — which only someone who can set
+        // this app's secrets could know. Scoped to seeding: no read path takes
+        // it, so it can never pull customer content out.
+        if (action === 'seed') {
+          const { graphWorkspaceEnabled, graphSeedTokenMatches } = await import('../lib/graphWorkspace.js')
+          if (!graphWorkspaceEnabled()) return notFound()
+          if (graphSeedTokenMatches(request.headers.get('authorization'))) return seed(request)
+        }
+
         const gate = await guard()
         if (!gate.ok) return gate.response
-        const action = String((params as { _splat?: string })._splat ?? '')
         if (action === 'verdict') return verdict(request, gate.userId)
         if (action === 'seed') return seed(request)
         return notFound()

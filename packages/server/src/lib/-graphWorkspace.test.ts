@@ -4,6 +4,7 @@ import {
   graphWorkspaceEnabled,
   graphWorkspaceLocalDev,
   graphWorkspaceRequiresLogin,
+  graphSeedTokenMatches,
   mayViewGraphWorkspace,
 } from './graphWorkspace'
 
@@ -15,6 +16,7 @@ import {
  */
 const KEYS = [
   'NODE_ENV',
+  'LOOPANY_GRAPH_SEED_TOKEN',
   'GITHUB_CLIENT_ID',
   'GITHUB_CLIENT_SECRET',
   'LOOPANY_GRAPH_WORKSPACE',
@@ -94,5 +96,23 @@ describe('graph workspace access policy', () => {
     process.env.LOOPANY_ALLOWED_LOGINS = 'ops@team.dev'
     expect(mayViewGraphWorkspace('ops@team.dev')).toBe(true)
     expect(mayViewGraphWorkspace('other@team.dev')).toBe(false)
+  })
+})
+
+describe('the operator seed token', () => {
+  test('never matches when unset — an absent secret authorizes nothing', () => {
+    delete process.env.LOOPANY_GRAPH_SEED_TOKEN
+    expect(graphSeedTokenMatches('Bearer anything')).toBe(false)
+    expect(graphSeedTokenMatches(null)).toBe(false)
+    expect(graphSeedTokenMatches('Bearer ')).toBe(false)
+  })
+
+  test('matches the exact token, with or without the Bearer prefix', () => {
+    process.env.LOOPANY_GRAPH_SEED_TOKEN = 's3cret-value'
+    expect(graphSeedTokenMatches('Bearer s3cret-value')).toBe(true)
+    expect(graphSeedTokenMatches('s3cret-value')).toBe(true)
+    expect(graphSeedTokenMatches('Bearer s3cret-valu')).toBe(false)
+    expect(graphSeedTokenMatches('Bearer S3CRET-VALUE')).toBe(false)
+    delete process.env.LOOPANY_GRAPH_SEED_TOKEN
   })
 })
