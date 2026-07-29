@@ -101,3 +101,13 @@ export interface ParseOptions {
   /** Partial override of `DEFAULT_LIMITS`. */
   limits?: Partial<ArtifactLimits>;
 }
+
+/** Serialization honors the SAME ceilings as parsing — the two halves of the
+ *  round trip must agree about what is representable, so a document parsed
+ *  under raised limits can always be written back under those limits. */
+export type SerializeOptions = ParseOptions;
+
+/** The effective ceilings for one call: `DEFAULT_LIMITS` under any override. */
+export function resolveLimits(options: ParseOptions | undefined): ArtifactLimits {
+  return { ...DEFAULT_LIMITS, ...options?.limits };
+}

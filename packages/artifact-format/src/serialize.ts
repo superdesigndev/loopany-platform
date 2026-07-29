@@ -14,7 +14,14 @@
 import { stringify } from "yaml";
 import { ArtifactFormatError } from "./errors.js";
 import { validateFrontMatter } from "./schema.js";
-import { CORE_FIELD_ORDER, type ArtifactDocument, type ArtifactFrontMatter } from "./types.js";
+import {
+  CORE_FIELD_ORDER,
+  resolveLimits,
+  type ArtifactDocument,
+  type ArtifactFrontMatter,
+  type ArtifactLimits,
+  type SerializeOptions,
+} from "./types.js";
 
 const CORE_INDEX = new Map<string, number>(CORE_FIELD_ORDER.map((key, i) => [key, i]));
 
@@ -36,42 +43,74 @@ function orderKeys(keys: string[]): string[] {
   });
 }
 
+/** A mapping we can represent: a YAML-shaped bag of keys, not a host object
+ *  (`Date`, `Map`, `Set`, a class instance) whose state YAML cannot carry. */
+function isPlainMapping(value: object): boolean {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function describeHostObject(value: object): string {
+  const name = (Object.getPrototypeOf(value) as { constructor?: { name?: unknown } } | null)?.constructor
+    ?.name;
+  return typeof name === "string" && name.length > 0 ? name : "non-plain object";
+}
+
+function unrepresentable(kind: string): ArtifactFormatError {
+  return new ArtifactFormatError("SCHEMA_VIOLATION", `front matter cannot hold a ${kind} value`, {
+    issues: [{ path: "<front matter>", message: `unrepresentable ${kind} value` }],
+  });
+}
+
 /**
  * Deep canonical form: mappings get sorted keys at every depth (YAML mappings
  * are unordered, so ordering is presentation and we pick one), lists keep their
  * order (a list IS ordered data), and `undefined` values are dropped — a caller
  * spreading `{...fm, status: undefined}` means "no status", not "null status".
+ *
+ * The accumulator has a NULL prototype, so a key that names an inherited
+ * accessor (`__proto__` above all) becomes an ordinary own property and
+ * survives the round trip like any other unknown field, instead of silently
+ * vanishing into `Object.prototype`'s setter.
+ *
+ * Depth is indexed exactly as the parse-side walk (`guardShape`) indexes it —
+ * the root mapping is depth 1 — and reads the SAME `maxFrontMatterDepth`, so
+ * what parses always re-serializes.
  */
-function canonicalize(value: unknown, depth = 0): unknown {
-  if (depth > 64) {
-    throw new ArtifactFormatError("FRONT_MATTER_TOO_DEEP", "front matter nests deeper than 64 levels");
+function canonicalize(value: unknown, limits: ArtifactLimits, depth = 1): unknown {
+  if (depth > limits.maxFrontMatterDepth) {
+    throw new ArtifactFormatError(
+      "FRONT_MATTER_TOO_DEEP",
+      `front matter nests deeper than ${limits.maxFrontMatterDepth} levels`,
+    );
   }
-  if (Array.isArray(value)) return value.map((entry) => canonicalize(entry, depth + 1));
+  if (Array.isArray(value)) return value.map((entry) => canonicalize(entry, limits, depth + 1));
   if (typeof value === "object" && value !== null) {
+    if (!isPlainMapping(value)) throw unrepresentable(describeHostObject(value));
     const source = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
+    const out = Object.create(null) as Record<string, unknown>;
     for (const key of orderKeys(Object.keys(source))) {
       const child = source[key];
       if (child === undefined) continue;
-      out[key] = canonicalize(child, depth + 1);
+      out[key] = canonicalize(child, limits, depth + 1);
     }
     return out;
   }
   if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
-    throw new ArtifactFormatError(
-      "SCHEMA_VIOLATION",
-      `front matter cannot hold a ${typeof value} value`,
-      { issues: [{ path: "<front matter>", message: `unrepresentable ${typeof value} value` }] },
-    );
+    throw unrepresentable(typeof value);
   }
   return value;
 }
 
-export function serializeArtifact(doc: ArtifactDocument): string {
-  // Serializing never emits a file this library would refuse to read back.
-  validateFrontMatter(canonicalize(doc.frontMatter));
+export function serializeArtifact(doc: ArtifactDocument, options?: SerializeOptions): string {
+  // ONE canonical tree: the bytes emitted are structurally the same value that
+  // was validated, and it can never be rebuilt differently between the two.
+  const canonical = canonicalize(doc.frontMatter, resolveLimits(options));
 
-  const head = stringify(canonicalize(doc.frontMatter), {
+  // Serializing never emits a file this library would refuse to read back.
+  validateFrontMatter(canonical);
+
+  const head = stringify(canonical, {
     version: "1.2",
     schema: "core",
     // No folding: a long value stays on one line so a byte diff tracks a data

@@ -23,12 +23,14 @@ export {
   CORE_FIELD_ORDER,
   DEFAULT_LIMITS,
   SUPPORTED_BODY_FORMATS,
+  resolveLimits,
   type ArtifactBodyFormat,
   type ArtifactCoreFields,
   type ArtifactDocument,
   type ArtifactFrontMatter,
   type ArtifactLimits,
   type ParseOptions,
+  type SerializeOptions,
 } from "./types.js";
 
 export { bodyFormatOf, validateFrontMatter } from "./schema.js";

@@ -104,7 +104,17 @@ describe("malformed files fail loudly", () => {
   });
 
   it("rejects a bare `---` file", () => {
-    expectCode(() => parseArtifact("---"), "UNTERMINATED_FRONT_MATTER");
+    const err = expectCode(() => parseArtifact("---"), "UNTERMINATED_FRONT_MATTER");
+    expect(err.message).toMatch(/never closed/);
+  });
+
+  it("codes a malformed opening line by WHAT is wrong, not by whether a newline follows", () => {
+    // Same input class, with and without a line break: both are a missing block.
+    expectCode(() => parseArtifact("--- yaml\ntype: note\n---\n"), "MISSING_FRONT_MATTER");
+    const err = expectCode(() => parseArtifact("--- yaml"), "MISSING_FRONT_MATTER");
+    expect(err.message).toMatch(/exactly `---`/);
+    // A well-formed opening line with no closer is the unterminated case.
+    expectCode(() => parseArtifact("---   "), "UNTERMINATED_FRONT_MATTER");
   });
 
   it("rejects malformed YAML with a document line number", () => {

@@ -111,6 +111,11 @@ front matter and identical bodies produce identical bytes regardless of key
 insertion order. Canonical order is core fields in their declared order, then
 every other key lexicographically, at every depth. Lists keep their order (a
 list is ordered data). A `undefined` value means "absent", and is dropped.
+Unknown fields survive verbatim — including a key like `__proto__`, which is
+carried as ordinary data and never resolved against a prototype. A value YAML
+cannot carry (a function, symbol, bigint, or a host object such as `Date` /
+`Map` / `Set` / a class instance) is a loud `SCHEMA_VIOLATION`, never a silently
+emitted `{}`.
 
 **Loud failure.** There is no lenient path — a file that opens a front-matter
 block and then malforms it is an error, never a document that silently becomes
@@ -126,7 +131,10 @@ block and then malforms it is an error, never a document that silently becomes
 stays `"no"`), duplicate keys rejected, unresolved tags rejected, alias
 expansion capped (billion-laughs). Size, depth and node-count ceilings are
 enforced and configurable via `ParseOptions.limits`; each one fails loudly
-rather than clipping. Only the **first** closing `---` closes the block, so a
+rather than clipping. `serializeArtifact` takes the same `limits` (as
+`SerializeOptions`) and defaults to the same ceilings, so whatever parsed under
+a given set of limits writes back under them. Only the **first** closing `---`
+closes the block, so a
 `---` inside the body is inert, not a front-matter injection point.
 
 **Sanitization.** Two independent defenses, so a behavior change in either

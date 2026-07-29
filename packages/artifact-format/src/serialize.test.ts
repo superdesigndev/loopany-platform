@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { isArtifactFormatError } from "./errors.js";
+import { ArtifactFormatError, isArtifactFormatError } from "./errors.js";
 import { parseArtifact } from "./parse.js";
 import { serializeArtifact, updateArtifactFrontMatter } from "./serialize.js";
 import type { ArtifactDocument } from "./types.js";
+
+/** Assert a throw is OUR typed error and carries the expected code. */
+function expectCode(fn: () => unknown, code: string): ArtifactFormatError {
+  try {
+    fn();
+  } catch (err) {
+    if (!isArtifactFormatError(err)) throw err;
+    expect(err.code).toBe(code);
+    return err;
+  }
+  throw new Error(`expected a ${code} failure, but nothing was thrown`);
+}
 
 const RICH: ArtifactDocument = {
   frontMatter: {
@@ -130,6 +142,99 @@ describe("round trip", () => {
     } catch (err) {
       expect(isArtifactFormatError(err)).toBe(true);
     }
+  });
+});
+
+describe("prototype-shaped keys are ordinary data", () => {
+  // Authored as TEXT on purpose: a `__proto__` key in an object literal sets
+  // the prototype instead of creating the property. The parser is where such a
+  // key really arrives.
+  const TEXT = "---\ntype: note\n__proto__:\n  status: approved\n---\nbody\n";
+
+  it("round-trips a `__proto__` field like any other unknown field", () => {
+    const doc = parseArtifact(TEXT);
+    expect(Object.prototype.hasOwnProperty.call(doc.frontMatter, "__proto__")).toBe(true);
+
+    const text = serializeArtifact(doc);
+    expect(text).toContain("__proto__:");
+
+    const again = parseArtifact(text);
+    expect(Object.prototype.hasOwnProperty.call(again.frontMatter, "__proto__")).toBe(true);
+    expect((again.frontMatter as Record<string, unknown>)["__proto__"]).toEqual({ status: "approved" });
+    expect(serializeArtifact(again)).toBe(text);
+  });
+
+  it("never lets the injected value stand in for a core field", () => {
+    const doc = parseArtifact(TEXT);
+    expect(doc.frontMatter.status).toBeUndefined();
+    expect(serializeArtifact(doc)).not.toMatch(/^status:/m);
+    expect(({} as Record<string, unknown>)["status"]).toBeUndefined();
+  });
+});
+
+describe("unrepresentable values fail loudly", () => {
+  class Widget {
+    readonly n = 1;
+  }
+
+  const HOST_VALUES: ReadonlyArray<readonly [string, unknown]> = [
+    ["Date", new Date("2026-07-29T09:15:00Z")],
+    ["Map", new Map([["a", 1]])],
+    ["Set", new Set([1])],
+    ["class instance", new Widget()],
+  ];
+
+  for (const [label, value] of HOST_VALUES) {
+    it(`refuses a ${label} instead of silently emitting an empty mapping`, () => {
+      const err = expectCode(
+        () => serializeArtifact({ frontMatter: { type: "note", odd: value }, body: "" }),
+        "SCHEMA_VIOLATION",
+      );
+      expect(err.issues).toEqual([
+        { path: "<front matter>", message: expect.stringMatching(/^unrepresentable .+ value$/) },
+      ]);
+    });
+  }
+
+  it("reports a function with the same issue shape", () => {
+    const err = expectCode(
+      () => serializeArtifact({ frontMatter: { type: "note", fn: () => 1 }, body: "" }),
+      "SCHEMA_VIOLATION",
+    );
+    expect(err.issues).toEqual([{ path: "<front matter>", message: "unrepresentable function value" }]);
+  });
+
+  it("still accepts a null-prototype mapping (it is YAML-shaped)", () => {
+    const bag = Object.create(null) as Record<string, unknown>;
+    bag["b"] = 1;
+    bag["a"] = 2;
+    expect(serializeArtifact({ frontMatter: { type: "note", bag }, body: "" })).toBe(
+      "---\ntype: note\nbag:\n  a: 2\n  b: 1\n---\n",
+    );
+  });
+});
+
+describe("depth ceiling", () => {
+  const NESTED = "---\ntype: note\nd: [[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]\n---\n";
+
+  it("defaults to the same ceiling the parser defaults to", () => {
+    expectCode(() => parseArtifact(NESTED), "FRONT_MATTER_TOO_DEEP");
+    const doc = parseArtifact(NESTED, { limits: { maxFrontMatterDepth: 64 } });
+    const err = expectCode(() => serializeArtifact(doc), "FRONT_MATTER_TOO_DEEP");
+    expect(err.message).toMatch(/16 levels/);
+  });
+
+  it("re-serializes anything the parser accepted under the same raised ceiling", () => {
+    const limits = { maxFrontMatterDepth: 64 };
+    const doc = parseArtifact(NESTED, { limits });
+    const text = serializeArtifact(doc, { limits });
+    expect(parseArtifact(text, { limits })).toEqual(doc);
+  });
+
+  it("honours a lowered ceiling", () => {
+    const doc: ArtifactDocument = { frontMatter: { type: "note", a: { b: 1 } }, body: "" };
+    expect(() => serializeArtifact(doc)).not.toThrow();
+    expectCode(() => serializeArtifact(doc, { limits: { maxFrontMatterDepth: 2 } }), "FRONT_MATTER_TOO_DEEP");
   });
 });
 

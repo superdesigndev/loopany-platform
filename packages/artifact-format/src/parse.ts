@@ -12,7 +12,7 @@ import { parseDocument } from "yaml";
 import { ArtifactFormatError } from "./errors.js";
 import { validateFrontMatter } from "./schema.js";
 import {
-  DEFAULT_LIMITS,
+  resolveLimits,
   type ArtifactDocument,
   type ArtifactLimits,
   type ParseOptions,
@@ -31,17 +31,13 @@ export interface ArtifactSplit {
   frontMatterStartLine: number;
 }
 
-function limitsOf(options: ParseOptions | undefined): ArtifactLimits {
-  return { ...DEFAULT_LIMITS, ...options?.limits };
-}
-
 /**
  * Split a file into its front-matter text and body WITHOUT parsing the YAML.
  * Exported because an ingress may want to route on the split before paying for
  * a parse; the guarantees (loud on missing/unterminated) are identical.
  */
 export function splitArtifact(text: string, options?: ParseOptions): ArtifactSplit {
-  const limits = limitsOf(options);
+  const limits = resolveLimits(options);
   const raw = text.startsWith(BOM) ? text.slice(BOM.length) : text;
 
   const bytes = Buffer.byteLength(raw, "utf8");
@@ -60,11 +56,21 @@ export function splitArtifact(text: string, options?: ParseOptions): ArtifactSpl
     );
   }
 
+  // The code is chosen by WHAT is wrong, never by whether a newline happens to
+  // be present: a malformed opening line is a missing block, and
+  // `UNTERMINATED_FRONT_MATTER` is reserved for a well-formed `---` that never
+  // meets its closing delimiter.
   const firstBreak = raw.indexOf("\n");
-  if (firstBreak === -1 || !DELIMITER.test(stripCr(raw.slice(0, firstBreak)))) {
+  const openingLine = stripCr(firstBreak === -1 ? raw : raw.slice(0, firstBreak));
+  if (!DELIMITER.test(openingLine)) {
+    throw new ArtifactFormatError("MISSING_FRONT_MATTER", "the opening line must be exactly `---`", {
+      line: 1,
+    });
+  }
+  if (firstBreak === -1) {
     throw new ArtifactFormatError(
-      firstBreak === -1 ? "UNTERMINATED_FRONT_MATTER" : "MISSING_FRONT_MATTER",
-      "the opening line must be exactly `---`",
+      "UNTERMINATED_FRONT_MATTER",
+      "the front-matter block opened with `---` but never closed",
       { line: 1 },
     );
   }
@@ -110,7 +116,7 @@ function stripCr(s: string): string {
  * fields are preserved untouched.
  */
 export function parseArtifact(text: string, options?: ParseOptions): ArtifactDocument {
-  const limits = limitsOf(options);
+  const limits = resolveLimits(options);
   const { frontMatterText, body, frontMatterStartLine } = splitArtifact(text, options);
 
   const fmBytes = Buffer.byteLength(frontMatterText, "utf8");
