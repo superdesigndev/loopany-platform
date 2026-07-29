@@ -232,9 +232,9 @@ computes pure functions. Run instructions: `README.md`.
   `/templates`, and the catalog teaser `components/TemplatesPreview.tsx` on BOTH the
   dashboard and the pre-login landing. The teaser opens with the SAME typed hero as the
   market (`AgentLoopsHeadline`, exported from `TemplatesPage` — compact size for the
-  band) and curates ROUND-ROBIN across bundles (every bundle's lead first in curated
-  category order, then every bundle's second, ...) to `PREVIEW_COUNT = 9` = three
-  desktop rows under `.templates-peek`, a fixed `max-height` + bottom mask: TWO rows
+  band) and previews the FIRST `PREVIEW_COUNT = 9` templates in the CATALOG's own
+  curated bundle order (Growth first — the same sequence the market shows, never a
+  re-curated shuffle) = three desktop rows under `.templates-peek`, a fixed `max-height` + bottom mask: TWO rows
   solid, the THIRD under the fade, then "Browse all N templates" (N = the WHOLE
   catalog). The card height (252px), the box (642px) and the mask stop (81%) are
   COUPLED — change one, change all three (pinned by `TemplatesPreview.test.ts`, which
