@@ -105,7 +105,7 @@ const CARD_ORDER = [
   // Personal
   'morning-briefing', 'homebrew-updater', 'daily-lesson',
   // Others (individually-created, closed loops)
-  'follow-up-tracker', 'outcome-watch', 'bug-vigil', 'release-shepherd',
+  'follow-up-tracker', 'ab-experiment-watch', 'bug-vigil', 'release-shepherd',
 ]
 const orderOf = (name: string): number => {
   const i = CARD_ORDER.indexOf(name)

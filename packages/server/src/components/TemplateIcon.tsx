@@ -186,11 +186,13 @@ const STROKE: Record<string, ReactNode> = {
       <circle cx="12" cy="12" r="3" />
     </>
   ),
-  'outcome-watch': (
+  // Two arms measured against a threshold: control bar, taller variant bar, and the
+  // dashed line the verdict is read against.
+  'ab-experiment-watch': (
     <>
-      <circle cx="12" cy="12" r="10" />
-      <circle cx="12" cy="12" r="6" />
-      <circle cx="12" cy="12" r="2" />
+      <path d="M3 20h18" />
+      <path d="M7 20v-6M17 20v-11" />
+      <path d="M3 9h5m4 0h9" strokeWidth="1.2" strokeDasharray="2 2" />
     </>
   ),
   'bug-vigil': (

@@ -1,7 +1,8 @@
 <svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <!-- Mock of a closed loop watching one change to a verdict: a goal chip, the
-       deciding metric climbing across its threshold line inside the report,
-       and the PASS verdict at the finish. Colors ride the app's CSS variables. -->
+  <!-- Mock of a closed loop watching one experiment to a verdict: a goal chip, the
+       flat control series against the variant climbing over its dashed threshold
+       inside the report, and the verdict at the finish. Colors ride the app's CSS
+       variables. -->
   <rect x="10" y="8" width="66" height="11" rx="5.5" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
   <circle cx="18" cy="13.5" r="2" fill="var(--color-rubik-green, #009b48)"/>
   <rect x="24" y="12.25" width="44" height="2.5" rx="1.25" fill="var(--color-rubik-green, #009b48)" opacity="0.55"/>
@@ -9,6 +10,7 @@
   <rect x="17" y="32" width="22" height="2.5" rx="1.25" fill="var(--color-wire, #cfd3db)"/>
   <path d="M17 50h52" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.2" stroke-dasharray="3 3" opacity="0.7"/>
   <rect x="17" y="48" width="14" height="4" rx="2" fill="var(--color-rubik-green, #009b48)" opacity="0.14"/>
+  <path d="M17 63 28 64 39 62 50 63 61 62 69 63" stroke="var(--color-wire, #cfd3db)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M17 62 28 60 39 61 50 52 61 45 69 39" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="50" cy="52" r="2.6" fill="var(--color-surface, #fff)" stroke="var(--color-rubik-green, #009b48)" stroke-width="1.4"/>
   <path d="M96 40h14" stroke="var(--color-wire, #cfd3db)" stroke-width="1.2" stroke-dasharray="3 3"/>

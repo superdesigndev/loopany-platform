@@ -3,6 +3,6 @@
   "label": "Goal Loops",
   "tagline": "Loops with a finish line — they watch one thing and close themselves when it's done.",
   "accent": "secondary",
-  "templates": ["follow-up-tracker", "outcome-watch", "bug-vigil", "release-shepherd"],
+  "templates": ["follow-up-tracker", "ab-experiment-watch", "bug-vigil", "release-shepherd"],
   "individual": true
 }

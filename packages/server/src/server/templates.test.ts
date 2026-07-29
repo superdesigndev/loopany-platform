@@ -62,7 +62,7 @@ describe('template registry', () => {
       'daily-lesson',
       // Others (individually-created, closed loops)
       'follow-up-tracker',
-      'outcome-watch',
+      'ab-experiment-watch',
       'bug-vigil',
       'release-shepherd',
     ])
@@ -159,8 +159,12 @@ describe('template registry', () => {
     expect(d).toContain('blind loop') // refuse when nothing can be observed
     expect(d).toContain('closed') // created closed, with a goal
     expect(d).toContain('finish condition') // the goal is a concrete finish line
+    // Half of the pair distinction: this one alarms, the experiment one scores a metric.
+    expect(d).toContain('does not score a change against a number')
+    expect(d).toContain('use the a/b experiment watch instead')
     // The paste-right-after-shipping invocation is the card's job, not the snippet's.
     expect(ft.desc.toLowerCase()).toContain('after finishing the task')
+    expect(ft.desc.toLowerCase()).toContain('a/b experiment watch')
   })
 
   test('ships the Reddit Karma template with its defining behaviors in the description', () => {
@@ -351,15 +355,22 @@ describe('bundle-catalog expansion (round 4)', () => {
     expect(d).toContain('never invent facts')
   })
 
-  test('Outcome Watch - measurable verdict, closed with a finish condition, differentiated from follow-up', () => {
-    const d = find('outcome-watch').description.toLowerCase()
-    expect(d).toContain('sibling of the follow-up tracker') // explicit differentiation
+  test('A/B Experiment Watch - one experiment, a threshold, a decision window, an explicit verdict', () => {
+    const t = find('ab-experiment-watch')
+    expect(t.label).toBe('A/B Experiment Watch')
+    const d = t.description.toLowerCase()
+    expect(d).toContain('exactly one deciding metric') // one metric, agreed up front
     expect(d).toContain('smoke test')
-    expect(d).toContain('conclusive-verdict finish condition')
-    expect(d).toContain('create the loop closed')
-    expect(d).toContain('finish the loop')
-    // Card desc pins the paste-after-it-goes-live invocation.
-    expect(find('outcome-watch').desc.toLowerCase()).toContain('right after the change goes live')
+    expect(d).toContain('do not create a blind loop')
+    expect(d).toContain('threshold')
+    expect(d).toContain('decision window')
+    expect(d).toContain('closed loop')
+    expect(d).toContain('ship it, kill it, or extend') // the explicit verdict
+    expect(d).toContain('not conclusive yet') // never call it early
+    expect(d).toContain('never invent numbers')
+    // The inverse half of the pair distinction lives in the copy itself.
+    expect(d).toContain('use the follow-up tracker instead')
+    expect(t.desc.toLowerCase()).toContain('follow-up tracker')
   })
 
   test('Bug Vigil - stake out one bug, capture full context on recurrence, then finish', () => {

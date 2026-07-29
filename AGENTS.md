@@ -215,7 +215,11 @@ computes pure functions. Run instructions: `README.md`.
   reduced-motion), client-side search filter, category chips that scroll-jump, then
   per-bundle SECTIONS fully expanded (no View-all; section headers carry the label +
   tagline — deliberately no accent bar — so cards there pass `showCategory={false}`). Detail resolves BY SLUG (`findPublicTemplate`) since the grid preloads on
-  hover; an unknown slug throws `notFound()` for a real HTTP 404. The detail page is a
+  hover; an unknown slug throws `notFound()` for a real HTTP 404. **The slug IS the
+  template folder name and there is no alias/redirect map**, so renaming a folder
+  permanently 404s the old `/templates/<old>` share link and the `/?template=<old>`
+  deep link — rename only a young/unshared template, otherwise change the `label`
+  and leave the folder alone. The detail page is a
   SPLIT layout: LEFT = the flow diagram, the mechanism facts COLLAPSED under it (native
   `<details>`, SSR-safe), and optional "Field notes" — a repo-authored
   `skill/templates/<name>/story.md` (real results/learnings write-up) attached ONLY by

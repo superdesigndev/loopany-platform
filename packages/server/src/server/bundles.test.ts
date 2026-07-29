@@ -84,7 +84,7 @@ describe('bundle registry', () => {
     expect(others).toBeTruthy()
     expect(others.label).toBe('Goal Loops')
     // The closed, goal-bound loops are set up individually, so they live in Others.
-    expect(others.members.map((m) => m.name)).toEqual(['follow-up-tracker', 'outcome-watch', 'bug-vigil', 'release-shepherd'])
+    expect(others.members.map((m) => m.name)).toEqual(['follow-up-tracker', 'ab-experiment-watch', 'bug-vigil', 'release-shepherd'])
     // `individual` marks a no-CTA category; the tryable bundles never set it.
     expect(others.individual).toBe(true)
     for (const b of BUNDLES.filter((x) => x.name !== 'others')) {

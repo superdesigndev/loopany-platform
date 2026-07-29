@@ -211,10 +211,10 @@ const FOLLOW_UP: FlowSpec = {
   nodes: [
     { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify + define the finish', detail: 'smoke-test an observation path · set the finish condition' },
     { id: 'tick', kicker: 'On cadence', glyph: '◷', title: 'A few times a day', detail: 'wakes on cadence — no fixed clock time' },
-    { id: 'observe', kicker: 'Step 1 · Observe', glyph: '⌕', title: 'Check the outcome', detail: 'through the verified path — logs / URL / gh' },
-    { id: 'report', kicker: 'Step 2 · Report', glyph: '◈', title: 'Report what you find', detail: 'one report · a metric when natural' },
-    { id: 'check', kicker: 'Step 3 · Check', glyph: '⚖', title: 'Goal met?', detail: 'keep watching until it genuinely holds' },
-    { id: 'finish', finish: true, kicker: 'When met', glyph: '⚑', title: 'Finish the loop', detail: 'marks it done — stops watching' },
+    { id: 'observe', kicker: 'Step 1 · Observe', glyph: '⌕', title: 'Check for trouble', detail: 'through the verified path — logs / URL / gh' },
+    { id: 'report', kicker: 'Step 2 · Report', glyph: '◈', title: 'Only what changed', detail: 'quiet while it behaves · loud when it regresses' },
+    { id: 'check', kicker: 'Step 3 · Check', glyph: '⚖', title: 'Settled?', detail: 'keep watching until it genuinely holds' },
+    { id: 'finish', finish: true, kicker: 'When settled', glyph: '⚑', title: 'Finish the loop', detail: 'marks it done — stops watching' },
   ],
   dashboard: [
     {
@@ -223,12 +223,12 @@ const FOLLOW_UP: FlowSpec = {
       title: 'Checkout fix — follow-up',
       date: '2026-07-08',
       lines: [
-        'conversion 29% → 44% over 3 days',
-        'no error spikes since the deploy',
-        'goal: hold ≥ 40% for 48h — 31h in, on track',
+        'no new checkout errors since the deploy',
+        'p95 latency steady, no rollback needed',
+        'goal: 48h clean after ship — 31h in, nothing to report',
       ],
     },
-    { type: 'metric', label: 'Checkout conversion %', series: [29, 31, 30, 34, 37, 39, 41, 43, 44], note: 'goal: hold ≥ 40% for 48h, then the loop finishes itself.' },
+    { type: 'metric', label: 'Checkout errors per hour', series: [11, 6, 2, 1, 0, 0, 1, 0, 0], note: 'goal: stays clean for 48h after the ship, then the loop finishes itself.' },
   ],
 }
 
@@ -576,26 +576,26 @@ const RELEASE_SHEPHERD: FlowSpec = {
   ],
 }
 
-const OUTCOME_WATCH: FlowSpec = {
+const AB_EXPERIMENT_WATCH: FlowSpec = {
   worktreeLabel: '', // no worktree — it reads the metric, it changes nothing
   nodes: [
     { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify the deciding metric', detail: 'one smoke read · agree threshold + decision window' },
-    { id: 'tick', kicker: 'On cadence', glyph: '◷', title: 'Fits the metric (you set it)', detail: 'checks as often as the data moves' },
-    { id: 'read', kicker: 'Step 1 · Read', glyph: '⌕', title: 'Read the metric', detail: 'analytics / events / logs — the verified path' },
-    { id: 'judge', kicker: 'Step 2 · Judge', glyph: '⚖', title: 'Against the threshold', detail: 'pass, fail, or still inside the window' },
-    { id: 'finish', finish: true, kicker: 'At the verdict', glyph: '⚑', title: 'Conclusive verdict, then done', detail: 'threshold reached or window closed — the loop finishes' },
+    { id: 'tick', kicker: 'On cadence', glyph: '◷', title: 'Daily through the window', detail: 'as often as the metric actually moves' },
+    { id: 'read', kicker: 'Step 1 · Read', glyph: '⌕', title: 'Read variant vs control', detail: 'analytics / events / logs — the verified path' },
+    { id: 'judge', kicker: 'Step 2 · Judge', glyph: '⚖', title: 'Against the threshold', detail: 'passing, failing, or not conclusive yet' },
+    { id: 'finish', finish: true, kicker: 'At the verdict', glyph: '⚑', title: 'Ship it, kill it, or extend', detail: 'threshold settled or window closed — the loop finishes' },
   ],
   dashboard: [
-    { type: 'metric', label: 'Deciding metric — conversion %', series: [3.1, 3.4, 3.2, 3.8, 3.9, 4.2, 4.4], note: 'verdict: clearly up after N days, or the window closes.' },
+    { type: 'metric', label: 'Deciding metric — conversion %', series: [3.1, 3.4, 3.2, 3.8, 3.9, 4.2, 4.4], note: 'verdict when it clears +0.8pt, or when the window closes.' },
     {
       type: 'embed',
       heading: 'Latest reading',
-      title: 'Outcome watch — pricing change',
+      title: 'Experiment watch — pricing page A/B',
       date: '2026-07-08',
       lines: [
-        'Day 5 of 14 — conversion 4.4% vs baseline 3.2%',
-        'Trend holds above the +0.8pt threshold so far',
-        'Verdict files itself when the window closes',
+        'Day 5 of 14 — variant 4.4% vs control 3.2%',
+        'Holds above the +0.8pt threshold; guardrail refunds flat',
+        'Leaning ship it; verdict files when the window closes',
       ],
     },
   ],
@@ -690,7 +690,7 @@ export const FLOWS: Record<string, FlowSpec> = {
   'ci-doctor': CI_DOCTOR,
   'bug-vigil': BUG_VIGIL,
   'release-shepherd': RELEASE_SHEPHERD,
-  'outcome-watch': OUTCOME_WATCH,
+  'ab-experiment-watch': AB_EXPERIMENT_WATCH,
 }
 
 /** Whether a template has a preview — drives the modal's two-column layout. */
