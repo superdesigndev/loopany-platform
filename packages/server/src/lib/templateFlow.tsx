@@ -620,14 +620,14 @@ const KEYWORD_BETS: FlowSpec = {
       sub: 'thesis → live → proven',
       columns: [
         ['Live', [
-          ['BET-9', 'context compaction — guide + 3 pages', 'day 5 of 7'],
-          ['BET-8', 'agent memory patterns', 'day 2 of 7'],
+          ['BET-9', 'agent handoff patterns — guide + 3 pages', 'day 5 of 7'],
+          ['BET-8', 'prompt-cache budgeting', 'day 2 of 7'],
         ]],
         ['Proven', [
-          ['BET-5', 'loop engineering', 'handed to the scale loop'],
+          ['BET-5', 'agent evals field guide', 'handed to the scale loop'],
         ]],
         ['Left', [
-          ['BET-4', 'loops vs graphs', '16 impressions · left'],
+          ['BET-4', 'yaml vs toml configs', '12 impressions · left'],
         ]],
       ],
     },
@@ -645,7 +645,7 @@ const KEYWORD_DOUBLE_DOWN: FlowSpec = {
     { id: 'ship', wt: true, kicker: 'Step 3 · Ship', glyph: '⑂', title: 'One PR, human merges', detail: 'never touches the breadwinner in cooldown' },
   ],
   dashboard: [
-    { type: 'metric', label: 'Cluster clicks (28d)', series: [820, 1200, 1900, 2800, 4300, 6900, 10400, 13831], note: 'the cluster often ends up out-earning the head page it supports.' },
+    { type: 'metric', label: 'Cluster clicks (28d)', series: [180, 260, 410, 640, 990, 1450, 2100, 3050], note: 'the cluster often ends up out-earning the head page it supports.' },
     {
       type: 'kanban',
       heading: 'Support pages',
@@ -658,7 +658,7 @@ const KEYWORD_DOUBLE_DOWN: FlowSpec = {
           ['SUP-11', 'title fix — page ranked, never clicked', 'PR merged'],
         ]],
         ['Earning', [
-          ['SUP-9', 'displacement page', '295 clicks/wk'],
+          ['SUP-9', 'displacement page', '120 clicks/wk'],
           ['SUP-7', 'supporting article', 'out-earns the guide'],
         ]],
       ],
