@@ -42,8 +42,8 @@ export const TEMPLATE_PREREQS: Record<string, TemplatePrereq[]> = {
 
   'seo-try-keywords': [
     {
-      label: 'Live Google Search Console read access',
-      desc: 'An API script, CLI, or MCP tool that pulls live query data for your site — every verdict reads it.',
+      label: 'Live Search Console access with the DATE dimension',
+      desc: 'A script/CLI returning query-, page-, and date-dim rows — the scoring doctrine is the daily series, so the date dimension is non-negotiable.',
       href: TREG,
       linkLabel: 'Manage agent credentials with treg',
     },
@@ -59,18 +59,18 @@ export const TEMPLATE_PREREQS: Record<string, TemplatePrereq[]> = {
   ],
   'seo-scale-keywords': [
     {
+      label: 'A day-7 SCALE verdict in the bet ledger',
+      desc: 'Engines are EARNED: the bet cleared an "SEO - Try New Keywords" loop and holds a SCALE verdict — no verdict, no engine.',
+    },
+    {
       label: 'Live Google Search Console read access',
-      desc: 'An API script, CLI, or MCP tool that pulls live query data for your site — every move is picked from it.',
+      desc: 'An API script, CLI, or MCP tool returning query- and page-dim rows — every move is picked from the daily series.',
       href: TREG,
       linkLabel: 'Manage agent credentials with treg',
     },
     {
       label: 'Your content repo, with a PR flow',
-      desc: 'The blog lives in git; every support page or fix ships as one pull request a human merges.',
-    },
-    {
-      label: 'A proven keyword set',
-      desc: 'Terms with a cleared verdict or sustained clicks — typically graduates of an "SEO - Try New Keywords" loop.',
+      desc: 'The blog lives in git; every cluster article or enrichment ships as one pull request a human merges.',
     },
   ],
 

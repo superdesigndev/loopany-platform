@@ -189,47 +189,61 @@ describe('template registry', () => {
     expect(d).toContain('written by ChatGPT') // the #1 AI tell it guards against
   })
 
-  test('seo-try-keywords: the EXPLORE half — cheap new-keyword bets, live verdicts, hand-off', () => {
+  test('seo-try-keywords: the bet manager — daily-series doctrine, verdicts, gated mining', () => {
     const t = TEMPLATES.find((x) => x.name === 'seo-try-keywords') as TemplateInfo
     expect(t).toBeTruthy()
     expect(t.label).toBe('SEO - Try New Keywords')
     const l = t.description.toLowerCase()
-    // Live Search Console is the only receipt source, smoke-tested before creating.
-    expect(l).toContain('search console')
-    expect(l).toContain('smoke test')
-    // One cheap bet on ONE new keyword per run, as one worktree PR a human merges.
-    expect(l).toContain('one cheap bet on one new keyword')
-    expect(l).toContain('worktree')
-    expect(l).toContain('human merges')
-    expect(l).toContain('clean skip')
-    // Verdicts: position/impressions never clicks, daily series never averages.
-    expect(l).toContain('never clicks')
-    expect(l).toContain('never averages')
-    // Winners are HANDED OFF to the sibling loop, never scaled in-place.
+    // The date dimension + daily-series doctrine are non-negotiable.
+    expect(l).toContain('date dimension')
+    expect(l).toContain('daily series')
+    expect(l).toContain('trailing window')
+    // Strict run order + the verdict machinery.
+    expect(l).toContain('score first, mine second')
+    expect(l).toContain('bet ledger')
+    expect(l).toContain('day-7')
+    expect(l).toContain('scale')
+    expect(l).toContain('leave')
+    // The two ship lanes + the empty-archetype rule.
+    expect(l).toContain('approval lane')
+    expect(l).toContain('archetype')
+    // One seed max, engine hand-off is the human's tick, sibling named.
+    expect(l).toContain('one seed')
+    expect(l).toContain('never spawn it yourself')
     expect(l).toContain('seo - scale proven keywords')
-    expect(l).toContain('flag it for')
-    // Suppressed formats stay banned.
-    expect(l).toContain('self-ranking listicle')
+    // The full template rides the on-demand reference, not the paste prompt.
+    expect(t.description).toContain('/api/skill/references/templates/seo-try-keywords/reference.md')
+    expect(l).toContain('never commit to main')
   })
 
-  test('seo-scale-keywords: the EXPLOIT half — proven set only, one move per run, honest let-go', () => {
+  test('seo-scale-keywords: the engine — earned, regime-driven, gated, sunsets by proposal', () => {
     const t = TEMPLATES.find((x) => x.name === 'seo-scale-keywords') as TemplateInfo
     expect(t).toBeTruthy()
     expect(t.label).toBe('SEO - Scale Proven Keywords')
     const l = t.description.toLowerCase()
-    // Works ONLY the proven set; exploring is the sibling loop's job.
-    expect(l).toContain('proven')
+    // Earn-the-engine gate: no SCALE verdict, no engine; sibling named.
+    expect(l).toContain('earned')
+    expect(l).toContain('scale verdict')
     expect(l).toContain('seo - try new keywords')
-    // Breadwinner protection with the cooldown.
+    // The regime decision + its computable flip gate.
+    expect(l).toContain('land-grab')
+    expect(l).toContain('harvest')
+    expect(l).toContain('family_top3_share')
+    // Production-safety doctrine.
     expect(l).toContain('breadwinner')
-    expect(l).toContain('14-day cooldown')
-    // One move per run from the live daily series, shipped as one PR.
-    expect(l).toContain('one move')
-    expect(l).toContain('never averages')
-    expect(l).toContain('worktree')
-    expect(l).toContain('human merges')
-    // The honest wind-down: rankings are rented, demand moving on ends the defense.
-    expect(l).toContain('winding the term down')
+    expect(l).toContain('canary')
+    expect(l).toContain('cooldown')
+    expect(l).toContain('merged is not live')
+    expect(l).toContain('carve-out')
+    // Ship gates.
+    expect(l).toContain('cannibalization')
+    expect(l).toContain('cta test')
+    expect(l).toContain('fact-check')
+    // Sunset is a proposal; the marker-gate workflow footgun is named.
+    expect(l).toContain('sunset')
+    expect(l).toContain('proposal')
+    expect(l).toContain('task constant')
+    expect(t.description).toContain('/api/skill/references/templates/seo-scale-keywords/reference.md')
   })
 })
 

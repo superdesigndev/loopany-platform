@@ -606,12 +606,12 @@ const OUTCOME_WATCH: FlowSpec = {
 const KEYWORD_BETS: FlowSpec = {
   worktreeLabel: 'Isolated git worktree · off main',
   nodes: [
-    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Wire Search Console + the map', detail: 'smoke-test one live pull · radar agreed · bot queries tagged' },
-    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Weekly (your choice)', detail: 'one bet max · skipping is healthy' },
-    { id: 'verdict', kicker: 'Step 1 · Verdict', glyph: '⚖', title: 'Verdict open bets', detail: 'live daily series · proven → hand to the scale loop' },
-    { id: 'radar', kicker: 'Step 2 · Radar', glyph: '⌕', title: 'Read your own feed', detail: 'bookmarks & communities — not keyword tools' },
-    { id: 'bet', wt: true, kicker: 'Step 3 · Bet', glyph: '✎', title: 'One bet, one NEW keyword', detail: 'one main page + a few supporting' },
-    { id: 'ship', wt: true, kicker: 'Step 4 · Ship', glyph: '⑂', title: 'One PR, human merges', detail: 'no new bet while one is open' },
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Fill the template · verify GSC', detail: 'date dimension non-negotiable · bet ledger created' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Weekly · before your review', detail: 'score first, mine second' },
+    { id: 'score', kicker: 'Part A · Score', glyph: '⚖', title: 'Score the daily series', detail: '3-day median · never a trailing window' },
+    { id: 'verdict', kicker: 'Part A · Verdict', glyph: '◈', title: 'Day-7 verdicts', detail: 'SCALE → engine · LEAVE → lesson · report files NOW' },
+    { id: 'mine', kicker: 'Part B · Mine', glyph: '⌕', title: 'Mine one new bet', detail: 'gated · radar-first · watchlist for the unsearchable' },
+    { id: 'ship', wt: true, kicker: 'Part B · Ship', glyph: '⑂', title: 'One seed PR', detail: 'archetype lane or approval lane' },
   ],
   dashboard: [
     {
@@ -631,21 +631,22 @@ const KEYWORD_BETS: FlowSpec = {
         ]],
       ],
     },
-    { type: 'metric', label: 'Proven keywords', series: [0, 0, 1, 1, 2, 2, 3, 4], note: 'most bets are duds by design — the winners pay for all of them.' },
+    { type: 'metric', label: 'Open bets', series: [0, 1, 2, 2, 1, 2, 2, 1], note: 'capped at 2 — more open bets than your human can merge is batch-crank.' },
   ],
 }
 
 const KEYWORD_DOUBLE_DOWN: FlowSpec = {
   worktreeLabel: 'Isolated git worktree · off main',
   nodes: [
-    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Agree the proven set', detail: 'GSC smoke-tested · breadwinner protected, 14-day cooldown' },
-    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every 2–3 days', detail: 'one move per run — steady compounding' },
-    { id: 'read', kicker: 'Step 1 · Read', glyph: '⌕', title: 'Read the daily series', detail: 'proven cluster · never averages' },
-    { id: 'pick', kicker: 'Step 2 · Pick', glyph: '⚖', title: 'Pick ONE move', detail: 'gap sub-page · leaky-title fix · interlink pass' },
-    { id: 'ship', wt: true, kicker: 'Step 3 · Ship', glyph: '⑂', title: 'One PR, human merges', detail: 'never touches the breadwinner in cooldown' },
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Earn the engine', detail: 'a day-7 SCALE verdict in the ledger · regime picked' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Daily · staggered', detail: 'one regime unit per run' },
+    { id: 'reconcile', kicker: 'Step 1 · Reconcile', glyph: '⌕', title: 'Drift + verification ledger', detail: 'live system first · +14d re-checks · REVERT flags' },
+    { id: 'score', kicker: 'Step 2 · Score', glyph: '⚖', title: 'Score the daily series', detail: 'canary + cooldowns · merged is not live' },
+    { id: 'pick', kicker: 'Step 3 · Pick', glyph: '✧', title: 'Pick the regime unit', detail: 'land-grab article · harvest enrichment' },
+    { id: 'ship', wt: true, kicker: 'Step 4 · Ship', glyph: '⑂', title: 'One gated PR', detail: 'cannibalization · CTA · fact-check gates' },
   ],
   dashboard: [
-    { type: 'metric', label: 'Cluster clicks (28d)', series: [180, 260, 410, 640, 990, 1450, 2100, 3050], note: 'the cluster often ends up out-earning the head page it supports.' },
+    { type: 'metric', label: 'kpi_clicks_28d', series: [180, 260, 410, 640, 990, 1450, 2100, 3050], note: 'the flip gate + sunset both read the metrics, never the prose.' },
     {
       type: 'kanban',
       heading: 'Support pages',
