@@ -26,10 +26,11 @@
  *                   body is verbatim; a front-matter head is synthesized from the
  *                   loop's own columns because production task files predate the
  *                   v1 artifact format (formatting, not content).
- * artifact file   → a Doc typed by its REAL front-matter `type`, mapped through
- *                   `LIFECYCLE` below. Bodies live in the artifact store (R2) and
- *                   are NOT in the database, so these are metadata-only and say
- *                   so - that is why `bodyAvailable` exists.
+ * artifact file   → a content Doc (no lifecycle - decision 8), plus a SHEPHERD
+ *                   task when its real front-matter `type` says a person owes a
+ *                   verdict. `LIFECYCLE` below is the whole mapping: which doc
+ *                   type, whether `published` is set, and which shepherd walks
+ *                   which transitions.
  * PR URL in a run → a `pull-request` MIRROR via get-or-create, at status
  *                   `observed`: we saw it referenced, we did not observe its
  *                   merge state.
@@ -39,8 +40,9 @@
  * They are REAL. Production loops encode lifecycle in the artifact front-matter
  * `type` the server already indexes: Support Inbox Triage writes `needs_human` /
  * `escalation`, LinkedIn Repurposer writes `drafted` / `queued`, Housekeeper
- * writes `open` / `merged`. Every one of those becomes the corresponding gate
- * state, so the inbox at :3700 is the captain's actual waiting list.
+ * writes `open` / `merged`. Each of those mints a shepherd task parked in its
+ * gate state, so the inbox at :3700 is the captain's actual waiting list - and
+ * every item on it is a TASK, which is the whole point of decision 8.
  */
 import { renderMarkdown, safeParseArtifact } from "@loopany/artifact-format";
 import { eq } from "drizzle-orm";
@@ -99,40 +101,48 @@ const DEFAULT_BAND = "monitors";
  * string in the payload, so nothing is lost and nothing is guessed.
  */
 interface Lifecycle {
-  type: "post" | "report" | "playbook" | "merge-review";
-  /** Transitions to run, in order, from the type's initial state. */
-  path: string[];
-  gate: boolean;
+  /** The CONTENT type the artifact becomes. Always a doc - content has no
+   *  lifecycle of its own (decision 8). */
+  doc: "post" | "report" | "playbook";
+  /** `published` is a plain field on the doc, so the settled flows set it here. */
+  published: boolean;
+  /**
+   * The shepherd TASK that carries the human verdict, when this flow has one.
+   * `path` is the transitions it walks; the LAST one is the gate-opening step
+   * for a waiting item, or the closing verdict for one already settled.
+   */
+  shepherd?: { type: "merge-review" | "publish-review" | "decision-review" | "ship-review"; path: string[]; waiting: boolean };
 }
 
 const LIFECYCLE: Record<string, Lifecycle> = {
-  // a person actively owes a decision
-  needs_human: { type: "report", path: ["escalate"], gate: true },
-  needs_followup: { type: "report", path: ["escalate"], gate: true },
-  escalation: { type: "report", path: ["escalate"], gate: true },
+  // a person actively owes a decision — the shepherd stops at its gate state
+  needs_human: { doc: "report", published: false, shepherd: { type: "decision-review", path: ["raise"], waiting: true } },
+  needs_followup: { doc: "report", published: false, shepherd: { type: "decision-review", path: ["raise"], waiting: true } },
+  escalation: { doc: "report", published: false, shepherd: { type: "decision-review", path: ["raise"], waiting: true } },
   // written, waiting to be published
-  drafted: { type: "post", path: ["draft-ready"], gate: true },
-  queued: { type: "post", path: ["draft-ready"], gate: true },
+  drafted: { doc: "post", published: false, shepherd: { type: "publish-review", path: ["ready"], waiting: true } },
+  queued: { doc: "post", published: false, shepherd: { type: "publish-review", path: ["ready"], waiting: true } },
   // a change waiting to be merged
-  open: { type: "merge-review", path: ["submit"], gate: true },
-  // settled
-  merged: { type: "merge-review", path: ["submit", "approve"], gate: false },
-  posted: { type: "post", path: ["draft-ready", "publish"], gate: false },
-  live: { type: "post", path: ["draft-ready", "publish"], gate: false },
-  shipped: { type: "playbook", path: ["ship"], gate: false },
-  resolved: { type: "report", path: ["complete"], gate: false },
-  significant: { type: "report", path: ["complete"], gate: false },
-  report: { type: "report", path: ["complete"], gate: false },
-  brief: { type: "report", path: ["complete"], gate: false },
-  digest: { type: "report", path: ["complete"], gate: false },
-  converters: { type: "report", path: ["complete"], gate: false },
-  rollup: { type: "report", path: ["complete"], gate: false },
-  up: { type: "report", path: ["complete"], gate: false },
-  skipped: { type: "report", path: ["complete"], gate: false },
-  dead: { type: "report", path: ["complete"], gate: false },
+  open: { doc: "playbook", published: false, shepherd: { type: "merge-review", path: ["submit"], waiting: true } },
+  // settled — the shepherd ran to its verdict, so the gate shows as cleared
+  merged: { doc: "playbook", published: true, shepherd: { type: "merge-review", path: ["submit", "approve"], waiting: false } },
+  posted: { doc: "post", published: true, shepherd: { type: "publish-review", path: ["ready", "publish"], waiting: false } },
+  live: { doc: "post", published: true, shepherd: { type: "publish-review", path: ["ready", "publish"], waiting: false } },
+  shipped: { doc: "playbook", published: true, shepherd: { type: "ship-review", path: ["propose", "approve"], waiting: false } },
+  // plain products — no human ever owed anything, so no shepherd at all
+  resolved: { doc: "report", published: true },
+  significant: { doc: "report", published: true },
+  report: { doc: "report", published: true },
+  brief: { doc: "report", published: true },
+  digest: { doc: "report", published: true },
+  converters: { doc: "report", published: true },
+  rollup: { doc: "report", published: true },
+  up: { doc: "report", published: true },
+  skipped: { doc: "report", published: true },
+  dead: { doc: "report", published: true },
 };
 
-const FALLBACK_LIFECYCLE: Lifecycle = { type: "report", path: ["complete"], gate: false };
+const FALLBACK_LIFECYCLE: Lifecycle = { doc: "report", published: true };
 
 /** `task` front matter is the loop's own brief; it is seeded from
  *  `task_file_content` instead, so the synced copy would be a duplicate row. */
@@ -344,30 +354,26 @@ export async function seedFromProdSnapshot(
       teamId,
       archetype: "doc",
       type: "playbook",
-      status: "draft",
+      status: "current",
       title: `${loop.name} · task file`,
       payload: {
         source: taskFileArtifact(loop, body),
         loopKey: loop.id,
         prodPath: loop.taskFile,
         bodyAvailable: true,
+        // A standing brief is live content, not something awaiting a verdict:
+        // it gets no shepherd, and `published` is simply true.
+        published: true,
+        version: 1,
         originalType: "task",
       },
       now: loop.updatedAt,
     });
     await graph.upsertEdge(undefined, { teamId, kind: "produces", srcId: objectId, dstId: doc.id, now: loop.updatedAt });
-    await step({
-      objectId: doc.id,
-      transition: "ship",
-      entrance: "agent-run",
-      actorId: `loop-${loop.id}`,
-      now: loop.updatedAt,
-      note: "published its standing task file",
-      label: `${loop.name} task file`,
-    });
   }
 
-  // ---- 4. artifact files → Docs / merge reviews, by their REAL lifecycle ----
+  // ---- 4. artifact files → a content Doc, plus a shepherd TASK when a
+  //         person owes a verdict on it ----
   for (const file of snap.files) {
     const objectId = loopObjectId.get(file.loopId);
     if (!objectId) {
@@ -392,14 +398,18 @@ export async function seedFromProdSnapshot(
 
     const doc = await graph.createObject(undefined, {
       teamId,
-      archetype: lifecycle.type === "merge-review" ? "task" : "doc",
-      type: lifecycle.type,
-      status: initialStateFor(lifecycle.type),
+      archetype: "doc",
+      type: lifecycle.doc,
+      status: "current", // docs have one nominal state and no transitions
       title,
       payload: {
         ...(body ? { source: body } : {}),
         bodyAvailable: Boolean(body),
         ...(absentReason ? { bodyAbsentReason: absentReason } : {}),
+        // `published` is a FIELD (decision 8), not a state. A shepherd's
+        // approving transition flips it through an `update-fields` action.
+        published: lifecycle.published,
+        version: 1,
         prodPath: file.path,
         sizeBytes: file.size,
         originalType: originalType ?? null,
@@ -410,19 +420,36 @@ export async function seedFromProdSnapshot(
     });
     await graph.upsertEdge(undefined, { teamId, kind: "produces", srcId: objectId, dstId: doc.id, now: when });
 
-    for (const [i, transition] of lifecycle.path.entries()) {
-      const last = i === lifecycle.path.length - 1;
+    if (!lifecycle.shepherd) continue;
+
+    // The verdict lives on a small TASK that tracks the content - the same
+    // relationship a merge review has with a pull request.
+    const shepherd = await graph.createObject(undefined, {
+      teamId,
+      archetype: "task",
+      type: lifecycle.shepherd.type,
+      status: "queued",
+      title,
+      payload: { loopKey: file.loopId, reviews: doc.id, prodPath: file.path },
+      now: when,
+    });
+    await graph.upsertEdge(undefined, { teamId, kind: "tracks", srcId: shepherd.id, dstId: doc.id, now: when });
+    await graph.upsertEdge(undefined, { teamId, kind: "produces", srcId: objectId, dstId: shepherd.id, now: when });
+
+    for (const [i, transition] of lifecycle.shepherd.path.entries()) {
+      const last = i === lifecycle.shepherd.path.length - 1;
+      const human = HUMAN_VERDICTS.has(transition);
       const ok = await step({
-        objectId: doc.id,
+        objectId: shepherd.id,
         transition,
-        // A gate-closing transition is `human` by the spec's own contract.
-        entrance: closingTransition(transition) ? "human" : "agent-run",
-        actorId: closingTransition(transition) ? SEED_ACTOR : `loop-${file.loopId}`,
+        // A gate state's outgoing transition is `human` by the spec's contract.
+        entrance: human ? "human" : "agent-run",
+        actorId: human ? SEED_ACTOR : `loop-${file.loopId}`,
         now: when,
         ...(i === 0 ? { note: `produced ${file.path}` } : {}),
-        // The gate's own review action is what the human is looking at, so it
-        // stays PENDING for anything still waiting.
-        keepPending: last && lifecycle.gate,
+        // What a person is still looking at stays PENDING; a settled flow's
+        // consequences are applied, including the `published` field write.
+        keepPending: last && lifecycle.shepherd.waiting,
         label: title,
       });
       if (!ok) break;
@@ -457,24 +484,7 @@ function isSensor(cron: string | null): boolean {
   return hour === "*" || /^\*\//.test(hour ?? "");
 }
 
-function initialStateFor(type: Lifecycle["type"]): string {
-  switch (type) {
-    case "post":
-      return "draft";
-    case "report":
-      return "drafting";
-    case "playbook":
-      return "draft";
-    case "merge-review":
-      return "queued";
-  }
-}
-
-/** The transitions that close a gate. Their spec declares `entrance: "human"`,
- *  so the replay has to enter them that way or the seam refuses - correctly. */
-function closingTransition(name: string): boolean {
-  return name === "approve" || name === "publish" || name === "decide";
-}
+const HUMAN_VERDICTS = new Set(["approve", "publish", "decide", "reject", "withdraw", "drop", "revise"]);
 
 /** A run that reported nothing new. Both signals are real columns. */
 function quiet(run: ProdRun): boolean {

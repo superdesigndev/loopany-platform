@@ -191,9 +191,13 @@ data — and anything whose bytes genuinely are not available keeps a notice say
 why. Without a snapshot the seeder stops and names your options rather than quietly
 substituting synthetic data.
 
-The "Needs you" list is the open `human-verdict` obligations, computed opened-minus-closed,
-and approving one is a real write: it runs the gate-closing transition through the same
-seam, and a second attempt comes back as a typed refusal.
+Lifecycle and gates are **task-only**: docs have no state machine at all (publishing is a
+field on them), and every human verdict lives on a small shepherd task that tracks the
+content — the same relationship a merge review has with a pull request. So the "Needs you"
+list is the open `human-verdict` obligations on those tasks, computed opened-minus-closed.
+Approving one is a real write: it runs the gate-closing transition through the same seam,
+its `update-fields` consequence flips `published` on the tracked content, and a second
+attempt comes back as a typed refusal.
 
 Read-only API (same dev gate as the page - both 404 in a production build):
 

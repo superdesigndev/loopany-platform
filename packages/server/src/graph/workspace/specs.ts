@@ -8,21 +8,24 @@
  * that the kernel carries a real fleet, so every status it shows moved through
  * `applyTransition` against the EFFECTIVE version resolved from the registry.
  *
- * Three shapes recur, and they are the whole point of the demo:
+ * LIFECYCLE AND GATES ARE TASK-ONLY (captain decision 8). Every state machine
+ * below hangs off the `task` archetype, and nothing else has one:
  *
  *  - a LOOP is a Task with `cron` set (design §4). It has no gate of its own:
- *    a loop is never "waiting on you", its PRODUCTS are.
- *  - every artifact type has exactly one GATE STATE. A gate state's outgoing
- *    transition is `entrance: "human"` by construction (design §12 item 5), so
- *    the demo's "Needs you" list cannot be discharged by anything but a person.
- *  - a pull request is a MIRROR: an external fact we observe. It declares NO
- *    transitions, so `applyTransition` refuses it structurally. The work we own
- *    is the separate `merge-review` Task that tracks it.
+ *    a loop is never "waiting on you", the work around its PRODUCTS is.
+ *  - a DOC is content. One nominal state, no transitions, plain fields -
+ *    `published` among them. `applyTransition` refuses it structurally, so
+ *    "content does not walk a state machine" cannot be violated by accident.
+ *  - a MIRROR is an external fact we observe. Also no transitions.
+ *  - so every human verdict lives on a small SHEPHERD TASK that `tracks` the
+ *    thing under review: `merge-review` around a pull request, and
+ *    `publish-review` / `decision-review` / `ship-review` around a doc. One
+ *    answer to "where does work live?", not two.
  *
  * Obligation keys are per-OBJECT (`(objectId, key)` is the obligation's
- * identity), which is why every gate hangs off the artifact and never off the
- * recurring loop: a loop-level key could only ever be opened once in the
- * object's whole life.
+ * identity), and a shepherd is created per review - so a recurring flow opens a
+ * fresh obligation every time, which a key on the long-lived loop or doc could
+ * never do.
  */
 import type { TypeSpec } from "../types.js";
 
@@ -72,6 +75,22 @@ export const LOOP_SPEC: TypeSpec = {
 };
 
 /**
+ * A shepherd is a small TASK that tracks one piece of content and carries the
+ * obligation a person owes on it - the same relationship `merge-review` has with
+ * a pull-request mirror. The content does not move; the work around it does.
+ *
+ * Each shepherd's approving transition declares an `update-fields` action rather
+ * than writing the doc itself: the transition records the decision, and the
+ * executor applies its consequence to the tracked object. `via: "tracks"` tells
+ * the executor to follow this task's `tracks` edge, so a static spec can name an
+ * instance-specific target.
+ */
+const REVIEW_ACTIONS = (set: Record<string, unknown>) => [
+  { kind: "update-fields" as const, payload: { via: "tracks", set } },
+  { kind: "notify" as const, payload: { channel: "inbox" } },
+];
+
+/**
  * The work we own around an external pull request. Separate from the PR mirror
  * on purpose: the mirror is the world's state, this is ours.
  */
@@ -95,23 +114,58 @@ export const MERGE_REVIEW_SPEC: TypeSpec = {
       to: "approved",
       entrance: "human",
       closes: ["merge-verdict"],
-      actions: [{ kind: "notify", payload: { channel: "inbox" } }],
+      // Same shape as the doc shepherds. When the tracked object is a MIRROR the
+      // executor refuses the field write - we do not record our beliefs as an
+      // observation of the outside world.
+      actions: REVIEW_ACTIONS({ merged: true }),
     },
     { name: "reject", from: ["awaiting-verdict"], to: "rejected", entrance: "human", closes: ["merge-verdict"] },
   ],
   fields: { repo: "string", number: "number" },
 };
 
+// ---- docs: content, no lifecycle (decision 8) ----
+
+/**
+ * The three content types are all the SAME shape now: one nominal state, no
+ * transitions, and plain fields. `applyTransition` refuses them structurally
+ * (`ARCHETYPE_HAS_NO_STATE_MACHINE`), so "a doc cannot walk a state machine" is
+ * a property of the system rather than a rule someone has to remember.
+ *
+ * `published` is a FIELD. It is written by `graphStore.updateObjectFields` - in
+ * practice by the `update-fields` action a shepherd task's approving transition
+ * enqueues, so even the field write has an event behind it.
+ */
+function docSpec(fields: Record<string, unknown>): TypeSpec {
+  return {
+    states: ["current"],
+    initialState: "current",
+    transitions: [],
+    fields: { published: "boolean", version: "number", ...fields },
+  };
+}
+
 /** Posts & content: written by a loop, published only by a person. */
-export const POST_SPEC: TypeSpec = {
-  states: ["draft", "awaiting-publish", "published", "archived"],
-  initialState: "draft",
+export const POST_SPEC: TypeSpec = docSpec({ channel: "string" });
+
+/** Reports & notes: a dated product per run. */
+export const REPORT_SPEC: TypeSpec = docSpec({ metric: "string", resolved: "boolean" });
+
+/** Docs: durable playbook material. */
+export const PLAYBOOK_SPEC: TypeSpec = docSpec({ merged: "boolean" });
+
+// ---- shepherd tasks: where a doc's human verdict actually lives ----
+
+/** Posts & content awaiting a human publish decision. */
+export const PUBLISH_REVIEW_SPEC: TypeSpec = {
+  states: ["queued", "awaiting-publish", "published", "withdrawn"],
+  initialState: "queued",
   gateStates: ["awaiting-publish"],
-  terminalStates: ["archived"],
+  terminalStates: ["published", "withdrawn"],
   transitions: [
     {
-      name: "draft-ready",
-      from: ["draft"],
+      name: "ready",
+      from: ["queued"],
       to: "awaiting-publish",
       entrance: "agent-run",
       opens: [{ key: "publish-verdict", class: "human-verdict", label: "Review and publish" }],
@@ -123,70 +177,63 @@ export const POST_SPEC: TypeSpec = {
       to: "published",
       entrance: "human",
       closes: ["publish-verdict"],
-      actions: [{ kind: "notify", payload: { channel: "inbox" } }],
+      actions: REVIEW_ACTIONS({ published: true }),
     },
-    { name: "revise", from: ["awaiting-publish", "published"], to: "draft", entrance: "human", closes: ["publish-verdict"] },
-    { name: "archive", from: ["*"], to: "archived", entrance: "human" },
+    { name: "withdraw", from: ["awaiting-publish"], to: "withdrawn", entrance: "human", closes: ["publish-verdict"] },
   ],
-  fields: { channel: "string" },
 };
 
-/** Reports & notes: a dated product per run, with an escalation path when the
- *  report reaches a question only a person can answer. */
-export const REPORT_SPEC: TypeSpec = {
-  states: ["drafting", "complete", "decision-needed", "archived"],
-  initialState: "drafting",
-  gateStates: ["decision-needed"],
-  terminalStates: ["archived"],
+/** A report that reached a question only a person can answer. */
+export const DECISION_REVIEW_SPEC: TypeSpec = {
+  states: ["queued", "awaiting-decision", "decided", "dropped"],
+  initialState: "queued",
+  gateStates: ["awaiting-decision"],
+  terminalStates: ["decided", "dropped"],
   transitions: [
-    { name: "complete", from: ["drafting"], to: "complete", entrance: "agent-run" },
     {
-      name: "escalate",
-      from: ["drafting", "complete"],
-      to: "decision-needed",
+      name: "raise",
+      from: ["queued"],
+      to: "awaiting-decision",
       entrance: "agent-run",
       opens: [{ key: "policy-verdict", class: "human-verdict", label: "Your call on the policy" }],
       actions: [{ kind: "enqueue-review", payload: { queue: "decision" } }],
     },
     {
       name: "decide",
-      from: ["decision-needed"],
-      to: "complete",
+      from: ["awaiting-decision"],
+      to: "decided",
       entrance: "human",
       closes: ["policy-verdict"],
-      actions: [{ kind: "notify", payload: { channel: "inbox" } }],
+      actions: REVIEW_ACTIONS({ resolved: true }),
     },
-    { name: "archive", from: ["*"], to: "archived", entrance: "human" },
+    { name: "drop", from: ["awaiting-decision"], to: "dropped", entrance: "human", closes: ["policy-verdict"] },
   ],
-  fields: { metric: "string" },
 };
 
-/** Docs: durable playbook material a loop proposes and a person ships. */
-export const PLAYBOOK_SPEC: TypeSpec = {
-  states: ["draft", "ship-blocked", "shipped", "archived"],
-  initialState: "draft",
-  gateStates: ["ship-blocked"],
-  terminalStates: ["archived"],
+/** Durable playbook material a loop proposes and a person ships. */
+export const SHIP_REVIEW_SPEC: TypeSpec = {
+  states: ["queued", "awaiting-review", "shipped", "revising"],
+  initialState: "queued",
+  gateStates: ["awaiting-review"],
+  terminalStates: ["shipped"],
   transitions: [
-    { name: "ship", from: ["draft"], to: "shipped", entrance: "agent-run" },
     {
-      name: "block",
-      from: ["draft"],
-      to: "ship-blocked",
+      name: "propose",
+      from: ["queued"],
+      to: "awaiting-review",
       entrance: "agent-run",
       opens: [{ key: "ship-verdict", class: "human-verdict", label: "Review the candidate" }],
       actions: [{ kind: "enqueue-review", payload: { queue: "ship" } }],
     },
     {
       name: "approve",
-      from: ["ship-blocked"],
+      from: ["awaiting-review"],
       to: "shipped",
       entrance: "human",
       closes: ["ship-verdict"],
-      actions: [{ kind: "notify", payload: { channel: "inbox" } }],
+      actions: REVIEW_ACTIONS({ published: true }),
     },
-    { name: "revise", from: ["ship-blocked"], to: "draft", entrance: "human", closes: ["ship-verdict"] },
-    { name: "archive", from: ["*"], to: "archived", entrance: "human" },
+    { name: "revise", from: ["awaiting-review"], to: "revising", entrance: "human", closes: ["ship-verdict"] },
   ],
 };
 
@@ -210,18 +257,35 @@ export const PULL_REQUEST_SPEC: TypeSpec = {
 export const DEMO_TYPES = [
   { name: "loop", archetype: "task", spec: LOOP_SPEC, rationale: "a scheduled agent loop - a Task with cron" },
   { name: "merge-review", archetype: "task", spec: MERGE_REVIEW_SPEC, rationale: "our-side work around an external PR" },
-  { name: "post", archetype: "doc", spec: POST_SPEC, rationale: "outbound content with a human publish gate" },
-  { name: "report", archetype: "doc", spec: REPORT_SPEC, rationale: "a dated run product with an escalation path" },
-  { name: "playbook", archetype: "doc", spec: PLAYBOOK_SPEC, rationale: "durable docs with a human ship gate" },
+  { name: "post", archetype: "doc", spec: POST_SPEC, rationale: "outbound content; publishing is a field, not a state" },
+  { name: "report", archetype: "doc", spec: REPORT_SPEC, rationale: "a dated run product" },
+  { name: "playbook", archetype: "doc", spec: PLAYBOOK_SPEC, rationale: "durable reference content" },
+  { name: "publish-review", archetype: "task", spec: PUBLISH_REVIEW_SPEC, rationale: "the human publish decision on a post" },
+  { name: "decision-review", archetype: "task", spec: DECISION_REVIEW_SPEC, rationale: "the human call a report escalated" },
+  { name: "ship-review", archetype: "task", spec: SHIP_REVIEW_SPEC, rationale: "the human ship decision on a playbook" },
   { name: "pull-request", archetype: "mirror", spec: PULL_REQUEST_SPEC, rationale: "an observed GitHub pull request" },
 ] as const satisfies readonly { name: string; archetype: "task" | "doc" | "mirror"; spec: TypeSpec; rationale: string }[];
 
 /** Type name → the Library category its artifacts group under. */
+/**
+ * Which Library category a CONTENT object belongs to. Shepherd tasks are NOT
+ * here on purpose: the Library lists the artifact, and its shepherd supplies the
+ * verdict button rather than occupying a row of its own.
+ */
 export const CATEGORY_OF_TYPE: Record<string, string> = {
-  "merge-review": "Pull requests",
   post: "Posts & content",
   report: "Reports & notes",
   playbook: "Docs",
+  "pull-request": "Pull requests",
+};
+
+/** Shepherd task type → the obligation key it opens. One place, so the read
+ *  model can find a content object's reviewer without guessing. */
+export const SHEPHERD_TYPES: Record<string, string> = {
+  "merge-review": "merge-verdict",
+  "publish-review": "publish-verdict",
+  "decision-review": "policy-verdict",
+  "ship-review": "ship-verdict",
 };
 
 /** Library category display order (mirrors the reference demo). */

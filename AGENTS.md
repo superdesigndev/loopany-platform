@@ -1044,11 +1044,29 @@ computes pure functions. Run instructions: `README.md`.
   `applyTransition`, so the seeded past carries real diffs, provenance, obligations and
   outbox rows. A refused step fails the seed loudly instead of seeding a state no legal
   transition could produce.
-- **Obligations hang off ARTIFACTS, never off the recurring loop** - `(objectId, key)` is
-  an obligation's identity, so a loop-level key could only ever open once in the object's
-  whole life. A pull request is therefore TWO objects: the `pull-request` MIRROR (external
-  fact, no transitions) and the `merge-review` TASK we own (holds the gate), linked by a
-  `tracks` edge. `workspace/specs.ts` is the source for the six demo types.
+- **LIFECYCLE AND GATES ARE TASK-ONLY (captain decision 8).** The `doc` archetype has NO
+  state machine and NO gate states - `BUILTIN_TYPE_SPECS.doc` declares one nominal state
+  (`current`) and zero transitions, so `applyTransition` refuses a doc structurally, the
+  same way it refuses a mirror. Content changes by field/body writes through
+  `graphStore.updateObjectFields`; **`published` is a FIELD, not a state**.
+- **Every human verdict lives on a SHEPHERD TASK that `tracks` the thing under review** -
+  `merge-review` around a pull request, and `publish-review` / `decision-review` /
+  `ship-review` around a doc. Obligations are keyed `(objectId, key)`, and a shepherd is
+  minted per review, so a recurring flow opens a fresh obligation every time - which a key
+  on the long-lived loop or doc could never do. `workspace/specs.ts` is the source for the
+  nine demo types; `SHEPHERD_TYPES` there maps each shepherd to the obligation it opens.
+- **A shepherd's approving transition does not write the doc itself.** It declares an
+  `update-fields` action with `via: "tracks"`, and the executor follows the task's `tracks`
+  edge to resolve the instance-specific target - that is how a static spec names a
+  per-instance object. `read.ts` `applyUpdateFields` performs it and REFUSES a mirror
+  target: writing our verdict into an observed external fact would record a belief as an
+  observation. `recordVerdict` drains BEFORE (to clear the gate-opening action that would
+  block a terminal verdict) and AFTER (to apply the verdict's own consequence), so the
+  decision and the field write never come apart.
+- **The Library row is the CONTENT**; its shepherd supplies the verdict, and
+  `verdict.objectId` is the SHEPHERD's id so the client never has to infer it. Row recency
+  and age read `updatedAt`, NOT `statusChangedAt` - a doc's status never changes, so a
+  just-published or just-revised doc would otherwise sort as if nothing had happened.
 - **Gate nodes in the System view are DERIVED**, not stored: one per loop that holds (or
   has held) obligations over itself and its `produces` products, badge = live open count.
   `assignColumns` then densifies each band's columns, because how many gates a band grows

@@ -38,7 +38,7 @@ import {
 import * as graph from "../../db/graphStore.js";
 import { applyTransition, type ApplyTransitionResult } from "../applyTransition.js";
 import type { TypeSpec } from "../types.js";
-import { CATEGORY_OF_TYPE, DEMO_TEAM_ID, DEMO_USER_ID, LIBRARY_CATEGORIES } from "./specs.js";
+import { CATEGORY_OF_TYPE, DEMO_TEAM_ID, DEMO_USER_ID, LIBRARY_CATEGORIES, SHEPHERD_TYPES } from "./specs.js";
 
 // ---- shared loading ----
 
@@ -144,9 +144,9 @@ const BAND_LABEL: Record<string, string> = {
  *  waiting, so a new artifact type names its own gate without a lookup table. */
 function gateName(types: Set<string>): string {
   if (types.has("merge-review")) return "Merge gate";
-  if (types.has("post")) return "Publish gate";
-  if (types.has("playbook")) return "Ship gate";
-  if (types.has("report")) return "Your call";
+  if (types.has("publish-review")) return "Publish gate";
+  if (types.has("ship-review")) return "Ship gate";
+  if (types.has("decision-review")) return "Your call";
   return "Review gate";
 }
 
@@ -321,7 +321,9 @@ export interface LibraryArtifact {
   needsHuman: boolean;
   /** The verdict this artifact is waiting for, if any - label plus the exact
    *  transition `POST /api/graph/verdict` will run. */
-  verdict?: { transition: string; label: string; obligation: string };
+  /** The verdict a person owes: which SHEPHERD task to move, with which
+   *  transition. Content itself never moves (decision 8). */
+  verdict?: { objectId: string; transition: string; label: string; obligation: string };
   /**
    * False when the artifact's BYTES are not in this database. Real production
    * products live in the artifact store (R2) and only their front-matter index
@@ -338,6 +340,8 @@ export interface LibraryArtifact {
   renderMode?: RenderMode;
   /** Why there is no body, when there is none. Always a real condition. */
   bodyAbsentReason?: string;
+  /** The doc's `published` FIELD - a field, not a state (decision 8). */
+  published: boolean;
 }
 
 /** How a stored body was projected to HTML. */
@@ -365,14 +369,17 @@ const ICON_OF_TYPE: Record<string, LibraryArtifact["icon"]> = {
   playbook: "doc",
 };
 
-/** Status → the label the Library shows. Derived per type so a state the demo
- *  never reaches still renders honestly (its own status, humanized). */
-function stateLabel(object: GraphObject, mirror?: GraphObject): string {
-  if (object.type === "merge-review") {
-    if (object.status === "awaiting-verdict") return humanize(mirror?.status ?? "open");
-    return humanize(object.status);
-  }
-  return humanize(object.status);
+/**
+ * The label the Library shows for a content row.
+ *
+ * A doc has no state to report (decision 8), so the label comes from whichever
+ * is true: the shepherd task currently reviewing it, else the `published` FIELD.
+ * A mirror reports the state we actually observed.
+ */
+function stateLabel(object: GraphObject, shepherd?: GraphObject): string {
+  if (object.archetype === "mirror") return humanize(object.status);
+  if (shepherd) return humanize(shepherd.status);
+  return payloadOf(object).published === true ? "Published" : "Draft";
 }
 
 function humanize(s: string): string {
@@ -424,26 +431,39 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
     return specCache.get(type);
   };
 
+  // A shepherd task `tracks` the content it reviews, so index the relation the
+  // other way: content id → the task carrying its verdict.
+  const shepherdOf = new Map<string, GraphObject>();
+  for (const e of edges) {
+    if (e.kind !== "tracks") continue;
+    const task = byId.get(e.srcId);
+    if (task && SHEPHERD_TYPES[task.type]) shepherdOf.set(e.dstId, task);
+  }
+
   const artifacts: LibraryArtifact[] = [];
   for (const o of objects) {
     const category = CATEGORY_OF_TYPE[o.type];
-    if (!category) continue; // loops and raw mirrors are not Library rows
+    if (!category) continue; // loops and shepherd tasks are not Library rows
 
     const p = payloadOf(o);
     const loopId = producer.get(o.id);
     const source = (loopId && byId.get(loopId)?.title) ?? "unknown loop";
-    const mirror = tracks.has(o.id) ? byId.get(tracks.get(o.id)!) : undefined;
-    const open = openByObject.get(o.id);
+    const shepherd = shepherdOf.get(o.id);
+    const open = shepherd ? openByObject.get(shepherd.id) : undefined;
 
     let verdict: LibraryArtifact["verdict"];
-    if (open) {
-      const spec = await specOf(o.type);
-      const transition = spec ? verdictTransition(spec, o.status, open.key) : undefined;
-      if (transition) verdict = { transition, label: VERDICT_LABEL[open.key] ?? "Decide", obligation: open.key };
+    if (open && shepherd) {
+      const spec = await specOf(shepherd.type);
+      const transition = spec ? verdictTransition(spec, shepherd.status, open.key) : undefined;
+      // The verdict runs on the SHEPHERD, not on the content - so the row hands
+      // the caller that object id rather than making the client infer it.
+      if (transition) {
+        verdict = { objectId: shepherd.id, transition, label: VERDICT_LABEL[open.key] ?? "Decide", obligation: open.key };
+      }
     }
 
-    const isMirrorFronted = o.type === "merge-review";
-    const externalUrl = str((mirror?.payload as Record<string, unknown> | null)?.sourceUrl);
+    const isMirror = o.archetype === "mirror";
+    const externalUrl = str(p.sourceUrl);
     const bodyAvailable = typeof p.source === "string";
     const rendered = bodyAvailable ? renderStored(p.source, str(p.prodPath)) : undefined;
     artifacts.push({
@@ -451,13 +471,11 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
       category,
       title: o.title ?? o.id,
       source,
-      state: stateLabel(o, mirror),
-      age: relativeAge(o.statusChangedAt, now),
+      state: stateLabel(o, shepherd),
+      age: relativeAge(o.updatedAt, now),
       icon: ICON_OF_TYPE[o.type] ?? "doc",
-      // A row is only "mirror" (external, not previewable) when it really has an
-      // external link. A merge review with no observed PR is still a document.
-      kind: isMirrorFronted && externalUrl ? "mirror" : "document",
-      ...(isMirrorFronted && externalUrl
+      kind: isMirror ? "mirror" : "document",
+      ...(isMirror && externalUrl
         ? { sourceUrl: externalUrl, externalLabel: "View on GitHub" }
         : { html: rendered?.html }),
       needsHuman: Boolean(open),
@@ -467,15 +485,19 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
       ...(str(p.bodyAbsentReason) ? { bodyAbsentReason: str(p.bodyAbsentReason) } : {}),
       ...(str(p.prodPath) ? { path: str(p.prodPath) } : {}),
       ...(str(p.originalType) ? { originalType: str(p.originalType) } : {}),
+      published: p.published === true,
     });
   }
 
   // Newest first. On a real workspace the archive is long, so the settled tail
   // is capped and the drop is REPORTED - but anything waiting on a human is
   // exempt, because a truncated inbox would be a lie.
+  // Recency is `updatedAt`, NOT `statusChangedAt`: content has no status to
+  // change (decision 8), so a doc that was just revised - or just published by a
+  // shepherd's field write - would otherwise sort as if nothing had happened.
   const byRecency = [...objects]
     .filter((o) => CATEGORY_OF_TYPE[o.type])
-    .sort((a, b) => b.statusChangedAt.localeCompare(a.statusChangedAt))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map((o) => o.id);
   const order = new Map(byRecency.map((id, i) => [id, i]));
   artifacts.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
@@ -624,6 +646,7 @@ function describeDiff(transition: string | null, diff: unknown, title?: string):
 // ---- Inbox ----
 
 export interface InboxItem {
+  /** The TASK that owes the verdict - what `recordVerdict` moves. */
   objectId: string;
   key: string;
   class: string;
@@ -632,6 +655,8 @@ export interface InboxItem {
   title: string;
   type: string;
   source: string;
+  /** The content object this task reviews, when it shepherds one. */
+  reviews?: string;
   /** The transition that discharges it, if the effective spec declares one. */
   verdict?: { transition: string; label: string };
 }
@@ -639,23 +664,30 @@ export interface InboxItem {
 export async function inboxView(teamId = DEMO_TEAM_ID): Promise<{ items: InboxItem[] }> {
   const { byId, edges } = await load(teamId);
   const producer = producerIndex(edges);
+  // shepherd id → the content it reviews
+  const reviews = new Map<string, string>();
+  for (const e of edges) if (e.kind === "tracks") reviews.set(e.srcId, e.dstId);
   const open = await graph.listOpenObligations(undefined, teamId, { class: "human-verdict" });
 
   const items: InboxItem[] = [];
   for (const o of open) {
-    const object = byId.get(o.objectId);
-    if (!object) continue;
-    const spec = (await graph.getEffectiveType(undefined, teamId, object.type))?.spec;
-    const transition = spec ? verdictTransition(spec, object.status, o.key) : undefined;
+    // Every obligation now sits on a TASK (decision 8) - a shepherd or a loop.
+    const task = byId.get(o.objectId);
+    if (!task) continue;
+    const content = byId.get(reviews.get(task.id) ?? "");
+    const spec = (await graph.getEffectiveType(undefined, teamId, task.type))?.spec;
+    const transition = spec ? verdictTransition(spec, task.status, o.key) : undefined;
     items.push({
-      objectId: o.objectId,
+      objectId: task.id,
       key: o.key,
       class: o.class,
       label: o.label ?? o.key,
       openedAt: o.openedAt,
-      title: object.title ?? object.id,
-      type: object.type,
-      source: byId.get(producer.get(object.id) ?? "")?.title ?? "unknown loop",
+      // The human reads the CONTENT, so the row is titled by it.
+      title: content?.title ?? task.title ?? task.id,
+      type: task.type,
+      ...(content ? { reviews: content.id } : {}),
+      source: byId.get(producer.get(task.id) ?? "")?.title ?? "unknown loop",
       ...(transition ? { verdict: { transition, label: VERDICT_LABEL[o.key] ?? "Decide" } } : {}),
     });
   }
@@ -686,13 +718,21 @@ export interface VerdictInput {
  * the executor here is deliberate and bounded - see that function's note.
  */
 export async function recordVerdict(input: VerdictInput): Promise<ApplyTransitionResult> {
+  // BEFORE: clear whatever the gate-opening transition left pending, or a
+  // terminal verdict is (correctly) refused for pending actions.
   await drainEngineLocalActions(input.objectId, input.now);
-  return applyTransition({
+  const result = await applyTransition({
     objectId: input.objectId,
     transition: input.transition,
     actor: { entrance: "human", actorId: input.userId ?? DEMO_USER_ID },
     now: input.now,
   });
+  // AFTER: the verdict's OWN consequences - the `update-fields` that flips
+  // `published` on the tracked content. A real executor would drain these on its
+  // next pass; without this the decision is recorded but never applied, which is
+  // exactly the half-done state the outbox exists to prevent.
+  if (result.ok) await drainEngineLocalActions(input.objectId, input.now);
+  return result;
 }
 
 /**
@@ -713,9 +753,41 @@ export async function drainEngineLocalActions(objectId: string, now: string): Pr
   let drained = 0;
   for (const action of pending) {
     if (action.consequenceClass === "R3" || action.consequenceClass === "R4") continue;
+    if (action.kind === "update-fields") await applyUpdateFields(action, now);
     if (await graph.markActionDelivered(undefined, action.id, now)) drained++;
   }
   return drained;
+}
+
+/**
+ * The one action kind this stand-in actually PERFORMS rather than just stamping.
+ *
+ * A shepherd's approving transition declares `update-fields` with `via: "tracks"`
+ * — "write these fields onto the thing I track". The target is instance-specific,
+ * so a static spec cannot name it; the executor resolves it by following the
+ * task's `tracks` edge. That is how `published` becomes true on a doc without the
+ * doc ever having a state machine (decision 8): the TASK records the decision,
+ * and its consequence lands on the content as a plain field write.
+ *
+ * A MIRROR target is refused. A mirror is an external fact we observe, and
+ * writing our verdict into it would be recording a belief as an observation.
+ */
+async function applyUpdateFields(action: { objectId: string | null; payload: unknown }, now: string): Promise<void> {
+  const payload = (action.payload ?? {}) as { via?: unknown; set?: unknown };
+  const set = payload.set as Record<string, unknown> | undefined;
+  if (payload.via !== "tracks" || !set || !action.objectId) return;
+
+  const edge = (await graph.edgesFrom(undefined, action.objectId, "tracks"))[0];
+  if (!edge) return;
+  const target = await graph.getObject(undefined, edge.dstId);
+  if (!target || target.archetype === "mirror") return;
+
+  await graph.updateObjectFields(
+    undefined,
+    target.id,
+    { payload: { ...((target.payload ?? {}) as Record<string, unknown>), ...set } },
+    now,
+  );
 }
 
 /** Workspace-level counters for the shell (sidebar badge, machine line). */

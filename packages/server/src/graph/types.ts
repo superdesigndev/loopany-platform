@@ -21,9 +21,18 @@
  *
  *  - `task`   work we own: guarded state machine, assignable, schedulable. A Loop
  *             is just a Task with `cron` set (not a separate archetype).
- *  - `doc`    content we author: a versioned content body.
+ *  - `doc`    content we author: versioned content plus plain fields, and NO
+ *             state machine (captain decision 8).
  *  - `mirror` an external fact we observe: read-only on normal write paths, no
  *             our-side state machine, never assignable/schedulable.
+ *
+ * LIFECYCLE IS TASK-ONLY (decision 8). Only the `task` archetype has states,
+ * transitions and gates. A doc is content: it changes by having its fields and
+ * body rewritten, not by walking a state machine, and "published" is a FIELD on
+ * it rather than a state. When a piece of content needs a human verdict, the
+ * verdict belongs to a small shepherd TASK that tracks the doc - exactly the way
+ * a merge review is the task that tracks a pull-request mirror. That keeps one
+ * answer to "where does work live?" instead of two competing ones.
  */
 export const ARCHETYPES = ["task", "doc", "mirror"] as const;
 export type Archetype = (typeof ARCHETYPES)[number];
@@ -273,15 +282,17 @@ export const BUILTIN_TYPE_SPECS: Record<Archetype, TypeSpec> = {
       { name: "cancel", from: ["open", "in-progress", "blocked"], to: "canceled" },
     ],
   },
+  // A doc has NO state machine (decision 8). It carries one nominal state so the
+  // `objects.status` column is never null, and declares no transitions - which
+  // makes `applyTransition` refuse it STRUCTURALLY, the same way it refuses a
+  // mirror, rather than by convention. Content and fields (including
+  // `published`) move through `graphStore.updateObjectFields`; a verdict on a
+  // doc belongs to a shepherd task that tracks it.
   doc: {
-    states: ["draft", "published", "archived"],
-    initialState: "draft",
-    terminalStates: ["archived"],
-    transitions: [
-      { name: "publish", from: ["draft"], to: "published" },
-      { name: "revise", from: ["published"], to: "draft" },
-      { name: "archive", from: ["draft", "published"], to: "archived" },
-    ],
+    states: ["current"],
+    initialState: "current",
+    transitions: [],
+    fields: { published: "boolean", version: "number" },
   },
   mirror: {
     states: ["observed"],

@@ -56,7 +56,9 @@ export interface LibraryArtifact {
   sourceUrl?: string
   externalLabel?: string
   needsHuman: boolean
-  verdict?: { transition: string; label: string; obligation: string }
+  /** The verdict a person owes: which SHEPHERD task to move, and how. Content
+   *  itself has no lifecycle, so this is never the artifact's own id. */
+  verdict?: { objectId: string; transition: string; label: string; obligation: string }
   /** False when the bytes live in the artifact store, not in this database. */
   bodyAvailable: boolean
   path?: string
@@ -66,6 +68,8 @@ export interface LibraryArtifact {
   renderMode?: 'artifact' | 'markdown' | 'code'
   /** Why there is no body, when there is none. Always a real condition. */
   bodyAbsentReason?: string
+  /** The doc's `published` field - a field, not a state. */
+  published: boolean
 }
 
 export interface LibraryView {

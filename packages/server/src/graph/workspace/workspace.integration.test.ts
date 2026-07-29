@@ -16,6 +16,7 @@ let tmp: string
 let seed: typeof import('./seed.js')
 let read: typeof import('./read.js')
 let graph: typeof import('../../db/graphStore.js')
+const at = () => import('../applyTransition.js')
 let result: import('./seed.js').SeedResult
 
 beforeAll(async () => {
@@ -53,9 +54,11 @@ describe('the seed runs entirely through the real primitives', () => {
     expect(again.openObligations).toBe(result.openObligations)
   }, 120_000)
 
-  it('every non-planned status change carries a transition, a diff and provenance', async () => {
+  it('every status change carries a transition, a diff and provenance', async () => {
     const objects = await graph.listObjects(undefined, read.DEMO_TEAM_ID)
-    const moved = objects.filter((o) => o.archetype !== 'mirror' && o.status !== 'planned' && o.status !== 'queued')
+    // Only TASKS move (decision 8): docs and mirrors have no state machine, so
+    // anything that changed state is a task and must be fully attributable.
+    const moved = objects.filter((o) => o.archetype === 'task' && o.status !== 'planned' && o.status !== 'queued')
     expect(moved.length).toBeGreaterThan(20)
     for (const o of moved) {
       const events = await graph.listObjectEvents(undefined, o.id)
@@ -124,14 +127,40 @@ describe('the read projections derive from rows, not from fixtures', () => {
     }
   })
 
-  it('marks exactly the obligation-holding artifacts as needing a human', async () => {
+  it('flags exactly the content whose SHEPHERD holds an open obligation', async () => {
     const library = await read.libraryView()
     const open = await graph.listOpenObligations(undefined, read.DEMO_TEAM_ID, { class: 'human-verdict' })
-    const flagged = library.artifacts.filter((a) => a.needsHuman).map((a) => a.id).sort()
-    expect(flagged).toEqual([...new Set(open.map((o) => o.objectId))].sort())
-    expect(library.needsYou).toBe(flagged.length)
-    // Each one names the transition that discharges it, resolved from the spec.
-    for (const a of library.artifacts.filter((x) => x.needsHuman)) expect(a.verdict?.transition).toBeTruthy()
+    const waiting = library.artifacts.filter((a) => a.needsHuman)
+    expect(library.needsYou).toBe(waiting.length)
+    // The row is the CONTENT; the obligation is on the task it points at.
+    expect(waiting.map((a) => a.verdict!.objectId).sort()).toEqual([...new Set(open.map((o) => o.objectId))].sort())
+    for (const a of waiting) {
+      expect(a.verdict?.transition).toBeTruthy()
+      expect(a.verdict?.objectId).not.toBe(a.id)
+    }
+  })
+
+  it('keeps lifecycle and gates TASK-ONLY (decision 8)', async () => {
+    const objects = new Map((await graph.listObjects(undefined, read.DEMO_TEAM_ID)).map((o) => [o.id, o]))
+    const obligations = await graph.listOpenObligations(undefined, read.DEMO_TEAM_ID)
+    expect(obligations.length).toBeGreaterThan(0)
+    // Not one obligation sits on content or on an observed external fact.
+    for (const o of obligations) expect(objects.get(o.objectId)?.archetype).toBe('task')
+
+    // And a doc cannot be moved even if something tried: its spec declares no
+    // transitions, so the seam refuses it structurally.
+    const doc = [...objects.values()].find((o) => o.archetype === 'doc')!
+    const refused = await at().then((m) =>
+      m.applyTransition({
+        objectId: doc.id,
+        transition: 'publish',
+        actor: { entrance: 'human', actorId: 'u-demo-captain' },
+        now: '2026-07-30T09:00:00+08:00',
+      }),
+    )
+    expect(refused.ok).toBe(false)
+    if (refused.ok) return
+    expect(refused.code).toBe('ARCHETYPE_HAS_NO_STATE_MACHINE')
   })
 
   it('feeds the timeline straight off the event log, with provenance', async () => {

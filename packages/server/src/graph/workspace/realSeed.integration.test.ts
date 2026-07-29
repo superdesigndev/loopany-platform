@@ -19,7 +19,11 @@ let tmp: string
 let seedReal: typeof import('./seed-real.js')
 let read: typeof import('./read.js')
 let graph: typeof import('../../db/graphStore.js')
+const at = () => import('../applyTransition.js')
 let snapshot: import('./pull-prod.js').ProdSnapshot
+
+/** The shepherd task types, mirrored from specs.ts so a rename shows up here. */
+const SHEPHERDS = { 'merge-review': 1, 'publish-review': 1, 'decision-review': 1, 'ship-review': 1 }
 
 function makeSnapshot(): import('./pull-prod.js').ProdSnapshot {
   return {
@@ -177,12 +181,36 @@ describe('replaying a production snapshot', () => {
     expect(events.some((e) => e.transition === 'finish')).toBe(true)
   })
 
-  it('opens a gate for exactly the waiting front-matter types', async () => {
+  it('opens a gate for exactly the waiting front-matter types, on a SHEPHERD task', async () => {
     const open = await graph.listOpenObligations(undefined, read.DEMO_TEAM_ID, { class: 'human-verdict' })
     const objects = new Map((await graph.listObjects(undefined, read.DEMO_TEAM_ID)).map((o) => [o.id, o]))
     const waiting = open.map((o) => objects.get(o.objectId)?.title).sort()
     // needs_human, open and drafted wait; report, merged and no-front-matter do not.
     expect(waiting).toEqual(['A post waiting to go out', 'Remove a dead util', 'SUP-79 refund decision'])
+    // Every one of them is a TASK, never the content itself (decision 8).
+    for (const o of open) {
+      const holder = objects.get(o.objectId)!
+      expect(holder.archetype).toBe('task')
+      expect(Object.keys(SHEPHERDS)).toContain(holder.type)
+    }
+  })
+
+  it('gives content no lifecycle at all, and publishes it with a FIELD', async () => {
+    const objects = await graph.listObjects(undefined, read.DEMO_TEAM_ID)
+    const docs = objects.filter((o) => o.archetype === 'doc')
+    expect(docs.length).toBeGreaterThan(3)
+    for (const doc of docs) {
+      // One nominal state, and no status-change event ever written for it.
+      expect(doc.status).toBe('current')
+      const events = await graph.listObjectEvents(undefined, doc.id)
+      expect(events.filter((e) => e.kind === 'status-changed')).toEqual([])
+      expect(typeof (doc.payload as Record<string, unknown>).published).toBe('boolean')
+    }
+    // Settled flows set the field; waiting ones leave it false.
+    const merged = docs.find((d) => d.title === 'Removed a dead component')!
+    expect((merged.payload as Record<string, unknown>).published).toBe(true)
+    const waiting = docs.find((d) => d.title === 'A post waiting to go out')!
+    expect((waiting.payload as Record<string, unknown>).published).toBe(false)
   })
 
   it('creates a mirror for a PR a run referenced, at the honest `observed` status', async () => {

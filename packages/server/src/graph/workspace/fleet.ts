@@ -107,6 +107,13 @@ export interface ArtifactSeed {
   loop: string;
   /** The artifact FILE, byte for byte as it would sit in the loop folder. */
   file: string;
+  /**
+   * The review flow a person owes on this content, if any. Present ⇒ the seeder
+   * mints a SHEPHERD task keyed `<key>#review` that tracks the doc and carries
+   * the obligation; the content itself never moves (decision 8). Absent ⇒ the
+   * doc is simply live content with `published: true`.
+   */
+  review?: "publish" | "decision" | "ship";
 }
 
 /** Small helper so each file below reads like the file it is. */
@@ -115,6 +122,7 @@ const file = (frontMatter: string, body: string) => `---\n${frontMatter.trim()}\
 export const ARTIFACTS: ArtifactSeed[] = [
   {
     key: "eng-policy",
+    review: "decision",
     type: "report",
     loop: "eng-loop",
     file: file(
@@ -145,6 +153,7 @@ be explicit before we carry compatibility work forward.
   },
   {
     key: "plib-1",
+    review: "ship",
     type: "playbook",
     loop: "plib-loop",
     file: file(
@@ -173,6 +182,7 @@ core score or remains a separate guardrail.`,
   },
   {
     key: "plib-2",
+    review: "ship",
     type: "playbook",
     loop: "plib-loop",
     file: file(
@@ -201,6 +211,7 @@ protocol; review should decide whether to merge or cross-link them.`,
   },
   {
     key: "linkedin-sidekick",
+    review: "publish",
     type: "post",
     loop: "li-loop",
     file: file(
@@ -231,6 +242,7 @@ leverage with receipts.`,
   },
   {
     key: "reddit-50",
+    review: "publish",
     type: "post",
     loop: "raeo-loop",
     file: file(
@@ -260,6 +272,7 @@ rounds much faster because taste is no longer trapped in chat history.`,
   },
   {
     key: "reddit-48",
+    review: "publish",
     type: "post",
     loop: "raeo-loop",
     file: file(
@@ -289,6 +302,7 @@ boundary has mattered more than shaving a few seconds off dispatch.`,
   },
   {
     key: "reddit-47",
+    review: "publish",
     type: "post",
     loop: "raeo-loop",
     file: file(
@@ -566,10 +580,8 @@ const sched = (key: string) => `sched-${key}`;
 export const HISTORY: HistoryStep[] = [
   // ==== Monday 2026-07-27 ====
   { at: "2026-07-27T09:00:00+08:00", object: "mon-vis", transition: "fire", entrance: "clock", actorId: sched("mon-vis") },
-  { at: "2026-07-27T09:04:00+08:00", object: "visibility", transition: "complete", entrance: "agent-run", actorId: run("vis-w4") },
   { at: "2026-07-27T09:05:00+08:00", object: "mon-vis", transition: "complete", entrance: "agent-run", actorId: run("vis-w4"), note: "indexed 257 answer records for week 4", fields: { runs: 4, lastOutcome: "new" } },
   { at: "2026-07-27T09:10:00+08:00", object: "mon-seowk", transition: "fire", entrance: "clock", actorId: sched("mon-seowk") },
-  { at: "2026-07-27T09:16:00+08:00", object: "geo-snapshot", transition: "complete", entrance: "agent-run", actorId: run("geo-w4") },
   { at: "2026-07-27T09:17:00+08:00", object: "mon-seowk", transition: "complete", entrance: "agent-run", actorId: run("geo-w4"), note: "delivered the weekly search and answer-engine roll-up", fields: { runs: 4 } },
   { at: "2026-07-27T08:00:00+08:00", object: "seo-loop", transition: "fire", entrance: "clock", actorId: sched("seo-loop") },
   { at: "2026-07-27T08:40:00+08:00", object: "seo-loop", transition: "complete", entrance: "agent-run", actorId: run("seo-13"), note: "shipped run 13 from research through live publication", fields: { runs: 13 } },
@@ -591,7 +603,6 @@ export const HISTORY: HistoryStep[] = [
   { at: "2026-07-29T04:09:00+08:00", object: "mon-rai", transition: "complete", entrance: "agent-run", actorId: run("rai-29"), note: "observed new citation opportunities", fields: { runs: 7 } },
 
   { at: "2026-07-29T05:08:00+08:00", object: "mon-radar", transition: "fire", entrance: "clock", actorId: sched("mon-radar") },
-  { at: "2026-07-29T05:14:00+08:00", object: "content-radar", transition: "complete", entrance: "agent-run", actorId: run("radar-29") },
   { at: "2026-07-29T05:15:00+08:00", object: "mon-radar", transition: "complete", entrance: "agent-run", actorId: run("radar-29"), note: "completed the daily market scan", fields: { runs: 7 } },
 
   // React Doctor opens a PR and hands it to the merge gate.
@@ -608,19 +619,17 @@ export const HISTORY: HistoryStep[] = [
 
   // Prompt library parks its first candidate at the ship gate.
   { at: "2026-07-29T07:40:00+08:00", object: "plib-loop", transition: "fire", entrance: "clock", actorId: sched("plib-loop") },
-  { at: "2026-07-29T07:48:00+08:00", object: "plib-1", transition: "block", entrance: "agent-run", actorId: run("plib-29a"), note: "blocked a playbook candidate at its quality gate", keepPending: true },
+  { at: "2026-07-29T07:48:00+08:00", object: "plib-1#review", transition: "propose", entrance: "agent-run", actorId: run("plib-29a"), note: "blocked a playbook candidate at its quality gate", keepPending: true },
   { at: "2026-07-29T07:50:00+08:00", object: "plib-loop", transition: "complete", entrance: "agent-run", actorId: run("plib-29a"), fields: { runs: 21 } },
 
   { at: "2026-07-29T08:00:00+08:00", object: "b-conv", transition: "fire", entrance: "clock", actorId: sched("b-conv") },
-  { at: "2026-07-29T08:04:00+08:00", object: "converter", transition: "complete", entrance: "agent-run", actorId: run("conv-29") },
   { at: "2026-07-29T08:05:00+08:00", object: "b-conv", transition: "complete", entrance: "agent-run", actorId: run("conv-29"), note: "recorded +$189 MRR and 7 subscriptions", fields: { runs: 5, mrrDelta: 189 } },
 
   { at: "2026-07-29T08:00:00+08:00", object: "seo-loop", transition: "fire", entrance: "clock", actorId: sched("seo-loop") },
-  { at: "2026-07-29T08:21:00+08:00", object: "seo-run-14", transition: "complete", entrance: "agent-run", actorId: run("seo-14") },
   { at: "2026-07-29T08:22:00+08:00", object: "seo-loop", transition: "complete", entrance: "agent-run", actorId: run("seo-14"), note: "shipped run 14 from research through live publication", fields: { runs: 14 } },
 
   { at: "2026-07-29T08:20:00+08:00", object: "li-loop", transition: "fire", entrance: "clock", actorId: sched("li-loop") },
-  { at: "2026-07-29T08:28:00+08:00", object: "linkedin-sidekick", transition: "draft-ready", entrance: "agent-run", actorId: run("li-29"), note: "drafted Sidekick Paradigm for review", keepPending: true },
+  { at: "2026-07-29T08:28:00+08:00", object: "linkedin-sidekick#review", transition: "ready", entrance: "agent-run", actorId: run("li-29"), note: "drafted Sidekick Paradigm for review", keepPending: true },
   { at: "2026-07-29T08:30:00+08:00", object: "li-loop", transition: "complete", entrance: "agent-run", actorId: run("li-29"), fields: { runs: 1 } },
 
   { at: "2026-07-29T09:00:00+08:00", object: "b-digest", transition: "fire", entrance: "clock", actorId: sched("b-digest") },
@@ -628,7 +637,7 @@ export const HISTORY: HistoryStep[] = [
 
   // ENG-010 escalates a policy question - a report, not a PR.
   { at: "2026-07-29T09:00:00+08:00", object: "eng-loop", transition: "fire", entrance: "clock", actorId: sched("eng-loop") },
-  { at: "2026-07-29T09:12:00+08:00", object: "eng-policy", transition: "escalate", entrance: "agent-run", actorId: run("eng-29"), note: "escalated the Safari 16.1 old-browser policy decision", keepPending: true },
+  { at: "2026-07-29T09:12:00+08:00", object: "eng-policy#review", transition: "raise", entrance: "agent-run", actorId: run("eng-29"), note: "escalated the Safari 16.1 old-browser policy decision", keepPending: true },
   { at: "2026-07-29T09:14:00+08:00", object: "eng-loop", transition: "complete", entrance: "agent-run", actorId: run("eng-29"), fields: { runs: 8 } },
 
   { at: "2026-07-29T10:00:00+08:00", object: "mon-fact", transition: "fire", entrance: "clock", actorId: sched("mon-fact") },
@@ -636,17 +645,16 @@ export const HISTORY: HistoryStep[] = [
 
   // Reddit outreach prepares three postable drafts in one pass.
   { at: "2026-07-29T11:00:00+08:00", object: "raeo-loop", transition: "fire", entrance: "clock", actorId: sched("raeo-loop") },
-  { at: "2026-07-29T11:06:00+08:00", object: "reddit-50", transition: "draft-ready", entrance: "agent-run", actorId: run("raeo-29"), note: "prepared 3 postable drafts, with RC-50 first", keepPending: true },
-  { at: "2026-07-29T11:07:00+08:00", object: "reddit-48", transition: "draft-ready", entrance: "agent-run", actorId: run("raeo-29"), keepPending: true },
-  { at: "2026-07-29T11:08:00+08:00", object: "reddit-47", transition: "draft-ready", entrance: "agent-run", actorId: run("raeo-29"), keepPending: true },
+  { at: "2026-07-29T11:06:00+08:00", object: "reddit-50#review", transition: "ready", entrance: "agent-run", actorId: run("raeo-29"), note: "prepared 3 postable drafts, with RC-50 first", keepPending: true },
+  { at: "2026-07-29T11:07:00+08:00", object: "reddit-48#review", transition: "ready", entrance: "agent-run", actorId: run("raeo-29"), keepPending: true },
+  { at: "2026-07-29T11:08:00+08:00", object: "reddit-47#review", transition: "ready", entrance: "agent-run", actorId: run("raeo-29"), keepPending: true },
   { at: "2026-07-29T11:10:00+08:00", object: "raeo-loop", transition: "complete", entrance: "agent-run", actorId: run("raeo-29"), fields: { runs: 9 } },
 
   { at: "2026-07-29T12:00:00+08:00", object: "sup-loop", transition: "fire", entrance: "clock", actorId: sched("sup-loop") },
-  { at: "2026-07-29T12:52:00+08:00", object: "support-notes", transition: "ship", entrance: "agent-run", actorId: run("sup-29") },
   { at: "2026-07-29T12:54:00+08:00", object: "sup-loop", transition: "stand-down", entrance: "agent-run", actorId: run("sup-29"), note: "closed a quiet wake with no ticket to escalate", fields: { runs: 180, lastOutcome: "nothing-new" } },
 
   { at: "2026-07-29T13:00:00+08:00", object: "plib-loop", transition: "fire", entrance: "clock", actorId: sched("plib-loop") },
-  { at: "2026-07-29T13:04:00+08:00", object: "plib-2", transition: "block", entrance: "agent-run", actorId: run("plib-29b"), note: "parked a second playbook candidate at its ship gate", keepPending: true },
+  { at: "2026-07-29T13:04:00+08:00", object: "plib-2#review", transition: "propose", entrance: "agent-run", actorId: run("plib-29b"), note: "parked a second playbook candidate at its ship gate", keepPending: true },
   { at: "2026-07-29T13:06:00+08:00", object: "plib-loop", transition: "complete", entrance: "agent-run", actorId: run("plib-29b"), fields: { runs: 21 } },
 
   // The oldest thing still waiting on a person: PR #1250, six days at the gate.

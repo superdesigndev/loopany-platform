@@ -40,15 +40,23 @@ import {
 } from "../../db/graph-schema.js";
 import * as graph from "../../db/graphStore.js";
 import { applyTransition } from "../applyTransition.js";
-import { ARTIFACTS, HISTORY, LOOPS, PULL_REQUESTS, RELATIONS, type ArtifactSeed } from "./fleet.js";
+import { ARTIFACTS, HISTORY, LOOPS, PULL_REQUESTS, RELATIONS } from "./fleet.js";
 import { DEMO_TEAM_ID, DEMO_TYPES } from "./specs.js";
 import { parseArtifact } from "@loopany/artifact-format";
 
 /** Instant the demo's registry rows and objects are stamped as created. */
 const SEED_AT = "2026-07-01T09:00:00+08:00";
 
-/** The reviewing task that hangs off a pull request, keyed `<pr>#review`. */
-const reviewKey = (prKey: string) => `${prKey}#review`;
+/** The reviewing TASK that hangs off a pull request or a doc, keyed `<key>#review`.
+ *  Content and mirrors never carry a verdict themselves (decision 8). */
+const reviewKey = (key: string) => `${key}#review`;
+
+/** Review flow → the shepherd task type that carries its obligation. */
+const SHEPHERD_OF_FLOW = {
+  publish: "publish-review",
+  decision: "decision-review",
+  ship: "ship-review",
+} as const;
 
 export interface SeedResult {
   teamId: string;
@@ -137,19 +145,25 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
     if (declared !== artifact.type) {
       throw new Error(`artifact ${artifact.key}: front matter type "${declared}" != seed type "${artifact.type}"`);
     }
+    const when = stringField(doc.frontMatter.createdAt) ?? SEED_AT;
     const row = await graph.createObject(undefined, {
       teamId,
       archetype: "doc",
+      // Content has ONE nominal state and no transitions (decision 8).
       type: artifact.type,
-      status: initialStateOf(artifact),
+      status: "current",
       title: typeof doc.frontMatter.title === "string" ? doc.frontMatter.title : artifact.key,
       payload: {
         // The bytes, kept verbatim: rendering is a projection, never storage.
         source: artifact.file,
         frontMatter: doc.frontMatter,
         loopKey: artifact.loop,
+        // `published` is a FIELD. Content awaiting a verdict is not published
+        // yet; content with no review flow is simply live.
+        published: !artifact.review,
+        version: 1,
       },
-      now: stringField(doc.frontMatter.createdAt) ?? SEED_AT,
+      now: when,
     });
     ids.set(artifact.key, row.id);
     await graph.upsertEdge(undefined, {
@@ -157,8 +171,23 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
       kind: "produces",
       srcId: ids.get(artifact.loop)!,
       dstId: row.id,
-      now: stringField(doc.frontMatter.createdAt) ?? SEED_AT,
+      now: when,
     });
+
+    if (!artifact.review) continue;
+    // The verdict lives on a shepherd TASK that tracks the content.
+    const shepherd = await graph.createObject(undefined, {
+      teamId,
+      archetype: "task",
+      type: SHEPHERD_OF_FLOW[artifact.review],
+      status: "queued",
+      title: row.title,
+      payload: { loopKey: artifact.loop, reviews: row.id },
+      now: when,
+    });
+    ids.set(reviewKey(artifact.key), shepherd.id);
+    await graph.upsertEdge(undefined, { teamId, kind: "tracks", srcId: shepherd.id, dstId: row.id, now: when });
+    await graph.upsertEdge(undefined, { teamId, kind: "produces", srcId: ids.get(artifact.loop)!, dstId: shepherd.id, now: when });
   }
 
   // ---- 4. pull requests: an external MIRROR + the merge review we own ----
@@ -278,19 +307,6 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
     pendingActions: pending.length,
     refusals,
   };
-}
-
-/** Each doc type's declared initial state. Kept here rather than read off the
- *  spec so a spec change that forgets an artifact type fails loudly at seed. */
-function initialStateOf(artifact: ArtifactSeed): string {
-  switch (artifact.type) {
-    case "post":
-      return "draft";
-    case "report":
-      return "drafting";
-    case "playbook":
-      return "draft";
-  }
 }
 
 function stringField(v: unknown): string | undefined {

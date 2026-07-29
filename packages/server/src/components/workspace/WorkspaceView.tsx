@@ -229,8 +229,8 @@ function ArtifactPreview({
             {artifact.verdict && (
               <div className="preview-verdict">
                 <p>
-                  This artifact is holding an open <code>{artifact.verdict.obligation}</code> obligation. Running{' '}
-                  <code>{artifact.verdict.transition}</code> closes it.
+                  A review task is holding an open <code>{artifact.verdict.obligation}</code> obligation on this
+                  content. Running <code>{artifact.verdict.transition}</code> on that task closes it.
                 </p>
                 <button className="verdict-button" disabled={busy} onClick={() => onVerdict(artifact)}>
                   {busy ? 'Working…' : artifact.verdict.label}
@@ -518,7 +518,8 @@ export function WorkspaceView() {
       if (!artifact.verdict) return
       setBusyId(artifact.id)
       setNotice(null)
-      const result = await postVerdict(artifact.id, artifact.verdict.transition)
+      // The verdict moves the SHEPHERD task, never the content itself.
+      const result = await postVerdict(artifact.verdict.objectId, artifact.verdict.transition)
       if (result.ok) {
         setNotice(`${artifact.title} → ${result.status} (closed ${result.closed.join(', ') || 'nothing'}; event ${result.eventId})`)
       } else {
