@@ -235,7 +235,7 @@ computes pure functions. Run instructions: `README.md`.
   compose through `DashboardView.openTemplate` - never a parallel creation path.
 - **The market CARD is ONE shared component** (`components/TemplateCard.tsx`:
   `TemplateCard` + `bundleItems`; the card body is the When/Does/You-get `FlowStrip`
-  fed by `rating.schedule`/`does`/`outcome` - `server/templateRatings.ts` owns those 21
+  fed by `rating.schedule`/`does`/`outcome` - `server/templateRatings.ts` owns those 23
   copy lines), rendered by THREE surfaces:
   `/templates`, and the catalog teaser `components/TemplatesPreview.tsx` on BOTH the
   dashboard and the pre-login landing. The teaser opens with the SAME typed hero as the
@@ -269,7 +269,7 @@ computes pure functions. Run instructions: `README.md`.
   from `nodes`, the `setup` gate split off, `closes` from a `finish` node, outputs from
   the dashboard WIDGETS the loop maintains, typed by widget kind). It must stay
   hook-free/measurement-free - that route SSRs for crawlers, and the guard test pins it.
-  A template with no spec renders NEITHER surface (all 21 shipping templates have one);
+  A template with no spec renders NEITHER surface (all 23 shipping templates have one);
   add a spec rather than invent a flow.
 - **Editorial ratings** (`server/templateRatings.ts`, one typed table merged onto
   `TemplateInfo.rating`) drive the market's rating chips and the detail view's mechanism
@@ -308,7 +308,7 @@ computes pure functions. Run instructions: `README.md`.
   paste-prompt must enumerate.** (6) OPTIONAL `story.md` - the public detail page's "Field
   notes"; see the public-market bullet above for the render path and the
   `public/template-assets/<name>/` media rule.
-- **The shipping catalog is the folder list under `skill/templates/`** (21 across the 6
+- **The shipping catalog is the folder list under `skill/templates/`** (23 across the 6
   bundles); each template's defining behaviors are owned by its own `meta.json`
   `description` and pinned per-template by `templates.test.ts` - read those, never a
   summary here. The house disciplines that recur across them, and that a NEW template
