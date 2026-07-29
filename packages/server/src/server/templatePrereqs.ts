@@ -40,6 +40,19 @@ export const TEMPLATE_PREREQS: Record<string, TemplatePrereq[]> = {
     },
   ],
 
+  'seo-scout': [
+    {
+      label: 'Live Google Search Console read access',
+      desc: 'An API script, CLI, or MCP tool that pulls live query data for your site — every verdict reads it.',
+      href: TREG,
+      linkLabel: 'Manage agent credentials with treg',
+    },
+    {
+      label: 'Your content repo, with a PR flow',
+      desc: 'The blog lives in git; every bet ships as one pull request a human merges.',
+    },
+  ],
+
   // ── Business Ops ────────────────────────────────────────────
   'support-triage': [
     {

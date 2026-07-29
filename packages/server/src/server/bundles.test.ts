@@ -68,7 +68,7 @@ describe('bundle registry', () => {
 
     expect(byName.get('growth')!.label).toBe('Growth')
     expect(byName.get('growth')!.accent).toBe('rubik-green')
-    expect(members('growth')).toEqual(['reddit-karma', 'market-research', 'changelog-broadcaster'])
+    expect(members('growth')).toEqual(['reddit-karma', 'seo-scout', 'market-research', 'changelog-broadcaster'])
 
     expect(byName.get('business-ops')!.label).toBe('Business Ops')
     expect(byName.get('business-ops')!.accent).toBe('rubik-orange')

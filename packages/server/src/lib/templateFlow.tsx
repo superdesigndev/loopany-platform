@@ -601,9 +601,43 @@ const OUTCOME_WATCH: FlowSpec = {
   ],
 }
 
+
+const SEO_SCOUT: FlowSpec = {
+  worktreeLabel: 'Isolated git worktree · off main',
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Wire Search Console + the map', detail: 'smoke-test one live pull · breadwinner protected · bot queries tagged' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every Mon', detail: 'one bet max · skipping is healthy' },
+    { id: 'verdict', kicker: 'Step 1 · Verdict', glyph: '⚖', title: 'Day-7 verdicts first', detail: 'live daily series · dated · scale or leave' },
+    { id: 'radar', kicker: 'Step 2 · Radar', glyph: '⌕', title: 'Read your own feed', detail: 'bookmarks & communities — not keyword tools' },
+    { id: 'bet', wt: true, kicker: 'Step 3 · Bet', glyph: '✎', title: 'Place one cheap bet', detail: 'one guide + up to 4 supporting pages' },
+    { id: 'ship', wt: true, kicker: 'Step 4 · Ship', glyph: '⑂', title: 'One PR, human merges', detail: 'no new bet while one is open' },
+  ],
+  dashboard: [
+    {
+      type: 'kanban',
+      heading: 'Bet board',
+      sub: 'thesis → live → verdict',
+      columns: [
+        ['Live', [
+          ['BET-7', 'context compaction — guide + 4 pages', 'day 5 of 7'],
+        ]],
+        ['Scaled', [
+          ['BET-5', 'loop engineering cluster', 'daily loop spun up'],
+          ['BET-6', '"X is dead" displacement page', '295 clicks/wk'],
+        ]],
+        ['Left', [
+          ['BET-4', 'loops vs graphs', '16 impressions · left'],
+        ]],
+      ],
+    },
+    { type: 'metric', label: 'Organic clicks (28d)', series: [112, 340, 820, 2079, 3900, 6900, 10400, 13831], note: 'bets are cheap; the verdicts decide what gets scaled.' },
+  ],
+}
+
 export const FLOWS: Record<string, FlowSpec> = {
   'support-triage': SUPPORT_TRIAGE,
   'reddit-karma': REDDIT_KARMA,
+  'seo-scout': SEO_SCOUT,
   'react-doctor': REACT_DOCTOR,
   'docs-sweep': DOCS_SWEEP,
   'error-sweep': ERROR_SWEEP,

@@ -110,7 +110,7 @@ const CARD_ORDER = [
   // Ship with Confidence
   'test-guardian', 'security-sweep', 'ci-doctor',
   // Growth
-  'reddit-karma', 'market-research', 'changelog-broadcaster',
+  'reddit-karma', 'seo-scout', 'market-research', 'changelog-broadcaster',
   // Business Ops
   'support-triage', 'metrics-digest', 'funnel-watch',
   // Personal

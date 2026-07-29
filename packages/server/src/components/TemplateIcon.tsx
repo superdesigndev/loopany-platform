@@ -92,6 +92,12 @@ const STROKE: Record<string, ReactNode> = {
       <path d="M2 12h20" />
     </>
   ),
+  'seo-scout': (
+    <>
+      <path d="M22 7 13.5 15.5l-5-5L2 17" />
+      <path d="M16 7h6v6" />
+    </>
+  ),
   'changelog-broadcaster': (
     <>
       <path d="m3 11 18-5v12L3 14v-3z" />

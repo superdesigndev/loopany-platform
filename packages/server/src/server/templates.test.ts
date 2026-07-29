@@ -48,6 +48,7 @@ describe('template registry', () => {
       'ci-doctor',
       // Growth
       'reddit-karma',
+      'seo-scout',
       'market-research',
       'changelog-broadcaster',
       // Business Ops
@@ -185,6 +186,34 @@ describe('template registry', () => {
     // The anti-AI writing rules are the hard-won differentiator.
     expect(l).toContain('em-dash')
     expect(d).toContain('written by ChatGPT') // the #1 AI tell it guards against
+  })
+
+  test('seo-scout: cheap emerging-keyword bets, live-data verdicts, one PR at a time', () => {
+    const t = TEMPLATES.find((x) => x.name === 'seo-scout') as TemplateInfo
+    expect(t).toBeTruthy()
+    expect(t.label).toBe('SEO Scout')
+    const d = t.description
+    const l = d.toLowerCase()
+    // Live Search Console is the ONLY receipt source, smoke-tested before creating.
+    expect(l).toContain('search console')
+    expect(l).toContain('smoke test')
+    // The breadwinner page is protected, with a cooldown; bot queries are excluded.
+    expect(l).toContain('breadwinner')
+    expect(l).toContain('14-day cooldown')
+    // The radar is the owner's own feed, not lagging keyword tools.
+    expect(l).toContain('keyword tools lag')
+    // One cheap bet per run, as one worktree PR a human merges — never stacked.
+    expect(l).toContain('at most one cheap bet')
+    expect(l).toContain('worktree')
+    expect(l).toContain('human merges')
+    // Skipping is a valid outcome — quality over volume.
+    expect(l).toContain('clean skip')
+    // Dated day-7 verdicts; emerging terms score on position/impressions, never clicks.
+    expect(l).toContain('day-7 verdict')
+    expect(l).toContain('never clicks')
+    expect(l).toContain('never averages')
+    // The suppressed formats stay banned.
+    expect(l).toContain('self-ranking listicle')
   })
 })
 

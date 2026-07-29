@@ -119,6 +119,16 @@ export const TEMPLATE_RATINGS: Record<string, TemplateRating> = {
     does: "Finds threads you can genuinely help → value-only replies",
     outcome: "⬆️ Compounding karma & presence",
   },
+  'seo-scout': {
+    ease: 'advanced',
+    cadence: 'long',
+    mechanism: 'open',
+    visibility: 'compounds',
+    visibilityNote: 'Emerging-keyword bets score on position/impressions first; clicks compound over weeks as bets clear their day-7 verdicts.',
+    schedule: "Weekly · Mon",
+    does: "Reads your own radar → places one cheap keyword bet",
+    outcome: "🔀 One content-bet PR + dated verdicts",
+  },
   'changelog-broadcaster': {
     ease: 'easy',
     cadence: 'long',
