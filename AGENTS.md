@@ -285,7 +285,7 @@ computes pure functions. Run instructions: `README.md`.
   don't settle for a tight one-paragraph blurb; some older short-paragraph templates
   predate this and are lighter. English only. `templates.test.ts` pins the full name list
   AND asserts each template's defining behaviors stay in its description.
-- **New-template SOP — TWO required pieces plus three optional ones:**
+- **New-template SOP — TWO required pieces plus four optional ones:**
   (1) `meta.json` — the paste-prompt `description`: a guided multi-step setup conversation
   (verify-before-create gates → the loop's rules / boundaries / quality gates → optionally
   the task-file skeleton to author). (2) membership in exactly one `skill/bundles/*`
@@ -301,7 +301,9 @@ computes pure functions. Run instructions: `README.md`.
   and renders the Loop-flow / Dashboard tabs; the SAME spec draws the public detail page's
   static diagram - see the flow-spec bullet above). **The LOOP FLOW and the DASHBOARD are
   the CARD VISUAL in (5) + what create.md/`reference.md` actually author — NOT sections the
-  paste-prompt must enumerate.**
+  paste-prompt must enumerate.** (6) OPTIONAL `story.md` - the public detail page's "Field
+  notes"; see the public-market bullet above for the render path and the
+  `public/template-assets/<name>/` media rule.
 - **The shipping catalog is the folder list under `skill/templates/`** (21 across the 6
   bundles); each template's defining behaviors are owned by its own `meta.json`
   `description` and pinned per-template by `templates.test.ts` - read those, never a
