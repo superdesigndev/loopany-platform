@@ -229,15 +229,18 @@ computes pure functions. Run instructions: `README.md`.
   `TemplateCard` + `bundleItems`; the card body is the When/Does/You-get `FlowStrip`
   fed by `rating.schedule`/`does`/`outcome` - `server/templateRatings.ts` owns those 21
   copy lines), rendered by THREE surfaces:
-  `/templates`, and the LOOP-MARKETPLACE band `components/TemplatesPreview.tsx` on BOTH
-  the dashboard and the pre-login landing. The band is the FULL catalog (no clip, no
-  round-robin cap, no "Browse all" hop): one section per bundle in curated order
-  (label + tagline, `h3.band-section-head`), every card `composeDirect` — the WHOLE
-  card links `/?template=<name>` straight into the compose flow (survives the login
-  redirect via `callbackURL`) and the hover Create pill is omitted as redundant. The
-  public `/templates` market keeps detail-page navigation (`composeDirect` off) — that
-  surface is for reading the prompt before committing. The old fixed-height peek/mask
-  machinery (`compact` card variant, `.templates-peek`, PREVIEW_COUNT) is retired.
+  `/templates`, and the catalog teaser `components/TemplatesPreview.tsx` on BOTH the
+  dashboard and the pre-login landing. The teaser opens with the SAME typed hero as the
+  market (`AgentLoopsHeadline`, exported from `TemplatesPage` — compact size for the
+  band) and curates ROUND-ROBIN across bundles (every bundle's lead first in curated
+  category order, then every bundle's second, ...) to `PREVIEW_COUNT = 9` = three
+  desktop rows under `.templates-peek`, a fixed `max-height` + bottom mask: TWO rows
+  solid, the THIRD under the fade, then "Browse all N templates" (N = the WHOLE
+  catalog). The card height (252px), the box (642px) and the mask stop (81%) are
+  COUPLED — change one, change all three (pinned by `TemplatesPreview.test.ts`, which
+  derives the formula from source). `PEEK_VISIBILITY` `display: none`s the cards a
+  narrower column count would push entirely under the clip (3/6/9 at 1/2/3 columns);
+  the box uses `overflow-clip`, not `hidden`, so it is never a scroll container.
   Data source differs by surface: the dashboard passes the
   loader's static `bundles` (never re-polled), while `SignIn` fetches `listPublicBundles`
   itself (thumb-stripped, public) rather than threading it through the eight gated routes

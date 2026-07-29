@@ -111,24 +111,30 @@ describe('SignIn (pre-login landing)', () => {
     expect(el.textContent).toContain('never runs an LLM or your code')
   })
 
-  it('renders the SAME marketplace band as the dashboard — full catalog, compose-direct', async () => {
+  it('renders the SAME template teaser as the dashboard, fading into Browse all', async () => {
     const el = await mount()
     expect(listPublicBundles).toHaveBeenCalled()
-    expect(el.textContent).toContain('Agent Loops')
-    // Every template renders in its bundle section; each card goes straight to compose
-    // (the ?template param survives the login redirect via callbackURL).
+    // The shared market card under the clip+fade container: each bundle's LEAD first,
+    // then a top-up from what is left (only 3 templates here, so all three show).
+    expect(el.querySelectorAll('.templates-peek').length).toBe(1)
     expect(el.querySelectorAll('article.market-card').length).toBe(3)
-    const links = [...el.querySelectorAll('a.market-card-link')].map((a) => a.getAttribute('href'))
-    expect(links.every((h) => h?.startsWith('/?template='))).toBe(true)
-    // No Browse-all hop — the band IS the catalog.
-    expect([...el.querySelectorAll('a')].some((a) => (a.textContent ?? '').includes('Browse all'))).toBe(false)
+    expect([...el.querySelectorAll('a.market-card-link')].map((a) => a.textContent)).toEqual([
+      'React Doctor',
+      'Market Monitor',
+      'Housekeeper',
+    ])
+    const browse = [...el.querySelectorAll('a')].filter((a) => (a.textContent ?? '').includes('Browse all'))
+    expect(browse.length).toBe(1)
+    // /templates is public, so the link works while logged out.
+    expect(browse[0]!.getAttribute('href')).toBe('/templates')
+    expect(browse[0]!.textContent).toContain('Browse all 3 templates')
   })
 
   it('the teaser is best-effort — a failed registry fetch never breaks the landing', async () => {
     listPublicBundles.mockRejectedValueOnce(new Error('offline'))
     const el = await mount()
     expect([...el.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('Continue with GitHub'))).toBe(true)
-    expect(el.querySelectorAll('article.market-card').length).toBe(0)
+    expect(el.querySelectorAll('.templates-peek').length).toBe(0)
   })
 
   it('sits above the playbook and reads the PUBLIC (thumb-stripped) registry', () => {

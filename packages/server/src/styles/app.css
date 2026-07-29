@@ -301,6 +301,28 @@
 }
 
 /*
+ * Template-catalog teaser (`TemplatesPreview`, the band right above the playbook on both
+ * the dashboard and the pre-login landing). The compact cards are fixed-height
+ * (`TemplateCard` `compact`), so clipping the grid to TWO full rows plus a peek of the
+ * third lands in the same place at every viewport width - 1, 2 or 3 columns - instead of
+ * depending on how tall a row happened to render. Two 252px cards + the 16px gap = 520px
+ * of solid rows; the box is 122px taller for the peek, so the mask stays fully opaque to
+ * 520/642 = 81% and fades the third row to nothing. That is the "there is more" cue the
+ * "Browse all templates" link answers - keep the three numbers in step.
+ *
+ * Exactly three rows are RENDERED at every column count (`PEEK_VISIBILITY` in
+ * `TemplatesPreview` display:none's the surplus below `lg`), so the clip never hides a
+ * card that is still focusable or read out by a screen reader; the container clips with
+ * `overflow-clip`, not `hidden`, so it is not a scroll container and focus can never
+ * shift the band up under the mask.
+ */
+.templates-peek {
+  max-height: 642px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 81%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 81%, transparent 100%);
+}
+
+/*
  * Public template MARKET hero (`TemplatesPage`): the faint engineering-grid paper
  * behind the stacked pixel headline (the MCP-directory pattern). Line ink derives from
  * the theme's display color via color-mix so dark mode follows for free.
