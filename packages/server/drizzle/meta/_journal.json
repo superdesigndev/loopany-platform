@@ -22,6 +22,13 @@
       "when": 1783502268448,
       "tag": "0002_funny_sage",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785298072067,
+      "tag": "0003_famous_earthquake",
+      "breakpoints": true
     }
   ]
 }

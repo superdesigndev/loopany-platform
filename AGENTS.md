@@ -24,7 +24,8 @@ computes pure functions. Run instructions: `README.md`.
     delivery, prompt, notify, blobstore (R2/in-memory), artifacts.
   - `src/db/` - Drizzle schema
     (machines/loops/runs/blobs/artifact_files/run_snapshots/run_leases/connect_keys)
-    + store + auth-schema.
+    + store + auth-schema, plus the dormant v3 `graph-schema` + `graphStore`
+    (see "Graph Engineering v3 kernel").
   - `src/server/` - boot (`ensureServer`), adapters (Loop/Run -> JobSummary/JobDetail),
     loopApi server fns.
   - `src/skill/` - ALL prompt/skill prose (see "The skill" below).
@@ -957,6 +958,45 @@ computes pure functions. Run instructions: `README.md`.
 - **Shared-Chrome contention in browser verify**: other lanes drive the same Chrome, so a
   bare `chrome-devtools-axi` tab gets navigated out from under you mid-flow. Set
   `CHROME_DEVTOOLS_AXI_SESSION=<lane>` to get a fully isolated browser instance for the run.
+
+## Graph Engineering v3 kernel (`src/db/graph-schema.ts` + `src/graph/`)
+
+- **ADDITIVE AND DORMANT.** Migration `0003` lands six kernel tables - `objects`
+  (task/doc/mirror archetypes as data), `edges`, `events`, `gate_obligations`,
+  `outbox_actions`, `type_registry` - plus `db/graphStore.ts` (DAL) and
+  `graph/applyTransition.ts`. NO existing runtime path reads or writes any of it;
+  loops/runs/events are untouched. The loops→objects migration is a later unit.
+  Authoritative design: `firstmate/data/graph-engineering-design/design.md` (§12
+  adopted revisions is binding) + `decisions-2026-07-28.md`.
+- **`applyTransition` is the ONLY writer of `objects.status`** - 5 steps in one
+  transaction (validate against the EFFECTIVE type version → apply → derive the
+  event with per-field {old,new} diffs → open/close obligations → enqueue outbox
+  rows). `graphStore.updateObjectFields` THROWS on a `status` key, so a content
+  write can never smuggle a state change (the v2 doc-push-bypass class).
+- **The DB-level chokepoint is a PENDING captain decision** (trigger-token vs
+  grants). Do not implement either ad hoc: the seam is `StatusWriteAuthorizer`
+  (`begin`/`end` around the status UPDATE, no-op today). Its three-probe
+  enforcement suite ships with that branch.
+- **Four invariants are STRUCTURAL, not conventions** - changing them is a schema
+  change, and each is pinned by `graph/graphInvariants.integration.test.ts`:
+  dedup by content-derived id + `ON CONFLICT DO NOTHING` (**a window is never a
+  dedup key**); mirror global uniqueness via the partial `UNIQUE(team, source,
+  external_id) WHERE mirror`; a `status-changed` event CHECK-refused without its
+  transition name + diff, with `entrance`/`actor_id` provenance NOT NULL on every
+  row; an R3/R4 outbox row CHECK-refused without an `approval_event`.
+- **Two easily-confused columns on `events`:** `origin` (`derived`|`organic`) is
+  how the ID was minted (i.e. whether the row can repeat); `entrance`
+  (`human`|`agent-run`|`rule`|`clock`) is how the transition was entered. Neither
+  implies the other. An action's consequence class is DERIVED from its kind in
+  `graph/types.ts`, never declared by a type spec.
+- **Ordering gotcha:** the replay latch must run BEFORE the from-state guard. A
+  re-derived transition whose first application already moved the status would
+  otherwise be refused as `ILLEGAL_FROM_STATE` instead of recognized as the no-op
+  it is - every retried observation would surface as a spurious failure.
+- Transitions never read the clock (`now` is a required input) and never retry
+  internally: every refusal is a typed `{ok:false, code}` logged at warn level.
+  Concurrency is actor-mailbox - `getObjectForUpdate` takes the row lock as the
+  first statement, so a racing transition re-validates against post-commit state.
 
 ## CI/CD (`.github/workflows/`)
 

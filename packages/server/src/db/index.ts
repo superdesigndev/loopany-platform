@@ -32,6 +32,8 @@ import { dataDir, databaseUrl, dbPoolMode } from "../env.js";
 import { logger } from "../logger.js";
 import { isTransactionPooler, poolOptionsFor } from "./poolOptions.js";
 import { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runLeases, connectKeys } from "./schema.js";
+// Graph Engineering v3 kernel tables (additive — no existing path reads them yet).
+import { objects, edges, events, gateObligations, outboxActions, typeRegistry } from "./graph-schema.js";
 import { user, session, account, verification } from "./auth-schema.js";
 
 // Business tables + Better Auth tables share one Drizzle instance (the auth
@@ -48,6 +50,12 @@ const schema = {
   artifactFiles,
   runLeases,
   connectKeys,
+  objects,
+  edges,
+  events,
+  gateObligations,
+  outboxActions,
+  typeRegistry,
   user,
   session,
   account,
