@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import type { BundleView } from '../types'
-import { TemplateCard, bundleItems, type MarketItem } from './TemplateCard'
+import { TemplateCard, bundleItems } from './TemplateCard'
 import { AgentLoopsHeadline } from './TemplatesPage'
 
 /**
@@ -18,9 +18,10 @@ import { AgentLoopsHeadline } from './TemplatesPage'
  * re-ships them), so this band costs the page nothing at runtime.
  */
 export function TemplatesPreview({ bundles }: { bundles: BundleView[] }) {
-  const byBundle = bundles.map(bundleItems)
-  const total = byBundle.reduce((n, members) => n + members.length, 0)
-  const shown = pickPreview(byBundle, PREVIEW_COUNT)
+  // Bundles partition the registry, so flatMap in bundle order IS the catalog order.
+  const items = bundles.flatMap(bundleItems)
+  const total = items.length
+  const shown = items.slice(0, PREVIEW_COUNT)
   if (!shown.length) return null
 
   return (
@@ -84,21 +85,3 @@ const PEEK_VISIBILITY: (string | undefined)[] = [
   'hidden lg:flex',
 ]
 
-/**
- * The curated subset, picked ROUND-ROBIN across bundles: every bundle's lead first (in
- * the registry's curated category order, Code Health -> ... -> Others), then every
- * bundle's second, and so on. So the band reads as a tour of the catalog at any count -
- * a flat top-up would fill the extra rows from whichever bundle happens to be first.
- */
-function pickPreview(byBundle: MarketItem[][], count: number): MarketItem[] {
-  const deepest = byBundle.reduce((n, m) => Math.max(n, m.length), 0)
-  const picked: MarketItem[] = []
-  for (let rank = 0; rank < deepest && picked.length < count; rank++) {
-    for (const members of byBundle) {
-      if (picked.length >= count) break
-      const item = members[rank]
-      if (item) picked.push(item)
-    }
-  }
-  return picked
-}

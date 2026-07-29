@@ -114,14 +114,14 @@ describe('SignIn (pre-login landing)', () => {
   it('renders the SAME template teaser as the dashboard, fading into Browse all', async () => {
     const el = await mount()
     expect(listPublicBundles).toHaveBeenCalled()
-    // The shared market card under the clip+fade container: each bundle's LEAD first,
-    // then a top-up from what is left (only 3 templates here, so all three show).
+    // The shared market card under the clip+fade container, in the CATALOG's own
+    // curated order (only 3 templates here, so all three show).
     expect(el.querySelectorAll('.templates-peek').length).toBe(1)
     expect(el.querySelectorAll('article.market-card').length).toBe(3)
     expect([...el.querySelectorAll('a.market-card-link')].map((a) => a.textContent)).toEqual([
       'React Doctor',
-      'Market Monitor',
       'Housekeeper',
+      'Market Monitor',
     ])
     const browse = [...el.querySelectorAll('a')].filter((a) => (a.textContent ?? '').includes('Browse all'))
     expect(browse.length).toBe(1)

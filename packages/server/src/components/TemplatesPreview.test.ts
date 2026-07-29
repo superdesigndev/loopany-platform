@@ -48,9 +48,8 @@ const bundle = (name: string, label: string, accent: BundleView['accent'], membe
   members: members.map(([n, l]) => tmpl(n, l)),
 })
 
-/** More templates than the band shows (10 across 6 bundles), so both the round-robin
- *  curation + its 9-card cap and the "Browse all N" catalog count bite. Code Health is
- *  deliberately deep (4) so a flat top-up would be visible as a Code Health cluster. */
+/** More templates than the band shows (10 across 6 bundles), so both the 9-card cap
+ *  and the "Browse all N" catalog count bite. */
 const bundles: BundleView[] = [
   bundle('code-health', 'Code Health', 'interactive', [
     ['react-doctor', 'React Doctor'],
@@ -86,28 +85,27 @@ async function mount(data: BundleView[] = bundles): Promise<HTMLDivElement> {
 }
 
 describe('TemplatesPreview (dashboard catalog teaser)', () => {
-  it('shows a round-robin curated subset — three desktop rows, two of them full', async () => {
+  it('shows the first 9 templates in the CATALOG\'s own curated order', async () => {
     const el = await mount()
     const cards = [...el.querySelectorAll('article.market-card')]
     // 9 = 3 columns x 3 rows: two full rows plus the one the fade cuts.
     expect(cards.length).toBe(9)
-    // Every bundle's LEAD first (curated category order), THEN every bundle's second,
-    // and so on — so the extra rows stay a tour of the catalog instead of turning into
-    // a Code Health cluster (that bundle is 4 deep here).
+    // The preview follows the market's actual sequence — bundle by bundle in curated
+    // order (Growth first in the real registry) — never a re-curated shuffle.
     const titles = [...el.querySelectorAll('a.market-card-link')].map((a) => a.textContent)
     expect(titles).toEqual([
       'React Doctor',
+      'Housekeeper',
+      'Doc Maintainer',
+      'Dependency Triage',
       'Release Notes',
+      'Test Guardian',
       'Market Monitor',
       'Inbox Triage',
       'Reading List',
-      'Bug Vigil',
-      'Housekeeper',
-      'Test Guardian',
-      'Doc Maintainer',
     ])
     // The 10th+ template stays behind the "Browse all" link.
-    expect(el.innerHTML).not.toContain('Dependency Triage')
+    expect(el.innerHTML).not.toContain('Bug Vigil')
   })
 
   it('reuses the market card language: category tag, intro, flow strip, rating row', async () => {
