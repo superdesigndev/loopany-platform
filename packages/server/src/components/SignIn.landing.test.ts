@@ -114,7 +114,7 @@ describe('SignIn (pre-login landing)', () => {
   it('renders the SAME marketplace band as the dashboard — full catalog, compose-direct', async () => {
     const el = await mount()
     expect(listPublicBundles).toHaveBeenCalled()
-    expect(el.textContent).toContain('Loop marketplace')
+    expect(el.textContent).toContain('Agent Loops')
     // Every template renders in its bundle section; each card goes straight to compose
     // (the ?template param survives the login redirect via callbackURL).
     expect(el.querySelectorAll('article.market-card').length).toBe(3)

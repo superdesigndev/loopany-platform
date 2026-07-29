@@ -89,8 +89,9 @@ describe('TemplatesPreview (the loop-marketplace band)', () => {
   it('renders the FULL catalog as per-bundle sections, in registry order', async () => {
     const el = await mount()
     const out = el.textContent ?? ''
-    expect(out).toContain('Loop marketplace')
-    expect(out).toContain('Start from a loop that already works')
+    // The band opens with the SAME typed hero as /templates.
+    expect(out).toContain('Agent Loops')
+    expect(out).toContain('that actually work')
     // One section per bundle, curated order, label + tagline + count.
     const heads = [...el.querySelectorAll('h3.band-section-head')].map((h) => h.textContent?.trim())
     expect(heads).toEqual(bundles.map((b) => b.label))

@@ -47,21 +47,7 @@ export function TemplatesPage({ bundles }: { bundles: BundleView[] }) {
       <main className="pb-24">
         {/* ── Marketplace hero ─────────────────────────────────────────── */}
         <section className="market-hero px-6 pb-10 pt-16 text-center">
-          {/* Both pixel lines at the SAME size; the gray second line types. */}
-          {/* One shared size for BOTH lines, derived from the viewport so the LONGEST
-              typed phrase stays one line from `sm` up (Geist Pixel runs ~0.83em/char,
-              so 3.9vw is the fit coefficient for the 29-char phrase). Below `sm` the
-              phrase may wrap at a word break — TypedLine glues the caret to the last
-              word, so the caret can never wrap alone (that reads as a bug). */}
-          <h1
-            aria-label={`Agent loops ${TYPED_PHRASES[0]}`}
-            className="mx-auto font-pixel text-[min(56px,3.9vw)] leading-[1.25] text-display max-sm:text-[6.5vw]"
-          >
-            Agent Loops
-            <span aria-hidden className="block text-disabled sm:whitespace-nowrap">
-              <TypedLine />
-            </span>
-          </h1>
+          <AgentLoopsHeadline as="h1" />
 
           <p className="mx-auto mt-6 max-w-[560px] text-body leading-relaxed text-secondary">
             Ready-to-run loops that work while you sleep. Each one is a real prompt — free to read, runs on your own
@@ -130,6 +116,31 @@ export function TemplatesPage({ bundles }: { bundles: BundleView[] }) {
 }
 
 const sectionId = (name: string) => `cat-${name}`
+
+/**
+ * The typed "Agent Loops that …" headline — ONE component for the market hero and the
+ * dashboard/landing marketplace band, so the two heroes cannot drift. Both pixel lines
+ * share ONE size, derived from the viewport so the LONGEST typed phrase stays one line
+ * from `sm` up (Geist Pixel runs ~0.83em/char — 3.9vw fits the 29-char phrase; the
+ * band's `compact` uses a smaller coefficient). Below `sm` the phrase may wrap at a
+ * word break — TypedLine glues the caret to the last word, so the caret can never wrap
+ * alone (that reads as a bug).
+ */
+export function AgentLoopsHeadline({ as: Tag = 'h1', compact }: { as?: 'h1' | 'h2'; compact?: boolean }) {
+  return (
+    <Tag
+      aria-label={`Agent loops ${TYPED_PHRASES[0]}`}
+      className={`mx-auto font-pixel leading-[1.25] text-display ${
+        compact ? 'text-[min(38px,2.9vw)] max-sm:text-[5.4vw]' : 'text-[min(56px,3.9vw)] max-sm:text-[6.5vw]'
+      }`}
+    >
+      Agent Loops
+      <span aria-hidden className="block text-disabled sm:whitespace-nowrap">
+        <TypedLine />
+      </span>
+    </Tag>
+  )
+}
 
 /**
  * The typed headline phrases — outcomes, not features. The FIRST is also the SSR

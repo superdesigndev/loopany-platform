@@ -1,5 +1,6 @@
 import type { BundleView } from '../types'
 import { TemplateCard, bundleItems } from './TemplateCard'
+import { AgentLoopsHeadline } from './TemplatesPage'
 
 /**
  * TemplatesPreview - the LOOP MARKETPLACE band, directly above the playbook on both
@@ -21,14 +22,11 @@ export function TemplatesPreview({ bundles }: { bundles: BundleView[] }) {
 
   return (
     <section className="mt-24 border-t border-hairline pt-16">
+      {/* The SAME hero as /templates (shared component) — one brand voice everywhere. */}
       <div className="text-center">
-        <div className="font-pixel text-label uppercase tracking-[0.18em] text-secondary">Loop marketplace</div>
-        <h2 className="mx-auto mt-3 max-w-[620px] font-pixel text-[clamp(21px,3.2vw,28px)] leading-[1.15] text-display">
-          Start from a loop that already works
-        </h2>
-        <p className="mx-auto mt-4 max-w-[520px] text-body leading-relaxed text-secondary">
-          Every template is a real prompt you run on your own machine with your own coding agent — pick one and set it
-          up.
+        <AgentLoopsHeadline as="h2" compact />
+        <p className="mx-auto mt-5 max-w-[520px] text-body leading-relaxed text-secondary">
+          Ready-to-run loops that work while you sleep. Each one is a real prompt — pick one and set it up.
         </p>
       </div>
 
