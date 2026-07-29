@@ -20,8 +20,12 @@ COPY packages/daemon/package.json packages/daemon/
 COPY packages/artifact-format/package.json packages/artifact-format/
 RUN pnpm install --frozen-lockfile
 
-# Build the server (nitro → .output/server/index.mjs).
+# Build the server (nitro → .output/server/index.mjs). `@loopany/artifact-format`
+# is consumed through its compiled `dist` entry (see its package.json exports),
+# so it MUST be built first - otherwise the bundler cannot resolve the workspace
+# import and the build fails at "Rolldown failed to resolve @loopany/artifact-format".
 COPY . .
+RUN pnpm --filter @loopany/artifact-format build
 RUN pnpm --filter @loopany/server build
 
 # Build provenance baked into the image, surfaced at /api/health for the deploy
