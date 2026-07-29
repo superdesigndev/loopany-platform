@@ -18,6 +18,8 @@ const rating: TemplateInfo['rating'] = {
   mechanism: 'open',
   visibility: 'first-run',
   visibilityNote: 'The first run fixes the worst issue.',
+  does: 'Scans the app → fixes the worst issue',
+  outcome: '🔀 One verified fix PR daily',
   schedule: 'Daily · ~6am',
 }
 

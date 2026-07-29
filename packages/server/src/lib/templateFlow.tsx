@@ -297,6 +297,310 @@ const REDDIT_KARMA: FlowSpec = {
   ],
 }
 
+const CHANGELOG_BROADCASTER: FlowSpec = {
+  worktreeLabel: '', // no worktree — it drafts announcements, it never touches code
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify gh / git log + channels', detail: 'smoke-test one listing · agree voice & channels' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every Mon · 9am', detail: 'reviews what merged since the last run' },
+    { id: 'review', kicker: 'Step 1 · Review', glyph: '⌕', title: "Read the week's merges", detail: 'user-facing changes only, not internal churn' },
+    { id: 'distill', kicker: 'Step 2 · Distill', glyph: '✎', title: 'One changelog entry', detail: 'features / fixes / improvements, in user language' },
+    { id: 'draft', kicker: 'Step 3 · Draft', glyph: '✉', title: 'Social post drafts', detail: 'for the agreed channels · never auto-posts' },
+  ],
+  dashboard: [
+    {
+      type: 'embed',
+      heading: 'Newest changelog draft',
+      title: 'Week of Jul 21 — changelog + posts',
+      date: '2026-07-27',
+      lines: [
+        '3 features, 2 fixes distilled from 14 merged PRs',
+        'New: bundle carousel on the dashboard',
+        'Fixed: timeline device filter on mobile',
+        'Drafts held for your review — nothing auto-posted',
+      ],
+    },
+    { type: 'metric', label: 'Changes announced', series: [2, 4, 3, 5, 4, 6, 5, 7], note: 'each is a reviewed draft you approved — never an auto-post.' },
+  ],
+}
+
+const METRICS_DIGEST: FlowSpec = {
+  worktreeLabel: '', // no worktree — read-only against the analytics source
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify analytics read access', detail: 'PostHog / warehouse / DB · one smoke query · agree the KPI' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every day · 8am', detail: 'pulls the latest window' },
+    { id: 'pull', kicker: 'Step 1 · Pull', glyph: '⌕', title: 'Query the agreed metrics', detail: 'read-only — never mutates the source' },
+    { id: 'compare', kicker: 'Step 2 · Compare', glyph: '⚖', title: 'Against recent history', detail: 'normal range vs. a real drop or spike' },
+    { id: 'report', kicker: 'Step 3 · Report', glyph: '✎', title: 'One dated digest', detail: 'leads with the KPI · flags anomalies plainly' },
+  ],
+  dashboard: [
+    { type: 'metric', label: 'Primary KPI — signups', series: [118, 124, 121, 130, 127, 135, 133, 141, 138, 146], note: 'anomalies get named plainly; a normal day says so.' },
+    {
+      type: 'embed',
+      heading: 'Newest digest',
+      title: 'Metrics — daily digest',
+      date: '2026-07-08',
+      lines: [
+        'Signups 146 (▲ vs 7-day avg 134) — healthy',
+        'Activation 41% — in normal range',
+        'No anomalies today; nothing needs you',
+      ],
+    },
+  ],
+}
+
+const FUNNEL_WATCH: FlowSpec = {
+  worktreeLabel: '', // no worktree — read-only against the funnel data
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify funnel read access', detail: 'agree the steps + the conversion rate that matters' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every day · 8am', detail: 'pulls each step for the latest window' },
+    { id: 'compute', kicker: 'Step 1 · Compute', glyph: '⌕', title: 'Step-to-step rates', detail: 'plus the overall conversion' },
+    { id: 'compare', kicker: 'Step 2 · Compare', glyph: '⚖', title: 'Against the baseline', detail: 'a real drop beyond normal daily variance' },
+    { id: 'alert', kicker: 'Step 3 · Alert', glyph: '⚑', title: 'Alert with evidence', detail: 'which step, how far, likely suspects · quiet when healthy' },
+  ],
+  dashboard: [
+    { type: 'metric', label: 'Signup → paid %', series: [4.2, 4.4, 4.1, 4.3, 4.5, 4.2, 4.4, 4.6, 4.3, 4.5], note: 'healthy days are a short log line — no alarm.' },
+    {
+      type: 'embed',
+      heading: 'Latest check',
+      title: 'Funnel watch — daily',
+      date: '2026-07-08',
+      lines: [
+        'All steps within normal variance — quiet day',
+        'signup → activate 38% (baseline 37%)',
+        'activate → paid 12% (baseline 12%)',
+      ],
+    },
+  ],
+}
+
+const MORNING_BRIEFING: FlowSpec = {
+  worktreeLabel: '', // no worktree — it gathers and writes, never touches code
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify every source', detail: 'weather · calendar · your topics — each smoke-tested once' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every day · 6am', detail: 'before your day starts' },
+    { id: 'gather', kicker: 'Step 1 · Gather', glyph: '⌕', title: 'Pull the agreed pieces', detail: 'weather, schedule, topic highlights — never invented' },
+    { id: 'compose', kicker: 'Step 2 · Compose', glyph: '✎', title: 'One skimmable briefing', detail: 'a source down? it says so, never pads' },
+  ],
+  dashboard: [
+    { type: 'calendar', heading: 'Briefings calendar', monthLabel: 'July 2026', days: 31, firstWeekday: 2, reportDays: [1, 2, 3, 4, 6, 7, 8] },
+    {
+      type: 'embed',
+      heading: "Today's briefing",
+      title: 'Morning briefing',
+      date: '2026-07-08',
+      lines: [
+        '18–24°C, clear morning, rain after 6pm',
+        '3 meetings — first at 10:00, gap 2–4pm',
+        'Your topics: 2 launches, 1 pricing move worth a look',
+      ],
+    },
+  ],
+}
+
+const HOMEBREW_UPDATER: FlowSpec = {
+  worktreeLabel: '', // no worktree — it manages brew packages, not a repo
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Agree the allowlist', detail: 'pre-authorized low-risk formulae + the key tools to verify' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Weekly (your choice)', detail: 'brew update · brew outdated' },
+    { id: 'upgrade', kicker: 'Step 1 · Upgrade', glyph: '✎', title: 'Allowlist only', detail: 'majors & heavy-dependent packages are flagged, not touched' },
+    { id: 'verify', kicker: 'Step 2 · Verify', glyph: '▷', title: 'Key tools still run', detail: 'broke something? report + suggest the rollback' },
+  ],
+  dashboard: [
+    {
+      type: 'embed',
+      heading: 'Latest update report',
+      title: 'Homebrew — weekly update',
+      date: '2026-07-06',
+      lines: [
+        '4 allowlisted upgrades applied, all tools verified',
+        'node 22.4 → 22.5 · gh 2.52 → 2.53 · jq, ripgrep',
+        'Held: postgresql 15 → 16 (major — needs your call)',
+      ],
+    },
+    { type: 'metric', label: 'Outdated packages', series: [11, 8, 9, 6, 7, 4, 5, 3], note: 'the held list is only ever majors awaiting your call.', betterDown: true },
+  ],
+}
+
+const DAILY_LESSON: FlowSpec = {
+  worktreeLabel: '', // no worktree — it writes lessons, never touches code
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Agree topic + arc', detail: 'what to learn, how deep · a rough beginner→fluent arc' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every day · 7am', detail: 'one lesson a day, rides the calendar' },
+    { id: 'next', kicker: 'Step 1 · Pick up', glyph: '⌕', title: 'The natural next step', detail: 'builds on the arc so far — never repeats' },
+    { id: 'write', kicker: 'Step 2 · Teach', glyph: '✎', title: 'One short lesson', detail: 'one idea · a concrete example · a tiny exercise' },
+  ],
+  dashboard: [
+    { type: 'calendar', heading: 'Lessons calendar', monthLabel: 'July 2026', days: 31, firstWeekday: 2, reportDays: [1, 2, 3, 6, 7, 8] },
+    {
+      type: 'embed',
+      heading: 'Newest lesson',
+      title: 'Lesson 8 — the subjunctive, gently',
+      date: '2026-07-08',
+      lines: [
+        'One idea: wishes & doubts take a different mood',
+        'Example: "Espero que tengas razón."',
+        'Exercise: rewrite 3 sentences from lesson 6',
+      ],
+    },
+  ],
+}
+
+const TEST_GUARDIAN: FlowSpec = {
+  worktreeLabel: 'Isolated git worktree · off main',
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify the suite runs', detail: 'one smoke run · confirm how coverage is measured' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every Mon · 6am', detail: 'one meaningful test a week' },
+    { id: 'find', kicker: 'Step 1 · Find', glyph: '⌕', title: 'Riskiest untested path', detail: 'core logic & error branches — never coverage padding' },
+    { id: 'write', wt: true, kicker: 'Step 2 · Write', glyph: '✎', title: 'One solid test', detail: 'in isolation, off the main branch' },
+    { id: 'prove', wt: true, kicker: 'Step 3 · Prove', glyph: '▷', title: 'Passes — and fails right', detail: 'green now, red when the behavior breaks' },
+    { id: 'ship', wt: true, kicker: 'Step 4 · Ship', glyph: '⑂', title: 'Open a PR', detail: 'no stacking on an open PR' },
+  ],
+  dashboard: [
+    { type: 'metric', label: 'Coverage %', series: [61, 61, 62, 63, 63, 64, 65, 65, 66, 67], note: 'one meaningful test a week — climbs steadily, not overnight.' },
+    {
+      type: 'embed',
+      heading: 'Newest test PR',
+      title: 'Guard the retry backoff path',
+      date: '2026-07-06',
+      lines: [
+        'Riskiest gap: transient-failure retry never tested',
+        'Proven: fails when the backoff is removed',
+        'PR #218 — one test, opened for review',
+      ],
+    },
+  ],
+}
+
+const SECURITY_SWEEP: FlowSpec = {
+  worktreeLabel: 'Isolated git worktree · off main',
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify the sweep tools', detail: 'audit source · git history · CI workflow files' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every Mon · 6am', detail: 'three surfaces, one pass' },
+    { id: 'sweep', kicker: 'Step 1 · Sweep', glyph: '⌕', title: 'Advisories · secrets · CI pins', detail: 'deps vs. advisories · leaked keys · mutable action tags' },
+    { id: 'judge', kicker: 'Step 2 · Judge', glyph: '⚖', title: 'Provably safe only', detail: 'clean patch bumps & hardened pins — the rest is flagged' },
+    { id: 'ship', wt: true, kicker: 'Step 3 · Ship', glyph: '⑂', title: 'Open a PR', detail: 'never leaks a secret into the report or PR' },
+  ],
+  dashboard: [
+    { type: 'metric', label: 'Open advisories', series: [5, 4, 4, 3, 2, 2, 1, 1, 0, 1], note: '0 = a clean sweep — a quiet report, no PR.', betterDown: true },
+    {
+      type: 'embed',
+      heading: 'Latest sweep',
+      title: 'Security sweep — weekly',
+      date: '2026-07-06',
+      lines: [
+        '1 advisory patched, 2 CI actions pinned to SHAs',
+        'lodash GHSA-…-qxrp — clean patch bump, PR opened',
+        'Secret scan: nothing leaked in recent commits',
+      ],
+    },
+  ],
+}
+
+const CI_DOCTOR: FlowSpec = {
+  worktreeLabel: 'Isolated git worktree · off main',
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify CI history reads', detail: 'gh or the provider API · one listing as a smoke test' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every day · 7am', detail: 'reads the recent runs' },
+    { id: 'hunt', kicker: 'Step 1 · Hunt', glyph: '⌕', title: 'The worst offender', detail: 'flaky test · creeping duration · retry-prone job' },
+    { id: 'fix', wt: true, kicker: 'Step 2 · Fix', glyph: '✎', title: 'Stabilize or speed up', detail: 'a real fix, verified in isolation' },
+    { id: 'quarantine', wt: true, kicker: 'Step 3 · Or quarantine', glyph: '⚑', title: 'Skip with a linked issue', detail: 'only when a genuine fix is not safe yet' },
+    { id: 'ship', wt: true, kicker: 'Step 4 · Ship', glyph: '⑂', title: 'Open a PR', detail: 'one offender a day, no stacking' },
+  ],
+  dashboard: [
+    { type: 'metric', label: 'Flaky failures / week', series: [9, 7, 8, 5, 6, 4, 3, 3, 2, 1], note: 'a healthier pipeline emerges over a week or two.', betterDown: true },
+    {
+      type: 'embed',
+      heading: 'Latest diagnosis',
+      title: 'CI doctor — daily',
+      date: '2026-07-08',
+      lines: [
+        'Worst offender: e2e checkout test, 4 retries this week',
+        'Root cause: unwaited network idle — stabilized',
+        'PR #305 opened · suite 2m faster',
+      ],
+    },
+  ],
+}
+
+const BUG_VIGIL: FlowSpec = {
+  worktreeLabel: '', // no worktree — it captures evidence; the fix is your call
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Describe bug + verify a tripwire', detail: 'symptom & finish condition · smoke-test the observation path' },
+    { id: 'tick', kicker: 'On cadence', glyph: '◷', title: 'Patrol cadence (you set it)', detail: 'stakes out the observation path' },
+    { id: 'patrol', kicker: 'Step 1 · Patrol', glyph: '⌕', title: 'Watch for a recurrence', detail: 'tracker / logs / metric / reproducible check' },
+    { id: 'capture', kicker: 'Step 2 · Capture', glyph: '◈', title: 'Full context, one report', detail: 'stack trace, inputs, timing — enough to fix it' },
+    { id: 'finish', finish: true, kicker: 'When captured', glyph: '⚑', title: 'Finish the loop', detail: 'one clean capture (or the give-up window) closes it' },
+  ],
+  dashboard: [
+    {
+      type: 'embed',
+      heading: 'Latest patrol',
+      title: 'Bug vigil — intermittent export crash',
+      date: '2026-07-08',
+      lines: [
+        'No recurrence this patrol — 14 quiet checks so far',
+        'Tripwire: Sentry issue EXPORT-512 + error-rate query',
+        'Finish: one clean capture with full context',
+      ],
+    },
+    { type: 'metric', label: 'Recurrences captured', series: [0, 0, 0, 0, 0, 0, 1], note: 'the capture is the payoff — then the loop closes itself.' },
+  ],
+}
+
+const RELEASE_SHEPHERD: FlowSpec = {
+  worktreeLabel: '', // no worktree — strictly report-only, it never mutates the release
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Confirm release + signals', detail: 'version & date · CI, advisories, docs, rollback plan readable' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Daily until release day', detail: 'one readiness pass a day' },
+    { id: 'walk', kicker: 'Step 1 · Walk', glyph: '⌕', title: 'The readiness checklist', detail: 'CI green · advisories clear · docs & changelog · rollback plan' },
+    { id: 'report', kicker: 'Step 2 · Report', glyph: '✎', title: 'Name the drift plainly', detail: 'what still needs doing — report-only, never mutates' },
+    { id: 'finish', finish: true, kicker: 'On release day', glyph: '⚑', title: 'Final go/no-go, then done', detail: 'ships (or is called off) — the loop closes' },
+  ],
+  dashboard: [
+    {
+      type: 'kanban',
+      heading: 'Readiness board',
+      sub: 'clear → drift',
+      columns: [
+        ['Clear', [
+          ['CI', 'Release branch green', 'checked today'],
+          ['SEC', 'No open advisories', 'checked today'],
+          ['ROLL', 'Rollback plan in place', 'checked Mon'],
+        ]],
+        ['Drift', [
+          ['DOCS', 'Changelog missing 2 merged features', 'flagged today'],
+        ]],
+      ],
+    },
+    { type: 'metric', label: 'Checklist items clear', series: [3, 4, 4, 5, 5, 6, 7], note: 'a final go/no-go report files on release day.' },
+  ],
+}
+
+const OUTCOME_WATCH: FlowSpec = {
+  worktreeLabel: '', // no worktree — it reads the metric, it changes nothing
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify the deciding metric', detail: 'one smoke read · agree threshold + decision window' },
+    { id: 'tick', kicker: 'On cadence', glyph: '◷', title: 'Fits the metric (you set it)', detail: 'checks as often as the data moves' },
+    { id: 'read', kicker: 'Step 1 · Read', glyph: '⌕', title: 'Read the metric', detail: 'analytics / events / logs — the verified path' },
+    { id: 'judge', kicker: 'Step 2 · Judge', glyph: '⚖', title: 'Against the threshold', detail: 'pass, fail, or still inside the window' },
+    { id: 'finish', finish: true, kicker: 'At the verdict', glyph: '⚑', title: 'Conclusive verdict, then done', detail: 'threshold reached or window closed — the loop finishes' },
+  ],
+  dashboard: [
+    { type: 'metric', label: 'Deciding metric — conversion %', series: [3.1, 3.4, 3.2, 3.8, 3.9, 4.2, 4.4], note: 'verdict: clearly up after N days, or the window closes.' },
+    {
+      type: 'embed',
+      heading: 'Latest reading',
+      title: 'Outcome watch — pricing change',
+      date: '2026-07-08',
+      lines: [
+        'Day 5 of 14 — conversion 4.4% vs baseline 3.2%',
+        'Trend holds above the +0.8pt threshold so far',
+        'Verdict files itself when the window closes',
+      ],
+    },
+  ],
+}
+
 export const FLOWS: Record<string, FlowSpec> = {
   'support-triage': SUPPORT_TRIAGE,
   'reddit-karma': REDDIT_KARMA,
@@ -307,6 +611,18 @@ export const FLOWS: Record<string, FlowSpec> = {
   'dependency-triage': DEPENDENCY_TRIAGE,
   'market-research': MARKET_RESEARCH,
   'follow-up-tracker': FOLLOW_UP,
+  'changelog-broadcaster': CHANGELOG_BROADCASTER,
+  'metrics-digest': METRICS_DIGEST,
+  'funnel-watch': FUNNEL_WATCH,
+  'morning-briefing': MORNING_BRIEFING,
+  'homebrew-updater': HOMEBREW_UPDATER,
+  'daily-lesson': DAILY_LESSON,
+  'test-guardian': TEST_GUARDIAN,
+  'security-sweep': SECURITY_SWEEP,
+  'ci-doctor': CI_DOCTOR,
+  'bug-vigil': BUG_VIGIL,
+  'release-shepherd': RELEASE_SHEPHERD,
+  'outcome-watch': OUTCOME_WATCH,
 }
 
 /** Whether a template has a preview — drives the modal's two-column layout. */

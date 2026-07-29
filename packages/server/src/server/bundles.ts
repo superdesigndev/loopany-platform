@@ -1,5 +1,6 @@
 import type { BundleInfo, BundleView, TemplateDetailView } from '../types'
-import { TEMPLATES } from './templates'
+import { TEMPLATES, templateStory } from './templates'
+import { templatePrereqs } from './templatePrereqs'
 
 /**
  * The bundle registry — curated groupings of templates surfaced as the dashboard's
@@ -20,12 +21,13 @@ const metas = import.meta.glob<BundleInfo>('../skill/bundles/*/meta.json', {
 })
 
 /**
- * Product-curated bundle order for the dashboard carousel (NOT alphabetical):
- * Code Health → Ship with Confidence → Growth → Business Ops → Personal → Others (the
- * individually-set-up catch-all, last). A bundle not in this list falls to the end,
- * name-sorted, so a new folder still shows.
+ * Product-curated bundle order for the dashboard carousel AND the public market's
+ * section order (NOT alphabetical): broad-appeal first — Growth → Business Ops — then
+ * the dev-craft categories Codebase Autopilot → CI, Test & Security, then Personal and
+ * Goal Loops (the individually-set-up, goal-bound catch-all, last). A bundle not in
+ * this list falls to the end, name-sorted, so a new folder still shows.
  */
-const BUNDLE_ORDER = ['code-health', 'ship-with-confidence', 'growth', 'business-ops', 'personal', 'others']
+const BUNDLE_ORDER = ['growth', 'business-ops', 'code-health', 'ship-with-confidence', 'personal', 'others']
 const orderOf = (name: string): number => {
   const i = BUNDLE_ORDER.indexOf(name)
   return i === -1 ? BUNDLE_ORDER.length : i
@@ -77,7 +79,15 @@ export function findPublicTemplate(slug: string): TemplateDetailView | null {
     const member = b.members.find((m) => m.name === slug)
     if (!member) continue
     const { thumb: _thumb, ...template } = member
-    return { template, categoryLabel: b.label, accent: b.accent }
+    const story = templateStory(slug)
+    const prereqs = templatePrereqs(slug)
+    return {
+      template,
+      categoryLabel: b.label,
+      accent: b.accent,
+      ...(story ? { story } : {}),
+      ...(prereqs ? { prereqs } : {}),
+    }
   }
   return null
 }

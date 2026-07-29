@@ -47,8 +47,8 @@ describe('template registry', () => {
       'security-sweep',
       'ci-doctor',
       // Growth
-      'market-research',
       'reddit-karma',
+      'market-research',
       'changelog-broadcaster',
       // Business Ops
       'support-triage',

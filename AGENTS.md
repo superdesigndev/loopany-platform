@@ -176,12 +176,14 @@ computes pure functions. Run instructions: `README.md`.
 - **Bundles** (`skill/bundles/<name>/meta.json` -> `server/bundles.ts`) are curated
   categories, same file-based/zero-exec mirror of the template system: `BundleInfo` =
   label + tagline + `accent` + the member template NAMES in display order, plus
-  `individual: true` for the catch-all "Others" (individually created, goal-bound loops -
-  renders NO bundle CTA). `listBundles` resolves members to their `TemplateInfo`s in a
-  curated 6-category order (Code Health -> Ship with Confidence -> Growth -> Business Ops
-  -> Personal -> Others). An accent is a `--color-<accent>` token and deliberately never a
-  red/alarm hue (a category must not read as an error state); Ship with Confidence uses
-  the calm `--color-indigo`, declared in a plain `:root` and NOT `@theme` because Tailwind
+  `individual: true` for the catch-all "Goal Loops" (bundle name `others`: individually
+  created, goal-bound loops - renders NO bundle CTA). `listBundles` resolves members to
+  their `TemplateInfo`s in a curated broad-appeal-first 6-category order (Growth ->
+  Business Ops -> Codebase Autopilot [`code-health`] -> CI, Test & Security
+  [`ship-with-confidence`] -> Personal -> Goal Loops [`others`]; bundle NAME keys never changed, only
+  labels/taglines - tests key on names). An accent is a `--color-<accent>` token and
+  deliberately never a red/alarm hue (a category must not read as an error state);
+  CI, Test & Security uses the calm `--color-indigo`, declared in a plain `:root` and NOT `@theme` because Tailwind
   v4 tree-shakes a var that only appears in a runtime inline style.
   **Every template belongs to EXACTLY ONE bundle** - pinned by `bundles.test.ts`.
 - **Dashboard entry**: the hero renders `components/BundleCarousel.tsx` - an auto-playing
@@ -204,23 +206,38 @@ computes pure functions. Run instructions: `README.md`.
   gate - and they SSR (the app-wide `ssr: false` exists only because other loaders need
   the session cookie) so crawlers and unfurlers get real HTML. They read
   `listPublicBundles`/`getPublicTemplate`: the same registry MINUS every inlined
-  `thumb.svg`, because the market is text-first (a card's visual anchor is a monospace
-  preview of the REAL prompt, whole-card click to the detail route, quiet hover-revealed
-  "Create"). Detail resolves BY SLUG (`findPublicTemplate`) since the grid preloads on
-  hover; an unknown slug throws `notFound()` for a real HTTP 404. Its CTA deep-links
+  `thumb.svg` - the market draws no illustration (a card's visual anchor is its
+  When -> Does -> You-get flow strip from the rating table; whole-card click to the
+  detail route, quiet hover-revealed "Create"; the FULL prompt lives only on the detail
+  page). `/templates` is a marketplace layout: centered hero (count badge, stacked
+  same-size pixel headline whose gray second line TYPES through `TYPED_PHRASES` -
+  SSR renders the first phrase statically, client-only effect, off under
+  reduced-motion), client-side search filter, category chips that scroll-jump, then
+  per-bundle SECTIONS fully expanded (no View-all; section headers carry the label +
+  tagline — deliberately no accent bar — so cards there pass `showCategory={false}`). Detail resolves BY SLUG (`findPublicTemplate`) since the grid preloads on
+  hover; an unknown slug throws `notFound()` for a real HTTP 404. The detail page is a
+  SPLIT layout: LEFT = the flow diagram, the mechanism facts COLLAPSED under it (native
+  `<details>`, SSR-safe), and optional "Field notes" — a repo-authored
+  `skill/templates/<name>/story.md` (real results/learnings write-up) attached ONLY by
+  `findPublicTemplate` (never on list payloads) and rendered through marked WITHOUT
+  DOMPurify (trusted repo content, and DOMPurify needs a DOM the SSR pass lacks);
+  RIGHT = the sticky verbatim prompt + Copy. Its CTA deep-links
   `/?template=<name>`, which is forwarded through the gated `/t/<team>` redirect and
   preserved across OAuth via `callbackURL`, then reuses the EXISTING single-template
   compose through `DashboardView.openTemplate` - never a parallel creation path.
 - **The market CARD is ONE shared component** (`components/TemplateCard.tsx`:
-  `TemplateCard` + `flattenBundles` + `promptPreview`), rendered by THREE surfaces:
+  `TemplateCard` + `bundleItems`; the card body is the When/Does/You-get `FlowStrip`
+  fed by `rating.schedule`/`does`/`outcome` - `server/templateRatings.ts` owns those 21
+  copy lines), rendered by THREE surfaces:
   `/templates`, and the catalog teaser `components/TemplatesPreview.tsx` on BOTH the
   dashboard and the pre-login landing. The teaser curates ROUND-ROBIN across bundles
   (every bundle's lead first in curated category order, then every bundle's second, ...)
   to `PREVIEW_COUNT = 9` = three desktop rows under `.templates-peek`, a fixed
   `max-height` + bottom mask: TWO rows solid, the THIRD under the fade, then "Browse all
-  N templates" (N = the WHOLE catalog, not the 9). The card height (218px), the box
-  (558px) and the mask stop (81% = (2*218 + 16px gap)/558) are COUPLED - change one,
-  change all three (pinned by `TemplatesPreview.test.ts`). Because the clip is a fixed
+  N templates" (N = the WHOLE catalog, not the 9). The card height (252px), the box
+  (642px) and the mask stop (81% = (2*252 + 16px gap)/642) are COUPLED - change one,
+  change all three (pinned by `TemplatesPreview.test.ts`, which derives the formula from
+  source - so it fails on any one-sided change). Because the clip is a fixed
   pixel height, `PEEK_VISIBILITY` `display: none`s the cards a narrower column count
   would push entirely under it (3 cards at 1 column, 6 at 2, all 9 at `lg`), so no
   invisible card stays focusable/AT-exposed; the box uses `overflow-clip`, not `hidden`,
@@ -244,8 +261,8 @@ computes pure functions. Run instructions: `README.md`.
   from `nodes`, the `setup` gate split off, `closes` from a `finish` node, outputs from
   the dashboard WIDGETS the loop maintains, typed by widget kind). It must stay
   hook-free/measurement-free - that route SSRs for crawlers, and the guard test pins it.
-  A template with no spec renders NEITHER surface (9 of 21 have one); add a spec rather
-  than invent a flow.
+  A template with no spec renders NEITHER surface (all 21 shipping templates have one);
+  add a spec rather than invent a flow.
 - **Editorial ratings** (`server/templateRatings.ts`, one typed table merged onto
   `TemplateInfo.rating`) drive the market's rating chips and the detail view's mechanism
   rows: ease, cadence + mechanism, effect visibility, plus a humanized `schedule` and -

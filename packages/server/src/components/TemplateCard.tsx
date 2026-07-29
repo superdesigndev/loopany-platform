@@ -1,81 +1,86 @@
+import type { ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import type { BundleView, TemplateInfo } from '../types'
+import type { BundleView, TemplateInfo, TemplateRating } from '../types'
 import { MicroIndicators, categoryTagStyle } from './TemplateRatingChips'
+import { TemplateIcon } from './TemplateIcon'
 
 /**
- * The ONE text-first template card, shared by the public market grid
+ * The ONE outcome-first template card, shared by the public market sections
  * (`TemplatesPage`, `/templates`) and the dashboard's catalog preview strip
  * (`TemplatesPreview`). Extracted so the two surfaces cannot drift: title, one-line
- * intro, category tag, the monospace prompt-preview texture, the compact 3-indicator
- * rating row, and the whole-card navigation to `/templates/<slug>`.
+ * intro, the When → Does → You-get flow strip (the card's visual anchor — it answers
+ * "what is this loop and what lands in my repo/inbox" without reading the prompt; the
+ * full prompt lives on the detail page), the compact 3-indicator rating row, and the
+ * whole-card navigation to `/templates/<slug>`.
  *
- * `compact` is the dashboard variant: a shorter prompt-preview block and a fixed card
- * height, so the preview grid's rows are uniform and the section's bottom fade cuts at
- * a predictable place at every viewport width. The fixed height leaves no slack, so the
- * compact title is clamped to ONE line - a longer label (or a type-scale tweak) then
- * ellipsises instead of silently pushing the rating row and the Create link out of the
- * card. Everything else is identical markup.
+ * `compact` is the dashboard variant: a fixed card height plus one-line clamps on title
+ * and intro, so the preview grid's rows are uniform and the section's bottom fade cuts
+ * at a predictable place at every viewport width. The fixed height leaves no slack, so
+ * a longer label ellipsises instead of silently pushing the rating row and the Create
+ * link out of the card. Everything else is identical markup.
+ *
+ * `showCategory` hides the per-card category tag on surfaces that already label the
+ * category around the card (the market's per-bundle sections); the flat teaser grid
+ * keeps it (the default) since there the tag is the only category context.
  */
 
 /** One template flattened with its category, for the market grid + filter. */
 export interface MarketItem {
   template: TemplateInfo
-  categoryName: string
   categoryLabel: string
   accent: BundleView['accent']
 }
 
 /** One bundle's members flattened to market items, in the bundle's own display order. */
 export function bundleItems(b: BundleView): MarketItem[] {
-  return b.members.map((template) => ({ template, categoryName: b.name, categoryLabel: b.label, accent: b.accent }))
+  return b.members.map((template) => ({ template, categoryLabel: b.label, accent: b.accent }))
 }
 
-/** Bundles partition the whole registry, so this IS the flat catalog (in bundle order). */
-export function flattenBundles(bundles: BundleView[]): MarketItem[] {
-  return bundles.flatMap(bundleItems)
-}
-
-export function TemplateCard({ item, compact, className }: { item: MarketItem; compact?: boolean; className?: string }) {
+export function TemplateCard({
+  item,
+  compact,
+  showCategory = true,
+  className,
+}: {
+  item: MarketItem
+  compact?: boolean
+  showCategory?: boolean
+  className?: string
+}) {
   const { template: t, categoryLabel, accent } = item
   return (
     <article
       className={`market-card group relative flex min-w-0 flex-col rounded-card border border-hairline bg-surface p-4 transition-colors hover:border-wire hover:shadow-[0_14px_30px_-20px_rgba(0,0,0,0.28)] ${
-        compact ? 'h-[218px] overflow-hidden' : ''
+        compact ? 'h-[252px] overflow-hidden' : ''
       } ${className ?? ''}`}
     >
-      {/* Header: category tag + suggested schedule. */}
-      <div className="flex items-center gap-2">
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-micro font-medium" style={categoryTagStyle(accent)}>
-          {categoryLabel}
-        </span>
-        {t.rating && <span className="min-w-0 truncate text-micro text-disabled">{t.rating.schedule}</span>}
-      </div>
+      {/* Header: category tag (teaser context only — market sections already carry it). */}
+      {showCategory && (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center rounded-full px-2 py-0.5 text-micro font-medium" style={categoryTagStyle(accent)}>
+            {categoryLabel}
+          </span>
+        </div>
+      )}
 
       {/* Title is the stretched link — the WHOLE card navigates to the detail page. */}
-      <h3 className={`mt-2 text-[15px] font-semibold leading-snug text-display ${compact ? 'line-clamp-1' : ''}`}>
+      <h3 className={`${showCategory ? 'mt-2' : ''} flex min-w-0 items-center gap-2 text-[15px] font-semibold leading-snug text-display`}>
+        <TemplateIcon name={t.name} size={17} className="shrink-0 text-secondary" />
         <Link
           to="/templates/$slug"
           params={{ slug: t.name }}
-          className="market-card-link outline-none group-hover:underline focus-visible:underline"
+          className={`market-card-link min-w-0 outline-none group-hover:underline focus-visible:underline ${compact ? 'truncate' : ''}`}
         >
           {t.label}
         </Link>
       </h3>
-      <p className="mt-1 line-clamp-2 text-caption leading-snug text-secondary">{t.desc}</p>
+      <p className={`mt-1 ${compact ? 'line-clamp-1' : 'line-clamp-2'} text-caption leading-snug text-secondary`}>{t.desc}</p>
 
-      {/* The visual anchor: a monospace preview of the REAL prompt, faded at the bottom. */}
-      <div
-        className={`prompt-preview-mask mt-3 overflow-hidden rounded-control bg-raised px-3 pb-2 pt-2 ${
-          compact ? 'h-[60px]' : 'h-[92px]'
-        }`}
-      >
-        <pre className="whitespace-pre-wrap font-mono text-[10.5px] leading-[1.45] text-secondary">
-          {promptPreview(t.description)}
-        </pre>
-      </div>
+      {/* The visual anchor: When → Does → You get, from the editorial rating table. */}
+      {t.rating && <FlowStrip rating={t.rating} />}
 
       {/* Footer: 3 compact indicators + the quiet hover-revealed Create affordance. */}
-      <div className="mt-3 flex items-end justify-between gap-3">
+      <div className="mt-auto flex items-end justify-between gap-3 pt-3">
         {t.rating && <MicroIndicators rating={t.rating} />}
         <Link
           to="/"
@@ -90,9 +95,32 @@ export function TemplateCard({ item, compact, className }: { item: MarketItem; c
   )
 }
 
-/** The first ~220 chars of the REAL prompt for the card's preview block (the mask fades
- *  the tail, so a mid-sentence cut is invisible). Collapses runs of blank lines so the
- *  preview stays dense. */
-export function promptPreview(description: string): string {
-  return description.replace(/\n{2,}/g, '\n').slice(0, 220)
+/** The When → Does → You-get strip. The You-get row is the card's one bold element. */
+function FlowStrip({ rating }: { rating: TemplateRating }) {
+  return (
+    <div className="flow-strip mt-3 flex min-w-0 flex-col gap-1.5 rounded-control bg-raised px-3 py-2.5">
+      <FlowRow label="When">
+        <span className="text-caption leading-snug text-primary">{rating.schedule}</span>
+      </FlowRow>
+      <FlowRow label="Does">
+        <span className="text-caption leading-snug text-primary">{rating.does}</span>
+      </FlowRow>
+      <FlowRow label="You get">
+        <span className="inline-flex min-w-0 items-center rounded-control border border-hairline bg-surface px-2 py-0.5 text-caption font-medium leading-snug text-display">
+          {rating.outcome}
+        </span>
+      </FlowRow>
+    </div>
+  )
+}
+
+function FlowRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-baseline gap-2">
+      <span className="w-[52px] shrink-0 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-disabled">
+        {label}
+      </span>
+      {children}
+    </div>
+  )
 }

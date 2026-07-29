@@ -23,11 +23,11 @@ import type { BundleView } from '../types'
 export const Route = createFileRoute('/templates')({
   head: () => ({
     meta: [
-      { title: 'Loopany templates — agent loops that run while you sleep' },
+      { title: 'Loopany templates — agent loops that actually work' },
       {
         name: 'description',
         content:
-          'Browse every Loopany template for free: ready-to-run scheduled agent loops for code health, shipping, growth, ops, and more — rated for ease, cycle, and effect.',
+          'Browse every Loopany template for free: ready-to-run scheduled agent loops for growth, business ops, codebase upkeep, CI & security, and more — each showing when it runs, what it does, and what you get.',
       },
     ],
   }),

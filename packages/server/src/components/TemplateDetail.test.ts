@@ -31,6 +31,8 @@ const template: TemplateInfo = {
     visibility: 'compounds',
     visibilityNote: 'Waits out an intermittent bug; the capture can take weeks.',
     schedule: 'Patrol cadence (you set it)',
+    does: 'Stakes out one elusive bug → captures full context',
+    outcome: '🐛 Root cause, then it closes',
     exitCondition: 'Finishes on one clean capture of the bug.',
   },
 }
@@ -76,7 +78,7 @@ describe('TemplateDetail', () => {
     // The honest effect note is present.
     expect(out).toContain('Waits out an intermittent bug; the capture can take weeks.')
     // Primary CTA deep-links into the compose flow with this template preselected.
-    const cta = [...el.querySelectorAll('a')].find((a) => (a.textContent ?? '').includes('Create directly in Loopany'))
+    const cta = [...el.querySelectorAll('a')].find((a) => (a.textContent ?? '').includes('Setup in Loopany'))
     expect(cta?.getAttribute('href')).toBe('/?template=bug-vigil')
   })
 

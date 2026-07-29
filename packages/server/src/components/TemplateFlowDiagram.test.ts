@@ -54,7 +54,7 @@ describe('templateFlowDiagram (derivation, pure)', () => {
   })
 
   it('is null for a template with no spec — never an invented flow', () => {
-    expect(templateFlowDiagram('morning-briefing')).toBeNull()
+    expect(templateFlowDiagram('not-a-template')).toBeNull()
     expect(templateFlowDiagram('')).toBeNull()
   })
 
@@ -99,7 +99,7 @@ describe('TemplateFlowDiagram (the drawn diagram)', () => {
   })
 
   it('renders NOTHING for a template with no flow spec', async () => {
-    const el = await mount('morning-briefing')
+    const el = await mount('not-a-template')
     expect(el.innerHTML).toBe('')
   })
 })

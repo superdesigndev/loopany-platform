@@ -1,7 +1,7 @@
 {
   "name": "ship-with-confidence",
-  "label": "Ship with Confidence",
-  "tagline": "Make every release safe to ship.",
+  "label": "CI, Test & Security",
+  "tagline": "Coverage, flaky CI and security advisories — guarded on schedule.",
   "accent": "indigo",
   "templates": ["test-guardian", "security-sweep", "ci-doctor"]
 }

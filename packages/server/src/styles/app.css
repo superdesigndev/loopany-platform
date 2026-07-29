@@ -305,9 +305,9 @@
  * the dashboard and the pre-login landing). The compact cards are fixed-height
  * (`TemplateCard` `compact`), so clipping the grid to TWO full rows plus a peek of the
  * third lands in the same place at every viewport width - 1, 2 or 3 columns - instead of
- * depending on how tall a row happened to render. Two 218px cards + the 16px gap = 452px
- * of solid rows; the box is 90px taller for the peek, so the mask stays fully opaque to
- * 452/558 = 81% and fades the third row to nothing. That is the "there is more" cue the
+ * depending on how tall a row happened to render. Two 252px cards + the 16px gap = 520px
+ * of solid rows; the box is 122px taller for the peek, so the mask stays fully opaque to
+ * 520/642 = 81% and fades the third row to nothing. That is the "there is more" cue the
  * "Browse all templates" link answers - keep the three numbers in step.
  *
  * Exactly three rows are RENDERED at every column count (`PEEK_VISIBILITY` in
@@ -317,14 +317,48 @@
  * shift the band up under the mask.
  */
 .templates-peek {
-  max-height: 558px;
+  max-height: 642px;
   -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 81%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 0, #000 81%, transparent 100%);
 }
 
 /*
- * Public template MARKET card (round 8, shared `TemplateCard`). The card's
- * visual anchor is a monospace preview of its REAL prompt, faded at the bottom. The
+ * Public template MARKET hero (`TemplatesPage`): the faint engineering-grid paper
+ * behind the stacked pixel headline (the MCP-directory pattern). Line ink derives from
+ * the theme's display color via color-mix so dark mode follows for free.
+ */
+.market-hero {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--color-display) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--color-display) 4%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+/* The typed headline's block caret. Steps (not a fade) — it's a terminal caret. */
+.type-caret {
+  display: inline-block;
+  width: 0.14em;
+  height: 0.85em;
+  margin-left: 0.1em;
+  vertical-align: -0.06em;
+  background: currentColor;
+  animation: type-caret-blink 1s steps(1) infinite;
+}
+@keyframes type-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .type-caret {
+    animation: none;
+  }
+}
+
+/*
+ * Public template MARKET card (shared `TemplateCard`). The card's visual anchor is
+ * its When -> Does -> You-get flow strip (editorial rating table). The
  * WHOLE card navigates to the detail page via a stretched-link overlay on the title
  * (`.market-card-link::after`), while the quiet "Create" affordance sits above it
  * (`position: relative; z-index`) so it stays independently clickable. The Create
@@ -336,10 +370,6 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
-}
-.prompt-preview-mask {
-  -webkit-mask-image: linear-gradient(to bottom, #000 42%, transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 42%, transparent 100%);
 }
 .market-create {
   transition: opacity 0.15s ease;
@@ -488,6 +518,64 @@
 }
 .taskmd th, .taskmd td { border: 1px solid var(--color-hairline); padding: 4px 8px; text-align: left; white-space: nowrap; }
 .taskmd img { max-width: 100%; }
+/* Dashboard/task markdown may embed a video; bound it to its pane like images
+   (story articles have their own .storymd img/video rule below). */
+.taskmd video { max-width: 100%; border-radius: var(--radius-control, 8px); }
+
+/*
+ * Template field notes (`story.md` on /templates/<slug>) — ARTICLE typography,
+ * deliberately separate from `.taskmd` (dashboard prose stays compact/quiet; an
+ * article must read like Medium: sans body at reading size, near-black ink,
+ * generous leading, clear heading hierarchy). The left detail column is
+ * already reading-width (~640px), so no extra measure constraint here.
+ */
+.storymd {
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.75;
+  letter-spacing: -0.003em;
+  color: var(--color-primary);
+}
+.storymd p { margin: 0 0 1.4em; }
+.storymd h1,
+.storymd h2,
+.storymd h3 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--color-display);
+  line-height: 1.25;
+}
+.storymd h1 { font-size: 28px; margin: 0 0 0.7em; }
+.storymd h2 { font-size: 23px; margin: 1.9em 0 0.55em; }
+.storymd h3 { font-size: 19px; margin: 1.6em 0 0.5em; }
+.storymd ul, .storymd ol { margin: 0 0 1.4em; padding-left: 1.5em; } /* preflight strips markers */
+.storymd ul { list-style: disc; }
+.storymd ol { list-style: decimal; }
+.storymd li { margin: 0.35em 0; }
+.storymd li::marker { color: var(--color-secondary); }
+.storymd blockquote {
+  margin: 1.7em 0;
+  padding-left: 1.1em;
+  border-left: 3px solid var(--color-display);
+  font-size: 17.5px;
+  font-weight: 500;
+  color: var(--color-display);
+}
+.storymd blockquote p { margin: 0; }
+.storymd a { color: var(--color-interactive); text-decoration: underline; text-underline-offset: 2px; }
+.storymd strong { font-weight: 650; color: var(--color-display); }
+.storymd code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  background: var(--color-raised);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.storymd pre { margin: 0 0 1.4em; padding: 14px 16px; overflow-x: auto; background: var(--color-raised); border-radius: var(--radius-control, 8px); }
+.storymd pre code { background: none; padding: 0; font-size: 13.5px; line-height: 1.6; }
+.storymd img, .storymd video { display: block; max-width: 100%; margin: 1.8em auto; border-radius: 10px; }
+.storymd hr { border: 0; border-top: 1px solid var(--color-hairline); margin: 2.4em 0; }
 
 /*
  * Minimal scrollbars - thin, trackless, monochrome. Firefox uses

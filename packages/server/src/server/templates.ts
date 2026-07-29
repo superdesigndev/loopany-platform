@@ -36,6 +36,68 @@ const thumbs = import.meta.glob<string>('../skill/templates/*/thumb.svg', {
 })
 
 /**
+ * Optional per-template FIELD NOTES: a `story.md` beside the meta.json — the honest
+ * write-up of how the loop ran for real (results, learnings, what to tweak), rendered
+ * on the public detail page (`/templates/<slug>`) under "Field notes". REPO-AUTHORED
+ * and trusted, like `thumb.svg`. Served ONLY through `findPublicTemplate` (the detail
+ * loader), never on the list payloads — a long write-up must not bloat the market grid.
+ */
+const stories = import.meta.glob<string>('../skill/templates/*/story.md', {
+  eager: true,
+  query: '?raw',
+  import: 'default',
+})
+
+/**
+ * Story MEDIA: screenshots/videos in `skill/templates/<name>/assets/`, referenced from
+ * the story markdown by relative path (`![…](assets/shot.png)`, `<video
+ * src="assets/demo.mp4">`). `?url` hands each file to Vite's asset pipeline — hashed,
+ * served in dev and prod, no extra route — and `templateStory` rewrites the relative
+ * references to those emitted URLs. Keep videos SMALL (they live in git); for anything
+ * heavy, embed a hosted player instead.
+ */
+const storyAssets = import.meta.glob<string>('../skill/templates/*/assets/*', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+})
+
+/** The template's field-notes markdown (front matter stripped, asset refs rewritten to
+ *  their served URLs), or null when the folder ships none. */
+export function templateStory(name: string): string | null {
+  const raw = stories[`../skill/templates/${name}/story.md`]
+  if (!raw) return null
+  const prefix = `../skill/templates/${name}/assets/`
+  const assets: Record<string, string> = {}
+  for (const [path, url] of Object.entries(storyAssets)) {
+    if (path.startsWith(prefix)) assets[path.slice(prefix.length)] = url
+  }
+  return rewriteStoryAssets(stripFrontMatter(raw), assets)
+}
+
+/**
+ * Drop a leading `---` front-matter block. Authors keep publishing metadata (status,
+ * internal notes) in the file; it must never render on the public page. Pure; returns
+ * the input unchanged when no front matter opens the file.
+ */
+export function stripFrontMatter(md: string): string {
+  if (!md.startsWith('---\n')) return md
+  const end = md.indexOf('\n---\n', 4)
+  if (end === -1) return md
+  return md.slice(end + 5).replace(/^\s+/, '')
+}
+
+/** Rewrite `assets/<file>` references (markdown links/images AND raw-HTML src attrs)
+ *  to the served URLs. Pure; unknown files are left as-is (a broken ref stays visible
+ *  to the author instead of silently vanishing). */
+export function rewriteStoryAssets(md: string, assets: Record<string, string>): string {
+  return md.replace(/(\]\(|src=")(?:\.\/)?assets\/([^)"\s]+)/g, (whole, lead: string, file: string) => {
+    const url = assets[file]
+    return url ? `${lead}${url}` : whole
+  })
+}
+
+/**
  * Product-curated card order (NOT alphabetical), grouped to mirror the dashboard
  * carousel's bundle order: Code Health → Ship with Confidence → Growth → Business Ops →
  * Personal → Others. A bundle resolves its OWN member order from its meta, so this order
@@ -48,7 +110,7 @@ const CARD_ORDER = [
   // Ship with Confidence
   'test-guardian', 'security-sweep', 'ci-doctor',
   // Growth
-  'market-research', 'reddit-karma', 'changelog-broadcaster',
+  'reddit-karma', 'market-research', 'changelog-broadcaster',
   // Business Ops
   'support-triage', 'metrics-digest', 'funnel-watch',
   // Personal

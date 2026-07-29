@@ -462,6 +462,12 @@ export interface TemplateRating {
    *  actually suggests in its prompt (e.g. "Daily · ~6am", "Weekly · Mon"), since a
    *  template has no fixed cron until you create the loop. English only. */
   schedule: string
+  /** The card's DOES line: one plain-English sentence of what a run mechanically does
+   *  (e.g. "Reads prod errors → root-causes → writes the fix"). English only. */
+  does: string
+  /** The card's YOU GET line: the concrete deliverable, led by one emoji glyph
+   *  (e.g. "🔀 One PR per verified fix"). English only. */
+  outcome: string
   /** For a CLOSED loop only: the concrete finish condition it completes on. Absent for
    *  open (monitor) loops, which run indefinitely. */
   exitCondition?: string
@@ -523,6 +529,29 @@ export interface TemplateDetailView {
   template: TemplateInfo
   categoryLabel: string
   accent: BundleAccent
+  /** Optional repo-authored field notes (`skill/templates/<name>/story.md`) — the
+   *  honest how-it-really-ran write-up rendered on the detail page. Detail-only:
+   *  never rides the market list payloads. */
+  story?: string
+  /** What this loop needs before it can run well (`server/templatePrereqs.ts`) —
+   *  only templates that declare any carry the section. Detail-only. */
+  prereqs?: TemplatePrereq[]
+}
+
+/** One prerequisite on a template's detail page: a tool, access, or setup piece the
+ *  loop needs (required) or benefits from (optional), with an optional external link. */
+export interface TemplatePrereq {
+  label: string
+  /** One plain line on what it is / why the loop wants it. English only. */
+  desc?: string
+  /** External resource, rendered INSIDE the description as an inline link labeled
+   *  `linkLabel` — the reader gets context before opening it. */
+  href?: string
+  /** The inline link's text (required alongside href), e.g.
+   *  "Manage agent credentials with treg". English only. */
+  linkLabel?: string
+  /** True ⇒ nice-to-have; absent/false ⇒ the loop needs it to run well. */
+  optional?: boolean
 }
 
 /** The team switcher's data: the teams this user may view + the active selection. */

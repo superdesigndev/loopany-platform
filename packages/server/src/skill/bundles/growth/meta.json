@@ -3,5 +3,5 @@
   "label": "Growth",
   "tagline": "Watch your market and grow your audience.",
   "accent": "rubik-green",
-  "templates": ["market-research", "reddit-karma", "changelog-broadcaster"]
+  "templates": ["reddit-karma", "market-research", "changelog-broadcaster"]
 }

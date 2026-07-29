@@ -44,6 +44,8 @@ const bundles: BundleView[] = [
         visibility: 'first-run',
         visibilityNote: 'The first scan fixes the worst issue.',
         schedule: 'Daily · ~6am',
+        does: 'Scans the app → fixes the worst issue',
+        outcome: '🔀 One verified fix PR daily',
       }),
     ],
   },
@@ -61,6 +63,8 @@ const bundles: BundleView[] = [
         visibility: 'compounds',
         visibilityNote: 'Waits out an intermittent bug.',
         schedule: 'Patrol cadence (you set it)',
+        does: 'Stakes out one elusive bug → captures full context',
+        outcome: '🐛 Root cause, then it closes',
         exitCondition: 'Finishes on one clean capture.',
       }),
     ],
@@ -88,17 +92,20 @@ async function mount(): Promise<HTMLDivElement> {
 }
 
 describe('TemplatesPage (text-first market — round 8 card)', () => {
-  it('renders text-first cards: title, intro, prompt preview anchor, 3 micro-indicators', async () => {
+  it('renders outcome-first cards: title, intro, flow strip, 3 micro-indicators', async () => {
     const el = await mount()
     const out = el.innerHTML
     expect(out).toContain('Code Health')
     expect(out).toContain('Others')
     expect(out).toContain('React Doctor')
     expect(out).toContain('Bug Vigil')
-    // The visual anchor: a monospace <pre> preview of the REAL prompt per card.
-    const pres = [...el.querySelectorAll('article pre')]
-    expect(pres.length).toBe(2)
-    expect(pres.some((p) => (p.textContent ?? '').includes('React Doctor full setup'))).toBe(true)
+    // The visual anchor: the When → Does → You-get strip per card (the full prompt
+    // moved to the detail page — no monospace preview on the market).
+    const strips = [...el.querySelectorAll('article .flow-strip')]
+    expect(strips.length).toBe(2)
+    expect(strips.some((p) => (p.textContent ?? '').includes('Scans the app → fixes the worst issue'))).toBe(true)
+    expect(strips.some((p) => (p.textContent ?? '').includes('Root cause, then it closes'))).toBe(true)
+    expect(el.querySelectorAll('article pre').length).toBe(0)
     // Compact 3-indicator row (ease · cadence · effect) — NOT the wrapping full chips.
     expect(out).toContain('Easy start')
     expect(out).toContain('Short cycle')
@@ -109,8 +116,8 @@ describe('TemplatesPage (text-first market — round 8 card)', () => {
     expect(out).not.toContain('Open loop')
     expect(out).not.toContain('Closed loop')
     expect(out).not.toContain('Visible first run')
-    // Text-first: still no template illustration on the market.
-    expect(el.querySelectorAll('article svg').length).toBe(0)
+    // One icon per card (the template's mark) — still no thumb illustration.
+    expect(el.querySelectorAll('article h3 svg').length).toBe(2)
   })
 
   it('the whole card links to detail; Create is a quiet deep-link; no Details button', async () => {

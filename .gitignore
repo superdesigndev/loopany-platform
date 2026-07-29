@@ -32,3 +32,4 @@ __pycache__/
 # verification proof output (screenshots/video), never committed
 evidence/
 /.playwright-cli
+.DS_Store

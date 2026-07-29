@@ -43,12 +43,12 @@ describe('bundle registry', () => {
     expect(new Set(names).size).toBe(names.length)
   })
 
-  test('listBundles returns the curated 6-category order', () => {
+  test('listBundles returns the curated 6-category order (broad-appeal first)', () => {
     expect(listBundles().map((b) => b.name)).toEqual([
-      'code-health',
-      'ship-with-confidence',
       'growth',
       'business-ops',
+      'code-health',
+      'ship-with-confidence',
       'personal',
       'others',
     ])
@@ -58,17 +58,17 @@ describe('bundle registry', () => {
     const byName = new Map(BUNDLES.map((b) => [b.name, b]))
     const members = (name: string) => byName.get(name)!.members.map((m) => m.name)
 
-    expect(byName.get('code-health')!.label).toBe('Code Health')
+    expect(byName.get('code-health')!.label).toBe('Codebase Autopilot')
     expect(byName.get('code-health')!.accent).toBe('interactive')
     expect(members('code-health')).toEqual(['docs-sweep', 'error-sweep', 'react-doctor', 'housekeeper', 'dependency-triage'])
 
-    expect(byName.get('ship-with-confidence')!.label).toBe('Ship with Confidence')
+    expect(byName.get('ship-with-confidence')!.label).toBe('CI, Test & Security')
     expect(byName.get('ship-with-confidence')!.accent).toBe('indigo')
     expect(members('ship-with-confidence')).toEqual(['test-guardian', 'security-sweep', 'ci-doctor'])
 
     expect(byName.get('growth')!.label).toBe('Growth')
     expect(byName.get('growth')!.accent).toBe('rubik-green')
-    expect(members('growth')).toEqual(['market-research', 'reddit-karma', 'changelog-broadcaster'])
+    expect(members('growth')).toEqual(['reddit-karma', 'market-research', 'changelog-broadcaster'])
 
     expect(byName.get('business-ops')!.label).toBe('Business Ops')
     expect(byName.get('business-ops')!.accent).toBe('rubik-orange')
@@ -82,7 +82,7 @@ describe('bundle registry', () => {
   test('the "Others" category holds the individually-set-up loops (no bundle CTA)', () => {
     const others = BUNDLES.find((b) => b.name === 'others')!
     expect(others).toBeTruthy()
-    expect(others.label).toBe('Others')
+    expect(others.label).toBe('Goal Loops')
     // The closed, goal-bound loops are set up individually, so they live in Others.
     expect(others.members.map((m) => m.name)).toEqual(['follow-up-tracker', 'outcome-watch', 'bug-vigil', 'release-shepherd'])
     // `individual` marks a no-CTA category; the tryable bundles never set it.

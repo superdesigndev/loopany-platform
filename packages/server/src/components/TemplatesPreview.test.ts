@@ -28,6 +28,8 @@ const rating: TemplateInfo['rating'] = {
   visibility: 'first-run',
   visibilityNote: 'The first run fixes the worst issue.',
   schedule: 'Daily · ~6am',
+  does: 'Scans the app → fixes the worst issue',
+  outcome: '🔀 One verified fix PR daily',
 }
 
 const tmpl = (name: string, label: string): TemplateInfo => ({
@@ -108,16 +110,19 @@ describe('TemplatesPreview (dashboard catalog teaser)', () => {
     expect(el.innerHTML).not.toContain('Dependency Triage')
   })
 
-  it('reuses the market card language: category tag, intro, prompt preview, rating row', async () => {
+  it('reuses the market card language: category tag, intro, flow strip, rating row', async () => {
     const el = await mount()
     const out = el.innerHTML
     expect(out).toContain('Code Health')
     expect(out).toContain('React Doctor blurb')
-    // The monospace prompt-preview texture, one per card, masked at its bottom.
-    const pres = [...el.querySelectorAll('article pre')]
-    expect(pres.length).toBe(9)
-    expect(pres[0]!.textContent).toContain('React Doctor full setup prompt')
-    expect(el.querySelectorAll('article .prompt-preview-mask').length).toBe(9)
+    // The When → Does → You-get strip, one per card (the old prompt preview is gone —
+    // the full prompt lives on the detail page).
+    const strips = [...el.querySelectorAll('article .flow-strip')]
+    expect(strips.length).toBe(9)
+    expect(strips[0]!.textContent).toContain('Daily · ~6am')
+    expect(strips[0]!.textContent).toContain('Scans the app → fixes the worst issue')
+    expect(strips[0]!.textContent).toContain('One verified fix PR daily')
+    expect(el.querySelectorAll('article pre').length).toBe(0)
     // The compact 3-indicator rating row (same as the market grid).
     expect(out).toContain('Easy start')
     expect(out).toContain('Short cycle')
@@ -226,8 +231,9 @@ describe('placement + shared-card wiring', () => {
   })
 
   it('the compact card clamps its title, so the fixed height cannot silently clip the footer', () => {
-    // 218px leaves no slack for a two-line title; a longer label must ellipsise rather
-    // than push the rating row + Create link out of the card.
-    expect(src('./TemplateCard.tsx')).toContain("compact ? 'line-clamp-1' : ''")
+    // The fixed height leaves no slack for a two-line title; a longer label must
+    // ellipsise (truncate on the title link — the h3 is a flex row with the icon)
+    // rather than push the rating row + Create link out of the card.
+    expect(src('./TemplateCard.tsx')).toContain("${compact ? 'truncate' : ''}")
   })
 })

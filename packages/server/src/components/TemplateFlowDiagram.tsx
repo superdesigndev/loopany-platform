@@ -47,7 +47,7 @@ export function TemplateFlowDiagram({ name }: { name: string }) {
             {groups.map((g, i) =>
               g.worktree ? (
                 <div key={i} className="relative rounded-control border border-dashed border-interactive/45 p-2 pt-3.5">
-                  <span className="absolute -top-2 left-2.5 bg-surface px-1.5 font-mono text-micro text-interactive">
+                  <span className="absolute -top-2 left-2.5 max-w-[calc(100%-20px)] truncate whitespace-nowrap bg-surface px-1.5 font-mono text-micro text-interactive">
                     {flow.worktreeLabel}
                   </span>
                   <div className="flex flex-col gap-2">
