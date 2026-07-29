@@ -158,6 +158,8 @@
   .preview-body th, .preview-body td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; }
   .preview-body th { color: var(--muted); font-weight: 600; }
   .preview-body code { padding: 1px 5px; border-radius: 4px; background: #f0eee9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  .preview-body pre { margin: 1.4em 0; padding: 12px 14px; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: #f7f5f1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; line-height: 1.6; }
+  .preview-body pre code { padding: 0; background: none; font-size: inherit; }
   .preview-nobody { color: #6d6a64; }
   .preview-nobody p { font-family: var(--font); font-size: .875rem; }
   .preview-nobody dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 22px 0 0; font-family: var(--font); font-size: .8125rem; }

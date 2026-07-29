@@ -158,6 +158,16 @@ function ArtifactRow({
   )
 }
 
+/** Say plainly how the thing on screen was produced. A real workspace holds
+ *  v1-format artifacts, older front-matter-less Markdown, and data files - and
+ *  the reader should not have to guess which one they are looking at. */
+function previewKicker(artifact: LibraryArtifact): string {
+  if (!artifact.bodyAvailable) return 'Front matter only · body not stored locally'
+  if (artifact.renderMode === 'code') return 'Data file · rendered as source'
+  if (artifact.renderMode === 'markdown') return 'Markdown · no front matter'
+  return 'Artifact file · front matter + Markdown'
+}
+
 function ArtifactPreview({
   artifact,
   onClose,
@@ -190,7 +200,7 @@ function ArtifactPreview({
           <button className="preview-back" onClick={onClose} autoFocus>
             <span aria-hidden="true">←</span> Back to Library
           </button>
-          <span>Stored artifact · rendered server-side</span>
+          <span>{previewKicker(artifact)}</span>
           <button className="preview-close" onClick={onClose} aria-label="Close preview">
             ×
           </button>
@@ -233,8 +243,8 @@ function ArtifactPreview({
             ) : (
               <div className="preview-body preview-nobody">
                 <p>
-                  The bytes for this artifact live in the loop's artifact store, not in the control-plane
-                  database, so this workspace has its front matter but not its body.
+                  No local body for this artifact: {artifact.bodyAbsentReason ?? 'its bytes are not in the local cache'}.
+                  Its front matter is below.
                 </p>
                 <dl>
                   {artifact.path && (

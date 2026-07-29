@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { resolveProdUrl } from './pull-prod'
+import { resolveR2 } from './fetch-bodies'
 
 /**
  * `pull-prod.ts` is the ONLY module in this repo that opens a connection to the
@@ -16,6 +17,15 @@ import { resolveProdUrl } from './pull-prod'
  */
 const rel = './pull-prod.ts'
 const SOURCE = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+const relBodies = './fetch-bodies.ts'
+const BODIES_RAW = readFileSync(fileURLToPath(new URL(relBodies, import.meta.url)), 'utf8')
+/** Comments explain the posture by NAMING what is forbidden, so the guard has to
+ *  read the code alone - exactly the trap the SQL guard below already avoids. */
+const BODIES = stripComments(BODIES_RAW)
+
+function stripComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+}
 
 describe('the production pull is read-only by construction', () => {
   it('pins the session read-only at the server', () => {
@@ -80,5 +90,67 @@ describe('resolveProdUrl', () => {
       }),
     ).toThrow(/LOOPANY_PROD_DB_URL/)
     expect(() => resolveProdUrl(() => 'NOTHING=1')).toThrow(/no LOOPANY_DB_URL entry/)
+  })
+})
+
+describe('the artifact-body fetch is read-only by construction', () => {
+  it('imports exactly one S3 command, and it is a read', () => {
+    const commands = [...BODIES.matchAll(/\b([A-Z][A-Za-z]*Command)\b/g)].map((m) => m[1])
+    expect([...new Set(commands)]).toEqual(['GetObjectCommand'])
+  })
+
+  it('never reaches for a write operation', () => {
+    for (const forbidden of [
+      /PutObject/,
+      /DeleteObject/,
+      /CreateMultipartUpload/,
+      /UploadPart/,
+      /CopyObject/,
+      /PutBucket/,
+    ]) {
+      expect(BODIES).not.toMatch(forbidden)
+    }
+  })
+
+  it('does not hold a store handle that can write', () => {
+    // `R2BlobStore` carries put/delete; a read-only job must not construct one.
+    expect(BODIES).not.toMatch(/R2BlobStore/)
+  })
+
+  it('takes the object layout from the server, not a second copy of the string', () => {
+    expect(BODIES_RAW).toContain('import { blobKey }')
+    // The literal key prefix must appear only in blobstore.ts.
+    expect(BODIES).not.toMatch(/["'`]blobs\//)
+  })
+
+  it('caches beside the demo database and refuses to guess a location', () => {
+    expect(BODIES).toContain('LOOPANY_DATA_DIR is unset')
+  })
+})
+
+describe('resolveR2', () => {
+  const saved = { ...process.env }
+  afterEach(() => {
+    for (const k of ['LOOPANY_R2_BUCKET', 'LOOPANY_R2_ACCESS_KEY_ID', 'LOOPANY_R2_SECRET_ACCESS_KEY', 'LOOPANY_R2_ACCOUNT_ID', 'LOOPANY_R2_ENV_FILE', 'LOOPANY_R2_ENDPOINT']) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+  })
+
+  it('derives the R2 endpoint from the account id', () => {
+    process.env.LOOPANY_R2_ENV_FILE = '/tmp/does-not-matter'
+    delete process.env.LOOPANY_R2_ENDPOINT
+    const creds = resolveR2(
+      () => 'LOOPANY_R2_BUCKET=b\nLOOPANY_R2_ACCESS_KEY_ID=k\nLOOPANY_R2_SECRET_ACCESS_KEY=s\nLOOPANY_R2_ACCOUNT_ID=acct\n',
+    )
+    expect(creds.endpoint).toBe('https://acct.r2.cloudflarestorage.com')
+    expect(creds.region).toBe('auto')
+    expect(creds.bucket).toBe('b')
+  })
+
+  it('fails loudly rather than half-configured', () => {
+    process.env.LOOPANY_R2_ENV_FILE = '/tmp/does-not-matter'
+    for (const k of ['LOOPANY_R2_BUCKET', 'LOOPANY_R2_ACCESS_KEY_ID', 'LOOPANY_R2_SECRET_ACCESS_KEY', 'LOOPANY_R2_ACCOUNT_ID', 'LOOPANY_R2_ENDPOINT']) delete process.env[k]
+    expect(() => resolveR2(() => 'LOOPANY_R2_BUCKET=b\n')).toThrow(/incomplete R2 credentials/)
   })
 })

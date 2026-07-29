@@ -163,6 +163,7 @@ and Timeline, backed by the real `objects` / `edges` / `events` / `gate_obligati
 
 ```bash
 pnpm graph:pull              # READ-ONLY snapshot of a real production team
+pnpm graph:bodies            # READ-ONLY fetch of those artifacts' real bytes
 pnpm graph:demo              # build → seed → serve http://127.0.0.1:3700/dev/workspace
 pnpm graph:demo --synthetic  # same, using the hand-built demo fleet instead
 pnpm graph:seed              # re-seed only (run with the server stopped)
@@ -180,9 +181,14 @@ one production team into `.graph-demo-data/prod-snapshot.json`, and the seeder r
 that snapshot locally — it never re-hits production. The pull is read-only at three
 layers (a session-level `default_transaction_read_only=on`, a read-only transaction per
 statement, and no write or DDL text anywhere in the module — all three pinned by tests).
-Rows with no clean mapping are dropped and counted, never invented; artifact bodies live
-in the artifact store rather than the database, so pulled products show their front matter
-and say so. Without a snapshot the seeder stops and names your options rather than quietly
+Rows with no clean mapping are dropped and counted, never invented.
+
+Artifact bodies live in the content-addressed artifact store rather than the database, so
+`pnpm graph:bodies` fetches them read-only (one `GetObject` per hash, nothing that writes
+is even imported) and caches them locally. Previews then render the real document — as a
+v1 artifact, as plain Markdown when it has no front matter, or as a code block when it is
+data — and anything whose bytes genuinely are not available keeps a notice saying exactly
+why. Without a snapshot the seeder stops and names your options rather than quietly
 substituting synthetic data.
 
 The "Needs you" list is the open `human-verdict` obligations, computed opened-minus-closed,

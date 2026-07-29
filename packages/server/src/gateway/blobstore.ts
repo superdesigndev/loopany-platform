@@ -45,8 +45,14 @@ export class MemoryBlobStore implements BlobStore {
   }
 }
 
-/** Object key for a blob hash. Flat namespace under a prefix — hashes are unique. */
-function blobKey(hash: string): string {
+/**
+ * Object key for a blob hash. Flat namespace under a prefix — hashes are unique.
+ *
+ * EXPORTED so anything that reads the same bucket derives the key from here
+ * rather than re-typing the layout (the graph v1 demo's read-only body fetcher
+ * does). A second copy of this string is a silent drift waiting to happen.
+ */
+export function blobKey(hash: string): string {
   return `blobs/${hash}`;
 }
 

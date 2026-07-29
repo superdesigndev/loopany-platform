@@ -83,17 +83,22 @@ function makeSnapshot(): import('./pull-prod.js').ProdSnapshot {
       { id: 'r7', loopId: 'loop-closed', phase: 'done', role: 'exec', ts: '2026-07-24T10:00:00.000Z', outcome: 'exec', status: 'new', message: 'Shipped https://github.com/acme/widgets/pull/42 for review.', error: null, durationMs: 45_000, costUsd: 0.4, state: { recovery_rate_pct: 91 }, sessionId: 's7' },
     ],
     files: [
-      { loopId: 'loop-support', path: 'escalations/SUP-79.md', size: 900, binary: false, updatedAt: '2026-07-28T10:10:00.000Z', meta: { type: 'needs_human', title: 'SUP-79 refund decision', date: '2026-07-28' } },
-      { loopId: 'loop-support', path: 'reports/2026-07-28.md', size: 1200, binary: false, updatedAt: '2026-07-28T10:20:00.000Z', meta: { type: 'report', title: 'Daily triage 2026-07-28', date: '2026-07-28' } },
-      { loopId: 'loop-support', path: 'cards/cleanup.md', size: 400, binary: false, updatedAt: '2026-07-27T09:00:00.000Z', meta: { type: 'open', title: 'Remove a dead util' } },
-      { loopId: 'loop-support', path: 'cards/done.md', size: 400, binary: false, updatedAt: '2026-07-26T09:00:00.000Z', meta: { type: 'merged', title: 'Removed a dead component' } },
-      { loopId: 'loop-support', path: 'posts/draft.md', size: 700, binary: false, updatedAt: '2026-07-26T10:00:00.000Z', meta: { type: 'drafted', title: 'A post waiting to go out' } },
-      // no front matter at all - keeps its path as the title, no gate
-      { loopId: 'loop-support', path: 'notes/scratch.md', size: 100, binary: false, updatedAt: '2026-07-20T10:00:00.000Z', meta: null },
+      { loopId: 'loop-support', path: 'escalations/SUP-79.md', hash: 'h-escalation', size: 900, binary: false, updatedAt: '2026-07-28T10:10:00.000Z', meta: { type: 'needs_human', title: 'SUP-79 refund decision', date: '2026-07-28' } },
+      // a v1-format artifact: front matter + Markdown
+      { loopId: 'loop-support', path: 'reports/2026-07-28.md', hash: 'h-artifact', size: 1200, binary: false, updatedAt: '2026-07-28T10:20:00.000Z', meta: { type: 'report', title: 'Daily triage 2026-07-28', date: '2026-07-28' } },
+      { loopId: 'loop-support', path: 'cards/cleanup.md', hash: 'h-open-card', size: 400, binary: false, updatedAt: '2026-07-27T09:00:00.000Z', meta: { type: 'open', title: 'Remove a dead util' } },
+      { loopId: 'loop-support', path: 'cards/done.md', hash: 'h-done-card', size: 400, binary: false, updatedAt: '2026-07-26T09:00:00.000Z', meta: { type: 'merged', title: 'Removed a dead component' } },
+      { loopId: 'loop-support', path: 'posts/draft.md', hash: 'h-draft', size: 700, binary: false, updatedAt: '2026-07-26T10:00:00.000Z', meta: { type: 'drafted', title: 'A post waiting to go out' } },
+      // Markdown with NO front matter - still a real document
+      { loopId: 'loop-support', path: 'notes/scratch.md', hash: 'h-plain', size: 100, binary: false, updatedAt: '2026-07-20T10:00:00.000Z', meta: null },
+      // data, not prose
+      { loopId: 'loop-support', path: 'reports/metrics.json', hash: 'h-json', size: 120, binary: false, updatedAt: '2026-07-20T11:00:00.000Z', meta: { type: 'report', title: 'Metrics' } },
+      // bytes never fetched - the Library must SAY so, not blank the row
+      { loopId: 'loop-support', path: 'reports/absent.md', hash: 'h-absent', size: 300, binary: false, updatedAt: '2026-07-19T11:00:00.000Z', meta: { type: 'report', title: 'Body not cached' } },
       // the loop's own task file, already seeded from task_file_content
-      { loopId: 'loop-support', path: 'support/README.md', size: 5000, binary: false, updatedAt: '2026-07-29T07:00:00.000Z', meta: { type: 'task', title: 'Support triage' } },
+      { loopId: 'loop-support', path: 'support/README.md', hash: 'h-taskfile', size: 5000, binary: false, updatedAt: '2026-07-29T07:00:00.000Z', meta: { type: 'task', title: 'Support triage' } },
       // belongs to nothing in this snapshot
-      { loopId: 'loop-gone', path: 'orphan.md', size: 10, binary: false, updatedAt: '2026-07-20T10:00:00.000Z', meta: { type: 'report' } },
+      { loopId: 'loop-gone', path: 'orphan.md', hash: 'h-orphan', size: 10, binary: false, updatedAt: '2026-07-20T10:00:00.000Z', meta: { type: 'report' } },
     ],
     dropped: [{ what: 'runs', count: 1047, why: 'outside the 14-day window' }],
   }
@@ -110,6 +115,18 @@ beforeAll(async () => {
   read = await import('./read.js')
   graph = await import('../../db/graphStore.js')
   snapshot = makeSnapshot()
+
+  // Stand in for `pnpm graph:bodies`: the real fetcher is read-only against the
+  // artifact store and must never run in CI, so the cache is written directly.
+  const bodies = await import('./fetch-bodies.js')
+  const cache = bodies.bodyCacheDir()
+  fs.mkdirSync(cache, { recursive: true })
+  const write = (hash: string, text: string) => fs.writeFileSync(path.join(cache, `${hash}.txt`), text)
+  write('h-artifact', '---\ntype: report\ntitle: Daily triage 2026-07-28\n---\n\n## Handled\n\n- four conversations\n')
+  write('h-plain', '# Scratch\n\nNo front matter here, but still a real document.\n')
+  write('h-json', '{"handled": 4}\n')
+  write('h-escalation', '---\ntype: needs_human\n---\n\nRefund call needed.\n')
+  // h-absent is deliberately NOT written.
 }, 120_000)
 
 describe('replaying a production snapshot', () => {
@@ -177,19 +194,55 @@ describe('replaying a production snapshot', () => {
     expect(mirror.status).toBe('observed')
   })
 
-  it('keeps the real task file as a document with its body, and the rest metadata-only', async () => {
+  it('renders the real fetched body of a v1-format artifact', async () => {
+    const library = await read.libraryView()
+    const product = library.artifacts.find((a) => a.title === 'Daily triage 2026-07-28')!
+    expect(product.bodyAvailable).toBe(true)
+    expect(product.renderMode).toBe('artifact')
+    expect(product.html).toContain('four conversations')
+    // the front-matter head is the machine head, not body content
+    expect(product.html).not.toContain('type: report')
+    expect(product.path).toBe('reports/2026-07-28.md')
+    expect(product.originalType).toBe('report')
+  })
+
+  it('renders Markdown with no front matter as prose rather than an error', async () => {
+    const library = await read.libraryView()
+    const plain = library.artifacts.find((a) => a.title === 'scratch')!
+    expect(plain.bodyAvailable).toBe(true)
+    expect(plain.renderMode).toBe('markdown')
+    expect(plain.html).toContain('still a real document')
+  })
+
+  it('renders a data file as a code block instead of mangling it as Markdown', async () => {
+    const library = await read.libraryView()
+    const json = library.artifacts.find((a) => a.title === 'Metrics')!
+    expect(json.renderMode).toBe('code')
+    expect(json.html).toContain('<code')
+    expect(json.html).toContain('handled')
+  })
+
+  it('keeps the real task file as a document with its body', async () => {
     const library = await read.libraryView()
     const taskFile = library.artifacts.find((a) => a.title.endsWith('· task file'))!
     expect(taskFile.bodyAvailable).toBe(true)
     expect(taskFile.html).toContain('Watch the inbox')
+  })
 
-    const product = library.artifacts.find((a) => a.title === 'Daily triage 2026-07-28')!
-    // The bytes are in the artifact store, not the control plane - say so, never
-    // render an empty document.
-    expect(product.bodyAvailable).toBe(false)
-    expect(product.html).toBeUndefined()
-    expect(product.path).toBe('reports/2026-07-28.md')
-    expect(product.originalType).toBe('report')
+  it('states WHY a body is missing instead of showing a blank document', async () => {
+    const library = await read.libraryView()
+    const absent = library.artifacts.find((a) => a.title === 'Body not cached')!
+    expect(absent.bodyAvailable).toBe(false)
+    expect(absent.html).toBeUndefined()
+    expect(absent.bodyAbsentReason).toMatch(/not in the local cache/)
+  })
+
+  it('never lets a body render raw HTML from an agent-written document', async () => {
+    const library = await read.libraryView()
+    for (const a of library.artifacts) {
+      if (!a.html) continue
+      expect(a.html).not.toMatch(/<script|<iframe|onerror=/i)
+    }
   })
 
   it('titles an artifact with no front matter from its path rather than inventing one', async () => {

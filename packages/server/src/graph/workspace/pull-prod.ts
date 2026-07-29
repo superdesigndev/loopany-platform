@@ -79,6 +79,9 @@ export interface ProdRun {
 export interface ProdFile {
   loopId: string;
   path: string;
+  /** sha256 of the file's bytes - the content-addressed key its bytes live under
+   *  in the artifact store (`gateway/blobstore.ts` `blobKey`). */
+  hash: string;
   size: number;
   binary: boolean;
   updatedAt: string;
@@ -206,7 +209,7 @@ export async function pullProdSnapshot(options: PullOptions): Promise<ProdSnapsh
 
       const allFiles = await tx<ProdFile[]>`
         select
-          af.loop_id as "loopId", af.path, af.size, af.binary,
+          af.loop_id as "loopId", af.path, af.hash, af.size, af.binary,
           af.updated_at as "updatedAt", b.meta
         from artifact_files af
         join loops l on l.id = af.loop_id

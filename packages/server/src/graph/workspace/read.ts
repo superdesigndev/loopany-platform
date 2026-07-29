@@ -24,7 +24,7 @@
  */
 import { desc, eq } from "drizzle-orm";
 
-import { renderArtifactBody, safeParseArtifact } from "@loopany/artifact-format";
+import { renderArtifactBody, renderMarkdown, safeParseArtifact } from "@loopany/artifact-format";
 
 import { db } from "../../db/index.js";
 import {
@@ -334,7 +334,14 @@ export interface LibraryArtifact {
   /** The producing loop's own front-matter `type` (`needs_human`, `drafted`,
    *  `merged`, …). Kept verbatim: the registry type is a mapping, not a rename. */
   originalType?: string;
+  /** How the body was rendered - see `renderStored`. Absent with no body. */
+  renderMode?: RenderMode;
+  /** Why there is no body, when there is none. Always a real condition. */
+  bodyAbsentReason?: string;
 }
+
+/** How a stored body was projected to HTML. */
+export type RenderMode = "artifact" | "markdown" | "code";
 
 export interface LibraryView {
   categories: string[];
@@ -438,6 +445,7 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
     const isMirrorFronted = o.type === "merge-review";
     const externalUrl = str((mirror?.payload as Record<string, unknown> | null)?.sourceUrl);
     const bodyAvailable = typeof p.source === "string";
+    const rendered = bodyAvailable ? renderStored(p.source, str(p.prodPath)) : undefined;
     artifacts.push({
       id: o.id,
       category,
@@ -451,10 +459,12 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
       kind: isMirrorFronted && externalUrl ? "mirror" : "document",
       ...(isMirrorFronted && externalUrl
         ? { sourceUrl: externalUrl, externalLabel: "View on GitHub" }
-        : { html: bodyAvailable ? renderStored(p.source) : undefined }),
+        : { html: rendered?.html }),
       needsHuman: Boolean(open),
       ...(verdict ? { verdict } : {}),
       bodyAvailable,
+      ...(rendered ? { renderMode: rendered.mode } : {}),
+      ...(str(p.bodyAbsentReason) ? { bodyAbsentReason: str(p.bodyAbsentReason) } : {}),
       ...(str(p.prodPath) ? { path: str(p.prodPath) } : {}),
       ...(str(p.originalType) ? { originalType: str(p.originalType) } : {}),
     });
@@ -483,17 +493,58 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
   };
 }
 
+/** Extensions that are source/data, not prose. Rendering them as Markdown would
+ *  mangle them, so they go through a fenced code block instead. */
+const CODE_EXTENSIONS: Record<string, string> = {
+  json: "json",
+  py: "python",
+  ts: "typescript",
+  js: "javascript",
+  mjs: "javascript",
+  sh: "bash",
+  bash: "bash",
+  sql: "sql",
+  yml: "yaml",
+  yaml: "yaml",
+  toml: "toml",
+  csv: "csv",
+  txt: "",
+};
+
 /**
- * Render a stored artifact file to sanitized HTML. Uses the SAFE parse: one
- * malformed stored body must degrade to a visible note, never blank the whole
- * Library. Raw HTML in the body is stripped (this content came from an agent,
- * not from us).
+ * Render a stored artifact body to sanitized HTML, and say HOW it was rendered.
+ *
+ * Real production artifacts are not uniformly v1-format files - many predate the
+ * format, and some are data or code the loop keeps beside its prose. So there
+ * are three honest paths, and the caller surfaces which one ran rather than
+ * pretending everything is a well-formed artifact:
+ *
+ *   `artifact`  front matter + Markdown, parsed and rendered by the format library
+ *   `markdown`  Markdown with no (or unparseable) front matter - rendered as prose
+ *   `code`      a data/source file - rendered as one fenced block
+ *
+ * Every path ends in the same sanitizer, and raw HTML in a body is STRIPPED:
+ * this content was written by an agent, not by us.
  */
-function renderStored(source: unknown): string | undefined {
+function renderStored(source: unknown, filePath?: string): { html: string; mode: RenderMode } | undefined {
   if (typeof source !== "string") return undefined;
+
+  const ext = filePath?.split(".").pop()?.toLowerCase();
+  if (ext && ext in CODE_EXTENSIONS) {
+    const lang = CODE_EXTENSIONS[ext]!;
+    // A fence inside the content would end the block early; the longest run of
+    // backticks in the body decides the fence length.
+    const longest = Math.max(2, ...[...source.matchAll(/`+/g)].map((m) => m[0].length));
+    const fence = "`".repeat(longest + 1);
+    return { html: renderMarkdown(`${fence}${lang}\n${source}\n${fence}`, { rawHtml: "strip" }), mode: "code" };
+  }
+
   const parsed = safeParseArtifact(source);
-  if (!parsed.ok) return `<p>This artifact could not be parsed: ${parsed.error.code}</p>`;
-  return renderArtifactBody(parsed.value, { rawHtml: "strip" });
+  if (parsed.ok) return { html: renderArtifactBody(parsed.value, { rawHtml: "strip" }), mode: "artifact" };
+  // No machine head (or one this version cannot read). The document is still a
+  // real document - render the prose and let the caller say it had no front
+  // matter, rather than replacing the content with an error.
+  return { html: renderMarkdown(source, { rawHtml: "strip" }), mode: "markdown" };
 }
 
 // ---- Timeline ----

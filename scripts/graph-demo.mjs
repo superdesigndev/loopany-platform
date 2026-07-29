@@ -7,6 +7,7 @@
  *                                only when the server is stopped — pglite is single-writer)
  *   pnpm graph:demo --synthetic  use the hand-built fleet instead of the real snapshot
  *   pnpm graph:pull              READ-ONLY snapshot of the real production fleet
+ *   pnpm graph:bodies            READ-ONLY fetch of those artifacts' real bytes
  *
  * The DEFAULT dataset is the REAL production fleet, replayed from the local
  * snapshot `pnpm graph:pull` writes. With no snapshot on disk the seeder stops
@@ -29,6 +30,7 @@
  * 3500/3611 must not be disturbed. Override with `LOOPANY_PORT`.
  */
 import { spawn } from 'node:child_process'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -36,11 +38,17 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const seedOnly = process.argv.includes('--seed')
 const synthetic = process.argv.includes('--synthetic')
 const pullOnly = process.argv.includes('--pull')
+const bodiesOnly = process.argv.includes('--bodies')
 
 const env = {
   ...process.env,
   LOOPANY_DATA_DIR: process.env.LOOPANY_DATA_DIR || path.join(repoRoot, '.graph-demo-data'),
   LOOPANY_PORT: process.env.LOOPANY_PORT || '3700',
+  // Artifact-store credentials for the read-only body fetch. Loaded from a file
+  // the operator points at; nothing is copied into the repo.
+  LOOPANY_R2_ENV_FILE:
+    process.env.LOOPANY_R2_ENV_FILE ||
+    path.join(os.homedir(), 'Workspace', 'firstmate', 'data', 'graph-v1-local-demo', 'r2.env'),
   // The demo is the embedded tier by construction: a DATABASE_URL inherited from
   // a shell would silently seed a real Postgres.
   DATABASE_URL: '',
@@ -67,6 +75,12 @@ try {
     // and not as a bare package script.
     step('pulling a READ-ONLY snapshot of the production fleet')
     await run('pnpm', ['--filter', '@loopany/server', 'graph:pull', '--', ...process.argv.slice(2).filter((a) => a !== '--pull')])
+    process.exit(0)
+  }
+
+  if (bodiesOnly) {
+    step("fetching the artifacts' real bytes (read-only)")
+    await run('pnpm', ['--filter', '@loopany/server', 'graph:bodies'])
     process.exit(0)
   }
 

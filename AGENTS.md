@@ -1091,12 +1091,27 @@ computes pure functions. Run instructions: `README.md`.
   `GATE_FRONT_MATTER_TYPES` (in `specs.ts`) is SHARED with the puller for a load-bearing
   reason: its per-loop recency cap must never discard a waiting item. Truncating the
   archive is fine; truncating the inbox is a lie.
-- **Artifact BODIES are not in Postgres.** `blobs` holds the hash + the indexed front
-  matter; the bytes live in R2. So pulled products are metadata-only and carry
-  `bodyAvailable: false`, which the preview states plainly instead of rendering an empty
-  document. The one real body available is `loops.task_file_content`, seeded as a
-  `playbook` Doc (with a front-matter head synthesized from the loop's own columns,
-  because production task files predate the v1 artifact format).
+- **Artifact BODIES are not in Postgres** - `blobs` holds the hash + the indexed front
+  matter; the bytes are content-addressed in R2. `pnpm graph:bodies` fetches them
+  READ-ONLY and caches each under its hash in `.graph-demo-data/blob-cache/`, and the
+  replay inlines whatever is cached. An artifact with no cached body keeps
+  `bodyAvailable: false` plus a `bodyAbsentReason` the preview shows verbatim (binary,
+  over the 256KB inline cap, or simply not fetched) - never a blank document.
+- **`fetch-bodies.ts` is read-only by construction, like the DB puller.** It imports
+  exactly ONE S3 command (`GetObjectCommand`), deliberately does NOT reuse
+  `gateway/blobstore.ts` `R2BlobStore` (that class carries `put`/`delete`), and DOES
+  import its `blobKey` so the object layout has one source of truth. All three are pinned
+  by source-reading guards in `pullProd.test.ts` - which strip comments first, because the
+  module's own header names the forbidden operations.
+- **Three honest render modes** (`read.ts` `renderStored`, surfaced as `renderMode`): a
+  real workspace is not uniformly v1-format. `artifact` = front matter + Markdown;
+  `markdown` = Markdown whose front matter is absent or unparseable (rendered as prose,
+  NOT replaced by an error); `code` = a data/source file (`.json`/`.py`/`.yaml`/…) in a
+  fenced block, because rendering it as Markdown would mangle it. Every path ends in the
+  same sanitizer with `rawHtml: "strip"` - these bodies were written by agents.
+- `loops.task_file_content` is the one body that comes straight from the DB, seeded as a
+  `playbook` Doc with a front-matter head synthesized from the loop's own columns
+  (production task files predate the v1 artifact format).
 - A PR referenced by a run message becomes a mirror at status `observed` - we saw it
   referenced, we did not observe whether it merged. `pull-request` declares that state
   for exactly this case.

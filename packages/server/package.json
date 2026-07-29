@@ -15,6 +15,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "graph:pull": "tsx src/graph/workspace/pull-cli.ts",
+    "graph:bodies": "tsx src/graph/workspace/bodies-cli.ts",
     "graph:seed": "tsx src/graph/workspace/seed-cli.ts",
     "graph:demo": "pnpm graph:seed && vite dev"
   },

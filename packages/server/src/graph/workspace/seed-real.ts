@@ -53,6 +53,7 @@ import { applyTransition } from "../applyTransition.js";
 import { resetGraphDemo, type SeedResult } from "./seed.js";
 import { DEMO_TEAM_ID, DEMO_TYPES } from "./specs.js";
 import { readSnapshot, type ProdFile, type ProdLoop, type ProdRun, type ProdSnapshot } from "./pull-prod.js";
+import { MAX_BODY_BYTES, readCachedBody } from "./fetch-bodies.js";
 
 const SEED_ACTOR = "u-demo-captain";
 
@@ -382,6 +383,13 @@ export async function seedFromProdSnapshot(
     const title = file.meta?.title ?? titleFromPath(file.path);
     const when = file.meta?.date ? `${file.meta.date}T12:00:00Z` : file.updatedAt;
 
+    // The REAL bytes, if `pnpm graph:bodies` has fetched them. Absent is a
+    // legitimate outcome (never synced, GC'd, binary, or over the inline cap) and
+    // the Library says so rather than pretending the document is empty.
+    const body = readCachedBody(file.hash);
+    const absentReason = body ? undefined : bodyAbsentReason(file);
+    if (absentReason) bump("artifact bodies", absentReason);
+
     const doc = await graph.createObject(undefined, {
       teamId,
       archetype: lifecycle.type === "merge-review" ? "task" : "doc",
@@ -389,10 +397,9 @@ export async function seedFromProdSnapshot(
       status: initialStateFor(lifecycle.type),
       title,
       payload: {
-        // No `source`: the BYTES live in the artifact store (R2), not in the
-        // database, so there is nothing local to render. Saying so beats
-        // fabricating a body.
-        bodyAvailable: false,
+        ...(body ? { source: body } : {}),
+        bodyAvailable: Boolean(body),
+        ...(absentReason ? { bodyAbsentReason: absentReason } : {}),
         prodPath: file.path,
         sizeBytes: file.size,
         originalType: originalType ?? null,
@@ -524,6 +531,14 @@ function* prReferences(message: string | null): Generator<[string, string]> {
     seen.add(externalId);
     yield [externalId, m[0]];
   }
+}
+
+/** Why an artifact has no local body. Every one of these is a real condition,
+ *  and the Library shows the reason rather than a bare blank. */
+function bodyAbsentReason(file: ProdFile): string {
+  if (file.binary) return "binary file - no readable document";
+  if (file.size > MAX_BODY_BYTES) return `over the ${MAX_BODY_BYTES}-byte inline cap`;
+  return "bytes not in the local cache - run `pnpm graph:bodies`, or they are no longer in the artifact store";
 }
 
 function titleFromPath(p: string): string {

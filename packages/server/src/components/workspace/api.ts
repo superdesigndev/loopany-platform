@@ -61,6 +61,11 @@ export interface LibraryArtifact {
   bodyAvailable: boolean
   path?: string
   originalType?: string
+  /** How the body was projected to HTML: a v1-format artifact, plain Markdown
+   *  (no front matter), or a data/source file shown as a code block. */
+  renderMode?: 'artifact' | 'markdown' | 'code'
+  /** Why there is no body, when there is none. Always a real condition. */
+  bodyAbsentReason?: string
 }
 
 export interface LibraryView {
