@@ -1033,6 +1033,17 @@ computes pure functions. Run instructions: `README.md`.
   fn check independently — a page that somehow rendered still gets no data. Both refuse
   BEFORE importing auth or the db when no allowlist is set. Pinned by
   `lib/-graphWorkspace.test.ts` + `routes/-api.graph.test.ts`.
+- **loopany-testing runs it behind the gate.** Deploy the branch with the "Deploy (Fly)"
+  workflow (`gh workflow run deploy.yml --ref <branch>`), then set
+  `LOOPANY_GRAPH_WORKSPACE=on` + `LOOPANY_GRAPH_WORKSPACE_LOGINS=<emails>` as Fly SECRETS
+  (not `fly.toml` `[env]` — the repo is public and those are colleagues' addresses).
+  `flyctl secrets set --stage` then a workflow re-run applies them; **never** a bare
+  `flyctl deploy --image`, which drops the baked `GIT_SHA`/`BUILT_AT` and leaves
+  `/api/health` reporting `unknown`.
+- **The testing R2 bucket is NOT the production one** (same Cloudflare account, different
+  bucket), so a testing app cannot fetch prod artifact bodies. Ship the locally fetched
+  cache instead of giving testing prod credentials: `tar czf` the `blob-cache`, `flyctl
+  ssh sftp put` it to `/data`, extract, and the seeder finds every body already cached.
 - **Seeding a DEPLOYED app goes through `POST /api/graph/seed`**, not a database URL:
   loopany-testing runs the embedded pglite tier on a mounted volume, so there is no
   reachable URL and pglite is single-writer — the running app is the only process that
