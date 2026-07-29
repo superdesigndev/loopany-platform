@@ -1016,6 +1016,11 @@ computes pure functions. Run instructions: `README.md`.
   fleet. `pnpm graph:demo` (repo root) builds artifact-format, seeds a demo workspace,
   and serves `http://127.0.0.1:3700/dev/workspace` - Library / System / Timeline over
   the six kernel tables. `pnpm graph:seed` re-seeds without serving.
+- **The DEFAULT dataset is the REAL production fleet**, replayed from a local snapshot;
+  `--synthetic` selects the hand-built fleet (which is what the test suite uses). With no
+  snapshot on disk the seeder STOPS and names both commands - it never silently falls
+  back, because "is this the real fleet?" must not be a guess. See the real-data section
+  below.
 - **DEV ONLY, gated twice**: `routes/dev.workspace.tsx` throws `notFound()` under
   `import.meta.env.PROD`, and `routes/api.graph.$.ts` (the whole read API + the one
   write path) returns 404 when `NODE_ENV === 'production'`. The API gate is checked
@@ -1056,6 +1061,50 @@ computes pure functions. Run instructions: `README.md`.
 - The demo's CSS (`styles/workspace.css`, loaded `?url` by the route only) is nested under
   `.loopany-workspace` so the skin cannot leak into the Tailwind app; it re-declares
   `list-style` because the app-wide preflight strips markers.
+
+## Graph v1 demo — the real-data pull (`graph/workspace/pull-prod.ts` + `seed-real.ts`)
+
+- **`pull-prod.ts` is the ONLY module in this repo that connects to PRODUCTION**, and it is
+  read-only at three independent layers: the connection carries
+  `-c default_transaction_read_only=on` (the whole session refuses writes at the server),
+  every statement runs inside `sql.begin("read only", …)`, and the file contains no
+  write/DDL text at all. `pullProd.test.ts` pins all three by reading the source - if you
+  add a statement there, that guard is what will stop you. Never relax it.
+- Credentials resolve from `LOOPANY_PROD_DB_URL`, else the `LOOPANY_DB_URL` line of
+  `LOOPANY_PROD_ENV_FILE` (default `~/Workspace/loopany-admin/.env`). Never logged.
+- **`snapshotPath()` REFUSES to default.** `dataDir()` would fall back to `~/.loopany` -
+  the live daemon's home - so writing a production snapshot there is a mistake the code
+  makes impossible. Always drive the pull with `pnpm graph:pull` from the repo root; it
+  points `LOOPANY_DATA_DIR` at `.graph-demo-data/`.
+- The pull writes `<data dir>/prod-snapshot.json`; `seed-real.ts` replays THAT, never the
+  network, so rebuilding the local demo is repeatable and costs production nothing.
+- **The mapping is a set of explicit little tables, not a heuristic** (`seed-real.ts`
+  header has the full list): a loop becomes a Task with cron; a run becomes
+  `fire`(clock)+`complete`/`stand-down`/`fail`(agent-run), or `skip`(clock) when the
+  machine was asleep, or `evolve`/`edit`; the run's `state` metrics ride as transition
+  FIELDS so the event diff carries real metric movement, and the run's own `message` is
+  the Timeline line. Where a row has no clean mapping it is DROPPED and counted in
+  `SeedResult.dropped` - inventing content is the one thing this path must never do.
+- **The gates are real, and they come from front matter.** Production loops encode
+  lifecycle in the artifact `type` the server already indexes (`needs_human`,
+  `escalation`, `drafted`, `queued`, `open`), and `LIFECYCLE` maps each to a gate state.
+  `GATE_FRONT_MATTER_TYPES` (in `specs.ts`) is SHARED with the puller for a load-bearing
+  reason: its per-loop recency cap must never discard a waiting item. Truncating the
+  archive is fine; truncating the inbox is a lie.
+- **Artifact BODIES are not in Postgres.** `blobs` holds the hash + the indexed front
+  matter; the bytes live in R2. So pulled products are metadata-only and carry
+  `bodyAvailable: false`, which the preview states plainly instead of rendering an empty
+  document. The one real body available is `loops.task_file_content`, seeded as a
+  `playbook` Doc (with a front-matter head synthesized from the loop's own columns,
+  because production task files predate the v1 artifact format).
+- A PR referenced by a run message becomes a mirror at status `observed` - we saw it
+  referenced, we did not observe whether it merged. `pull-request` declares that state
+  for exactly this case.
+- `BAND_OF_LOOP` in `seed-real.ts` is the one editorial judgement in the path (System-view
+  lane assignment, keyed by real loop name, default `monitors`). It affects layout only.
+- `realSeed.integration.test.ts` pins the mapping against a hand-built snapshot fixture,
+  so it runs in CI with no production access. Keep it that way: the puller must never run
+  anywhere but a developer's own machine.
 
 ## CI/CD (`.github/workflows/`)
 

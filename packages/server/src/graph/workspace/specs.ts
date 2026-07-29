@@ -40,8 +40,12 @@ export const DEMO_USER_ID = "u-demo-captain";
  * view draws it dashed straight off this status.
  */
 export const LOOP_SPEC: TypeSpec = {
-  states: ["planned", "idle", "running", "paused"],
+  states: ["planned", "idle", "running", "paused", "completed"],
   initialState: "planned",
+  // A closed loop (one with a goal) ends its own life when the goal is met -
+  // `loopany finish`. That is a real terminal state, so entering it takes the
+  // attested "no open obligations, no pending actions" like any other.
+  terminalStates: ["completed"],
   transitions: [
     { name: "activate", from: ["planned", "paused"], to: "idle" },
     // The scheduler fires it. `clock` provenance means the actor id is a
@@ -51,7 +55,18 @@ export const LOOP_SPEC: TypeSpec = {
     // "Nothing found" is a first-class outcome: a run that manufactured no
     // activity is a clean stop, not a failure.
     { name: "stand-down", from: ["running"], to: "idle", entrance: "agent-run" },
+    // A run that reported a failure. Distinct from `stand-down` on purpose: the
+    // Timeline must not read a failed run as a quiet one.
+    { name: "fail", from: ["running"], to: "idle", entrance: "agent-run" },
+    // A fire the machine never claimed (asleep/offline), superseded by the next
+    // one. Neither success nor failure - it is the scheduler's own record.
+    { name: "skip", from: ["idle"], to: "idle", entrance: "clock" },
+    // A self-improvement pass over the loop's own configuration.
+    { name: "evolve", from: ["idle"], to: "idle", entrance: "agent-run" },
+    // An owner-requested change, dispatched as one agent pass.
+    { name: "edit", from: ["idle"], to: "idle", entrance: "human" },
     { name: "pause", from: ["idle", "running"], to: "paused" },
+    { name: "finish", from: ["idle", "running", "paused"], to: "completed", entrance: "agent-run" },
   ],
   fields: { band: "string", cadence: "string", stat: "string", runs: "number" },
 };
@@ -182,8 +197,11 @@ export const PLAYBOOK_SPEC: TypeSpec = {
  * UPSERT on the deterministic mirror id - so re-seeding converges on one row.
  */
 export const PULL_REQUEST_SPEC: TypeSpec = {
-  states: ["open", "checks-green", "merged", "closed"],
-  initialState: "open",
+  // `observed` is the honest state for a PR we only ever saw REFERENCED (a run
+  // message linking to it): we know it exists, we did not observe whether it
+  // merged. Claiming `open` or `merged` there would be inventing an observation.
+  states: ["observed", "open", "checks-green", "merged", "closed"],
+  initialState: "observed",
   transitions: [],
   fields: { repo: "string", number: "number" },
 };
@@ -208,3 +226,24 @@ export const CATEGORY_OF_TYPE: Record<string, string> = {
 
 /** Library category display order (mirrors the reference demo). */
 export const LIBRARY_CATEGORIES = ["Pull requests", "Posts & content", "Reports & notes", "Docs"] as const;
+
+/**
+ * The production front-matter `type` values that mean A PERSON OWES SOMETHING.
+ *
+ * Real loops encode their own lifecycle here - Support Inbox Triage writes
+ * `needs_human`, LinkedIn Repurposer writes `drafted`/`queued`, Housekeeper
+ * writes `open` - and `seed-real.ts` turns each one into an open gate obligation.
+ *
+ * It lives in this shared module because BOTH ends need it and they must not
+ * drift: the read-only pull uses it to make sure its per-loop recency cap never
+ * discards a waiting item (a truncated archive is fine; a truncated inbox is a
+ * lie), and the replay uses it to decide which artifacts open a gate.
+ */
+export const GATE_FRONT_MATTER_TYPES = new Set([
+  "needs_human",
+  "needs_followup",
+  "escalation",
+  "drafted",
+  "queued",
+  "open",
+]);

@@ -158,6 +158,13 @@
   .preview-body th, .preview-body td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; }
   .preview-body th { color: var(--muted); font-weight: 600; }
   .preview-body code { padding: 1px 5px; border-radius: 4px; background: #f0eee9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  .preview-nobody { color: #6d6a64; }
+  .preview-nobody p { font-family: var(--font); font-size: .875rem; }
+  .preview-nobody dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 22px 0 0; font-family: var(--font); font-size: .8125rem; }
+  .preview-nobody dt { color: var(--faint); }
+  .preview-nobody dd { margin: 0; }
+  .library-truncation { margin: 30px 0 -10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: .75rem; line-height: 1.55; }
+
   .preview-verdict { display: flex; align-items: center; gap: 12px; margin: 0 0 34px; padding: 12px 14px; border: 1px solid #eadfbe; border-radius: 8px; background: #fffaf0; font-family: var(--font); }
   .preview-verdict p { flex: 1; margin: 0; color: #7d6b45; font-size: .8125rem; }
 

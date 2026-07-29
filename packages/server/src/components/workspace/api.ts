@@ -57,12 +57,18 @@ export interface LibraryArtifact {
   externalLabel?: string
   needsHuman: boolean
   verdict?: { transition: string; label: string; obligation: string }
+  /** False when the bytes live in the artifact store, not in this database. */
+  bodyAvailable: boolean
+  path?: string
+  originalType?: string
 }
 
 export interface LibraryView {
   categories: string[]
   artifacts: LibraryArtifact[]
   needsYou: number
+  total: number
+  truncated: number
 }
 
 export interface TimelineEntry {

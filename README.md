@@ -162,16 +162,28 @@ and Timeline, backed by the real `objects` / `edges` / `events` / `gate_obligati
 `outbox_actions` / `type_registry` tables.
 
 ```bash
-pnpm graph:demo     # build → seed → serve http://127.0.0.1:3700/dev/workspace
-pnpm graph:seed     # re-seed only (run with the server stopped)
+pnpm graph:pull              # READ-ONLY snapshot of a real production team
+pnpm graph:demo              # build → seed → serve http://127.0.0.1:3700/dev/workspace
+pnpm graph:demo --synthetic  # same, using the hand-built demo fleet instead
+pnpm graph:seed              # re-seed only (run with the server stopped)
 ```
 
 It seeds into its own gitignored database (`.graph-demo-data/`), so it never touches
-`~/.loopany` or a real Postgres. Nothing in it is a fixture: loop classes are Tasks with
-`cron`, artifacts are real front-matter + Markdown files parsed and rendered by
-`@loopany/artifact-format`, pull requests are get-or-create mirrors, and every status
-you see was produced by replaying a history script through `applyTransition` - so each
-one carries its per-field diff and its `entrance`/`actor` provenance.
+`~/.loopany` or a real Postgres. Every status you see was produced by replaying real
+history through `applyTransition`, so each one carries its per-field diff and its
+`entrance`/`actor` provenance: loop classes are Tasks with `cron`, runs become
+clock-entered fires and agent-entered reports, pull requests are get-or-create mirrors,
+and artifact bodies are parsed and rendered by `@loopany/artifact-format`.
+
+**The default dataset is the real fleet.** `pnpm graph:pull` takes a read-only snapshot of
+one production team into `.graph-demo-data/prod-snapshot.json`, and the seeder replays
+that snapshot locally — it never re-hits production. The pull is read-only at three
+layers (a session-level `default_transaction_read_only=on`, a read-only transaction per
+statement, and no write or DDL text anywhere in the module — all three pinned by tests).
+Rows with no clean mapping are dropped and counted, never invented; artifact bodies live
+in the artifact store rather than the database, so pulled products show their front matter
+and say so. Without a snapshot the seeder stops and names your options rather than quietly
+substituting synthetic data.
 
 The "Needs you" list is the open `human-verdict` obligations, computed opened-minus-closed,
 and approving one is a real write: it runs the gate-closing transition through the same

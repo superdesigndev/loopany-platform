@@ -12,6 +12,7 @@
     "dev": "pnpm --filter @loopany/server dev",
     "build": "pnpm --filter @loopany/server build",
     "start": "pnpm --filter @loopany/server start",
+    "graph:pull": "node scripts/graph-demo.mjs --pull",
     "graph:demo": "node scripts/graph-demo.mjs",
     "graph:seed": "node scripts/graph-demo.mjs --seed",
     "typecheck": "pnpm -r typecheck",

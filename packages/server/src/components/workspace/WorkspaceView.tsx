@@ -35,6 +35,9 @@ import {
 
 const SystemGraph = lazy(() => import('./SystemGraph'))
 
+/** Mirrors `LIBRARY_SETTLED_CAP` in `graph/workspace/read.ts` - display copy only. */
+const LIBRARY_SETTLED_SHOWN = 90
+
 type ViewName = 'library' | 'system' | 'timeline'
 
 const GLYPHS: Record<string, string> = {
@@ -148,7 +151,7 @@ function ArtifactRow({
         </a>
       ) : (
         <span className="artifact-action">
-          Preview <Glyph name="chevron" />
+          {artifact.bodyAvailable ? 'Preview' : 'Details'} <Glyph name="chevron" />
         </span>
       )}
     </article>
@@ -224,8 +227,31 @@ function ArtifactPreview({
                 </button>
               </div>
             )}
-            {/* Sanitized by @loopany/artifact-format before it left the server. */}
-            <div className="preview-body" dangerouslySetInnerHTML={{ __html: artifact.html ?? '' }} />
+            {artifact.bodyAvailable ? (
+              /* Sanitized by @loopany/artifact-format before it left the server. */
+              <div className="preview-body" dangerouslySetInnerHTML={{ __html: artifact.html ?? '' }} />
+            ) : (
+              <div className="preview-body preview-nobody">
+                <p>
+                  The bytes for this artifact live in the loop's artifact store, not in the control-plane
+                  database, so this workspace has its front matter but not its body.
+                </p>
+                <dl>
+                  {artifact.path && (
+                    <>
+                      <dt>Path</dt>
+                      <dd><code>{artifact.path}</code></dd>
+                    </>
+                  )}
+                  {artifact.originalType && (
+                    <>
+                      <dt>Front-matter type</dt>
+                      <dd><code>{artifact.originalType}</code></dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+            )}
           </article>
         </div>
       </aside>
@@ -271,7 +297,11 @@ function LibraryPane({
         eyebrow="Library"
         title="Library"
         description="Everything your loops have made, collected in one quiet place."
-        meta={`${library.artifacts.length} artifacts`}
+        meta={
+          library.truncated
+            ? `${library.artifacts.length} of ${library.total} artifacts`
+            : `${library.total} artifacts`
+        }
       />
       <section className="needs-section">
         <div className="section-heading">
@@ -296,6 +326,12 @@ function LibraryPane({
           ))}
         </div>
       </section>
+      {library.truncated > 0 && (
+        <p className="library-truncation">
+          Showing the {LIBRARY_SETTLED_SHOWN} most recent settled artifacts; {library.truncated} older ones are in the
+          workspace but not on this page. Everything waiting on a human is always shown.
+        </p>
+      )}
       {grouped.map(({ category, items }) => (
         <section className="library-group" key={category}>
           <div className="section-heading">

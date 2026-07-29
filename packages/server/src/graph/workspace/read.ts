@@ -217,6 +217,9 @@ export async function systemView(teamId = DEMO_TEAM_ID): Promise<SystemView> {
   // ---- the shared band: the person and the machines ----
   const openHuman = obligations.filter((o) => o.closedByEvent === null && o.class === "human-verdict");
   const activeLoops = loops.filter((l) => l.status !== "planned");
+  // Real machine count when the loops carry their binding (a pulled workspace
+  // does); otherwise the fleet is described by what it runs, not by a guess.
+  const machineIds = new Set(loops.map((l) => str(payloadOf(l).machineId)).filter(Boolean));
   nodes.push({
     id: "you",
     kind: "human",
@@ -231,10 +234,10 @@ export async function systemView(teamId = DEMO_TEAM_ID): Promise<SystemView> {
   nodes.push({
     id: "machine",
     kind: "machine",
-    name: "Machine fleet",
+    name: machineIds.size ? `Machine fleet ×${machineIds.size}` : "Machine fleet",
     eyebrow: "machine role class",
     stat: `Runs ${activeLoops.length} armed loop classes`,
-    badge: String(activeLoops.length),
+    badge: String(machineIds.size || activeLoops.length),
     rank: 1,
     activity: "online",
     band: "shared",
@@ -319,13 +322,34 @@ export interface LibraryArtifact {
   /** The verdict this artifact is waiting for, if any - label plus the exact
    *  transition `POST /api/graph/verdict` will run. */
   verdict?: { transition: string; label: string; obligation: string };
+  /**
+   * False when the artifact's BYTES are not in this database. Real production
+   * products live in the artifact store (R2) and only their front-matter index
+   * is in Postgres, so a pulled workspace has the title, type and date but no
+   * body. The preview says so instead of rendering an empty document.
+   */
+  bodyAvailable: boolean;
+  /** The artifact's real path in its loop folder, when it has one. */
+  path?: string;
+  /** The producing loop's own front-matter `type` (`needs_human`, `drafted`,
+   *  `merged`, …). Kept verbatim: the registry type is a mapping, not a rename. */
+  originalType?: string;
 }
 
 export interface LibraryView {
   categories: string[];
   artifacts: LibraryArtifact[];
   needsYou: number;
+  /** Total artifacts in the workspace; `artifacts` may be capped below it. */
+  total: number;
+  /** How many were left out of this page, so a large real workspace never looks
+   *  smaller than it is. Items needing a human are NEVER capped away. */
+  truncated: number;
 }
+
+/** Settled artifacts served per request. Anything holding an open obligation is
+ *  exempt - the inbox must be complete even when the archive is not. */
+const LIBRARY_SETTLED_CAP = 90;
 
 const ICON_OF_TYPE: Record<string, LibraryArtifact["icon"]> = {
   "merge-review": "pr",
@@ -412,6 +436,8 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
     }
 
     const isMirrorFronted = o.type === "merge-review";
+    const externalUrl = str((mirror?.payload as Record<string, unknown> | null)?.sourceUrl);
+    const bodyAvailable = typeof p.source === "string";
     artifacts.push({
       id: o.id,
       category,
@@ -420,24 +446,40 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
       state: stateLabel(o, mirror),
       age: relativeAge(o.statusChangedAt, now),
       icon: ICON_OF_TYPE[o.type] ?? "doc",
-      kind: isMirrorFronted ? "mirror" : "document",
-      ...(isMirrorFronted
-        ? {
-            sourceUrl: str((mirror?.payload as Record<string, unknown> | null)?.sourceUrl),
-            externalLabel: "View on GitHub",
-          }
-        : { html: renderStored(p.source) }),
+      // A row is only "mirror" (external, not previewable) when it really has an
+      // external link. A merge review with no observed PR is still a document.
+      kind: isMirrorFronted && externalUrl ? "mirror" : "document",
+      ...(isMirrorFronted && externalUrl
+        ? { sourceUrl: externalUrl, externalLabel: "View on GitHub" }
+        : { html: bodyAvailable ? renderStored(p.source) : undefined }),
       needsHuman: Boolean(open),
       ...(verdict ? { verdict } : {}),
+      bodyAvailable,
+      ...(str(p.prodPath) ? { path: str(p.prodPath) } : {}),
+      ...(str(p.originalType) ? { originalType: str(p.originalType) } : {}),
     });
   }
 
-  // Newest first inside each category; "needs you" is grouped by the client.
-  artifacts.sort((a, b) => a.category.localeCompare(b.category) || a.title.localeCompare(b.title));
+  // Newest first. On a real workspace the archive is long, so the settled tail
+  // is capped and the drop is REPORTED - but anything waiting on a human is
+  // exempt, because a truncated inbox would be a lie.
+  const byRecency = [...objects]
+    .filter((o) => CATEGORY_OF_TYPE[o.type])
+    .sort((a, b) => b.statusChangedAt.localeCompare(a.statusChangedAt))
+    .map((o) => o.id);
+  const order = new Map(byRecency.map((id, i) => [id, i]));
+  artifacts.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+
+  const waiting = artifacts.filter((a) => a.needsHuman);
+  const settled = artifacts.filter((a) => !a.needsHuman);
+  const shownSettled = settled.slice(0, LIBRARY_SETTLED_CAP);
+
   return {
     categories: [...LIBRARY_CATEGORIES],
-    artifacts,
-    needsYou: artifacts.filter((a) => a.needsHuman).length,
+    artifacts: [...waiting, ...shownSettled],
+    needsYou: waiting.length,
+    total: artifacts.length,
+    truncated: settled.length - shownSettled.length,
   };
 }
 

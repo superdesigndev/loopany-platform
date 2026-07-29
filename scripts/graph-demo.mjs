@@ -2,9 +2,17 @@
 /**
  * One command for the Graph Engineering v1 local demo:
  *
- *   pnpm graph:demo          build → seed → serve  (http://127.0.0.1:3700/dev/workspace)
- *   pnpm graph:demo --seed   build → seed, then exit (re-seed a running demo's DB
- *                            only when the server is stopped — pglite is single-writer)
+ *   pnpm graph:demo              build → seed → serve  (http://127.0.0.1:3700/dev/workspace)
+ *   pnpm graph:demo --seed       build → seed, then exit (re-seed a running demo's DB
+ *                                only when the server is stopped — pglite is single-writer)
+ *   pnpm graph:demo --synthetic  use the hand-built fleet instead of the real snapshot
+ *   pnpm graph:pull              READ-ONLY snapshot of the real production fleet
+ *
+ * The DEFAULT dataset is the REAL production fleet, replayed from the local
+ * snapshot `pnpm graph:pull` writes. With no snapshot on disk the seeder stops
+ * and tells you which of the two commands you want — it never silently falls
+ * back to synthetic data, because "is this the real fleet?" must never be a
+ * guess.
  *
  * Why a script and not a shell one-liner:
  *
@@ -26,6 +34,8 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const seedOnly = process.argv.includes('--seed')
+const synthetic = process.argv.includes('--synthetic')
+const pullOnly = process.argv.includes('--pull')
 
 const env = {
   ...process.env,
@@ -51,8 +61,17 @@ try {
   step('building @loopany/artifact-format (the server imports its dist)')
   await run('pnpm', ['--filter', '@loopany/artifact-format', 'build'])
 
-  step(`seeding the graph demo into ${env.LOOPANY_DATA_DIR}`)
-  await run('pnpm', ['--filter', '@loopany/server', 'graph:seed'])
+  if (pullOnly) {
+    // The pull writes its snapshot next to the demo database, never into
+    // `~/.loopany` (the live daemon's home) - that is why it runs through here
+    // and not as a bare package script.
+    step('pulling a READ-ONLY snapshot of the production fleet')
+    await run('pnpm', ['--filter', '@loopany/server', 'graph:pull', '--', ...process.argv.slice(2).filter((a) => a !== '--pull')])
+    process.exit(0)
+  }
+
+  step(`seeding the graph demo into ${env.LOOPANY_DATA_DIR}${synthetic ? ' (synthetic fleet)' : ''}`)
+  await run('pnpm', ['--filter', '@loopany/server', 'graph:seed', ...(synthetic ? ['--', '--synthetic'] : [])])
 
   if (seedOnly) {
     process.stdout.write('\nseed complete.\n')
