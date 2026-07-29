@@ -5,6 +5,8 @@ source: x-article draft 2026-07-29 (Post 1, numbers approved)
 ---
 # How our blog went from 100 to 13,831 monthly clicks in 3 months
 
+![Daily Google clicks, late April through July: a flat line, a first spike, then the compounding climb](assets/seo-traffic.jpeg)
+
 In April our blog got about 100 clicks from Google. In the last 28 days it got 13,831.
 
 Same small site the whole time. No domain authority, no backlink budget, no ads. Two things changed: we started betting on keywords we can actually win, and we built agent loops to run most of the work.
@@ -129,7 +131,7 @@ Three failures worth stealing the fixes from:
 - [ ] measurement loop separated from shipping loops
 - [ ] a human merges everything
 
-That's the machine behind those numbers: about 100 clicks a month in April, 13,831 in the last 28 days. And the composition matters more than the total. Most of the recent jump came from one emerging keyword we caught early, not from publishing volume.
+That's the machine behind the curve at the top: about 100 clicks a month in April, 13,831 in the last 28 days. And the composition matters more than the total. Most of the recent jump came from one emerging keyword we caught early, not from publishing volume.
 
 We open-sourced the whole method as the loop templates on this site — this page is the bet manager; its sibling, SEO - Scale Proven Keywords, scales the winners.
 
