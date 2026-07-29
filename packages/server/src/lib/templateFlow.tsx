@@ -228,7 +228,7 @@ const FOLLOW_UP: FlowSpec = {
         'goal: 48h clean after ship — 31h in, nothing to report',
       ],
     },
-    { type: 'metric', label: 'Checkout errors per hour', series: [11, 6, 2, 1, 0, 0, 1, 0, 0], note: 'goal: stays clean for 48h after the ship, then the loop finishes itself.' },
+    { type: 'metric', label: 'Checkout errors per hour', series: [11, 6, 2, 1, 0, 0, 0, 0, 0], note: 'goal: stays clean for 48h after the ship, then the loop finishes itself.' },
   ],
 }
 
