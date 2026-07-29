@@ -5,7 +5,9 @@ source: excerpted verbatim from the 2026-07-29 methodology article (Post 1)
 ---
 # Double down on what works
 
-This is the scale half of the system — what happens after a bet proves. The full write-up, from the first bet to the 13,831-click curve, lives on the [bet manager's page](/templates/seo-try-keywords); these are the parts that matter once a keyword has earned its engine.
+![Daily Google clicks, late April through July: a flat line, a first spike, then the compounding climb](/template-assets/seo-try-keywords/seo-traffic.jpeg)
+
+This is the scale half of the system — what happens after a bet proves. The full write-up, from the first bet to the 13,831-click curve, lives on the [SEO - Try New Keywords loop](/templates/seo-try-keywords); these are the parts that matter once a keyword has earned its engine.
 
 ## Bet on emerging, double down on what works
 
