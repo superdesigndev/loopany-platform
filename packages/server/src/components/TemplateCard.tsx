@@ -13,12 +13,6 @@ import { TemplateIcon } from './TemplateIcon'
  * full prompt lives on the detail page), the compact 3-indicator rating row, and the
  * whole-card navigation to `/templates/<slug>`.
  *
- * `compact` is the dashboard variant: a fixed card height plus one-line clamps on title
- * and intro, so the preview grid's rows are uniform and the section's bottom fade cuts
- * at a predictable place at every viewport width. The fixed height leaves no slack, so
- * a longer label ellipsises instead of silently pushing the rating row and the Create
- * link out of the card. Everything else is identical markup.
- *
  * `showCategory` hides the per-card category tag on surfaces that already label the
  * category around the card (the market's per-bundle sections); the flat teaser grid
  * keeps it (the default) since there the tag is the only category context.
@@ -43,13 +37,11 @@ export function bundleItems(b: BundleView): MarketItem[] {
 
 export function TemplateCard({
   item,
-  compact,
   showCategory = true,
   composeDirect = false,
   className,
 }: {
   item: MarketItem
-  compact?: boolean
   showCategory?: boolean
   composeDirect?: boolean
   className?: string
@@ -57,9 +49,7 @@ export function TemplateCard({
   const { template: t, categoryLabel, accent } = item
   return (
     <article
-      className={`market-card group relative flex min-w-0 flex-col rounded-card border border-hairline bg-surface p-4 transition-colors hover:border-wire hover:shadow-[0_14px_30px_-20px_rgba(0,0,0,0.28)] ${
-        compact ? 'h-[252px] overflow-hidden' : ''
-      } ${className ?? ''}`}
+      className={`market-card group relative flex min-w-0 flex-col rounded-card border border-hairline bg-surface p-4 transition-colors hover:border-wire hover:shadow-[0_14px_30px_-20px_rgba(0,0,0,0.28)] ${className ?? ''}`}
     >
       {/* Header: category tag (teaser context only — market sections already carry it). */}
       {showCategory && (
@@ -78,7 +68,7 @@ export function TemplateCard({
             to="/"
             search={{ template: t.name }}
             aria-label={`Set up the ${t.label} loop in Loopany`}
-            className={`market-card-link min-w-0 outline-none group-hover:underline focus-visible:underline ${compact ? 'truncate' : ''}`}
+            className="market-card-link min-w-0 outline-none group-hover:underline focus-visible:underline"
           >
             {t.label}
           </Link>
@@ -86,13 +76,13 @@ export function TemplateCard({
           <Link
             to="/templates/$slug"
             params={{ slug: t.name }}
-            className={`market-card-link min-w-0 outline-none group-hover:underline focus-visible:underline ${compact ? 'truncate' : ''}`}
+            className="market-card-link min-w-0 outline-none group-hover:underline focus-visible:underline"
           >
             {t.label}
           </Link>
         )}
       </h3>
-      <p className={`mt-1 ${compact ? 'line-clamp-1' : 'line-clamp-2'} text-caption leading-snug text-secondary`}>{t.desc}</p>
+      <p className="mt-1 line-clamp-2 text-caption leading-snug text-secondary">{t.desc}</p>
 
       {/* The visual anchor: When → Does → You get, from the editorial rating table. */}
       {t.rating && <FlowStrip rating={t.rating} />}
