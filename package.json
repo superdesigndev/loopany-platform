@@ -12,6 +12,8 @@
     "dev": "pnpm --filter @loopany/server dev",
     "build": "pnpm --filter @loopany/server build",
     "start": "pnpm --filter @loopany/server start",
+    "graph:demo": "node scripts/graph-demo.mjs",
+    "graph:seed": "node scripts/graph-demo.mjs --seed",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter @loopany/server test && pnpm --filter @crewlet/loopany test && pnpm --filter @loopany/artifact-format test"
   },

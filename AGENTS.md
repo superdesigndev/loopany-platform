@@ -39,7 +39,10 @@ computes pure functions. Run instructions: `README.md`.
   the core schema, the error codes and the sanitization posture are documented in
   its own `README.md` - read that, never a summary here. NB it is STRICT and throws,
   unlike the soft, never-throwing v2 loop-product reader
-  `packages/server/src/server/frontmatter.ts`; the two coexist by design.
+  `packages/server/src/server/frontmatter.ts`; the two coexist by design. Its only
+  consumer today is the graph v1 workspace demo (below), through the built `dist`
+  entry - so `pnpm --filter @loopany/artifact-format build` is a prerequisite of
+  anything that imports it.
 
 ## Commands
 
@@ -1006,6 +1009,53 @@ computes pure functions. Run instructions: `README.md`.
   internally: every refusal is a typed `{ok:false, code}` logged at warn level.
   Concurrency is actor-mailbox - `getObjectForUpdate` takes the row lock as the
   first statement, so a racing transition re-validates against post-commit state.
+
+## Graph v1 workspace demo (`src/graph/workspace/` + `/dev/workspace`)
+
+- **What it is:** a locally runnable proof that the dormant v3 kernel carries a real
+  fleet. `pnpm graph:demo` (repo root) builds artifact-format, seeds a demo workspace,
+  and serves `http://127.0.0.1:3700/dev/workspace` - Library / System / Timeline over
+  the six kernel tables. `pnpm graph:seed` re-seeds without serving.
+- **DEV ONLY, gated twice**: `routes/dev.workspace.tsx` throws `notFound()` under
+  `import.meta.env.PROD`, and `routes/api.graph.$.ts` (the whole read API + the one
+  write path) returns 404 when `NODE_ENV === 'production'`. The API gate is checked
+  BEFORE the DB import, and is pinned by `routes/-api.graph.test.ts`. The demo seeds a
+  fixed team id (`team-graph-demo`) and has NO auth, so neither gate is optional.
+- **Its own database.** `scripts/graph-demo.mjs` points `LOOPANY_DATA_DIR` at
+  `.graph-demo-data/` (gitignored) and clears `DATABASE_URL`, so the demo never touches
+  `~/.loopany` or a real Postgres. Port 3700 avoids the live review environments on
+  3000/3001/3004/3200/3400/3500/3611.
+- **PGLITE GOTCHA that will waste an hour:** the embedded tier is a single in-process
+  Postgres with its OWN buffer pool. A dev server left running holds the data dir, so a
+  seed from a second process lands on disk but the RUNNING server keeps serving its old
+  state (and a stale server on the port makes it look like the seeder silently failed).
+  ALWAYS stop the server before re-seeding - `pnpm graph:demo` chains seed→serve for
+  exactly that reason, and killing by PORT (`lsof -ti tcp:3700`) is more reliable than
+  `pkill -f 'vite dev'`.
+- **Nothing in the demo is a fixture.** `workspace/fleet.ts` is pure input (loop classes,
+  artifact FILES in the v1 format, PRs, relations, a history script); `workspace/seed.ts`
+  runs all of it through `createObject`/`getOrCreateMirror`/`upsertEdge`/
+  `proposeTypeVersion`+`armTypeVersion` and replays EVERY status change through
+  `applyTransition`, so the seeded past carries real diffs, provenance, obligations and
+  outbox rows. A refused step fails the seed loudly instead of seeding a state no legal
+  transition could produce.
+- **Obligations hang off ARTIFACTS, never off the recurring loop** - `(objectId, key)` is
+  an obligation's identity, so a loop-level key could only ever open once in the object's
+  whole life. A pull request is therefore TWO objects: the `pull-request` MIRROR (external
+  fact, no transitions) and the `merge-review` TASK we own (holds the gate), linked by a
+  `tracks` edge. `workspace/specs.ts` is the source for the six demo types.
+- **Gate nodes in the System view are DERIVED**, not stored: one per loop that holds (or
+  has held) obligations over itself and its `produces` products, badge = live open count.
+  `assignColumns` then densifies each band's columns, because how many gates a band grows
+  is a property of the data.
+- **The seed and the verdict path both stand in for the not-yet-built outbox executor.**
+  Entering a terminal state is refused while actions are pending (design §12 item 8), so
+  `seed.ts` stamps each step's actions delivered (except `keepPending` steps, which leave
+  a real backlog) and `read.ts` `drainEngineLocalActions` drains R0-R2 before a verdict.
+  R3/R4 are NEVER auto-delivered there - that ceiling is the point, and a test pins it.
+- The demo's CSS (`styles/workspace.css`, loaded `?url` by the route only) is nested under
+  `.loopany-workspace` so the skin cannot leak into the Tailwind app; it re-declares
+  `list-style` because the app-wide preflight strips markers.
 
 ## CI/CD (`.github/workflows/`)
 

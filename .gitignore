@@ -32,3 +32,6 @@ __pycache__/
 # verification proof output (screenshots/video), never committed
 evidence/
 /.playwright-cli
+
+# graph v1 workspace demo — its own embedded pglite database (pnpm graph:demo)
+/.graph-demo-data/

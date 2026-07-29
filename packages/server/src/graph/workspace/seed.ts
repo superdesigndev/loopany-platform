@@ -1,0 +1,298 @@
+/**
+ * Graph Engineering v1 workspace demo - the SEEDER.
+ *
+ * Everything this writes goes through the real primitives. There is no direct
+ * INSERT of a status, no hand-written event row, and no fixture table:
+ *
+ *   - loop / merge-review / artifact objects  → `graphStore.createObject`
+ *   - GitHub pull requests                    → `graphStore.getOrCreateMirror`
+ *     (an UPSERT on the deterministic mirror id - re-seeding converges on ONE row)
+ *   - relations + `produces` / `tracks` links → `graphStore.upsertEdge`
+ *   - the custom types                        → `proposeTypeVersion` + `armTypeVersion`
+ *     (arming is the only promotion; a proposal is invisible to a guard)
+ *   - EVERY status in the demo                → `applyTransition`
+ *
+ * That last one is the point. Because the history script replays through the
+ * transition seam, the seeded past carries what a hand-written fixture never
+ * could: per-field `{old,new}` diffs, `entrance`/`actorId` provenance on every
+ * event, gate obligations opened and closed BY events, and outbox rows written
+ * in the same transaction as the status they belong to.
+ *
+ * The seeder also plays MINIMAL EXECUTOR: after each step it stamps the
+ * transition's outbox actions delivered (`markActionDelivered`), because a
+ * terminal transition is refused while actions are still pending (design §12
+ * item 8). Steps flagged `keepPending` are left undrained on purpose, so the
+ * demo has a real backlog of undelivered actions to show.
+ *
+ * Re-runnable: `seedGraphDemo` deletes the demo team's rows first. It is scoped
+ * to `DEMO_TEAM_ID` and touches nothing else in the database.
+ */
+import { eq } from "drizzle-orm";
+
+import { db } from "../../db/index.js";
+import {
+  edges as edgesTable,
+  events as eventsTable,
+  gateObligations as gateObligationsTable,
+  objects as objectsTable,
+  outboxActions as outboxActionsTable,
+  typeRegistry as typeRegistryTable,
+} from "../../db/graph-schema.js";
+import * as graph from "../../db/graphStore.js";
+import { applyTransition } from "../applyTransition.js";
+import { ARTIFACTS, HISTORY, LOOPS, PULL_REQUESTS, RELATIONS, type ArtifactSeed } from "./fleet.js";
+import { DEMO_TEAM_ID, DEMO_TYPES } from "./specs.js";
+import { parseArtifact } from "@loopany/artifact-format";
+
+/** Instant the demo's registry rows and objects are stamped as created. */
+const SEED_AT = "2026-07-01T09:00:00+08:00";
+
+/** The reviewing task that hangs off a pull request, keyed `<pr>#review`. */
+const reviewKey = (prKey: string) => `${prKey}#review`;
+
+export interface SeedResult {
+  teamId: string;
+  objects: number;
+  edges: number;
+  events: number;
+  openObligations: number;
+  pendingActions: number;
+  /** Steps the state machine refused. Non-empty means the history script and the
+   *  type specs disagree - a seed bug, surfaced instead of swallowed. */
+  refusals: string[];
+}
+
+/** Drop every row this demo owns. Scoped to the demo team id, so a real
+ *  workspace sharing the database is untouched. */
+export async function resetGraphDemo(teamId = DEMO_TEAM_ID): Promise<void> {
+  await db.delete(outboxActionsTable).where(eq(outboxActionsTable.teamId, teamId));
+  await db.delete(gateObligationsTable).where(eq(gateObligationsTable.teamId, teamId));
+  await db.delete(eventsTable).where(eq(eventsTable.teamId, teamId));
+  await db.delete(edgesTable).where(eq(edgesTable.teamId, teamId));
+  await db.delete(objectsTable).where(eq(objectsTable.teamId, teamId));
+  await db.delete(typeRegistryTable).where(eq(typeRegistryTable.teamId, teamId));
+}
+
+/**
+ * Seed the demo workspace. Returns a tally so the CLI (and the test) can assert
+ * the seed actually landed rather than reporting success on an empty write.
+ */
+export async function seedGraphDemo(options: { teamId?: string; reset?: boolean } = {}): Promise<SeedResult> {
+  const teamId = options.teamId ?? DEMO_TEAM_ID;
+  if (options.reset !== false) await resetGraphDemo(teamId);
+
+  // ---- 1. the registry: archetype base types, then the demo's own types ----
+  //
+  // Every status resolution in the engine goes through `getEffectiveType`, so
+  // even a plain Task's state machine has to be armed here - decision 4 has no
+  // exception for archetypes.
+  await graph.seedBuiltinTypes(undefined, teamId, SEED_AT);
+  for (const t of DEMO_TYPES) {
+    await graph.proposeTypeVersion(undefined, {
+      teamId,
+      name: t.name,
+      archetype: t.archetype,
+      version: 1,
+      spec: t.spec,
+      rationale: t.rationale,
+      now: SEED_AT,
+    });
+    await graph.armTypeVersion(undefined, { teamId, name: t.name, version: 1, now: SEED_AT });
+  }
+
+  /** Seed key → object id, for the history script and the edge writer. */
+  const ids = new Map<string, string>();
+
+  // ---- 2. loop classes (a Task with `cron` set IS a Loop, design §4) ----
+  for (const loop of LOOPS) {
+    const row = await graph.createObject(undefined, {
+      teamId,
+      archetype: "task",
+      type: "loop",
+      status: "planned", // LOOP_SPEC.initialState - `activate` moves it below
+      title: loop.name,
+      cron: loop.cron,
+      timezone: loop.cron ? "Asia/Shanghai" : null,
+      payload: {
+        band: loop.band,
+        kind: loop.kind,
+        cadence: loop.cadence,
+        stat: loop.stat,
+        rank: loop.rank,
+        ...(loop.yOffset ? { yOffset: loop.yOffset } : {}),
+        runs: 0,
+      },
+      now: loop.createdAt,
+    });
+    ids.set(loop.key, row.id);
+  }
+
+  // ---- 3. artifacts: real v1 artifact files, parsed at ingress ----
+  //
+  // The FILE is the source of truth. Parsing it here means the demo cannot
+  // drift from the format: a malformed front matter block fails the seed.
+  for (const artifact of ARTIFACTS) {
+    const doc = parseArtifact(artifact.file);
+    const declared = doc.frontMatter.type;
+    if (declared !== artifact.type) {
+      throw new Error(`artifact ${artifact.key}: front matter type "${declared}" != seed type "${artifact.type}"`);
+    }
+    const row = await graph.createObject(undefined, {
+      teamId,
+      archetype: "doc",
+      type: artifact.type,
+      status: initialStateOf(artifact),
+      title: typeof doc.frontMatter.title === "string" ? doc.frontMatter.title : artifact.key,
+      payload: {
+        // The bytes, kept verbatim: rendering is a projection, never storage.
+        source: artifact.file,
+        frontMatter: doc.frontMatter,
+        loopKey: artifact.loop,
+      },
+      now: stringField(doc.frontMatter.createdAt) ?? SEED_AT,
+    });
+    ids.set(artifact.key, row.id);
+    await graph.upsertEdge(undefined, {
+      teamId,
+      kind: "produces",
+      srcId: ids.get(artifact.loop)!,
+      dstId: row.id,
+      now: stringField(doc.frontMatter.createdAt) ?? SEED_AT,
+    });
+  }
+
+  // ---- 4. pull requests: an external MIRROR + the merge review we own ----
+  for (const pr of PULL_REQUESTS) {
+    const externalId = `${pr.repo}/pull/${pr.number}`;
+    const { object: mirror } = await graph.getOrCreateMirror(undefined, {
+      teamId,
+      externalSource: "github",
+      externalId,
+      type: "pull-request",
+      status: pr.observedStatus,
+      title: `PR #${pr.number} · ${pr.title}`,
+      payload: {
+        repo: pr.repo,
+        number: pr.number,
+        sourceUrl: `https://github.com/${pr.repo}/pull/${pr.number}`,
+      },
+      now: pr.observedAt,
+    });
+    ids.set(pr.key, mirror.id);
+
+    const review = await graph.createObject(undefined, {
+      teamId,
+      archetype: "task",
+      type: "merge-review",
+      status: "queued", // MERGE_REVIEW_SPEC.initialState
+      title: mirror.title,
+      payload: { repo: pr.repo, number: pr.number, loopKey: pr.loop },
+      now: pr.observedAt,
+    });
+    ids.set(reviewKey(pr.key), review.id);
+
+    // The review TRACKS the external fact; the loop PRODUCES the review.
+    await graph.upsertEdge(undefined, { teamId, kind: "tracks", srcId: review.id, dstId: mirror.id, now: pr.observedAt });
+    await graph.upsertEdge(undefined, { teamId, kind: "produces", srcId: ids.get(pr.loop)!, dstId: review.id, now: pr.observedAt });
+  }
+
+  // ---- 5. typed relations between loop classes ----
+  for (const rel of RELATIONS) {
+    const srcId = ids.get(rel.from);
+    const dstId = ids.get(rel.to);
+    if (!srcId || !dstId) throw new Error(`relation ${rel.from} -> ${rel.to}: unknown loop key`);
+    await graph.upsertEdge(undefined, { teamId, kind: rel.kind, srcId, dstId, meta: { label: rel.label }, now: SEED_AT });
+  }
+
+  // ---- 6. arm every non-planned loop, then replay the history ----
+
+  const refusals: string[] = [];
+
+  /** Run one transition and drain (or deliberately keep) its outbox actions. */
+  const step = async (input: {
+    key: string;
+    transition: string;
+    entrance: "human" | "agent-run" | "rule" | "clock";
+    actorId: string;
+    at: string;
+    note?: string;
+    fields?: Record<string, unknown>;
+    keepPending?: boolean;
+  }): Promise<void> => {
+    const objectId = ids.get(input.key);
+    if (!objectId) throw new Error(`history step for unknown object key "${input.key}"`);
+    const result = await applyTransition({
+      objectId,
+      transition: input.transition,
+      actor: { entrance: input.entrance, actorId: input.actorId },
+      now: input.at,
+      ...(input.fields ? { fields: input.fields } : {}),
+      ...(input.note ? { eventPayload: { note: input.note } } : {}),
+    });
+    if (!result.ok) {
+      refusals.push(`${input.key}.${input.transition} @ ${input.at}: ${result.code} - ${result.message}`);
+      return;
+    }
+    if (input.keepPending) return;
+    // Minimal executor: an action a real executor would have delivered. Without
+    // this a later terminal transition is (correctly) refused for pending actions.
+    for (const action of result.actions) await graph.markActionDelivered(undefined, action.id, input.at);
+  };
+
+  for (const loop of LOOPS) {
+    if (loop.planned) continue;
+    await step({
+      key: loop.key,
+      transition: "activate",
+      entrance: "human",
+      actorId: "u-demo-captain",
+      at: loop.createdAt,
+      note: `armed ${loop.name}`,
+    });
+  }
+
+  for (const h of HISTORY) {
+    await step({
+      key: h.object,
+      transition: h.transition,
+      entrance: h.entrance,
+      actorId: h.actorId,
+      at: h.at,
+      ...(h.note ? { note: h.note } : {}),
+      ...(h.fields ? { fields: h.fields } : {}),
+      ...(h.keepPending ? { keepPending: true } : {}),
+    });
+  }
+
+  // ---- 7. tally ----
+  const allObjects = await graph.listObjects(undefined, teamId);
+  const allEdges = await db.select().from(edgesTable).where(eq(edgesTable.teamId, teamId));
+  const open = await graph.listOpenObligations(undefined, teamId);
+  const pending = await graph.listPendingActions(undefined, { teamId });
+  return {
+    teamId,
+    objects: allObjects.length,
+    edges: allEdges.length,
+    events: await graph.countEvents(undefined, teamId),
+    openObligations: open.length,
+    pendingActions: pending.length,
+    refusals,
+  };
+}
+
+/** Each doc type's declared initial state. Kept here rather than read off the
+ *  spec so a spec change that forgets an artifact type fails loudly at seed. */
+function initialStateOf(artifact: ArtifactSeed): string {
+  switch (artifact.type) {
+    case "post":
+      return "draft";
+    case "report":
+      return "drafting";
+    case "playbook":
+      return "draft";
+  }
+}
+
+function stringField(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}

@@ -150,10 +150,42 @@ Pass configuration with `-e KEY=value` or `--env-file` (same variables as [`.env
 ```bash
 pnpm dev            # server on http://127.0.0.1:3000
 pnpm -r test        # all tests
-pnpm -r typecheck   # both packages
+pnpm -r typecheck   # every package
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contributor guide (migrations, releases, PR flow) and [`AGENTS.md`](AGENTS.md) for architecture notes.
+
+### Graph v1 workspace demo (dev only)
+
+A locally runnable workspace over the Graph Engineering v1 kernel - Library, System,
+and Timeline, backed by the real `objects` / `edges` / `events` / `gate_obligations` /
+`outbox_actions` / `type_registry` tables.
+
+```bash
+pnpm graph:demo     # build → seed → serve http://127.0.0.1:3700/dev/workspace
+pnpm graph:seed     # re-seed only (run with the server stopped)
+```
+
+It seeds into its own gitignored database (`.graph-demo-data/`), so it never touches
+`~/.loopany` or a real Postgres. Nothing in it is a fixture: loop classes are Tasks with
+`cron`, artifacts are real front-matter + Markdown files parsed and rendered by
+`@loopany/artifact-format`, pull requests are get-or-create mirrors, and every status
+you see was produced by replaying a history script through `applyTransition` - so each
+one carries its per-field diff and its `entrance`/`actor` provenance.
+
+The "Needs you" list is the open `human-verdict` obligations, computed opened-minus-closed,
+and approving one is a real write: it runs the gate-closing transition through the same
+seam, and a second attempt comes back as a typed refusal.
+
+Read-only API (same dev gate as the page - both 404 in a production build):
+
+```
+GET  /api/graph/summary | system | library | timeline | inbox
+POST /api/graph/verdict   {"objectId": "...", "transition": "approve"}
+```
+
+The demo is served on port 3700 to stay clear of other local environments; override with
+`LOOPANY_PORT`. The embedded database is single-writer, so stop the server before re-seeding.
 
 ## License
 
