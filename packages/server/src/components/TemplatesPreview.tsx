@@ -44,7 +44,7 @@ export function TemplatesPreview({ bundles }: { bundles: BundleView[] }) {
       <div className="templates-peek mt-8 overflow-clip">
         <div className="grid min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {shown.map((it, i) => (
-            <TemplateCard key={it.template.name} item={it} compact className={PEEK_VISIBILITY[i]} />
+            <TemplateCard key={it.template.name} item={it} compact composeDirect className={PEEK_VISIBILITY[i]} />
           ))}
         </div>
       </div>
