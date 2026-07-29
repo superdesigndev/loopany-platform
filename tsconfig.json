@@ -3,6 +3,7 @@
   "files": [],
   "references": [
     { "path": "packages/server" },
-    { "path": "packages/daemon" }
+    { "path": "packages/daemon" },
+    { "path": "packages/artifact-format" }
   ]
 }

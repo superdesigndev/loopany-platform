@@ -1,0 +1,39 @@
+{
+  "name": "@loopany/artifact-format",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Artifact file format v1 — YAML front matter + Markdown body, with sanitized HTML rendering as a projection. Pure library: no server internals, no I/O.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "marked": "^18.0.5",
+    "sanitize-html": "^2.17.6",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@types/sanitize-html": "^2.16.0",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.9"
+  }
+}

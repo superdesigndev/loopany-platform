@@ -32,13 +32,22 @@ computes pure functions. Run instructions: `README.md`.
   - `src/routes/` - pages + server-only route files.
 - `packages/daemon` (`@crewlet/loopany`) - one binary, two roles: poll-loop daemon
   and the in-run `loopany` callback; spawns claude.
+- `packages/artifact-format` (`@loopany/artifact-format`) - the Graph-Engineering-v3
+  **artifact file format v1**: YAML front matter + Markdown body, deterministic
+  round-trip, sanitized HTML as a projection. PURE library (no I/O, no server
+  internals) and deliberately NOT yet wired into server or UI. The format contract,
+  the core schema, the error codes and the sanitization posture are documented in
+  its own `README.md` - read that, never a summary here. NB it is STRICT and throws,
+  unlike the soft, never-throwing v2 loop-product reader
+  `packages/server/src/server/frontmatter.ts`; the two coexist by design.
 
 ## Commands
 
 - `pnpm dev` - server on :3000 (UI + scheduler + machine routes).
-- `pnpm -r typecheck` - both packages (server typecheck runs `tsr generate` first,
+- `pnpm -r typecheck` - every package (server typecheck runs `tsr generate` first,
   so a fresh checkout typechecks with no prior build).
-- `pnpm --filter @loopany/server test` / `pnpm --filter @crewlet/loopany test` -
+- `pnpm --filter @loopany/server test` / `pnpm --filter @crewlet/loopany test` /
+  `pnpm --filter @loopany/artifact-format test` (all three via `pnpm test`) -
   vitest; single file: append the path; single test: `vitest run -t "<name>"`.
 - `pnpm --filter @loopany/server db:generate` / `db:migrate` - Drizzle migrations.
 - `bash scripts/demo-cookie-unified.sh` - e2e demo loop through the unified server.
