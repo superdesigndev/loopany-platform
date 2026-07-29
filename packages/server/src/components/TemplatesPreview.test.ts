@@ -129,12 +129,13 @@ describe('TemplatesPreview (dashboard catalog teaser)', () => {
     expect(out).toContain('Visible fast')
   })
 
-  it('keeps whole-card navigation to the detail route, and the Create deep-link', async () => {
+  it('whole-card goes STRAIGHT to compose (no detail hop, no duplicate Create pill)', async () => {
     const el = await mount()
     const links = [...el.querySelectorAll('a.market-card-link')].map((a) => a.getAttribute('href'))
-    expect(links[0]).toBe('/templates/react-doctor')
-    expect(links.every((h) => h?.startsWith('/templates/'))).toBe(true)
-    expect([...el.querySelectorAll('a.market-create')].map((a) => a.getAttribute('href'))[0]).toBe('/?template=react-doctor')
+    expect(links[0]).toBe('/?template=react-doctor')
+    expect(links.every((h) => h?.startsWith('/?template='))).toBe(true)
+    // The whole card composes, so the separate Create affordance is omitted.
+    expect(el.querySelectorAll('a.market-create').length).toBe(0)
   })
 
   it('fades out into ONE Browse-all affordance counting the WHOLE catalog', async () => {
