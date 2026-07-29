@@ -49,30 +49,21 @@ const stories = import.meta.glob<string>('../skill/templates/*/story.md', {
 })
 
 /**
- * Story MEDIA: screenshots/videos in `skill/templates/<name>/assets/`, referenced from
- * the story markdown by relative path (`![…](assets/shot.png)`, `<video
- * src="assets/demo.mp4">`). `?url` hands each file to Vite's asset pipeline — hashed,
- * served in dev and prod, no extra route — and `templateStory` rewrites the relative
- * references to those emitted URLs. Keep videos SMALL (they live in git); for anything
- * heavy, embed a hosted player instead.
+ * Story MEDIA lives in `public/template-assets/<name>/` (nitro serves `public/`
+ * verbatim in dev AND prod), referenced from the story markdown by relative path
+ * (`![…](assets/shot.png)`, `<video src="assets/demo.mp4">`) — `templateStory`
+ * rewrites those to `/template-assets/<name>/…`. Deliberately NOT Vite `?url`
+ * assets: an SSR-emitted `/assets/<hash>` URL is not publicly served by the nitro
+ * build (the 2026-07-29 prod 404s). Keep videos SMALL (they live in git); for
+ * anything heavy, embed a hosted player instead.
  */
-const storyAssets = import.meta.glob<string>('../skill/templates/*/assets/*', {
-  eager: true,
-  query: '?url',
-  import: 'default',
-})
 
 /** The template's field-notes markdown (front matter stripped, asset refs rewritten to
  *  their served URLs), or null when the folder ships none. */
 export function templateStory(name: string): string | null {
   const raw = stories[`../skill/templates/${name}/story.md`]
   if (!raw) return null
-  const prefix = `../skill/templates/${name}/assets/`
-  const assets: Record<string, string> = {}
-  for (const [path, url] of Object.entries(storyAssets)) {
-    if (path.startsWith(prefix)) assets[path.slice(prefix.length)] = url
-  }
-  return rewriteStoryAssets(stripFrontMatter(raw), assets)
+  return rewriteStoryAssets(stripFrontMatter(raw), name)
 }
 
 /**
@@ -88,13 +79,11 @@ export function stripFrontMatter(md: string): string {
 }
 
 /** Rewrite `assets/<file>` references (markdown links/images AND raw-HTML src attrs)
- *  to the served URLs. Pure; unknown files are left as-is (a broken ref stays visible
- *  to the author instead of silently vanishing). */
-export function rewriteStoryAssets(md: string, assets: Record<string, string>): string {
-  return md.replace(/(\]\(|src=")(?:\.\/)?assets\/([^)"\s]+)/g, (whole, lead: string, file: string) => {
-    const url = assets[file]
-    return url ? `${lead}${url}` : whole
-  })
+ *  to the public URLs under `/template-assets/<name>/`. Pure; a ref to a file the
+ *  author never dropped in `public/template-assets/<name>/` 404s VISIBLY rather than
+ *  silently vanishing. */
+export function rewriteStoryAssets(md: string, name: string): string {
+  return md.replace(/(\]\(|src=")(?:\.\/)?assets\//g, `$1/template-assets/${name}/`)
 }
 
 /**

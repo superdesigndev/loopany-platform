@@ -24,18 +24,16 @@ describe('stripFrontMatter', () => {
 })
 
 describe('rewriteStoryAssets', () => {
-  const assets = { 'shot.png': '/assets/shot-abc123.png', 'demo.mp4': '/assets/demo-def456.mp4' }
-
   test('rewrites markdown images and raw-HTML src attrs, with or without ./', () => {
     const md = '![before](assets/shot.png) and <video controls src="./assets/demo.mp4"></video>'
-    expect(rewriteStoryAssets(md, assets)).toBe(
-      '![before](/assets/shot-abc123.png) and <video controls src="/assets/demo-def456.mp4"></video>',
+    expect(rewriteStoryAssets(md, 'reddit-karma')).toBe(
+      '![before](/template-assets/reddit-karma/shot.png) and <video controls src="/template-assets/reddit-karma/demo.mp4"></video>',
     )
   })
 
-  test('an unknown file stays as-authored — visibly broken beats silently vanished', () => {
-    const md = '![missing](assets/nope.png)'
-    expect(rewriteStoryAssets(md, assets)).toBe(md)
+  test('non-asset links and absolute URLs are untouched', () => {
+    const md = '[doc](https://example.com/assets/x.png) and ![ok](/already/absolute.png)'
+    expect(rewriteStoryAssets(md, 'reddit-karma')).toBe(md)
   })
 })
 

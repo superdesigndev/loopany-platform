@@ -220,7 +220,11 @@ computes pure functions. Run instructions: `README.md`.
   `<details>`, SSR-safe), and optional "Field notes" — a repo-authored
   `skill/templates/<name>/story.md` (real results/learnings write-up) attached ONLY by
   `findPublicTemplate` (never on list payloads) and rendered through marked WITHOUT
-  DOMPurify (trusted repo content, and DOMPurify needs a DOM the SSR pass lacks);
+  DOMPurify (trusted repo content, and DOMPurify needs a DOM the SSR pass lacks). Story
+  MEDIA lives in `public/template-assets/<name>/` (nitro serves `public/` verbatim in
+  dev AND prod; `templateStory` rewrites relative `assets/<file>` refs to
+  `/template-assets/<name>/…`) — deliberately NOT Vite `?url` assets, whose SSR-emitted
+  `/assets/<hash>` URLs the nitro build never serves (the 2026-07-29 prod 404s);
   RIGHT = the sticky verbatim prompt + Copy. Its CTA deep-links
   `/?template=<name>`, which is forwarded through the gated `/t/<team>` redirect and
   preserved across OAuth via `callbackURL`, then reuses the EXISTING single-template
