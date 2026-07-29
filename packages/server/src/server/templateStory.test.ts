@@ -46,7 +46,18 @@ describe('templateStory (the real registry)', () => {
     expect(story).not.toContain('awaiting-review')
   })
 
+  test('the field-notes templates ship a story with their asset refs rewritten', () => {
+    for (const name of ['react-doctor', 'housekeeper', 'docs-sweep', 'error-sweep', 'dependency-triage']) {
+      const story = templateStory(name)
+      expect(story, name).toBeTruthy()
+      // Publishing metadata never renders, and no asset ref survives unrewritten
+      // (an `assets/…` path left as-authored would 404 on the public detail page).
+      expect(story, name).not.toContain('awaiting-review')
+      expect(story, name).not.toContain('](assets/')
+    }
+  })
+
   test('a template without a story returns null', () => {
-    expect(templateStory('error-sweep')).toBeNull()
+    expect(templateStory('seo-scout')).toBeNull()
   })
 })
