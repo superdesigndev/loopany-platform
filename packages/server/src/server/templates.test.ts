@@ -48,7 +48,8 @@ describe('template registry', () => {
       'ci-doctor',
       // Growth
       'reddit-karma',
-      'seo-scout',
+      'seo-try-keywords',
+      'seo-scale-keywords',
       'market-research',
       'changelog-broadcaster',
       // Business Ops
@@ -188,32 +189,47 @@ describe('template registry', () => {
     expect(d).toContain('written by ChatGPT') // the #1 AI tell it guards against
   })
 
-  test('seo-scout: cheap emerging-keyword bets, live-data verdicts, one PR at a time', () => {
-    const t = TEMPLATES.find((x) => x.name === 'seo-scout') as TemplateInfo
+  test('seo-try-keywords: the EXPLORE half — cheap new-keyword bets, live verdicts, hand-off', () => {
+    const t = TEMPLATES.find((x) => x.name === 'seo-try-keywords') as TemplateInfo
     expect(t).toBeTruthy()
-    expect(t.label).toBe('SEO Scout')
-    const d = t.description
-    const l = d.toLowerCase()
-    // Live Search Console is the ONLY receipt source, smoke-tested before creating.
+    expect(t.label).toBe('SEO - Try New Keywords')
+    const l = t.description.toLowerCase()
+    // Live Search Console is the only receipt source, smoke-tested before creating.
     expect(l).toContain('search console')
     expect(l).toContain('smoke test')
-    // The breadwinner page is protected, with a cooldown; bot queries are excluded.
-    expect(l).toContain('breadwinner')
-    expect(l).toContain('14-day cooldown')
-    // The radar is the owner's own feed, not lagging keyword tools.
-    expect(l).toContain('keyword tools lag')
-    // One cheap bet per run, as one worktree PR a human merges — never stacked.
-    expect(l).toContain('at most one cheap bet')
+    // One cheap bet on ONE new keyword per run, as one worktree PR a human merges.
+    expect(l).toContain('one cheap bet on one new keyword')
     expect(l).toContain('worktree')
     expect(l).toContain('human merges')
-    // Skipping is a valid outcome — quality over volume.
     expect(l).toContain('clean skip')
-    // Dated day-7 verdicts; emerging terms score on position/impressions, never clicks.
-    expect(l).toContain('day-7 verdict')
+    // Verdicts: position/impressions never clicks, daily series never averages.
     expect(l).toContain('never clicks')
     expect(l).toContain('never averages')
-    // The suppressed formats stay banned.
+    // Winners are HANDED OFF to the sibling loop, never scaled in-place.
+    expect(l).toContain('seo - scale proven keywords')
+    expect(l).toContain('flag it for')
+    // Suppressed formats stay banned.
     expect(l).toContain('self-ranking listicle')
+  })
+
+  test('seo-scale-keywords: the EXPLOIT half — proven set only, one move per run, honest let-go', () => {
+    const t = TEMPLATES.find((x) => x.name === 'seo-scale-keywords') as TemplateInfo
+    expect(t).toBeTruthy()
+    expect(t.label).toBe('SEO - Scale Proven Keywords')
+    const l = t.description.toLowerCase()
+    // Works ONLY the proven set; exploring is the sibling loop's job.
+    expect(l).toContain('proven')
+    expect(l).toContain('seo - try new keywords')
+    // Breadwinner protection with the cooldown.
+    expect(l).toContain('breadwinner')
+    expect(l).toContain('14-day cooldown')
+    // One move per run from the live daily series, shipped as one PR.
+    expect(l).toContain('one move')
+    expect(l).toContain('never averages')
+    expect(l).toContain('worktree')
+    expect(l).toContain('human merges')
+    // The honest wind-down: rankings are rented, demand moving on ends the defense.
+    expect(l).toContain('winding the term down')
   })
 })
 

@@ -602,42 +602,75 @@ const OUTCOME_WATCH: FlowSpec = {
 }
 
 
-const SEO_SCOUT: FlowSpec = {
+
+const KEYWORD_BETS: FlowSpec = {
   worktreeLabel: 'Isolated git worktree · off main',
   nodes: [
-    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Wire Search Console + the map', detail: 'smoke-test one live pull · breadwinner protected · bot queries tagged' },
-    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every Mon', detail: 'one bet max · skipping is healthy' },
-    { id: 'verdict', kicker: 'Step 1 · Verdict', glyph: '⚖', title: 'Day-7 verdicts first', detail: 'live daily series · dated · scale or leave' },
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Wire Search Console + the map', detail: 'smoke-test one live pull · radar agreed · bot queries tagged' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Weekly (your choice)', detail: 'one bet max · skipping is healthy' },
+    { id: 'verdict', kicker: 'Step 1 · Verdict', glyph: '⚖', title: 'Verdict open bets', detail: 'live daily series · proven → hand to the scale loop' },
     { id: 'radar', kicker: 'Step 2 · Radar', glyph: '⌕', title: 'Read your own feed', detail: 'bookmarks & communities — not keyword tools' },
-    { id: 'bet', wt: true, kicker: 'Step 3 · Bet', glyph: '✎', title: 'Place one cheap bet', detail: 'one guide + up to 4 supporting pages' },
+    { id: 'bet', wt: true, kicker: 'Step 3 · Bet', glyph: '✎', title: 'One bet, one NEW keyword', detail: 'one main page + a few supporting' },
     { id: 'ship', wt: true, kicker: 'Step 4 · Ship', glyph: '⑂', title: 'One PR, human merges', detail: 'no new bet while one is open' },
   ],
   dashboard: [
     {
       type: 'kanban',
       heading: 'Bet board',
-      sub: 'thesis → live → verdict',
+      sub: 'thesis → live → proven',
       columns: [
         ['Live', [
-          ['BET-7', 'context compaction — guide + 4 pages', 'day 5 of 7'],
+          ['BET-9', 'context compaction — guide + 3 pages', 'day 5 of 7'],
+          ['BET-8', 'agent memory patterns', 'day 2 of 7'],
         ]],
-        ['Scaled', [
-          ['BET-5', 'loop engineering cluster', 'daily loop spun up'],
-          ['BET-6', '"X is dead" displacement page', '295 clicks/wk'],
+        ['Proven', [
+          ['BET-5', 'loop engineering', 'handed to the scale loop'],
         ]],
         ['Left', [
           ['BET-4', 'loops vs graphs', '16 impressions · left'],
         ]],
       ],
     },
-    { type: 'metric', label: 'Organic clicks (28d)', series: [112, 340, 820, 2079, 3900, 6900, 10400, 13831], note: 'bets are cheap; the verdicts decide what gets scaled.' },
+    { type: 'metric', label: 'Proven keywords', series: [0, 0, 1, 1, 2, 2, 3, 4], note: 'most bets are duds by design — the winners pay for all of them.' },
+  ],
+}
+
+const KEYWORD_DOUBLE_DOWN: FlowSpec = {
+  worktreeLabel: 'Isolated git worktree · off main',
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Agree the proven set', detail: 'GSC smoke-tested · breadwinner protected, 14-day cooldown' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every 2–3 days', detail: 'one move per run — steady compounding' },
+    { id: 'read', kicker: 'Step 1 · Read', glyph: '⌕', title: 'Read the daily series', detail: 'proven cluster · never averages' },
+    { id: 'pick', kicker: 'Step 2 · Pick', glyph: '⚖', title: 'Pick ONE move', detail: 'gap sub-page · leaky-title fix · interlink pass' },
+    { id: 'ship', wt: true, kicker: 'Step 3 · Ship', glyph: '⑂', title: 'One PR, human merges', detail: 'never touches the breadwinner in cooldown' },
+  ],
+  dashboard: [
+    { type: 'metric', label: 'Cluster clicks (28d)', series: [820, 1200, 1900, 2800, 4300, 6900, 10400, 13831], note: 'the cluster often ends up out-earning the head page it supports.' },
+    {
+      type: 'kanban',
+      heading: 'Support pages',
+      sub: 'planned → earning',
+      columns: [
+        ['Planned', [
+          ['SUP-12', 'searched gap: "…vs fine-tuning"', 'from live queries'],
+        ]],
+        ['Shipped', [
+          ['SUP-11', 'title fix — page ranked, never clicked', 'PR merged'],
+        ]],
+        ['Earning', [
+          ['SUP-9', 'displacement page', '295 clicks/wk'],
+          ['SUP-7', 'supporting article', 'out-earns the guide'],
+        ]],
+      ],
+    },
   ],
 }
 
 export const FLOWS: Record<string, FlowSpec> = {
   'support-triage': SUPPORT_TRIAGE,
   'reddit-karma': REDDIT_KARMA,
-  'seo-scout': SEO_SCOUT,
+  'seo-try-keywords': KEYWORD_BETS,
+  'seo-scale-keywords': KEYWORD_DOUBLE_DOWN,
   'react-doctor': REACT_DOCTOR,
   'docs-sweep': DOCS_SWEEP,
   'error-sweep': ERROR_SWEEP,

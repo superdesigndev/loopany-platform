@@ -40,7 +40,7 @@ export const TEMPLATE_PREREQS: Record<string, TemplatePrereq[]> = {
     },
   ],
 
-  'seo-scout': [
+  'seo-try-keywords': [
     {
       label: 'Live Google Search Console read access',
       desc: 'An API script, CLI, or MCP tool that pulls live query data for your site — every verdict reads it.',
@@ -50,6 +50,27 @@ export const TEMPLATE_PREREQS: Record<string, TemplatePrereq[]> = {
     {
       label: 'Your content repo, with a PR flow',
       desc: 'The blog lives in git; every bet ships as one pull request a human merges.',
+    },
+    {
+      label: 'A keyword radar of your own',
+      desc: "Bookmarks, feeds, niche communities — the source of terms keyword tools haven't caught yet.",
+      optional: true,
+    },
+  ],
+  'seo-scale-keywords': [
+    {
+      label: 'Live Google Search Console read access',
+      desc: 'An API script, CLI, or MCP tool that pulls live query data for your site — every move is picked from it.',
+      href: TREG,
+      linkLabel: 'Manage agent credentials with treg',
+    },
+    {
+      label: 'Your content repo, with a PR flow',
+      desc: 'The blog lives in git; every support page or fix ships as one pull request a human merges.',
+    },
+    {
+      label: 'A proven keyword set',
+      desc: 'Terms with a cleared verdict or sustained clicks — typically graduates of an "SEO - Try New Keywords" loop.',
     },
   ],
 

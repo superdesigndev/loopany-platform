@@ -92,10 +92,17 @@ const STROKE: Record<string, ReactNode> = {
       <path d="M2 12h20" />
     </>
   ),
-  'seo-scout': (
+  'seo-try-keywords': (
     <>
       <path d="M22 7 13.5 15.5l-5-5L2 17" />
       <path d="M16 7h6v6" />
+    </>
+  ),
+  'seo-scale-keywords': (
+    <>
+      <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+      <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
+      <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
     </>
   ),
   'changelog-broadcaster': (
