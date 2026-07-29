@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 import { rewriteStoryAssets, stripFrontMatter, templateStory } from './templates'
 
@@ -46,18 +48,26 @@ describe('templateStory (the real registry)', () => {
     expect(story).not.toContain('awaiting-review')
   })
 
-  test('the field-notes templates ship a story with their asset refs rewritten', () => {
+  test('the field-notes templates ship a story whose media really exists on disk', () => {
+    // Only `public/` is served verbatim by nitro, so every rewritten
+    // `/template-assets/<name>/<file>` ref must have a real file behind it — a ref with
+    // no file 404s on the public detail page (the 2026-07-29 prod incident).
+    const publicRel = '../../public/'
+    const publicDir = fileURLToPath(new URL(publicRel, import.meta.url))
     for (const name of ['react-doctor', 'housekeeper', 'docs-sweep', 'error-sweep', 'dependency-triage']) {
       const story = templateStory(name)
       expect(story, name).toBeTruthy()
-      // Publishing metadata never renders, and no asset ref survives unrewritten
-      // (an `assets/…` path left as-authored would 404 on the public detail page).
+      // Publishing metadata never renders.
       expect(story, name).not.toContain('awaiting-review')
-      expect(story, name).not.toContain('](assets/')
+      const refs = [...(story ?? '').matchAll(/\/template-assets\/[\w.-]+\/[\w.-]+/g)].map((m) => m[0])
+      expect(refs.length, `${name} story references at least one asset`).toBeGreaterThan(0)
+      for (const ref of refs) {
+        expect(existsSync(publicDir + ref.slice(1)), `${name}: ${ref} exists under public/`).toBe(true)
+      }
     }
   })
 
   test('a template without a story returns null', () => {
-    expect(templateStory('seo-scout')).toBeNull()
+    expect(templateStory('bug-vigil')).toBeNull()
   })
 })
