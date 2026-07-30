@@ -520,6 +520,10 @@ export const CATEGORY_OF_TYPE: Record<string, string> = {
   "pull-request": "Pull requests",
 };
 
+/** The registry type the runs bridge dispatches. Named once, so the read model and
+ *  the CLI cannot drift from the spec. */
+export const WORK_TYPE = "agent-task";
+
 /** Shepherd task type → the obligation key it opens. One place, so the read
  *  model can find a content object's reviewer without guessing. */
 export const SHEPHERD_TYPES: Record<string, string> = {

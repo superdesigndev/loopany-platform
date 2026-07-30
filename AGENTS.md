@@ -1270,6 +1270,13 @@ computes pure functions. Run instructions: `README.md`.
   `sum(gate.waiting) === open human-verdict count`.
 - Two spec surfaces declare the watch: `LOOP_SPEC.watch-prs` (fans out over `produces`) and
   `MERGE_REVIEW_SPEC.submit` (two independent waits, on two objects, from one transition).
+- **`runGh` KEEPS a body printed alongside a non-zero exit.** `gh api graphql` prints
+  `{data, errors}` and exits NON-ZERO when any field in a batch failed - which for a sweep is
+  the ORDINARY case (one deleted PR among twenty). Treating exit-1 as "no data" loses every
+  good PR in the batch and reports them all unresolved, so the mirrors never move; a live demo
+  found exactly that. Only a call that produced no JSON at all is a transport failure. Each
+  missing number also gets ITS OWN error message (GitHub names the number), never `errors[0]`
+  for everything.
 - **Probes:** `sensing.integration.test.ts` re-asserts every pre-migration property through
   the new seam (double report ⇒ zero rows, one change ⇒ one event per field, partial-report
   recovery, wait auto-close, discovery convergence) PLUS a **source scan** proving the server
@@ -1418,7 +1425,25 @@ computes pure functions. Run instructions: `README.md`.
   dispatched → done/failed, plus `declined`) is deliberately GENERIC - not a fix-review.
   `pnpm graph:dispatch -- [--brief …] [--workdir …] [--repos …]` stages one awaiting a verdict;
   the default brief is a read-only survey, so the demo exercises every hop while touching
-  nothing.
+  nothing. `WORK_TYPE` in `specs.ts` names the type once so the read model and the CLI cannot
+  drift from the spec.
+- **The WORK read model is its own surface** (`read.ts workView`, `GET /api/graph/work`, the
+  `WorkSection` beside Outward effects). The Library lists what the fleet has MADE; this lists
+  what it is asking to DO. An `agent-task` is not an artifact - no body, no category - so giving
+  it a Library row would have meant inventing a content category or letting the artifact list
+  mean two things. Rows derive their run state from the LIFECYCLE EVENTS, not from the task's
+  status column, so "the task is done" and "the run said what it did" stay separate facts. The
+  brief is rendered VERBATIM: a person approving a run is approving an instruction an agent will
+  follow, and that is the one place a summary would be dangerous.
+- **A run and its report are named after the TASK, not the standing intent.** A type's intent
+  first line is identical for every instance ("Carry out the work described in
+  `context.object.brief`"), so the handler defaults the work order's `label` to the holder's
+  title and `runFinished` defaults an untitled report doc to the same - otherwise every Timeline
+  row and every Library report reads identically. Caught by the live demo, pinned by two probes.
+- **Live-demo order** (pglite is SINGLE-WRITER, and the server holds the dir): stop the dev
+  server → `pnpm graph:dispatch` / `graph:pr` → start the server → approve in `/dev/workspace`
+  → `pnpm agent --once`. Staging while the server runs appears to succeed and the server never
+  sees the row.
 - **Probes:** `graph/agent/runs.integration.test.ts` (18: dispatch idempotency, claim
   exclusivity, lease expiry → attention naming the task, exactly-once advance + replay,
   failure surfacing with typed retryability, lease-as-authority incl. the zombie, malformed

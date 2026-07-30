@@ -42,7 +42,7 @@ import { drainOutbox } from "../outbox/executor.js";
 import { sensingHealth, type SensingHealth } from "../sensing/watch.js";
 import { RUN_FINISHED_EVENT, RUN_STARTED_EVENT } from "../effects/instruction.js";
 import type { TypeSpec } from "../types.js";
-import { CATEGORY_OF_TYPE, DEMO_TEAM_ID, DEMO_USER_ID, LIBRARY_CATEGORIES, SHEPHERD_TYPES } from "./specs.js";
+import { CATEGORY_OF_TYPE, DEMO_TEAM_ID, DEMO_USER_ID, LIBRARY_CATEGORIES, SHEPHERD_TYPES, WORK_TYPE } from "./specs.js";
 
 // ---- shared loading ----
 
@@ -945,6 +945,119 @@ export async function effectsView(teamId = DEMO_TEAM_ID, limit = 25): Promise<{ 
   };
 }
 
+// ---- the runs bridge: work a person can send to a machine ----
+
+export interface WorkRow {
+  /** The `agent-task` itself - what a verdict moves. */
+  id: string;
+  title: string;
+  /** This instance's own instruction, verbatim. A person approving a run must be
+   *  able to read what it will be told to do. */
+  brief: string | null;
+  status: string;
+  age: string;
+  /** The go-ahead a person owes, when this row is sitting in its gate. */
+  verdict?: { objectId: string; transition: string; label: string; obligation: string };
+  /** The run's own id, once one was dispatched. */
+  runId?: string;
+  /** Where the run got to: started, or finished with an outcome. */
+  runState?: "started" | "success" | "failure";
+  /** The run's own one-line account of what it did. */
+  summary?: string;
+  /** The report DOC it produced, if it produced one - the Library row to open. */
+  reportId?: string;
+}
+
+export interface WorkView {
+  items: WorkRow[];
+  /** Rows waiting on a person's go-ahead. */
+  awaiting: number;
+  /** Runs dispatched and not yet reported back. */
+  inFlight: number;
+}
+
+/**
+ * WORK, as opposed to content.
+ *
+ * The Library lists what the fleet has MADE; this lists what a person has been asked
+ * to let a machine DO. They are deliberately separate surfaces: an `agent-task` is not
+ * an artifact, it has no body, and giving it a Library row would have meant either
+ * inventing a content category for it or letting the artifact list mean two things.
+ *
+ * Every field is derived from real rows - the task's status, and the run lifecycle
+ * events the machine agent reported (`graph/agent/runs.ts`). Nothing here is a flag,
+ * so a run that never reported back shows as dispatched-and-silent rather than as
+ * whatever a status column was last set to.
+ */
+export async function workView(teamId = DEMO_TEAM_ID): Promise<WorkView> {
+  const { objects, edges, obligations, now } = await load(teamId);
+  const tasks = objects.filter((o) => o.type === WORK_TYPE);
+  if (!tasks.length) return { items: [], awaiting: 0, inFlight: 0 };
+
+  const openByObject = new Map<string, GateObligation>();
+  for (const o of obligations) {
+    if (o.closedByEvent === null && o.class !== "external-wait") openByObject.set(o.objectId, o);
+  }
+  const spec = (await graph.getEffectiveType(undefined, teamId, WORK_TYPE))?.spec;
+  /** task id → the report doc it produced, so a finished run links to its product. */
+  const produced = new Map<string, string>();
+  for (const e of edges) if (e.kind === "produces") produced.set(e.srcId, e.dstId);
+
+  const items: WorkRow[] = [];
+  for (const task of tasks) {
+    const p = payloadOf(task);
+    const open = openByObject.get(task.id);
+    const transition = open && spec ? verdictTransition(spec, task.status, open.key) : undefined;
+
+    // The run's own account of itself, read off the lifecycle events rather than
+    // inferred from the task's status - "the task is done" and "the run said what it
+    // did" are different facts, and only one of them is the machine's own words.
+    const events = await graph.listObjectEvents(undefined, task.id);
+    const finished = [...events].reverse().find((e) => e.kind === RUN_FINISHED_EVENT);
+    const started = [...events].reverse().find((e) => e.kind === RUN_STARTED_EVENT);
+    const runEvent = finished ?? started;
+    const runPayload = (runEvent?.payload ?? {}) as Record<string, unknown>;
+    const outcome = str((finished?.payload as Record<string, unknown> | undefined)?.outcome);
+
+    items.push({
+      id: task.id,
+      title: task.title ?? task.id,
+      brief: str(p.brief) ?? null,
+      status: task.status,
+      age: relativeAge(task.updatedAt, now),
+      ...(transition && open
+        ? {
+            verdict: {
+              objectId: task.id,
+              transition,
+              label: VERDICT_LABEL[open.key] ?? "Decide",
+              obligation: open.key,
+            },
+          }
+        : {}),
+      ...(str(runPayload.run) ? { runId: str(runPayload.run)! } : {}),
+      ...(finished
+        ? { runState: outcome === "failure" ? ("failure" as const) : ("success" as const) }
+        : started
+          ? { runState: "started" as const }
+          : {}),
+      ...(str((finished?.payload as Record<string, unknown> | undefined)?.summary)
+        ? { summary: str((finished!.payload as Record<string, unknown>).summary)! }
+        : {}),
+      ...(produced.has(task.id) ? { reportId: produced.get(task.id)! } : {}),
+    });
+  }
+  items.sort((a, b) => (a.verdict ? -1 : b.verdict ? 1 : 0));
+  return {
+    items,
+    awaiting: items.filter((i) => i.verdict).length,
+    // Dispatched with no outcome reported yet. Includes a run whose agent died - the
+    // Attention list is what says so, and this counter never pretends otherwise.
+    inFlight: items.filter((i) => i.status === "dispatched" && i.runState !== "success" && i.runState !== "failure")
+      .length,
+  };
+}
+
 /** Workspace-level counters for the shell (sidebar badge, machine line). */
 export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
   loops: number;
@@ -973,6 +1086,8 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
    * of real rows rather than a heartbeat somebody has to remember to send.
    */
   sensing: SensingHealth;
+  /** Work awaiting a go-ahead, and runs in flight - the runs bridge's own vitals. */
+  work: { awaiting: number; inFlight: number };
 }> {
   const { objects, obligations } = await load(teamId);
   const pending = await graph.listPendingActions(undefined, { teamId });
@@ -980,6 +1095,7 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
   const notes = await graph.listNotifications(undefined, teamId, 200);
   return {
     sensing: await sensingHealth({ now: new Date().toISOString(), teamId }),
+    work: await workCounters(teamId),
     loops: objects.filter((o) => o.type === "loop" && o.status !== "planned").length,
     artifacts: objects.filter((o) => CATEGORY_OF_TYPE[o.type]).length,
     // A parked chain is counted by `attention`, not here - see `inboxView`.
@@ -994,6 +1110,19 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
     notifications: notes.length,
     unreadNotifications: await graph.countUnreadNotifications(undefined, teamId),
     effectsInFlight: await graph.countUnsettledDirectives(undefined, teamId),
+  };
+}
+
+/** Just the two work counters, for the shell. Cheaper than the whole view, which
+ *  reads every task's event history. */
+async function workCounters(teamId: string): Promise<{ awaiting: number; inFlight: number }> {
+  const tasks = await graph.listObjects(undefined, teamId, { type: WORK_TYPE });
+  if (!tasks.length) return { awaiting: 0, inFlight: 0 };
+  const open = await graph.listOpenObligations(undefined, teamId, { class: "human-verdict" });
+  const gated = new Set(open.map((o) => o.objectId));
+  return {
+    awaiting: tasks.filter((t) => gated.has(t.id)).length,
+    inFlight: tasks.filter((t) => t.status === "dispatched").length,
   };
 }
 

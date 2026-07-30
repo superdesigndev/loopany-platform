@@ -11,6 +11,7 @@ import { createFileRoute } from '@tanstack/react-router'
  *   GET  /api/graph/attention  dead-letters / parked chains / refused closes /
  *                              outward effects that never landed
  *   GET  /api/graph/notifications  what the `notify` action produced
+ *   GET  /api/graph/work       work awaiting a go-ahead + what its runs did
  *   GET  /api/graph/effects    outward work orders and what became of them
  *                              (the AGENT's own wire is `/api/agent/*`, which is
  *                              bearer-token authed and never session authed)
@@ -133,6 +134,8 @@ export const Route = createFileRoute('/api/graph/$')({
             return Response.json(await read.notificationsView())
           case 'effects':
             return Response.json(await read.effectsView())
+          case 'work':
+            return Response.json(await read.workView())
           default:
             return notFound()
         }

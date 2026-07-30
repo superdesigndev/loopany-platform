@@ -97,6 +97,17 @@ export const runGh: GhRunner = (args, stdin) =>
       { timeout: GH_TIMEOUT_MS, maxBuffer: GH_MAX_BYTES, encoding: "utf8" },
       (err, stdout, stderr) => {
         if (err) {
+          // PARTIAL RESPONSES ARE REAL DATA. `gh api graphql` prints a body carrying
+          // BOTH `data` and `errors` and exits NON-ZERO when any field in a batch
+          // failed - which for a sensing sweep is the ordinary case, not the
+          // exceptional one: one deleted PR among twenty makes the whole call
+          // "fail". Discarding the body there loses every good PR in the batch and
+          // reports them all unresolved, so the mirrors never move.
+          //
+          // Keep the body when there is one; the caller then resolves the fields it
+          // did get and reports the rest as missing WITH GitHub's own reason. Only a
+          // call that produced no JSON at all is a transport failure.
+          if (stdout && stdout.trim().startsWith("{")) return resolve(stdout);
           const detail = String(stderr || stdout || "").trim().slice(0, 600);
           return reject(new Error(`${err.message}${detail ? ` - ${detail}` : ""}`));
         }
@@ -218,7 +229,7 @@ export function ghClient(runner: GhRunner = runGh): Gh {
         for (const n of chunk) {
           const parsed = toObserved(repo, data?.repository?.[`p${n}`]);
           if (parsed) observed.set(n, parsed);
-          else missing.push({ number: n, why: errors?.[0]?.message ?? "no pullRequest node in the response" });
+          else missing.push({ number: n, why: reasonFor(n, errors) });
         }
       }
       return { observed, ...(rateLimitRemaining === undefined ? {} : { rateLimitRemaining }), missing };
@@ -236,6 +247,20 @@ interface GhPrNode {
   title?: string;
   body?: string | null;
   commits?: { nodes?: { commit?: { statusCheckRollup?: { state?: string } | null } }[] };
+}
+
+/**
+ * WHY this particular PR did not come back.
+ *
+ * A batch response's `errors` array carries one entry per failed field, and GitHub's
+ * message names the number ("Could not resolve to a PullRequest with the number of
+ * 1241"). So the per-number reason is matched on that rather than taking `errors[0]`
+ * for everything - otherwise a batch with one deleted PR reports that PR's message
+ * against every other number in it, which is a confidently wrong answer.
+ */
+function reasonFor(number: number, errors: { message?: string }[] | undefined): string {
+  const own = errors?.find((e) => typeof e.message === "string" && e.message.includes(String(number)));
+  return own?.message ?? errors?.[0]?.message ?? "no pullRequest node in the response";
 }
 
 /**

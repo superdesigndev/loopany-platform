@@ -7,7 +7,7 @@
  * run without a DB (an unknown view and a production request both return before
  * `read.js` is loaded).
  */
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import { Route } from './api.graph.$'
 
@@ -60,6 +60,23 @@ describe('/api/graph enablement gate', () => {
 })
 
 describe('/api/graph routing', () => {
+  /**
+   * WARM THE HANDLER'S DYNAMIC IMPORTS FIRST.
+   *
+   * Unlike the gate cases above, a routing case gets PAST the gate - so the first one
+   * pays a cold `import('../graph/workspace/read.js')`, which pulls in Drizzle, pglite
+   * and the artifact-format dist. On a loaded machine (this file running beside the
+   * graph integration suites) that cold import alone can outlast the 5s default, and
+   * the test fails for a reason that has nothing to do with routing.
+   *
+   * Warming it here fixes the cause rather than raising the timeout: the assertions
+   * then measure what they are about. It is scoped to THIS describe on purpose, so the
+   * gate cases above keep costing nothing and touching nothing.
+   */
+  beforeAll(async () => {
+    await import('../graph/workspace/read.js')
+  }, 30_000)
+
   test('an unknown view is a 404, not a crash', async () => {
     const res = await get('nope')
     expect(res.status).toBe(404)

@@ -1,7 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { parseRepoAllowlist, type AgentConfig } from "./config.js";
-import { batchQuery, referencedPrs, toObserved, type Gh, type PrBatch } from "./gh.js";
+import { batchQuery, ghClient, referencedPrs, runGh, toObserved, type Gh, type PrBatch } from "./gh.js";
 import { groupByRepo, sweepOnce, RATE_LIMIT_FLOOR, REPO_CONCURRENCY } from "./sensing.js";
 import type { ObservedPr, WatchItem, WatchListResponse } from "./types.js";
 
@@ -242,6 +245,97 @@ describe("the sweep is honest about what it could not read", () => {
     const sweep = await sweepOnce(config({ allowedRepos: parseRepoAllowlist("acme/widgets") }), h.deps);
     expect(sweep.reported).toBe(1);
     expect(h.reported[0]!.observations[0]!.merged).toBe(true);
+  });
+});
+
+describe("a PARTIAL batch response keeps the PRs that did resolve", () => {
+  /** The real client over an injected runner, so this exercises `fetchPrs`'s own
+   *  parsing rather than a fake of it. */
+  const client = (body: string) => ghClient(async () => body);
+
+  const partial = JSON.stringify({
+    data: {
+      repository: {
+        p159: { number: 159, state: "OPEN", merged: false, isDraft: false, title: "a real one", body: "" },
+        p1241: null,
+      },
+      rateLimit: { remaining: 4321, cost: 1 },
+    },
+    errors: [{ message: "Could not resolve to a PullRequest with the number of 1241." }],
+  });
+
+  it("resolves the good field and reports only the bad one as missing", async () => {
+    // THE REGRESSION THIS EXISTS FOR: a batch of five where four PRs do not exist used
+    // to lose the fifth too, so a real pull request stayed permanently unobserved
+    // while the sweep cheerfully reported "5 unresolved". Caught by a live demo, and
+    // pinned here so it cannot come back.
+    const batch = await client(partial).fetchPrs("superdesigndev/loopany-platform", [159, 1241]);
+    expect([...batch.observed.keys()]).toEqual([159]);
+    expect(batch.observed.get(159)!.title).toBe("a real one");
+    expect(batch.missing).toEqual([
+      { number: 1241, why: "Could not resolve to a PullRequest with the number of 1241." },
+    ]);
+    // The live rate-limit budget still arrives, which is what lets the sweep stop early.
+    expect(batch.rateLimitRemaining).toBe(4321);
+  });
+
+  it("attributes each missing number to ITS OWN error, not to errors[0]", async () => {
+    const body = JSON.stringify({
+      data: { repository: { p7: null, p8: null } },
+      errors: [
+        { message: "Could not resolve to a PullRequest with the number of 7." },
+        { message: "Could not resolve to a PullRequest with the number of 8." },
+      ],
+    });
+    const batch = await client(body).fetchPrs("acme/widgets", [7, 8]);
+    expect(batch.missing.find((m) => m.number === 7)!.why).toContain("number of 7");
+    expect(batch.missing.find((m) => m.number === 8)!.why).toContain("number of 8");
+  });
+
+  it("runGh KEEPS a body printed alongside a non-zero exit", async () => {
+    // The other half of the fix, against a REAL child process: `gh api graphql` prints
+    // `{data, errors}` and exits 1 when any batched field fails. A runner that treated
+    // exit-1 as "no data" is exactly what lost the good PRs, so the tolerance is
+    // asserted here rather than assumed.
+    const stub = path.join(os.tmpdir(), `loopany-gh-stub-${process.pid}.sh`);
+    fs.writeFileSync(stub, `#!/bin/sh\necho '{"data":{"repository":{"p1":null}},"errors":[{"message":"nope"}]}'\nexit 1\n`, {
+      mode: 0o755,
+    });
+    const previous = process.env.LOOPANY_AGENT_GH_BIN;
+    process.env.LOOPANY_AGENT_GH_BIN = stub;
+    try {
+      await expect(runGh(["api", "graphql", "-f", "query=x"])).resolves.toContain('"errors"');
+    } finally {
+      if (previous === undefined) delete process.env.LOOPANY_AGENT_GH_BIN;
+      else process.env.LOOPANY_AGENT_GH_BIN = previous;
+      fs.rmSync(stub, { force: true });
+    }
+  });
+
+  it("runGh REJECTS a non-zero exit that printed no JSON at all", async () => {
+    const stub = path.join(os.tmpdir(), `loopany-gh-stub-bare-${process.pid}.sh`);
+    fs.writeFileSync(stub, '#!/bin/sh\necho "gh: not logged in" >&2\nexit 1\n', { mode: 0o755 });
+    const previous = process.env.LOOPANY_AGENT_GH_BIN;
+    process.env.LOOPANY_AGENT_GH_BIN = stub;
+    try {
+      await expect(runGh(["api", "graphql", "-f", "query=x"])).rejects.toThrow(/not logged in/);
+    } finally {
+      if (previous === undefined) delete process.env.LOOPANY_AGENT_GH_BIN;
+      else process.env.LOOPANY_AGENT_GH_BIN = previous;
+      fs.rmSync(stub, { force: true });
+    }
+  });
+
+  it("a transport failure with NO body is still a failure", async () => {
+    const gh = ghClient(async () => {
+      throw new Error("gh: not logged in");
+    });
+    const batch = await gh.fetchPrs("acme/widgets", [1, 2]);
+    // Every number in the chunk comes back missing, with the reason - one unreachable
+    // repo must not abort a sweep over the others.
+    expect(batch.observed.size).toBe(0)
+    expect(batch.missing.map((m) => m.number)).toEqual([1, 2]);
+    expect(batch.missing[0]!.why).toContain("not logged in");
   });
 });
 

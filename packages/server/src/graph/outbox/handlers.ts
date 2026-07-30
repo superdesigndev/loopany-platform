@@ -725,10 +725,18 @@ const dispatchRun: ActionHandler = async ({ tx, action, now }) => {
   const stand = standDownReason(holder, p.requires);
   if (stand) return { ok: true, detail: stand };
 
-  // The instance supplies the scope its static declaration could not know (its
-  // workdir, its repos) - and can only FILL what the declaration left open, never
-  // widen what it pinned. See `withObjectScope`.
-  const parsed = parseInstruction(action.id, withObjectScope(p, holder.payload));
+  // The instance supplies what its static declaration could not know - the scope
+  // (its workdir, its repos) and the LABEL. Both can only FILL what the declaration
+  // left open, never widen or override what it pinned (see `withObjectScope`).
+  //
+  // The label matters more than it looks: a standing intent's first line is identical
+  // across every instance of a type ("Carry out the work described in
+  // context.object.brief"), so falling back to it would name every run in the Timeline
+  // and every report doc the same thing. The task's own title is the human-meaningful
+  // name, and the task is what a person actually recognises.
+  const declared = withObjectScope(p, holder.payload) as Record<string, unknown>;
+  if (declared.label === undefined && holder.title) declared.label = holder.title;
+  const parsed = parseInstruction(action.id, declared);
   if (!parsed.ok) return { ok: false, retryable: false, detail: parsed.why };
   const spec = parsed.spec;
 

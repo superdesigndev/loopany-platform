@@ -228,6 +228,21 @@ describe('probe: approving a dispatch writes exactly one run work order', () => 
     expect(instruction.instructionOf(after[0]!.payload)!.runId).toBe(`run-${action.id}`)
   })
 
+  it('names the run after the TASK, not after the standing intent', async () => {
+    // A standing intent's first line is identical for every instance of a type ("Carry
+    // out the work described in context.object.brief"), so falling back to it named
+    // every run in the Timeline and every report doc the same thing - which a live
+    // demo made obvious immediately. The task's title is what a person recognises.
+    const task = await pendingTask('Survey the scratch directory. Read-only.')
+    const { directives } = await approve(task.id)
+    const spec = instruction.instructionOf(directives[0]!.payload)!
+    expect(spec.label).toBe(task.title)
+    expect(spec.label).not.toContain('context.object.brief')
+    // The intent itself is untouched - it is the standing instruction, and the label is
+    // only a name for it.
+    expect(spec.intent).toContain('context.object.brief')
+  })
+
   it('the instance can FILL the scope its static declaration left open, never widen it', async () => {
     // `withObjectScope`'s direction, asserted end to end: the task supplies its own
     // repos, and the declaration's pinned `writes` is untouched by anything the
@@ -372,6 +387,42 @@ describe('probe: run-finished advances the dispatching task exactly once', () =>
     expect(String((doc.payload as Record<string, unknown>).source)).toContain('Three files, nothing to do.')
     const produced = await graph.edgesFrom(undefined, task.id, 'produces')
     expect(produced.map((e) => e.dstId)).toContain(doc.id)
+  })
+
+  it("titles an untitled report after the dispatching task", async () => {
+    // The agent reports a body and usually no title. The honest default is the task's
+    // own title, for the same reason the run's label is: a standing intent names every
+    // instance identically, and the Library would fill up with identical rows.
+    const task = await pendingTask('Check the deploy logs for yesterday')
+    const { directives } = await approve(task.id)
+    await claim('agent-a')
+    const finished = await runs.runFinished({
+      now: SOON,
+      agent: 'agent-a',
+      directiveId: directives[0]!.id,
+      outcome: 'success',
+      exitCode: 0,
+      report: { body: 'nothing unusual' },
+    })
+    expect(finished.ok).toBe(true)
+    if (!finished.ok) return
+    const doc = (await graph.getObject(undefined, finished.report!.objectId))!
+    expect(doc.title).toBe(task.title)
+    // A run that DOES name its product wins - it knows what it made.
+    const other = await pendingTask('Another one')
+    const second = await approve(other.id)
+    await claim('agent-a')
+    const named = await runs.runFinished({
+      now: SOON,
+      agent: 'agent-a',
+      directiveId: second.directives[0]!.id,
+      outcome: 'success',
+      exitCode: 0,
+      report: { title: 'Deploy log digest', body: 'x' },
+    })
+    expect(named.ok).toBe(true)
+    if (!named.ok) return
+    expect((await graph.getObject(undefined, named.report!.objectId))!.title).toBe('Deploy log digest')
   })
 
   it('a re-delivered report changes nothing at all', async () => {

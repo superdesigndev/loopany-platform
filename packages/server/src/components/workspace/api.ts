@@ -137,6 +137,7 @@ export interface Summary {
   /** Outward effects queued or in flight - decisions on their way out. */
   effectsInFlight: number
   sensing: SensingHealth
+  work: { awaiting: number; inFlight: number }
 }
 
 /**
@@ -196,6 +197,33 @@ export interface EffectsView {
   unsettled: number
 }
 
+/**
+ * WORK a person has been asked to let a machine DO - the runs bridge's read side.
+ *
+ * Separate from the Library on purpose: that lists what the fleet has MADE, this lists
+ * what it is asking to do. An `agent-task` is not an artifact - it has no body - so
+ * giving it a Library row would have meant either inventing a content category for it
+ * or letting the artifact list mean two things.
+ */
+export interface WorkRow {
+  id: string
+  title: string
+  brief: string | null
+  status: string
+  age: string
+  verdict?: { objectId: string; transition: string; label: string; obligation: string }
+  runId?: string
+  runState?: 'started' | 'success' | 'failure'
+  summary?: string
+  reportId?: string
+}
+
+export interface WorkView {
+  items: WorkRow[]
+  awaiting: number
+  inFlight: number
+}
+
 /** What the `notify` action produced - a verdict's visible consequence. */
 export interface NotificationRow {
   id: string
@@ -246,6 +274,7 @@ export const fetchTimeline = () => getJson<TimelineView>('/api/graph/timeline')
 export const fetchAttention = () => getJson<AttentionView>('/api/graph/attention')
 export const fetchNotifications = () => getJson<NotificationsView>('/api/graph/notifications')
 export const fetchEffects = () => getJson<EffectsView>('/api/graph/effects')
+export const fetchWork = () => getJson<WorkView>('/api/graph/work')
 
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {

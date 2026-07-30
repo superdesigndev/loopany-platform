@@ -3,6 +3,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react
 import {
   fetchAttention,
   fetchEffects,
+  fetchWork,
   fetchLibrary,
   fetchNotifications,
   fetchSummary,
@@ -21,6 +22,8 @@ import {
   type SystemView,
   type TimelineEntry,
   type TimelineView,
+  type WorkRow,
+  type WorkView,
 } from './api'
 
 /**
@@ -392,6 +395,78 @@ function AttentionSection({
   )
 }
 
+// ---- Work: the runs bridge ----
+
+/**
+ * WORK A PERSON IS BEING ASKED TO LET A MACHINE DO.
+ *
+ * The other half of "approve in the platform". Outward effects say what a verdict did
+ * to the world; this says what the fleet wants to GO AND DO, and then what its run
+ * actually did. Both exist for the same reason: a decision whose consequence you have
+ * to go and look for somewhere else is a decision the workspace only pretended to make.
+ *
+ * The brief is shown VERBATIM. A person approving a run is approving an instruction an
+ * agent will follow, so summarising it here would be the one place a summary is
+ * actually dangerous.
+ */
+function WorkSection({ work, onVerdict, busyId }: { work: WorkView; onVerdict: (row: WorkRow) => void; busyId: string | null }) {
+  if (!work.items.length) return null
+  return (
+    <section className="effects-section">
+      <div className="section-heading">
+        <div>
+          <span className="effects-dot" />
+          <h2>Work</h2>
+          <span>{work.items.length}</span>
+        </div>
+        <p>
+          {work.awaiting
+            ? `${work.awaiting} waiting on your go-ahead — a machine agent runs these, not this server`
+            : work.inFlight
+              ? `${work.inFlight} dispatched and still running`
+              : 'Every dispatched run has reported back'}
+        </p>
+      </div>
+      <div className="effects-list">
+        {work.items.map((row) => (
+          <article className={`effect-row is-${workState(row)}`} key={row.id}>
+            <span className="effect-icon">
+              <Glyph name="run" />
+            </span>
+            <div className="effect-main">
+              <h3>{row.title}</h3>
+              <p title={row.brief ?? undefined}>{row.summary ?? row.brief ?? workPhrase(row)}</p>
+            </div>
+            <span className={`effect-state is-${workState(row)}`}>{row.status}</span>
+            {row.verdict && (
+              <button className="verdict-button" onClick={() => onVerdict(row)} disabled={busyId === row.id}>
+                {busyId === row.id ? '…' : row.verdict.label}
+              </button>
+            )}
+            <time>{row.age}</time>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+/** The row's visual state, borrowed from the effects row so the two read alike. */
+function workState(row: WorkRow): string {
+  if (row.verdict) return 'pending'
+  if (row.runState === 'failure' || row.status === 'failed') return 'failed'
+  if (row.runState === 'success' || row.status === 'done') return 'done'
+  if (row.status === 'dispatched') return 'claimed'
+  return 'pending'
+}
+
+/** What a row means when neither the run nor the brief has said anything yet. */
+function workPhrase(row: WorkRow): string {
+  if (row.status === 'dispatched') return 'dispatched — waiting for a machine agent to run it'
+  if (row.status === 'declined') return 'you declined this run'
+  return 'staged'
+}
+
 // ---- Outward effects ----
 
 /**
@@ -523,16 +598,20 @@ function LibraryPane({
   library,
   attention,
   effects,
+  work,
   highlighted,
   onVerdict,
+  onWorkVerdict,
   onResolveAttention,
   busyId,
 }: {
   library: LibraryView
   attention: AttentionView | null
   effects: EffectsView | null
+  work: WorkView | null
   highlighted: string[]
   onVerdict: (a: LibraryArtifact) => void
+  onWorkVerdict: (row: WorkRow) => void
   onResolveAttention: (item: AttentionItem, verb: 'acknowledge' | 'retry') => void
   busyId: string | null
 }) {
@@ -570,6 +649,7 @@ function LibraryPane({
         }
       />
       {attention && <AttentionSection attention={attention} onResolve={onResolveAttention} busyId={busyId} />}
+      {work && <WorkSection work={work} onVerdict={onWorkVerdict} busyId={busyId} />}
       {effects && <EffectsSection effects={effects} />}
       <section className="needs-section">
         <div className="section-heading">
@@ -791,6 +871,7 @@ export function WorkspaceView() {
   const [timeline, setTimeline] = useState<TimelineView | null>(null)
   const [attention, setAttention] = useState<AttentionView | null>(null)
   const [effects, setEffects] = useState<EffectsView | null>(null)
+  const [work, setWork] = useState<WorkView | null>(null)
   const [notifications, setNotifications] = useState<NotificationsView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [highlighted, setHighlighted] = useState<string[]>([])
@@ -799,13 +880,14 @@ export function WorkspaceView() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, sys, lib, tl, att, eff, notes] = await Promise.all([
+      const [s, sys, lib, tl, att, eff, wk, notes] = await Promise.all([
         fetchSummary(),
         fetchSystem(),
         fetchLibrary(),
         fetchTimeline(),
         fetchAttention(),
         fetchEffects(),
+        fetchWork(),
         fetchNotifications(),
       ])
       setSummary(s)
@@ -814,6 +896,7 @@ export function WorkspaceView() {
       setTimeline(tl)
       setAttention(att)
       setEffects(eff)
+      setWork(wk)
       setNotifications(notes)
       setError(null)
     } catch (err) {
@@ -846,6 +929,37 @@ export function WorkspaceView() {
           : ''
         setNotice(
           `${artifact.title} → ${result.status} (closed ${result.closed.join(', ') || 'nothing'}; event ${result.eventId})${effects}`,
+        )
+      } else {
+        setNotice(`refused: ${result.code} — ${result.message}`)
+      }
+      await refresh()
+      setBusyId(null)
+    },
+    [refresh],
+  )
+
+  /**
+   * The go-ahead on a piece of WORK. Same write path as any other verdict - it runs
+   * `approve` on the `agent-task` through `applyTransition` - but the consequence is
+   * different in kind: the outbox writes a run work order, and the RUN itself happens on
+   * a machine afterwards. So the notice says the dispatch was queued rather than
+   * claiming the work is done; the row's own state is what reports the outcome, when the
+   * agent reports it back.
+   */
+  const onWorkVerdict = useCallback(
+    async (row: WorkRow) => {
+      if (!row.verdict) return
+      setBusyId(row.id)
+      setNotice(null)
+      const result = await postVerdict(row.verdict.objectId, row.verdict.transition)
+      if (result.ok) {
+        const queued = result.effects?.done ?? 0
+        setNotice(
+          `${row.title} → ${result.status}` +
+            (queued
+              ? ` · ${queued} work order${queued === 1 ? '' : 's'} queued — a machine agent runs it next`
+              : ' (nothing queued)'),
         )
       } else {
         setNotice(`refused: ${result.code} — ${result.message}`)
@@ -927,8 +1041,10 @@ export function WorkspaceView() {
                 library={library}
                 attention={attention}
                 effects={effects}
+                work={work}
                 highlighted={highlighted}
                 onVerdict={onVerdict}
+                onWorkVerdict={onWorkVerdict}
                 onResolveAttention={onResolveAttention}
                 busyId={busyId}
               />

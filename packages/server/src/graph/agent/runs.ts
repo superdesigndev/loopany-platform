@@ -274,7 +274,10 @@ export async function runFinished(input: RunFinishedInput): Promise<RunFinishedO
           directive,
           object,
           runId,
-          title: clip(input.report.title) ?? spec?.label ?? "Run report",
+          // The run may name its own product; otherwise the DISPATCHING OBJECT's
+          // title is the honest default - it is what a person recognises, and a
+          // standing intent's first line is the same string for every instance.
+          title: clip(input.report.title) ?? object.title ?? spec?.label ?? "Run report",
           body: input.report.body,
           now: input.now,
         })
