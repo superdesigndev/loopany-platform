@@ -27,7 +27,20 @@
  * fresh obligation every time, which a key on the long-lived loop or doc could
  * never do.
  */
-import type { TypeSpec } from "../types.js";
+import type { EntranceClass, TypeSpec } from "../types.js";
+
+/**
+ * Who may take a review from `queued` into its gate state.
+ *
+ * TWO entrances, deliberately: the AGENT RUN that produced the content (the
+ * ordinary path, and what the seeded history replays), and the engine RULE that
+ * noticed content with no reviewer - the `enqueue-review` outbox action, which
+ * creates the shepherd and opens its gate with `entrance: "rule"` and the action
+ * id as its actor. Leaving it unrestricted would have worked too, and would also
+ * have admitted `human` and `clock`, neither of which should ever enter a review
+ * gate.
+ */
+const OPENS_A_REVIEW: readonly EntranceClass[] = ["agent-run", "rule"];
 
 /** The team every demo row is scoped to. The graph tables key on team id and
  *  hold no FK to `teams`, so the demo is self-contained and never collides with
@@ -68,6 +81,36 @@ export const LOOP_SPEC: TypeSpec = {
     { name: "evolve", from: ["idle"], to: "idle", entrance: "agent-run" },
     // An owner-requested change, dispatched as one agent pass.
     { name: "edit", from: ["idle"], to: "idle", entrance: "human" },
+    /**
+     * The run handed its products to review - another auditable self-transition,
+     * the same shape as `skip`/`evolve`/`edit` (decision 8's clarification).
+     *
+     * This is the one place a REVIEW IS CREATED BY THE ENGINE rather than by a
+     * seeder: its `enqueue-review` action fans out over the loop's `produces`
+     * edges and, for every unpublished post with nothing already reviewing it,
+     * the executor creates the shepherd task through `applyTransition` (entrance
+     * `rule`, actor = the action id). A static spec cannot name instances, so the
+     * SELECTOR is the declarative answer - "the posts I make", resolved at
+     * execution time. Idempotent twice over: the shepherd's id is derived from
+     * `(action, doc)`, and a doc that already has a reviewer is skipped.
+     */
+    {
+      name: "queue-review",
+      from: ["idle"],
+      to: "idle",
+      entrance: "agent-run",
+      actions: [
+        {
+          kind: "enqueue-review",
+          payload: {
+            queue: "publish",
+            review: "publish-review",
+            via: "produces",
+            select: { type: "post", unpublished: true },
+          },
+        },
+      ],
+    },
     { name: "pause", from: ["idle", "running"], to: "paused" },
     { name: "finish", from: ["idle", "running", "paused"], to: "completed", entrance: "agent-run" },
   ],
@@ -104,7 +147,10 @@ export const MERGE_REVIEW_SPEC: TypeSpec = {
       name: "submit",
       from: ["queued"],
       to: "awaiting-verdict",
-      entrance: "agent-run",
+      // EITHER the agent run that produced the content, OR the engine rule that
+      // noticed content with no reviewer (`enqueue-review`). Not a human - a
+      // person does not open their own review queue - and not the clock.
+      entrance: OPENS_A_REVIEW,
       opens: [{ key: "merge-verdict", class: "human-verdict", label: "Approve the merge" }],
       actions: [{ kind: "enqueue-review", payload: { queue: "merge" } }],
     },
@@ -167,7 +213,10 @@ export const PUBLISH_REVIEW_SPEC: TypeSpec = {
       name: "ready",
       from: ["queued"],
       to: "awaiting-publish",
-      entrance: "agent-run",
+      // EITHER the agent run that produced the content, OR the engine rule that
+      // noticed content with no reviewer (`enqueue-review`). Not a human - a
+      // person does not open their own review queue - and not the clock.
+      entrance: OPENS_A_REVIEW,
       opens: [{ key: "publish-verdict", class: "human-verdict", label: "Review and publish" }],
       actions: [{ kind: "enqueue-review", payload: { queue: "publish" } }],
     },
@@ -194,7 +243,10 @@ export const DECISION_REVIEW_SPEC: TypeSpec = {
       name: "raise",
       from: ["queued"],
       to: "awaiting-decision",
-      entrance: "agent-run",
+      // EITHER the agent run that produced the content, OR the engine rule that
+      // noticed content with no reviewer (`enqueue-review`). Not a human - a
+      // person does not open their own review queue - and not the clock.
+      entrance: OPENS_A_REVIEW,
       opens: [{ key: "policy-verdict", class: "human-verdict", label: "Your call on the policy" }],
       actions: [{ kind: "enqueue-review", payload: { queue: "decision" } }],
     },
@@ -221,7 +273,10 @@ export const SHIP_REVIEW_SPEC: TypeSpec = {
       name: "propose",
       from: ["queued"],
       to: "awaiting-review",
-      entrance: "agent-run",
+      // EITHER the agent run that produced the content, OR the engine rule that
+      // noticed content with no reviewer (`enqueue-review`). Not a human - a
+      // person does not open their own review queue - and not the clock.
+      entrance: OPENS_A_REVIEW,
       opens: [{ key: "ship-verdict", class: "human-verdict", label: "Review the candidate" }],
       actions: [{ kind: "enqueue-review", payload: { queue: "ship" } }],
     },

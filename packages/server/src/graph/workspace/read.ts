@@ -36,7 +36,9 @@ import {
   type GraphObject,
 } from "../../db/graph-schema.js";
 import * as graph from "../../db/graphStore.js";
-import { applyTransition, type ApplyTransitionResult } from "../applyTransition.js";
+import { applyTransition, CHAIN_PARK_KEY, type ApplyTransitionResult } from "../applyTransition.js";
+import { attentionView as attention, type AttentionView } from "../outbox/attention.js";
+import { drainOutbox } from "../outbox/executor.js";
 import type { TypeSpec } from "../types.js";
 import { CATEGORY_OF_TYPE, DEMO_TEAM_ID, DEMO_USER_ID, LIBRARY_CATEGORIES, SHEPHERD_TYPES } from "./specs.js";
 
@@ -671,6 +673,12 @@ export async function inboxView(teamId = DEMO_TEAM_ID): Promise<{ items: InboxIt
 
   const items: InboxItem[] = [];
   for (const o of open) {
+    // A PARKED CHAIN is an attention item, not a verdict. It holds a
+    // human-verdict obligation (that is what makes parking terminal-until-verdict),
+    // but no spec declares a transition that closes it - so listing it here would
+    // put a row with no button among rows that all have one. `attentionView` owns
+    // it, and acknowledging it there closes this obligation.
+    if (o.key === CHAIN_PARK_KEY) continue;
     // Every obligation now sits on a TASK (decision 8) - a shepherd or a loop.
     const task = byId.get(o.objectId);
     if (!task) continue;
@@ -705,6 +713,16 @@ export interface VerdictInput {
   userId?: string;
 }
 
+/** What the verdict's own consequences did, so the UI can say the effect landed
+ *  rather than leave the person guessing whether anything happened. */
+export interface VerdictEffects {
+  claimed: number;
+  done: number;
+  deadLettered: number;
+}
+
+export type RecordVerdictResult = ApplyTransitionResult & { effects?: VerdictEffects };
+
 /**
  * Close a human-verdict gate from the UI. This is a thin, honest wrapper: it
  * supplies `entrance: "human"` and the acting user, and hands everything else to
@@ -712,82 +730,94 @@ export interface VerdictInput {
  * from the object's current state, or that a gate state forbids to a non-human,
  * comes back as a typed refusal rather than a partial write.
  *
- * It first runs `drainEngineLocalActions`, because the outbox EXECUTOR is a
- * later unit and a verdict that enters a terminal state is (correctly) refused
- * while the gate's own `enqueue-review` action is still pending. Standing in for
- * the executor here is deliberate and bounded - see that function's note.
+ * ── the executor, before and after ──────────────────────────────────────────
+ *
+ * BEFORE: drain this object's queue. A verdict that enters a terminal state is
+ * (correctly) refused while the gate's own `enqueue-review` action is unsettled,
+ * so the attested close needs a clear queue to attest to. This is no longer a
+ * stand-in - it is `outbox/executor.ts` doing its real job, one object's worth.
+ *
+ * AFTER: drain again, for the verdict's OWN consequences - the `notify` a person
+ * will see and the `update-fields` that flips `published` on the tracked content.
+ * The background loop would pick these up within a tick anyway; doing it inline
+ * means the response can REPORT the effect, which is the difference between "we
+ * recorded your decision" and "here is what it caused".
  */
-export async function recordVerdict(input: VerdictInput): Promise<ApplyTransitionResult> {
-  // BEFORE: clear whatever the gate-opening transition left pending, or a
-  // terminal verdict is (correctly) refused for pending actions.
-  await drainEngineLocalActions(input.objectId, input.now);
+export async function recordVerdict(input: VerdictInput): Promise<RecordVerdictResult> {
+  await drainObjectActions(input.objectId, input.now);
   const result = await applyTransition({
     objectId: input.objectId,
     transition: input.transition,
     actor: { entrance: "human", actorId: input.userId ?? DEMO_USER_ID },
     now: input.now,
   });
-  // AFTER: the verdict's OWN consequences - the `update-fields` that flips
-  // `published` on the tracked content. A real executor would drain these on its
-  // next pass; without this the decision is recorded but never applied, which is
-  // exactly the half-done state the outbox exists to prevent.
-  if (result.ok) await drainEngineLocalActions(input.objectId, input.now);
-  return result;
+  if (!result.ok) return result;
+  const effects = await drainObjectActions(input.objectId, input.now);
+  return { ...result, effects };
 }
 
 /**
- * MINIMAL EXECUTOR STAND-IN. Marks this object's pending ENGINE-LOCAL actions
- * (R0/R1/R2) delivered, exactly as the real outbox executor will.
+ * Drain the outbox, then report what it did.
  *
- * The ceiling is preserved and is the whole point: an OUTWARD (R3) or GOVERNANCE
- * (R4) action is never touched here. Those carry an approval event by schema
- * CHECK, and delivering one is an effect on the world - not something a read
- * surface gets to do on the way to rendering a page. If one is pending, the
- * terminal-state guard will refuse the verdict, which is the correct outcome.
- *
- * Returns how many rows it stamped, so the caller can say so rather than have it
- * happen invisibly.
+ * The executor claims by DUE-NESS, not by object (a per-object claim query would
+ * be a second scan shape to keep correct), so a verdict's drain may also settle a
+ * few unrelated rows that were already due. That is the executor working, not a
+ * side effect worth avoiding - the numbers reported back are simply the pass's,
+ * and the background loop would have done the same thing a tick later.
  */
-export async function drainEngineLocalActions(objectId: string, now: string): Promise<number> {
+async function drainObjectActions(objectId: string, now: string): Promise<VerdictEffects> {
   const pending = await graph.listPendingActions(undefined, { objectId });
-  let drained = 0;
-  for (const action of pending) {
-    if (action.consequenceClass === "R3" || action.consequenceClass === "R4") continue;
-    if (action.kind === "update-fields") await applyUpdateFields(action, now);
-    if (await graph.markActionDelivered(undefined, action.id, now)) drained++;
-  }
-  return drained;
+  if (!pending.length) return { claimed: 0, done: 0, deadLettered: 0 };
+  const r = await drainOutbox({ now, teamId: pending[0]!.teamId, limit: 50, maxPasses: 8 });
+  return { claimed: r.claimed, done: r.done, deadLettered: r.deadLettered };
+}
+
+// ---- Attention + notifications: the executor's two visible surfaces ----
+
+/**
+ * The Attention section's payload. Deliberately a SEPARATE view from the inbox:
+ * "a person must decide something" and "a consequence is stuck" are different
+ * feelings, and the design's §8 inbox aggregate is only useful if the second one
+ * cannot be lost among the first.
+ */
+export async function attentionView(teamId = DEMO_TEAM_ID): Promise<AttentionView> {
+  return attention(teamId);
+}
+
+export interface NotificationRow {
+  id: string;
+  title: string;
+  body: string | null;
+  channel: string;
+  createdAt: string;
+  age: string;
+  read: boolean;
+  objectId: string | null;
 }
 
 /**
- * The one action kind this stand-in actually PERFORMS rather than just stamping.
- *
- * A shepherd's approving transition declares `update-fields` with `via: "tracks"`
- * — "write these fields onto the thing I track". The target is instance-specific,
- * so a static spec cannot name it; the executor resolves it by following the
- * task's `tracks` edge. That is how `published` becomes true on a doc without the
- * doc ever having a state machine (decision 8): the TASK records the decision,
- * and its consequence lands on the content as a plain field write.
- *
- * A MIRROR target is refused. A mirror is an external fact we observe, and
- * writing our verdict into it would be recording a belief as an observation.
+ * What the `notify` action produced - the proof that approving a gate CAUSES
+ * something. Read-only; marking read is a separate explicit write.
  */
-async function applyUpdateFields(action: { objectId: string | null; payload: unknown }, now: string): Promise<void> {
-  const payload = (action.payload ?? {}) as { via?: unknown; set?: unknown };
-  const set = payload.set as Record<string, unknown> | undefined;
-  if (payload.via !== "tracks" || !set || !action.objectId) return;
-
-  const edge = (await graph.edgesFrom(undefined, action.objectId, "tracks"))[0];
-  if (!edge) return;
-  const target = await graph.getObject(undefined, edge.dstId);
-  if (!target || target.archetype === "mirror") return;
-
-  await graph.updateObjectFields(
-    undefined,
-    target.id,
-    { payload: { ...((target.payload ?? {}) as Record<string, unknown>), ...set } },
-    now,
-  );
+export async function notificationsView(
+  teamId = DEMO_TEAM_ID,
+  limit = 50,
+): Promise<{ items: NotificationRow[]; unread: number }> {
+  const rows = await graph.listNotifications(undefined, teamId, limit);
+  const nowMs = rows.length ? Date.parse(rows[0]!.createdAt) : Date.now();
+  return {
+    items: rows.map((n) => ({
+      id: n.id,
+      title: n.title,
+      body: n.body,
+      channel: n.channel,
+      createdAt: n.createdAt,
+      age: relativeAge(n.createdAt, Math.max(nowMs, Date.parse(n.createdAt))),
+      read: n.readAt !== null,
+      objectId: n.objectId,
+    })),
+    unread: await graph.countUnreadNotifications(undefined, teamId),
+  };
 }
 
 /** Workspace-level counters for the shell (sidebar badge, machine line). */
@@ -797,16 +827,32 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
   needsYou: number;
   events: number;
   pendingActions: number;
+  attention: number;
+  notifications: number;
+  unreadNotifications: number;
 }> {
   const { objects, obligations } = await load(teamId);
   const pending = await graph.listPendingActions(undefined, { teamId });
+  const att = await attention(teamId);
+  const notes = await graph.listNotifications(undefined, teamId, 200);
   return {
     loops: objects.filter((o) => o.type === "loop" && o.status !== "planned").length,
     artifacts: objects.filter((o) => CATEGORY_OF_TYPE[o.type]).length,
-    needsYou: obligations.filter((o) => o.closedByEvent === null && o.class === "human-verdict").length,
+    // A parked chain is counted by `attention`, not here - see `inboxView`.
+    needsYou: obligations.filter(
+      (o) => o.closedByEvent === null && o.class === "human-verdict" && o.key !== CHAIN_PARK_KEY,
+    ).length,
     events: await graph.countEvents(undefined, teamId),
     pendingActions: pending.length,
+    attention: att.items.length,
+    notifications: notes.length,
+    unreadNotifications: await graph.countUnreadNotifications(undefined, teamId),
   };
+}
+
+/** Mark every notification read (an explicit human action from the UI). */
+export async function markNotificationsRead(teamId = DEMO_TEAM_ID, now?: string): Promise<number> {
+  return graph.markNotificationsRead(undefined, teamId, now ?? new Date().toISOString());
 }
 
 export async function objectsForTeam(teamId = DEMO_TEAM_ID): Promise<GraphObject[]> {

@@ -8,7 +8,12 @@ import { createFileRoute } from '@tanstack/react-router'
  *   GET  /api/graph/library    artifacts with sanitized rendered HTML
  *   GET  /api/graph/timeline   the event feed (?limit=N)
  *   GET  /api/graph/inbox      open human-verdict obligations
+ *   GET  /api/graph/attention  dead-letters / parked chains / refused closes
+ *   GET  /api/graph/notifications  what the `notify` action produced
  *   POST /api/graph/verdict    {objectId, transition} → applyTransition (human)
+ *   POST /api/graph/attention  {kind, ref, verb} → acknowledge | retry (human)
+ *   POST /api/graph/notifications/read   mark every notification read
+ *   POST /api/graph/drain      run one outbox pass now (the executor also loops)
  *   POST /api/graph/seed       replay a production snapshot into THIS server's db
  *
  * ── the gate ────────────────────────────────────────────────────────────────
@@ -91,6 +96,10 @@ export const Route = createFileRoute('/api/graph/$')({
           }
           case 'inbox':
             return Response.json(await read.inboxView())
+          case 'attention':
+            return Response.json(await read.attentionView())
+          case 'notifications':
+            return Response.json(await read.notificationsView())
           default:
             return notFound()
         }
@@ -112,6 +121,9 @@ export const Route = createFileRoute('/api/graph/$')({
         const gate = await guard()
         if (!gate.ok) return gate.response
         if (action === 'verdict') return verdict(request, gate.userId)
+        if (action === 'attention') return resolveAttention(request, gate.userId)
+        if (action === 'notifications/read') return markNotificationsRead()
+        if (action === 'drain') return drain()
         if (action === 'seed') return seed(request)
         return notFound()
       },
@@ -152,6 +164,71 @@ async function verdict(request: Request, userId: string | null): Promise<Respons
     eventId: result.event.id,
     closed: result.closed.map((o) => o.key),
     actions: result.actions.map((a) => ({ id: a.id, kind: a.kind, consequenceClass: a.consequenceClass })),
+    // What the verdict CAUSED. The whole point of the executor: a decision the
+    // response can only describe is a decision that did nothing.
+    ...(result.effects ? { effects: result.effects } : {}),
+  })
+}
+
+/**
+ * Resolve one attention item. Both verbs are HUMAN-entrance events through the
+ * counter (`outbox/attention.ts`), so clearing a stuck consequence is as
+ * attributable as approving a gate - which is the point: an attention item that
+ * could be dismissed without a record would be a flag, not a computed item.
+ */
+async function resolveAttention(request: Request, userId: string | null): Promise<Response> {
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return Response.json({ error: 'body must be JSON' }, { status: 400 })
+  }
+  const { kind, ref, verb } = (body ?? {}) as { kind?: unknown; ref?: unknown; verb?: unknown }
+  const { ATTENTION_KINDS } = await import('../graph/types.js')
+  if (typeof kind !== 'string' || !(ATTENTION_KINDS as readonly string[]).includes(kind)) {
+    return Response.json({ error: `kind must be one of ${ATTENTION_KINDS.join('|')}` }, { status: 400 })
+  }
+  if (typeof ref !== 'string' || !ref) return Response.json({ error: 'ref is required' }, { status: 400 })
+  if (verb !== 'acknowledge' && verb !== 'retry') {
+    return Response.json({ error: 'verb must be acknowledge|retry' }, { status: 400 })
+  }
+
+  const { resolveAttention: resolve } = await import('../graph/outbox/attention.js')
+  const { DEMO_TEAM_ID, DEMO_USER_ID } = await import('../graph/workspace/specs.js')
+  const result = await resolve({
+    teamId: DEMO_TEAM_ID,
+    kind: kind as import('../graph/types.js').AttentionKind,
+    ref,
+    verb,
+    now: new Date().toISOString(),
+    userId: userId ?? DEMO_USER_ID,
+  })
+  if (!result.ok) return Response.json(result, { status: 409 })
+  return Response.json(result)
+}
+
+async function markNotificationsRead(): Promise<Response> {
+  const read = await import('../graph/workspace/read.js')
+  return Response.json({ ok: true, marked: await read.markNotificationsRead() })
+}
+
+/**
+ * Run ONE outbox pass now. The background executor already loops, so this is not
+ * how effects normally happen - it exists so a demo (or a probe) can make the
+ * queue drain on demand instead of waiting out a tick, and so the response can
+ * report exactly what the pass did.
+ */
+async function drain(): Promise<Response> {
+  const { drainOutbox } = await import('../graph/outbox/executor.js')
+  const { DEMO_TEAM_ID } = await import('../graph/workspace/specs.js')
+  const r = await drainOutbox({ now: new Date().toISOString(), teamId: DEMO_TEAM_ID, maxPasses: 20 })
+  return Response.json({
+    ok: true,
+    claimed: r.claimed,
+    done: r.done,
+    failed: r.failed,
+    deadLettered: r.deadLettered,
+    outcomes: r.outcomes,
   })
 }
 

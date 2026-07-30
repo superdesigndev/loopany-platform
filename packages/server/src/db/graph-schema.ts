@@ -34,6 +34,7 @@ import {
   CONSEQUENCE_CLASSES,
   EVENT_ORIGINS,
   OBLIGATION_CLASSES,
+  OUTBOX_REFUSAL_CODES,
   OUTBOX_STATES,
   TYPE_VERSION_STATES,
   type EventDiff,
@@ -312,16 +313,86 @@ export const outboxActions = pgTable(
     lastError: text("last_error"),
     createdAt: text("created_at").notNull(),
     deliveredAt: text("delivered_at"),
+    /** Earliest instant a `failed` row may be claimed again (backoff gate). NULL
+     *  ⇒ claimable now. Bounded retries mean this always eventually stops. */
+    nextAttemptAt: text("next_attempt_at"),
+    /** When the current `executing` claim was taken. A claim older than
+     *  `EXECUTING_STALE_MS` is treated as a crashed executor and re-claimed -
+     *  which is safe precisely because handlers dedup on the action id. */
+    claimedAt: text("claimed_at"),
+    /** Which executor instance holds the claim (observability + crash forensics;
+     *  the LOCK is what actually makes the claim exclusive, not this column). */
+    claimedBy: text("claimed_by"),
+    /** Stamped when the row went TERMINAL WITHOUT EFFECT. Paired with
+     *  `refusalCode`; `lastError` carries the human-readable detail. */
+    deadLetteredAt: text("dead_lettered_at"),
+    /** TYPED reason for a dead-letter (`graph/types.ts` OUTBOX_REFUSAL_CODES).
+     *  The attention section groups on this rather than on message text. */
+    refusalCode: text("refusal_code", { enum: OUTBOX_REFUSAL_CODES }),
   },
   (t) => [
-    // The executor's drain query: oldest pending first.
-    index("outbox_actions_pending_idx").on(t.createdAt).where(sql`${t.state} = 'pending'`),
+    // The executor's claim query: claimable rows, oldest first. Covers both
+    // `pending` (never attempted) and `failed` (retry scheduled) - one index,
+    // because they are drained by the same scan.
+    index("outbox_actions_claim_idx")
+      .on(t.nextAttemptAt, t.createdAt, t.seq)
+      .where(sql`${t.state} in ('pending','failed')`),
+    // Stuck-claim recovery + the dead-letter feed for the attention section. Both
+    // are small partial indexes, so their size tracks trouble, not history.
+    index("outbox_actions_executing_idx").on(t.claimedAt).where(sql`${t.state} = 'executing'`),
+    index("outbox_actions_dead_idx").on(t.teamId, t.deadLetteredAt).where(sql`${t.state} = 'dead-letter'`),
     index("outbox_actions_event_idx").on(t.eventId),
     index("outbox_actions_object_idx").on(t.objectId),
     check(
       "outbox_actions_approval_required",
       sql`${t.consequenceClass} NOT IN ('R3','R4') OR ${t.approvalEvent} IS NOT NULL`,
     ),
+    // A dead-letter is never reasonless, and a reason never rides a live row:
+    // the pair lands together or not at all, so "why did this stop?" is always
+    // answerable from the row itself.
+    check(
+      "outbox_actions_dead_letter_reason",
+      sql`(${t.state} = 'dead-letter') = (${t.refusalCode} IS NOT NULL)`,
+    ),
+  ],
+);
+
+// ---- graph_notifications: what the `notify` action actually produces ----
+
+/**
+ * The R2 `notify` action's EFFECT, in-graph: one row a human can read in the
+ * workspace. This is the whole point of the executor - a verdict must CAUSE
+ * something - and it is the smallest surface that proves it without any outward
+ * effect (no push, no webhook, no daemon delivery).
+ *
+ * IDEMPOTENCY IS THE PRIMARY KEY. The id IS the outbox action id, so running the
+ * same action twice inserts the same row twice → `ON CONFLICT DO NOTHING` → one
+ * notification. The at-least-once boundary needs no dedup logic in the handler
+ * because identity does the work (the same trick `events` and `edges` use).
+ */
+export const graphNotifications = pgTable(
+  "graph_notifications",
+  {
+    /** The outbox action id that produced it - the idempotency key. */
+    id: text("id").primaryKey(),
+    teamId: text("team_id").notNull(),
+    /** The object the notification is about (null for workspace-level notices). */
+    objectId: text("object_id"),
+    /** The event whose transition enqueued the producing action (audit trail). */
+    eventId: text("event_id").notNull(),
+    /** Where it was addressed - `inbox` today; a real channel later. */
+    channel: text("channel").notNull(),
+    title: text("title").notNull(),
+    body: text("body"),
+    createdAt: text("created_at").notNull(),
+    /** NULL ⇒ unread. Read state is a plain stamp: a notification is a message,
+     *  not an obligation, so it needs no opened-minus-closed machinery. */
+    readAt: text("read_at"),
+  },
+  (t) => [
+    index("graph_notifications_team_idx").on(t.teamId, t.createdAt),
+    index("graph_notifications_unread_idx").on(t.teamId).where(sql`${t.readAt} is null`),
+    index("graph_notifications_object_idx").on(t.objectId),
   ],
 );
 
@@ -385,8 +456,18 @@ export type GateObligation = typeof gateObligations.$inferSelect;
 export type NewGateObligation = typeof gateObligations.$inferInsert;
 export type OutboxAction = typeof outboxActions.$inferSelect;
 export type NewOutboxAction = typeof outboxActions.$inferInsert;
+export type GraphNotification = typeof graphNotifications.$inferSelect;
+export type NewGraphNotification = typeof graphNotifications.$inferInsert;
 export type TypeRegistryRow = typeof typeRegistry.$inferSelect;
 export type NewTypeRegistryRow = typeof typeRegistry.$inferInsert;
 
 /** Drizzle table bag for the graph kernel (merged into the one Drizzle instance). */
-export const graphSchema = { objects, edges, events, gateObligations, outboxActions, typeRegistry };
+export const graphSchema = {
+  objects,
+  edges,
+  events,
+  gateObligations,
+  outboxActions,
+  graphNotifications,
+  typeRegistry,
+};

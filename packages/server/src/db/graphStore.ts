@@ -27,20 +27,24 @@ import {
   edges,
   events,
   gateObligations,
+  graphNotifications,
   objects,
   outboxActions,
   typeRegistry,
   type GateObligation,
   type GraphEdge,
   type GraphEvent,
+  type GraphNotification,
   type GraphObject,
   type NewGraphEvent,
+  type NewGraphNotification,
   type OutboxAction,
   type TypeRegistryRow,
 } from "./graph-schema.js";
 import {
   BUILTIN_TYPE_SPECS,
   ARCHETYPES,
+  OUTBOX_UNSETTLED_STATES,
   consequenceOf,
   isActionKind,
   requiresApproval,
@@ -48,6 +52,7 @@ import {
   type Archetype,
   type EventDiff,
   type ObligationClass,
+  type OutboxRefusalCode,
   type TypeSpec,
 } from "../graph/types.js";
 import { edgeId, mirrorObjectId, newObjectId, outboxActionId, typeVersionId } from "../graph/ids.js";
@@ -57,7 +62,7 @@ import { edgeId, mirrorObjectId, newObjectId, outboxActionId, typeVersionId } fr
  * `db.transaction(...)`. Structural on purpose - the two share the builder API,
  * which is the whole reason the store is single-sourced across driver tiers.
  */
-export type GraphExec = Pick<typeof db, "select" | "insert" | "update" | "delete">;
+export type GraphExec = Pick<typeof db, "select" | "insert" | "update" | "delete" | "execute">;
 
 const X = (x?: GraphExec): GraphExec => x ?? db;
 
@@ -499,11 +504,17 @@ export async function enqueueActions(
     .orderBy(asc(outboxActions.seq));
 }
 
+/**
+ * Actions that have NOT yet had their effect - `pending`, `executing` or `failed`
+ * (awaiting a scheduled retry). The attested-close check reads this, so a row
+ * mid-flight or backing off blocks a terminal transition exactly like one that
+ * was never attempted (design §12 item 8).
+ */
 export async function listPendingActions(
   x: GraphExec | undefined,
   filter: { teamId?: string; objectId?: string },
 ): Promise<OutboxAction[]> {
-  const where = [eq(outboxActions.state, "pending")];
+  const where = [inArray(outboxActions.state, [...OUTBOX_UNSETTLED_STATES])];
   if (filter.teamId) where.push(eq(outboxActions.teamId, filter.teamId));
   if (filter.objectId) where.push(eq(outboxActions.objectId, filter.objectId));
   return X(x).select().from(outboxActions).where(and(...where)).orderBy(asc(outboxActions.createdAt), asc(outboxActions.seq));
@@ -514,31 +525,271 @@ export async function countPendingActions(x: GraphExec | undefined, objectId: st
     await X(x)
       .select({ n: sql<number>`count(*)` })
       .from(outboxActions)
-      .where(and(eq(outboxActions.objectId, objectId), eq(outboxActions.state, "pending")))
+      .where(
+        and(
+          eq(outboxActions.objectId, objectId),
+          inArray(outboxActions.state, [...OUTBOX_UNSETTLED_STATES]),
+        ),
+      )
   )[0];
   return Number(r?.n ?? 0);
 }
 
 /**
- * Stamp an action delivered. The executor calls this AFTER the effect; a crash in
- * between leaves the row `pending` and the effect happens twice - the at-least-once
- * boundary, which is why every executor must be idempotent on the action id.
+ * Stamp an action DONE - its effect landed. Guarded on the row still being
+ * unsettled, so a late second stamp (the at-least-once boundary firing) is a
+ * no-op rather than a rewrite of when the effect happened.
  */
-export async function markActionDelivered(
+export async function markActionDone(
   x: GraphExec | undefined,
   id: string,
   now: string,
 ): Promise<OutboxAction | undefined> {
   const out = await X(x)
     .update(outboxActions)
-    .set({ state: "delivered", deliveredAt: now })
-    .where(and(eq(outboxActions.id, id), eq(outboxActions.state, "pending")))
+    .set({ state: "done", deliveredAt: now, lastError: null, claimedAt: null, claimedBy: null, nextAttemptAt: null })
+    .where(and(eq(outboxActions.id, id), inArray(outboxActions.state, [...OUTBOX_UNSETTLED_STATES])))
     .returning();
   return out[0];
 }
 
+/**
+ * CLAIM a batch of due actions for one executor pass.
+ *
+ * `SELECT … FOR UPDATE SKIP LOCKED` inside the same statement that flips the rows
+ * to `executing` is what makes the executor safe to run more than once: two
+ * passes racing on the same queue take DISJOINT sets, because the loser's rows
+ * are skipped rather than blocked on. `attempts` is incremented AT CLAIM TIME, so
+ * a claim that then crashes still burns an attempt - otherwise a handler that
+ * reliably kills the process would retry forever.
+ *
+ * Claimable = `pending` or `failed` (a retry whose backoff has elapsed), PLUS
+ * `executing` rows whose claim is older than `staleBefore` - a crashed executor's
+ * work, recovered. Re-running an effect is safe by the at-least-once contract.
+ */
+export async function claimActions(
+  x: GraphExec | undefined,
+  input: { limit: number; now: string; owner: string; staleBefore: string; teamId?: string },
+): Promise<OutboxAction[]> {
+  const teamFilter = input.teamId ? sql`and team_id = ${input.teamId}` : sql``;
+  const rows = await X(x).execute(sql`
+    update outbox_actions set
+      state = 'executing',
+      claimed_at = ${input.now},
+      claimed_by = ${input.owner},
+      attempts = attempts + 1
+    where id in (
+      select id from outbox_actions
+      where (
+              state in ('pending','failed')
+              and (next_attempt_at is null or next_attempt_at <= ${input.now})
+            )
+         or (state = 'executing' and claimed_at is not null and claimed_at < ${input.staleBefore})
+        ${teamFilter}
+      order by created_at asc, seq asc
+      limit ${input.limit}
+      for update skip locked
+    )
+    returning *
+  `);
+  return normalizeActionRows(rows);
+}
+
+/**
+ * Record a FAILED attempt and schedule the retry. The row goes back to `failed`
+ * (not `pending`): "tried and failed, retrying at T" is a different fact from
+ * "never tried", and only one of them is worth a second look.
+ */
+export async function markActionFailed(
+  x: GraphExec | undefined,
+  input: { id: string; error: string; nextAttemptAt: string },
+): Promise<OutboxAction | undefined> {
+  const out = await X(x)
+    .update(outboxActions)
+    .set({
+      state: "failed",
+      lastError: input.error,
+      nextAttemptAt: input.nextAttemptAt,
+      claimedAt: null,
+      claimedBy: null,
+    })
+    .where(eq(outboxActions.id, input.id))
+    .returning();
+  return out[0];
+}
+
+/**
+ * DEAD-LETTER an action: terminal, without effect, with a TYPED reason. This is
+ * the one thing the executor must never do silently - a dropped consequence that
+ * nobody can see is worse than a loud one, so every dead-letter becomes an
+ * attention item until a human acknowledges or retries it.
+ */
+export async function deadLetterAction(
+  x: GraphExec | undefined,
+  input: { id: string; refusalCode: OutboxRefusalCode; error: string; now: string },
+): Promise<OutboxAction | undefined> {
+  const out = await X(x)
+    .update(outboxActions)
+    .set({
+      state: "dead-letter",
+      refusalCode: input.refusalCode,
+      lastError: input.error,
+      deadLetteredAt: input.now,
+      claimedAt: null,
+      claimedBy: null,
+      nextAttemptAt: null,
+    })
+    .where(eq(outboxActions.id, input.id))
+    .returning();
+  return out[0];
+}
+
+/** Put a dead-lettered action back in the queue with a fresh attempt budget -
+ *  the human "retry" verdict on an attention item. Only a dead-letter row can be
+ *  revived, so this can never disturb work in flight. */
+export async function requeueDeadLetter(
+  x: GraphExec | undefined,
+  id: string,
+): Promise<OutboxAction | undefined> {
+  const out = await X(x)
+    .update(outboxActions)
+    .set({
+      state: "pending",
+      attempts: 0,
+      refusalCode: null,
+      deadLetteredAt: null,
+      nextAttemptAt: null,
+      claimedAt: null,
+      claimedBy: null,
+    })
+    .where(and(eq(outboxActions.id, id), eq(outboxActions.state, "dead-letter")))
+    .returning();
+  return out[0];
+}
+
+export async function listDeadLetters(x: GraphExec | undefined, teamId: string): Promise<OutboxAction[]> {
+  return X(x)
+    .select()
+    .from(outboxActions)
+    .where(and(eq(outboxActions.teamId, teamId), eq(outboxActions.state, "dead-letter")))
+    .orderBy(asc(outboxActions.deadLetteredAt));
+}
+
+export async function getAction(x: GraphExec | undefined, id: string): Promise<OutboxAction | undefined> {
+  return (await X(x).select().from(outboxActions).where(eq(outboxActions.id, id)))[0];
+}
+
 export async function listActionsForEvent(x: GraphExec | undefined, eventId: string): Promise<OutboxAction[]> {
   return X(x).select().from(outboxActions).where(eq(outboxActions.eventId, eventId)).orderBy(asc(outboxActions.seq));
+}
+
+/**
+ * A raw `execute()` returns driver-shaped output: postgres-js hands back the row
+ * array directly, pglite wraps it in `{rows}`. Both tiers are single-sourced
+ * everywhere else in this file because they go through the query builder; the
+ * claim statement cannot (there is no builder form of `FOR UPDATE SKIP LOCKED`
+ * inside an UPDATE … IN subquery), so the shape is normalized here, once.
+ *
+ * Column names come back snake_case, so they are mapped to the Drizzle row shape
+ * rather than cast - a cast would silently hand callers `undefined` for every
+ * multi-word column.
+ */
+function normalizeActionRows(raw: unknown): OutboxAction[] {
+  const rows = (Array.isArray(raw) ? raw : ((raw as { rows?: unknown[] })?.rows ?? [])) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    id: String(r.id),
+    eventId: String(r.event_id),
+    seq: Number(r.seq),
+    teamId: String(r.team_id),
+    objectId: (r.object_id ?? null) as string | null,
+    kind: String(r.kind),
+    consequenceClass: r.consequence_class as OutboxAction["consequenceClass"],
+    approvalEvent: (r.approval_event ?? null) as string | null,
+    chainDepth: Number(r.chain_depth ?? 0),
+    payload: (r.payload ?? null) as Record<string, unknown> | null,
+    state: r.state as OutboxAction["state"],
+    attempts: Number(r.attempts ?? 0),
+    lastError: (r.last_error ?? null) as string | null,
+    createdAt: String(r.created_at),
+    deliveredAt: (r.delivered_at ?? null) as string | null,
+    nextAttemptAt: (r.next_attempt_at ?? null) as string | null,
+    claimedAt: (r.claimed_at ?? null) as string | null,
+    claimedBy: (r.claimed_by ?? null) as string | null,
+    deadLetteredAt: (r.dead_lettered_at ?? null) as string | null,
+    refusalCode: (r.refusal_code ?? null) as OutboxAction["refusalCode"],
+  }));
+}
+
+// ---- notifications (the `notify` action's in-graph effect) ----
+
+/**
+ * Write a notification. IDEMPOTENT BY IDENTITY: the id is the producing outbox
+ * action's id, so the at-least-once boundary costs nothing - a second delivery
+ * conflicts on the primary key and the row it would have written already exists.
+ * Returns `created: false` in exactly that case, which is the probe's assertion.
+ */
+export async function insertNotification(
+  x: GraphExec | undefined,
+  row: NewGraphNotification,
+): Promise<{ notification: GraphNotification; created: boolean }> {
+  const exec = X(x);
+  const out = await exec.insert(graphNotifications).values(row).onConflictDoNothing().returning();
+  if (out[0]) return { notification: out[0], created: true };
+  const existing = (await exec.select().from(graphNotifications).where(eq(graphNotifications.id, row.id)))[0];
+  if (!existing) throw new Error(`notification insert was swallowed but no row exists: ${row.id}`);
+  return { notification: existing, created: false };
+}
+
+export async function listNotifications(
+  x: GraphExec | undefined,
+  teamId: string,
+  limit = 50,
+): Promise<GraphNotification[]> {
+  return X(x)
+    .select()
+    .from(graphNotifications)
+    .where(eq(graphNotifications.teamId, teamId))
+    .orderBy(desc(graphNotifications.createdAt), desc(graphNotifications.id))
+    .limit(limit);
+}
+
+export async function countUnreadNotifications(x: GraphExec | undefined, teamId: string): Promise<number> {
+  const r = (
+    await X(x)
+      .select({ n: sql<number>`count(*)` })
+      .from(graphNotifications)
+      .where(and(eq(graphNotifications.teamId, teamId), isNull(graphNotifications.readAt)))
+  )[0];
+  return Number(r?.n ?? 0);
+}
+
+export async function markNotificationsRead(
+  x: GraphExec | undefined,
+  teamId: string,
+  now: string,
+): Promise<number> {
+  const out = await X(x)
+    .update(graphNotifications)
+    .set({ readAt: now })
+    .where(and(eq(graphNotifications.teamId, teamId), isNull(graphNotifications.readAt)))
+    .returning();
+  return out.length;
+}
+
+/** Events of one kind for a team, newest first - the attention section's feed
+ *  (`chain-parked`, `close-refused`, and the acknowledgements that close them). */
+export async function listEventsOfKind(
+  x: GraphExec | undefined,
+  teamId: string,
+  kind: string,
+  limit = 200,
+): Promise<GraphEvent[]> {
+  return X(x)
+    .select()
+    .from(events)
+    .where(and(eq(events.teamId, teamId), eq(events.kind, kind)))
+    .orderBy(desc(events.ts), desc(events.id))
+    .limit(limit);
 }
 
 // ---- type registry ----

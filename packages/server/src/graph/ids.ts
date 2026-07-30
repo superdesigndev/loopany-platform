@@ -120,6 +120,21 @@ export function outboxActionId(eventId: string, seq: number): string {
   return `${eventId}-${seq}`;
 }
 
+/**
+ * A shepherd review task's id, derived from the ACTION that created it plus the
+ * object it reviews.
+ *
+ * This is what makes the `enqueue-review` handler safe under the executor's
+ * at-least-once boundary: the second delivery of the same action computes the
+ * same id, finds the object already there, and creates nothing. Both halves of
+ * the pair are load-bearing - the action id alone would collide across a fan-out
+ * over several produced docs, and the target alone would collide across two
+ * genuinely different review rounds on the same content.
+ */
+export function reviewObjectId(actionId: string, targetId: string): string {
+  return `obj-rev-${contentHash({ actionId, targetId })}`;
+}
+
 /** A registry row's id - deterministic, so re-proposing the same version collides. */
 export function typeVersionId(teamId: string, name: string, version: number): string {
   return `type-${contentHash({ teamId, name })}-v${version}`;

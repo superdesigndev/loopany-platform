@@ -1,13 +1,20 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
+  fetchAttention,
   fetchLibrary,
+  fetchNotifications,
   fetchSummary,
   fetchSystem,
   fetchTimeline,
+  postAttention,
+  postNotificationsRead,
   postVerdict,
+  type AttentionItem,
+  type AttentionView,
   type LibraryArtifact,
   type LibraryView,
+  type NotificationsView,
   type Summary,
   type SystemView,
   type TimelineEntry,
@@ -38,12 +45,13 @@ const SystemGraph = lazy(() => import('./SystemGraph'))
 /** Mirrors `LIBRARY_SETTLED_CAP` in `graph/workspace/read.ts` - display copy only. */
 const LIBRARY_SETTLED_SHOWN = 90
 
-type ViewName = 'library' | 'system' | 'timeline'
+type ViewName = 'library' | 'system' | 'timeline' | 'notifications'
 
 const GLYPHS: Record<string, string> = {
   library: '▤',
   system: '⌘',
   timeline: '◷',
+  notifications: '◍',
   pr: '⑂',
   post: '✎',
   report: '◫',
@@ -53,6 +61,9 @@ const GLYPHS: Record<string, string> = {
   artifact: '◇',
   decision: '✓',
   chevron: '›',
+  'dead-letter': '⊘',
+  'chain-parked': '⧗',
+  'close-refused': '⊝',
 }
 
 function Glyph({ name }: { name: string }) {
@@ -269,15 +280,163 @@ function ArtifactPreview({
   )
 }
 
+// ---- Attention ----
+
+/**
+ * The ATTENTION section: consequences that did not happen.
+ *
+ * It sits ABOVE "Needs you" and reads in a different temperature (muted rose vs
+ * warm amber) because it is a different ask. A verdict queue is ordinary work; a
+ * dead-lettered action is a promise the system failed to keep, and burying it
+ * among approvals would be the exact failure the outbox exists to prevent.
+ *
+ * Every row is COMPUTED - from a dead-lettered outbox row, a parked chain event or
+ * a refused close - so nothing here can be dismissed by clearing a flag. The two
+ * buttons write human-entrance events instead: "Acknowledge" records that a person
+ * accepts this is not happening, and "Retry" re-queues the action WITHOUT
+ * acknowledging it, so a second failure comes straight back to this list.
+ */
+const ATTENTION_LABEL: Record<AttentionItem['kind'], string> = {
+  'dead-letter': 'Effect never landed',
+  'chain-parked': 'Rule chain parked',
+  'close-refused': 'Close refused',
+}
+
+function AttentionSection({
+  attention,
+  onResolve,
+  busyId,
+}: {
+  attention: AttentionView
+  onResolve: (item: AttentionItem, verb: 'acknowledge' | 'retry') => void
+  busyId: string | null
+}) {
+  if (!attention.items.length) return null
+  const summary = (Object.keys(attention.counts) as AttentionItem['kind'][])
+    .filter((k) => attention.counts[k] > 0)
+    .map((k) => `${attention.counts[k]} ${ATTENTION_LABEL[k].toLowerCase()}`)
+    .join(' · ')
+
+  return (
+    <section className="attention-section">
+      <div className="section-heading">
+        <div>
+          <span className="attn-dot" />
+          <h2>Attention</h2>
+          <span>{attention.items.length}</span>
+        </div>
+        <p>{summary}</p>
+      </div>
+      <div className="attn-list">
+        {attention.items.map((item) => (
+          <article className="attn-row" key={item.id}>
+            <span className="attn-icon">
+              <Glyph name={item.kind} />
+            </span>
+            <div className="attn-main">
+              <h3>{item.title}</h3>
+              <p title={item.detail}>
+                {item.subject ? `${item.subject} — ` : ''}
+                {item.detail}
+              </p>
+            </div>
+            <span className="attn-reason">{item.reason}</span>
+            <time>{item.raisedAt.slice(0, 16).replace('T', ' ')}</time>
+            <div className="attn-actions">
+              {item.retryable && (
+                <button className="attn-button" disabled={busyId === item.id} onClick={() => onResolve(item, 'retry')}>
+                  {busyId === item.id ? 'Working…' : `Retry (${item.attempts ?? 0} tried)`}
+                </button>
+              )}
+              <button
+                className="attn-button is-quiet"
+                disabled={busyId === item.id}
+                onClick={() => onResolve(item, 'acknowledge')}
+              >
+                Acknowledge
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// ---- Notifications ----
+
+/**
+ * What the `notify` action produced. This pane is the proof the executor works
+ * from a person's side: approve a gate in the Library and a row appears here,
+ * because the verdict enqueued an action and the executor delivered it.
+ *
+ * Not the Timeline. The Timeline is every event the kernel wrote; this is the
+ * short list that was ADDRESSED to a human.
+ */
+function NotificationsPane({
+  notifications,
+  onMarkRead,
+  busy,
+}: {
+  notifications: NotificationsView
+  onMarkRead: () => void
+  busy: boolean
+}) {
+  return (
+    <div className="document-view">
+      <ViewHeader
+        eyebrow="Notifications"
+        title="Notifications"
+        description="What your decisions caused. Each row was written by a notify action the outbox executor delivered."
+        meta={`${notifications.items.length} total · ${notifications.unread} unread`}
+      />
+      {notifications.items.length === 0 ? (
+        <p className="attn-empty" style={{ marginTop: 26 }}>
+          Nothing yet. Approve something in the Library and its notify action lands here.
+        </p>
+      ) : (
+        <>
+          <div className="notif-toolbar">
+            <button className="attn-button is-quiet" disabled={busy || notifications.unread === 0} onClick={onMarkRead}>
+              {busy ? 'Working…' : 'Mark all read'}
+            </button>
+          </div>
+          <div className="notif-list">
+            {notifications.items.map((n) => (
+              <article className={`notif-row ${n.read ? '' : 'is-unread'}`} key={n.id}>
+                <span className="notif-icon">
+                  <Glyph name="notifications" />
+                </span>
+                <div className="notif-main">
+                  <h3>{n.title}</h3>
+                  <p>{n.body ?? '—'}</p>
+                </div>
+                <span className="notif-channel">{n.channel}</span>
+                <time>{n.age}</time>
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---- Library ----
+
 function LibraryPane({
   library,
+  attention,
   highlighted,
   onVerdict,
+  onResolveAttention,
   busyId,
 }: {
   library: LibraryView
+  attention: AttentionView | null
   highlighted: string[]
   onVerdict: (a: LibraryArtifact) => void
+  onResolveAttention: (item: AttentionItem, verb: 'acknowledge' | 'retry') => void
   busyId: string | null
 }) {
   const [preview, setPreview] = useState<LibraryArtifact | null>(null)
@@ -313,6 +472,7 @@ function LibraryPane({
             : `${library.total} artifacts`
         }
       />
+      {attention && <AttentionSection attention={attention} onResolve={onResolveAttention} busyId={busyId} />}
       <section className="needs-section">
         <div className="section-heading">
           <div>
@@ -432,6 +592,7 @@ function TimelinePane({ timeline }: { timeline: TimelineView }) {
 function Sidebar({ view, setView, summary }: { view: ViewName; setView: (v: ViewName) => void; summary: Summary | null }) {
   const items: { id: ViewName; label: string }[] = [
     { id: 'library', label: 'Library' },
+    { id: 'notifications', label: 'Notifications' },
     { id: 'system', label: 'System' },
     { id: 'timeline', label: 'Timeline' },
   ]
@@ -458,7 +619,10 @@ function Sidebar({ view, setView, summary }: { view: ViewName; setView: (v: View
           >
             <Glyph name={item.id} />
             <span>{item.label}</span>
-            {item.id === 'library' && summary && <b>{summary.needsYou}</b>}
+            {item.id === 'library' && summary && <b>{summary.needsYou + summary.attention}</b>}
+            {item.id === 'notifications' && summary && summary.unreadNotifications > 0 && (
+              <b>{summary.unreadNotifications}</b>
+            )}
           </button>
         ))}
       </nav>
@@ -466,7 +630,13 @@ function Sidebar({ view, setView, summary }: { view: ViewName; setView: (v: View
         <span />
         <div>
           <strong>{summary ? `${summary.loops} armed loop classes` : 'loading…'}</strong>
-          <small>{summary ? `${summary.events} events · ${summary.pendingActions} pending actions` : ''}</small>
+          {/* The queue depth is the executor's own vital sign: `pending` is work
+              it will do, `attention` is work it CANNOT do without a person. */}
+          <small>
+            {summary
+              ? `${summary.events} events · ${summary.pendingActions} queued${summary.attention ? ` · ${summary.attention} need attention` : ''}`
+              : ''}
+          </small>
         </div>
       </div>
     </aside>
@@ -480,12 +650,14 @@ export function WorkspaceView() {
   const [view, setView] = useState<ViewName>('library')
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get('view')
-    if (requested === 'system' || requested === 'timeline') setView(requested)
+    if (requested === 'system' || requested === 'timeline' || requested === 'notifications') setView(requested)
   }, [])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [system, setSystem] = useState<SystemView | null>(null)
   const [library, setLibrary] = useState<LibraryView | null>(null)
   const [timeline, setTimeline] = useState<TimelineView | null>(null)
+  const [attention, setAttention] = useState<AttentionView | null>(null)
+  const [notifications, setNotifications] = useState<NotificationsView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [highlighted, setHighlighted] = useState<string[]>([])
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -493,11 +665,20 @@ export function WorkspaceView() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, sys, lib, tl] = await Promise.all([fetchSummary(), fetchSystem(), fetchLibrary(), fetchTimeline()])
+      const [s, sys, lib, tl, att, notes] = await Promise.all([
+        fetchSummary(),
+        fetchSystem(),
+        fetchLibrary(),
+        fetchTimeline(),
+        fetchAttention(),
+        fetchNotifications(),
+      ])
       setSummary(s)
       setSystem(sys)
       setLibrary(lib)
       setTimeline(tl)
+      setAttention(att)
+      setNotifications(notes)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -521,7 +702,15 @@ export function WorkspaceView() {
       // The verdict moves the SHEPHERD task, never the content itself.
       const result = await postVerdict(artifact.verdict.objectId, artifact.verdict.transition)
       if (result.ok) {
-        setNotice(`${artifact.title} → ${result.status} (closed ${result.closed.join(', ') || 'nothing'}; event ${result.eventId})`)
+        // Say what it CAUSED, not just what it recorded. The effects count comes
+        // from the outbox pass the verdict ran with, so "1 effect delivered" is a
+        // fact about rows, not an optimistic claim.
+        const effects = result.effects
+          ? ` · ${result.effects.done} effect${result.effects.done === 1 ? '' : 's'} delivered${result.effects.deadLettered ? `, ${result.effects.deadLettered} needing attention` : ''}`
+          : ''
+        setNotice(
+          `${artifact.title} → ${result.status} (closed ${result.closed.join(', ') || 'nothing'}; event ${result.eventId})${effects}`,
+        )
       } else {
         setNotice(`refused: ${result.code} — ${result.message}`)
       }
@@ -530,6 +719,28 @@ export function WorkspaceView() {
     },
     [refresh],
   )
+
+  /** Resolve an attention item. Same posture as a verdict: the server decides, the
+   *  notice quotes it, and the views reload from the database afterwards. */
+  const onResolveAttention = useCallback(
+    async (item: AttentionItem, verb: 'acknowledge' | 'retry') => {
+      setBusyId(item.id)
+      setNotice(null)
+      const result = await postAttention(item, verb)
+      setNotice(result.ok ? `${verb}: ${result.detail}` : `refused: ${result.code} — ${result.message}`)
+      await refresh()
+      setBusyId(null)
+    },
+    [refresh],
+  )
+
+  const onMarkNotificationsRead = useCallback(async () => {
+    setBusyId('notifications')
+    const result = await postNotificationsRead()
+    setNotice(`marked ${result.marked} notification${result.marked === 1 ? '' : 's'} read`)
+    await refresh()
+    setBusyId(null)
+  }, [refresh])
 
   const openArtifacts = useCallback((ids: string[]) => {
     setHighlighted(ids)
@@ -576,7 +787,21 @@ export function WorkspaceView() {
               </div>
             )}
             {view === 'library' && library && (
-              <LibraryPane library={library} highlighted={highlighted} onVerdict={onVerdict} busyId={busyId} />
+              <LibraryPane
+                library={library}
+                attention={attention}
+                highlighted={highlighted}
+                onVerdict={onVerdict}
+                onResolveAttention={onResolveAttention}
+                busyId={busyId}
+              />
+            )}
+            {view === 'notifications' && notifications && (
+              <NotificationsPane
+                notifications={notifications}
+                onMarkRead={onMarkNotificationsRead}
+                busy={busyId === 'notifications'}
+              />
             )}
             {view === 'system' && system && (
               <div className="system-view">

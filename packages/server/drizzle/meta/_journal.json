@@ -29,6 +29,13 @@
       "when": 1785298072067,
       "tag": "0003_famous_earthquake",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785384072737,
+      "tag": "0004_tearful_ser_duncan",
+      "breakpoints": true
     }
   ]
 }

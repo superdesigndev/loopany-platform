@@ -19,7 +19,7 @@
  * in the same transaction as the status they belong to.
  *
  * The seeder also plays MINIMAL EXECUTOR: after each step it stamps the
- * transition's outbox actions delivered (`markActionDelivered`), because a
+ * transition's outbox actions done (`markActionDone`), because a
  * terminal transition is refused while actions are still pending (design §12
  * item 8). Steps flagged `keepPending` are left undrained on purpose, so the
  * demo has a real backlog of undelivered actions to show.
@@ -265,7 +265,7 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
     if (input.keepPending) return;
     // Minimal executor: an action a real executor would have delivered. Without
     // this a later terminal transition is (correctly) refused for pending actions.
-    for (const action of result.actions) await graph.markActionDelivered(undefined, action.id, input.at);
+    for (const action of result.actions) await graph.markActionDone(undefined, action.id, input.at);
   };
 
   for (const loop of LOOPS) {

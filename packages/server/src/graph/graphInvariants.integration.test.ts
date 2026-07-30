@@ -560,7 +560,7 @@ describe('probe: obligations open and close by events; the inbox is opened-minus
     expect(!blocked.ok && blocked.code).toBe('PENDING_ACTIONS')
 
     for (const a of await graph.listPendingActions(undefined, { objectId: obj.id })) {
-      await graph.markActionDelivered(undefined, a.id, NOW)
+      await graph.markActionDone(undefined, a.id, NOW)
     }
 
     const closed = await at.applyTransition({

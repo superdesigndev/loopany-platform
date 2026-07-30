@@ -21,6 +21,7 @@ import {
   dbWatchdogTimeoutMs,
   dbWatchdogFailureThreshold,
 } from "../env.js";
+import { graphWorkspaceEnabled } from "../lib/graphWorkspace.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
 
@@ -114,6 +115,18 @@ async function boot(): Promise<Booted> {
       failureThreshold,
     });
     abort.signal.addEventListener("abort", () => stopWatchdog(), { once: true });
+  }
+
+  // GRAPH OUTBOX EXECUTOR - the loop that makes a verdict cause something.
+  //
+  // Started only where the graph workspace EXISTS (`lib/graphWorkspace.ts`, the
+  // same leaf gate the route and the page read), so an ordinary deploy of this
+  // branch adds no background work until an operator turns the surface on. The
+  // executor's own claim is what makes it safe, so this is a "why run it at all"
+  // gate rather than a correctness one.
+  if (graphWorkspaceEnabled()) {
+    const { startOutboxExecutor } = await import("../graph/outbox/executor.js");
+    startOutboxExecutor({ signal: abort.signal });
   }
 
   logger.info("loopany server booted");

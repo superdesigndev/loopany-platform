@@ -190,11 +190,89 @@ export function consequenceOf(kind: ActionKind): ConsequenceClass {
 
 // ---- outbox delivery state ----
 
-/** At-least-once boundary: the executor may deliver a `pending` row more than
- *  once (crash between effect and stamp), so every executor dedups by action id.
- *  The id is `<eventId>-<seq>`, which is stable across replays by construction. */
-export const OUTBOX_STATES = ["pending", "delivered", "failed"] as const;
+/**
+ * The outbox row state machine (design §5, §12 item 8).
+ *
+ *   pending    → claimable. Either never attempted, or a retry whose backoff has
+ *                not elapsed (`nextAttemptAt`).
+ *   executing  → claimed by ONE executor instance (`SELECT … FOR UPDATE SKIP
+ *                LOCKED`). A row left here by a crash is re-claimed after
+ *                `EXECUTING_STALE_MS`; the effect is re-run, which is safe
+ *                because every handler is idempotent on the action id.
+ *   failed     → the last attempt failed and a retry is SCHEDULED. Distinct from
+ *                `pending` on purpose: "never tried" and "tried and failed" are
+ *                different facts, and the second one is worth seeing.
+ *   done       → the effect landed and was stamped.
+ *   dead-letter→ TERMINAL without effect: retries exhausted, a safety re-check
+ *                refused it, or no handler exists. NEVER a silent drop - a
+ *                dead-letter row is an attention item until a human resolves it.
+ *
+ * AT-LEAST-ONCE BOUNDARY: a crash between the effect and the stamp is
+ * indistinguishable from a crash before it, so the executor may run a row's
+ * effect more than once. Every handler therefore dedups by action id, which is
+ * `<eventId>-<seq>` - stable across replays by construction.
+ */
+export const OUTBOX_STATES = ["pending", "executing", "done", "failed", "dead-letter"] as const;
 export type OutboxState = (typeof OUTBOX_STATES)[number];
+
+/** States in which an action has NOT yet had its effect. The attested-close
+ *  check (design §12 item 8) blocks a terminal transition on any of these -
+ *  `pending` alone would let a row mid-flight or awaiting retry slip through. */
+export const OUTBOX_UNSETTLED_STATES: readonly OutboxState[] = ["pending", "executing", "failed"];
+
+/**
+ * Why an action ended in `dead-letter`. A TYPED reason, not a parsed message:
+ * the attention section groups on it, and a UI that string-matches an error
+ * message is one wording change away from showing nothing.
+ *
+ *  - `RETRIES_EXHAUSTED`   the handler kept throwing; the bounded retry budget ran out
+ *  - `APPROVAL_MISSING`    an R3/R4 row whose `approval_event` names no event row
+ *  - `APPROVAL_NOT_HUMAN`  its approval event exists but was not entered by a human
+ *  - `CHAIN_BUDGET_EXCEEDED` the transition→action→transition chain ran past budget
+ *  - `NO_HANDLER`          no handler is registered for the kind (an unimplemented
+ *                          effect is surfaced, never quietly marked done)
+ *  - `HANDLER_REFUSED`     the handler itself refused for a reason retrying cannot fix
+ */
+export const OUTBOX_REFUSAL_CODES = [
+  "RETRIES_EXHAUSTED",
+  "APPROVAL_MISSING",
+  "APPROVAL_NOT_HUMAN",
+  "CHAIN_BUDGET_EXCEEDED",
+  "NO_HANDLER",
+  "HANDLER_REFUSED",
+] as const;
+export type OutboxRefusalCode = (typeof OUTBOX_REFUSAL_CODES)[number];
+
+// ---- attention items (design §8: the inbox aggregates budget-exceeded parked chains) ----
+
+/**
+ * The three ways the engine can end up needing a person's attention for a reason
+ * that is NOT an ordinary verdict. Every one is COMPUTED from real rows - a
+ * dead-lettered action, a `chain-parked` event, a `close-refused` event - and
+ * never from a hand-set flag, so an attention item cannot be forgotten into
+ * existence or dismissed into silence.
+ *
+ *  - `dead-letter`    an action that will never take effect on its own
+ *  - `chain-parked`   a transition refused because its chain ran past budget
+ *  - `close-refused`  an attested close blocked by an open obligation or an
+ *                     unsettled action (design §12 item 8)
+ */
+export const ATTENTION_KINDS = ["dead-letter", "chain-parked", "close-refused"] as const;
+export type AttentionKind = (typeof ATTENTION_KINDS)[number];
+
+/** The event kind that RESOLVES an attention item. Human entrance only, and its
+ *  id is derived from `(kind, ref)`, so acknowledging twice is one event row and
+ *  the attention list is `raised − acknowledged` - the same opened-minus-closed
+ *  shape the verdict inbox already has. */
+export const ATTENTION_ACK_EVENT = "attention-acknowledged";
+
+/** The event kind an attested-close refusal records so the refusal is VISIBLE.
+ *  Without it the refusal is only a log line, and the design's "violation = an
+ *  attention item" would have nothing to compute from. */
+export const CLOSE_REFUSED_EVENT = "close-refused";
+
+/** The event kind a budget park records (written by `applyTransition`). */
+export const CHAIN_PARKED_EVENT = "chain-parked";
 
 // ---- type registry (design §4, §12 item 4 / captain decision 4) ----
 
@@ -232,9 +310,18 @@ export interface TransitionSpec {
   /** Legal source states. `"*"` means any non-terminal state. */
   from: string[];
   to: string;
-  /** Restrict which entrance may run it. A transition OUT of a gate state is
-   *  forced to `human` regardless (design §12 item 5); this is extra narrowing. */
-  entrance?: EntranceClass;
+  /**
+   * Restrict which entrances may run it - one class, or a SET of them. A
+   * transition OUT of a gate state is forced to `human` regardless (design §12
+   * item 5); this is extra narrowing on top of that.
+   *
+   * The set form exists because "who may open a review gate" has a genuinely
+   * plural answer: the agent run that produced the content, OR the engine rule
+   * that noticed content with no reviewer (the `enqueue-review` action). Widening
+   * to "unrestricted" would have been the easy fix and the wrong one - it would
+   * also admit `human` and `clock`, which have no business entering that state.
+   */
+  entrance?: EntranceClass | readonly EntranceClass[];
   /** Obligations this transition opens (keyed, so it is idempotent per object). */
   opens?: GateSpec[];
   /** Obligation keys this transition closes. */

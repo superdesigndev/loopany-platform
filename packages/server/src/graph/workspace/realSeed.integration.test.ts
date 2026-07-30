@@ -19,11 +19,19 @@ let tmp: string
 let seedReal: typeof import('./seed-real.js')
 let read: typeof import('./read.js')
 let graph: typeof import('../../db/graphStore.js')
+let ids: typeof import('../ids.js')
 const at = () => import('../applyTransition.js')
 let snapshot: import('./pull-prod.js').ProdSnapshot
 
 /** The shepherd task types, mirrored from specs.ts so a rename shows up here. */
 const SHEPHERDS = { 'merge-review': 1, 'publish-review': 1, 'decision-review': 1, 'ship-review': 1 }
+
+/** The content id a shepherd reviews, off its own payload. */
+function requireReviewedId(shepherd: { payload: unknown }): string {
+  const reviews = (shepherd.payload as Record<string, unknown>).reviews
+  if (typeof reviews !== 'string') throw new Error('shepherd carries no `reviews` pointer')
+  return reviews
+}
 
 function makeSnapshot(): import('./pull-prod.js').ProdSnapshot {
   return {
@@ -118,6 +126,7 @@ beforeAll(async () => {
   seedReal = await import('./seed-real.js')
   read = await import('./read.js')
   graph = await import('../../db/graphStore.js')
+  ids = await import('../ids.js')
   snapshot = makeSnapshot()
 
   // Stand in for `pnpm graph:bodies`: the real fetcher is read-only against the
@@ -193,6 +202,33 @@ describe('replaying a production snapshot', () => {
       expect(holder.archetype).toBe('task')
       expect(Object.keys(SHEPHERDS)).toContain(holder.type)
     }
+  })
+
+  it('has the OUTBOX EXECUTOR create the publish review, not the seeder', async () => {
+    // The one live path in the seed (`seed-real.ts` step 5): the loop runs
+    // `queue-review`, its `enqueue-review` action fans out over the posts it
+    // produced, and the EXECUTOR creates the shepherd. So this gate exists because
+    // a rule fired - which is what the whole outbox unit is for, and the thing a
+    // seeded shepherd could never demonstrate.
+    const objects = await graph.listObjects(undefined, read.DEMO_TEAM_ID)
+    const shepherd = objects.find((o) => o.type === 'publish-review' && o.title === 'A post waiting to go out')!
+    expect(shepherd).toBeDefined()
+    expect(shepherd.status).toBe('awaiting-publish')
+    // Created BY an action, and its id is derived from that action - so a replay
+    // of the same action resolves this object instead of minting a twin.
+    const createdByAction = (shepherd.payload as Record<string, unknown>).createdByAction
+    expect(typeof createdByAction).toBe('string')
+    expect(shepherd.id).toBe(ids.reviewObjectId(createdByAction as string, requireReviewedId(shepherd)))
+
+    // The gate opened the normal way: a real `ready` transition with `rule`
+    // provenance whose actor is the action id.
+    const events = await graph.listObjectEvents(undefined, shepherd.id)
+    const ready = events.find((e) => e.transition === 'ready')!
+    expect(ready.entrance).toBe('rule')
+    expect(ready.actorId).toBe(createdByAction)
+
+    // And the action that did it is settled, not left hanging.
+    expect((await graph.getAction(undefined, createdByAction as string))!.state).toBe('done')
   })
 
   it('gives content no lifecycle at all, and publishes it with a FIELD', async () => {

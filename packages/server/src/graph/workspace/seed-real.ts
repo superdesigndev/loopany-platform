@@ -52,8 +52,9 @@ import { edges as edgesTable } from "../../db/graph-schema.js";
 import * as graph from "../../db/graphStore.js";
 import { cronText } from "../../lib/format.js";
 import { applyTransition } from "../applyTransition.js";
+import { drainOutbox } from "../outbox/executor.js";
 import { resetGraphDemo, type SeedResult } from "./seed.js";
-import { DEMO_TEAM_ID, DEMO_TYPES } from "./specs.js";
+import { DEMO_TEAM_ID, DEMO_TYPES, LOOP_SPEC } from "./specs.js";
 import { readSnapshot, type ProdFile, type ProdLoop, type ProdRun, type ProdSnapshot } from "./pull-prod.js";
 import { MAX_BODY_BYTES, readCachedBody } from "./fetch-bodies.js";
 
@@ -144,6 +145,30 @@ const LIFECYCLE: Record<string, Lifecycle> = {
 
 const FALLBACK_LIFECYCLE: Lifecycle = { doc: "report", published: true };
 
+/**
+ * Which waiting flows the ENGINE opens rather than the seeder: an unpublished
+ * post awaiting a publish verdict, which is exactly what the loop's
+ * `queue-review` selector (`specs.ts` LOOP_SPEC) declares it reviews.
+ *
+ * Only ONE flow, on purpose. The others are replayed HISTORY - a verdict that was
+ * already given, or a review whose own gate-opening transition is part of a path
+ * the seeder walks - and re-deriving those through the executor would fabricate
+ * notifications for decisions that happened weeks ago. This one is the live path,
+ * and one live path is what proves the mechanism.
+ */
+function queuedByEngine(lifecycle: Lifecycle): boolean {
+  return lifecycle.shepherd?.type === "publish-review" && lifecycle.shepherd.waiting === true;
+}
+
+/** Can this loop actually run `queue-review`? Its `from` states are the answer,
+ *  read off the transition spec rather than restated here. */
+async function canQueueReview(loopObjectId: string): Promise<boolean> {
+  const loop = await graph.getObject(undefined, loopObjectId);
+  if (!loop) return false;
+  const from = LOOP_SPEC.transitions.find((t) => t.name === "queue-review")?.from ?? [];
+  return from.includes(loop.status);
+}
+
 /** `task` front matter is the loop's own brief; it is seeded from
  *  `task_file_content` instead, so the synced copy would be a duplicate row. */
 const SKIP_TYPES = new Set(["task"]);
@@ -165,6 +190,9 @@ export async function seedFromProdSnapshot(
 
   const dropped = [...snap.dropped];
   const refusals: string[] = [];
+  /** Loop object ids whose unpublished posts are handed to the ENGINE for their
+   *  review instead of getting a seed-built shepherd (step 5). */
+  const engineQueued = new Set<string>();
   const bump = (what: string, why: string) => {
     const row = dropped.find((d) => d.what === what && d.why === why);
     if (row) row.count++;
@@ -213,7 +241,7 @@ export async function seedFromProdSnapshot(
       return false;
     }
     if (!input.keepPending) {
-      for (const a of out.actions) await graph.markActionDelivered(undefined, a.id, input.now);
+      for (const a of out.actions) await graph.markActionDone(undefined, a.id, input.now);
     }
     return true;
   };
@@ -422,6 +450,23 @@ export async function seedFromProdSnapshot(
 
     if (!lifecycle.shepherd) continue;
 
+    // THE ENGINE-CREATED PATH. A post still awaiting a publish verdict does NOT
+    // get a hand-built shepherd: the producing loop runs `queue-review` below and
+    // the OUTBOX EXECUTOR creates it through `applyTransition`. Same end state,
+    // real provenance - the review exists because a rule fired, which is how it
+    // will work when the product is live and no seeder is involved.
+    //
+    // Gated on the loop actually being able to run that transition. `queue-review`
+    // goes from `idle`/`paused`, and a loop whose real history ended in
+    // `completed` is terminal - so those keep the seeded path. Deciding it HERE
+    // (the loop's status is already final by now) rather than reacting to a
+    // refusal later is what keeps the waiting item from being lost either way: a
+    // truncated archive is fine, a truncated inbox is a lie.
+    if (queuedByEngine(lifecycle) && (await canQueueReview(objectId))) {
+      engineQueued.add(objectId);
+      continue;
+    }
+
     // The verdict lives on a small TASK that tracks the content - the same
     // relationship a merge review has with a pull request.
     const shepherd = await graph.createObject(undefined, {
@@ -453,6 +498,44 @@ export async function seedFromProdSnapshot(
         label: title,
       });
       if (!ok) break;
+    }
+  }
+
+  // ---- 5. hand the unpublished posts to the ENGINE, and let it run ----
+  //
+  // This is the live flow, not a fixture: `queue-review` is an ordinary auditable
+  // self-transition on the loop whose `enqueue-review` action fans out over its
+  // `produces` edges, and the EXECUTOR creates each publish-review shepherd
+  // through `applyTransition` (entrance `rule`, actor = the action id). So the
+  // gate obligations those posts hold were opened the normal way, by a rule, with
+  // provenance a person can read in the Timeline.
+  //
+  // Only an `idle`/`paused` loop can run it (a completed loop is terminal), so a
+  // loop whose real history ended in `completed` keeps the seeded shepherd path -
+  // an honest fallback rather than a fabricated re-activation.
+  for (const objectId of engineQueued) {
+    const loop = await graph.getObject(undefined, objectId);
+    if (!loop) continue;
+    await step({
+      objectId,
+      transition: "queue-review",
+      entrance: "agent-run",
+      actorId: `run-queue-review-${objectId}`,
+      now: loop.updatedAt,
+      note: "handed unpublished products to review",
+      // The whole point: leave the action for the executor.
+      keepPending: true,
+      label: loop.title ?? objectId,
+    });
+  }
+  // Drain what we just enqueued. The background executor would pick these up
+  // within a tick anyway; draining here means `pnpm graph:seed` leaves a
+  // CONSISTENT workspace rather than one that becomes consistent shortly after
+  // the server starts.
+  if (engineQueued.size) {
+    const drained = await drainOutbox({ now: new Date().toISOString(), teamId, limit: 100, maxPasses: 50 });
+    if (drained.deadLettered) {
+      bump("review handoff", `${drained.deadLettered} action(s) dead-lettered - see the Attention section`);
     }
   }
 

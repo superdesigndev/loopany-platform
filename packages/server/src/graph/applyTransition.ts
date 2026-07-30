@@ -74,8 +74,11 @@ import type { GraphExec } from "../db/graphStore.js";
 import { derivedEventId, organicEventId } from "./ids.js";
 import {
   ACTION_CONSEQUENCE,
+  CHAIN_PARKED_EVENT,
+  CLOSE_REFUSED_EVENT,
   type ActionKind,
   type ConsequenceClass,
+  type EntranceClass,
   type EventProvenance,
   type EventDiff,
   type TransitionSpec,
@@ -261,6 +264,19 @@ export function buildDiff(
   return diff;
 }
 
+/** Normalize a spec's `entrance` restriction to a list - one class or several. */
+export function entranceList(e: EntranceClass | readonly EntranceClass[]): readonly EntranceClass[] {
+  return Array.isArray(e) ? e : [e as EntranceClass];
+}
+
+/** May this actor's entrance run a transition restricted to `e`? */
+export function allowsEntrance(
+  e: EntranceClass | readonly EntranceClass[],
+  entrance: EntranceClass,
+): boolean {
+  return entranceList(e).includes(entrance);
+}
+
 function sameJson(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a == null && b == null) return true;
@@ -373,10 +389,11 @@ export async function applyTransitionIn(
       where,
     );
   }
-  if (t.entrance && t.entrance !== actor.entrance) {
+  if (t.entrance && !allowsEntrance(t.entrance, actor.entrance)) {
     return fail(
       "WRONG_ENTRANCE",
-      `${before.type}.${transitionName} requires entrance ${t.entrance}, got ${actor.entrance}`,
+      `${before.type}.${transitionName} requires entrance ${entranceList(t.entrance).join(" or ")}, ` +
+        `got ${actor.entrance}`,
       where,
     );
   }
@@ -408,9 +425,17 @@ export async function applyTransitionIn(
       id: parkEventId,
       teamId: before.teamId,
       objectId: before.id,
-      kind: "chain-parked",
+      kind: CHAIN_PARKED_EVENT,
       origin: "organic",
-      payload: { transition: transitionName, chainDepth: depth, chainBudget: budget },
+      payload: {
+        transition: transitionName,
+        chainDepth: depth,
+        chainBudget: budget,
+        code: "CHAIN_BUDGET_EXCEEDED",
+        // Spelled out on the event so the attention item reads the same whether
+        // it is rendered from the row or from a log.
+        reason: `chain depth ${depth} exceeds the budget of ${budget} - the object is parked until a person decides`,
+      },
       entrance: actor.entrance,
       actorId: actor.actorId,
       ts: now,
@@ -435,6 +460,14 @@ export async function applyTransitionIn(
   // ATTESTED CLOSE (design §12 item 8): entering a terminal state requires "no
   // open obligations, no pending actions", checked in THIS transaction and
   // recorded on the closing event so the attestation is auditable, not implied.
+  //
+  // A VIOLATION IS RECORDED, not just returned. Until the executor existed a
+  // refused close was a log line, and the design's "violation ⇒ an attention
+  // item" had nothing to compute from. So the refusal appends a `close-refused`
+  // event (the same posture the chain-budget park already had) and the attention
+  // section derives an item from it. This is the only place besides the park where
+  // this module writes on a refusal, and the reason is identical: a refusal a
+  // person must act on cannot live only in a log.
   const terminal = (spec.terminalStates ?? []).includes(t.to);
   let attestation: { openObligations: number; pendingActions: number } | undefined;
   if (terminal) {
@@ -444,20 +477,33 @@ export async function applyTransitionIn(
       (o) => o.closedByEvent === null && !closing.has(o.key),
     );
     if (open.length) {
-      return fail(
-        "OPEN_OBLIGATIONS",
+      const reason =
         `cannot enter terminal state "${t.to}" with ${open.length} open obligation(s): ` +
-          open.map((o) => o.key).join(", "),
-        where,
-      );
+        open.map((o) => o.key).join(", ");
+      await recordCloseRefusal(tx, {
+        before,
+        transition: transitionName,
+        actor,
+        now,
+        code: "OPEN_OBLIGATIONS",
+        reason,
+        detail: { to: t.to, openObligations: open.map((o) => o.key) },
+      });
+      return fail("OPEN_OBLIGATIONS", reason, where);
     }
     const pending = await graph.countPendingActions(tx, before.id);
     if (pending) {
-      return fail(
-        "PENDING_ACTIONS",
-        `cannot enter terminal state "${t.to}" with ${pending} pending action(s)`,
-        where,
-      );
+      const reason = `cannot enter terminal state "${t.to}" with ${pending} unsettled action(s)`;
+      await recordCloseRefusal(tx, {
+        before,
+        transition: transitionName,
+        actor,
+        now,
+        code: "PENDING_ACTIONS",
+        reason,
+        detail: { to: t.to, pendingActions: pending },
+      });
+      return fail("PENDING_ACTIONS", reason, where);
     }
     attestation = { openObligations: 0, pendingActions: 0 };
   }
@@ -571,6 +617,46 @@ export async function applyTransitionIn(
 }
 
 // ---- small local helpers ----
+
+/**
+ * Record an attested-close violation as an event, so the attention section can
+ * compute an item from it (design §12 item 8 + §8's "the inbox aggregates …").
+ *
+ * The id is DERIVED from `(object, transition, code, now)`. Including `now` is
+ * deliberate: two attempts to close the same task an hour apart are two real
+ * refusals worth seeing, while a retry storm inside the same instant collapses to
+ * one row. Excluding `now` would hide the second refusal; using a ULID would
+ * flood the list from a caller in a loop.
+ */
+async function recordCloseRefusal(
+  tx: GraphExec,
+  input: {
+    before: GraphObject;
+    transition: string;
+    actor: EventProvenance;
+    now: string;
+    code: "OPEN_OBLIGATIONS" | "PENDING_ACTIONS";
+    reason: string;
+    detail: Record<string, unknown>;
+  },
+): Promise<void> {
+  await graph.appendEvent(tx, {
+    id: derivedEventId({
+      closeRefused: input.before.id,
+      transition: input.transition,
+      code: input.code,
+      at: input.now,
+    }),
+    teamId: input.before.teamId,
+    objectId: input.before.id,
+    kind: CLOSE_REFUSED_EVENT,
+    origin: "derived",
+    payload: { transition: input.transition, code: input.code, reason: input.reason, ...input.detail },
+    entrance: input.actor.entrance,
+    actorId: input.actor.actorId,
+    ts: input.now,
+  });
+}
 
 const eqId = (id: string) => eq(objectsTable.id, id);
 

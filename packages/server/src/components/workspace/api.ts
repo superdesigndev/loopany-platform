@@ -104,6 +104,51 @@ export interface Summary {
   needsYou: number
   events: number
   pendingActions: number
+  attention: number
+  notifications: number
+  unreadNotifications: number
+}
+
+/**
+ * An ATTENTION item - computed from a dead-lettered action, a parked chain or a
+ * refused close. Visually and structurally separate from a verdict: "decide this"
+ * and "this is stuck" are different asks, and one must not hide inside the other.
+ */
+export interface AttentionItem {
+  id: string
+  kind: 'dead-letter' | 'chain-parked' | 'close-refused'
+  ref: string
+  title: string
+  detail: string
+  reason: string
+  raisedAt: string
+  objectId: string | null
+  subject: string | null
+  retryable: boolean
+  actionKind?: string
+  attempts?: number
+}
+
+export interface AttentionView {
+  items: AttentionItem[]
+  counts: Record<'dead-letter' | 'chain-parked' | 'close-refused', number>
+}
+
+/** What the `notify` action produced - a verdict's visible consequence. */
+export interface NotificationRow {
+  id: string
+  title: string
+  body: string | null
+  channel: string
+  createdAt: string
+  age: string
+  read: boolean
+  objectId: string | null
+}
+
+export interface NotificationsView {
+  items: NotificationRow[]
+  unread: number
 }
 
 export interface VerdictOk {
@@ -113,6 +158,8 @@ export interface VerdictOk {
   eventId: string
   closed: string[]
   actions: { id: string; kind: string; consequenceClass: string }[]
+  /** What the verdict CAUSED, as reported by the outbox pass that ran with it. */
+  effects?: { claimed: number; done: number; deadLettered: number }
 }
 
 export interface VerdictFail {
@@ -120,6 +167,9 @@ export interface VerdictFail {
   code: string
   message: string
 }
+
+export type ResolveOk = { ok: true; verb: 'acknowledge' | 'retry'; eventId: string; replay: boolean; detail: string }
+export type ResolveFail = { ok: false; code: string; message: string }
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { accept: 'application/json' } })
@@ -131,6 +181,30 @@ export const fetchSummary = () => getJson<Summary>('/api/graph/summary')
 export const fetchSystem = () => getJson<SystemView>('/api/graph/system')
 export const fetchLibrary = () => getJson<LibraryView>('/api/graph/library')
 export const fetchTimeline = () => getJson<TimelineView>('/api/graph/timeline')
+export const fetchAttention = () => getJson<AttentionView>('/api/graph/attention')
+export const fetchNotifications = () => getJson<NotificationsView>('/api/graph/notifications')
+
+async function postJson<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  })
+  return (await res.json()) as T
+}
+
+/** Resolve an attention item. `acknowledge` says "seen, not happening"; `retry`
+ *  re-queues a dead-lettered action - and deliberately does NOT silence it, so a
+ *  second failure comes back. */
+export const postAttention = (item: AttentionItem, verb: 'acknowledge' | 'retry') =>
+  postJson<ResolveOk | ResolveFail>('/api/graph/attention', { kind: item.kind, ref: item.ref, verb })
+
+export const postNotificationsRead = () => postJson<{ ok: true; marked: number }>('/api/graph/notifications/read')
+
+/** Run one outbox pass now. The executor loops on its own; this is for a demo or
+ *  a check that wants the effect immediately rather than within a tick. */
+export const postDrain = () =>
+  postJson<{ ok: true; claimed: number; done: number; failed: number; deadLettered: number }>('/api/graph/drain')
 
 /**
  * The one write. A refusal comes back as a 409 with the transition seam's own

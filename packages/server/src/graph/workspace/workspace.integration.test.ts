@@ -16,6 +16,7 @@ let tmp: string
 let seed: typeof import('./seed.js')
 let read: typeof import('./read.js')
 let graph: typeof import('../../db/graphStore.js')
+let drainOutbox: typeof import('../outbox/executor.js')['drainOutbox']
 const at = () => import('../applyTransition.js')
 let result: import('./seed.js').SeedResult
 
@@ -29,6 +30,7 @@ beforeAll(async () => {
   seed = await import('./seed.js')
   read = await import('./read.js')
   graph = await import('../../db/graphStore.js')
+  drainOutbox = (await import('../outbox/executor.js')).drainOutbox
   result = await seed.seedGraphDemo()
 }, 120_000)
 
@@ -219,11 +221,14 @@ describe('the write path is the transition seam, not a shortcut', () => {
     expect(second.code).toBe('ILLEGAL_FROM_STATE')
   }, 120_000)
 
-  it('never auto-delivers an outward or governance action', async () => {
+  it('never performs an outward or governance action - it dead-letters it into Attention', async () => {
     await seed.seedGraphDemo()
     const objects = await graph.listObjects(undefined, read.DEMO_TEAM_ID)
     const holder = objects.find((o) => o.type === 'merge-review' && o.status === 'awaiting-verdict')!
-    // Plant an R3 action on the object: the drain must leave it alone.
+    // Plant an R3 action on the object, WITH a real human approval - so nothing
+    // about the approval ceiling is what stops it. What stops it is that no
+    // handler for an outward effect exists in this build: the ceiling holds by
+    // ABSENCE, and the action ends up visible rather than quietly marked done.
     await graph.appendEvent(undefined, {
       id: 'ev-test-approval',
       teamId: read.DEMO_TEAM_ID,
@@ -241,9 +246,15 @@ describe('the write path is the transition seam, not a shortcut', () => {
       now: '2026-07-30T09:00:00+08:00',
     })
 
-    const drained = await read.drainEngineLocalActions(holder.id, '2026-07-30T09:01:00+08:00')
-    expect(drained).toBeGreaterThan(0)
-    const stillPending = await graph.listPendingActions(undefined, { objectId: holder.id })
-    expect(stillPending.map((a) => a.consequenceClass)).toEqual(['R3'])
+    const r = await drainOutbox({ now: '2026-07-30T09:01:00+08:00', teamId: read.DEMO_TEAM_ID })
+    expect(r.done).toBeGreaterThan(0)
+
+    const outward = (await graph.listActionsForEvent(undefined, 'ev-test-approval'))[0]!
+    expect(outward.state).toBe('dead-letter')
+    expect(outward.refusalCode).toBe('NO_HANDLER')
+    expect(outward.deliveredAt).toBeNull()
+
+    const attention = await read.attentionView()
+    expect(attention.items.some((i) => i.kind === 'dead-letter' && i.ref === outward.id)).toBe(true)
   }, 120_000)
 })
