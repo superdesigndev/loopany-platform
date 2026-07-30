@@ -8,14 +8,18 @@
  *
  *   1. get-or-create the PR MIRROR (`graphStore.getOrCreateMirror`, the upsert on
  *      a deterministic id - so running this twice converges on one row);
- *   2. OBSERVE it for real (`sensing/poller.ts sweepOnce`), so the mirror carries
- *      facts GitHub actually reported rather than a plausible guess. This is the
- *      same freshness sweep that will later close the external wait;
- *   3. create the `merge-review` shepherd that TRACKS it, and run `submit`
+ *   2. create the `merge-review` shepherd that TRACKS it, and run `submit`
  *      through `applyTransition` with `entrance: "agent-run"` - the run that
  *      opened the PR is who hands it to review;
- *   4. drain the outbox, so `submit`'s own consequences are settled and the
+ *   3. drain the outbox, so `submit`'s own consequences are settled and the
  *      terminal `approve` is not blocked by them.
+ *
+ * WHAT IT DOES NOT DO: read the pull request. This process holds no GitHub
+ * transport, because no part of the server does (captain decision 10) - the mirror
+ * lands at status `observed` ("we know it exists, we have not read its state") and
+ * the MACHINE AGENT's next sweep is what observes it, because the watch list is
+ * derived from the table this just wrote to. Run `pnpm agent --once` after this and
+ * the facts arrive.
  *
  * `--merge-intent` sets the shepherd's `mergeIntent` field, which is what the
  * `external-merge` action's `requires` clause reads. WITHOUT it, approving
@@ -28,7 +32,6 @@ import { runMigrations } from "../../db/index.js";
 import * as graph from "../../db/graphStore.js";
 import { applyTransition } from "../applyTransition.js";
 import { drainOutbox } from "../outbox/executor.js";
-import { sweepOnce } from "../sensing/poller.js";
 import { PR_SOURCE, PR_TYPE, mirrorTitle, prExternalId, prUrl, parsePrExternalId } from "../sensing/pr.js";
 import { DEMO_TEAM_ID } from "./specs.js";
 
@@ -37,8 +40,8 @@ function usage(): never {
     [
       "usage: pnpm graph:pr -- <owner/repo> <number> [--merge-intent] [--machine <name>]",
       "",
-      "  registers a REAL pull request as a mirror, observes it, and opens a",
-      "  merge review that is waiting on your verdict.",
+      "  registers a REAL pull request as a mirror and opens a merge review that is",
+      "  waiting on your verdict. The machine agent observes it (`pnpm agent --once`).",
       "",
       "  --merge-intent   approving will also MERGE it (guarded again at the agent)",
       "  --machine <name> bind the resulting work orders to one effect agent",
@@ -72,8 +75,8 @@ async function main(): Promise<void> {
     externalSource: PR_SOURCE,
     externalId,
     type: PR_TYPE,
-    // `observed` is the honest starting state: we know it exists, we have not
-    // read its facts yet. Step 2 is what reads them.
+    // `observed` is the honest starting state: we know it exists, we have not read
+    // its facts yet. The machine agent's next sweep is what reads them.
     status: "observed",
     title: mirrorTitle({ ...identity, title: `#${number}`, state: "open", merged: false, checks: "none", draft: false }),
     payload: { repo, number, sourceUrl: prUrl(identity), registeredBy: "graph:pr" },
@@ -81,17 +84,9 @@ async function main(): Promise<void> {
   });
   process.stdout.write(`${created ? "created" : "found"} mirror ${mirror.id} for ${externalId}\n`);
 
-  // Observe it for real. A failure here is not fatal - the review can still be
-  // opened - but it IS reported, because a mirror with no facts is a mirror the
-  // merge guard cannot reason about.
-  try {
-    const sweep = await sweepOnce({ now, teamId: DEMO_TEAM_ID });
-    process.stdout.write(`observed: ${sweep.changed} mirror(s) moved, ${sweep.events} event(s)\n`);
-    for (const u of sweep.unresolved) process.stdout.write(`  unresolved  ${u.externalId} — ${u.why}\n`);
-  } catch (err) {
-    process.stderr.write(`observation failed (is \`gh\` logged in?): ${err instanceof Error ? err.message : String(err)}\n`);
-  }
-
+  // NOT observed here. This process holds no GitHub transport (see the header):
+  // the mirror is now on the watch list, and the machine agent's next sweep is what
+  // reads its real facts.
   const fresh = (await graph.getObject(undefined, mirror.id))!;
   process.stdout.write(`mirror status: ${fresh.status}\n`);
 
@@ -135,8 +130,8 @@ async function main(): Promise<void> {
       machine ? `  bound machine   ${machine}` : "  bound machine   (any effect agent)",
       `  outbox          ${drained.done} action(s) settled, ${drained.deadLettered} dead-lettered`,
       "",
-      "Open /dev/workspace and approve it. The verdict queues an outward work order;",
-      "run the effect agent (pnpm effects:agent) to execute it.",
+      "Run `pnpm agent --once` to sense the PR's real facts, then open /dev/workspace",
+      "and approve it. The verdict queues an outward work order the same agent executes.",
       "",
     ].join("\n"),
   );

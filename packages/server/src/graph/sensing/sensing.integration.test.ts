@@ -1,37 +1,49 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 /**
- * PROBE SUITE - LIVE INGESTION, pipe 1 (the GitHub PR mirror poller), over a REAL
+ * PROBE SUITE - LIVE INGESTION, pipe 1 (the GitHub PR mirror pipe), over a REAL
  * pglite database.
  *
- * The unit is only worth anything if re-polling forever is free and a restart
- * cannot duplicate or lose anything. Those are not properties you can eyeball, so
- * each block below is one of them, and each is asserted against real rows through
- * the real seam - never a mock of the thing under test. The FETCHER is the only
- * fake: a sweep that reached GitHub could not assert "the same facts twice change
- * nothing", because the facts would be free to move underneath the assertion.
+ * ── what changed, and what deliberately did not ─────────────────────────────
  *
- *   1. double-poll        no upstream change ⇒ zero new events, zero field churn
+ * Captain decision 10 moved the FETCH LOOP to the machine agent: the server keeps a
+ * watch-list API and the observation seam, and holds no GitHub transport at all. So
+ * these probes drive the SEAM the agent talks to (`watchList` +
+ * `ingestObservations`) instead of an in-server sweep - and every behavioural claim
+ * the old suite made is asserted again, unchanged, because the transport moved and
+ * the meaning did not. That is the whole point of the migration probe: if any of
+ * these had to be relaxed, identity was not really content-derived.
+ *
+ *   1. double-report      no upstream change ⇒ zero new events, zero field churn
  *   2. one real change    ⇒ exactly one derived event per moved field + the write;
  *                           replaying the same observation ⇒ no-op
- *   3. kill mid-sweep     ⇒ no dupes, no gaps after the next sweep
+ *   3. kill mid-sweep     ⇒ no dupes, no gaps after the next report
  *   4. external-wait      a matching observation closes it (closed_by = the
  *                           observation); a non-matching one leaves it open
  *   5. unknown PR ref     ⇒ exactly ONE mirror, under concurrency
+ *   6. the watch list     scope is our own tables; a non-PR mirror is never offered
+ *   7. NO FETCH PATH      the server source contains no GitHub transport, and the
+ *                           deleted poller/fetcher modules are really gone
  *
- * Probe 3 is the one worth reading twice: the poller has no cursor, so "recovery"
- * is not a code path that could be wrong - it is the dedup invariant. The probe
- * proves that by aborting a sweep halfway and letting the next one run.
+ * Probe 3 is the one worth reading twice: there is no cursor, so "recovery" is not a
+ * code path that could be wrong - it is the dedup invariant. The probe proves that by
+ * reporting half a sweep and then reporting the whole of it.
+ *
+ * `sweepViaSeam` stands in for the agent: watch list → resolve facts from a fixture →
+ * report. The FIXTURE is the only fake, and it has to be: a sweep that reached GitHub
+ * could not assert "the same facts twice change nothing", because the facts would be
+ * free to move underneath the assertion.
  */
 
 let tmp: string
 let dbmod: typeof import('../../db/index.js')
 let graph: typeof import('../../db/graphStore.js')
 let observe: typeof import('./observe.js')
-let poller: typeof import('./poller.js')
+let watch: typeof import('./watch.js')
 let handlers: typeof import('../outbox/handlers.js')
 let exec: typeof import('../outbox/executor.js')
 let pr: typeof import('./pr.js')
@@ -71,27 +83,36 @@ function observed(number: number, over: Partial<import('./pr.js').ObservedPr> = 
   }
 }
 
-/** A fetcher over a fixed table of facts, counting its calls. The ONLY fake in
- *  the suite: the facts have to hold still for "the same observation twice" to
- *  mean anything. */
-function fakeFetcher(facts: Map<number, import('./pr.js').ObservedPr>) {
-  const calls: { repo: string; numbers: number[] }[] = []
-  return {
-    calls,
-    fetcher: {
-      async fetch(repo: string, numbers: number[]) {
-        calls.push({ repo, numbers: [...numbers] })
-        const out = new Map<number, import('./pr.js').ObservedPr>()
-        const missing: { number: number; why: string }[] = []
-        for (const n of numbers) {
-          const f = facts.get(n)
-          if (f) out.set(n, f)
-          else missing.push({ number: n, why: 'not in the probe fixture' })
-        }
-        return { observed: out, missing, rateLimitRemaining: 4000 }
-      },
-    },
+/**
+ * WHAT THE MACHINE AGENT DOES, in-process: pull the watch list, look each entry up in
+ * a fixture, report what it "read". This is deliberately a thin stand-in rather than
+ * an import of the agent package - the agent's own batching, rate-limit stop and
+ * cross-reference parsing are probed in `packages/machine-agent`, and what THIS suite
+ * is about is the server seam those reports land on.
+ */
+async function sweepViaSeam(
+  facts: Map<number, import('./pr.js').ObservedPr>,
+  now: string,
+  options: { only?: number[] } = {},
+): Promise<{ ingest: Awaited<ReturnType<typeof watch.ingestObservations>>; asked: number[] }> {
+  const list = await watch.watchList({ teamId: TEAM })
+  const asked: number[] = []
+  const observations: import('./pr.js').ObservedPr[] = []
+  const unresolved: { externalId: string; why: string }[] = []
+  for (const item of list.items) {
+    if (options.only && !options.only.includes(item.number)) continue
+    asked.push(item.number)
+    const f = facts.get(item.number)
+    if (f) observations.push(f)
+    else unresolved.push({ externalId: item.externalId, why: 'not in the probe fixture' })
   }
+  const ingest = await watch.ingestObservations({ now, teamId: TEAM, observations, unresolved })
+  return { ingest, asked }
+}
+
+/** Every event the workspace holds for one mirror. */
+async function eventsFor(objectId: string) {
+  return graph.listObjectEvents(undefined, objectId)
 }
 
 async function mirrorFor(number: number, over: Record<string, unknown> = {}) {
@@ -108,11 +129,6 @@ async function mirrorFor(number: number, over: Record<string, unknown> = {}) {
   return object
 }
 
-/** Every event the workspace holds for one mirror. */
-async function eventsFor(objectId: string) {
-  return graph.listObjectEvents(undefined, objectId)
-}
-
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'loopany-sensing-'))
   process.env.LOOPANY_DATA_DIR = tmp
@@ -122,7 +138,7 @@ beforeAll(async () => {
   await dbmod.runMigrations()
   graph = await import('../../db/graphStore.js')
   observe = await import('./observe.js')
-  poller = await import('./poller.js')
+  watch = await import('./watch.js')
   handlers = await import('../outbox/handlers.js')
   exec = await import('../outbox/executor.js')
   pr = await import('./pr.js')
@@ -144,32 +160,32 @@ beforeEach(async () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROBE 1 - re-polling is free
+// PROBE 1 - re-reporting is free
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('probe: a second poll with no upstream change writes nothing', () => {
-  it('sweeps twice and the second sweep produces zero events and zero field churn', async () => {
+describe('probe: a second report with no upstream change writes nothing', () => {
+  it('reports twice and the second report produces zero events and zero field churn', async () => {
     const mirror = await mirrorFor(1291)
-    const { fetcher, calls } = fakeFetcher(new Map([[1291, observed(1291)]]))
+    const facts = new Map([[1291, observed(1291)]])
 
-    const first = await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
-    expect(first.mirrors).toBe(1)
-    expect(first.changed).toBe(1)
-    expect(first.events).toBeGreaterThan(0)
+    const first = await sweepViaSeam(facts, NOW)
+    expect(first.ingest.mirrors).toBe(1)
+    expect(first.ingest.changed).toBe(1)
+    expect(first.ingest.events).toBeGreaterThan(0)
 
     const afterFirst = (await graph.getObject(undefined, mirror.id))!
     const eventsAfterFirst = await eventsFor(mirror.id)
 
-    const second = await poller.sweepOnce({ now: LATER, teamId: TEAM, fetcher })
-    // The sweep RAN - it fetched again, it just found no news.
-    expect(calls).toHaveLength(2)
-    expect(second.changed).toBe(0)
-    expect(second.events).toBe(0)
+    const second = await sweepViaSeam(facts, LATER)
+    // The sweep RAN - it asked for the mirror again, it just found no news.
+    expect(second.asked).toEqual([1291])
+    expect(second.ingest.changed).toBe(0)
+    expect(second.ingest.events).toBe(0)
 
     const afterSecond = (await graph.getObject(undefined, mirror.id))!
     expect(await eventsFor(mirror.id)).toHaveLength(eventsAfterFirst.length)
     // Zero FIELD churn: the payload, the status and - critically - the instant the
-    // status last changed are all untouched. A re-poll that bumped
+    // status last changed are all untouched. A re-report that bumped
     // `statusChangedAt` would corrupt every stuck-time aggregate in the product.
     expect(afterSecond.payload).toEqual(afterFirst.payload)
     expect(afterSecond.status).toBe(afterFirst.status)
@@ -180,16 +196,16 @@ describe('probe: a second poll with no upstream change writes nothing', () => {
     expect(afterFirst.externalObservedAt).toBe(NOW)
   })
 
-  it('stays free over many polls', async () => {
+  it('stays free over many reports', async () => {
     await mirrorFor(1291)
-    const { fetcher } = fakeFetcher(new Map([[1291, observed(1291)]]))
-    await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
+    const facts = new Map([[1291, observed(1291)]])
+    await sweepViaSeam(facts, NOW)
     const baseline = await graph.countEvents(undefined, TEAM)
     for (let i = 0; i < 10; i++) {
-      await poller.sweepOnce({ now: `2026-07-30T10:${String(i).padStart(2, '0')}:00.000Z`, teamId: TEAM, fetcher })
+      await sweepViaSeam(facts, `2026-07-30T10:${String(i).padStart(2, '0')}:00.000Z`)
     }
-    // Ten more sweeps, not one row. This is the property that lets the poller run
-    // on a cadence forever instead of needing a window to forget with.
+    // Ten more sweeps, not one row. This is the property that lets the agent sweep on
+    // a cadence forever instead of needing a window to forget with.
     expect(await graph.countEvents(undefined, TEAM)).toBe(baseline)
   })
 })
@@ -202,21 +218,22 @@ describe('probe: a real state change is exactly one derived event per moved fiel
   it('records the change, updates the mirror, and replays as a no-op', async () => {
     const mirror = await mirrorFor(1291)
     const facts = new Map([[1291, observed(1291)]])
-    const { fetcher } = fakeFetcher(facts)
-    await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
+    await sweepViaSeam(facts, NOW)
     const before = await eventsFor(mirror.id)
 
     // The PR merges upstream. Three facts move (`state`, `merged`, the projected
     // `status`); `checks` and `title` do not.
     facts.set(1291, observed(1291, { state: 'merged', merged: true }))
-    const sweep = await poller.sweepOnce({ now: LATER, teamId: TEAM, fetcher })
-    expect(sweep.changed).toBe(1)
-    expect(sweep.events).toBe(3)
+    const sweep = await sweepViaSeam(facts, LATER)
+    expect(sweep.ingest.changed).toBe(1)
+    expect(sweep.ingest.events).toBe(3)
 
     const fresh = (await eventsFor(mirror.id)).filter((e) => !before.some((b) => b.id === e.id))
     expect(fresh.map((e) => (e.payload as Record<string, unknown>).field).sort()).toEqual(['merged', 'state', 'status'])
     for (const e of fresh) {
-      // Provenance on every row: a rule did this, and the rule is named.
+      // PROVENANCE IS UNCHANGED BY THE TRANSPORT MOVE. Still a rule, still the poller
+      // actor - a freshness sweep is the engine's own declarative service, not the
+      // agent run that happened to carry its bytes.
       expect(e.kind).toBe('external-changed')
       expect(e.origin).toBe('derived')
       expect(e.entrance).toBe('rule')
@@ -230,38 +247,42 @@ describe('probe: a real state change is exactly one derived event per moved fiel
     const after = (await graph.getObject(undefined, mirror.id))!
     expect(after.status).toBe('merged')
     expect((after.payload as Record<string, unknown>).merged).toBe(true)
-    // The display title follows the observed one, so a Library row improves the
-    // moment the poller looks.
+    // The display title follows the observed one, so a Library row improves the moment
+    // the agent looks.
     expect(after.title).toBe('PR #1291 · PR 1291 title')
 
     // REPLAY: the same observation again, at yet another instant, by a different
-    // actor. Same facts ⇒ same ids ⇒ nothing lands.
+    // actor. Same facts ⇒ same ids ⇒ nothing lands. Asserted through the SEAM the
+    // agent uses, which is exactly the claim the transport move has to make good on.
     const eventCount = await graph.countEvents(undefined, TEAM)
-    const replay = await observe.recordObservation({
-      objectId: mirror.id,
-      observed: observed(1291, { state: 'merged', merged: true }),
+    const replay = await watch.ingestObservations({
       now: '2026-08-30T23:59:00.000Z',
+      teamId: TEAM,
+      observations: [observed(1291, { state: 'merged', merged: true })],
       actorId: 'rule-some-other-sweep',
     })
-    expect(replay.ok).toBe(true)
-    if (!replay.ok) return
-    expect(replay.changed).toEqual([])
-    expect(replay.events).toEqual([])
+    expect(replay.changed).toBe(0)
+    expect(replay.events).toBe(0)
     expect(await graph.countEvents(undefined, TEAM)).toBe(eventCount)
   })
 
   it('re-deriving the SAME change against a rolled-back mirror inserts nothing new', async () => {
-    // The direct form of the invariant: hand `recordObservation` the same change
-    // twice with the stored facts reset in between, so the diff is non-empty both
-    // times. The first call writes; the second derives identical ids, collides,
-    // and is reported as a replay that applied nothing.
+    // The direct form of the invariant: hand the seam the same change twice with the
+    // stored facts reset in between, so the diff is non-empty both times. The first
+    // call writes; the second derives identical ids, collides, and is reported as a
+    // replay that applied nothing.
     const mirror = await mirrorFor(1291)
     const facts = observed(1291, { state: 'merged', merged: true })
     const first = await observe.recordObservation({ objectId: mirror.id, observed: facts, now: NOW })
     expect(first.ok && first.replay).toBe(false)
     const count = await graph.countEvents(undefined, TEAM)
 
-    await graph.recordMirrorObservation(undefined, { id: mirror.id, status: 'observed', payload: { repo: REPO, number: 1291 }, now: NOW })
+    await graph.recordMirrorObservation(undefined, {
+      id: mirror.id,
+      status: 'observed',
+      payload: { repo: REPO, number: 1291 },
+      now: NOW,
+    })
     const again = await observe.recordObservation({ objectId: mirror.id, observed: facts, now: LATER })
     expect(again.ok).toBe(true)
     if (!again.ok) return
@@ -295,13 +316,30 @@ describe('probe: a real state change is exactly one derived event per moved fiel
   })
 
   it('refuses an observation aimed at the wrong mirror', async () => {
-    // A fetcher bug that mismatched a batch response to its request would write
-    // one PR's facts onto another PR's mirror. A WRONG observation is worse than a
-    // missing one, so the identity is re-checked at the seam.
+    // A transport bug that mismatched a batch response to its request would write one
+    // PR's facts onto another PR's mirror. A WRONG observation is worse than a missing
+    // one, so the identity is re-checked at the seam - and now that the transport runs
+    // on somebody else's machine, that check matters MORE, not less.
     const mirror = await mirrorFor(1291)
     const r = await observe.recordObservation({ objectId: mirror.id, observed: observed(1292), now: NOW })
     expect(r.ok).toBe(false)
     expect(!r.ok && r.code).toBe('IDENTITY_MISMATCH')
+  })
+
+  it('drops a reported fact for a mirror this team does not hold', async () => {
+    // A report is not a discovery channel. An agent reporting whatever it likes must
+    // not be able to widen the graph's scope - new mirrors arrive only through a
+    // cross-reference inside a PR we already watch.
+    await mirrorFor(1291)
+    const r = await watch.ingestObservations({
+      now: NOW,
+      teamId: TEAM,
+      observations: [observed(1291), observed(4242)],
+    })
+    expect(r.unknown).toBe(1)
+    expect(r.changed).toBe(1)
+    const mirrors = await graph.listMirrors(undefined, TEAM, { externalSource: 'github', type: 'pull-request' })
+    expect(mirrors).toHaveLength(1)
   })
 })
 
@@ -315,33 +353,19 @@ describe('probe: killing a sweep mid-flight leaves no dupes and no gaps', () => 
     for (const n of numbers) await mirrorFor(n)
     const facts = new Map(numbers.map((n) => [n, observed(n, { state: 'merged', merged: true })]))
 
-    // A fetcher that dies partway through the batch, taking the whole repo's
-    // response with it - a process killed, or a connection dropped, before
-    // anything committed. (The next test covers the other half: killed AFTER some
-    // mirrors had already landed.)
-    let fail = true
-    const dying = {
-      async fetch(repo: string, nums: number[]) {
-        const out = new Map<number, import('./pr.js').ObservedPr>()
-        for (const n of nums) {
-          if (fail && out.size === 3) throw new Error('killed mid-sweep')
-          const f = facts.get(n)
-          if (f) out.set(n, f)
-        }
-        return { observed: out, missing: [] }
-      },
-    }
-
-    await expect(poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher: dying })).resolves.toBeTruthy()
-    // A repo whose fetch threw is reported, not swallowed: every number in it comes
-    // back unresolved so the sweep's own report is honest about the gap.
-    const partial = await graph.countEvents(undefined, TEAM)
-    expect(partial).toBe(0)
+    // An agent that died partway through the sweep: it read three PRs and never
+    // reported the rest. That is the honest shape of a killed process here - the
+    // fetch happens off-server, so what the server sees is a PARTIAL report.
+    const partial = await sweepViaSeam(facts, NOW, { only: [1, 2, 3] })
+    expect(partial.ingest.changed).toBe(3)
+    const afterPartial = await graph.countEvents(undefined, TEAM)
+    expect(afterPartial).toBeGreaterThan(0)
 
     // Now the process is back. Same facts, full sweep.
-    fail = false
-    const complete = await poller.sweepOnce({ now: LATER, teamId: TEAM, fetcher: dying })
-    expect(complete.changed).toBe(6)
+    const complete = await sweepViaSeam(facts, LATER)
+    // Only the three that had not landed produced events; the committed ones are
+    // no-ops even though the sweep re-read and re-reported them.
+    expect(complete.ingest.changed).toBe(3)
     const total = await graph.countEvents(undefined, TEAM)
 
     // NO GAPS: every mirror carries the merge.
@@ -349,32 +373,22 @@ describe('probe: killing a sweep mid-flight leaves no dupes and no gaps', () => 
       const m = (await graph.getObject(undefined, pr.prMirrorId(TEAM, { repo: REPO, number: n })))!
       expect(m.status).toBe('merged')
     }
-    // NO DUPES: a third sweep over the same facts adds nothing. There is no cursor
-    // to have advanced wrongly - the diff is the whole recovery story.
-    await poller.sweepOnce({ now: '2026-07-30T09:10:00.000Z', teamId: TEAM, fetcher: dying })
+    // NO DUPES: a third sweep over the same facts adds nothing. There is no cursor to
+    // have advanced wrongly - the diff is the whole recovery story.
+    await sweepViaSeam(facts, '2026-07-30T09:10:00.000Z')
     expect(await graph.countEvents(undefined, TEAM)).toBe(total)
   })
 
-  it('a sweep interrupted AFTER some mirrors committed does not re-event them', async () => {
-    const numbers = [10, 11, 12]
-    for (const n of numbers) await mirrorFor(n)
-    const facts = new Map(numbers.map((n) => [n, observed(n, { checks: 'passing' })]))
-
-    // Observe the first mirror only - the state a kill between two mirrors leaves.
-    await observe.recordObservation({
-      objectId: pr.prMirrorId(TEAM, { repo: REPO, number: 10 }),
-      observed: facts.get(10)!,
-      now: NOW,
-    })
-    const afterPartial = await graph.countEvents(undefined, TEAM)
-    expect(afterPartial).toBeGreaterThan(0)
-
-    const { fetcher } = fakeFetcher(facts)
-    const resumed = await poller.sweepOnce({ now: LATER, teamId: TEAM, fetcher })
-    // Only the two that had not landed produced events; the committed one is a
-    // no-op even though the sweep re-read and re-diffed it.
-    expect(resumed.changed).toBe(2)
-    expect(await graph.countEvents(undefined, TEAM)).toBe(afterPartial * 3)
+  it('an unreadable mirror is reported unresolved, never guessed at', async () => {
+    await mirrorFor(1291)
+    await mirrorFor(1292)
+    // The fixture knows one of the two. The other comes back as unresolved rather
+    // than as a fabricated `closed`.
+    const sweep = await sweepViaSeam(new Map([[1291, observed(1291)]]), NOW)
+    expect(sweep.ingest.unresolved).toEqual([
+      { externalId: `${REPO}/pull/1292`, why: 'not in the probe fixture' },
+    ])
+    expect((await graph.getObject(undefined, pr.prMirrorId(TEAM, { repo: REPO, number: 1292 })))!.status).toBe('observed')
   })
 })
 
@@ -385,7 +399,7 @@ describe('probe: killing a sweep mid-flight leaves no dupes and no gaps', () => 
 describe('probe: an external-wait closes on the matching observation and only that one', () => {
   /** Open a `merge-wait` on a mirror the way the engine does: a `register-watch`
    *  action, executed by the real outbox executor. */
-  async function watch(mirrorId: string, key = 'merge-wait', nonce = 'a'): Promise<string> {
+  async function watchFor(mirrorId: string, key = 'merge-wait', nonce = 'a'): Promise<string> {
     const carrier = `ev-watch-${mirrorId}-${key}-${nonce}`
     await graph.appendEvent(undefined, {
       id: carrier,
@@ -411,7 +425,7 @@ describe('probe: an external-wait closes on the matching observation and only th
 
   it('a merge observation closes the wait, with the OBSERVATION as the closing event', async () => {
     const mirror = await mirrorFor(1291)
-    await watch(mirror.id)
+    await watchFor(mirror.id)
     const open = await graph.listOpenObligations(undefined, TEAM, { class: 'external-wait' })
     expect(open).toHaveLength(1)
     expect(open[0]!.objectId).toBe(mirror.id)
@@ -419,25 +433,24 @@ describe('probe: an external-wait closes on the matching observation and only th
     expect(open[0]!.nextReminderAt).toBeTruthy()
 
     const facts = new Map([[1291, observed(1291, { checks: 'passing' })]])
-    const { fetcher } = fakeFetcher(facts)
 
-    // A NON-MATCHING observation: checks went green, which is a real change and a
-    // real event - and leaves the merge wait exactly where it was.
-    const nonMatching = await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
-    expect(nonMatching.events).toBeGreaterThan(0)
-    expect(nonMatching.waitsClosed).toBe(0)
+    // A NON-MATCHING observation: checks went green, which is a real change and a real
+    // event - and leaves the merge wait exactly where it was.
+    const nonMatching = await sweepViaSeam(facts, NOW)
+    expect(nonMatching.ingest.events).toBeGreaterThan(0)
+    expect(nonMatching.ingest.waitsClosed).toBe(0)
     expect(await graph.listOpenObligations(undefined, TEAM, { class: 'external-wait' })).toHaveLength(1)
 
     // The MATCHING one.
     facts.set(1291, observed(1291, { state: 'merged', merged: true, checks: 'passing' }))
-    const matching = await poller.sweepOnce({ now: LATER, teamId: TEAM, fetcher })
-    expect(matching.waitsClosed).toBe(1)
+    const matching = await sweepViaSeam(facts, LATER)
+    expect(matching.ingest.waitsClosed).toBe(1)
     expect(await graph.listOpenObligations(undefined, TEAM, { class: 'external-wait' })).toHaveLength(0)
 
     const closed = (await graph.listObjectObligations(undefined, mirror.id))[0]!
     expect(closed.closedAt).toBe(LATER)
-    // The obligation points at the OBSERVATION that discharged it - not at a
-    // synthetic close event - so the audit trail names the fact.
+    // The obligation points at the OBSERVATION that discharged it - not at a synthetic
+    // close event - so the audit trail names the fact.
     const closer = (await graph.getEvent(undefined, closed.closedByEvent!))!
     expect(closer.kind).toBe('external-changed')
     expect(closer.entrance).toBe('rule')
@@ -447,30 +460,30 @@ describe('probe: an external-wait closes on the matching observation and only th
 
   it('a wait on a different condition is untouched by a merge', async () => {
     const mirror = await mirrorFor(1300)
-    await watch(mirror.id, 'ci-wait:checks-green')
-    const facts = new Map([[1300, observed(1300, { state: 'merged', merged: true, checks: 'failing' })]])
-    const { fetcher } = fakeFetcher(facts)
-    const sweep = await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
-    // Merged, but the wait was for green CI - which is still failing. The condition
-    // is read off the KEY, so a sweep cannot close a wait it did not satisfy.
-    expect(sweep.waitsClosed).toBe(0)
+    await watchFor(mirror.id, 'ci-wait:checks-green')
+    const sweep = await sweepViaSeam(
+      new Map([[1300, observed(1300, { state: 'merged', merged: true, checks: 'failing' })]]),
+      NOW,
+    )
+    // Merged, but the wait was for green CI - which is still failing. The condition is
+    // read off the KEY, so a sweep cannot close a wait it did not satisfy.
+    expect(sweep.ingest.waitsClosed).toBe(0)
     expect(await graph.listOpenObligations(undefined, TEAM, { class: 'external-wait' })).toHaveLength(1)
   })
 
   it('does not open a wait for something already true upstream', async () => {
     // A wait for an already-satisfied condition could never be closed by an
-    // observation (no change ⇒ no event to close it with) and would sit open
-    // forever looking like a stuck watch. Not opening it is the honest answer.
+    // observation (no change ⇒ no event to close it with) and would sit open forever
+    // looking like a stuck watch. Not opening it is the honest answer.
     const mirror = await mirrorFor(1301)
-    const { fetcher } = fakeFetcher(new Map([[1301, observed(1301, { state: 'merged', merged: true })]]))
-    await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
-    await watch(mirror.id)
+    await sweepViaSeam(new Map([[1301, observed(1301, { state: 'merged', merged: true })]]), NOW)
+    await watchFor(mirror.id)
     expect(await graph.listOpenObligations(undefined, TEAM, { class: 'external-wait' })).toHaveLength(0)
   })
 
   it('never opens a watch on a non-mirror, and never dead-letters for trying', async () => {
-    // `merge-review.submit` declares this action for the live flow where it tracks
-    // a PR mirror; in the replayed history the same type tracks a plain doc. An
+    // `merge-review.submit` declares this action for the live flow where it tracks a
+    // PR mirror; in the replayed history the same type tracks a plain doc. An
     // inapplicable declaration must be a clean no-op, not an attention item.
     const doc = await graph.createObject(undefined, {
       teamId: TEAM,
@@ -505,12 +518,12 @@ describe('probe: an external-wait closes on the matching observation and only th
 
   it('re-registering the same watch opens nothing new', async () => {
     const mirror = await mirrorFor(1302)
-    await watch(mirror.id)
+    await watchFor(mirror.id)
     const first = (await graph.listObjectObligations(undefined, mirror.id))[0]!
     // A genuinely SECOND action (its own carrier event, so the handler really runs
-    // again). `(objectId, key)` is the obligation's identity, so nothing new opens
-    // and the ORIGINAL opener stands rather than being rewritten by the replay.
-    await watch(mirror.id, 'merge-wait', 'b')
+    // again). `(objectId, key)` is the obligation's identity, so nothing new opens and
+    // the ORIGINAL opener stands rather than being rewritten by the replay.
+    await watchFor(mirror.id, 'merge-wait', 'b')
     const all = await graph.listObjectObligations(undefined, mirror.id)
     expect(all).toHaveLength(1)
     expect(all[0]!.openedByEvent).toBe(first.openedByEvent)
@@ -523,22 +536,17 @@ describe('probe: an external-wait closes on the matching observation and only th
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('probe: a reference to an unmirrored PR creates exactly one mirror', () => {
-  it('creates it once, even when several sweeps discover it at the same instant', async () => {
+  it('creates it once, even when several reports discover it at the same instant', async () => {
     const seed = await mirrorFor(1291)
-    const facts = new Map([
-      [1291, observed(1291, { references: [{ repo: REPO, number: 999 }] })],
-    ])
-    const { fetcher } = fakeFetcher(facts)
+    const facts = new Map([[1291, observed(1291, { references: [{ repo: REPO, number: 999 }] })]])
 
-    // Eight sweeps racing on the same discovery. The upsert is the mechanism -
-    // `getOrCreateMirror` is a deterministic-id insert with ON CONFLICT DO
-    // NOTHING, never a read-then-write - so nothing here depends on ordering.
-    const sweeps = await Promise.all(
-      Array.from({ length: 8 }, (_, i) =>
-        poller.sweepOnce({ now: `2026-07-30T09:0${i}:00.000Z`, teamId: TEAM, fetcher }),
-      ),
+    // Eight reports racing on the same discovery. The upsert is the mechanism -
+    // `getOrCreateMirror` is a deterministic-id insert with ON CONFLICT DO NOTHING,
+    // never a read-then-write - so nothing here depends on ordering.
+    const reports = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => sweepViaSeam(facts, `2026-07-30T09:0${i}:00.000Z`)),
     )
-    expect(sweeps.reduce((n, s) => n + s.discovered, 0)).toBe(1)
+    expect(reports.reduce((n, r) => n + r.ingest.discovered, 0)).toBe(1)
 
     const mirrors = await graph.listMirrors(undefined, TEAM, { externalSource: 'github', type: 'pull-request' })
     expect(mirrors.filter((m) => m.externalId === `${REPO}/pull/999`)).toHaveLength(1)
@@ -550,61 +558,54 @@ describe('probe: a reference to an unmirrored PR creates exactly one mirror', ()
     expect(discovered.status).toBe('observed')
     expect((discovered.payload as Record<string, unknown>).discoveredBy).toBe('cross-reference')
 
-    // And the NEXT sweep observes it, because scope is derived from the table -
-    // the discovery is what widened it, not a config change.
+    // And the NEXT sweep observes it, because the WATCH LIST is derived from the table
+    // - the discovery is what widened the agent's scope, not a config change.
     facts.set(999, observed(999, { state: 'closed' }))
-    const next = await poller.sweepOnce({ now: LATER, teamId: TEAM, fetcher })
-    expect(next.mirrors).toBe(2)
+    const next = await sweepViaSeam(facts, LATER)
+    expect(next.asked).toContain(999)
     expect((await graph.getObject(undefined, discovered.id))!.status).toBe('closed')
   })
 
   it('does not re-create a mirror that already exists', async () => {
     await mirrorFor(1291)
     await mirrorFor(999)
-    const { fetcher } = fakeFetcher(
+    const sweep = await sweepViaSeam(
       new Map([
         [1291, observed(1291, { references: [{ repo: REPO, number: 999 }] })],
         [999, observed(999)],
       ]),
+      NOW,
     )
-    const sweep = await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
-    expect(sweep.discovered).toBe(0)
+    expect(sweep.ingest.discovered).toBe(0)
     expect(await graph.listMirrors(undefined, TEAM, { externalSource: 'github', type: 'pull-request' })).toHaveLength(2)
   })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// the sweep's own shape
+// PROBE 6 - the watch list is scoped by our own tables
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('the sweep batches by repo and reports what it could not resolve', () => {
-  it('asks each repo once, for all of its PRs', async () => {
+describe('the watch list offers exactly the mirrors this team holds', () => {
+  it('lists every PR mirror with its identity and its freshness', async () => {
     for (const n of [1, 2, 3]) await mirrorFor(n)
-    const { object: other } = await graph.getOrCreateMirror(undefined, {
-      teamId: TEAM,
-      externalSource: 'github',
-      externalId: 'superdesigndev/superdesign-prompts/pull/41',
-      type: 'pull-request',
-      status: 'observed',
-      now: NOW,
-    })
-    expect(other.id).toBeTruthy()
+    const list = await watch.watchList({ teamId: TEAM })
+    expect(list.source).toBe('github')
+    expect(list.truncated).toBe(false)
+    expect(list.items.map((i) => i.number).sort((a, b) => a - b)).toEqual([1, 2, 3])
+    for (const item of list.items) {
+      expect(item.repo).toBe(REPO)
+      expect(item.externalId).toBe(`${REPO}/pull/${item.number}`)
+      // Never observed yet, and the list says so rather than omitting the field - an
+      // agent prioritising the stalest entries needs to be able to tell.
+      expect(item.observedAt).toBeNull()
+    }
 
-    const { fetcher, calls } = fakeFetcher(new Map([1, 2, 3].map((n) => [n, observed(n)])))
-    const sweep = await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
-
-    // Two repos, two calls - not four calls for four PRs.
-    expect(calls).toHaveLength(2)
-    expect(calls.find((c) => c.repo === REPO)!.numbers).toEqual([1, 2, 3])
-    expect(sweep.repos).toBe(2)
-    // The PR the fixture has no facts for is REPORTED, never silently dropped: a
-    // mirror that stopped resolving is a fact about the world too.
-    expect(sweep.unresolved).toEqual([
-      { externalId: 'superdesigndev/superdesign-prompts/pull/41', why: 'not in the probe fixture' },
-    ])
+    await sweepViaSeam(new Map([[1, observed(1)]]), NOW)
+    const after = await watch.watchList({ teamId: TEAM })
+    expect(after.items.find((i) => i.number === 1)!.observedAt).toBe(NOW)
   })
 
-  it('ignores a mirror whose external id is not a pull request', async () => {
+  it('never offers a mirror whose external id is not a pull request', async () => {
     await graph.getOrCreateMirror(undefined, {
       teamId: TEAM,
       externalSource: 'github',
@@ -613,19 +614,93 @@ describe('the sweep batches by repo and reports what it could not resolve', () =
       status: 'observed',
       now: NOW,
     })
-    const { fetcher, calls } = fakeFetcher(new Map())
-    const sweep = await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
-    expect(sweep.mirrors).toBe(1)
-    // In scope as a row, but not addressable as a PR - so nothing is fetched and
-    // nothing is guessed.
-    expect(calls).toHaveLength(0)
-    expect(sweep.repos).toBe(0)
+    // In scope as a row, but not addressable as a PR - so it is never handed to an
+    // agent and nothing about it is guessed.
+    expect((await watch.watchList({ teamId: TEAM })).items).toHaveLength(0)
   })
 
   it('is a clean no-op on an empty workspace', async () => {
-    const { fetcher, calls } = fakeFetcher(new Map())
-    const sweep = await poller.sweepOnce({ now: NOW, teamId: TEAM, fetcher })
-    expect(sweep).toMatchObject({ mirrors: 0, repos: 0, changed: 0, events: 0 })
-    expect(calls).toHaveLength(0)
+    const list = await watch.watchList({ teamId: TEAM })
+    expect(list.items).toHaveLength(0)
+    const ingest = await watch.ingestObservations({ now: NOW, teamId: TEAM, observations: [] })
+    expect(ingest).toMatchObject({ mirrors: 0, reported: 0, changed: 0, events: 0, discovered: 0 })
+  })
+
+  it('reports sensing freshness from the observation stamps themselves', async () => {
+    // The workspace's own answer to "is anybody sensing?". Computed from rows, so it
+    // cannot claim freshness the data does not have - which is the whole reason the
+    // deleted poller's "I am running" indicator was not a good enough replacement.
+    await mirrorFor(1291)
+    const cold = await watch.sensingHealth({ now: NOW, teamId: TEAM })
+    expect(cold).toMatchObject({ mirrors: 1, unobserved: 1, stale: 0, lastObservedAt: null })
+
+    await sweepViaSeam(new Map([[1291, observed(1291)]]), NOW)
+    const warm = await watch.sensingHealth({ now: LATER, teamId: TEAM })
+    expect(warm).toMatchObject({ mirrors: 1, unobserved: 0, stale: 0, lastObservedAt: NOW })
+
+    const later = new Date(Date.parse(NOW) + watch.STALE_AFTER_MS + 60_000).toISOString()
+    expect((await watch.sensingHealth({ now: later, teamId: TEAM })).stale).toBe(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROBE 7 - the server holds NO GitHub fetch path (captain decision 10)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('probe: the server contains no GitHub fetch path at all', () => {
+  /** Every `.ts`/`.tsx` file under the server's source tree, tests excluded: a probe
+   *  may legitimately mention `gh`, production code may not. */
+  function serverSources(): string[] {
+    const root = fileURLToPath(new URL('../..', import.meta.url))
+    const out: string[] = []
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name === 'dist') continue
+          walk(full)
+          continue
+        }
+        if (!/\.tsx?$/.test(entry.name)) continue
+        if (/\.test\.tsx?$/.test(entry.name)) continue
+        out.push(full)
+      }
+    }
+    walk(root)
+    return out
+  }
+
+  it('has no module that spawns `gh` or issues a GitHub GraphQL query', () => {
+    // The invariant captain decision 10 turns on, pinned by a source scan because it
+    // is exactly the kind of thing that erodes one convenient import at a time. The
+    // agent package holds the transport; this package must hold none of it.
+    const offenders: string[] = []
+    for (const file of serverSources()) {
+      const text = fs.readFileSync(file, 'utf8')
+      const rel = path.relative(fileURLToPath(new URL('../..', import.meta.url)), file)
+      if (/\bapi\s+graphql\b/.test(text)) offenders.push(`${rel}: issues a \`gh api graphql\` call`)
+      if (/api\.github\.com/.test(text)) offenders.push(`${rel}: talks to api.github.com`)
+      if (/LOOPANY_GH_BIN/.test(text)) offenders.push(`${rel}: resolves a \`gh\` binary`)
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('no graph module imports node:child_process', () => {
+    // Stronger and simpler than grepping for `gh`: the server executes NOTHING for the
+    // graph engine, so the graph tree has no business importing a process spawner at
+    // all. A future "just shell out to X" lands here first.
+    const graphRoot = fileURLToPath(new URL('..', import.meta.url))
+    const offenders = serverSources()
+      .filter((f) => f.startsWith(graphRoot))
+      .filter((f) => /child_process/.test(fs.readFileSync(f, 'utf8')))
+      .map((f) => path.relative(graphRoot, f))
+    expect(offenders).toEqual([])
+  })
+
+  it('the in-server poller and fetcher modules are gone, not merely unused', async () => {
+    // An unimported module is a module somebody re-imports. Both are deleted, and a
+    // dynamic import is the only way to assert absence without a compile error.
+    await expect(import('./poller.js' as string)).rejects.toThrow()
+    await expect(import('./fetch-gh.js' as string)).rejects.toThrow()
   })
 })

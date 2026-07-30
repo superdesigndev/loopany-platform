@@ -6,6 +6,8 @@
  *   pnpm graph:demo --seed       build → seed, then exit (re-seed a running demo's DB
  *                                only when the server is stopped — pglite is single-writer)
  *   pnpm graph:demo --synthetic  use the hand-built fleet instead of the real snapshot
+ *   pnpm graph:pr <repo> <n>     register a REAL pull request + a merge review
+ *   pnpm graph:dispatch          stage an approvable agent task (the runs bridge)
  *   pnpm graph:pull              READ-ONLY snapshot of the real production fleet
  *   pnpm graph:bodies            READ-ONLY fetch of those artifacts' real bytes
  *
@@ -40,6 +42,7 @@ const synthetic = process.argv.includes('--synthetic')
 const pullOnly = process.argv.includes('--pull')
 const bodiesOnly = process.argv.includes('--bodies')
 const prOnly = process.argv.includes('--pr')
+const dispatchOnly = process.argv.includes('--dispatch')
 
 const env = {
   ...process.env,
@@ -96,6 +99,21 @@ try {
       'graph:pr',
       '--',
       ...process.argv.slice(2).filter((a) => a !== '--pr'),
+    ])
+    process.exit(0)
+  }
+
+  if (dispatchOnly) {
+    // Stages an approvable `agent-task` - the runs bridge's own starting shape.
+    // Routed through here for the same reason the seeder and `--pr` are: it must
+    // write the DEMO's database, and pglite is single-writer - stop the server first.
+    step('staging an agent task in the demo workspace')
+    await run('pnpm', [
+      '--filter',
+      '@loopany/server',
+      'graph:dispatch',
+      '--',
+      ...process.argv.slice(2).filter((a) => a !== '--dispatch'),
     ])
     process.exit(0)
   }

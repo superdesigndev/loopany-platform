@@ -17,9 +17,10 @@
     "graph:demo": "node scripts/graph-demo.mjs",
     "graph:seed": "node scripts/graph-demo.mjs --seed",
     "graph:pr": "node scripts/graph-demo.mjs --pr",
+    "graph:dispatch": "node scripts/graph-demo.mjs --dispatch",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @loopany/server test && pnpm --filter @crewlet/loopany test && pnpm --filter @loopany/artifact-format test && pnpm --filter @loopany/effect-agent test",
-    "effects:agent": "pnpm --filter @loopany/effect-agent start"
+    "test": "pnpm --filter @loopany/server test && pnpm --filter @crewlet/loopany test && pnpm --filter @loopany/artifact-format test && pnpm --filter @loopany/machine-agent test",
+    "agent": "pnpm --filter @loopany/machine-agent start"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

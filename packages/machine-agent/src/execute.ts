@@ -25,29 +25,59 @@
 import type { AgentConfig } from "./config.js";
 import type { Gh } from "./gh.js";
 import { checkApproval, checkMergeTarget, checkRepo, findMarkedComment } from "./guards.js";
-import type { Directive, ExecuteOutcome } from "./types.js";
+import { runInstruction, type RunDeps, type RunOutcomeDetail } from "./run.js";
+import { instructionOf, type Directive, type ExecuteOutcome, type RunOutcome } from "./types.js";
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
 
+/**
+ * The two calls a RUN makes back to the graph while it happens, injected so the
+ * executor stays a pure "guards then one effect" function and every probe can watch
+ * the lifecycle without a server.
+ */
+export interface RunReporter {
+  started: (directive: Directive) => Promise<void>;
+  finished: (
+    directive: Directive,
+    outcome: RunOutcome,
+    detail: { summary?: string; exitCode: number | null; durationMs: number; report?: string },
+  ) => Promise<void>;
+}
+
+export interface ExecuteDeps {
+  gh: Gh;
+  /** Present only on a machine that executes instructions. */
+  run?: RunDeps;
+  runReporter?: RunReporter;
+}
+
 export async function executeDirective(
   config: AgentConfig,
-  gh: Gh,
+  deps: ExecuteDeps,
   directive: Directive,
 ): Promise<ExecuteOutcome> {
   // 1. THE APPROVAL. Before anything else, including before deciding whether we
   //    would have been allowed to - an unapproved work order is not a question
-  //    about permissions, it is one we refuse to consider.
+  //    about permissions, it is one we refuse to consider. This is the first half of
+  //    the guard sandwich captain decision 12 attaches to the DIRECTIVE rather than
+  //    to any one handler, so it runs for a run exactly as it does for a merge.
   const approval = checkApproval(directive);
   if (approval) return { ok: false, ...approval };
 
+  // 2. THE GENERIC PATH FIRST. An instruction work order is the default shape for an
+  //    external effect (decision 12); the GitHub branches below are earned
+  //    accelerators for two hot actions, not the required road.
+  if (directive.kind === "run-task") return executeRun(config, deps, directive);
+
+  const gh = deps.gh;
   const repo = directive.target.repo ?? repoOf(directive.target.externalId);
   const number = directive.target.number ?? numberOf(directive.target.externalId);
   if (!repo || !number) {
     return { ok: false, code: "TARGET_UNRESOLVED", error: `cannot read a repo and number from "${directive.target.externalId}"` };
   }
 
-  // 2. THE ALLOWLIST. Applies to every kind, comment included: this agent acts on
-  //    the repositories its operator named, and on no others.
+  // 3. THE ALLOWLIST. Applies to every GitHub kind, comment included: this agent acts
+  //    on the repositories its operator named, and on no others.
   const repoRefusal = checkRepo(config, repo);
   if (repoRefusal) return { ok: false, ...repoRefusal };
 
@@ -120,6 +150,97 @@ export async function executeDirective(
   // no default branch that shrugs and reports success: an effect nobody performed
   // must never be recorded as one that happened.
   return { ok: false, code: "UNSUPPORTED_KIND", error: `this agent does not implement "${directive.kind}"` };
+}
+
+/**
+ * Execute an INSTRUCTION work order - the generic "an agent does X" path.
+ *
+ * The lifecycle is reported around the work rather than after it, and that ordering
+ * is the point: `run-started` lands BEFORE the executor spawns, so a run that dies
+ * without ever reporting still left a trace of having begun. The outcome report then
+ * lands whichever way the run went, so `run-finished` is not a success-only path -
+ * a failed run advances the dispatching task through its own declared transition, and
+ * the directive's typed refusal raises the attention item.
+ *
+ * A reporting failure does NOT swallow the run's outcome: the report is best-effort
+ * and logged, and the directive report that follows (in `agent.ts`) is what the lease
+ * hangs on. If both fail the lease expires and the work order is re-offered, which is
+ * safe because the instruction told the agent to check reality first.
+ */
+async function executeRun(config: AgentConfig, deps: ExecuteDeps, directive: Directive): Promise<ExecuteOutcome> {
+  const spec = instructionOf(directive.payload);
+  if (!spec) {
+    return { ok: false, code: "TARGET_UNRESOLVED", error: "the work order carries no instruction (no intent)" };
+  }
+  if (!deps.run) {
+    return {
+      ok: false,
+      code: "RUN_NOT_PERMITTED",
+      error: "this agent is not configured to execute instructions",
+    };
+  }
+
+  await report(() => deps.runReporter?.started(directive));
+
+  const outcome: RunOutcomeDetail = await runInstruction(config, spec, deps.run);
+  const summary = firstMeaningfulLine(outcome.output) ?? outcome.refusal?.error;
+
+  await report(() =>
+    deps.runReporter?.finished(directive, outcome.ok ? "success" : "failure", {
+      ...(summary ? { summary } : {}),
+      exitCode: outcome.exitCode,
+      durationMs: outcome.durationMs,
+      // The run's own output IS the product, when the work order asked for one. A
+      // refused run has no output to report, so no empty report doc is created.
+      ...(spec.report && outcome.output.trim() ? { report: reportBody(outcome) } : {}),
+    }),
+  );
+
+  if (!outcome.ok) {
+    const refusal = outcome.refusal ?? { code: "AGENT_ERROR" as const, error: "the run failed without a reason" };
+    return { ok: false, code: refusal.code, error: refusal.error };
+  }
+  return {
+    ok: true,
+    result: {
+      url: spec.runId,
+      detail: summary
+        ? `${spec.label} — ${summary}`
+        : `${spec.label} — finished in ${Math.round(outcome.durationMs / 1000)}s`,
+      runId: spec.runId,
+      durationMs: outcome.durationMs,
+      ...(outcome.truncated ? { outputTruncated: true } : {}),
+    },
+  };
+}
+
+/** The report body, with the truncation stated IN it. A clipped report that did not
+ *  say it was clipped would read as a complete account of the work. */
+function reportBody(outcome: RunOutcomeDetail): string {
+  const body = outcome.output.trimEnd();
+  return outcome.truncated
+    ? `${body}\n\n---\n\n_Output truncated at this agent's capture limit; the run itself was not._\n`
+    : body;
+}
+
+/** The first line worth showing in a Timeline row: skips blank lines and markdown
+ *  heading markers, so a report that opens with `# Title` summarises as the title. */
+function firstMeaningfulLine(output: string): string | undefined {
+  for (const raw of output.split("\n")) {
+    const line = raw.replace(/^#+\s*/, "").trim();
+    if (line) return line.slice(0, 300);
+  }
+  return undefined;
+}
+
+/** Lifecycle reporting is best-effort by design - see `executeRun`. */
+async function report(call: () => Promise<void> | undefined): Promise<void> {
+  try {
+    await call();
+  } catch {
+    // Swallowed here and surfaced by the caller's own logging: a failed lifecycle
+    // report must not turn a run that WORKED into a run that failed.
+  }
 }
 
 function repoOf(externalId: string): string | null {

@@ -1,12 +1,12 @@
 {
-  "name": "@loopany/effect-agent",
+  "name": "@loopany/machine-agent",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Loopany effect agent — claims approved outward-effect directives from a Loopany server and executes them with LOCAL credentials (gh CLI). The server never acts on the world; this does.",
+  "description": "Loopany machine agent \u2014 the machine side of the graph engine. Senses the outside world, executes approved outward-effect directives, and dispatches sandboxed runs, all with LOCAL credentials. The server never touches GitHub and never executes work.",
   "bin": {
-    "loopany-effects": "dist/cli.js"
+    "loopany-agent": "dist/cli.js"
   },
   "engines": {
     "node": ">=22"

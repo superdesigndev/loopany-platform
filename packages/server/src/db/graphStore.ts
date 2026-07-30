@@ -163,6 +163,14 @@ export async function listObjects(
  * external_id) WHERE mirror` index - not from any ordering in this function.
  *
  * Idempotent by construction: calling it a thousand times yields one object.
+ *
+ * CREATION IS NOT AN OBSERVATION, so `external_observed_at` is left NULL. Knowing
+ * that a pull request exists (somebody registered it, or another PR referenced it) is
+ * a different fact from having read its state, and a fresh mirror's `observed` status
+ * says exactly that. Stamping it here would have made "when did we last look?"
+ * unanswerable: every mirror would claim a look it never had, which is precisely the
+ * distinction the sensing-freshness read (`sensing/watch.ts sensingHealth`) has to be
+ * able to make now that no server-side loop is doing the looking.
  */
 export async function getOrCreateMirror(
   x: GraphExec | undefined,
@@ -194,7 +202,7 @@ export async function getOrCreateMirror(
       payload: input.payload ?? null,
       externalSource: input.externalSource,
       externalId: input.externalId,
-      externalObservedAt: input.now,
+      // Deliberately NOT stamped - see the header. An observation sets it.
       createdAt: input.now,
       updatedAt: input.now,
     })

@@ -61,7 +61,7 @@ export function checkRepo(config: AgentConfig, repo: string | null | undefined):
   if (!config.allowedRepos.size) {
     return {
       code: "REPO_NOT_ALLOWED",
-      error: "this agent has an EMPTY repo allowlist, so it acts on nothing - set LOOPANY_EFFECT_ALLOWED_REPOS",
+      error: "this agent has an EMPTY repo allowlist, so it acts on nothing - set LOOPANY_AGENT_ALLOWED_REPOS",
     };
   }
   if (!config.allowedRepos.has(name)) {
@@ -100,7 +100,7 @@ export interface MergeSubject {
  */
 export function checkMergeTarget(config: AgentConfig, subject: MergeSubject): Refusal | undefined {
   if (config.commentOnly) {
-    return { code: "REPO_NOT_ALLOWED", error: "this agent runs comment-only (LOOPANY_EFFECT_COMMENT_ONLY) - it never merges" };
+    return { code: "REPO_NOT_ALLOWED", error: "this agent runs comment-only (LOOPANY_AGENT_COMMENT_ONLY) - it never merges" };
   }
   const base = subject.baseRefName.trim();
   const def = subject.defaultBranchName.trim();
@@ -122,7 +122,7 @@ export function checkMergeTarget(config: AgentConfig, subject: MergeSubject): Re
       code: "DEFAULT_BRANCH_REFUSED",
       error:
         `this pull request targets "${base}", the repository's DEFAULT branch, and this agent was not told that is ` +
-        "allowed - set LOOPANY_EFFECT_ALLOW_DEFAULT_BRANCH only if you mean it",
+        "allowed - set LOOPANY_AGENT_ALLOW_DEFAULT_BRANCH only if you mean it",
     };
   }
   if (subject.state === "CLOSED" && !subject.merged) {
@@ -143,4 +143,78 @@ export function findMarkedComment(
 ): { body: string; url: string } | undefined {
   if (!marker) return undefined;
   return comments.find((c) => c.body.includes(marker));
+}
+
+// ---- the run pre-flight (captain decision 12's deterministic half) ----
+
+/**
+ * The name we will NEVER execute, whatever the configuration says.
+ *
+ * The production Loopany daemon and its CLI are somebody's live scheduled work. An
+ * instruction executor that could be pointed at them - by a config typo, by an
+ * operator reusing a shell, by anything - could stop, restart or re-register a real
+ * fleet. So the refusal is in CODE and not in a document, and it is checked on the
+ * resolved basename so a path cannot walk around it.
+ */
+export const NEVER_EXECUTE = new Set(["loopany", "loopany-agent", "loopany-effects"]);
+
+/** The executor's own name, as the refusal should read it. */
+function basename(command: string): string {
+  const parts = command.split(/[\\/]/);
+  return (parts[parts.length - 1] ?? command).trim().toLowerCase();
+}
+
+/**
+ * WHAT THIS MACHINE MAY EXECUTE - the pre-flight check that runs before an
+ * instruction is spawned, and the reason a work order cannot talk this agent into
+ * anything its operator did not configure.
+ *
+ * Four refusals, each fail-closed:
+ *
+ *   1. NO EXECUTOR. An agent with no configured executor runs nothing. Absent is
+ *      "nothing", never "figure something out".
+ *   2. A FORBIDDEN EXECUTOR. See `NEVER_EXECUTE` - a hard floor under the
+ *      configuration, not a suggestion.
+ *   3. NO RUN ROOT. A run with nowhere safe to work has nowhere to work. The jail is
+ *      required, so "I forgot to set it" cannot mean "anywhere on this disk".
+ *   4. OUT OF SCOPE. The work order asks for a repository this machine does not
+ *      allow. Note the direction: the instruction's declared scope and the machine's
+ *      allowlist COMPOSE - the run may touch the intersection, and a declaration
+ *      cannot widen the machine's boundary any more than the machine can widen the
+ *      declaration's.
+ *
+ * All four are `RUN_NOT_PERMITTED`, which is deliberately NOT retryable: a command
+ * does not join an allowlist by being asked twice.
+ */
+export function checkRunPermitted(config: AgentConfig, scope: { repos: string[] }): Refusal | undefined {
+  const command = config.run.command?.trim();
+  if (!command) {
+    return {
+      code: "RUN_NOT_PERMITTED",
+      error: "this agent has NO instruction executor configured, so it runs nothing - set LOOPANY_AGENT_EXEC_COMMAND",
+    };
+  }
+  if (NEVER_EXECUTE.has(basename(command))) {
+    return {
+      code: "RUN_NOT_PERMITTED",
+      error:
+        `"${command}" is on this agent's never-execute list: it drives a live Loopany daemon, ` +
+        "and an instruction runner must never be able to touch real scheduled work",
+    };
+  }
+  if (!config.run.root?.trim()) {
+    return {
+      code: "RUN_NOT_PERMITTED",
+      error: "this agent has NO run root, so a run has nowhere safe to work - set LOOPANY_AGENT_RUN_ROOT",
+    };
+  }
+  const outside = scope.repos.map((r) => r.trim().toLowerCase()).filter((r) => r && !config.allowedRepos.has(r));
+  if (outside.length) {
+    const allowed = config.allowedRepos.size ? [...config.allowedRepos].sort().join(", ") : "(none)";
+    return {
+      code: "RUN_NOT_PERMITTED",
+      error: `the instruction claims scope over ${outside.join(", ")}, which this agent does not allow (allowlist: ${allowed})`,
+    };
+  }
+  return undefined;
 }

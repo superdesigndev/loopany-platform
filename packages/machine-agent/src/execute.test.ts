@@ -55,6 +55,12 @@ function fakeGh(over: { facts?: PrFacts; commentUrl?: string; mergeThrows?: stri
       state.facts = { ...state.facts, merged: true, state: "MERGED" };
       return "merged";
     },
+    // The sensing read. Never reached by an effect path, and asserted so: an effect
+    // that fetched a batch would be doing something nobody asked for.
+    async fetchPrs(repo, numbers) {
+      calls.push(`fetchPrs ${repo} [${numbers.join(",")}]`);
+      return { observed: new Map(), missing: [] };
+    },
   };
 }
 
@@ -67,6 +73,9 @@ function config(over: Partial<AgentConfig> = {}): AgentConfig {
     allowedRepos: parseRepoAllowlist("acme/widgets"),
     allowDefaultBranch: false,
     commentOnly: false,
+    sensing: false,
+    sensingIntervalMs: 60_000,
+    run: { args: [], maxTimeoutMs: 60_000, maxOutputBytes: 4096 },
     ...over,
   };
 }
@@ -98,7 +107,7 @@ function directive(over: Partial<Directive> = {}): Directive {
 describe("github-comment", () => {
   it("posts the body it was handed", async () => {
     const gh = fakeGh();
-    const r = await executeDirective(config(), gh, directive());
+    const r = await executeDirective(config(), { gh }, directive());
     expect(r.ok).toBe(true);
     expect(gh.calls).toEqual(["view acme/widgets#7", "comment acme/widgets#7"]);
   });
@@ -106,8 +115,8 @@ describe("github-comment", () => {
   it("EXECUTED TWICE produces exactly ONE comment", async () => {
     const gh = fakeGh();
     const d = directive();
-    await executeDirective(config(), gh, d);
-    const second = await executeDirective(config(), gh, d);
+    await executeDirective(config(), { gh }, d);
+    const second = await executeDirective(config(), { gh }, d);
     // A success - the world is as the verdict asked - but nothing was posted.
     expect(second.ok).toBe(true);
     if (second.ok) expect(second.result.alreadyDone).toBe(true);
@@ -119,7 +128,7 @@ describe("github-comment", () => {
     const d = directive({
       approval: { eventId: "ev-1", entrance: "rule", actorId: "rule-x", ts: "t", transition: null },
     });
-    const r = await executeDirective(config(), gh, d);
+    const r = await executeDirective(config(), { gh }, d);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("APPROVAL_INVALID");
     // The guard ran BEFORE the transport: an unapproved effect does not even look.
@@ -131,7 +140,7 @@ describe("github-comment", () => {
     const d = directive({
       target: { source: "github", externalId: "other/repo/pull/1", repo: "other/repo", number: 1 },
     });
-    const r = await executeDirective(config(), gh, d);
+    const r = await executeDirective(config(), { gh }, d);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("REPO_NOT_ALLOWED");
     expect(gh.calls).toEqual([]);
@@ -139,7 +148,7 @@ describe("github-comment", () => {
 
   it("reports a transport failure as retryable rather than swallowing it", async () => {
     const gh = fakeGh({ viewThrows: "connection reset" });
-    const r = await executeDirective(config(), gh, directive());
+    const r = await executeDirective(config(), { gh }, directive());
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("AGENT_ERROR");
   });
@@ -151,14 +160,14 @@ describe("github-merge", () => {
 
   it("merges a PR aimed at a scratch base", async () => {
     const gh = fakeGh();
-    const r = await executeDirective(config(), gh, mergeDirective());
+    const r = await executeDirective(config(), { gh }, mergeDirective());
     expect(r.ok).toBe(true);
     expect(gh.calls).toContain("merge acme/widgets#7 squash");
   });
 
   it("REFUSES a PR aimed at the repository's default branch, without merging", async () => {
     const gh = fakeGh({ facts: facts({ baseRefName: "main" }) });
-    const r = await executeDirective(config(), gh, mergeDirective());
+    const r = await executeDirective(config(), { gh }, mergeDirective());
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("DEFAULT_BRANCH_REFUSED");
     expect(gh.calls.some((c) => c.startsWith("merge"))).toBe(false);
@@ -166,15 +175,15 @@ describe("github-merge", () => {
 
   it("merges into the default branch when the operator explicitly allowed it", async () => {
     const gh = fakeGh({ facts: facts({ baseRefName: "main" }) });
-    const r = await executeDirective(config({ allowDefaultBranch: true }), gh, mergeDirective());
+    const r = await executeDirective(config({ allowDefaultBranch: true }), { gh }, mergeDirective());
     expect(r.ok).toBe(true);
   });
 
   it("EXECUTED TWICE merges once - an already-merged PR is an already-done success", async () => {
     const gh = fakeGh();
     const d = mergeDirective();
-    await executeDirective(config(), gh, d);
-    const second = await executeDirective(config(), gh, d);
+    await executeDirective(config(), { gh }, d);
+    const second = await executeDirective(config(), { gh }, d);
     expect(second.ok).toBe(true);
     if (second.ok) expect(second.result.alreadyDone).toBe(true);
     expect(gh.calls.filter((c) => c.startsWith("merge"))).toHaveLength(1);
@@ -182,7 +191,7 @@ describe("github-merge", () => {
 
   it("reports GitHub's own refusal as NOT_MERGEABLE", async () => {
     const gh = fakeGh({ mergeThrows: "Pull request is not mergeable" });
-    const r = await executeDirective(config(), gh, mergeDirective());
+    const r = await executeDirective(config(), { gh }, mergeDirective());
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("NOT_MERGEABLE");
   });
@@ -191,7 +200,7 @@ describe("github-merge", () => {
 describe("an effect kind this build does not implement", () => {
   it("REFUSES loudly rather than reporting a success nobody performed", async () => {
     const gh = fakeGh();
-    const r = await executeDirective(config(), gh, directive({ kind: "github-close-everything" }));
+    const r = await executeDirective(config(), { gh }, directive({ kind: "github-close-everything" }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("UNSUPPORTED_KIND");
   });

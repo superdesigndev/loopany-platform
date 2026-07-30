@@ -35,10 +35,25 @@ import { parsePrExternalId, prExternalId, PR_SOURCE, type PrIdentity } from "../
  * Outward action kind → the effect a machine agent performs. PARTIAL on purpose,
  * exactly like the outbox handler registry: an R3 kind absent from this map has
  * no delivery shape, and the handler refuses it rather than inventing one.
+ *
+ * ── why `dispatch-run` (R2) is deliberately absent ──────────────────────────
+ *
+ * `dispatch-outward-run` is R3 and needs a human approval; `dispatch-run` is R2
+ * and would not. Only the first has a delivery shape here, and that is a decision
+ * rather than an omission: a run is a COMMAND on somebody's machine, and the
+ * blast radius of a command is whatever that machine can reach - it can push, it
+ * can spend money, it can delete. "Machine-local only" is a property of the
+ * script, not of the vocabulary, and nothing on this side can check it. So the
+ * runs bridge takes the approved door only, and `dispatch-run` dead-letters with
+ * `NO_HANDLER` - visible, and the honest answer for a consequence this build will
+ * not perform unapproved. (`effect_directives.approval_event` is NOT NULL by
+ * CHECK, so this is also what keeps that constraint meaningful rather than
+ * relaxed to accommodate an unapproved kind.)
  */
 export const EFFECT_KIND_OF_ACTION = {
   "external-comment": "github-comment",
   "external-merge": "github-merge",
+  "dispatch-outward-run": "run-task",
 } as const satisfies Partial<Record<ActionKind, EffectKind>>;
 
 export function effectKindOf(action: string): EffectKind | undefined {

@@ -258,8 +258,8 @@ export type OutboxRefusalCode = (typeof OUTBOX_REFUSAL_CODES)[number];
  * and wait. A machine-side effect agent claims it, executes it with LOCAL
  * credentials, and reports the outcome back.
  *
- * The two kinds this build can deliver. A closed set, because the agent branches
- * on it and an unknown kind must fail LOUDLY at the wire rather than be
+ * The three kinds this build can deliver. A closed set, because the agent
+ * branches on it and an unknown kind must fail LOUDLY at the wire rather than be
  * interpreted generously at the far end:
  *
  *  - `github-comment` post a comment on the pull request under review. The
@@ -267,8 +267,14 @@ export type OutboxRefusalCode = (typeof OUTBOX_REFUSAL_CODES)[number];
  *  - `github-merge`   merge the pull request. Guarded at the agent by an explicit
  *                     repo allowlist and a default-branch refusal, because the
  *                     blast radius of getting this wrong is somebody's `main`.
+ *  - `run-task`       RUN A BOUNDED COMMAND on the machine, and report the run's
+ *                     lifecycle back. The runs bridge rides this channel rather
+ *                     than a second one because a dispatched run has exactly the
+ *                     properties a directive exists for: only a credentialed
+ *                     machine can perform it, it must be approved, a dead agent
+ *                     must not lose it, and a failure must reach a person.
  */
-export const EFFECT_KINDS = ["github-comment", "github-merge"] as const;
+export const EFFECT_KINDS = ["github-comment", "github-merge", "run-task"] as const;
 export type EffectKind = (typeof EFFECT_KINDS)[number];
 
 export function isEffectKind(v: unknown): v is EffectKind {
@@ -312,6 +318,15 @@ export const DIRECTIVE_UNSETTLED_STATES: readonly DirectiveState[] = ["pending",
  *  - `TARGET_UNRESOLVED`      the directive names a PR the agent cannot resolve
  *  - `NOT_MERGEABLE`          GitHub refused the merge (conflicts, blocked checks)
  *  - `UNSUPPORTED_KIND`       the agent does not implement this effect kind
+ *  - `RUN_FAILED`             a dispatched run exited non-zero
+ *  - `RUN_TIMEOUT`            a dispatched run outlived its declared timeout and
+ *                             was killed. Its own code rather than `RUN_FAILED`
+ *                             because "it broke" and "it never finished" lead a
+ *                             person to look in different places.
+ *  - `RUN_NOT_PERMITTED`      the run's command or working directory is outside
+ *                             what THIS machine's operator allowed. A guard
+ *                             refusal, so retrying cannot fix it - the same
+ *                             posture `REPO_NOT_ALLOWED` takes.
  */
 export const DIRECTIVE_REFUSAL_CODES = [
   "AGENT_ERROR",
@@ -322,6 +337,9 @@ export const DIRECTIVE_REFUSAL_CODES = [
   "TARGET_UNRESOLVED",
   "NOT_MERGEABLE",
   "UNSUPPORTED_KIND",
+  "RUN_FAILED",
+  "RUN_TIMEOUT",
+  "RUN_NOT_PERMITTED",
 ] as const;
 export type DirectiveRefusalCode = (typeof DIRECTIVE_REFUSAL_CODES)[number];
 
@@ -334,6 +352,12 @@ export const DIRECTIVE_RETRYABLE_CODES: readonly DirectiveRefusalCode[] = [
   "AGENT_ERROR",
   "LEASE_EXPIRED",
   "NOT_MERGEABLE",
+  // A run that broke or ran long may well succeed on a second go (a flaky
+  // network, a machine that was busy), so both are offered a retry. What is NOT
+  // retryable is `RUN_NOT_PERMITTED`: a command does not join this machine's
+  // allowlist by being asked twice, exactly as a repo does not.
+  "RUN_FAILED",
+  "RUN_TIMEOUT",
 ];
 
 export function directiveRetryable(code: DirectiveRefusalCode | null | undefined): boolean {

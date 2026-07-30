@@ -128,16 +128,12 @@ async function boot(): Promise<Booted> {
     const { startOutboxExecutor } = await import("../graph/outbox/executor.js");
     startOutboxExecutor({ signal: abort.signal });
 
-    // GRAPH MIRROR POLLER - the loop that makes the graph update ITSELF.
-    //
-    // Same gate as the executor, plus its own opt-out: unlike the executor this
-    // one reaches the NETWORK (read-only GitHub queries), so a machine without
-    // `gh` - or an operator who simply does not want a background API spend -
-    // sets `LOOPANY_GRAPH_POLL=off` and the workspace still serves, just from
-    // whatever facts it already holds. Crash-safety needs nothing here: a sweep
-    // has no cursor, so the next one is the recovery (`sensing/poller.ts`).
-    const { startMirrorPoller, pollEnabled } = await import("../graph/sensing/poller.js");
-    if (pollEnabled()) startMirrorPoller({ signal: abort.signal });
+    // NO SENSING LOOP HERE, AND THAT IS THE POINT (captain decision 10). External
+    // observation executes on the USER'S MACHINE with the user's credentials, so
+    // this process starts no poller and holds no GitHub transport - it serves the
+    // watch list at `/api/agent/sensing/watchlist` and ingests what the machine
+    // agent reports. The captain explicitly declined a dev-mode exception, so a
+    // local demo runs the real topology: `pnpm agent` alongside `pnpm dev`.
   }
 
   logger.info("loopany server booted");

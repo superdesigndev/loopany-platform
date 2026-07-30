@@ -39,6 +39,8 @@ import * as graph from "../../db/graphStore.js";
 import { applyTransition, CHAIN_PARK_KEY, type ApplyTransitionResult } from "../applyTransition.js";
 import { attentionView as attention, type AttentionView } from "../outbox/attention.js";
 import { drainOutbox } from "../outbox/executor.js";
+import { sensingHealth, type SensingHealth } from "../sensing/watch.js";
+import { RUN_FINISHED_EVENT, RUN_STARTED_EVENT } from "../effects/instruction.js";
 import type { TypeSpec } from "../types.js";
 import { CATEGORY_OF_TYPE, DEMO_TEAM_ID, DEMO_USER_ID, LIBRARY_CATEGORIES, SHEPHERD_TYPES } from "./specs.js";
 
@@ -434,6 +436,9 @@ const VERDICT_LABEL: Record<string, string> = {
   "publish-verdict": "Review",
   "ship-verdict": "Review",
   "policy-verdict": "Your call",
+  // Dispatching a run is an outward effect that spends money and can act on the
+  // world, so its button says what it does rather than the softer "Approve".
+  "dispatch-verdict": "Run it",
 };
 
 /**
@@ -670,7 +675,7 @@ export async function timelineView(teamId = DEMO_TEAM_ID, limit = 120): Promise<
       entrance: e.entrance,
       actorId: e.actorId,
       band: str(payloadOf(loop ?? object ?? ({ payload: null } as GraphObject)).band) ?? "platform",
-      kind: classify(e.entrance, object),
+      kind: classify(e.entrance, object, e.kind),
       objectId: e.objectId,
     };
   });
@@ -682,8 +687,19 @@ export async function timelineView(teamId = DEMO_TEAM_ID, limit = 120): Promise<
  * records on EVERY event - never from a parallel fixture:
  * a human entrance is a decision; an agent run against a product is an artifact
  * event; anything a sensor or the clock produced is observation or run activity.
+ *
+ * The RUN LIFECYCLE kinds are checked FIRST, ahead of the object-shape branches.
+ * A dispatched run's `run-started`/`run-finished` land on the task that dispatched
+ * it, and without this a run against a doc-shaped object would read as an artifact
+ * event - which is exactly wrong: the whole point of surfacing a run in the
+ * Timeline is that a person can see the machine working.
  */
-function classify(entrance: string, object: GraphObject | undefined): TimelineEntry["kind"] {
+function classify(
+  entrance: string,
+  object: GraphObject | undefined,
+  kind?: string,
+): TimelineEntry["kind"] {
+  if (kind === RUN_STARTED_EVENT || kind === RUN_FINISHED_EVENT) return "run";
   if (entrance === "human") return "decision";
   if (object && (object.archetype === "doc" || object.type === "merge-review")) return "artifact";
   if (object && str(payloadOf(object).kind) === "sensor") return "observe";
@@ -949,12 +965,21 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
   /** Outward effects still in flight - queued for an agent or being executed by
    *  one. The counter that says "your decision is on its way out there". */
   effectsInFlight: number;
+  /**
+   * IS ANYBODY SENSING? Since captain decision 10 the server holds no fetch loop,
+   * so a workspace whose machine agent is not running looks exactly like one whose
+   * pull requests simply have not changed - and those are very different
+   * situations. Computed from `objects.external_observed_at`, so it is a property
+   * of real rows rather than a heartbeat somebody has to remember to send.
+   */
+  sensing: SensingHealth;
 }> {
   const { objects, obligations } = await load(teamId);
   const pending = await graph.listPendingActions(undefined, { teamId });
   const att = await attention(teamId);
   const notes = await graph.listNotifications(undefined, teamId, 200);
   return {
+    sensing: await sensingHealth({ now: new Date().toISOString(), teamId }),
     loops: objects.filter((o) => o.type === "loop" && o.status !== "planned").length,
     artifacts: objects.filter((o) => CATEGORY_OF_TYPE[o.type]).length,
     // A parked chain is counted by `attention`, not here - see `inboxView`.

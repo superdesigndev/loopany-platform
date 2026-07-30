@@ -18,6 +18,7 @@
     "graph:bodies": "tsx src/graph/workspace/bodies-cli.ts",
     "graph:seed": "tsx src/graph/workspace/seed-cli.ts",
     "graph:pr": "tsx src/graph/workspace/pr-cli.ts",
+    "graph:dispatch": "tsx src/graph/workspace/dispatch-cli.ts",
     "graph:demo": "pnpm graph:seed && vite dev"
   },
   "dependencies": {

@@ -7,14 +7,15 @@
  * silently dropped. That posture is why this registry is a plain lookup and not a
  * default-to-noop map.
  *
- * NO HANDLER HERE EVER TOUCHES THE OUTSIDE WORLD. Most are in-graph: `notify`
- * writes a notification row, `enqueue-review` creates a shepherd task through
- * `applyTransition`, `update-fields` writes plain fields on a tracked object. The
- * two OUTWARD (R3) handlers - `external-comment` and `external-merge` - do not
- * perform their effect either: they write an EFFECT DIRECTIVE, a work order a
- * machine-side agent claims and executes with local credentials
- * (`graph/effects/`). The server stays zero-exec; what changed is that an outward
- * consequence now has somewhere to go instead of dead-lettering.
+ * NO HANDLER HERE EVER TOUCHES THE OUTSIDE WORLD, AND NONE EXECUTES WORK. Most are
+ * in-graph: `notify` writes a notification row, `enqueue-review` creates a shepherd
+ * task through `applyTransition`, `update-fields` writes plain fields on a tracked
+ * object. The three OUTWARD (R3) handlers - `external-comment`, `external-merge`
+ * and `dispatch-outward-run` - do not perform their effect either: they write an
+ * EFFECT DIRECTIVE, a work order a machine-side agent claims and executes with
+ * local credentials (`graph/effects/`, `graph/agent/`). The server stays zero-exec;
+ * what changed is that an outward consequence - including "go and do this work" -
+ * now has somewhere to go instead of dead-lettering.
  *
  * The outward ceiling therefore no longer holds by ABSENCE. It holds by three
  * independent checks on the same fact: the schema CHECK when the action was
@@ -37,6 +38,9 @@
  *   external-comment  the directive row's primary key IS the action id, and the
  *   external-merge    comment it asks for carries that id as a marker - so the
  *                     idempotency survives all the way out to GitHub
+ *   dispatch-outward- the directive row's primary key IS the action id, and the
+ *   run               RUN ID is derived from it - so one work order, one run
+ *                     identity, and a replayed report-back changes nothing
  *
  * None of them reads "have I run before?". Identity does that work, which is the
  * one dedup strategy that does not degrade with history length (design §12 item 6).
@@ -53,6 +57,7 @@ import {
   mergeMethodOf,
   targetOfMirror,
 } from "../effects/directive.js";
+import { parseInstruction, runTargetExternalId, withObjectScope, RUN_TARGET_SOURCE } from "../effects/instruction.js";
 import { derivedEventId, reviewObjectId } from "../ids.js";
 import { conditionOf, observedFromPayload, waitSatisfied } from "../sensing/pr.js";
 import type { ActionKind, TypeSpec } from "../types.js";
@@ -649,6 +654,127 @@ const outwardEffect: ActionHandler = async (ctx) => {
   return { ok: true, detail: detail.join("; ") };
 };
 
+// ---- dispatch-outward-run (R3): the runs bridge, dispatch direction ----
+
+/**
+ * Turn an approved DISPATCH into an INSTRUCTION work order for a machine agent.
+ *
+ * This is the channel captain decision 12 makes the DEFAULT path for external
+ * effects: the payload is a generic intent + structured context + scope, and a
+ * machine-side agent executes it. It is not a fix-run handler - the same shape
+ * carries an Intercom reply, a tweet, a PR comment or an investigation, which is
+ * exactly why it must not learn any one of their vocabularies.
+ *
+ * The server's job is the same as for every other outward action: resolve the
+ * declaration, write ONE row in `effect_directives`, and wait. An agent running
+ * where the credentials live claims it, re-checks the approval, checks the scope
+ * against its OWN boundary, executes, reports the run's lifecycle back through the
+ * run entrance (`graph/agent/runs.ts`), and settles the directive through the same
+ * channel every other effect uses.
+ *
+ * ── what makes this different from the GitHub accelerators ──────────────────
+ *
+ * The TARGET. A comment or a merge is about a MIRROR - an external thing we observe
+ * - so those handlers resolve a mirror and refuse anything else. An instruction is
+ * about the DISPATCHING OBJECT: the task that wants work done. So this handler needs
+ * no selector and no mirror; the directive's `objectId` is the task itself, which is
+ * also exactly what `agent/runs.ts` advances when the run finishes.
+ *
+ * Payload contract: see `effects/instruction.ts parseInstruction` (intent, context,
+ * scope, label, onSuccess, onFailure, report) plus:
+ *
+ *   machine    bind the directive to one machine. Omitted ⇒ any agent may claim it.
+ *   requires   the same `{field, equals}` stand-down gate the GitHub effects use.
+ *
+ * A MALFORMED DECLARATION DEAD-LETTERS. There is deliberately no default intent and
+ * no shrug-and-succeed branch: a work order nobody can execute must end up in front
+ * of a person, because the alternative is a task waiting forever for a run that was
+ * never dispatchable.
+ *
+ * IDEMPOTENT by identity: the directive's primary key IS the action id, and the run
+ * id is derived from that - so the at-least-once boundary produces exactly one work
+ * order and exactly one run identity, however many times this handler fires. What it
+ * does NOT give is idempotency of the agent's own actions out in the world; that is
+ * instruction discipline ("check reality before acting") with the observation pipe as
+ * the backstop, which is decision 12's explicit answer and is composed into the
+ * prompt on the agent side.
+ */
+const dispatchRun: ActionHandler = async ({ tx, action, now }) => {
+  const p = payloadOf(action);
+  const effectKind = effectKindOf(action.kind);
+  if (!effectKind) {
+    return { ok: false, retryable: false, detail: `"${action.kind}" has no directive shape in this build` };
+  }
+  if (!action.objectId) return { ok: false, retryable: false, detail: "action carries no object" };
+  // The executor already refused an R3 row without a resolvable HUMAN approval;
+  // re-read it because this is the value WRITTEN onto the work order, and a
+  // directive with an empty approval column is one the agent cannot check.
+  if (!action.approvalEvent) {
+    return {
+      ok: false,
+      retryable: false,
+      detail: "a dispatch carries no approval event - refusing to build a work order",
+    };
+  }
+
+  const holder = await graph.getObject(tx, action.objectId);
+  if (!holder) return { ok: false, retryable: false, detail: `object ${action.objectId} is gone` };
+
+  // Same `requires` gate the outward GitHub effects use, so one static spec can
+  // declare a dispatch that only some instances want.
+  const stand = standDownReason(holder, p.requires);
+  if (stand) return { ok: true, detail: stand };
+
+  // The instance supplies the scope its static declaration could not know (its
+  // workdir, its repos) - and can only FILL what the declaration left open, never
+  // widen what it pinned. See `withObjectScope`.
+  const parsed = parseInstruction(action.id, withObjectScope(p, holder.payload));
+  if (!parsed.ok) return { ok: false, retryable: false, detail: parsed.why };
+  const spec = parsed.spec;
+
+  const { created } = await graph.insertDirective(tx, {
+    id: action.id,
+    teamId: action.teamId,
+    actionId: action.id,
+    eventId: action.eventId,
+    // The DISPATCHING object, not a mirror - this is what the run's outcome moves.
+    objectId: holder.id,
+    kind: effectKind,
+    targetSource: RUN_TARGET_SOURCE,
+    targetExternalId: runTargetExternalId(spec.runId),
+    targetMachine: str(p.machine) ?? null,
+    // The whole resolved spec rides on the row, so the agent interprets nothing it
+    // was not given and `agent/runs.ts` can read back which transition each outcome
+    // runs. The CONTEXT is resolved HERE because the server is the only side that
+    // can see the graph; the agent never queries it.
+    //
+    // `object` is the dispatching object's own payload, merged in unconditionally.
+    // That is what lets a STATIC spec carry a standing intent ("do the work
+    // described in context.object.brief") while the instance supplies the
+    // particulars - the same problem `via`/`select` solve for the GitHub effects,
+    // solved without inventing a template language for prose.
+    payload: {
+      ...spec,
+      context: {
+        dispatchedBy: holder.id,
+        title: holder.title,
+        object: (holder.payload ?? {}) as Record<string, unknown>,
+        ...spec.context,
+      },
+    },
+    approvalEvent: action.approvalEvent,
+    state: "pending",
+    attempts: 0,
+    createdAt: now,
+  });
+  return {
+    ok: true,
+    detail: created
+      ? `instruction work order queued: ${spec.label} (${spec.runId})`
+      : `instruction work order already queued: ${spec.runId} (replay)`,
+  };
+};
+
 /**
  * Should this instance stand down? `requires: {field, equals}` is checked against
  * the shepherd's own payload, so one static spec can declare "comment always,
@@ -679,9 +805,12 @@ const HANDLERS: Partial<Record<ActionKind, ActionHandler>> = {
   "update-fields": updateFields,
   "register-watch": registerWatch,
   // R3. These do not perform their effect either - they write a work order for a
-  // machine agent (see `outwardEffect`). Governance (R4) kinds remain absent.
+  // machine agent (see `outwardEffect` / `dispatchRun`). Governance (R4) kinds
+  // remain absent, and so does the R2 `dispatch-run`: see `EFFECT_KIND_OF_ACTION`
+  // on why a run takes the approved door only.
   "external-comment": outwardEffect,
   "external-merge": outwardEffect,
+  "dispatch-outward-run": dispatchRun,
 };
 
 export function handlerFor(kind: string): ActionHandler | undefined {
@@ -716,6 +845,7 @@ export const _internals = {
   updateFields,
   registerWatch,
   outwardEffect,
+  dispatchRun,
   describeObject,
   standDownReason,
 };

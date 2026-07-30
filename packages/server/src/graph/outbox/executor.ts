@@ -391,7 +391,7 @@ function defaultOwner(): string {
  * function directly.
  */
 export async function expireDirectiveLeasesNow(now: string): Promise<{ requeued: number; expired: number }> {
-  const { maxClaims } = await import("../effects/config.js");
+  const { maxClaims } = await import("../agent/config.js");
   const r = await graph.expireDirectiveLeases(undefined, { now, maxAttempts: maxClaims() });
   return { requeued: r.requeued.length, expired: r.failed.length };
 }

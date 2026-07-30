@@ -36,7 +36,7 @@ import { logger } from "../../logger.js";
 import type { EffectDirective, GraphEvent } from "../../db/graph-schema.js";
 import * as graph from "../../db/graphStore.js";
 import type { DirectiveRefusalCode } from "../types.js";
-import { CLAIM_BATCH, leaseMs, maxClaims } from "./config.js";
+import { CLAIM_BATCH, leaseMs, maxClaims } from "../agent/config.js";
 
 /** The approval evidence a work order carries, for the agent to re-check. */
 export interface ApprovalBlock {

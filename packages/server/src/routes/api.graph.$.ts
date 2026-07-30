@@ -12,14 +12,20 @@ import { createFileRoute } from '@tanstack/react-router'
  *                              outward effects that never landed
  *   GET  /api/graph/notifications  what the `notify` action produced
  *   GET  /api/graph/effects    outward work orders and what became of them
- *                              (the AGENT's own wire is `/api/effects/*`, which is
+ *                              (the AGENT's own wire is `/api/agent/*`, which is
  *                              bearer-token authed and never session authed)
  *   POST /api/graph/verdict    {objectId, transition} → applyTransition (human)
  *   POST /api/graph/attention  {kind, ref, verb} → acknowledge | retry (human)
  *   POST /api/graph/notifications/read   mark every notification read
  *   POST /api/graph/drain      run one outbox pass now (the executor also loops)
- *   POST /api/graph/poll       run one mirror-poll sweep now (the poller also loops)
  *   POST /api/graph/seed       replay a production snapshot into THIS server's db
+ *
+ * There is deliberately NO "poll now" verb. Since captain decision 10 this server
+ * holds no GitHub transport at all, so it could not honour one - sensing runs on the
+ * machine, and the machine's own sweep is what makes mirrors fresh. What this
+ * surface offers instead is the TRUTH about it: `summary.sensing` says when the
+ * workspace was last observed and how much of it is stale, so an agent that is not
+ * running is visible rather than indistinguishable from a quiet week on GitHub.
  *
  * ── the gate ────────────────────────────────────────────────────────────────
  *
@@ -93,25 +99,6 @@ async function ensureExecutor(): Promise<void> {
   startOutboxExecutor()
 }
 
-/**
- * Make sure the MIRROR POLLER loop is running — the same reasoning as
- * `ensureExecutor`, and for the same gap: `boot.ts` starts it, but boot only
- * happens when something touches the machine gateway or a server fn, and nothing
- * on this surface does. Without this a server that only ever serves the workspace
- * would show a graph that never updates itself, which is precisely the thing this
- * unit exists to deliver.
- *
- * `startMirrorPoller` is globalThis-guarded and idempotent, and it does ONE
- * immediate catch-up sweep on first start (fire-and-forget, so a request never
- * waits on GitHub). `pollEnabled()` is the opt-out: a machine with no `gh` on PATH
- * sets `LOOPANY_GRAPH_POLL=off` and the surface still works, just without live
- * ingestion.
- */
-async function ensurePoller(): Promise<void> {
-  const { startMirrorPoller, pollEnabled } = await import('../graph/sensing/poller.js')
-  if (pollEnabled()) startMirrorPoller()
-}
-
 const notFound = () => Response.json({ error: 'not found' }, { status: 404 })
 
 export const Route = createFileRoute('/api/graph/$')({
@@ -124,7 +111,6 @@ export const Route = createFileRoute('/api/graph/$')({
         const view = String((params as { _splat?: string })._splat ?? '')
         const read = await import('../graph/workspace/read.js')
         await ensureExecutor()
-        await ensurePoller()
         const url = new URL(request.url)
 
         switch (view) {
@@ -168,12 +154,10 @@ export const Route = createFileRoute('/api/graph/$')({
         const gate = await guard()
         if (!gate.ok) return gate.response
         await ensureExecutor()
-        await ensurePoller()
         if (action === 'verdict') return verdict(request, gate.userId)
         if (action === 'attention') return resolveAttention(request, gate.userId)
         if (action === 'notifications/read') return markNotificationsRead()
         if (action === 'drain') return drain()
-        if (action === 'poll') return poll()
         if (action === 'seed') return seed(request)
         return notFound()
       },
@@ -280,31 +264,6 @@ async function drain(): Promise<Response> {
     deadLettered: r.deadLettered,
     outcomes: r.outcomes,
   })
-}
-
-/**
- * Run ONE mirror-poll sweep now, and report what moved.
- *
- * The poller already loops, so this is not how observations normally arrive - it
- * exists so a demo (or a live check) can watch the graph move without waiting out
- * an interval, and so the response can say exactly what changed rather than
- * leaving someone to diff two page loads. Same shape and same reasoning as
- * `drain()`.
- *
- * READ-ONLY TOWARD GITHUB. A sweep issues GraphQL queries and nothing else (see
- * `graph/sensing/fetch-gh.ts`), so the worst an extra call costs is rate-limit
- * budget - which the sweep itself guards.
- */
-async function poll(): Promise<Response> {
-  const { sweepOnce, pollEnabled } = await import('../graph/sensing/poller.js')
-  if (!pollEnabled()) {
-    return Response.json({ ok: false, error: 'live polling is off (LOOPANY_GRAPH_POLL=off)' }, { status: 409 })
-  }
-  const { DEMO_TEAM_ID } = await import('../graph/workspace/specs.js')
-  // The clock is READ HERE and passed in - the sweep never reads one, which is
-  // what makes a probe able to replay an observation at a chosen instant.
-  const r = await sweepOnce({ now: new Date().toISOString(), teamId: DEMO_TEAM_ID })
-  return Response.json({ ok: true, ...r })
 }
 
 /**

@@ -33,11 +33,13 @@ computes pure functions. Run instructions: `README.md`.
   - `src/routes/` - pages + server-only route files.
 - `packages/daemon` (`@crewlet/loopany`) - one binary, two roles: poll-loop daemon
   and the in-run `loopany` callback; spawns claude.
-- `packages/effect-agent` (`@loopany/effect-agent`) - the MACHINE side of effect
-  delivery: claims approved outward-effect directives from a server and executes
-  them with LOCAL `gh` credentials. The server holds no GitHub token and performs
-  no outward effect; this is what does. See "Graph effect delivery" below and its
-  own `README.md`.
+- `packages/machine-agent` (`@loopany/machine-agent`) - the MACHINE side of the graph
+  engine, in BOTH directions: it SENSES the outside world (pulls the watch list,
+  fetches with local `gh`, reports observations), EXECUTES approved outward-effect
+  directives, and RUNS approved instructions in a sandbox. The server holds no GitHub
+  token, performs no outward effect and executes no work; this is what does. See
+  "Graph sensing", "Graph effect delivery" and "Graph runs bridge" below, plus its own
+  `README.md` (the reference for the wire and every guard).
 - `packages/artifact-format` (`@loopany/artifact-format`) - the Graph-Engineering-v3
   **artifact file format v1**: YAML front matter + Markdown body, deterministic
   round-trip, sanitized HTML as a projection. PURE library (no I/O, no server
@@ -56,9 +58,12 @@ computes pure functions. Run instructions: `README.md`.
 - `pnpm -r typecheck` - every package (server typecheck runs `tsr generate` first,
   so a fresh checkout typechecks with no prior build).
 - `pnpm --filter @loopany/server test` / `pnpm --filter @crewlet/loopany test` /
-  `pnpm --filter @loopany/artifact-format test` / `pnpm --filter @loopany/effect-agent
+  `pnpm --filter @loopany/artifact-format test` / `pnpm --filter @loopany/machine-agent
   test` (all four via `pnpm test`) - vitest; single file: append the path; single
   test: `vitest run -t "<name>"`.
+- `pnpm agent` - run the machine agent against a local server (`--once` one pass,
+  `--sense` one sensing sweep). The graph demo needs it: nothing else senses, and
+  nothing else executes.
 - `pnpm --filter @loopany/server db:generate` / `db:migrate` - Drizzle migrations.
 - `bash scripts/demo-cookie-unified.sh` - e2e demo loop through the unified server.
 - Prod: nitro build, then `pnpm start` = `scripts/prestart.mjs` +
@@ -1204,78 +1209,89 @@ computes pure functions. Run instructions: `README.md`.
   on both an open obligation and an unsettled action. `replayRows` in that file writes rows
   directly on purpose: there is no production verb for "un-stamp a delivered action".
 
-## Graph live ingestion — the PR mirror poller (`src/graph/sensing/`)
+## Graph sensing — DAEMON-SIDE, no server fetch loop (`src/graph/sensing/`)
 
-- **The first thing that makes the workspace update ITSELF.** Four modules, one job each:
-  `pr.ts` (PURE - identity, the observed fact set, the diff, the event-id derivation, the
-  wait conditions), `observe.ts` (`recordObservation` - the sanctioned mirror write),
-  `fetch-gh.ts` (the read-only `gh api graphql` transport behind the injectable
-  `PrFetcher`), `poller.ts` (`sweepOnce` + the globalThis-guarded background loop).
-  Design reference: `design.md` §7 (mirrors and sensing) + §12 item 6 (the dedup invariant).
-- **This is FRESHNESS sensing, not discovery** (§7 splits them). Scope is a query over our
-  OWN tables (`graphStore.listMirrors`) - never a GitHub search - so it cannot widen on its
-  own. The one discovery nod: a fetched PR whose prose references an unmirrored PR gets a
-  mirror through the existing `getOrCreateMirror` upsert, at status `observed` with NO
-  facts (we learned it exists; the NEXT sweep observes it, because scope is derived from
-  the table).
-- **Crash-safety is the dedup invariant, not a code path.** There is no cursor and no
-  high-water mark: a sweep re-reads everything and the DIFF decides what is news. So a kill
-  mid-sweep loses nothing and duplicates nothing, and there is no recovery logic to get
-  wrong. Do not add a "last polled" gate on which rows are swept - it would buy nothing and
-  break exactly this property.
+- **Captain decision 10: ALL external observation runs on the user's machine with the
+  user's credentials.** The server keeps exactly two things - a WATCH-LIST api ("these are
+  the pull-request mirrors this team holds") and the OBSERVATION SEAM - and holds no GitHub
+  transport at all. The in-server poller (`poller.ts`) and its `gh api graphql` fetcher
+  (`fetch-gh.ts`) are DELETED, with **no dev-mode exception** (the captain explicitly
+  declined one), so a local demo runs the real topology: `pnpm agent` alongside `pnpm dev`.
+  Why it had to move: private repos are unreadable server-side, one shared server GitHub
+  quota cannot scale past a handful of teams, and a machine-side sensor can observe things a
+  server never reaches.
+- **Server modules:** `pr.ts` (PURE - identity, the observed fact set, the diff, the
+  event-id derivation, the wait conditions), `observe.ts` (`recordObservation` - the
+  sanctioned mirror write, UNCHANGED by the move), `watch.ts` (`watchList` +
+  `ingestObservations` + `sensingHealth`). The fetch/batch/rate-limit/cross-reference-parse
+  half now lives in `packages/machine-agent/src/{sensing,gh}.ts`.
+- **THE TRANSPORT MOVED; NOTHING ABOUT IDENTITY DID.** Derived event ids are content-derived
+  from the fact itself, so who fetched the bytes is invisible to dedup: a re-report inserts
+  ZERO rows. Provenance semantics are also untouched - still `entrance: "rule"`, still
+  `PR_POLLER_ACTOR`, because a freshness sweep is the engine's own declarative service and
+  not the agent run that carried its bytes. If either had to change, identity was never
+  really content-derived.
+- **A REPORT IS NOT A DISCOVERY CHANNEL.** A reported fact for a mirror the team does not
+  hold is counted (`unknown`) and dropped, never created - so an agent cannot widen the
+  graph's scope by reporting whatever it likes. New mirrors arrive ONE way: a
+  cross-reference inside a PR we already watch, adopted through `getOrCreateMirror` at
+  status `observed` with NO facts, capped per report.
+- **`getOrCreateMirror` no longer stamps `external_observed_at`.** Creation is not an
+  observation - knowing a PR exists is a different fact from having read its state - and
+  that distinction is what makes `sensingHealth` (mirrors / unobserved / stale /
+  lastObservedAt) able to answer "is anybody sensing?". The workspace sidebar renders it,
+  because with no server loop an agent that stopped would otherwise look exactly like a
+  quiet week on GitHub. There is deliberately no `POST /api/graph/poll` any more: this
+  server could not honour one.
+- **Crash-safety is the dedup invariant, not a code path.** No cursor, no high-water mark: a
+  sweep re-reads everything and the DIFF decides what is news. Do not add a "last observed"
+  gate on which rows are offered - it would buy nothing and break exactly this property.
 - **The event seed carries `from` AS WELL AS the new value**
   (`{source, repo, number, field, from, to}`). A seed of only the new value looks right and
   silently rots: checks go `pending → passing → pending` on every push, so the second
   arrival at `pending` would collide with the first, `ON CONFLICT DO NOTHING` would swallow
-  it, and the mirror would keep a stale field forever. `from` is the stored value read under
-  the row lock, so it is identical across derivations of the same change - not a clock, not
-  a counter. Pinned by `pr.test.ts` ("distinguishes a FLIP BACK").
+  it, and the mirror would keep a stale field forever. Pinned by `pr.test.ts`.
 - **Five observed fields per PR**: `state`, `merged`, `checks`, `title`, plus the projected
   `status` (`mirrorStatusFor`, which must return a state `PULL_REQUEST_SPEC` declares - an
   observation cannot invent a state any more than a transition can). One derived
-  `external-changed` event per CHANGED field, `entrance: "rule"`, `actorId` =
-  `PR_POLLER_ACTOR`. Unchanged facts write ZERO rows and do not touch `statusChangedAt`
-  (only `externalObservedAt` moves - "when did we last look?" is a different question from
-  "when did it last move?").
-- **external-wait auto-close.** `register-watch` (an R1 outbox handler in
-  `outbox/handlers.ts`) opens an `external-wait` obligation ON THE MIRROR; the sweep closes
-  it with `closed_by_event` = the OBSERVATION that satisfied it. The condition rides the
-  obligation KEY - `merge-wait` ⇒ `merged`, `merge-wait:checks-green` ⇒ that (`conditionOf`)
-  - so the binding lives on the row and needs no side table. An UNKNOWN condition is never
-  satisfied (a wait this build cannot evaluate stays open and visible). Two deliberate
-  no-ops in the handler: a non-mirror target (the replayed history's merge reviews track
-  docs) and an ALREADY-SATISFIED condition, which would open a watch no observation could
-  ever close.
+  `external-changed` event per CHANGED field. Unchanged facts write ZERO rows and do not
+  touch `statusChangedAt` (only `externalObservedAt` moves).
+- **external-wait auto-close.** `register-watch` (an R1 outbox handler) opens an
+  `external-wait` obligation ON THE MIRROR; ingest closes it with `closed_by_event` = the
+  OBSERVATION that satisfied it. The condition rides the obligation KEY - `merge-wait` ⇒
+  `merged`, `merge-wait:checks-green` ⇒ that (`conditionOf`) - so the binding lives on the
+  row and needs no side table. An UNKNOWN condition is never satisfied. Two deliberate
+  no-ops in the handler: a non-mirror target and an ALREADY-SATISFIED condition, which would
+  open a watch no observation could ever close.
 - **The two obligation CLASSES must stay separated in the read model.** `external-wait` is
   NOT a gate (§12 item 5), so `read.ts` counts it as `watching` and never folds it into a
   gate node's `waiting`, its `artifactIds`, `summary.needsYou`, or the `needs verdict` edge
-  to the human. Folding them would tell a person they owe something GitHub owes.
-  `workspace.integration.test.ts` pins `sum(gate.waiting) === open human-verdict count`.
-- Two spec surfaces declare the watch: `LOOP_SPEC.watch-prs` (fans out over `produces` to
-  the pull-request mirrors a loop opened - the loop's real "one PR at a time" house rule)
-  and `MERGE_REVIEW_SPEC.submit` (alongside its human-verdict gate: two independent waits,
-  on two objects, from one transition). `seed-real.ts` runs `watch-prs` per loop while it is
-  still `idle` and drains immediately - a terminal `finish` is refused while an action is
-  unsettled.
-- Ops: started from `boot.ts` and `routes/api.graph.$.ts` `ensurePoller()` behind the SAME
-  `graphWorkspaceEnabled()` gate as the executor, plus its own opt-out `LOOPANY_GRAPH_POLL=off`
-  (it reaches the network; the executor does not). Cadence `LOOPANY_GRAPH_POLL_MS` (default
-  2min), ONE immediate catch-up sweep on start. `POST /api/graph/poll` runs one sweep now and
-  reports it (same posture as `/api/graph/drain`). OFF under vitest unless
-  `LOOPANY_GRAPH_POLL=on`, so no probe reaches GitHub by accident.
-- **Adding an action kind with a handler? Check `outbox.integration.test.ts`'s NO_HANDLER
-  probe** - it asserts the ABSENCE of a handler and must be moved to a kind that still has
-  none (it used `register-watch` until this unit; it now uses `set-follow-up-date`).
+  to the human. `workspace.integration.test.ts` pins
+  `sum(gate.waiting) === open human-verdict count`.
+- Two spec surfaces declare the watch: `LOOP_SPEC.watch-prs` (fans out over `produces`) and
+  `MERGE_REVIEW_SPEC.submit` (two independent waits, on two objects, from one transition).
+- **Probes:** `sensing.integration.test.ts` re-asserts every pre-migration property through
+  the new seam (double report ⇒ zero rows, one change ⇒ one event per field, partial-report
+  recovery, wait auto-close, discovery convergence) PLUS a **source scan** proving the server
+  contains no `gh api graphql` / `api.github.com` / `LOOPANY_GH_BIN` path and that no
+  `src/graph/**` module imports `node:child_process`. The agent's batching, rate-limit stop
+  and parsing are probed in `machine-agent/src/sensing.test.ts`.
 
-## Graph effect delivery (`src/graph/effects/` + `packages/effect-agent`)
+## Graph effect delivery (`src/graph/effects/` + `packages/machine-agent`)
 
 - **What it is:** how an approved in-workspace verdict ACTS on the outside world.
   The server still executes nothing outward - the R3 handler writes a DIRECTIVE
   (`effect_directives`, migration `0005`) and stops; a machine-side agent claims it,
   executes with LOCAL `gh` credentials, and reports back. The table IS the boundary:
   everything above it is pure server, everything below is somebody's laptop.
+- **AGENT EXECUTION IS THE DEFAULT PATH (captain decision 12).** Every external effect
+  is, by default, "an agent does it from an instruction" - the generic `run-task` directive
+  (see "Graph runs bridge"). The coded `github-comment`/`github-merge` handlers remain only
+  as EARNED ACCELERATORS for two hot, high-stakes actions; a NEW action kind never gets a
+  coded path first. Symmetric with decision 4's "generic Task first, specialized types
+  earned".
 - **The outward ceiling NO LONGER holds by the ABSENCE of a handler** (it used to;
-  that is the one durable fact this unit changed). It holds by THREE independent
+  that is the one durable fact the effects unit changed). It holds by THREE independent
   checks on the same approval, which fail differently on purpose: the schema CHECK at
   enqueue, the executor's re-check that the id resolves to a `human`-entrance event,
   and the AGENT's re-check of the approval block that rides with the work order. R4
@@ -1293,7 +1309,7 @@ computes pure functions. Run instructions: `README.md`.
   place that marker and the comment prose are built - the agent posts bytes it was
   handed and interprets nothing.
 - **A claim is a LEASE, not a flag.** An agent that dies leaves an expiring claim that
-  returns to `pending`; past `LOOPANY_EFFECT_MAX_CLAIMS` it FAILS with `LEASE_EXPIRED`.
+  returns to `pending`; past `LOOPANY_AGENT_MAX_CLAIMS` it FAILS with `LEASE_EXPIRED`.
   Expiry runs in the claim endpoint (the agent's poll is the liveliest clock) AND in
   the outbox executor's background tick - the second one is load-bearing, because the
   case that matters is the one where NO agent is polling.
@@ -1302,12 +1318,12 @@ computes pure functions. Run instructions: `README.md`.
   `done`). `retryable` derives from the TYPED refusal code: a guard refusal is terminal
   (`REPO_NOT_ALLOWED`, `DEFAULT_BRANCH_REFUSED`, `APPROVAL_INVALID`) and its retry verb
   is refused `NOT_RETRYABLE` - a repo does not join an allowlist by being asked twice.
-- **The safety policy lives on the AGENT, where the credentials are** (`effect-agent`
+- **The safety policy lives on the AGENT, where the credentials are** (`machine-agent`
   `guards.ts`, pure + unit-probed; its `README.md` is the reference). Every guard FAILS
-  CLOSED: an EMPTY `LOOPANY_EFFECT_ALLOWED_REPOS` allows NOTHING; merging into the
-  repo's own default branch needs `LOOPANY_EFFECT_ALLOW_DEFAULT_BRANCH` on top of the
+  CLOSED: an EMPTY `LOOPANY_AGENT_ALLOWED_REPOS` allows NOTHING; merging into the
+  repo's own default branch needs `LOOPANY_AGENT_ALLOW_DEFAULT_BRANCH` on top of the
   allowlist; and an UNKNOWN base or default branch refuses too (a partial GraphQL
-  response must never read as "go ahead"). The server-side `LOOPANY_EFFECT_AGENT_TOKEN`
+  response must never read as "go ahead"). The server-side `LOOPANY_AGENT_TOKEN`
   fails closed the same way - unset 401s every request.
 - `merge-review.approve` declares FOUR consequences and resolves which apply per
   INSTANCE: `update-fields` (docs only), `external-comment` (always), `external-merge`
@@ -1317,15 +1333,19 @@ computes pure functions. Run instructions: `README.md`.
   would leave an attention item. `via: "self"` on a mirror still refuses: across the
   action vocabulary, an explicitly-named wrong target is an error and a selector that
   matches nothing applicable is a no-op.
-- **Surfaces:** `POST /api/effects/{claim,heartbeat,report}` is a MACHINE route (bearer
-  only, never session-authed - the inverse of `/api/graph/*`, and mixing them would
-  mean either browsers claim work orders or agents need cookies); `GET
-  /api/graph/effects` + the workspace's Outward-effects section are the human read.
+- **Surfaces:** ONE machine route, `POST /api/agent/*` (`routes/api.agent.$.ts`), carrying
+  `effects/{claim,heartbeat,report}` + `sensing/{watchlist,observations}` +
+  `runs/{started,finished}`. Bearer only, never session-authed - the inverse of
+  `/api/graph/*`, and mixing them would mean either browsers claim work orders or agents
+  need cookies. All three groups share ONE token because acting and observing are ONE trust
+  boundary (decision 10); splitting it would invite one half to be configured loosely.
+  Auth + lease config live in `graph/agent/config.ts`. `GET /api/graph/effects` + the
+  workspace's Outward-effects section are the human read.
 - **Running the demo:** `pnpm graph:pr -- <owner/repo> <n> [--merge-intent]` registers a
-  REAL pull request (mirror → live observation → merge-review awaiting a verdict), then
-  approve in `/dev/workspace` and run `pnpm effects:agent` (`--once` for one pass). Same
-  single-writer pglite rule as `graph:seed`: stop the server before `graph:pr`.
-  `LOOPANY_DATA_DIR` should point somewhere of its own (`.effects-demo-data/`).
+  REAL pull request (mirror at `observed`, merge-review awaiting a verdict) - it does NOT
+  observe it, because no server process can; run `pnpm agent --sense` for that. Then approve
+  in `/dev/workspace` and run `pnpm agent --once`. Same single-writer pglite rule as
+  `graph:seed`: stop the server before `graph:pr`.
 - **Probes:** `graph/effects/effects.integration.test.ts` (idempotency, claim
   exclusivity, lease recovery then give-up, the zombie report, guard refusals, the
   ceiling, the bearer) + the agent's `guards.test.ts`/`execute.test.ts` against an
@@ -1333,6 +1353,79 @@ computes pure functions. Run instructions: `README.md`.
 - **Any table added to the graph must be added to `seed.ts` `resetGraphDemo`** -
   `effect_directives` is keyed by the action id exactly like `graph_notifications`, so
   it strands exactly the same way. `workspace.integration.test.ts` is what says so.
+
+## Graph runs bridge (`src/graph/effects/instruction.ts` + `src/graph/agent/runs.ts`)
+
+- **What it is:** the two-way channel through which the workspace gets WORK DONE. Outward, an
+  approved `dispatch-outward-run` (R3) becomes a `run-task` DIRECTIVE on the existing effect
+  channel; inward, the machine agent reports the run's lifecycle through
+  `POST /api/agent/runs/{started,finished}`, which appends the run's events, optionally
+  creates a report DOC, and ADVANCES the dispatching task through `applyTransition`.
+- **The payload is a GENERIC INSTRUCTION, never a command** (captain decision 12):
+  `intent` (prose, addressed to an agent) + `context` (structured facts the server resolved,
+  because the server is the only side that can see the graph) + `scope`
+  (`{workdir, repos, writes, timeoutMs}` - the half a DETERMINISTIC pre-flight check reads).
+  `effects/instruction.ts` is the ONE pure definition; `parseInstruction` is the only way one
+  is built, so a malformed declaration dead-letters visibly instead of arriving as something
+  the far end must guess about. This same shape is what later carries Intercom replies,
+  tweets, anything - do NOT teach it an action's vocabulary.
+- **A static spec + an instance, without a template language.** The handler always merges the
+  dispatching object's own payload in as `context.object`, so a spec carries a STANDING intent
+  ("do the work in `context.object.brief`") while the instance supplies particulars. And
+  `withObjectScope` lets the instance FILL scope fields the declaration left open (its
+  workdir, its repos) but never REPLACE one it pinned - so instance, declaration and the
+  machine's own allowlist compose, and none can widen another.
+- **`dispatch-run` (R2) deliberately has NO delivery shape.** A run is a command on somebody's
+  machine and nothing server-side can verify a script is "machine-local only", so the runs
+  bridge takes the approved (R3) door only; the R2 kind dead-letters `NO_HANDLER`. That is also
+  what keeps `effect_directives.approval_event NOT NULL` meaningful rather than relaxed.
+- **Run identity is DERIVED: `runIdOf(directiveId)` = `run-<directive id>`**, which is itself a
+  pure function of the approving event. So every row the report-back path writes keys off it -
+  both lifecycle events are `derived`, the report doc's id is derived, and the advancing
+  transition passes `derivedFrom` - which is why "run-finished advances the task EXACTLY once"
+  is a property and not a hope. Prefixed rather than hashed so a `run-…` actor id in the
+  Timeline names its work order without a lookup.
+- **TWO entrances, on purpose.** The run's own `run-started`/`run-finished` events carry
+  `entrance: "agent-run"` with the RUN ID as actor (that is what the class means); the
+  TRANSITION they cause carries `entrance: "rule"` with the action id as actor, because the
+  state change is the engine's declarative consequence of a run finishing - the same shape an
+  observation takes when it closes a wait.
+- **The lease is the authority.** Both run verbs require the caller to still HOLD the
+  directive's lease, else `LEASE_LOST` (409). Without it any process with the channel token
+  could advance any task by naming a directive id, and a zombie could overwrite what its
+  successor recorded.
+- **Nothing hangs silently.** A run that dies mid-flight reports nothing → the lease expires →
+  the directive FAILS `LEASE_EXPIRED` → a `directive-failed` attention item NAMING the
+  dispatching task. The task stays honestly `dispatched` with a reason beside it. A refused
+  outcome transition is likewise REPORTED (`notAdvanced`), never swallowed.
+- **The report DOC goes through the kernel path:** `createObject` (derived id) + a `produces`
+  edge from the dispatching object + an `object-created` event with the run as actor, type
+  `report`, body serialized as a v1 ARTIFACT (front matter + Markdown, decision 6) into
+  `payload.source` - the key `read.ts renderStored` renders, so a run's product reads like
+  every other product. A run that printed nothing creates no empty doc.
+- **Machine side (`packages/machine-agent/src/run.ts`) - the sandbox:** fixed argv, NEVER a
+  shell; the instruction on STDIN (so a prompt with `$(…)` is text, and `ps` never shows it);
+  the workdir resolved inside `LOOPANY_AGENT_RUN_ROOT` with a separator-terminated prefix test
+  AFTER normalization; the declared timeout clamped and enforced by killing the process GROUP;
+  bounded output whose truncation is stated IN the report; an ALLOWLISTED child env
+  (`INHERITED_ENV`) so the channel token never travels into a run. `composeInstruction` is
+  pure, and always appends the check-reality-first discipline, the boundary and the reporting
+  contract - decision 12's answer to agent-side idempotency, with observation as the backstop.
+- **`NEVER_EXECUTE` is a hard floor under the configuration**: `loopany` and the agent's own
+  binaries can never be the executor whatever the env says, checked on the resolved basename.
+  A live daemon runs somebody's real scheduled work.
+- **Demo type + CLI:** `AGENT_TASK_SPEC` (`agent-task`: queued → awaiting-dispatch [gate] →
+  dispatched → done/failed, plus `declined`) is deliberately GENERIC - not a fix-review.
+  `pnpm graph:dispatch -- [--brief …] [--workdir …] [--repos …]` stages one awaiting a verdict;
+  the default brief is a read-only survey, so the demo exercises every hop while touching
+  nothing.
+- **Probes:** `graph/agent/runs.integration.test.ts` (18: dispatch idempotency, claim
+  exclusivity, lease expiry → attention naming the task, exactly-once advance + replay,
+  failure surfacing with typed retryability, lease-as-authority incl. the zombie, malformed
+  declaration dead-letter, the R2 absence, the non-human-approval ceiling) +
+  `machine-agent/src/run.test.ts` (the jail incl. traversal and prefix-sibling, the guards,
+  the composed prompt, and a REAL child process for stdin-not-argv, timeout killing a
+  grandchild, output bounding).
 
 ## Graph v1 demo — the real-data pull (`graph/workspace/pull-prod.ts` + `seed-real.ts`)
 

@@ -5,6 +5,6 @@
     { "path": "packages/server" },
     { "path": "packages/daemon" },
     { "path": "packages/artifact-format" },
-    { "path": "packages/effect-agent" }
+    { "path": "packages/machine-agent" }
   ]
 }

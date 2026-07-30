@@ -47,7 +47,7 @@ let at: typeof import('../applyTransition.js')
 let exec: typeof import('../outbox/executor.js')
 let attention: typeof import('../outbox/attention.js')
 let channel: typeof import('./channel.js')
-let cfg: typeof import('./config.js')
+let cfg: typeof import('../agent/config.js')
 let directive: typeof import('./directive.js')
 let specs: typeof import('../workspace/specs.js')
 
@@ -171,7 +171,7 @@ beforeAll(async () => {
   exec = await import('../outbox/executor.js')
   attention = await import('../outbox/attention.js')
   channel = await import('./channel.js')
-  cfg = await import('./config.js')
+  cfg = await import('../agent/config.js')
   directive = await import('./directive.js')
   specs = await import('../workspace/specs.js')
 
@@ -557,22 +557,22 @@ describe('probe: an outward action without a HUMAN approval never becomes a dire
 // PROBE 9 - the bearer: an unconfigured channel admits nobody
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('probe: the effect channel fails closed', () => {
+describe('probe: the machine agent channel fails closed', () => {
   it('admits nobody when no token is configured', () => {
-    delete process.env.LOOPANY_EFFECT_AGENT_TOKEN
-    expect(cfg.effectChannelConfigured()).toBe(false)
-    expect(cfg.effectAgentTokenMatches('Bearer anything')).toBe(false)
+    delete process.env.LOOPANY_AGENT_TOKEN
+    expect(cfg.agentChannelConfigured()).toBe(false)
+    expect(cfg.agentTokenMatches('Bearer anything')).toBe(false)
     // Not even an empty bearer, which is the shape a misconfigured agent sends.
-    expect(cfg.effectAgentTokenMatches('Bearer ')).toBe(false)
-    expect(cfg.effectAgentTokenMatches(null)).toBe(false)
+    expect(cfg.agentTokenMatches('Bearer ')).toBe(false)
+    expect(cfg.agentTokenMatches(null)).toBe(false)
   })
 
   it('admits the configured token, in either bearer form, and nothing else', () => {
-    process.env.LOOPANY_EFFECT_AGENT_TOKEN = 'shh-probe-secret'
-    expect(cfg.effectAgentTokenMatches('Bearer shh-probe-secret')).toBe(true)
-    expect(cfg.effectAgentTokenMatches('shh-probe-secret')).toBe(true)
-    expect(cfg.effectAgentTokenMatches('Bearer shh-probe-secreT')).toBe(false)
-    expect(cfg.effectAgentTokenMatches('Bearer shh')).toBe(false)
-    delete process.env.LOOPANY_EFFECT_AGENT_TOKEN
+    process.env.LOOPANY_AGENT_TOKEN = 'shh-probe-secret'
+    expect(cfg.agentTokenMatches('Bearer shh-probe-secret')).toBe(true)
+    expect(cfg.agentTokenMatches('shh-probe-secret')).toBe(true)
+    expect(cfg.agentTokenMatches('Bearer shh-probe-secreT')).toBe(false)
+    expect(cfg.agentTokenMatches('Bearer shh')).toBe(false)
+    delete process.env.LOOPANY_AGENT_TOKEN
   })
 })

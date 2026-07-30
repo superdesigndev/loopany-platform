@@ -687,6 +687,25 @@ function TimelinePane({ timeline }: { timeline: TimelineView }) {
 
 // ---- shell ----
 
+/**
+ * One line answering "is the world still being watched?".
+ *
+ * Deliberately not alarmist and deliberately not reassuring: it says what the rows
+ * say. No mirrors is a clean "nothing to sense"; never observed means the agent has
+ * not run yet, which on a fresh workspace is ordinary; stale means it ran once and
+ * stopped, which is the case worth noticing and the one a "poller: on" indicator
+ * would have hidden.
+ */
+function sensingPhrase(s: Summary['sensing']): string {
+  if (!s.mirrors) return 'sensing: nothing to watch yet'
+  if (!s.lastObservedAt) return `sensing: ${s.mirrors} mirror${s.mirrors === 1 ? '' : 's'} never observed — is the machine agent running?`
+  const mins = Math.max(0, Math.round((Date.now() - Date.parse(s.lastObservedAt)) / 60_000))
+  const ago = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`
+  const stale = s.stale ? ` · ${s.stale} stale` : ''
+  const unobserved = s.unobserved ? ` · ${s.unobserved} never observed` : ''
+  return `sensed by the machine agent ${ago}${stale}${unobserved}`
+}
+
 function Sidebar({ view, setView, summary }: { view: ViewName; setView: (v: ViewName) => void; summary: Summary | null }) {
   const items: { id: ViewName; label: string }[] = [
     { id: 'library', label: 'Library' },
@@ -744,6 +763,13 @@ function Sidebar({ view, setView, summary }: { view: ViewName; setView: (v: View
               {summary.watching ? ` · ${summary.watching} waiting on GitHub` : ''}
             </small>
           )}
+          {/* SENSING FRESHNESS. This server holds no GitHub transport at all
+              (captain decision 10) - a machine agent reads the world with its own
+              credentials and reports back. So the honest vital sign is not "the
+              poller is running", it is WHEN THE ROWS WERE LAST OBSERVED, computed
+              from the observation stamps themselves. Without this line an agent
+              that stopped would be indistinguishable from a quiet week on GitHub. */}
+          {summary && <small className="sensing-line">{sensingPhrase(summary.sensing)}</small>}
         </div>
       </div>
     </aside>

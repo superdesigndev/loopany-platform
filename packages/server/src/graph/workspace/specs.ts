@@ -251,6 +251,105 @@ export const MERGE_REVIEW_SPEC: TypeSpec = {
   fields: { repo: "string", number: "number", mergeIntent: "boolean" },
 };
 
+/**
+ * WORK AN AGENT DOES, once a person says go - the runs bridge's own shepherd.
+ *
+ * Deliberately GENERIC (captain decision 12, symmetric with decision 4's "generic
+ * Task first, specialized types earned"): this is not a fix-review or a
+ * reply-review, it is "a person approved an instruction and an agent carried it
+ * out". The instruction's prose and its particulars come from the INSTANCE, so the
+ * same type carries an investigation today and an Intercom reply tomorrow without a
+ * new state machine.
+ *
+ * ── the shape, and why each state exists ────────────────────────────────────
+ *
+ *   queued            created, nobody asked for anything yet
+ *   awaiting-dispatch GATE. A person owes the verdict, because dispatching an agent
+ *                     run is an outward effect: it spends money and it can act on
+ *                     the world. R3 is the honest class, so a human approval is
+ *                     structurally required rather than configurable.
+ *   dispatched         the work order is out. NOT terminal, and not a gate either:
+ *                     nobody owes anything, we are waiting on a machine. The run's
+ *                     own outcome is what moves it, through `applyTransition` with
+ *                     `entrance: "rule"` (`graph/agent/runs.ts`).
+ *   done / failed      the run said so. Two states rather than one plus a field,
+ *                     because "it worked" and "it broke" lead to different next
+ *                     actions and the Timeline must not read them the same.
+ *   declined           the person said no. The verdict is recorded either way.
+ *
+ * `approve` declares the dispatch and a notification. Both rest on the approval
+ * this very transition IS: a human entered it, so its own event is the approval
+ * event, re-resolved by the executor before the work order is written and re-checked
+ * a THIRD time by the agent before anything is executed.
+ *
+ * A run that dies without reporting does NOT strand this task silently: the
+ * directive's lease expires, the channel gives up after a bounded number of
+ * abandoned claims, and the failed directive becomes an attention item naming this
+ * object. The task stays visibly `dispatched` with a reason next to it, which is the
+ * honest state - it really is still waiting, and now a person knows why.
+ */
+export const AGENT_TASK_SPEC: TypeSpec = {
+  states: ["queued", "awaiting-dispatch", "dispatched", "done", "failed", "declined"],
+  initialState: "queued",
+  gateStates: ["awaiting-dispatch"],
+  terminalStates: ["done", "failed", "declined"],
+  transitions: [
+    {
+      name: "submit",
+      from: ["queued"],
+      to: "awaiting-dispatch",
+      entrance: OPENS_A_REVIEW,
+      opens: [{ key: "dispatch-verdict", class: "human-verdict", label: "Approve the run" }],
+      actions: [{ kind: "enqueue-review", payload: { queue: "dispatch" } }],
+    },
+    {
+      name: "approve",
+      from: ["awaiting-dispatch"],
+      to: "dispatched",
+      entrance: "human",
+      closes: ["dispatch-verdict"],
+      actions: [
+        {
+          kind: "dispatch-outward-run",
+          payload: {
+            // The STANDING intent for this type of work. Instance particulars ride
+            // in `context.object`, which the handler merges from the task's own
+            // payload - so one static declaration serves every instance.
+            intent: [
+              "Carry out the work described in `context.object.brief`.",
+              "",
+              "Before acting, CHECK REALITY: read the current state of whatever you are about to change and",
+              "stop if the work has already been done. This instruction may be delivered more than once.",
+              "",
+              "Stay inside the scope you were given. Do not touch anything outside `scope.workdir`, do not act",
+              "on a repository that is not in `scope.repos`, and never copy a credential, token or personal",
+              "detail into anything you write or publish.",
+              "",
+              "Finish by printing a short markdown report of what you found and what you changed. If there was",
+              "nothing to do, say so plainly - a clean stop is a real outcome, not a failure.",
+            ].join("\n"),
+            scope: { writes: ["report.md"] },
+            onSuccess: "succeeded",
+            onFailure: "broke",
+            report: true,
+          },
+        },
+        { kind: "notify", payload: { channel: "inbox" } },
+      ],
+    },
+    { name: "decline", from: ["awaiting-dispatch"], to: "declined", entrance: "human", closes: ["dispatch-verdict"] },
+    // The two outcome transitions. `entrance: "rule"` because the state change is
+    // the engine's declarative consequence of a run finishing - the same shape an
+    // observation takes when it closes a wait. Restricted to `rule`, so nothing
+    // else can claim a run's outcome on its behalf.
+    { name: "succeeded", from: ["dispatched"], to: "done", entrance: "rule" },
+    { name: "broke", from: ["dispatched"], to: "failed", entrance: "rule" },
+  ],
+  /** `brief` is the instance's own instruction - what this particular run should do.
+   *  `workdir`/`repos` narrow the scope the dispatch declares. */
+  fields: { brief: "string", workdir: "string", repos: "string" },
+};
+
 // ---- docs: content, no lifecycle (decision 8) ----
 
 /**
@@ -396,6 +495,12 @@ export const DEMO_TYPES = [
   { name: "post", archetype: "doc", spec: POST_SPEC, rationale: "outbound content; publishing is a field, not a state" },
   { name: "report", archetype: "doc", spec: REPORT_SPEC, rationale: "a dated run product" },
   { name: "playbook", archetype: "doc", spec: PLAYBOOK_SPEC, rationale: "durable reference content" },
+  {
+    name: "agent-task",
+    archetype: "task",
+    spec: AGENT_TASK_SPEC,
+    rationale: "work an agent does from an approved instruction - the generic outward-effect path (decision 12)",
+  },
   { name: "publish-review", archetype: "task", spec: PUBLISH_REVIEW_SPEC, rationale: "the human publish decision on a post" },
   { name: "decision-review", archetype: "task", spec: DECISION_REVIEW_SPEC, rationale: "the human call a report escalated" },
   { name: "ship-review", archetype: "task", spec: SHIP_REVIEW_SPEC, rationale: "the human ship decision on a playbook" },
