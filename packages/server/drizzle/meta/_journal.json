@@ -50,6 +50,13 @@
       "when": 1785402513347,
       "tag": "0006_awesome_zuras",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785424974046,
+      "tag": "0007_youthful_morlun",
+      "breakpoints": true
     }
   ]
 }

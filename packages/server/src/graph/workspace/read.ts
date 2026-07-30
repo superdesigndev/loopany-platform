@@ -44,7 +44,16 @@ import { cadenceOf, describeCadence } from "../schedule/cadence.js";
 import { CLOCK_SKIPPED_EVENT } from "../schedule/scheduler.js";
 import { RUN_FINISHED_EVENT, RUN_STARTED_EVENT } from "../effects/instruction.js";
 import type { TypeSpec } from "../types.js";
-import { CATEGORY_OF_TYPE, DEMO_TEAM_ID, DEMO_USER_ID, LIBRARY_CATEGORIES, SHEPHERD_TYPES, WORK_TYPE } from "./specs.js";
+import {
+  CATEGORY_OF_TYPE,
+  DEMO_TEAM_ID,
+  DEMO_USER_ID,
+  LIBRARY_CATEGORIES,
+  REVIEW_PRESETS,
+  REVIEW_TYPE,
+  SHEPHERD_TYPES,
+  WORK_PRESET,
+} from "./specs.js";
 
 // ---- shared loading ----
 
@@ -160,11 +169,14 @@ const BAND_LABEL: Record<string, string> = {
 
 /** What the gate holding these objects is called. Derived from what is actually
  *  waiting, so a new artifact type names its own gate without a lookup table. */
-function gateName(types: Set<string>): string {
-  if (types.has("merge-review")) return "Merge gate";
-  if (types.has("publish-review")) return "Publish gate";
-  if (types.has("ship-review")) return "Ship gate";
-  if (types.has("decision-review")) return "Your call";
+function gateName(presets: Set<string>): string {
+  // Named off the review PRESET, which is instance data (captain decision 16) -
+  // there is one review type now, so a gate cannot be named by a type name
+  // without inventing five of them again.
+  if (presets.has("merge")) return "Merge gate";
+  if (presets.has("publish")) return "Publish gate";
+  if (presets.has(WORK_PRESET)) return "Go-ahead";
+  if (presets.has("decision")) return "Your call";
   return "Review gate";
 }
 
@@ -385,6 +397,12 @@ export interface LibraryArtifact {
    * itself when the mirror poller observes the condition.
    */
   watching?: string;
+  /** The wait's key, for the `wait answer` verb. */
+  watchKey?: string;
+  /** The object NAMED as its watcher at creation (decision 13). */
+  watcher?: string;
+  /** The question its watcher answers. */
+  watchQuestion?: string;
   /** When an observation last ingested facts for this mirror. The one field on a
    *  Library row that moves without anybody doing anything. */
   observedAt?: string;
@@ -409,7 +427,7 @@ export interface LibraryView {
 const LIBRARY_SETTLED_CAP = 90;
 
 const ICON_OF_TYPE: Record<string, LibraryArtifact["icon"]> = {
-  "merge-review": "pr",
+  "pull-request": "pr",
   post: "post",
   report: "report",
   playbook: "doc",
@@ -432,16 +450,19 @@ function humanize(s: string): string {
   return s.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase());
 }
 
-/** Verdict labels, keyed by the obligation the transition closes. */
-const VERDICT_LABEL: Record<string, string> = {
-  "merge-verdict": "Approve",
-  "publish-verdict": "Review",
-  "ship-verdict": "Review",
-  "policy-verdict": "Your call",
-  // Dispatching a run is an outward effect that spends money and can act on the
-  // world, so its button says what it does rather than the softer "Approve".
-  "dispatch-verdict": "Run it",
-};
+/**
+ * The verdict button's words, from the review's PRESET.
+ *
+ * Was a table keyed by obligation key, one entry per shepherd type. Since the
+ * collapse (decision 16) there is one key on one type, so the label comes from
+ * instance data - which is also why "Run it" still reads differently from
+ * "Approve": dispatching a run spends money and can act on the world, and the
+ * button should say what it does.
+ */
+function verdictLabel(object: GraphObject | undefined): string {
+  const preset = str(payloadOf(object ?? ({} as GraphObject)).preset);
+  return (preset && REVIEW_PRESETS[preset]?.label) || "Decide";
+}
 
 /**
  * The transition that discharges an open obligation, resolved from the object's
@@ -449,8 +470,16 @@ const VERDICT_LABEL: Record<string, string> = {
  * closes this key. Nothing is hardcoded - a new type gets its verdict button for
  * free, and a spec with no such transition simply offers none.
  */
-function verdictTransition(spec: TypeSpec, status: string, key: string): string | undefined {
-  return spec.transitions.find((t) => t.from.includes(status) && (t.closes ?? []).includes(key))?.name;
+function verdictTransition(spec: TypeSpec, status: string, key: string, object?: GraphObject): string | undefined {
+  // WHICH yes, when there is more than one. The collapsed review type offers two
+  // ways out of its gate - `approve` (a consequence that lands here or through an
+  // earned accelerator) and `dispatch` (work a machine does) - and the PRESET is
+  // what says which one this instance means (captain decision 16). Instance data
+  // decides; the spec is still what makes it legal.
+  const preset = object ? str(payloadOf(object).preset) : undefined;
+  const wanted = preset ? REVIEW_PRESETS[preset]?.verdict : undefined;
+  const candidates = spec.transitions.filter((t) => t.from.includes(status) && (t.closes ?? []).includes(key));
+  return (wanted ? candidates.find((t) => t.name === wanted) : undefined)?.name ?? candidates[0]?.name;
 }
 
 function relativeAge(iso: string, nowMs: number): string {
@@ -510,11 +539,11 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
     let verdict: LibraryArtifact["verdict"];
     if (open && shepherd) {
       const spec = await specOf(shepherd.type);
-      const transition = spec ? verdictTransition(spec, shepherd.status, open.key) : undefined;
+      const transition = spec ? verdictTransition(spec, shepherd.status, open.key, shepherd) : undefined;
       // The verdict runs on the SHEPHERD, not on the content - so the row hands
       // the caller that object id rather than making the client infer it.
       if (transition) {
-        verdict = { objectId: shepherd.id, transition, label: VERDICT_LABEL[open.key] ?? "Decide", obligation: open.key };
+        verdict = { objectId: shepherd.id, transition, label: verdictLabel(shepherd), obligation: open.key };
       }
     }
 
@@ -545,7 +574,18 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
       // A mirror's own external wait, plus when we last looked. Both move with no
       // human involved - this is where the live pipe shows up in the Library.
       ...(watchByObject.has(o.id)
-        ? { watching: watchByObject.get(o.id)!.label ?? watchByObject.get(o.id)!.key }
+        ? {
+            watching: watchByObject.get(o.id)!.label ?? watchByObject.get(o.id)!.key,
+            // The wait's KEY and its named WATCHER, so the workspace can offer the
+            // same `wait answer` verb an agent uses (captain decisions 13 + 16) -
+            // a person looking at the thing is a perfectly good watcher, and
+            // routing their answer through the verb keeps the Timeline uniform.
+            watchKey: watchByObject.get(o.id)!.key,
+            ...(watchByObject.get(o.id)!.watcherObjectId
+              ? { watcher: watchByObject.get(o.id)!.watcherObjectId! }
+              : {}),
+            ...(watchByObject.get(o.id)!.question ? { watchQuestion: watchByObject.get(o.id)!.question! } : {}),
+          }
         : {}),
       ...(o.externalObservedAt ? { observedAt: o.externalObservedAt } : {}),
     });
@@ -711,7 +751,7 @@ function classify(
   if (kind === RUN_STARTED_EVENT || kind === RUN_FINISHED_EVENT) return "run";
   if (entrance === "clock") return "clock";
   if (entrance === "human") return "decision";
-  if (object && (object.archetype === "doc" || object.type === "merge-review")) return "artifact";
+  if (object && (object.archetype === "doc" || object.type === REVIEW_TYPE)) return "artifact";
   if (object && str(payloadOf(object).kind) === "sensor") return "observe";
   return "run";
 }
@@ -763,7 +803,7 @@ export async function inboxView(teamId = DEMO_TEAM_ID): Promise<{ items: InboxIt
     if (!task) continue;
     const content = byId.get(reviews.get(task.id) ?? "");
     const spec = (await graph.getEffectiveType(undefined, teamId, task.type))?.spec;
-    const transition = spec ? verdictTransition(spec, task.status, o.key) : undefined;
+    const transition = spec ? verdictTransition(spec, task.status, o.key, task) : undefined;
     items.push({
       objectId: task.id,
       key: o.key,
@@ -775,7 +815,7 @@ export async function inboxView(teamId = DEMO_TEAM_ID): Promise<{ items: InboxIt
       type: task.type,
       ...(content ? { reviews: content.id } : {}),
       source: byId.get(producer.get(task.id) ?? "")?.title ?? "unknown loop",
-      ...(transition ? { verdict: { transition, label: VERDICT_LABEL[o.key] ?? "Decide" } } : {}),
+      ...(transition ? { verdict: { transition, label: verdictLabel(task) } } : {}),
     });
   }
   items.sort((a, b) => Date.parse(a.openedAt) - Date.parse(b.openedAt));
@@ -958,7 +998,7 @@ export async function effectsView(teamId = DEMO_TEAM_ID, limit = 25): Promise<{ 
 // ---- the runs bridge: work a person can send to a machine ----
 
 export interface WorkRow {
-  /** The `agent-task` itself - what a verdict moves. */
+  /** The review task itself - what a verdict moves. */
   id: string;
   title: string;
   /** This instance's own instruction, verbatim. A person approving a run must be
@@ -990,7 +1030,7 @@ export interface WorkView {
  * WORK, as opposed to content.
  *
  * The Library lists what the fleet has MADE; this lists what a person has been asked
- * to let a machine DO. They are deliberately separate surfaces: an `agent-task` is not
+ * to let a machine DO. They are deliberately separate surfaces: a dispatch review is not
  * an artifact, it has no body, and giving it a Library row would have meant either
  * inventing a content category for it or letting the artifact list mean two things.
  *
@@ -1001,14 +1041,16 @@ export interface WorkView {
  */
 export async function workView(teamId = DEMO_TEAM_ID): Promise<WorkView> {
   const { objects, edges, obligations, now } = await load(teamId);
-  const tasks = objects.filter((o) => o.type === WORK_TYPE);
+  // WORK is a review whose verdict DISPATCHES a run - a preset, not a type
+  // (decision 16). Everything else about this view is unchanged.
+  const tasks = objects.filter((o) => o.type === REVIEW_TYPE && str(payloadOf(o).preset) === WORK_PRESET);
   if (!tasks.length) return { items: [], awaiting: 0, inFlight: 0 };
 
   const openByObject = new Map<string, GateObligation>();
   for (const o of obligations) {
     if (o.closedByEvent === null && o.class !== "external-wait") openByObject.set(o.objectId, o);
   }
-  const spec = (await graph.getEffectiveType(undefined, teamId, WORK_TYPE))?.spec;
+  const spec = (await graph.getEffectiveType(undefined, teamId, REVIEW_TYPE))?.spec;
   /** task id → the report doc it produced, so a finished run links to its product. */
   const produced = new Map<string, string>();
   for (const e of edges) if (e.kind === "produces") produced.set(e.srcId, e.dstId);
@@ -1017,7 +1059,7 @@ export async function workView(teamId = DEMO_TEAM_ID): Promise<WorkView> {
   for (const task of tasks) {
     const p = payloadOf(task);
     const open = openByObject.get(task.id);
-    const transition = open && spec ? verdictTransition(spec, task.status, open.key) : undefined;
+    const transition = open && spec ? verdictTransition(spec, task.status, open.key, task) : undefined;
 
     // The run's own account of itself, read off the lifecycle events rather than
     // inferred from the task's status - "the task is done" and "the run said what it
@@ -1040,7 +1082,7 @@ export async function workView(teamId = DEMO_TEAM_ID): Promise<WorkView> {
             verdict: {
               objectId: task.id,
               transition,
-              label: VERDICT_LABEL[open.key] ?? "Decide",
+              label: verdictLabel(task),
               obligation: open.key,
             },
           }
@@ -1144,7 +1186,7 @@ async function scheduleCounters(teamId: string): Promise<{ armed: number; overdu
 /** Just the two work counters, for the shell. Cheaper than the whole view, which
  *  reads every task's event history. */
 async function workCounters(teamId: string): Promise<{ awaiting: number; inFlight: number }> {
-  const tasks = await graph.listObjects(undefined, teamId, { type: WORK_TYPE });
+  const tasks = await graph.listObjects(undefined, teamId, { type: REVIEW_TYPE });
   if (!tasks.length) return { awaiting: 0, inFlight: 0 };
   const open = await graph.listOpenObligations(undefined, teamId, { class: "human-verdict" });
   const gated = new Set(open.map((o) => o.objectId));

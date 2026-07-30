@@ -383,8 +383,20 @@ export function directiveRetryable(code: DirectiveRefusalCode | null | undefined
  *                       created it - the action DID what it was asked to do (it
  *                       wrote a directive), and blaming it would point a person at
  *                       the wrong row.
+ *  - `wait-recurrence`  a verification wait that had been ANSWERED "met" was
+ *                       answered again with the thing back (captain decision 14:
+ *                       "a recurrence answer raises attention"). The wait reopens
+ *                       on its own, which keeps the watcher watching; the item is
+ *                       what makes a person aware that a fix stopped holding,
+ *                       which no amount of re-watching would tell them.
  */
-export const ATTENTION_KINDS = ["dead-letter", "chain-parked", "close-refused", "directive-failed"] as const;
+export const ATTENTION_KINDS = [
+  "dead-letter",
+  "chain-parked",
+  "close-refused",
+  "directive-failed",
+  "wait-recurrence",
+] as const;
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
 
 /** The event kind that RESOLVES an attention item. Human entrance only, and its
@@ -400,6 +412,14 @@ export const CLOSE_REFUSED_EVENT = "close-refused";
 
 /** The event kind a budget park records (written by `applyTransition`). */
 export const CHAIN_PARKED_EVENT = "chain-parked";
+
+/** The event kinds the agent-answered external-wait path writes (decisions 13 +
+ *  14). `wait-recurrence` is what the attention section computes its item from -
+ *  the same "an item is derived from a real row, never from a flag" rule every
+ *  other attention kind follows. */
+export const WAIT_OPENED_EVENT = "wait-opened";
+export const WAIT_ANSWERED_EVENT = "wait-answered";
+export const WAIT_RECURRENCE_EVENT = "wait-recurrence";
 
 // ---- type registry (design §4, §12 item 4 / captain decision 4) ----
 

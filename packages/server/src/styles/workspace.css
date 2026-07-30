@@ -87,6 +87,20 @@
   .title-row p { max-width: 58ch; margin: 10px 0 0; color: var(--muted); font-size: .9375rem; line-height: 1.55; }
   .view-meta { flex: none; padding-bottom: 2px; color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; }
 
+  /* The VERB BAR - the seven verbs from a person's hands (captain decision 16).
+     Quiet on purpose: it sits above "Needs you", and an action panel that shouted
+     would compete with the queue it is meant to feed. */
+  .verb-bar { margin-top: 28px; padding: 14px 20px 16px; border: 1px solid #e8e0cf; border-radius: 10px; background: #fdfbf5; }
+  .verb-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .verb-actions button { min-height: 28px; padding: 0 12px; border: 1px solid #ded4bb; border-radius: 6px; background: #fff; color: #6b6250; font-size: .75rem; font-weight: 600; cursor: pointer; }
+  .verb-actions button:hover { background: #f6f1e4; }
+  .verb-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
+  .verb-form input, .verb-form select { flex: 1 1 220px; min-width: 0; min-height: 30px; padding: 0 10px; border: 1px solid #ded4bb; border-radius: 6px; background: #fff; font-size: .8125rem; color: #4a453a; }
+  .verb-form button { min-height: 30px; padding: 0 12px; border: 1px solid #e0c98d; border-radius: 6px; background: #fff3d2; color: #7d5a0c; font-size: .75rem; font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; }
+  .verb-form button:disabled { opacity: .5; cursor: not-allowed; }
+  /* The verb's own answer, verbatim - including a refusal's `allowed` list, which
+     is the same guidance the CLI prints (decision 15b). */
+  .verb-said { margin: 10px 0 0; font-size: .78rem; color: #6b6250; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .needs-section { margin-top: 36px; padding: 18px 20px 4px; border: 1px solid #eadfbe; border-radius: 10px; background: #fffaf0; }
   .section-heading { min-height: 36px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
   .section-heading > div { display: flex; align-items: center; gap: 8px; }

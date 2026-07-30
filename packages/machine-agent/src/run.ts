@@ -39,6 +39,7 @@
  * an effect nobody performed must never be recorded as one that happened.
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import type { AgentConfig } from "./config.js";
@@ -62,6 +63,27 @@ export const INHERITED_ENV = [
   "TERM",
   "TZ",
 ] as const;
+
+/**
+ * THE RUN'S `graph` CREDENTIAL - the machine half of a derivation whose other
+ * half is the server's `graph/cli/identity.ts`.
+ *
+ * DELIBERATELY DUPLICATED, three lines of it, rather than shared through a
+ * package. This process must not depend on the server's source tree (it is a
+ * standalone binary an operator installs), and a shared package for one hash
+ * would be a build-order coupling for something whose whole value is that both
+ * ends can compute it independently. The two are pinned to the SAME GOLDEN VECTOR
+ * by a test on each side, which is a stronger guarantee than a shared import:
+ * a change on either side fails both suites.
+ *
+ * Possession proves two things and no more - that the holder was handed it by
+ * something that knew the channel secret, and that it is for exactly one run.
+ * What bounds it in time is the run's own lease, checked server-side on every
+ * call.
+ */
+export function runCliToken(channelToken: string, runId: string): string {
+  return `rt_${createHash("sha256").update(`${channelToken}:${runId}`).digest("hex").slice(0, 32)}`;
+}
 
 export interface RunOutcomeDetail {
   ok: boolean;
@@ -293,7 +315,13 @@ export async function runInstruction(
       stdin: composeInstruction(spec),
       timeoutMs,
       maxOutputBytes: config.run.maxOutputBytes,
-      env: runEnv(spec, resolved.dir),
+      env: runEnv(spec, resolved.dir, {
+        serverUrl: config.serverUrl,
+        // Derived here, from the channel secret this process already holds, so
+        // no credential is minted, stored or transported for it.
+        token: runCliToken(config.token, spec.runId),
+        ...(config.run.graphBinDir ? { binDir: config.run.graphBinDir } : {}),
+      }),
     });
   } catch (err) {
     // The executor could not be started at all (missing binary, no permission).
@@ -346,9 +374,28 @@ export async function runInstruction(
   };
 }
 
-/** The child's environment: an allowlisted subset of ours plus the run's own facts.
- *  Never a spread of `process.env` - see `INHERITED_ENV`. */
-export function runEnv(spec: Instruction, workdir: string): Record<string, string> {
+/**
+ * The child's environment: an allowlisted subset of ours plus the run's own facts.
+ * Never a spread of `process.env` - see `INHERITED_ENV`.
+ *
+ * ── the run's own credential (captain decision 15) ──────────────────────────
+ *
+ * A run drives the seven `graph` verbs, so it needs an identity on the wire. It
+ * gets a DERIVED one - `sha256(channelToken ":" runId)` - and never this
+ * process's channel token, which is the point: the secret that could claim any
+ * work order on this machine has no business in a model's context, and a run
+ * credential that names exactly one run is bounded by that run's own lease.
+ *
+ * The `graph` binary is put on PATH the same way, by prepending its directory
+ * rather than by naming a command - so the instruction says `graph task create`
+ * and the machine decides which binary that is, which is the same division every
+ * other guard in this process keeps.
+ */
+export function runEnv(
+  spec: Instruction,
+  workdir: string,
+  graph?: { serverUrl: string; token: string; binDir?: string },
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const key of INHERITED_ENV) {
     const value = process.env[key];
@@ -359,6 +406,11 @@ export function runEnv(spec: Instruction, workdir: string): Record<string, strin
   env.LOOPANY_RUN_ID = spec.runId;
   env.LOOPANY_RUN_LABEL = spec.label;
   env.LOOPANY_RUN_WORKDIR = workdir;
+  if (graph) {
+    env.LOOPANY_GRAPH_SERVER_URL = graph.serverUrl;
+    env.LOOPANY_RUN_TOKEN = graph.token;
+    if (graph.binDir) env.PATH = `${graph.binDir}:${env.PATH ?? ""}`.replace(/:$/, "");
+  }
   return env;
 }
 

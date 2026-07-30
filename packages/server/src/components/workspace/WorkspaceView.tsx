@@ -12,10 +12,12 @@ import {
   fetchSystem,
   fetchTimeline,
   postAttention,
+  postGraphVerb,
   postNotificationsRead,
   postVerdict,
   type AttentionItem,
   type AttentionView,
+  type GraphVerb,
   type EffectsView,
   type InboxItem,
   type InboxView,
@@ -110,6 +112,157 @@ function ViewHeader({ eyebrow, title, description, meta }: { eyebrow: string; ti
         <span className="view-meta">{meta}</span>
       </div>
     </header>
+  )
+}
+
+
+/**
+ * THE VERB BAR - the seven verbs, from a person's hands (captain decision 16).
+ *
+ * "UI buttons invoke the same verbs (plus the human verdict), no bespoke parallel
+ * endpoints." So this panel does not post to a form handler that writes rows its
+ * own way: it posts to `/api/graph/verb/*`, which calls the very functions the
+ * `graph` CLI calls, with `entrance: "human"` instead of `agent-run`.
+ *
+ * The consequence worth having is in the Timeline: a task a person opened and a
+ * task a run opened are the same shape with different provenance, so "who did
+ * this?" is answered by one column rather than by guessing at which surface was
+ * responsible.
+ *
+ * Deliberately three actions and not seven. `task move` is the verdict buttons
+ * that already exist, `mirror track` and `wait open` are things a run does with
+ * ids it holds, and a form for them would be a worse version of the CLI. What a
+ * person genuinely does from here is: start a piece of work, ask for a verdict,
+ * and answer a wait they are looking at.
+ */
+function VerbBar({ artifacts, onDone }: { artifacts: LibraryArtifact[]; onDone: () => void | Promise<void> }) {
+  const [open, setOpen] = useState<'task' | 'review' | 'wait' | null>(null)
+  const [title, setTitle] = useState('')
+  const [evidence, setEvidence] = useState('')
+  const [waitOn, setWaitOn] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [said, setSaid] = useState<string | null>(null)
+
+  // Only rows actually holding an open wait can be answered - the list is derived
+  // from the obligations, never from a flag.
+  const waits = artifacts.filter((a) => a.watchKey)
+
+  const send = async (verb: GraphVerb, body: Record<string, unknown>) => {
+    setBusy(true)
+    try {
+      const result = await postGraphVerb(verb, body)
+      setSaid(
+        result.ok
+          ? result.summary
+          : `${result.code}: ${result.message}${result.allowed?.length ? ` — you may: ${result.allowed.join(', ')}` : ''}`,
+      )
+      if (result.ok) {
+        setTitle('')
+        setEvidence('')
+        setOpen(null)
+        await onDone()
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="verb-bar">
+      <div className="section-heading">
+        <div>
+          <h2>Do something</h2>
+        </div>
+        <p>The same seven verbs your runs use — this time it is you calling them</p>
+      </div>
+      <div className="verb-actions">
+        <button type="button" onClick={() => setOpen(open === 'task' ? null : 'task')}>
+          + Task
+        </button>
+        <button type="button" onClick={() => setOpen(open === 'review' ? null : 'review')}>
+          + Review
+        </button>
+        {waits.length > 0 && (
+          <button type="button" onClick={() => setOpen(open === 'wait' ? null : 'wait')}>
+            Answer a wait ({waits.length})
+          </button>
+        )}
+      </div>
+
+      {open === 'task' && (
+        <div className="verb-form">
+          <input
+            value={title}
+            placeholder="What needs doing?"
+            onChange={(e) => setTitle(e.target.value)}
+            aria-label="Task title"
+          />
+          <button
+            type="button"
+            disabled={busy || !title.trim()}
+            onClick={() => void send('task.create', { type: 'task', title: title.trim() })}
+          >
+            {busy ? 'Working…' : 'graph task create'}
+          </button>
+        </div>
+      )}
+
+      {open === 'review' && (
+        <div className="verb-form">
+          <input
+            value={title}
+            placeholder="What should somebody decide?"
+            onChange={(e) => setTitle(e.target.value)}
+            aria-label="Review question"
+          />
+          <button
+            type="button"
+            disabled={busy || !title.trim()}
+            onClick={() => void send('review.request', { question: title.trim(), preset: 'decision' })}
+          >
+            {busy ? 'Working…' : 'graph review request'}
+          </button>
+        </div>
+      )}
+
+      {open === 'wait' && (
+        <div className="verb-form">
+          <select value={waitOn} onChange={(e) => setWaitOn(e.target.value)} aria-label="Which wait">
+            <option value="">Pick a wait…</option>
+            {waits.map((a) => (
+              <option key={`${a.id}:${a.watchKey}`} value={`${a.id}|${a.watchKey}`}>
+                {a.title} — {a.watchQuestion ?? a.watching}
+              </option>
+            ))}
+          </select>
+          <input
+            value={evidence}
+            placeholder="What did you see? (the answer's evidence)"
+            onChange={(e) => setEvidence(e.target.value)}
+            aria-label="Evidence"
+          />
+          {(['met', 'not-met'] as const).map((answer) => (
+            <button
+              key={answer}
+              type="button"
+              disabled={busy || !waitOn || !evidence.trim()}
+              onClick={() =>
+                void send('wait.answer', {
+                  objectId: waitOn.split('|')[0],
+                  key: waitOn.split('|')[1],
+                  met: answer === 'met',
+                  evidence: evidence.trim(),
+                })
+              }
+            >
+              {answer === 'met' ? '--met' : '--not-met'}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {said && <p className="verb-said">{said}</p>}
+    </section>
   )
 }
 
@@ -396,6 +549,10 @@ const ATTENTION_LABEL: Record<AttentionItem['kind'], { one: string; many: string
   'chain-parked': { one: 'parked rule chain', many: 'parked rule chains' },
   'close-refused': { one: 'refused close', many: 'refused closes' },
   'directive-failed': { one: 'outward effect refused', many: 'outward effects refused' },
+  // Decision 14: a verification wait answered "met" and then answered again with
+  // the thing back. Worded as the fact rather than as a failure - nothing broke,
+  // something returned.
+  'wait-recurrence': { one: 'it came back', many: 'came back' },
 }
 
 function AttentionSection({
@@ -669,6 +826,7 @@ function LibraryPane({
   onInboxVerdict,
   onWorkVerdict,
   onResolveAttention,
+  onRefresh,
   busyId,
 }: {
   library: LibraryView
@@ -681,6 +839,7 @@ function LibraryPane({
   onInboxVerdict: (item: InboxItem) => void
   onWorkVerdict: (row: WorkRow) => void
   onResolveAttention: (item: AttentionItem, verb: 'acknowledge' | 'retry') => void
+  onRefresh: () => void | Promise<void>
   busyId: string | null
 }) {
   const [preview, setPreview] = useState<LibraryArtifact | null>(null)
@@ -727,6 +886,7 @@ function LibraryPane({
             : `${library.total} artifacts`
         }
       />
+      <VerbBar artifacts={library.artifacts} onDone={onRefresh} />
       {attention && <AttentionSection attention={attention} onResolve={onResolveAttention} busyId={busyId} />}
       {work && <WorkSection work={work} onVerdict={onWorkVerdict} busyId={busyId} />}
       {effects && <EffectsSection effects={effects} />}
@@ -1263,6 +1423,7 @@ export function WorkspaceView() {
                 onInboxVerdict={onInboxVerdict}
                 onWorkVerdict={onWorkVerdict}
                 onResolveAttention={onResolveAttention}
+                onRefresh={refresh}
                 busyId={busyId}
               />
             )}

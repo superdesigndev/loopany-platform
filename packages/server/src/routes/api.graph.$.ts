@@ -166,6 +166,12 @@ export const Route = createFileRoute('/api/graph/$')({
         const gate = await guard()
         if (!gate.ok) return gate.response
         await ensureExecutor()
+        // THE VERB SURFACE (captain decision 16). One endpoint per verb, the same
+        // seven a run drives from the CLI, with a HUMAN actor. So a task a person
+        // created in the browser and one an agent created from a run are the same
+        // rows with the same shape, told apart by provenance rather than by which
+        // code path made them - which is what makes the Timeline uniform.
+        if (action.startsWith('verb/')) return humanVerb(action.slice('verb/'.length), request, gate.userId)
         if (action === 'verdict') return verdict(request, gate.userId)
         if (action === 'attention') return resolveAttention(request, gate.userId)
         if (action === 'notifications/read') return markNotificationsRead()
@@ -176,6 +182,122 @@ export const Route = createFileRoute('/api/graph/$')({
     },
   },
 })
+
+/**
+ * ONE VERB, invoked by a person (captain decision 16).
+ *
+ *   POST /api/graph/verb/task.create   {type, title?, fields?, key?, for?}
+ *   POST /api/graph/verb/task.move     {objectId, transition, note?}
+ *   POST /api/graph/verb/artifact.push {body, title?, type?, for?, replaces?}
+ *   POST /api/graph/verb/review.request{about?, question, preset?, fields?}
+ *   POST /api/graph/verb/mirror.track  {ref, source?, externalId?, for?}
+ *   POST /api/graph/verb/wait.open     {objectId, key, question, watcher}
+ *   POST /api/graph/verb/wait.answer   {objectId, key, met, evidence}
+ *
+ * The SAME functions the CLI calls, with `entrance: "human"` and the signed-in
+ * user as the actor. There is deliberately no argv here: a browser is not a text
+ * sink, and giving the UI a second parser to keep in step would be the drift this
+ * decision exists to remove. What is shared is the part that matters - the writes,
+ * the guards, and the "what can I do next" answer.
+ *
+ * NOT ROLE-FENCED. The fence exists to keep ONE agent run narrow (decision 15a);
+ * a person acting in their own workspace has no work order to be narrow about.
+ */
+async function humanVerb(name: string, request: Request, userId: string | null): Promise<Response> {
+  let body: Record<string, unknown>
+  try {
+    body = ((await request.json()) ?? {}) as Record<string, unknown>
+  } catch {
+    return Response.json({ ok: false, code: 'VALIDATION_ERROR', message: 'body must be JSON' }, { status: 400 })
+  }
+
+  const verbs = await import('../graph/cli/verbs.js')
+  const { DEMO_TEAM_ID, DEMO_USER_ID } = await import('../graph/workspace/specs.js')
+  const ctx: import('../graph/cli/verbs.js').VerbContext = {
+    teamId: (typeof body.teamId === 'string' && body.teamId.trim()) || DEMO_TEAM_ID,
+    // A PERSON, always. The seam records the entrance verbatim, and a gate state's
+    // outgoing transition is admitted on exactly this basis (design §12 item 5).
+    actor: { entrance: 'human', actorId: userId ?? DEMO_USER_ID },
+    ...(typeof body.subject === 'string' && body.subject.trim() ? { subjectId: body.subject.trim() } : {}),
+    now: new Date().toISOString(),
+  }
+
+  const s = (k: string): string | undefined => {
+    const v = body[k]
+    return typeof v === 'string' && v.trim() ? v.trim() : undefined
+  }
+  const fields = (body.fields ?? undefined) as Record<string, unknown> | undefined
+
+  let result: import('../graph/cli/verbs.js').VerbResult
+  switch (name) {
+    case 'task.create':
+      result = await verbs.taskCreate(ctx, {
+        type: s('type') ?? '',
+        ...(s('title') ? { title: s('title')! } : {}),
+        ...(s('key') ? { key: s('key')! } : {}),
+        ...(s('for') ? { forId: s('for')! } : {}),
+        ...(fields ? { fields } : {}),
+      })
+      break
+    case 'task.move':
+      result = await verbs.taskMove(ctx, {
+        objectId: s('objectId') ?? '',
+        transition: s('transition') ?? '',
+        ...(s('note') ? { note: s('note')! } : {}),
+      })
+      break
+    case 'artifact.push':
+      result = await verbs.artifactPush(ctx, {
+        body: typeof body.body === 'string' ? body.body : '',
+        ...(s('title') ? { title: s('title')! } : {}),
+        ...(s('type') ? { type: s('type')! } : {}),
+        ...(s('for') ? { forId: s('for')! } : {}),
+        ...(s('replaces') ? { replacesId: s('replaces')! } : {}),
+      })
+      break
+    case 'review.request':
+      result = await verbs.reviewRequest(ctx, {
+        question: s('question') ?? '',
+        ...(s('about') ? { aboutId: s('about')! } : {}),
+        ...(s('preset') ? { preset: s('preset')! } : {}),
+        ...(s('title') ? { title: s('title')! } : {}),
+        ...(fields ? { fields } : {}),
+      })
+      break
+    case 'mirror.track':
+      result = await verbs.mirrorTrack(ctx, {
+        ref: s('ref') ?? '',
+        ...(s('source') ? { source: s('source')! } : {}),
+        ...(s('externalId') ? { externalId: s('externalId')! } : {}),
+        ...(s('title') ? { title: s('title')! } : {}),
+        ...(s('for') ? { forId: s('for')! } : {}),
+      })
+      break
+    case 'wait.open':
+      result = await verbs.waitOpen(ctx, {
+        objectId: s('objectId') ?? '',
+        key: s('key') ?? '',
+        question: s('question') ?? '',
+        watcherId: s('watcher') ?? '',
+        ...(s('label') ? { label: s('label')! } : {}),
+      })
+      break
+    case 'wait.answer':
+      result = await verbs.waitAnswer(ctx, {
+        objectId: s('objectId') ?? '',
+        key: s('key') ?? '',
+        met: body.met === true,
+        evidence: s('evidence') ?? '',
+      })
+      break
+    default:
+      return notFound()
+  }
+
+  // A refused verb is a 409, like a refused verdict: the engine decided, and the
+  // typed code plus the `allowed` list is exactly what the caller should show.
+  return Response.json(result, { status: result.ok ? 200 : 409 })
+}
 
 /** The one ordinary write: close a human-verdict gate through `applyTransition`. */
 async function verdict(request: Request, userId: string | null): Promise<Response> {

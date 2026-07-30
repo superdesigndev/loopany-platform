@@ -51,6 +51,15 @@ export interface RunConfig {
    *  doc and an event payload, and a run that printed a gigabyte is not describing
    *  something a person will read. */
   maxOutputBytes: number;
+  /**
+   * Directory holding the `graph` binary, PREPENDED to a run's PATH.
+   *
+   * A run drives the seven verbs by name (`graph task create`), so the machine
+   * decides which binary that is - the same division every other guard here
+   * keeps. UNSET means a run has no `graph` on its PATH, which fails the honest
+   * way: the command is not found, rather than found and pointed somewhere else.
+   */
+  graphBinDir?: string;
 }
 
 export interface AgentConfig {
@@ -163,6 +172,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
       ...(env.LOOPANY_AGENT_RUN_ROOT?.trim() ? { root: env.LOOPANY_AGENT_RUN_ROOT.trim() } : {}),
       maxTimeoutMs: positive(env.LOOPANY_AGENT_RUN_MAX_TIMEOUT_MS, DEFAULT_RUN_MAX_TIMEOUT_MS, 1_000),
       maxOutputBytes: positive(env.LOOPANY_AGENT_RUN_MAX_OUTPUT_BYTES, DEFAULT_RUN_MAX_OUTPUT_BYTES, 1_024),
+      ...(env.LOOPANY_AGENT_GRAPH_BIN_DIR?.trim() ? { graphBinDir: env.LOOPANY_AGENT_GRAPH_BIN_DIR.trim() } : {}),
     },
   };
 }
@@ -183,5 +193,6 @@ export function describeConfig(c: AgentConfig): string {
     `executor      ${executor}`,
     `run root      ${c.run.root ?? "(none - every run will refuse)"}`,
     `run limits    ${Math.round(c.run.maxTimeoutMs / 1000)}s · ${Math.round(c.run.maxOutputBytes / 1024)}KB captured`,
+    `graph cli     ${c.run.graphBinDir ?? "(not on a run's PATH - the seven verbs are unavailable)"}`,
   ].join("\n  ");
 }

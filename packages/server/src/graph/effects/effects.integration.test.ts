@@ -63,7 +63,7 @@ const LEASE_CYCLE = ['2026-07-30T10:00:00.000Z', '2026-07-30T10:30:00.000Z', '20
 /** Past every lease in the cycle - when the probe asks what became of it. */
 const AFTER_CYCLE = '2026-07-30T12:00:00.000Z'
 
-/** One PR mirror plus the merge-review shepherd that tracks it, parked in its
+/** One PR mirror plus the `merge`-preset review that tracks it, parked in its
  *  gate exactly as the live flow leaves it: `submit` run by the agent run that
  *  opened the PR, its own actions settled. */
 async function pendingReview(
@@ -84,12 +84,17 @@ async function pendingReview(
   const review = await graph.createObject(undefined, {
     teamId: TEAM,
     archetype: 'task',
-    type: 'merge-review',
+    type: 'review',
     status: 'queued',
     title: `merge review ${suffix}`,
     payload: {
+      preset: 'merge',
       repo: 'acme/widgets',
       number: opts.number,
+      // The GitHub accelerators are OPT-IN per instance since the collapse
+      // (captain decisions 16 + 17): the comment always applies to a merge
+      // review, the merge only when this instance asked for it.
+      commentIntent: true,
       ...(opts.mergeIntent ? { mergeIntent: true } : {}),
     },
     now: NOW,
@@ -177,9 +182,9 @@ beforeAll(async () => {
 
   await graph.seedBuiltinTypes(undefined, TEAM, NOW)
   // The REAL specs, not probe stand-ins: the point of this suite is that the
-  // shipping merge-review type reaches GitHub, so a hand-written copy of it here
-  // would test the copy.
-  await armType('merge-review', specs.MERGE_REVIEW_SPEC, 'task')
+  // shipping review type reaches GitHub with the `merge` preset, so a
+  // hand-written copy of it here would test the copy.
+  await armType('review', specs.REVIEW_SPEC, 'task')
   await armType('pull-request', specs.PULL_REQUEST_SPEC, 'mirror')
 })
 

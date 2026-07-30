@@ -4,7 +4,7 @@
  * Everything this writes goes through the real primitives. There is no direct
  * INSERT of a status, no hand-written event row, and no fixture table:
  *
- *   - loop / merge-review / artifact objects  → `graphStore.createObject`
+ *   - loop / review / artifact objects       → `graphStore.createObject`
  *   - GitHub pull requests                    → `graphStore.getOrCreateMirror`
  *     (an UPSERT on the deterministic mirror id - re-seeding converges on ONE row)
  *   - relations + `produces` / `tracks` links → `graphStore.upsertEdge`
@@ -43,7 +43,7 @@ import {
 import * as graph from "../../db/graphStore.js";
 import { applyTransition, type ApplyTransitionResult } from "../applyTransition.js";
 import { ARTIFACTS, HISTORY, LOOPS, PULL_REQUESTS, RELATIONS } from "./fleet.js";
-import { DEMO_TEAM_ID, DEMO_TYPES } from "./specs.js";
+import { DEMO_TEAM_ID, DEMO_TYPES, REVIEW_PRESETS, REVIEW_TYPE } from "./specs.js";
 import { parseArtifact } from "@loopany/artifact-format";
 
 /** Instant the demo's registry rows and objects are stamped as created. */
@@ -53,11 +53,17 @@ const SEED_AT = "2026-07-01T09:00:00+08:00";
  *  Content and mirrors never carry a verdict themselves (decision 8). */
 const reviewKey = (key: string) => `${key}#review`;
 
-/** Review flow → the shepherd task type that carries its obligation. */
-const SHEPHERD_OF_FLOW = {
-  publish: "publish-review",
-  decision: "decision-review",
-  ship: "ship-review",
+/**
+ * Review flow → the PRESET the review task carries.
+ *
+ * Was a map to three shepherd TYPES. Since the collapse (captain decision 16)
+ * there is one `review` type and the flow is instance data, so this maps to a
+ * preset name and the state machine is the same for all of them.
+ */
+const PRESET_OF_FLOW = {
+  publish: "publish",
+  decision: "decision",
+  ship: "publish",
 } as const;
 
 export interface SeedResult {
@@ -189,10 +195,16 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
     const shepherd = await graph.createObject(undefined, {
       teamId,
       archetype: "task",
-      type: SHEPHERD_OF_FLOW[artifact.review],
+      type: REVIEW_TYPE,
       status: "queued",
       title: row.title,
-      payload: { loopKey: artifact.loop, reviews: row.id },
+      payload: {
+        loopKey: artifact.loop,
+        reviews: row.id,
+        subject: row.id,
+        preset: PRESET_OF_FLOW[artifact.review],
+        ...REVIEW_PRESETS[PRESET_OF_FLOW[artifact.review]]!.payload,
+      },
       now: when,
     });
     ids.set(reviewKey(artifact.key), shepherd.id);
@@ -222,10 +234,17 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
     const review = await graph.createObject(undefined, {
       teamId,
       archetype: "task",
-      type: "merge-review",
-      status: "queued", // MERGE_REVIEW_SPEC.initialState
+      type: REVIEW_TYPE,
+      status: "queued", // REVIEW_SPEC.initialState
       title: mirror.title,
-      payload: { repo: pr.repo, number: pr.number, loopKey: pr.loop },
+      payload: {
+        repo: pr.repo,
+        number: pr.number,
+        loopKey: pr.loop,
+        subject: mirror.id,
+        preset: "merge",
+        ...REVIEW_PRESETS.merge!.payload,
+      },
       now: pr.observedAt,
     });
     ids.set(reviewKey(pr.key), review.id);

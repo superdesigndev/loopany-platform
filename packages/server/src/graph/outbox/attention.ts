@@ -59,6 +59,7 @@ import {
   ATTENTION_KINDS,
   CHAIN_PARKED_EVENT,
   CLOSE_REFUSED_EVENT,
+  WAIT_RECURRENCE_EVENT,
   directiveRetryable,
   type AttentionKind,
 } from "../types.js";
@@ -131,6 +132,13 @@ export async function attentionView(teamId: string): Promise<AttentionView> {
     const item = await directiveItem(directive);
     if (!acked.has(ackEventId(item.kind, item.ref))) items.push(item);
   }
+  // A verification wait whose answer said the thing came BACK (decision 14). The
+  // wait reopens itself, so the watcher keeps watching; this item is the part
+  // re-watching could never deliver - telling a person that a fix stopped holding.
+  for (const event of await graph.listEventsOfKind(undefined, teamId, WAIT_RECURRENCE_EVENT, 500)) {
+    const item = await eventItem(event, "wait-recurrence");
+    if (!acked.has(ackEventId(item.kind, item.ref))) items.push(item);
+  }
 
   items.sort((a, b) => a.raisedAt.localeCompare(b.raisedAt));
   const counts = Object.fromEntries(ATTENTION_KINDS.map((k) => [k, 0])) as Record<AttentionKind, number>;
@@ -191,17 +199,27 @@ async function eventItem(event: GraphEvent, kind: AttentionKind): Promise<Attent
   const object = event.objectId ? await graph.getObject(undefined, event.objectId) : undefined;
   const p = (event.payload ?? {}) as Record<string, unknown>;
   const transition = typeof p.transition === "string" ? p.transition : undefined;
+  const waitKey = typeof p.key === "string" ? p.key : undefined;
   const title =
     kind === "chain-parked"
       ? `Rule chain parked${transition ? ` at “${transition}”` : ""}`
-      : `Close refused${transition ? ` on “${transition}”` : ""}`;
+      : kind === "wait-recurrence"
+        ? `It came back${waitKey ? `: “${waitKey}”` : ""}`
+        : `Close refused${transition ? ` on “${transition}”` : ""}`;
   return {
     id: `${kind}:${event.id}`,
     kind,
     ref: event.id,
     title,
     detail: typeof p.reason === "string" ? p.reason : summarizePayload(p),
-    reason: typeof p.code === "string" ? p.code : kind === "chain-parked" ? "CHAIN_BUDGET_EXCEEDED" : "ATTESTED_CLOSE",
+    reason:
+      typeof p.code === "string"
+        ? p.code
+        : kind === "chain-parked"
+          ? "CHAIN_BUDGET_EXCEEDED"
+          : kind === "wait-recurrence"
+            ? "WAIT_RECURRENCE"
+            : "ATTESTED_CLOSE",
     raisedAt: event.ts,
     objectId: event.objectId,
     subject: subjectOf(object),

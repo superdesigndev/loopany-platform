@@ -11,9 +11,18 @@ import { beforeAll, describe, expect, it } from 'vitest'
  *
  *   the clock fires  →  the fire DISPATCHES a run (and does nothing else)
  *   a machine agent claims the work order and runs it
- *   the run REPORTS BACK what it found  →  the loop takes the declared path
- *   `escalate`'s `enqueue-review` creates a shepherd over the run's OWN report
- *   the shepherd's gate opens  →  the item is in "Needs you"
+ *   the run CALLS `graph review request` over its own credential
+ *   the review's gate opens  →  the item is in "Needs you"
+ *   the run REPORTS BACK  →  the loop records that this fire found something
+ *
+ * ── the change captain decision 15 made here ────────────────────────────────
+ *
+ * The review used to be created BY THE ENGINE: `escalate` declared an
+ * `enqueue-review` action and the outbox built a shepherd over the run's report.
+ * That is spec-declared sequencing, and decision 15 moves it into the agent - so
+ * the run asks, in as many words, through the same seam. The last probe in this
+ * file pins the old chain as GONE, because two paths to one review is exactly the
+ * drift the decision exists to prevent.
  *
  * ── why the shape is this and not "let the clock open the review" ────────────
  *
@@ -37,8 +46,13 @@ let exec: typeof import('../outbox/executor.js')
 let channel: typeof import('../effects/channel.js')
 let runs: typeof import('../agent/runs.js')
 let specs: typeof import('./specs.js')
+let cli: typeof import('../cli/cli.js')
+let context: typeof import('../cli/context.js')
+let identity: typeof import('../cli/identity.js')
 
 const USER = 'u-discovery-captain'
+/** The machine-agent channel secret this probe's run credentials derive from. */
+const CHANNEL_TOKEN = 'probe-channel-secret'
 const AGENT = 'probe-machine-agent'
 const T0 = '2026-07-30T09:00:00.000Z'
 
@@ -71,7 +85,15 @@ async function armedLoop(teamId: string, title: string) {
     type: 'loop',
     status: 'planned',
     title,
-    payload: { brief: 'watch the thing and report', band: 'platform' },
+    // `role` is what decides which verbs its runs may call (decision 15a), and
+    // `workflow` is the prose composed into their work orders (decision 15.5).
+    // Both are INSTANCE FIELDS - that is the whole point.
+    payload: {
+      brief: 'watch the thing and report',
+      band: 'platform',
+      role: 'discovery',
+      workflow: 'Look at the export. If it is empty again, write it up and ask a person.',
+    },
     now: T0,
   })
   const { applyTransition } = await import('../applyTransition.js')
@@ -111,10 +133,31 @@ async function fireAndClaim(teamId: string, objectId: string, at: string) {
   return directive
 }
 
+/**
+ * ONE `graph` COMMAND, as the run itself would send it.
+ *
+ * Deliberately the FULL path: the credential is derived exactly the way the
+ * machine agent derives it (`runCliToken`), resolved exactly the way the wire
+ * resolves it (`resolveRunContext`, which re-checks that the work order is still
+ * claimed), and dispatched through the real argv router. A helper that called the
+ * verb functions directly would prove the verbs work and say nothing about
+ * whether a run can actually reach them.
+ */
+async function runCli(directiveId: string, argv: string[]) {
+  const resolved = await context.resolveRunContext({
+    runId: `run-${directiveId}`,
+    authorization: `Bearer ${identity.runCliToken(CHANNEL_TOKEN, `run-${directiveId}`)}`,
+    now: '2026-07-30T09:00:30.000Z',
+  })
+  if (!resolved.ok) throw new Error(`probe could not resolve the run: ${resolved.code} ${resolved.message}`)
+  return cli.graphCli(resolved.ctx, argv)
+}
+
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'loopany-discovery-'))
   process.env.LOOPANY_DATA_DIR = tmp
   process.env.LOOPANY_LOG_LEVEL = 'silent'
+  process.env.LOOPANY_AGENT_TOKEN = CHANNEL_TOKEN
   delete process.env.DATABASE_URL
 
   const dbmod = await import('../../db/index.js')
@@ -128,6 +171,9 @@ beforeAll(async () => {
   channel = await import('../effects/channel.js')
   runs = await import('../agent/runs.js')
   specs = await import('./specs.js')
+  cli = await import('../cli/cli.js')
+  context = await import('../cli/context.js')
+  identity = await import('../cli/identity.js')
 }, 120_000)
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -135,12 +181,41 @@ beforeAll(async () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('probe: an unattended fire whose run finds something reaches a person', () => {
-  it('opens a human-verdict gate over the run’s own report, with nobody in the chain', async () => {
+  it('opens a human-verdict gate through the run’s OWN `review request`, with nobody in the chain', async () => {
     const team = await world('discovery')
     const loop = await armedLoop(team, 'Scratch survey (scheduled)')
     const directive = await fireAndClaim(team, loop.id, '2026-07-30T09:00:05.000Z')
 
-    // The run did the work and says a person has to look at what it found.
+    // THE RUN'S OWN HANDS. Not a helper and not a declared action: the real argv
+    // path, over the real run credential, exactly as `graph` sends it from inside
+    // a dispatched run.
+    const pushed = await runCli(directive.id, [
+      'artifact',
+      'push',
+      'export-watch.md',
+      '--body',
+      '# Export watch\n\nThree empty exports in a row.\n',
+      '--title',
+      'Export watch — 2026-07-30',
+    ])
+    expect(pushed.exitCode).toBe(0)
+    const reportId = String((pushed.json as Record<string, unknown>).objectId)
+
+    const asked = await runCli(directive.id, [
+      'review',
+      'request',
+      '--about',
+      reportId,
+      '--question',
+      'The nightly export has been empty for three days — do we page the data team?',
+    ])
+    expect(asked.exitCode).toBe(0)
+    // SELF-GUIDING (decision 15b): the result tells the run what happens next.
+    expect(asked.text).toContain('waiting on a person')
+    expect(asked.text).toContain('help[')
+
+    // The run then reports its outcome, which records that this fire found
+    // something - and, since decision 15, does nothing else.
     const finished = await runs.runFinished({
       now: '2026-07-30T09:01:00.000Z',
       agent: AGENT,
@@ -148,15 +223,12 @@ describe('probe: an unattended fire whose run finds something reaches a person',
       outcome: 'success',
       finding: 'discovery',
       summary: 'the nightly export has been empty for three days',
-      report: { title: 'Export watch — 2026-07-30', body: '# Export watch\n\nThree empty exports in a row.\n' },
     })
     expect(finished.ok).toBe(true)
     if (!finished.ok) return
     // The FINDING chose the path: `escalate`, not the plain `complete`.
     expect(finished.advanced?.transition).toBe('escalate')
-    expect(finished.report?.objectId).toBeTruthy()
 
-    // The review is created by the outbox pass, not by the report itself.
     const drained = await exec.drainOutbox({ now: '2026-07-30T09:01:01.000Z', teamId: team, maxPasses: 4 })
     expect(drained.deadLettered).toBe(0)
 
@@ -164,13 +236,14 @@ describe('probe: an unattended fire whose run finds something reaches a person',
     expect(inbox.items).toHaveLength(1)
     const item = inbox.items[0]!
     expect(item.class).toBe('human-verdict')
-    expect(item.key).toBe('policy-verdict')
-    expect(item.type).toBe('decision-review')
+    // ONE key on ONE type since the collapse (captain decision 16) - the five
+    // shepherd types and their five obligation keys are gone.
+    expect(item.key).toBe('verdict')
+    expect(item.type).toBe('review')
     // The person is deciding about the RUN'S REPORT — the context the run prepared.
-    expect(item.reviews).toBe(finished.report!.objectId)
-    expect(item.title).toBe('Export watch — 2026-07-30')
+    expect(item.reviews).toBe(reportId)
     // …and the row carries the transition that discharges it, so it is actionable.
-    expect(item.verdict?.transition).toBe('decide')
+    expect(item.verdict?.transition).toBe('approve')
 
     // THE PROVENANCE CHAIN, end to end, with no human entrance anywhere in it.
     const loopEvents = await graph.listObjectEvents(undefined, loop.id)
@@ -181,18 +254,19 @@ describe('probe: an unattended fire whose run finds something reaches a person',
     expect((await graph.listActionsForEvent(undefined, fire.id)).map((a) => a.kind)).toEqual(['dispatch-outward-run'])
 
     const escalate = loopEvents.find((e) => e.transition === 'escalate')!
-    // The RUN REPORT-BACK path: the runs bridge enters it as the engine's
-    // declarative consequence of a run finishing, exactly like `complete`.
     expect(escalate.entrance).toBe('rule')
-    expect((escalate.payload as Record<string, unknown>).run).toBe(finished.runId)
     expect((escalate.payload as Record<string, unknown>).finding).toBe('discovery')
+    // AND IT CAUSED NOTHING. The old `enqueue-review` chain is gone; the review
+    // exists because the run asked for it.
+    expect(await graph.listActionsForEvent(undefined, escalate.id)).toEqual([])
 
-    const shepherdEvents = await graph.listObjectEvents(undefined, item.objectId)
-    const opened = shepherdEvents.find((e) => e.transition === 'raise')!
-    expect(opened.entrance).toBe('rule')
+    const reviewEvents = await graph.listObjectEvents(undefined, item.objectId)
+    const opened = reviewEvents.find((e) => e.transition === 'submit')!
+    // THE RUN opened it, as itself - the actor is the run id, which is what
+    // `entrance: "agent-run"` means (design §12).
+    expect(opened.entrance).toBe('agent-run')
+    expect(opened.actorId).toBe(`run-${directive.id}`)
 
-    // Not one human entrance produced any of it. The only human act in this world
-    // was arming the cadence, which is the standing approval the R3 fire rests on.
     const chain = [fire, escalate, opened]
     for (const e of chain) expect(e.entrance).not.toBe('human')
 
@@ -200,31 +274,50 @@ describe('probe: an unattended fire whose run finds something reaches a person',
     expect((await read.summaryView(team)).needsYou).toBe(inbox.items.length)
   }, 120_000)
 
-  it('is idempotent: a re-delivered report opens no second review', async () => {
+  it('is idempotent: the same `review request` twice opens ONE review', async () => {
     const team = await world('replay')
     const loop = await armedLoop(team, 'Replay survey')
     const directive = await fireAndClaim(team, loop.id, '2026-07-30T09:00:05.000Z')
-    const finish = () =>
-      runs.runFinished({
-        now: '2026-07-30T09:01:00.000Z',
-        agent: AGENT,
-        directiveId: directive.id,
-        outcome: 'success',
-        finding: 'discovery',
-        report: { title: 'Replay report', body: 'found one thing\n' },
-      })
-    await finish()
-    await exec.drainOutbox({ now: '2026-07-30T09:01:01.000Z', teamId: team, maxPasses: 4 })
-    // The lease is still held (the directive is settled separately), so the same
-    // report can be delivered again — which is exactly what an at-least-once
-    // channel does after a lost response.
-    await finish()
-    await exec.drainOutbox({ now: '2026-07-30T09:01:02.000Z', teamId: team, maxPasses: 4 })
 
-    const inbox = await read.inboxView(team)
-    expect(inbox.items).toHaveLength(1)
-    const reviews = (await graph.listObjects(undefined, team, { type: 'decision-review' })).length
-    expect(reviews).toBe(1)
+    const ask = () =>
+      runCli(directive.id, ['review', 'request', '--question', 'Does this need a person?', '--preset', 'decision'])
+    const first = await ask()
+    // A RETRY - the exact shape a run takes when it lost the first response.
+    const second = await ask()
+    expect(first.exitCode).toBe(0)
+    expect(second.exitCode).toBe(0)
+    expect((second.json as Record<string, unknown>).objectId).toBe((first.json as Record<string, unknown>).objectId)
+    expect(second.text).toContain('replay')
+
+    await exec.drainOutbox({ now: '2026-07-30T09:01:02.000Z', teamId: team, maxPasses: 4 })
+    expect((await read.inboxView(team)).items).toHaveLength(1)
+    expect(await graph.listObjects(undefined, team, { type: 'review' })).toHaveLength(1)
+  }, 120_000)
+
+  it('refuses a verb outside the run’s role, and says what the role MAY do', async () => {
+    const team = await world('role')
+    const loop = await armedLoop(team, 'Role survey')
+    const directive = await fireAndClaim(team, loop.id, '2026-07-30T09:00:05.000Z')
+
+    // The loop's role is `discovery`, which does not include `wait open`
+    // (decision 15a: one to three verbs, never seven).
+    const refused = await runCli(directive.id, [
+      'wait',
+      'open',
+      loop.id,
+      '--key',
+      'anything',
+      '--question',
+      'well?',
+      '--watcher',
+      loop.id,
+    ])
+    expect(refused.exitCode).toBe(1)
+    expect(refused.text).toContain('FORBIDDEN')
+    expect(refused.text).toContain('discovery')
+    // THE WAY OUT, every time (decision 15b).
+    expect(refused.text).toContain('graph task create')
+    expect(refused.text).toContain('graph review request')
   }, 120_000)
 })
 
@@ -257,7 +350,7 @@ describe('probe: a run reporting nothing-new opens nothing', () => {
     await exec.drainOutbox({ now: '2026-07-30T09:01:01.000Z', teamId: team, maxPasses: 4 })
     expect((await read.inboxView(team)).items).toHaveLength(0)
     expect((await read.summaryView(team)).needsYou).toBe(0)
-    expect(await graph.listObjects(undefined, team, { type: 'decision-review' })).toHaveLength(0)
+    expect(await graph.listObjects(undefined, team, { type: 'review' })).toHaveLength(0)
   }, 120_000)
 
   it('falls back to the plain success path when the run reports NO finding at all', async () => {
@@ -340,9 +433,28 @@ describe('probe: no shipped type lets the CLOCK open a human gate', () => {
     expect(fire.entrance).toBe('clock')
     expect((fire.actions ?? []).map((a) => a.kind)).toEqual(['dispatch-outward-run'])
     expect(fire.opens ?? []).toEqual([])
-    // And the escalation it eventually causes is on the RUN REPORT-BACK path.
+    // And the escalation it eventually causes is on the RUN REPORT-BACK path -
+    // where it now DECLARES NOTHING. Captain decision 15 moved "and then open a
+    // review" out of the spec and into the agent, so this transition is a
+    // guardrail (it records that this fire found something) and not a chain.
     const escalate = specs.LOOP_SPEC.transitions.find((t) => t.name === 'escalate')!
     expect(escalate.entrance).toEqual(['agent-run', 'rule'])
-    expect((escalate.actions ?? []).map((a) => a.kind)).toEqual(['enqueue-review'])
+    expect(escalate.actions ?? []).toEqual([])
+
+    // THE DE-HARDCODING, stated once over the whole shipped catalogue: no type
+    // declares an `enqueue-review` or a `register-watch` any more. Both are verbs
+    // an agent calls (`review request`, `wait open`), and leaving a declaration
+    // behind would be the second competing path decision 15 exists to remove.
+    const chains: string[] = []
+    for (const t of specs.DEMO_TYPES) {
+      for (const transition of t.spec.transitions) {
+        for (const action of transition.actions ?? []) {
+          if (action.kind === 'enqueue-review' || action.kind === 'register-watch') {
+            chains.push(`${t.name}.${transition.name} → ${action.kind}`)
+          }
+        }
+      }
+    }
+    expect(chains).toEqual([])
   })
 })

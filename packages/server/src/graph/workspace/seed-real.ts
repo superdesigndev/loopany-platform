@@ -52,10 +52,11 @@ import { edges as edgesTable } from "../../db/graph-schema.js";
 import * as graph from "../../db/graphStore.js";
 import { cronText } from "../../lib/format.js";
 import { applyTransition } from "../applyTransition.js";
+import { reviewRequest, waitOpen } from "../cli/verbs.js";
 import { drainOutbox } from "../outbox/executor.js";
 import { parsePrExternalId } from "../sensing/pr.js";
 import { resetGraphDemo, type SeedResult } from "./seed.js";
-import { DEMO_TEAM_ID, DEMO_TYPES, LOOP_SPEC } from "./specs.js";
+import { DEMO_TEAM_ID, DEMO_TYPES, LOOP_SPEC, REVIEW_PRESETS, REVIEW_TYPE } from "./specs.js";
 import { readSnapshot, type ProdFile, type ProdLoop, type ProdRun, type ProdSnapshot } from "./pull-prod.js";
 import { MAX_BODY_BYTES, readCachedBody } from "./fetch-bodies.js";
 
@@ -113,24 +114,24 @@ interface Lifecycle {
    * `path` is the transitions it walks; the LAST one is the gate-opening step
    * for a waiting item, or the closing verdict for one already settled.
    */
-  shepherd?: { type: "merge-review" | "publish-review" | "decision-review" | "ship-review"; path: string[]; waiting: boolean };
+  shepherd?: { preset: "merge" | "publish" | "decision"; path: string[]; waiting: boolean };
 }
 
 const LIFECYCLE: Record<string, Lifecycle> = {
   // a person actively owes a decision — the shepherd stops at its gate state
-  needs_human: { doc: "report", published: false, shepherd: { type: "decision-review", path: ["raise"], waiting: true } },
-  needs_followup: { doc: "report", published: false, shepherd: { type: "decision-review", path: ["raise"], waiting: true } },
-  escalation: { doc: "report", published: false, shepherd: { type: "decision-review", path: ["raise"], waiting: true } },
+  needs_human: { doc: "report", published: false, shepherd: { preset: "decision", path: ["submit"], waiting: true } },
+  needs_followup: { doc: "report", published: false, shepherd: { preset: "decision", path: ["submit"], waiting: true } },
+  escalation: { doc: "report", published: false, shepherd: { preset: "decision", path: ["submit"], waiting: true } },
   // written, waiting to be published
-  drafted: { doc: "post", published: false, shepherd: { type: "publish-review", path: ["ready"], waiting: true } },
-  queued: { doc: "post", published: false, shepherd: { type: "publish-review", path: ["ready"], waiting: true } },
+  drafted: { doc: "post", published: false, shepherd: { preset: "publish", path: ["submit"], waiting: true } },
+  queued: { doc: "post", published: false, shepherd: { preset: "publish", path: ["submit"], waiting: true } },
   // a change waiting to be merged
-  open: { doc: "playbook", published: false, shepherd: { type: "merge-review", path: ["submit"], waiting: true } },
+  open: { doc: "playbook", published: false, shepherd: { preset: "merge", path: ["submit"], waiting: true } },
   // settled — the shepherd ran to its verdict, so the gate shows as cleared
-  merged: { doc: "playbook", published: true, shepherd: { type: "merge-review", path: ["submit", "approve"], waiting: false } },
-  posted: { doc: "post", published: true, shepherd: { type: "publish-review", path: ["ready", "publish"], waiting: false } },
-  live: { doc: "post", published: true, shepherd: { type: "publish-review", path: ["ready", "publish"], waiting: false } },
-  shipped: { doc: "playbook", published: true, shepherd: { type: "ship-review", path: ["propose", "approve"], waiting: false } },
+  merged: { doc: "playbook", published: true, shepherd: { preset: "merge", path: ["submit", "approve"], waiting: false } },
+  posted: { doc: "post", published: true, shepherd: { preset: "publish", path: ["submit", "approve"], waiting: false } },
+  live: { doc: "post", published: true, shepherd: { preset: "publish", path: ["submit", "approve"], waiting: false } },
+  shipped: { doc: "playbook", published: true, shepherd: { preset: "publish", path: ["submit", "approve"], waiting: false } },
   // plain products — no human ever owed anything, so no shepherd at all
   resolved: { doc: "report", published: true },
   significant: { doc: "report", published: true },
@@ -158,16 +159,21 @@ const FALLBACK_LIFECYCLE: Lifecycle = { doc: "report", published: true };
  * and one live path is what proves the mechanism.
  */
 function queuedByEngine(lifecycle: Lifecycle): boolean {
-  return lifecycle.shepherd?.type === "publish-review" && lifecycle.shepherd.waiting === true;
+  return lifecycle.shepherd?.preset === "publish" && lifecycle.shepherd.waiting === true;
 }
 
-/** Can this loop actually run `queue-review`? Its `from` states are the answer,
- *  read off the transition spec rather than restated here. */
-async function canQueueReview(loopObjectId: string): Promise<boolean> {
+/**
+ * Is this loop still LIVE enough for its products to be handed to review?
+ *
+ * A loop whose real history ended in `completed` is terminal, and asking a
+ * finished loop to request a review would attribute a live act to something that
+ * has stopped. Those keep the seed-built review instead - an honest fallback
+ * rather than a fabricated re-activation.
+ */
+async function canRequestReview(loopObjectId: string): Promise<boolean> {
   const loop = await graph.getObject(undefined, loopObjectId);
   if (!loop) return false;
-  const from = LOOP_SPEC.transitions.find((t) => t.name === "queue-review")?.from ?? [];
-  return from.includes(loop.status);
+  return !(LOOP_SPEC.terminalStates ?? []).includes(loop.status);
 }
 
 /** `task` front matter is the loop's own brief; it is seeded from
@@ -191,9 +197,9 @@ export async function seedFromProdSnapshot(
 
   const dropped = [...snap.dropped];
   const refusals: string[] = [];
-  /** Loop object ids whose unpublished posts are handed to the ENGINE for their
-   *  review instead of getting a seed-built shepherd (step 5). */
-  const engineQueued = new Set<string>();
+  /** Unpublished posts handed to the `review request` VERB in step 5, instead of
+   *  getting a seed-built review task here. */
+  const engineQueued: { loopId: string; docId: string; title: string }[] = [];
   const bump = (what: string, why: string) => {
     const row = dropped.find((d) => d.what === what && d.why === why);
     if (row) row.count++;
@@ -388,36 +394,33 @@ export async function seedFromProdSnapshot(
 
     // ── the standing wait on every PR this loop opened ───────────────────────
     //
-    // The ENGINE opens these, not the seeder: `watch-prs` is an ordinary
-    // auditable self-transition whose `register-watch` action fans out over the
-    // loop's `produces` edges, and the EXECUTOR opens one `external-wait`
-    // obligation per pull-request mirror. So every wait the workspace shows was
-    // opened the normal way, by a rule, with provenance a person can read in the
-    // Timeline - and the mirror poller closes it from a real observation.
+    // THROUGH THE VERB, not a declared chain (captain decisions 15 + 16). This
+    // used to run a `watch-prs` self-transition whose `register-watch` action
+    // fanned out over the loop's `produces` edges; that is spec-declared
+    // sequencing, so it is gone and the seeder calls the same `wait open` verb a
+    // run would - which also means the seeded waits carry a NAMED WATCHER
+    // (decision 13), which the old chain could not express at all.
     //
-    // Gated on the loop actually being able to run it (`from: ["idle"]`), which
-    // is why it happens HERE - before the pause/finish step below moves the loop
-    // out of `idle` for good. The actions are left PENDING and drained
-    // immediately: a terminal `finish` is refused while an action is unsettled
-    // (design §12 item 8), so the queue has to be clear before it runs.
+    // The watcher is the loop itself: it is the thing already observing that
+    // source on its cadence, which is decision 13's stated default.
     const watched = watchedByLoop.get(objectId);
-    if (watched?.length) {
-      const ok = await step({
-        objectId,
-        transition: "watch-prs",
-        entrance: "agent-run",
-        actorId: `run-watch-prs-${loop.id}`,
-        now: latestRunTs(runs) ?? loop.updatedAt,
-        note: `waiting on ${watched.length} pull request${watched.length === 1 ? "" : "s"} to land`,
-        keepPending: true,
-        label: loop.name,
-      });
-      if (ok) {
-        const drained = await drainOutbox({ now: snap.pulledAt, teamId, limit: 50, maxPasses: 8 });
-        if (drained.deadLettered) {
-          bump("pr watches", `${drained.deadLettered} action(s) dead-lettered - see the Attention section`);
-        }
-      }
+    for (const mirrorId of watched ?? []) {
+      const opened = await waitOpen(
+        {
+          teamId,
+          actor: { entrance: "agent-run", actorId: `run-watch-${loop.id}` },
+          subjectId: objectId,
+          now: latestRunTs(runs) ?? loop.updatedAt,
+        },
+        {
+          objectId: mirrorId,
+          key: "merge-wait",
+          question: "Has GitHub shown this pull request merged?",
+          watcherId: objectId,
+          label: "Waiting for GitHub to show the PR merged",
+        },
+      );
+      if (!opened.ok) bump("pr watches", `${opened.code}: ${opened.message}`);
     }
 
     // The loop's REAL end state.
@@ -528,8 +531,8 @@ export async function seedFromProdSnapshot(
     // (the loop's status is already final by now) rather than reacting to a
     // refusal later is what keeps the waiting item from being lost either way: a
     // truncated archive is fine, a truncated inbox is a lie.
-    if (queuedByEngine(lifecycle) && (await canQueueReview(objectId))) {
-      engineQueued.add(objectId);
+    if (queuedByEngine(lifecycle) && (await canRequestReview(objectId))) {
+      engineQueued.push({ loopId: objectId, docId: doc.id, title });
       continue;
     }
 
@@ -538,10 +541,18 @@ export async function seedFromProdSnapshot(
     const shepherd = await graph.createObject(undefined, {
       teamId,
       archetype: "task",
-      type: lifecycle.shepherd.type,
+      type: REVIEW_TYPE,
       status: "queued",
       title,
-      payload: { loopKey: file.loopId, reviews: doc.id, prodPath: file.path },
+      payload: {
+        loopKey: file.loopId,
+        reviews: doc.id,
+        subject: doc.id,
+        preset: lifecycle.shepherd.preset,
+        question: `Your verdict on “${title}”`,
+        ...REVIEW_PRESETS[lifecycle.shepherd.preset]!.payload,
+        prodPath: file.path,
+      },
       now: when,
     });
     await graph.upsertEdge(undefined, { teamId, kind: "tracks", srcId: shepherd.id, dstId: doc.id, now: when });
@@ -567,38 +578,38 @@ export async function seedFromProdSnapshot(
     }
   }
 
-  // ---- 5. hand the unpublished posts to the ENGINE, and let it run ----
+  // ---- 5. hand the unpublished posts to review, THROUGH THE VERB ----
   //
-  // This is the live flow, not a fixture: `queue-review` is an ordinary auditable
-  // self-transition on the loop whose `enqueue-review` action fans out over its
-  // `produces` edges, and the EXECUTOR creates each publish-review shepherd
-  // through `applyTransition` (entrance `rule`, actor = the action id). So the
-  // gate obligations those posts hold were opened the normal way, by a rule, with
-  // provenance a person can read in the Timeline.
-  //
-  // Only an `idle`/`paused` loop can run it (a completed loop is terminal), so a
-  // loop whose real history ended in `completed` keeps the seeded shepherd path -
-  // an honest fallback rather than a fabricated re-activation.
-  for (const objectId of engineQueued) {
-    const loop = await graph.getObject(undefined, objectId);
-    if (!loop) continue;
-    await step({
-      objectId,
-      transition: "queue-review",
-      entrance: "agent-run",
-      actorId: `run-queue-review-${objectId}`,
-      now: loop.updatedAt,
-      note: "handed unpublished products to review",
-      // The whole point: leave the action for the executor.
-      keepPending: true,
-      label: loop.title ?? objectId,
-    });
+  // This is the live flow, not a fixture - and since decisions 15 + 16 the live
+  // flow is a verb call, not a declared chain. It used to run `queue-review` on
+  // the loop, whose `enqueue-review` action fanned out over its `produces` edges
+  // and had the executor create one shepherd per unpublished post. That is
+  // exactly the spec-declared sequencing decision 15 moves into the agent, so the
+  // seeder now calls `review request` per post with the PRODUCING RUN as the
+  // actor - the same call, with the same provenance, that a real discovery run
+  // makes from the CLI.
+  for (const { loopId, docId, title } of engineQueued) {
+    const requested = await reviewRequest(
+      {
+        teamId,
+        actor: { entrance: "agent-run", actorId: `run-review-${loopId}` },
+        subjectId: loopId,
+        now: new Date().toISOString(),
+      },
+      {
+        aboutId: docId,
+        preset: "publish",
+        question: `Ready to publish “${title}”?`,
+        title,
+      },
+    );
+    if (!requested.ok) bump("review handoff", `${requested.code}: ${requested.message}`);
   }
-  // Drain what we just enqueued. The background executor would pick these up
+  // Drain what the reviews enqueued. The background executor would pick these up
   // within a tick anyway; draining here means `pnpm graph:seed` leaves a
   // CONSISTENT workspace rather than one that becomes consistent shortly after
   // the server starts.
-  if (engineQueued.size) {
+  if (engineQueued.length) {
     const drained = await drainOutbox({ now: new Date().toISOString(), teamId, limit: 100, maxPasses: 50 });
     if (drained.deadLettered) {
       bump("review handoff", `${drained.deadLettered} action(s) dead-lettered - see the Attention section`);
@@ -633,7 +644,7 @@ function isSensor(cron: string | null): boolean {
   return hour === "*" || /^\*\//.test(hour ?? "");
 }
 
-const HUMAN_VERDICTS = new Set(["approve", "publish", "decide", "reject", "withdraw", "drop", "revise"]);
+const HUMAN_VERDICTS = new Set(["approve", "dispatch", "reject"]);
 
 /** A run that reported nothing new. Both signals are real columns. */
 function quiet(run: ProdRun): boolean {

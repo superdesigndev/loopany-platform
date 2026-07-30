@@ -94,6 +94,28 @@ export function prUrl(id: PrIdentity): string {
   return `https://github.com/${id.repo}/pull/${id.number}`;
 }
 
+const PR_URL = /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)(?:[/?#].*)?$/;
+
+/**
+ * Read a PR identity out of a pasted URL - the ONE place a GitHub URL shape is
+ * understood, and it lives here because this module IS the GitHub accelerator
+ * (captain decision 17: coded GitHub pieces are earned exceptions, never the
+ * pattern). `mirror track` calls it first and falls back to the domain-neutral
+ * `(source, externalId)` form for everything else, so no other source ever needs
+ * a parser in platform code.
+ *
+ * Returns undefined for anything that is not a PR URL, including an issue URL -
+ * guessing would register the wrong external thing under a type whose sensing
+ * sweep then cannot observe it.
+ */
+export function parsePrUrl(url: string | null | undefined): PrIdentity | undefined {
+  const m = PR_URL.exec((url ?? "").trim());
+  if (!m) return undefined;
+  const number = Number(m[3]);
+  if (!Number.isSafeInteger(number) || number <= 0) return undefined;
+  return { repo: `${m[1]}/${m[2]}`, number };
+}
+
 /** The mirror OBJECT id a PR resolves to - the deterministic id
  *  `graphStore.getOrCreateMirror` mints, so a caller holding only a PR identity
  *  can address its mirror without a lookup. */

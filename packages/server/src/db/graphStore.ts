@@ -20,7 +20,7 @@
  * so a content write can never smuggle a state change - the v2 doc-push-bypass
  * bug class, eliminated structurally (design §2).
  */
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 
 import { db } from "./index.js";
 import {
@@ -545,6 +545,10 @@ export async function openObligation(
     label?: string | null;
     openedByEvent: string;
     nextReminderAt?: string | null;
+    /** The object responsible for answering this wait (decision 13). */
+    watcherObjectId?: string | null;
+    /** The question its watcher answers (decisions 13 + 14). */
+    question?: string | null;
     now: string;
   },
 ): Promise<{ obligation: GateObligation; opened: boolean }> {
@@ -560,6 +564,8 @@ export async function openObligation(
       openedByEvent: input.openedByEvent,
       openedAt: input.now,
       nextReminderAt: input.nextReminderAt ?? null,
+      watcherObjectId: input.watcherObjectId ?? null,
+      question: input.question ?? null,
     })
     .onConflictDoNothing()
     .returning();
@@ -595,6 +601,82 @@ export async function closeObligation(
     )
     .returning();
   return out[0];
+}
+
+/**
+ * RENEW an open external-wait: the watcher looked, the condition is not met yet,
+ * and the wait should re-surface later rather than now (captain decision 14 - the
+ * windowed judgment lives in the watcher's answer, so "not yet" is an ordinary
+ * answer and not a failure). Only the reminder stamp moves; the opener, the key
+ * and the watcher are untouched, so a renewed wait is the SAME obligation and its
+ * age still reads honestly.
+ */
+export async function renewObligation(
+  x: GraphExec | undefined,
+  input: { objectId: string; key: string; nextReminderAt: string },
+): Promise<GateObligation | undefined> {
+  const out = await X(x)
+    .update(gateObligations)
+    .set({ nextReminderAt: input.nextReminderAt })
+    .where(
+      and(
+        eq(gateObligations.objectId, input.objectId),
+        eq(gateObligations.key, input.key),
+        isNull(gateObligations.closedByEvent),
+      ),
+    )
+    .returning();
+  return out[0];
+}
+
+/**
+ * REOPEN a closed obligation - the RECURRENCE case (captain decision 14: "a
+ * recurrence answer raises attention"). A verification wait that was answered
+ * "met" and whose signature then came back is not a new wait: it is the same
+ * question, live again, and minting a second row under a fresh key would hide
+ * that this has now happened twice.
+ *
+ * The close stamps are cleared and `openedByEvent` is re-pointed at the answering
+ * event, because that event is genuinely why this obligation is open again. The
+ * `closedByEvent IS NOT NULL` predicate keeps it single-shot: reopening an
+ * already-open wait is a no-op, so a re-delivered answer cannot churn the row.
+ */
+export async function reopenObligation(
+  x: GraphExec | undefined,
+  input: { objectId: string; key: string; openedByEvent: string; nextReminderAt?: string | null; now: string },
+): Promise<GateObligation | undefined> {
+  const out = await X(x)
+    .update(gateObligations)
+    .set({
+      closedByEvent: null,
+      closedAt: null,
+      openedByEvent: input.openedByEvent,
+      openedAt: input.now,
+      nextReminderAt: input.nextReminderAt ?? null,
+    })
+    .where(
+      and(
+        eq(gateObligations.objectId, input.objectId),
+        eq(gateObligations.key, input.key),
+        isNotNull(gateObligations.closedByEvent),
+      ),
+    )
+    .returning();
+  return out[0];
+}
+
+/** One obligation by its `(objectId, key)` identity, open or closed. */
+export async function getObligation(
+  x: GraphExec | undefined,
+  objectId: string,
+  key: string,
+): Promise<GateObligation | undefined> {
+  return (
+    await X(x)
+      .select()
+      .from(gateObligations)
+      .where(and(eq(gateObligations.objectId, objectId), eq(gateObligations.key, key)))
+  )[0];
 }
 
 /**
@@ -1350,6 +1432,21 @@ export async function getEffectiveType(
       .from(typeRegistry)
       .where(and(eq(typeRegistry.teamId, teamId), eq(typeRegistry.name, name), eq(typeRegistry.state, "effective")))
   )[0];
+}
+
+/**
+ * EVERY EFFECTIVE TYPE in a team, name-ordered. The list a refusal hands back
+ * when a caller names a type that does not exist ("`issue` has no effective
+ * version - here is what does"), which is decision 15(b)'s rule applied to the
+ * registry: a refusal that does not say what IS available is one the caller can
+ * only answer by guessing. Proposals are invisible here, like everywhere else.
+ */
+export async function listEffectiveTypes(x: GraphExec | undefined, teamId: string): Promise<TypeRegistryRow[]> {
+  return X(x)
+    .select()
+    .from(typeRegistry)
+    .where(and(eq(typeRegistry.teamId, teamId), eq(typeRegistry.state, "effective")))
+    .orderBy(asc(typeRegistry.name));
 }
 
 export async function listTypeVersions(

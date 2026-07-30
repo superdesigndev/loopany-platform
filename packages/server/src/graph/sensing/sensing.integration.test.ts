@@ -482,7 +482,7 @@ describe('probe: an external-wait closes on the matching observation and only th
   })
 
   it('never opens a watch on a non-mirror, and never dead-letters for trying', async () => {
-    // `merge-review.submit` declares this action for the live flow where it tracks a
+    // The pre-CLI `register-watch` action ran for the live flow where a review tracks a
     // PR mirror; in the replayed history the same type tracks a plain doc. An
     // inapplicable declaration must be a clean no-op, not an attention item.
     const doc = await graph.createObject(undefined, {

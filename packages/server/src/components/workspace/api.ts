@@ -76,8 +76,13 @@ export interface LibraryArtifact {
   /** The doc's `published` field - a field, not a state. */
   published: boolean
   /** An open external-wait this row holds ("waiting on GitHub to show it
-   *  merged"). No button: the mirror poller clears it from an observation. */
+   *  merged"). Coded eyes clear it from an observation; agent eyes - the DEFAULT
+   *  since captain decision 13 - answer it, and so can a person, through the very
+   *  same `wait answer` verb. */
   watching?: string
+  watchKey?: string
+  watcher?: string
+  watchQuestion?: string
   /** When an observation last ingested facts for this mirror. */
   observedAt?: string
 }
@@ -182,7 +187,15 @@ export interface Summary {
  * refused close. Visually and structurally separate from a verdict: "decide this"
  * and "this is stuck" are different asks, and one must not hide inside the other.
  */
-export type AttentionKind = 'dead-letter' | 'chain-parked' | 'close-refused' | 'directive-failed'
+export type AttentionKind =
+  | 'dead-letter'
+  | 'chain-parked'
+  | 'close-refused'
+  | 'directive-failed'
+  /** A verification wait answered "met" and then answered again with the thing
+   *  back (captain decision 14). The wait reopens itself; this item is what tells
+   *  a person the fix stopped holding. */
+  | 'wait-recurrence'
 
 export interface AttentionItem {
   id: string
@@ -238,7 +251,7 @@ export interface EffectsView {
  * WORK a person has been asked to let a machine DO - the runs bridge's read side.
  *
  * Separate from the Library on purpose: that lists what the fleet has MADE, this lists
- * what it is asking to do. An `agent-task` is not an artifact - it has no body - so
+ * what it is asking to do. A dispatch review is not an artifact - it has no body - so
  * giving it a Library row would have meant either inventing a content category for it
  * or letting the artifact list mean two things.
  */
@@ -376,9 +389,54 @@ export const postDrain = () =>
 // machine, and `summary.sensing` is how this UI tells the truth about whether it is.
 
 /**
- * The one write. A refusal comes back as a 409 with the transition seam's own
- * typed code, which is exactly what the UI should show — the engine decided, not
- * the client.
+ * THE SEVEN VERBS, from the browser (captain decision 16).
+ *
+ * The same operations an agent run drives from the `graph` CLI, invoked here with
+ * `entrance: "human"` and the signed-in user as the actor. That is the whole
+ * decision in one function: a task a person creates and a task an agent creates
+ * are the same rows, told apart in the Timeline by provenance rather than by
+ * which surface made them.
+ *
+ * A refusal comes back as a 409 carrying the verb's typed code AND its `allowed`
+ * list, which is what the UI shows - the engine decided, not the client.
+ */
+export type GraphVerb =
+  | 'task.create'
+  | 'task.move'
+  | 'artifact.push'
+  | 'review.request'
+  | 'mirror.track'
+  | 'wait.open'
+  | 'wait.answer'
+
+export interface VerbOk {
+  ok: true
+  summary: string
+  data: Record<string, unknown>
+  next: string[]
+  replay?: boolean
+}
+
+export interface VerbFail {
+  ok: false
+  code: string
+  message: string
+  allowed?: string[]
+}
+
+export async function postGraphVerb(verb: GraphVerb, body: Record<string, unknown>): Promise<VerbOk | VerbFail> {
+  const res = await fetch(`/api/graph/verb/${verb}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return (await res.json()) as VerbOk | VerbFail
+}
+
+/**
+ * The human VERDICT - kept as its own endpoint by decision 16, because Approve is
+ * the product's most load-bearing control. It is a `task.move` with a human
+ * entrance and runs the identical seam.
  */
 export async function postVerdict(objectId: string, transition: string): Promise<VerdictOk | VerdictFail> {
   const res = await fetch('/api/graph/verdict', {

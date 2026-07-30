@@ -12,6 +12,7 @@ import {
   nodeExec,
   readFinding,
   resolveWorkdir,
+  runCliToken,
   runEnv,
   runInstruction,
   INHERITED_ENV,
@@ -245,6 +246,34 @@ describe("the child's environment", () => {
     expect(env.LOOPANY_RUN_ID).toBe("run-act-1");
     expect(env.LOOPANY_RUN_WORKDIR).toBe("/srv/runs/x");
     delete process.env.LOOPANY_AGENT_TOKEN;
+  });
+
+  it("hands the run its OWN credential, never this process's channel token", () => {
+    process.env.LOOPANY_AGENT_TOKEN = "shh-secret";
+    const env = runEnv(spec(), "/srv/runs/x", {
+      serverUrl: "http://127.0.0.1:3840",
+      token: runCliToken("shh-secret", "run-act-1"),
+      binDir: "/opt/graph/bin",
+    });
+    // The secret that could claim ANY work order on this machine has no business
+    // in a model's context (captain decision 15). What travels is derived, names
+    // exactly one run, and dies with that run's lease.
+    expect(env.LOOPANY_AGENT_TOKEN).toBeUndefined();
+    expect(env.LOOPANY_RUN_TOKEN).toBe(runCliToken("shh-secret", "run-act-1"));
+    expect(env.LOOPANY_RUN_TOKEN).not.toContain("shh-secret");
+    expect(env.LOOPANY_GRAPH_SERVER_URL).toBe("http://127.0.0.1:3840");
+    // `graph` is put on PATH by DIRECTORY, so the instruction names a command and
+    // the machine decides which binary that is.
+    expect(env.PATH?.startsWith("/opt/graph/bin:")).toBe(true);
+    delete process.env.LOOPANY_AGENT_TOKEN;
+  });
+
+  it("derives the run credential the way the SERVER does", () => {
+    // A GOLDEN VECTOR shared with `graph/cli/cli.test.ts` on the server side. The
+    // two implementations are deliberately independent - this process must not
+    // depend on the server's source tree - so this pair is what keeps them from
+    // drifting: a change on either side fails both suites.
+    expect(runCliToken("probe-channel-secret", "run-abc")).toBe("rt_d6a9f4bbe5d47860346705bb1a8a5654");
   });
 });
 

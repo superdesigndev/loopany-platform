@@ -1,0 +1,26 @@
+{
+  "name": "@loopany/graph-cli",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "`graph` — the seven-verb operation surface of the graph workspace, as a CLI. A pure text sink over the server's verb endpoints: an agent run drives it with a per-run credential, and every result prints the sensible next commands.",
+  "bin": {
+    "graph": "dist/bin.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/bin.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.9"
+  }
+}

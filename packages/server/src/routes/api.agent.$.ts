@@ -89,6 +89,13 @@ export const Route = createFileRoute('/api/agent/$')({
       POST: async ({ params, request }) => {
         const verb = String((params as { _splat?: string })._splat ?? '')
 
+        // THE RUN'S OWN CHANNEL, and the ONE thing on this route that is not
+        // authenticated by the channel token: a `graph` CLI call carries a RUN
+        // credential (`graph/cli/identity.ts`), derived per run so the machine
+        // agent never has to hand its own secret to a model. Checked first
+        // because its answer is different (and narrower) than the channel's.
+        if (verb === 'cli') return runCli(request)
+
         // Auth before anything else, and before any database import: an
         // unauthenticated request costs one string comparison.
         const { agentTokenMatches, agentChannelConfigured } = await import('../graph/agent/config.js')
@@ -122,6 +129,50 @@ interface Ctx {
   teamId: string
   now: string
   body: Record<string, unknown>
+}
+
+// ---- the run's CLI: the seven verbs, driven by argv ----
+
+/**
+ * `POST /api/agent/cli  {runId, argv[]}` with the run's own bearer credential.
+ *
+ * The whole surface an in-run agent has (captain decision 15). It is deliberately
+ * ONE endpoint taking argv rather than seven RPCs: the caller is a `graph` binary
+ * that must stay a pure text sink, so parsing, the role fence and rendering all
+ * happen here where there is one implementation of each. The verb ENDPOINTS the
+ * UI uses (`/api/graph/verb/*`) call the same functions with a human actor.
+ *
+ * A refusal comes back 200 with a non-zero `exitCode`: the HTTP call SUCCEEDED in
+ * delivering a refusal, and giving an agent a 4xx here would invite its client to
+ * retry the transport instead of reading the answer. Transport-level failures
+ * (bad credential, dead run) keep their real statuses.
+ */
+async function runCli(request: Request): Promise<Response> {
+  const body = await readBody(request)
+  if (!body) return json({ error: `body must be JSON and under ${Math.floor(BODY_CAP / 1024)}KB` }, 400)
+
+  const runId = str(body.runId) ?? str(body.run)
+  if (!runId) return json({ error: 'runId is required' }, 400)
+  const argv = Array.isArray(body.argv) ? body.argv.filter((a): a is string => typeof a === 'string') : undefined
+  if (!argv) return json({ error: 'argv must be an array of strings' }, 400)
+
+  const { resolveRunContext } = await import('../graph/cli/context.js')
+  const resolved = await resolveRunContext({
+    runId,
+    authorization: request.headers.get('authorization'),
+    now: new Date().toISOString(),
+  })
+  if (!resolved.ok) {
+    const { errorBlock } = await import('../gateway/toon.js')
+    return json(
+      { text: errorBlock(resolved.message, resolved.code), exitCode: 1, error: resolved.message, code: resolved.code },
+      resolved.status,
+    )
+  }
+
+  const { graphCli } = await import('../graph/cli/cli.js')
+  const result = await graphCli(resolved.ctx, argv)
+  return json({ text: result.text, exitCode: result.exitCode, json: result.json })
 }
 
 // ---- effects: the outward direction ----

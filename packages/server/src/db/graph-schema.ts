@@ -305,6 +305,35 @@ export const gateObligations = pgTable(
     closedAt: text("closed_at"),
     /** Next time a passive (`external-wait`) obligation should re-surface (ISO). */
     nextReminderAt: text("next_reminder_at"),
+    /**
+     * WHO IS RESPONSIBLE FOR ANSWERING THIS WAIT (captain decision 13).
+     *
+     * A wait explicitly NAMES ITS WATCHER at creation - the loop already
+     * observing that source on its cadence (the default) or a dedicated
+     * self-terminating watch task. No inference and no discovery query: an
+     * object id, on the row, decided by whoever opened the wait.
+     *
+     * That makes "unwatched debt" a trivial query rather than an audit: a wait
+     * whose watcher points at a paused, completed or missing object is visible
+     * with one join, checkable at creation and on every sweep, and reassigning
+     * it is one field change.
+     *
+     * NULL for a `human-verdict` obligation (a person owes it, and the inbox is
+     * the watcher) and for the waits the pre-CLI declarative `register-watch`
+     * action opened, which named none.
+     */
+    watcherObjectId: text("watcher_object_id"),
+    /**
+     * THE QUESTION AN AGENT ANSWERS (captain decisions 13 + 14).
+     *
+     * Agent eyes are the DEFAULT observation mode, so most waits carry a
+     * question a run can read and answer directly ("does signature X still
+     * appear? report a count"), and the answer is the evidence that closes or
+     * renews the wait. Coded eyes - the mirror/`merge-wait` path, matched
+     * mechanically against observed facts - are the earned exception and leave
+     * this null.
+     */
+    question: text("question"),
   },
   (t) => [
     primaryKey({ columns: [t.objectId, t.key] }),

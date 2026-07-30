@@ -57,6 +57,7 @@ import {
   mergeMethodOf,
   targetOfMirror,
 } from "../effects/directive.js";
+import { composeWorkOrderIntent, hasWorkOrderInstance } from "../cli/workOrder.js";
 import { parseInstruction, runTargetExternalId, withObjectScope, RUN_TARGET_SOURCE } from "../effects/instruction.js";
 import { derivedEventId, reviewObjectId } from "../ids.js";
 import { conditionOf, observedFromPayload, waitSatisfied } from "../sensing/pr.js";
@@ -143,7 +144,7 @@ function describeObject(o: GraphObject): string {
  * Payload contract:
  *
  *   queue        display label for the review queue (`publish`, `merge`, …)
- *   review       the SHEPHERD TYPE to create (`publish-review`, …). Required for
+ *   review       the review TYPE to create (`review`). Required for
  *                the create path; without it the handler can only confirm an
  *                already-open review.
  *   transition   the shepherd's gate-opening transition. Optional - resolved from
@@ -414,7 +415,7 @@ function loopKeyOf(o: GraphObject): string | undefined {
  *                            is a real mismatch between the spec and the graph.
  *   via: tracks / produces   CLEAN SKIP. A selector landed somewhere this
  *                            declaration does not apply, which is ordinary - the
- *                            merge-review type tracks a doc in the replayed
+ *                            review type tracks a doc in the replayed
  *                            history and a PR mirror in the live flow, and the
  *                            live flow's outward effect is a DIRECTIVE, not a
  *                            field write. Dead-lettering that would put an
@@ -426,15 +427,46 @@ function loopKeyOf(o: GraphObject): string | undefined {
  */
 const updateFields: ActionHandler = async ({ tx, action, now }) => {
   const p = payloadOf(action);
-  const set = p.set as Record<string, unknown> | undefined;
-  if (!set || !Object.keys(set).length) return { ok: false, retryable: false, detail: "no `set` in payload" };
   if (!action.objectId) return { ok: false, retryable: false, detail: "action carries no object" };
+
+  /**
+   * WHAT TO WRITE, from the declaration or from the INSTANCE.
+   *
+   * `set` is the static form: a spec author knows the fields. `setFrom` names a
+   * field on the action's OWN object to read the set out of, which is what lets
+   * one collapsed review type serve every preset (captain decision 16): a publish
+   * review carries `approveSet: {published: true}`, a decision review carries
+   * `{resolved: true}`, and a review with no field consequence at all carries
+   * nothing. An ABSENT or EMPTY instance set is therefore a CLEAN NO-OP and not a
+   * refusal - "this review decides something without changing a field" is an
+   * ordinary shape, and dead-lettering it would put an attention item on every
+   * plain approval.
+   */
+  let set = p.set as Record<string, unknown> | undefined;
+  const setFrom = str(p.setFrom);
+  if (setFrom) {
+    const holder = await graph.getObject(tx, action.objectId);
+    if (!holder) return { ok: false, retryable: false, detail: `object ${action.objectId} is gone` };
+    const instance = ((holder.payload ?? {}) as Record<string, unknown>)[setFrom];
+    if (instance !== undefined && (typeof instance !== "object" || instance === null || Array.isArray(instance))) {
+      return { ok: false, retryable: false, detail: `\`${setFrom}\` on ${holder.id} is not an object of fields` };
+    }
+    set = { ...(set ?? {}), ...((instance ?? {}) as Record<string, unknown>) };
+    if (!Object.keys(set).length) {
+      return { ok: true, detail: `${holder.id} declares no \`${setFrom}\` - nothing to write` };
+    }
+  }
+  if (!set || !Object.keys(set).length) return { ok: false, retryable: false, detail: "no `set` in payload" };
 
   const via = str(p.via) ?? "self";
   let targetId = action.objectId;
   if (via === "tracks") {
     const edge = (await graph.edgesFrom(tx, action.objectId, "tracks"))[0];
-    if (!edge) return { ok: false, retryable: false, detail: `${action.objectId} tracks nothing` };
+    // A SELECTOR THAT MATCHES NOTHING IS A NO-OP, the same rule `enqueue-review`
+    // and `register-watch` follow. A review can legitimately be about nothing in
+    // the graph - a question a person answers, with no subject to write a field
+    // onto - and refusing that would dead-letter every one of them.
+    if (!edge) return { ok: true, detail: `${action.objectId} tracks nothing - no field written` };
     targetId = edge.dstId;
   } else if (via !== "self") {
     return { ok: false, retryable: false, detail: `unknown via "${via}"` };
@@ -494,7 +526,7 @@ const updateFields: ActionHandler = async ({ tx, action, now }) => {
  *
  * ── two deliberate no-ops ───────────────────────────────────────────────────
  *
- * A NON-MIRROR target is a clean success, not a refusal: today's `merge-review`
+ * A NON-MIRROR target is a clean success, not a refusal: today's `review`
  * type tracks a pull-request mirror in the live flow and a plain doc in the
  * replayed history, and there is nothing to watch about a doc. Dead-lettering the
  * doc case would turn an inapplicable declaration into an attention item.
@@ -581,7 +613,7 @@ function msOf(iso: string): number {
  *   select     for `via: "produces"`: `{type?}` filter.
  *   requires   `{field, equals}` evaluated against the ACTION'S OWN OBJECT (the
  *              shepherd), NOT the target. This is how a static spec declares an
- *              effect that only some instances want - the merge-review type
+ *              effect that only some instances want - the review type
  *              declares both a comment and a merge, and the merge stands down
  *              unless that review carries explicit merge intent. A stand-down is
  *              a clean success with the reason in its detail, never a refusal:
@@ -593,7 +625,7 @@ function msOf(iso: string): number {
  * ── the two shapes of "this target is not deliverable" ──────────────────────
  *
  * A SELECTOR that lands on something outside GitHub is a clean skip. The
- * merge-review type tracks a PR mirror in the live flow and a plain playbook doc
+ * review type tracks a PR mirror in the live flow and a plain playbook doc
  * in the replayed history, and there is nothing to comment on about a doc;
  * dead-lettering that would turn "this declaration does not apply here" into an
  * attention item, which is the mistake `register-watch` already refuses to make.
@@ -764,6 +796,18 @@ const dispatchRun: ActionHandler = async ({ tx, action, now }) => {
   // name, and the task is what a person actually recognises.
   const declared = withObjectScope(p, holder.payload) as Record<string, unknown>;
   if (declared.label === undefined && holder.title) declared.label = holder.title;
+  /**
+   * WORKFLOW INSTRUCTIONS ARE DATA (captain decision 15(5)), and the verb subset
+   * is per ROLE (15(a)). Both come off the dispatching object and are composed
+   * onto the declared CORE intent here - so what a run of this loop should do,
+   * and which one to three commands it may reach for, are instance fields rather
+   * than a TypeScript string per loop. An object carrying neither leaves the
+   * intent byte-identical to what the declaration wrote.
+   */
+  const instance = (holder.payload ?? {}) as Record<string, unknown>;
+  if (hasWorkOrderInstance(instance) && typeof declared.intent === "string") {
+    declared.intent = composeWorkOrderIntent(declared.intent, instance);
+  }
   const parsed = parseInstruction(action.id, declared);
   if (!parsed.ok) return { ok: false, retryable: false, detail: parsed.why };
   const spec = parsed.spec;
@@ -791,6 +835,11 @@ const dispatchRun: ActionHandler = async ({ tx, action, now }) => {
     // solved without inventing a template language for prose.
     payload: {
       ...spec,
+      // THE RUN'S ROLE, on the row (decision 15a). The composer printed this
+      // role's verbs into the intent; the CLI reads it back off the directive to
+      // ENFORCE the same subset, so what a run was told it may do and what it is
+      // actually allowed to do cannot drift.
+      ...(str(instance.role) ? { role: str(instance.role) } : {}),
       context: {
         dispatchedBy: holder.id,
         title: holder.title,

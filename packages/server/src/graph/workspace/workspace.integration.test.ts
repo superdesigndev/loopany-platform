@@ -326,7 +326,7 @@ describe('the write path is the transition seam, not a shortcut', () => {
     // decision absent from its own history. Any table added to the graph must be
     // added to the reset, and this is what will say so.
     const objects = await graph.listObjects(undefined, read.DEMO_TEAM_ID)
-    const holder = objects.find((o) => o.type === 'merge-review' && o.status === 'awaiting-verdict')
+    const holder = objects.find((o) => o.type === 'review' && o.status === 'awaiting-verdict')
     if (holder) {
       await read.recordVerdict({ objectId: holder.id, transition: 'approve', now: '2026-07-30T10:00:00+08:00' })
     }

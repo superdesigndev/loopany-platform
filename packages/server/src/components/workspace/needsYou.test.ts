@@ -84,7 +84,7 @@ function bareItem(over: Partial<InboxItem> = {}): InboxItem {
     label: 'Your call on the policy',
     openedAt: new Date(Date.now() - 3_600_000).toISOString(),
     title: 'A1 probe · a fire that opened a human gate',
-    type: 'decision-review',
+    type: 'review',
     source: 'Scratch survey (scheduled)',
     verdict: { transition: 'decide', label: 'Your call' },
     ...over,

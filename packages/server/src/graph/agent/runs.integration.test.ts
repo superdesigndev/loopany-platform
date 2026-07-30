@@ -83,9 +83,13 @@ async function armTypes(): Promise<void> {
 }
 
 /**
- * One `agent-task` parked in its verdict gate, exactly as `pnpm graph:dispatch`
- * leaves it: `submit` run by the agent run that staged it, its own actions settled so
- * the terminal transitions are not blocked by them.
+ * One `dispatch`-preset review parked in its verdict gate, exactly as
+ * `pnpm graph:dispatch` leaves it: `submit` run by the agent run that staged it,
+ * its own actions settled so the terminal transitions are not blocked by them.
+ *
+ * The preset is the whole difference between this and a publish review since the
+ * collapse (captain decision 16) - one type, one gate, and instance data saying
+ * that this instance's yes DISPATCHES.
  */
 async function pendingTask(
   brief: string,
@@ -94,10 +98,10 @@ async function pendingTask(
   const task = await graph.createObject(undefined, {
     teamId: TEAM,
     archetype: 'task',
-    type: 'agent-task',
+    type: 'review',
     status: 'queued',
     title: brief.slice(0, 80),
-    payload: { brief, ...over },
+    payload: { preset: 'dispatch', brief, ...over },
     now: NOW,
   })
   const submitted = await at.applyTransition({
@@ -116,7 +120,9 @@ async function pendingTask(
 async function approve(taskId: string, now = NOW) {
   const approved = await at.applyTransition({
     objectId: taskId,
-    transition: 'approve',
+    // The `dispatch` preset's verdict. `approve` is the other way out of the same
+    // gate and lands an in-graph consequence instead of a run.
+    transition: 'dispatch',
     actor: { entrance: 'human', actorId: USER },
     now,
   })
@@ -172,7 +178,7 @@ beforeEach(async () => {
 describe('probe: approving a dispatch writes exactly one run work order', () => {
   it('carries the resolved instruction, the human approval and a derived run id', async () => {
     const task = await pendingTask('Survey the scratch directory.', { workdir: 'probe-1' })
-    expect(task.status).toBe('awaiting-dispatch')
+    expect(task.status).toBe('awaiting-verdict')
 
     const { approved, directives } = await approve(task.id)
     expect(approved.ok && approved.object.status).toBe('dispatched')
@@ -191,7 +197,7 @@ describe('probe: approving a dispatch writes exactly one run work order', () => 
     // brief and workdir folded in. Nothing command-shaped anywhere on the row.
     const spec = instruction.instructionOf(d.payload)!
     expect(spec.runId).toBe(`run-${d.id}`)
-    expect(spec.intent).toContain('context.object.brief')
+    expect(spec.intent).toContain('`context.object`')
     expect(spec.scope.workdir).toBe('probe-1')
     expect(spec.onSuccess).toBe('succeeded')
     expect(spec.onFailure).toBe('broke')
@@ -237,10 +243,10 @@ describe('probe: approving a dispatch writes exactly one run work order', () => 
     const { directives } = await approve(task.id)
     const spec = instruction.instructionOf(directives[0]!.payload)!
     expect(spec.label).toBe(task.title)
-    expect(spec.label).not.toContain('context.object.brief')
+    expect(spec.label).not.toContain('`context.object`')
     // The intent itself is untouched - it is the standing instruction, and the label is
     // only a name for it.
-    expect(spec.intent).toContain('context.object.brief')
+    expect(spec.intent).toContain('`context.object`')
   })
 
   it('the instance can FILL the scope its static declaration left open, never widen it', async () => {
@@ -668,8 +674,8 @@ describe('probe: an undispatchable declaration surfaces instead of vanishing', (
       objectId: task.id,
       kind: 'status-changed',
       origin: 'organic',
-      transition: 'approve',
-      diff: { status: { old: 'awaiting-dispatch', new: 'dispatched' } },
+      transition: 'dispatch',
+      diff: { status: { old: 'awaiting-verdict', new: 'dispatched' } },
       entrance: 'human',
       actorId: USER,
       ts: NOW,

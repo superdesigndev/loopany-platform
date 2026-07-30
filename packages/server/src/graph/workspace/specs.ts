@@ -17,30 +17,29 @@
  *    `published` among them. `applyTransition` refuses it structurally, so
  *    "content does not walk a state machine" cannot be violated by accident.
  *  - a MIRROR is an external fact we observe. Also no transitions.
- *  - so every human verdict lives on a small SHEPHERD TASK that `tracks` the
- *    thing under review: `merge-review` around a pull request, and
- *    `publish-review` / `decision-review` / `ship-review` around a doc. One
+ *  - so every human verdict lives on a small REVIEW TASK that `tracks` the thing
+ *    under review - a pull request, a post, a playbook, a piece of work. One
  *    answer to "where does work live?", not two.
  *
+ * ONE REVIEW TYPE, FIVE PRESETS (captain decision 16, "如无必要勿增实体"). This
+ * file used to arm five near-identical review types; they differed only in the
+ * words on their states, their obligation key and which consequences their
+ * approval declared - none of which is a different STATE SHAPE. So there is one
+ * `review` type now (`REVIEW_SPEC`) and the differences are instance data
+ * (`REVIEW_PRESETS`).
+ *
+ * DOMAIN-NEUTRAL (captain decision 17). Nothing in this file knows what a pull
+ * request is except the `pull-request` mirror type, which is the EARNED sensing
+ * accelerator and is explicitly the exception. Every outward consequence a review
+ * can declare stands down unless the INSTANCE asks for it, so a Reddit post or an
+ * SEO change rides the same type with different fields and no new platform code.
+ *
  * Obligation keys are per-OBJECT (`(objectId, key)` is the obligation's
- * identity), and a shepherd is created per review - so a recurring flow opens a
- * fresh obligation every time, which a key on the long-lived loop or doc could
+ * identity), and a review task is created per review - so a recurring flow opens
+ * a fresh obligation every time, which a key on the long-lived loop or doc could
  * never do.
  */
-import type { EntranceClass, TypeSpec } from "../types.js";
-
-/**
- * Who may take a review from `queued` into its gate state.
- *
- * TWO entrances, deliberately: the AGENT RUN that produced the content (the
- * ordinary path, and what the seeded history replays), and the engine RULE that
- * noticed content with no reviewer - the `enqueue-review` outbox action, which
- * creates the shepherd and opens its gate with `entrance: "rule"` and the action
- * id as its actor. Leaving it unrestricted would have worked too, and would also
- * have admitted `human` and `clock`, neither of which should ever enter a review
- * gate.
- */
-const OPENS_A_REVIEW: readonly EntranceClass[] = ["agent-run", "rule"];
+import type { TypeSpec } from "../types.js";
 
 /** The team every demo row is scoped to. The graph tables key on team id and
  *  hold no FK to `teams`, so the demo is self-contained and never collides with
@@ -138,7 +137,7 @@ export const LOOP_SPEC: TypeSpec = {
         },
       ],
     },
-    // The two outcome transitions a run's report drives. `agent-run` is the
+    // The three plain outcome transitions a run's report drives. `agent-run` is the
     // replayed history's shape (a run reporting for itself); `rule` is the runs
     // bridge's (design: the state change is the engine's declarative consequence of
     // a run finishing, so `graph/agent/runs.ts` enters it as a rule). Both are real
@@ -151,38 +150,21 @@ export const LOOP_SPEC: TypeSpec = {
     // Timeline must not read a failed run as a quiet one.
     { name: "fail", from: ["running"], to: "idle", entrance: ["agent-run", "rule"] },
     /**
-     * THE RUN FOUND SOMETHING A PERSON MUST DECIDE - the fourth outcome, and the hop
-     * that makes an UNATTENDED loop reach a human.
+     * THE RUN FOUND SOMETHING A PERSON MUST DECIDE - the fourth outcome.
      *
-     * Same entrance set as the other three outcome transitions (`agent-run` for a run
-     * reporting for itself, `rule` for the runs bridge entering it as the engine's
-     * declarative consequence), so this is the RUN REPORT-BACK path and nothing else.
-     * The clock is deliberately absent: a fire can only `dispatch-outward-run`, and
-     * the review is opened by the work the fire caused, never by the fire.
+     * It DECLARES NO ACTION (captain decision 15). Until this unit it carried an
+     * `enqueue-review` chain, so the engine turned every discovery into a review
+     * on the run's behalf; that is exactly the spec-declared sequencing decision 15
+     * moves into the agent. The run now says what it found by CALLING
+     * `graph review request --about <its report> --question "…"`, which opens the
+     * same gate through the same seam with the run itself as the actor.
      *
-     * Its `enqueue-review` targets `via: "run-report"` - the report doc THIS run
-     * wrote, named on the very event that entered this transition - so the person
-     * gets the run's findings as the thing they are deciding about. Not
-     * `via: "produces"`: that would fan out over every report the loop ever made and
-     * open a review for the whole unreviewed archive.
-     *
-     * The gate itself opens on the created `decision-review` shepherd (entrance
-     * `rule`, actor = the action id), exactly as `queue-review` does for a post. The
-     * loop holds no gate of its own - a loop is never "waiting on you", the work
-     * around its products is.
+     * The transition survives because it is a GUARDRAIL, not a chain: it records
+     * that this fire ended in a finding, so a run that reported `discovery` and
+     * then never asked anybody anything is VISIBLE in the Timeline as exactly that
+     * - an omission surfaced as a debt, which is decision 15(c)'s posture.
      */
-    {
-      name: "escalate",
-      from: ["running"],
-      to: "idle",
-      entrance: ["agent-run", "rule"],
-      actions: [
-        {
-          kind: "enqueue-review",
-          payload: { queue: "decision", review: "decision-review", via: "run-report" },
-        },
-      ],
-    },
+    { name: "escalate", from: ["running"], to: "idle", entrance: ["agent-run", "rule"] },
     // A fire the machine never claimed (asleep/offline), superseded by the next
     // one. Neither success nor failure - it is the scheduler's own record.
     { name: "skip", from: ["idle"], to: "idle", entrance: "clock" },
@@ -190,77 +172,24 @@ export const LOOP_SPEC: TypeSpec = {
     { name: "evolve", from: ["idle"], to: "idle", entrance: "agent-run" },
     // An owner-requested change, dispatched as one agent pass.
     { name: "edit", from: ["idle"], to: "idle", entrance: "human" },
-    /**
-     * The run handed its products to review - another auditable self-transition,
-     * the same shape as `skip`/`evolve`/`edit` (decision 8's clarification).
-     *
-     * This is the one place a REVIEW IS CREATED BY THE ENGINE rather than by a
-     * seeder: its `enqueue-review` action fans out over the loop's `produces`
-     * edges and, for every unpublished post with nothing already reviewing it,
-     * the executor creates the shepherd task through `applyTransition` (entrance
-     * `rule`, actor = the action id). A static spec cannot name instances, so the
-     * SELECTOR is the declarative answer - "the posts I make", resolved at
-     * execution time. Idempotent twice over: the shepherd's id is derived from
-     * `(action, doc)`, and a doc that already has a reviewer is skipped.
-     */
-    {
-      name: "queue-review",
-      from: ["idle"],
-      to: "idle",
-      entrance: "agent-run",
-      actions: [
-        {
-          kind: "enqueue-review",
-          payload: {
-            queue: "publish",
-            review: "publish-review",
-            via: "produces",
-            select: { type: "post", unpublished: true },
-          },
-        },
-      ],
-    },
-    /**
-     * The run opened pull requests and now WAITS for the world to land them -
-     * another auditable self-transition, the same shape as `queue-review`.
-     *
-     * This is the loop's own house rule made mechanical: a coding loop lands one
-     * PR at a time and does not stack a second on an unmerged first, so "is that
-     * PR merged yet?" is a real, standing wait. Its `register-watch` action fans
-     * out over the loop's `produces` edges and opens an `external-wait`
-     * obligation on each pull-request MIRROR it made (design §7: "a Task entering
-     * a waiting state registers watch interest on its linked Mirror").
-     *
-     * Note what it is NOT: a gate. Nobody owes a verdict here - we are waiting on
-     * GitHub, and design §12 item 5 is explicit that this is an `external-wait`
-     * obligation rather than a gate state. The mirror poller
-     * (`graph/sensing/poller.ts`) closes it when it observes the merge, with the
-     * observation itself as the closing event.
-     */
-    {
-      name: "watch-prs",
-      from: ["idle"],
-      to: "idle",
-      entrance: "agent-run",
-      actions: [
-        {
-          kind: "register-watch",
-          payload: {
-            via: "produces",
-            select: { type: "pull-request" },
-            wait: "merge-wait",
-            label: "Waiting for GitHub to show the PR merged",
-          },
-        },
-      ],
-    },
     { name: "pause", from: ["idle", "running"], to: "paused", entrance: "human" },
     { name: "finish", from: ["idle", "running", "paused"], to: "completed", entrance: "agent-run" },
   ],
-  /** `brief`/`workdir`/`repos` are the INSTANCE half of the fire's work order -
-   *  what this particular loop's scheduled run should do, and where it may do it.
-   *  A static declaration cannot know them, so `withObjectScope` and the resolved
-   *  `context.object` carry them from here into the instruction. */
+  /**
+   * The INSTANCE half of everything above.
+   *
+   * `brief`/`workdir`/`repos` are the scope a static declaration cannot know
+   * (`withObjectScope` folds them into the work order). `role` and `workflow` are
+   * captain decision 15's own requirement that WORKFLOW INSTRUCTIONS ARE DATA:
+   *
+   *   role      which verb subset this loop's runs are handed (`roles.ts`). One
+   *             to three verbs, never seven - decision 15(a)'s answer to "the
+   *             agent wanders".
+   *   workflow  what a run of THIS loop should do, in prose, including which
+   *             command to reach for when. It lives on the object because the
+   *             alternative is a TypeScript string per loop, which is the thing
+   *             decision 15 exists to stop.
+   */
   fields: {
     band: "string",
     cadence: "string",
@@ -269,95 +198,113 @@ export const LOOP_SPEC: TypeSpec = {
     brief: "string",
     workdir: "string",
     repos: "string",
+    role: "string",
+    workflow: "string",
   },
 };
 
 /**
- * A shepherd is a small TASK that tracks one piece of content and carries the
- * obligation a person owes on it - the same relationship `merge-review` has with
- * a pull-request mirror. The content does not move; the work around it does.
+ * THE STANDARD REVIEW TASK - one type, five presets (captain decision 16).
  *
- * Each shepherd's approving transition declares an `update-fields` action rather
- * than writing the doc itself: the transition records the decision, and the
- * executor applies its consequence to the tracked object. `via: "tracks"` tells
- * the executor to follow this task's `tracks` edge, so a static spec can name an
- * instance-specific target.
+ * Until this unit the workspace armed FIVE near-identical task types -
+ * `merge-review`, `publish-review`, `decision-review`, `ship-review` and
+ * `agent-task`. They differed in three ways only: the words on their states, the
+ * key of the obligation they opened, and which consequences their approval
+ * declared. None of that is a different STATE SHAPE, which is the captain's bar
+ * for a new registry type ("如无必要勿增实体"), so they are one type now and their
+ * differences are INSTANCE DATA (`REVIEW_PRESETS` below).
+ *
+ * ── the shape, and why each state exists ────────────────────────────────────
+ *
+ *   queued           created; nobody has been asked anything yet
+ *   awaiting-verdict GATE. A person owes the answer. One key - `verdict` - for
+ *                    every preset, so the inbox query, the button resolver and
+ *                    the CLI all read one string instead of five.
+ *   approved         a person said yes and the consequence is IN-GRAPH or an
+ *                    accelerated outward effect. Terminal: the attested close
+ *                    (design §12 item 8) applies exactly as it did before.
+ *   dispatched       a person said yes and the consequence is WORK AN AGENT DOES.
+ *                    NOT terminal and not a gate: nobody owes anything, we are
+ *                    waiting on a machine, and the run's own outcome moves it.
+ *   done / failed    the run said so. Two states rather than one plus a field,
+ *                    because "it worked" and "it broke" lead a person to
+ *                    different places.
+ *   rejected         a person said no. The verdict is recorded either way.
+ *
+ * TWO transitions out of the gate rather than one, and that is the only place the
+ * presets touch the state machine: `approve` for a consequence that lands here or
+ * through an earned accelerator, `dispatch` for one an agent carries out. Both are
+ * `human`, both close the same key. Which one a review offers is read off its
+ * `preset` field by the UI and the CLI - data, not a type.
+ *
+ * ── domain neutrality (captain decision 17) ─────────────────────────────────
+ *
+ * Nothing here knows what a pull request is. `approve` declares four consequences
+ * and EVERY ONE of them is gated by a `requires` clause reading this instance's
+ * own payload:
+ *
+ *   update-fields      writes `approveSet` onto the tracked subject - how a doc's
+ *                      `published`/`resolved` field flips (decision 8: content has
+ *                      no state machine, so its consequence is a field write)
+ *   external-comment   the GitHub comment ACCELERATOR, opt-in per instance
+ *   external-merge     the GitHub merge ACCELERATOR, opt-in per instance
+ *   notify             the in-workspace trace of the decision
+ *
+ * So a Reddit post, an SEO change and a pull request are the same review with
+ * different instance fields, and the two GitHub-shaped actions are permanently
+ * what decision 17 demotes them to: earned exceptions that stand down unless an
+ * instance explicitly asks for them. A foreign domain adds NO platform code - it
+ * carries its consequence as prose in `consequence`, which `dispatch` hands to an
+ * agent.
  */
-const REVIEW_ACTIONS = (set: Record<string, unknown>) => [
-  { kind: "update-fields" as const, payload: { via: "tracks", set } },
-  { kind: "notify" as const, payload: { channel: "inbox" } },
-];
+export const REVIEW_TYPE = "review";
 
-/**
- * The work we own around an external pull request. Separate from the PR mirror
- * on purpose: the mirror is the world's state, this is ours.
- */
-export const MERGE_REVIEW_SPEC: TypeSpec = {
-  states: ["queued", "awaiting-verdict", "approved", "rejected"],
+/** The ONE obligation key every review opens. Was five keys across five types. */
+export const VERDICT_KEY = "verdict";
+
+export const REVIEW_SPEC: TypeSpec = {
+  states: ["queued", "awaiting-verdict", "approved", "rejected", "dispatched", "done", "failed"],
   initialState: "queued",
   gateStates: ["awaiting-verdict"],
-  terminalStates: ["approved", "rejected"],
+  terminalStates: ["approved", "rejected", "done", "failed"],
   transitions: [
     {
       name: "submit",
       from: ["queued"],
       to: "awaiting-verdict",
-      // EITHER the agent run that produced the content, OR the engine rule that
-      // noticed content with no reviewer (`enqueue-review`). Not a human - a
-      // person does not open their own review queue - and not the clock.
-      entrance: OPENS_A_REVIEW,
-      opens: [{ key: "merge-verdict", class: "human-verdict", label: "Approve the merge" }],
-      actions: [
-        { kind: "enqueue-review", payload: { queue: "merge" } },
-        // TWO INDEPENDENT WAITS, on two objects, from one transition - which is
-        // exactly what keyed obligations are for (decision 3). The human owes a
-        // verdict on THIS task; the world owes us a merge on the MIRROR this task
-        // tracks, and only one of those is a gate. When the tracked object is a
-        // doc rather than a mirror (the replayed history's merge reviews) the
-        // handler cleanly no-ops - there is nothing external to watch.
-        {
-          kind: "register-watch",
-          payload: { via: "tracks", wait: "merge-wait", label: "Waiting for GitHub to show the PR merged" },
-        },
-      ],
+      // The AGENT RUN that produced the thing under review (the ordinary path
+      // now that `graph review request` is how a review is born), the engine RULE
+      // that noticed content with no reviewer, or a HUMAN opening one from the
+      // workspace - which decision 16 makes a real path, since a person acting in
+      // the UI goes through the same verb an agent does.
+      entrance: ["agent-run", "rule", "human"],
+      opens: [{ key: VERDICT_KEY, class: "human-verdict", label: "Your verdict" }],
     },
-    /**
-     * THE VERDICT THAT REACHES GITHUB.
-     *
-     * Four declared consequences, and which of them apply is decided per instance
-     * at execution time rather than by four variants of this type:
-     *
-     *  1. `update-fields {merged:true}` - the DOC case. The replayed history's
-     *     merge reviews track a playbook, and this is what marks it landed. When
-     *     the tracked object is a MIRROR the handler cleanly writes nothing: the
-     *     world's `merged` comes from observing GitHub, never from our verdict.
-     *  2. `external-comment` (R3) - the DEFAULT outward effect and the low-risk
-     *     one. It says a person approved this, and names the verdict event so the
-     *     comment can be traced back into our log. It changes nothing.
-     *  3. `external-merge` (R3) - guarded twice over. `requires` stands it down
-     *     unless THIS review was opened with explicit merge intent, and the agent
-     *     that would perform it refuses a repo off its allowlist or a PR aimed at
-     *     the repo's default branch. Approving a review is not, by itself, an
-     *     instruction to land code.
-     *  4. `notify` - the in-workspace trace of the decision.
-     *
-     * Both R3 actions rest on the approval this very transition IS: a human
-     * entered it, so its own event is the approval event, re-resolved and
-     * re-checked by the executor before any directive is written and a third time
-     * by the agent before anything is posted.
-     */
     {
       name: "approve",
       from: ["awaiting-verdict"],
       to: "approved",
       entrance: "human",
-      closes: ["merge-verdict"],
+      closes: [VERDICT_KEY],
       actions: [
-        { kind: "update-fields", payload: { via: "tracks", set: { merged: true } } },
+        // The consequence a person's yes has ON THE SUBJECT, as instance data:
+        // `approveSet` is a plain object written onto the tracked object. Absent ⇒
+        // the handler cleanly writes nothing (a review can be a decision with no
+        // field consequence at all).
+        { kind: "update-fields", payload: { via: "tracks", setFrom: "approveSet" } },
+        // EARNED ACCELERATOR (decision 17), opt-in per instance. Off by default:
+        // most reviews have nothing to comment on.
         {
           kind: "external-comment",
-          payload: { via: "tracks", note: "Approved via the Loopany workspace." },
+          payload: {
+            via: "tracks",
+            requires: { field: "commentIntent", equals: true },
+            note: "Approved via the Loopany workspace.",
+          },
         },
+        // EARNED ACCELERATOR, opt-in per instance and guarded again at the agent
+        // (repo allowlist + default-branch refusal). Approving a review is not, by
+        // itself, an instruction to land code.
         {
           kind: "external-merge",
           payload: { via: "tracks", requires: { field: "mergeIntent", equals: true }, method: "squash" },
@@ -365,79 +312,35 @@ export const MERGE_REVIEW_SPEC: TypeSpec = {
         { kind: "notify", payload: { channel: "inbox" } },
       ],
     },
-    { name: "reject", from: ["awaiting-verdict"], to: "rejected", entrance: "human", closes: ["merge-verdict"] },
-  ],
-  /** `mergeIntent` is the field the `external-merge` action's `requires` clause
-   *  reads. Absent or false ⇒ approving comments and stops there. */
-  fields: { repo: "string", number: "number", mergeIntent: "boolean" },
-};
-
-/**
- * WORK AN AGENT DOES, once a person says go - the runs bridge's own shepherd.
- *
- * Deliberately GENERIC (captain decision 12, symmetric with decision 4's "generic
- * Task first, specialized types earned"): this is not a fix-review or a
- * reply-review, it is "a person approved an instruction and an agent carried it
- * out". The instruction's prose and its particulars come from the INSTANCE, so the
- * same type carries an investigation today and an Intercom reply tomorrow without a
- * new state machine.
- *
- * ── the shape, and why each state exists ────────────────────────────────────
- *
- *   queued            created, nobody asked for anything yet
- *   awaiting-dispatch GATE. A person owes the verdict, because dispatching an agent
- *                     run is an outward effect: it spends money and it can act on
- *                     the world. R3 is the honest class, so a human approval is
- *                     structurally required rather than configurable.
- *   dispatched         the work order is out. NOT terminal, and not a gate either:
- *                     nobody owes anything, we are waiting on a machine. The run's
- *                     own outcome is what moves it, through `applyTransition` with
- *                     `entrance: "rule"` (`graph/agent/runs.ts`).
- *   done / failed      the run said so. Two states rather than one plus a field,
- *                     because "it worked" and "it broke" lead to different next
- *                     actions and the Timeline must not read them the same.
- *   declined           the person said no. The verdict is recorded either way.
- *
- * `approve` declares the dispatch and a notification. Both rest on the approval
- * this very transition IS: a human entered it, so its own event is the approval
- * event, re-resolved by the executor before the work order is written and re-checked
- * a THIRD time by the agent before anything is executed.
- *
- * A run that dies without reporting does NOT strand this task silently: the
- * directive's lease expires, the channel gives up after a bounded number of
- * abandoned claims, and the failed directive becomes an attention item naming this
- * object. The task stays visibly `dispatched` with a reason next to it, which is the
- * honest state - it really is still waiting, and now a person knows why.
- */
-export const AGENT_TASK_SPEC: TypeSpec = {
-  states: ["queued", "awaiting-dispatch", "dispatched", "done", "failed", "declined"],
-  initialState: "queued",
-  gateStates: ["awaiting-dispatch"],
-  terminalStates: ["done", "failed", "declined"],
-  transitions: [
+    { name: "reject", from: ["awaiting-verdict"], to: "rejected", entrance: "human", closes: [VERDICT_KEY] },
+    /**
+     * THE VERDICT THAT SPENDS A MACHINE - a person approving WORK rather than a
+     * field write. Dispatching an agent run is an outward effect: it costs money
+     * and it can act on the world, so R3 is the honest class and a human approval
+     * is structurally required rather than configurable.
+     *
+     * The intent is the STANDING one (identical for every instance and every
+     * domain); the particulars ride the instance - `context.object.brief` for
+     * ordinary work, `context.object.consequence` for "carry out what this review
+     * was approved FOR". That pair is decision 17's whole mechanism: a Reddit post
+     * and an SEO tweak are prose in a field, executed by an agent with
+     * machine-side credentials, with no platform code that knows either domain.
+     */
     {
-      name: "submit",
-      from: ["queued"],
-      to: "awaiting-dispatch",
-      entrance: OPENS_A_REVIEW,
-      opens: [{ key: "dispatch-verdict", class: "human-verdict", label: "Approve the run" }],
-      actions: [{ kind: "enqueue-review", payload: { queue: "dispatch" } }],
-    },
-    {
-      name: "approve",
-      from: ["awaiting-dispatch"],
+      name: "dispatch",
+      from: ["awaiting-verdict"],
       to: "dispatched",
       entrance: "human",
-      closes: ["dispatch-verdict"],
+      closes: [VERDICT_KEY],
       actions: [
         {
           kind: "dispatch-outward-run",
           payload: {
-            // The STANDING intent for this type of work. Instance particulars ride
-            // in `context.object`, which the handler merges from the task's own
-            // payload - so one static declaration serves every instance.
             intent: [
-              "Carry out the work described in `context.object.brief`.",
+              "A person approved this piece of work. Carry it out.",
+              "",
+              "WHAT was approved is in `context.object` - `brief` when this is ordinary work, `consequence`",
+              "when it is the thing a review was approved for. Read both; act on whichever is present.",
               "",
               "Before acting, CHECK REALITY: read the current state of whatever you are about to change and",
               "stop if the work has already been done. This instruction may be delivered more than once.",
@@ -458,18 +361,99 @@ export const AGENT_TASK_SPEC: TypeSpec = {
         { kind: "notify", payload: { channel: "inbox" } },
       ],
     },
-    { name: "decline", from: ["awaiting-dispatch"], to: "declined", entrance: "human", closes: ["dispatch-verdict"] },
     // The two outcome transitions. `entrance: "rule"` because the state change is
     // the engine's declarative consequence of a run finishing - the same shape an
-    // observation takes when it closes a wait. Restricted to `rule`, so nothing
-    // else can claim a run's outcome on its behalf.
+    // observation takes when it closes a wait.
     { name: "succeeded", from: ["dispatched"], to: "done", entrance: "rule" },
     { name: "broke", from: ["dispatched"], to: "failed", entrance: "rule" },
   ],
-  /** `brief` is the instance's own instruction - what this particular run should do.
-   *  `workdir`/`repos` narrow the scope the dispatch declares. */
-  fields: { brief: "string", workdir: "string", repos: "string" },
+  /**
+   * Every difference between the old five types, as INSTANCE FIELDS.
+   *
+   *   preset        which recipe this review is (`REVIEW_PRESETS`) - a LABEL for
+   *                 the UI and the CLI, never something the engine branches on
+   *   question      what the person is actually being asked
+   *   subject       the object under review (also a `tracks` edge)
+   *   approveSet    fields `approve` writes onto the subject
+   *   commentIntent opt into the GitHub comment accelerator
+   *   mergeIntent   opt into the GitHub merge accelerator
+   *   consequence   prose an agent carries out when `dispatch` is the verdict
+   *   brief/workdir/repos   the dispatch's own scope
+   */
+  fields: {
+    preset: "string",
+    question: "string",
+    subject: "string",
+    approveSet: "object",
+    commentIntent: "boolean",
+    mergeIntent: "boolean",
+    consequence: "string",
+    brief: "string",
+    workdir: "string",
+    repos: "string",
+  },
 };
+
+/**
+ * THE PRESETS - recipes for a standard review Task, and nothing more.
+ *
+ * Each is the payload a `review request` starts from plus which gate transition
+ * its verdict runs. They are DATA: the engine never reads `preset`, the registry
+ * holds one type, and adding a sixth recipe (an SEO change, a Reddit post) is a
+ * row here or - better - just different flags on the CLI call.
+ */
+export interface ReviewPreset {
+  /** Which human transition discharges the gate. */
+  verdict: "approve" | "dispatch";
+  /** The button a person sees. */
+  label: string;
+  /** Default payload the preset contributes. */
+  payload: Record<string, unknown>;
+  /** One line for `graph review request --help`. */
+  summary: string;
+}
+
+export const REVIEW_PRESETS: Record<string, ReviewPreset> = {
+  /** Somebody must decide something. The plain default, and the one with no
+   *  consequence beyond the decision being recorded. */
+  decision: {
+    verdict: "approve",
+    label: "Your call",
+    payload: { approveSet: { resolved: true } },
+    summary: "a question only a person can answer (default)",
+  },
+  /** Content a person releases: approving flips the subject's `published` field. */
+  publish: {
+    verdict: "approve",
+    label: "Review",
+    payload: { approveSet: { published: true } },
+    summary: "content waiting to be published",
+  },
+  /** The GitHub merge ACCELERATOR (decision 17: an exception, not the pattern).
+   *  Approving comments on the tracked PR mirror and merges it. */
+  merge: {
+    verdict: "approve",
+    label: "Approve",
+    payload: { commentIntent: true, mergeIntent: true, approveSet: {} },
+    summary: "a pull request the run wants merged (GitHub accelerator)",
+  },
+  /** Work a MACHINE does once a person says go - any domain, prose in
+   *  `consequence`/`brief`, executed by an agent with local credentials. */
+  dispatch: {
+    verdict: "dispatch",
+    label: "Run it",
+    payload: {},
+    summary: "work an agent should carry out once approved",
+  },
+};
+
+export const REVIEW_PRESET_NAMES = Object.keys(REVIEW_PRESETS);
+
+/** The transition a preset's verdict runs; unknown presets fall back to the
+ *  ordinary approval, so a hand-made review is never un-answerable. */
+export function verdictTransitionOfPreset(preset: string | undefined): "approve" | "dispatch" {
+  return REVIEW_PRESETS[preset ?? ""]?.verdict ?? "approve";
+}
 
 // ---- docs: content, no lifecycle (decision 8) ----
 
@@ -501,98 +485,6 @@ export const REPORT_SPEC: TypeSpec = docSpec({ metric: "string", resolved: "bool
 /** Docs: durable playbook material. */
 export const PLAYBOOK_SPEC: TypeSpec = docSpec({ merged: "boolean" });
 
-// ---- shepherd tasks: where a doc's human verdict actually lives ----
-
-/** Posts & content awaiting a human publish decision. */
-export const PUBLISH_REVIEW_SPEC: TypeSpec = {
-  states: ["queued", "awaiting-publish", "published", "withdrawn"],
-  initialState: "queued",
-  gateStates: ["awaiting-publish"],
-  terminalStates: ["published", "withdrawn"],
-  transitions: [
-    {
-      name: "ready",
-      from: ["queued"],
-      to: "awaiting-publish",
-      // EITHER the agent run that produced the content, OR the engine rule that
-      // noticed content with no reviewer (`enqueue-review`). Not a human - a
-      // person does not open their own review queue - and not the clock.
-      entrance: OPENS_A_REVIEW,
-      opens: [{ key: "publish-verdict", class: "human-verdict", label: "Review and publish" }],
-      actions: [{ kind: "enqueue-review", payload: { queue: "publish" } }],
-    },
-    {
-      name: "publish",
-      from: ["awaiting-publish"],
-      to: "published",
-      entrance: "human",
-      closes: ["publish-verdict"],
-      actions: REVIEW_ACTIONS({ published: true }),
-    },
-    { name: "withdraw", from: ["awaiting-publish"], to: "withdrawn", entrance: "human", closes: ["publish-verdict"] },
-  ],
-};
-
-/** A report that reached a question only a person can answer. */
-export const DECISION_REVIEW_SPEC: TypeSpec = {
-  states: ["queued", "awaiting-decision", "decided", "dropped"],
-  initialState: "queued",
-  gateStates: ["awaiting-decision"],
-  terminalStates: ["decided", "dropped"],
-  transitions: [
-    {
-      name: "raise",
-      from: ["queued"],
-      to: "awaiting-decision",
-      // EITHER the agent run that produced the content, OR the engine rule that
-      // noticed content with no reviewer (`enqueue-review`). Not a human - a
-      // person does not open their own review queue - and not the clock.
-      entrance: OPENS_A_REVIEW,
-      opens: [{ key: "policy-verdict", class: "human-verdict", label: "Your call on the policy" }],
-      actions: [{ kind: "enqueue-review", payload: { queue: "decision" } }],
-    },
-    {
-      name: "decide",
-      from: ["awaiting-decision"],
-      to: "decided",
-      entrance: "human",
-      closes: ["policy-verdict"],
-      actions: REVIEW_ACTIONS({ resolved: true }),
-    },
-    { name: "drop", from: ["awaiting-decision"], to: "dropped", entrance: "human", closes: ["policy-verdict"] },
-  ],
-};
-
-/** Durable playbook material a loop proposes and a person ships. */
-export const SHIP_REVIEW_SPEC: TypeSpec = {
-  states: ["queued", "awaiting-review", "shipped", "revising"],
-  initialState: "queued",
-  gateStates: ["awaiting-review"],
-  terminalStates: ["shipped"],
-  transitions: [
-    {
-      name: "propose",
-      from: ["queued"],
-      to: "awaiting-review",
-      // EITHER the agent run that produced the content, OR the engine rule that
-      // noticed content with no reviewer (`enqueue-review`). Not a human - a
-      // person does not open their own review queue - and not the clock.
-      entrance: OPENS_A_REVIEW,
-      opens: [{ key: "ship-verdict", class: "human-verdict", label: "Review the candidate" }],
-      actions: [{ kind: "enqueue-review", payload: { queue: "ship" } }],
-    },
-    {
-      name: "approve",
-      from: ["awaiting-review"],
-      to: "shipped",
-      entrance: "human",
-      closes: ["ship-verdict"],
-      actions: REVIEW_ACTIONS({ published: true }),
-    },
-    { name: "revise", from: ["awaiting-review"], to: "revising", entrance: "human", closes: ["ship-verdict"] },
-  ],
-};
-
 /**
  * The external pull request. A mirror declares NO transitions: its state is the
  * world's, and `applyTransition` refuses to move it (`ARCHETYPE_HAS_NO_STATE_MACHINE`).
@@ -609,23 +501,31 @@ export const PULL_REQUEST_SPEC: TypeSpec = {
   fields: { repo: "string", number: "number" },
 };
 
-/** Every custom type the demo arms, with its parent archetype. */
+/**
+ * Every custom type the demo arms, with its parent archetype.
+ *
+ * SIX, down from ten (captain decision 16). The four shepherd types and the
+ * `agent-task` collapsed into `review`; a mirror registered by the domain-neutral
+ * `mirror track` verb uses the BUILT-IN `mirror` archetype base type, so a
+ * foreign source needs nothing here either (decision 17).
+ */
 export const DEMO_TYPES = [
   { name: "loop", archetype: "task", spec: LOOP_SPEC, rationale: "a scheduled agent loop - a Task with cron" },
-  { name: "merge-review", archetype: "task", spec: MERGE_REVIEW_SPEC, rationale: "our-side work around an external PR" },
+  {
+    name: REVIEW_TYPE,
+    archetype: "task",
+    spec: REVIEW_SPEC,
+    rationale: "the standard review Task - every human verdict, five presets, one state shape (decision 16)",
+  },
   { name: "post", archetype: "doc", spec: POST_SPEC, rationale: "outbound content; publishing is a field, not a state" },
   { name: "report", archetype: "doc", spec: REPORT_SPEC, rationale: "a dated run product" },
   { name: "playbook", archetype: "doc", spec: PLAYBOOK_SPEC, rationale: "durable reference content" },
   {
-    name: "agent-task",
-    archetype: "task",
-    spec: AGENT_TASK_SPEC,
-    rationale: "work an agent does from an approved instruction - the generic outward-effect path (decision 12)",
+    name: "pull-request",
+    archetype: "mirror",
+    spec: PULL_REQUEST_SPEC,
+    rationale: "an observed GitHub pull request - the EARNED sensing accelerator, not the pattern (decision 17)",
   },
-  { name: "publish-review", archetype: "task", spec: PUBLISH_REVIEW_SPEC, rationale: "the human publish decision on a post" },
-  { name: "decision-review", archetype: "task", spec: DECISION_REVIEW_SPEC, rationale: "the human call a report escalated" },
-  { name: "ship-review", archetype: "task", spec: SHIP_REVIEW_SPEC, rationale: "the human ship decision on a playbook" },
-  { name: "pull-request", archetype: "mirror", spec: PULL_REQUEST_SPEC, rationale: "an observed GitHub pull request" },
 ] as const satisfies readonly { name: string; archetype: "task" | "doc" | "mirror"; spec: TypeSpec; rationale: string }[];
 
 /** Type name → the Library category its artifacts group under. */
@@ -641,18 +541,18 @@ export const CATEGORY_OF_TYPE: Record<string, string> = {
   "pull-request": "Pull requests",
 };
 
-/** The registry type the runs bridge dispatches. Named once, so the read model and
- *  the CLI cannot drift from the spec. */
-export const WORK_TYPE = "agent-task";
-
-/** Shepherd task type → the obligation key it opens. One place, so the read
- *  model can find a content object's reviewer without guessing. */
+/**
+ * The registry type EVERY human verdict lives on, and the one obligation key it
+ * opens. Named once so the read model, the UI and the CLI cannot drift from the
+ * spec - and, since decision 16, there is exactly one entry where there were five.
+ */
 export const SHEPHERD_TYPES: Record<string, string> = {
-  "merge-review": "merge-verdict",
-  "publish-review": "publish-verdict",
-  "decision-review": "policy-verdict",
-  "ship-review": "ship-verdict",
+  [REVIEW_TYPE]: VERDICT_KEY,
 };
+
+/** The preset whose verdict DISPATCHES a run - the read model's "work awaiting a
+ *  go-ahead" filter. A preset, not a type: `review` carries all of them. */
+export const WORK_PRESET = "dispatch";
 
 /** Library category display order (mirrors the reference demo). */
 export const LIBRARY_CATEGORIES = ["Pull requests", "Posts & content", "Reports & notes", "Docs"] as const;

@@ -2,24 +2,23 @@
  * `pnpm graph:dispatch [--brief "<what to do>"] [--workdir <dir>] [--repos a/b] [--machine <name>]`
  *
  * Put an APPROVABLE PIECE OF WORK into the demo workspace - the shape the whole
- * runs bridge starts from, exactly as `graph:pr` is the shape effect delivery starts
- * from.
+ * runs bridge starts from, exactly as `graph:pr` is the shape effect delivery
+ * starts from.
  *
- * What it does, all of it through sanctioned paths:
+ * ── THROUGH THE VERB (captain decision 16) ──────────────────────────────────
  *
- *   1. create an `agent-task` - the generic "an agent does X from an instruction"
- *      type (captain decision 12), carrying THIS instance's brief and scope in its
- *      own fields;
- *   2. run `submit` through `applyTransition` with `entrance: "agent-run"`, which
- *      opens the human-verdict gate;
- *   3. drain the outbox, so `submit`'s own consequences are settled and the
- *      terminal outcome transitions are not blocked by them.
+ * One call to `review request` with the `dispatch` preset, and that is the whole
+ * command. It used to create an `agent-task` by hand and run `submit` on it;
+ * since the collapse there is no `agent-task` type - "work an agent does once a
+ * person says go" is a standard review Task whose verdict DISPATCHES rather than
+ * approves, which is instance data (`preset: "dispatch"`), not a fifth state
+ * machine.
  *
- * Then a person approves it in the workspace. THAT is the R3 approval: the verdict
- * writes a `run-task` work order, the machine agent claims it, re-checks the
- * approval, checks the scope against its own boundary, executes the instruction,
- * and reports the run's lifecycle back - which advances this task and lands its
- * report in the Timeline.
+ * Then a person approves it in the workspace. THAT is the R3 approval: the
+ * verdict writes a `run-task` work order, the machine agent claims it, re-checks
+ * the approval, checks the scope against its own boundary, executes the
+ * instruction, and reports the run's lifecycle back - which advances this task
+ * and lands its report in the Timeline.
  *
  * ── the default brief is deliberately harmless ──────────────────────────────
  *
@@ -28,12 +27,17 @@
  * every hop of the bridge (approve → claim → execute → report → advance) while
  * touching nothing, and anybody wanting real work says so explicitly.
  *
- * Runs in its OWN process and exits, like `graph:seed` and `graph:pr`: the embedded
- * pglite tier is single-writer, so the dev server must not be holding the data dir.
+ * `--role` and `--workflow` are the agentic half (captain decision 15): the role
+ * decides which one to three `graph` verbs the run is handed, and the workflow is
+ * the prose telling it what to do with them. Both are INSTANCE FIELDS, which is
+ * the whole point - a workflow lives in the object, never in TypeScript.
+ *
+ * Runs in its OWN process and exits, like `graph:seed` and `graph:pr`: the
+ * embedded pglite tier is single-writer, so the dev server must not be holding
+ * the data dir.
  */
 import { runMigrations } from "../../db/index.js";
-import * as graph from "../../db/graphStore.js";
-import { applyTransition } from "../applyTransition.js";
+import { reviewRequest, type VerbContext } from "../cli/verbs.js";
 import { drainOutbox } from "../outbox/executor.js";
 import { DEMO_TEAM_ID } from "./specs.js";
 
@@ -47,15 +51,18 @@ const DEFAULT_BRIEF = [
 function usage(): never {
   process.stderr.write(
     [
-      'usage: pnpm graph:dispatch -- [--brief "<what to do>"] [--workdir <dir>] [--repos a/b,c/d] [--machine <name>]',
+      'usage: pnpm graph:dispatch -- [--brief "<what to do>"] [--workdir <dir>] [--repos a/b,c/d]',
+      '                            [--role discovery|fix|watch] [--workflow "<how this run works>"] [--machine <name>]',
       "",
-      "  stages an `agent-task` waiting on your verdict. Approving it in the workspace",
-      "  dispatches the instruction to the machine agent, which executes it locally.",
+      "  stages a review whose verdict DISPATCHES a run. Approving it in the workspace",
+      "  sends the instruction to the machine agent, which executes it locally.",
       "",
-      "  --brief    what the agent should do (default: a read-only survey of the workdir)",
-      "  --workdir  where it may work, relative to the agent's own run root",
-      "  --repos    repositories it may act on (the agent narrows this again)",
-      "  --machine  bind the resulting work order to one machine agent",
+      "  --brief     what the agent should do (default: a read-only survey of the workdir)",
+      "  --workdir   where it may work, relative to the agent's own run root",
+      "  --repos     repositories it may act on (the agent narrows this again)",
+      "  --role      which `graph` verbs the run is handed (decision 15a)",
+      "  --workflow  the standing workflow prose composed into its work order",
+      "  --machine   bind the resulting work order to one machine agent",
       "",
     ].join("\n"),
   );
@@ -77,37 +84,36 @@ async function main(): Promise<void> {
   const brief = flagValue(argv, "brief") ?? DEFAULT_BRIEF;
   const workdir = flagValue(argv, "workdir");
   const repos = flagValue(argv, "repos");
+  const role = flagValue(argv, "role");
+  const workflow = flagValue(argv, "workflow");
   const machine = flagValue(argv, "machine");
   const now = new Date().toISOString();
 
   await runMigrations();
 
-  const task = await graph.createObject(undefined, {
+  const ctx: VerbContext = {
     teamId: DEMO_TEAM_ID,
-    archetype: "task",
-    type: "agent-task",
-    status: "queued",
+    actor: { entrance: "human", actorId: "operator-graph-dispatch" },
+    now,
+  };
+  const staged = await reviewRequest(ctx, {
+    preset: "dispatch",
+    question: brief.split("\n")[0]!.slice(0, 160),
     title: brief.split("\n")[0]!.slice(0, 120),
-    // The instance's own fields. `brief` is what the standing intent points at
-    // (`context.object.brief`); `workdir`/`repos` FILL the scope the static
-    // declaration left open - they can never widen what it pinned.
-    payload: {
+    fields: {
+      // The instance's own fields. `brief` is what the standing intent points at
+      // (`context.object.brief`); `workdir`/`repos` FILL the scope the static
+      // declaration left open - they can never widen what it pinned.
       brief,
       ...(workdir ? { workdir } : {}),
       ...(repos ? { repos } : {}),
+      ...(role ? { role } : {}),
+      ...(workflow ? { workflow } : {}),
       ...(machine ? { machine } : {}),
     },
-    now,
   });
-
-  const submitted = await applyTransition({
-    objectId: task.id,
-    transition: "submit",
-    actor: { entrance: "agent-run", actorId: "run-graph-dispatch-cli" },
-    now,
-  });
-  if (!submitted.ok) {
-    process.stderr.write(`submit refused: ${submitted.code} - ${submitted.message}\n`);
+  if (!staged.ok) {
+    process.stderr.write(`review request refused: ${staged.code} - ${staged.message}\n`);
     process.exit(1);
   }
   const drained = await drainOutbox({ now, teamId: DEMO_TEAM_ID, maxPasses: 8 });
@@ -115,10 +121,12 @@ async function main(): Promise<void> {
   process.stdout.write(
     [
       "",
-      `agent task ${task.id} is ${submitted.object.status}`,
+      `dispatch review ${staged.data.objectId} is ${staged.data.status}`,
       `  brief           ${brief.split("\n")[0]}`,
       `  workdir         ${workdir ?? "(the agent's own run root)"}`,
       `  repos           ${repos ?? "(none - the instruction claims no repo scope)"}`,
+      `  role            ${role ?? "(none - the run gets no graph verbs)"}`,
+      `  workflow        ${workflow ? `${workflow.split("\n")[0]!.slice(0, 60)}…` : "(none)"}`,
       machine ? `  bound machine   ${machine}` : "  bound machine   (any machine agent)",
       `  outbox          ${drained.done} action(s) settled, ${drained.deadLettered} dead-lettered`,
       "",

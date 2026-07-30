@@ -24,7 +24,9 @@ const at = () => import('../applyTransition.js')
 let snapshot: import('./pull-prod.js').ProdSnapshot
 
 /** The shepherd task types, mirrored from specs.ts so a rename shows up here. */
-const SHEPHERDS = { 'merge-review': 1, 'publish-review': 1, 'decision-review': 1, 'ship-review': 1 }
+/** Since captain decision 16 there is ONE review type; the old four are presets
+ *  on it, which is instance data rather than a registry entry. */
+const REVIEW_TYPE = 'review'
 
 /** The content id a shepherd reviews, off its own payload. */
 function requireReviewedId(shepherd: { payload: unknown }): string {
@@ -200,35 +202,33 @@ describe('replaying a production snapshot', () => {
     for (const o of open) {
       const holder = objects.get(o.objectId)!
       expect(holder.archetype).toBe('task')
-      expect(Object.keys(SHEPHERDS)).toContain(holder.type)
+      expect(holder.type).toBe(REVIEW_TYPE)
     }
   })
 
-  it('has the OUTBOX EXECUTOR create the publish review, not the seeder', async () => {
-    // The one live path in the seed (`seed-real.ts` step 5): the loop runs
-    // `queue-review`, its `enqueue-review` action fans out over the posts it
-    // produced, and the EXECUTOR creates the shepherd. So this gate exists because
-    // a rule fired - which is what the whole outbox unit is for, and the thing a
-    // seeded shepherd could never demonstrate.
+  it('creates the publish review through the `review request` VERB, not by hand', async () => {
+    // The one live path in the seed (`seed-real.ts` step 5). It used to run
+    // `queue-review` on the loop and let an `enqueue-review` action fan out over
+    // the posts it produced; captain decisions 15 + 16 replaced that declared
+    // chain with the verb an agent run itself calls, so this gate exists because
+    // somebody ASKED for it - with the producing run as the actor.
     const objects = await graph.listObjects(undefined, read.DEMO_TEAM_ID)
-    const shepherd = objects.find((o) => o.type === 'publish-review' && o.title === 'A post waiting to go out')!
-    expect(shepherd).toBeDefined()
-    expect(shepherd.status).toBe('awaiting-publish')
-    // Created BY an action, and its id is derived from that action - so a replay
-    // of the same action resolves this object instead of minting a twin.
-    const createdByAction = (shepherd.payload as Record<string, unknown>).createdByAction
-    expect(typeof createdByAction).toBe('string')
-    expect(shepherd.id).toBe(ids.reviewObjectId(createdByAction as string, requireReviewedId(shepherd)))
+    const review = objects.find((o) => o.type === REVIEW_TYPE && o.title === 'A post waiting to go out')!
+    expect(review).toBeDefined()
+    expect(review.status).toBe('awaiting-verdict')
+    const payload = review.payload as Record<string, unknown>
+    // Instance data carries everything the old five types encoded structurally.
+    expect(payload.preset).toBe('publish')
+    expect(payload.approveSet).toEqual({ published: true })
+    expect(typeof payload.question).toBe('string')
+    expect(payload.subject).toBe(requireReviewedId(review))
 
-    // The gate opened the normal way: a real `ready` transition with `rule`
-    // provenance whose actor is the action id.
-    const events = await graph.listObjectEvents(undefined, shepherd.id)
-    const ready = events.find((e) => e.transition === 'ready')!
-    expect(ready.entrance).toBe('rule')
-    expect(ready.actorId).toBe(createdByAction)
-
-    // And the action that did it is settled, not left hanging.
-    expect((await graph.getAction(undefined, createdByAction as string))!.state).toBe('done')
+    // The gate opened the normal way: a real `submit` transition whose actor is
+    // the RUN that produced the content.
+    const events = await graph.listObjectEvents(undefined, review.id)
+    const submitted = events.find((e) => e.transition === 'submit')!
+    expect(submitted.entrance).toBe('agent-run')
+    expect(String(submitted.actorId)).toMatch(/^run-review-/)
   })
 
   it('gives content no lifecycle at all, and publishes it with a FIELD', async () => {
