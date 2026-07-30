@@ -25,13 +25,19 @@ computes pure functions. Run instructions: `README.md`.
   - `src/db/` - Drizzle schema
     (machines/loops/runs/blobs/artifact_files/run_snapshots/run_leases/connect_keys)
     + store + auth-schema, plus the dormant v3 `graph-schema` + `graphStore`
-    (see "Graph Engineering v3 kernel").
+    (see "Graph Engineering v3 kernel"), including `effect_directives` (see
+    "Graph effect delivery").
   - `src/server/` - boot (`ensureServer`), adapters (Loop/Run -> JobSummary/JobDetail),
     loopApi server fns.
   - `src/skill/` - ALL prompt/skill prose (see "The skill" below).
   - `src/routes/` - pages + server-only route files.
 - `packages/daemon` (`@crewlet/loopany`) - one binary, two roles: poll-loop daemon
   and the in-run `loopany` callback; spawns claude.
+- `packages/effect-agent` (`@loopany/effect-agent`) - the MACHINE side of effect
+  delivery: claims approved outward-effect directives from a server and executes
+  them with LOCAL `gh` credentials. The server holds no GitHub token and performs
+  no outward effect; this is what does. See "Graph effect delivery" below and its
+  own `README.md`.
 - `packages/artifact-format` (`@loopany/artifact-format`) - the Graph-Engineering-v3
   **artifact file format v1**: YAML front matter + Markdown body, deterministic
   round-trip, sanitized HTML as a projection. PURE library (no I/O, no server
@@ -50,8 +56,9 @@ computes pure functions. Run instructions: `README.md`.
 - `pnpm -r typecheck` - every package (server typecheck runs `tsr generate` first,
   so a fresh checkout typechecks with no prior build).
 - `pnpm --filter @loopany/server test` / `pnpm --filter @crewlet/loopany test` /
-  `pnpm --filter @loopany/artifact-format test` (all three via `pnpm test`) -
-  vitest; single file: append the path; single test: `vitest run -t "<name>"`.
+  `pnpm --filter @loopany/artifact-format test` / `pnpm --filter @loopany/effect-agent
+  test` (all four via `pnpm test`) - vitest; single file: append the path; single
+  test: `vitest run -t "<name>"`.
 - `pnpm --filter @loopany/server db:generate` / `db:migrate` - Drizzle migrations.
 - `bash scripts/demo-cookie-unified.sh` - e2e demo loop through the unified server.
 - Prod: nitro build, then `pnpm start` = `scripts/prestart.mjs` +
@@ -1259,6 +1266,73 @@ computes pure functions. Run instructions: `README.md`.
 - **Adding an action kind with a handler? Check `outbox.integration.test.ts`'s NO_HANDLER
   probe** - it asserts the ABSENCE of a handler and must be moved to a kind that still has
   none (it used `register-watch` until this unit; it now uses `set-follow-up-date`).
+
+## Graph effect delivery (`src/graph/effects/` + `packages/effect-agent`)
+
+- **What it is:** how an approved in-workspace verdict ACTS on the outside world.
+  The server still executes nothing outward - the R3 handler writes a DIRECTIVE
+  (`effect_directives`, migration `0005`) and stops; a machine-side agent claims it,
+  executes with LOCAL `gh` credentials, and reports back. The table IS the boundary:
+  everything above it is pure server, everything below is somebody's laptop.
+- **The outward ceiling NO LONGER holds by the ABSENCE of a handler** (it used to;
+  that is the one durable fact this unit changed). It holds by THREE independent
+  checks on the same approval, which fail differently on purpose: the schema CHECK at
+  enqueue, the executor's re-check that the id resolves to a `human`-entrance event,
+  and the AGENT's re-check of the approval block that rides with the work order. R4
+  governance kinds still have no handler at all.
+- **The SELF-APPROVAL rule** (`applyTransition`): a transition a HUMAN entered is
+  itself the approval for the outward actions it declares - its own event id lands in
+  `approvalEvent`. Any other entrance still refuses `APPROVAL_REQUIRED`, an explicit
+  `approvals[i]` still wins, and the executor re-resolves whatever id landed. Without
+  it the UI could not reach an outward effect at all: the approving event does not
+  exist until the call that writes it.
+- **Identity is INHERITED, never invented.** A directive's id IS the producing outbox
+  action's id (`<eventId>-<seq>`), so the executor's at-least-once boundary yields one
+  work order; and a comment's body carries `<!-- loopany-effect:<id> -->`, so the
+  idempotency survives all the way out to GitHub. `directive.ts` (pure) is the ONE
+  place that marker and the comment prose are built - the agent posts bytes it was
+  handed and interprets nothing.
+- **A claim is a LEASE, not a flag.** An agent that dies leaves an expiring claim that
+  returns to `pending`; past `LOOPANY_EFFECT_MAX_CLAIMS` it FAILS with `LEASE_EXPIRED`.
+  Expiry runs in the claim endpoint (the agent's poll is the liveliest clock) AND in
+  the outbox executor's background tick - the second one is load-bearing, because the
+  case that matters is the one where NO agent is polling.
+- **`directive-failed` is the fourth ATTENTION kind**, computed from the directive row
+  and NOT from the action that wrote it (that action did its job and is legitimately
+  `done`). `retryable` derives from the TYPED refusal code: a guard refusal is terminal
+  (`REPO_NOT_ALLOWED`, `DEFAULT_BRANCH_REFUSED`, `APPROVAL_INVALID`) and its retry verb
+  is refused `NOT_RETRYABLE` - a repo does not join an allowlist by being asked twice.
+- **The safety policy lives on the AGENT, where the credentials are** (`effect-agent`
+  `guards.ts`, pure + unit-probed; its `README.md` is the reference). Every guard FAILS
+  CLOSED: an EMPTY `LOOPANY_EFFECT_ALLOWED_REPOS` allows NOTHING; merging into the
+  repo's own default branch needs `LOOPANY_EFFECT_ALLOW_DEFAULT_BRANCH` on top of the
+  allowlist; and an UNKNOWN base or default branch refuses too (a partial GraphQL
+  response must never read as "go ahead"). The server-side `LOOPANY_EFFECT_AGENT_TOKEN`
+  fails closed the same way - unset 401s every request.
+- `merge-review.approve` declares FOUR consequences and resolves which apply per
+  INSTANCE: `update-fields` (docs only), `external-comment` (always), `external-merge`
+  (only when the shepherd carries `mergeIntent`, via the `requires` payload clause),
+  `notify`. **`update-fields` now cleanly skips a mirror reached through a SELECTOR**
+  (`tracks`/`produces`) instead of dead-lettering - otherwise every real merge approval
+  would leave an attention item. `via: "self"` on a mirror still refuses: across the
+  action vocabulary, an explicitly-named wrong target is an error and a selector that
+  matches nothing applicable is a no-op.
+- **Surfaces:** `POST /api/effects/{claim,heartbeat,report}` is a MACHINE route (bearer
+  only, never session-authed - the inverse of `/api/graph/*`, and mixing them would
+  mean either browsers claim work orders or agents need cookies); `GET
+  /api/graph/effects` + the workspace's Outward-effects section are the human read.
+- **Running the demo:** `pnpm graph:pr -- <owner/repo> <n> [--merge-intent]` registers a
+  REAL pull request (mirror → live observation → merge-review awaiting a verdict), then
+  approve in `/dev/workspace` and run `pnpm effects:agent` (`--once` for one pass). Same
+  single-writer pglite rule as `graph:seed`: stop the server before `graph:pr`.
+  `LOOPANY_DATA_DIR` should point somewhere of its own (`.effects-demo-data/`).
+- **Probes:** `graph/effects/effects.integration.test.ts` (idempotency, claim
+  exclusivity, lease recovery then give-up, the zombie report, guard refusals, the
+  ceiling, the bearer) + the agent's `guards.test.ts`/`execute.test.ts` against an
+  INJECTED `gh`, so the whole agent is tested on a machine with no `gh` at all.
+- **Any table added to the graph must be added to `seed.ts` `resetGraphDemo`** -
+  `effect_directives` is keyed by the action id exactly like `graph_notifications`, so
+  it strands exactly the same way. `workspace.integration.test.ts` is what says so.
 
 ## Graph v1 demo — the real-data pull (`graph/workspace/pull-prod.ts` + `seed-real.ts`)
 

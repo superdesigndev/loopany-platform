@@ -35,3 +35,6 @@ evidence/
 
 # graph v1 workspace demo — its own embedded pglite database (pnpm graph:demo)
 /.graph-demo-data/
+# effect-delivery demo — same idea, its own database so a real GitHub round trip
+# never runs against the graph demo's data (or anything else's)
+/.effects-demo-data/

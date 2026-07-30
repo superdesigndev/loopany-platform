@@ -122,6 +122,19 @@ describe("the merge guards", () => {
     expect(checkMergeTarget(config(), { ...trunk, baseRefName: "main" })).toBeUndefined();
   });
 
+  it("FAILS CLOSED when the base or the default branch is unknown", () => {
+    // The one guard whose failure is irreversible, so "we could not tell" must
+    // never read as "go ahead" - a partial GraphQL response is exactly how a
+    // permissive version of this would have merged something into main.
+    expect(checkMergeTarget(config(), { ...scratch, defaultBranchName: "" })?.code).toBe("DEFAULT_BRANCH_REFUSED");
+    expect(checkMergeTarget(config(), { ...scratch, baseRefName: "" })?.code).toBe("DEFAULT_BRANCH_REFUSED");
+    // And not even the explicit allow-default-branch flag unlocks an UNKNOWN one:
+    // that flag says "main is fine", not "anything is fine".
+    expect(checkMergeTarget(config({ allowDefaultBranch: true }), { ...scratch, defaultBranchName: "" })?.code).toBe(
+      "DEFAULT_BRANCH_REFUSED",
+    );
+  });
+
   it("refuses every merge in comment-only mode, allowlist or not", () => {
     expect(checkMergeTarget(config({ commentOnly: true }), scratch)?.error).toContain("comment-only");
   });

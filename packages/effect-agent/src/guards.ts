@@ -104,7 +104,20 @@ export function checkMergeTarget(config: AgentConfig, subject: MergeSubject): Re
   }
   const base = subject.baseRefName.trim();
   const def = subject.defaultBranchName.trim();
-  if (base && def && base === def && !config.allowDefaultBranch) {
+  // FAIL CLOSED ON AN UNKNOWN BASE OR DEFAULT. If either is missing - a GraphQL
+  // shape change, a partial response, a repo we could not fully read - then we
+  // cannot tell whether this merge lands on `main`, and "cannot tell" must never
+  // resolve to "go ahead". This is the one branch in the guard where getting it
+  // wrong is irreversible, so it is the one that must not be permissive.
+  if (!base || !def) {
+    return {
+      code: "DEFAULT_BRANCH_REFUSED",
+      error:
+        `could not determine whether this merge targets the default branch ` +
+        `(base "${base || "unknown"}", default "${def || "unknown"}") - refusing rather than guessing`,
+    };
+  }
+  if (base === def && !config.allowDefaultBranch) {
     return {
       code: "DEFAULT_BRANCH_REFUSED",
       error:
