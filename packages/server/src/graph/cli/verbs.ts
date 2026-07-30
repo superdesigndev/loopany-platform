@@ -44,10 +44,16 @@
  * ── idempotency is structural, never a lookup ───────────────────────────────
  *
  * Every verb derives its identity from what it IS: a created object from
- * `(actor, key)`, an artifact from the sha256 of its own bytes, a transition from
+ * `(owner, key)`, an artifact from the sha256 of its own bytes, a transition from
  * `(actor, object, transition)`, a wait answer from `(actor, object, key,
  * answer)`. So a retried call collides on a primary key and changes nothing -
  * which is the property that lets a work order say "if in doubt, run it again".
+ *
+ * The SCOPE differs on purpose. A created object keys on its OWNER, so two runs
+ * of one loop recording the same problem land on one row; a transition keys on
+ * the ACTOR, because two people moving the same task are two real decisions. The
+ * first live chain got this wrong in the safest-looking direction and filed a
+ * duplicate issue, so every verb now says its scope in the result.
  *
  * `now` is always passed in. Nothing here reads a clock (design §12 item 8).
  */
@@ -138,9 +144,9 @@ export interface TaskCreateInput {
   /** Instance fields. Domain semantics live here (decision 17). */
   fields?: Record<string, unknown>;
   /**
-   * The identity seed. Two calls with the same actor and key are the SAME task,
-   * so a retried work order never twins. Defaults to the title, because a run
-   * that creates "the same issue" twice in one pass meant it once.
+   * The identity seed. Defaults to the title, because a caller that asks for
+   * "the same issue" twice meant it once. Scoped to the OWNER, not the caller -
+   * see `taskCreate`.
    */
   key?: string;
   /** Link it under this object with a `produces` edge. Defaults to the caller's
@@ -151,9 +157,19 @@ export interface TaskCreateInput {
 /**
  * Create a piece of work.
  *
- * The id is `obj-cli-<sha256(actor, key)>`, which is what makes the verb safe to
- * retry: the second call finds the row and reports a replay rather than minting a
- * twin the workspace would then show twice.
+ * The id is `obj-cli-<sha256(owner, key)>`, where the OWNER is the object this
+ * task hangs off (the loop, normally) and NOT the caller. That distinction is the
+ * whole idempotency story and it was learned the hard way in the first live
+ * chain: keyed by the actor, two sweeps of the same loop a few minutes apart
+ * filed the same problem twice, because a run id is unique per run. Worse, a run
+ * reasoned out loud that re-issuing `task create` "is a no-op on an existing
+ * node" - and was right about the guarantee it wanted and wrong about the one it
+ * had.
+ *
+ * Keyed by the owner, the guarantee is the one every work order's "check reality
+ * before acting" instruction implies: a loop that already recorded this problem
+ * records it once, however many runs ask. A caller with no owner falls back to
+ * itself, which is the narrowest honest scope for a one-off.
  */
 export async function taskCreate(ctx: VerbContext, input: TaskCreateInput): Promise<VerbResult> {
   const type = input.type.trim();
@@ -176,15 +192,19 @@ export async function taskCreate(ctx: VerbContext, input: TaskCreateInput): Prom
 
   const title = input.title?.trim() || `${type} from ${ctx.actor.actorId}`;
   const key = input.key?.trim() || title;
-  const id = `obj-cli-${contentHash({ actor: ctx.actor.actorId, key })}`;
   const forId = input.forId ?? ctx.subjectId;
+  // The OWNER, not the caller - so a loop's second run recording the same problem
+  // lands on the same row instead of twinning it.
+  const id = `obj-cli-${contentHash({ owner: forId ?? ctx.actor.actorId, key })}`;
 
   const existing = await graph.getObject(undefined, id);
   if (existing) {
     return {
       ok: true,
       replay: true,
-      summary: `${id} already exists (${existing.type}, ${existing.status}) - nothing created`,
+      summary:
+        `${id} already exists (${existing.type}, ${existing.status}) - nothing created. ` +
+        `“${key}” is already recorded here; do not file it again.`,
       data: { objectId: id, type: existing.type, status: existing.status, replay: true },
       next: nextForTask(existing, typeRow.spec),
     };
@@ -208,7 +228,15 @@ export async function taskCreate(ctx: VerbContext, input: TaskCreateInput): Prom
   return {
     ok: true,
     summary: `created ${id} (${type}, ${object.status})`,
-    data: { objectId: id, type, status: object.status, title },
+    data: {
+      objectId: id,
+      type,
+      status: object.status,
+      title,
+      // SAY WHAT THE IDENTITY IS SCOPED TO. A run that has to guess whether a
+      // retry twins will guess, and the first live chain proved it guesses wrong.
+      identity: `${forId ?? ctx.actor.actorId} + “${key}”`,
+    },
     next: nextForTask(object, typeRow.spec),
   };
 }
@@ -506,8 +534,10 @@ export async function reviewRequest(ctx: VerbContext, input: ReviewRequestInput)
 // ---- mirror track ----
 
 export interface MirrorTrackInput {
-  /** The external thing: a GitHub PR URL, or any `<source>:<id>` reference. */
-  ref: string;
+  /** The external thing: a GitHub PR URL, or any `<source>:<id>` reference.
+   *  Optional when `source` + `externalId` name it explicitly, which is the form
+   *  a source with no URL shape at all uses. */
+  ref?: string;
   /** Explicit form, for a source with no URL shape at all. */
   source?: string;
   externalId?: string;

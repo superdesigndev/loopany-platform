@@ -2,7 +2,7 @@
   "name": "loopany-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "Loopany — multi-user scheduled-loop manager. Server schedules/stores/auths; execution is BYOA (claude-code on the user's own machine).",
+  "description": "Loopany \u2014 multi-user scheduled-loop manager. Server schedules/stores/auths; execution is BYOA (claude-code on the user's own machine).",
   "type": "module",
   "packageManager": "pnpm@8.15.0",
   "engines": {
@@ -19,8 +19,9 @@
     "graph:pr": "node scripts/graph-demo.mjs --pr",
     "graph:dispatch": "node scripts/graph-demo.mjs --dispatch",
     "graph:schedule": "node scripts/graph-demo.mjs --schedule",
+    "graph:agentic": "node scripts/graph-demo.mjs --agentic",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @loopany/server test && pnpm --filter @crewlet/loopany test && pnpm --filter @loopany/artifact-format test && pnpm --filter @loopany/machine-agent test",
+    "test": "pnpm --filter @loopany/server test && pnpm --filter @crewlet/loopany test && pnpm --filter @loopany/artifact-format test && pnpm --filter @loopany/machine-agent test && pnpm --filter @loopany/graph-cli test",
     "agent": "pnpm --filter @loopany/machine-agent start"
   },
   "devDependencies": {

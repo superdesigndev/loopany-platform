@@ -696,6 +696,35 @@ export async function listOpenObligations(
   return X(x).select().from(gateObligations).where(and(...where)).orderBy(asc(gateObligations.openedAt));
 }
 
+/**
+ * THE WAITS THIS OBJECT IS ON THE HOOK FOR (captain decision 13).
+ *
+ * A wait names its watcher at creation, and the watcher is normally the loop
+ * already observing that source on its cadence - so the answer to "what does this
+ * run have to look at?" is one indexed read, not a discovery query. The dispatch
+ * handler calls this and carries the result into the work order's context, which
+ * is what "batched into its next work orders" means in practice.
+ *
+ * Open only: an answered wait is not work.
+ */
+export async function listWaitsForWatcher(
+  x: GraphExec | undefined,
+  teamId: string,
+  watcherObjectId: string,
+): Promise<GateObligation[]> {
+  return X(x)
+    .select()
+    .from(gateObligations)
+    .where(
+      and(
+        eq(gateObligations.teamId, teamId),
+        eq(gateObligations.watcherObjectId, watcherObjectId),
+        isNull(gateObligations.closedByEvent),
+      ),
+    )
+    .orderBy(asc(gateObligations.openedAt));
+}
+
 export async function listObjectObligations(x: GraphExec | undefined, objectId: string): Promise<GateObligation[]> {
   return X(x)
     .select()

@@ -811,6 +811,9 @@ const dispatchRun: ActionHandler = async ({ tx, action, now }) => {
   const parsed = parseInstruction(action.id, declared);
   if (!parsed.ok) return { ok: false, retryable: false, detail: parsed.why };
   const spec = parsed.spec;
+  const watching = await graph.listWaitsForWatcher(tx, action.teamId, holder.id);
+  const already = await recentlyProduced(tx, holder.id);
+  const subject = await trackedSubject(tx, holder.id);
 
   const { created } = await graph.insertDirective(tx, {
     id: action.id,
@@ -844,6 +847,38 @@ const dispatchRun: ActionHandler = async ({ tx, action, now }) => {
         dispatchedBy: holder.id,
         title: holder.title,
         object: (holder.payload ?? {}) as Record<string, unknown>,
+        // THE WAITS THIS OBJECT WATCHES (captain decision 13: a wait names its
+        // watcher, and the watcher's next work order carries it - "batched into
+        // its next work orders", at marginal cost ~zero). Without this a watch run
+        // would have to be told what to look at in prose, which is precisely the
+        // discovery query the decision rejects. Empty for a run that watches
+        // nothing, which is most of them.
+        ...(watching.length
+          ? {
+              waits: watching.map((w) => ({
+                objectId: w.objectId,
+                key: w.key,
+                question: w.question,
+                openedAt: w.openedAt,
+              })),
+            }
+          : {}),
+        // WHAT THIS OBJECT HAS ALREADY MADE. Every work order tells its run to
+        // "check reality before acting", and until the first live chain that
+        // instruction was unanswerable: the run had no way to see what earlier
+        // runs of the same loop had already recorded, so two sweeps a few minutes
+        // apart found the same problem and filed it twice. The server is the only
+        // side that can see the graph (the agent never queries it), so the facts
+        // have to ride the work order - the same reasoning `waits` rests on.
+        ...(already.length ? { alreadyRecorded: already } : {}),
+        // WHAT THIS WORK IS ABOUT, with its bytes. A review tracks the thing
+        // under review, and until the first live chain the run approved to act on
+        // it could not READ it: the dry-run post run was handed "post the approved
+        // draft" and had no verb that could fetch the draft, so it refused to
+        // invent the bytes and said so - which was the right call and a gap in the
+        // work order rather than in the run. The server is the only side that can
+        // see the graph, so the subject rides the order like every other fact.
+        ...(subject ? { subject } : {}),
         ...spec.context,
       },
     },
@@ -859,6 +894,73 @@ const dispatchRun: ActionHandler = async ({ tx, action, now }) => {
       : `instruction work order already queued: ${spec.runId} (replay)`,
   };
 };
+
+/**
+ * What this object has already produced - the reality a run is told to check.
+ *
+ * TASKS AND REVIEWS ONLY, and the NEWEST first: a loop's reports and drafts
+ * accumulate forever and are not what "have I already recorded this?" means,
+ * while its open work is exactly that question. Capped, because a work order is
+ * read by a model with a finite window and an unbounded list would push the
+ * instructions out of it.
+ *
+ * Deliberately not a search and not a filter the caller can widen: it is the
+ * `produces` edges this object already has, which is a fact about the graph and
+ * not a query about a domain.
+ */
+const PRODUCED_CAP = 25;
+
+async function recentlyProduced(
+  tx: GraphExec,
+  objectId: string,
+): Promise<{ id: string; type: string; title: string | null; status: string }[]> {
+  const out: { id: string; type: string; title: string | null; status: string; at: string }[] = [];
+  for (const edge of await graph.edgesFrom(tx, objectId, "produces")) {
+    const produced = await graph.getObject(tx, edge.dstId);
+    if (!produced || produced.archetype !== "task") continue;
+    out.push({
+      id: produced.id,
+      type: produced.type,
+      title: produced.title,
+      status: produced.status,
+      at: produced.createdAt,
+    });
+  }
+  return out
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .slice(0, PRODUCED_CAP)
+    .map(({ at: _at, ...rest }) => rest);
+}
+
+/**
+ * The object a task TRACKS, with its content - what the work is about.
+ *
+ * Bounded: a work order is read by a model with a finite window, and a run that
+ * needs a megabyte of subject is describing a different problem. Truncation is
+ * SAID OUT LOUD in the payload rather than silent, because a run acting on half a
+ * document while believing it has all of it is the failure this exists to prevent.
+ */
+const SUBJECT_CAP = 12_000;
+
+async function trackedSubject(
+  tx: GraphExec,
+  objectId: string,
+): Promise<{ id: string; type: string; title: string | null; content?: string; truncated?: boolean } | undefined> {
+  const edge = (await graph.edgesFrom(tx, objectId, "tracks"))[0];
+  if (!edge) return undefined;
+  const target = await graph.getObject(tx, edge.dstId);
+  if (!target) return undefined;
+  const payload = (target.payload ?? {}) as Record<string, unknown>;
+  const source = str(payload.source);
+  const clipped = source && source.length > SUBJECT_CAP ? source.slice(0, SUBJECT_CAP) : source;
+  return {
+    id: target.id,
+    type: target.type,
+    title: target.title,
+    ...(clipped ? { content: clipped } : {}),
+    ...(source && source.length > SUBJECT_CAP ? { truncated: true } : {}),
+  };
+}
 
 /**
  * Should this instance stand down? `requires: {field, equals}` is checked against

@@ -8,6 +8,8 @@
  *   pnpm graph:demo --synthetic  use the hand-built fleet instead of the real snapshot
  *   pnpm graph:pr <repo> <n>     register a REAL pull request + a merge review
  *   pnpm graph:dispatch          stage an approvable agent task (the runs bridge)
+ *   pnpm graph:agentic          stand up the AGENTIC-CLI demo (two live loops whose
+ *                               runs drive the seven verbs)
  *   pnpm graph:schedule -- --every 2m
  *                               ARM a cadence, so the clock fires it with nobody
  *                               watching (the clock shadow)
@@ -47,6 +49,7 @@ const bodiesOnly = process.argv.includes('--bodies')
 const prOnly = process.argv.includes('--pr')
 const dispatchOnly = process.argv.includes('--dispatch')
 const scheduleOnly = process.argv.includes('--schedule')
+const agenticOnly = process.argv.includes('--agentic')
 
 const env = {
   ...process.env,
@@ -103,6 +106,21 @@ try {
       'graph:pr',
       '--',
       ...process.argv.slice(2).filter((a) => a !== '--pr'),
+    ])
+    process.exit(0)
+  }
+
+  if (agenticOnly) {
+    // Stands up the AGENTIC-CLI demo: two live loops whose runs drive the seven
+    // verbs. Routed through here for the same reason the seeder is - it writes
+    // the DEMO's database, and pglite is single-writer, so stop the server first.
+    step('standing up the agentic-CLI demo workspace')
+    await run('pnpm', [
+      '--filter',
+      '@loopany/server',
+      'graph:agentic',
+      '--',
+      ...process.argv.slice(2).filter((a) => a !== '--agentic'),
     ])
     process.exit(0)
   }

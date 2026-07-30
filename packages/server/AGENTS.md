@@ -459,6 +459,52 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   unauthenticated). The destination restriction closes the SSRF regardless of creator;
   tightening create to team-owner-only is a separate change.
 
+## The graph's seven verbs (`graph/cli/`) — the ONE operation surface
+
+- **Captain decisions 15, 16, 17 in one place.** `graph/cli/verbs.ts` holds the
+  seven verbs (task create/move, artifact push, review request, mirror track,
+  wait open/answer). Each takes an explicit ACTOR, so the SAME functions back all
+  three callers: the `graph` CLI a dispatched run drives (`POST /api/agent/cli`,
+  per-run credential), the human verb endpoints (`POST /api/graph/verb/<v>`,
+  session-authed, `entrance: "human"`), and the workspace UI's own controls
+  (`WorkspaceView` `VerbBar` → `postGraphVerb`). Adding an operation means adding
+  a verb, never a bespoke endpoint — `graph:pr` and `graph:dispatch` are two calls
+  each, and the seeder's review/wait creation goes through the verbs too.
+- **Sequencing is NOT declared.** No shipped type may declare `enqueue-review` or
+  `register-watch`; a run asks for a review by CALLING `review request`. Pinned by
+  `discovery.integration.test.ts` ("leaves the loop's fire with exactly one
+  power"). A loop's WORKFLOW is prose in its `workflow` field, composed into the
+  work order by `cli/workOrder.ts` — never a TypeScript string per loop.
+- **Roles fence the verbs** (`cli/roles.ts`): a work order carries `role`, the
+  composer prints only that role's 1-4 verbs, and `cli.ts` ENFORCES the same list.
+  An unset role gets NOTHING (fail-closed).
+- **ONE review type, five presets** (`workspace/specs.ts` `REVIEW_SPEC` +
+  `REVIEW_PRESETS`). merge/publish/decision/ship/agent-task collapsed into it;
+  `preset` is instance data the engine never branches on, and it only decides
+  which gate transition (`approve` vs `dispatch`) a verdict runs. One obligation
+  key, `verdict`. Do not add a review type — add a preset, or just different
+  fields.
+- **Domain neutrality**: `mirror track` is `(source, externalId)`; the GitHub PR
+  URL parser (`sensing/pr.ts` `parsePrUrl`) is the EARNED accelerator and the only
+  domain-shaped code. A review's outward actions (`external-comment`,
+  `external-merge`) stand down unless the instance opts in. A foreign domain
+  carries its consequence as prose in `consequence` and adds no platform code.
+- **The run credential is DERIVED**, `sha256(channelToken:runId)` →
+  `rt_<32 hex>`, computed independently by `graph/cli/identity.ts` and
+  `machine-agent/src/run.ts` and pinned to one GOLDEN VECTOR by a test on each
+  side. The channel secret never enters a run's environment; a run's writes stop
+  the moment its directive stops being `claimed`.
+- **A work order carries the facts a run cannot query** (the agent never reads the
+  database): `context.waits` (obligations naming this object as watcher),
+  `context.alreadyRecorded` (tasks/reviews it already produced — what makes
+  "check reality before acting" answerable), `context.subject` (the tracked
+  object WITH its content). All three were added because a live `claude -p` chain
+  needed them; see `docs/graph-agentic-cli-acceptance.md` for what went wrong.
+- **`task create` keys on the OWNER**, not the caller, so two runs of one loop
+  recording the same problem land on one row. Transitions key on the ACTOR (two
+  people moving a task are two decisions). Every result states its scope.
+- Demo: `pnpm graph:agentic` stands up two live loops whose runs drive the verbs.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

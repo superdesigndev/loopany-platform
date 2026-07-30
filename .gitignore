@@ -38,3 +38,6 @@ evidence/
 # effect-delivery demo — same idea, its own database so a real GitHub round trip
 # never runs against the graph demo's data (or anything else's)
 /.effects-demo-data/
+.graph-agentic-data/
+.graph-agentic.env
+packages/graph-cli/bin
