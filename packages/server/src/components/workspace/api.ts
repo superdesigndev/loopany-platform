@@ -99,7 +99,10 @@ export interface TimelineEntry {
   entrance: string
   actorId: string
   band: string
-  kind: 'decision' | 'artifact' | 'observe' | 'run'
+  /** `clock` is its own row type, straight off the event's `entrance` column: "time
+   *  arrived" is a different kind of cause from a person deciding or an agent
+   *  producing, and a fire must not read like the run it caused. */
+  kind: 'decision' | 'artifact' | 'observe' | 'run' | 'clock'
   objectId: string | null
 }
 
@@ -138,6 +141,10 @@ export interface Summary {
   effectsInFlight: number
   sensing: SensingHealth
   work: { awaiting: number; inFlight: number }
+  /** The clock's vitals: live cursors, and how many are already in the past.
+   *  `overdue` is the honest "is the scheduler running?" reading - it ticks faster
+   *  than any legal cadence, so a standing backlog means it is not. */
+  schedules: { armed: number; overdue: number }
 }
 
 /**
@@ -224,6 +231,40 @@ export interface WorkView {
   inFlight: number
 }
 
+/**
+ * ONE SCHEDULED OBJECT - a cadence, and whether the clock is actually on it.
+ *
+ * `armed` is the distinction the whole view exists for: a cadence is
+ * configuration, a CURSOR is what makes it live. This workspace replays real
+ * production loops, cadences included, and none of them fires here - so a row that
+ * showed "every day at 07:00" without saying it is not armed would be a lie.
+ */
+export interface ScheduleRow {
+  objectId: string
+  title: string
+  type: string
+  status: string
+  cadence: string
+  armed: boolean
+  nextFire?: string
+  dueIn?: string
+  overdueBy?: string
+  fireTransition?: string
+  lastFiredAt?: string
+  lastFiredAge?: string
+  fires: number
+  misses: number
+  /** The human event the cadence rests on. Absent ⇒ an outward fire would be
+   *  refused, which is worth seeing rather than discovering at 03:00. */
+  armedByEvent?: string
+}
+
+export interface ScheduleView {
+  items: ScheduleRow[]
+  armed: number
+  overdue: number
+}
+
 /** What the `notify` action produced - a verdict's visible consequence. */
 export interface NotificationRow {
   id: string
@@ -275,6 +316,7 @@ export const fetchAttention = () => getJson<AttentionView>('/api/graph/attention
 export const fetchNotifications = () => getJson<NotificationsView>('/api/graph/notifications')
 export const fetchEffects = () => getJson<EffectsView>('/api/graph/effects')
 export const fetchWork = () => getJson<WorkView>('/api/graph/work')
+export const fetchSchedule = () => getJson<ScheduleView>('/api/graph/schedule')
 
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {

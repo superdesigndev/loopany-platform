@@ -85,12 +85,53 @@ export const objects = pgTable(
     ownerUserId: text("owner_user_id"),
     /** Who owes the work. Meaningful for the `task` archetype only. */
     assigneeUserId: text("assignee_user_id"),
-    /** Scheduling - a Task with `cron` set IS a Loop (design §4). Null otherwise. */
+    /**
+     * SCHEDULING, half one - the CADENCE, as data (design §4: a Task with a
+     * schedule set IS a Loop). Two forms, at most one set:
+     *   `cron`        a cron expression, read in `timezone`
+     *   `intervalMs`  a fixed interval, on a stable epoch-anchored grid
+     * Nothing about either is loop-specific: the scheduler reads a QUERY, not an
+     * archetype, so a plain task carrying a bounded recurring watch schedules
+     * exactly the same way (the closed-loop ruling, 2026-07-28).
+     */
     cron: text("cron"),
     /** IANA tz the cron is interpreted in. Null ⇒ server local. */
     timezone: text("timezone"),
     /** One-shot next fire (ISO), mirroring `loops.nextRunAt`. */
     nextRunAt: text("next_run_at"),
+    /** The interval form of the cadence, in ms. Null when `cron` is the form. */
+    intervalMs: integer("interval_ms"),
+    /**
+     * SCHEDULING, half two - the SCHEDULER'S CURSOR: the next instant this object
+     * is due, jitter already applied (ISO).
+     *
+     * NULL is load-bearing and is NOT the same as "no cadence": a cadence is
+     * CONFIGURATION (`cron`/`intervalMs`), and this column is what makes it LIVE.
+     * The scheduler's whole claim predicate is `next_fire <= now`, so a workspace
+     * that replays production loops carries their cadences without any of them
+     * firing here - arming is a deliberate act, never a side effect of import.
+     *
+     * LEVEL-TRIGGERED. After a fire this advances to the next occurrence after
+     * NOW, never to "the one after the one we just ran", so a server that was
+     * down for three intervals owes exactly ONE catch-up fire rather than three.
+     * The debt is "due", not "N ticks owed".
+     */
+    nextFire: text("next_fire"),
+    /**
+     * The HUMAN event that armed this cadence - the STANDING APPROVAL every
+     * outward action a fire declares rests on (captain decision 2).
+     *
+     * A scheduled run cannot ask a person per fire; that is what a schedule is
+     * for. So the approval is the arming act itself, and it is a real
+     * `entrance: "human"` row in the log. This column is what the scheduler hands
+     * `applyTransition` as the R3 approval, and the executor re-resolves it and
+     * re-checks that it was entered by a human before any work order is written -
+     * so a clock still cannot approve its own outward effect.
+     */
+    scheduleArmedByEvent: text("schedule_armed_by_event"),
+    /** When the clock last fired this object (ISO) - observability, so "is the
+     *  cadence actually running?" is answerable without scanning the event log. */
+    lastFiredAt: text("last_fired_at"),
     /** Mirror identity: the external system (`github`, `linear`, …). Null for
      *  task/doc. Together with `externalId` this is the global uniqueness key. */
     externalSource: text("external_source"),
@@ -117,11 +158,18 @@ export const objects = pgTable(
       "objects_mirror_identity_complete",
       sql`${t.archetype} <> 'mirror' OR (${t.externalSource} IS NOT NULL AND ${t.externalId} IS NOT NULL)`,
     ),
-    // A mirror is never assignable or schedulable (design §4 contract).
+    // THE SCHEDULER'S CLAIM SCAN. Partial, so its size tracks live cadences
+    // rather than every object that ever carried one.
+    index("objects_due_idx").on(t.nextFire).where(sql`${t.nextFire} is not null`),
+    // A mirror is never assignable or schedulable (design §4 contract) - which
+    // now covers the interval form and the live cursor too, not just `cron`.
     check(
       "objects_mirror_not_schedulable",
-      sql`${t.archetype} <> 'mirror' OR (${t.cron} IS NULL AND ${t.assigneeUserId} IS NULL)`,
+      sql`${t.archetype} <> 'mirror' OR (${t.cron} IS NULL AND ${t.intervalMs} IS NULL AND ${t.nextFire} IS NULL AND ${t.assigneeUserId} IS NULL)`,
     ),
+    // ONE cadence form per object. Two would leave "when is this due?" with two
+    // answers and the scheduler picking one, which is the drift this refuses.
+    check("objects_one_schedule_form", sql`${t.cron} IS NULL OR ${t.intervalMs} IS NULL`),
   ],
 );
 

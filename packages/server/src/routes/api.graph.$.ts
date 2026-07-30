@@ -12,6 +12,7 @@ import { createFileRoute } from '@tanstack/react-router'
  *                              outward effects that never landed
  *   GET  /api/graph/notifications  what the `notify` action produced
  *   GET  /api/graph/work       work awaiting a go-ahead + what its runs did
+ *   GET  /api/graph/schedule   every cadence, armed or merely configured, + its cursor
  *   GET  /api/graph/effects    outward work orders and what became of them
  *                              (the AGENT's own wire is `/api/agent/*`, which is
  *                              bearer-token authed and never session authed)
@@ -98,6 +99,12 @@ async function guard(): Promise<Guarded> {
 async function ensureExecutor(): Promise<void> {
   const { startOutboxExecutor } = await import('../graph/outbox/executor.js')
   startOutboxExecutor()
+  // The CLOCK, for the same reason and with the same idempotent globalThis guard.
+  // Without it a server that only ever serves the workspace would hold armed
+  // schedules that never fire — the exact silent gap this unit exists to close, so
+  // it is closed here rather than assumed to have come from boot.
+  const { startGraphScheduler } = await import('../graph/schedule/scheduler.js')
+  startGraphScheduler()
 }
 
 const notFound = () => Response.json({ error: 'not found' }, { status: 404 })
@@ -136,6 +143,8 @@ export const Route = createFileRoute('/api/graph/$')({
             return Response.json(await read.effectsView())
           case 'work':
             return Response.json(await read.workView())
+          case 'schedule':
+            return Response.json(await read.scheduleView())
           default:
             return notFound()
         }

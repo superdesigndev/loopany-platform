@@ -43,6 +43,13 @@
       "when": 1785391452760,
       "tag": "0005_supreme_eternity",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785402513347,
+      "tag": "0006_awesome_zuras",
+      "breakpoints": true
     }
   ]
 }

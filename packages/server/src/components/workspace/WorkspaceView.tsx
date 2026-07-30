@@ -6,6 +6,7 @@ import {
   fetchWork,
   fetchLibrary,
   fetchNotifications,
+  fetchSchedule,
   fetchSummary,
   fetchSystem,
   fetchTimeline,
@@ -18,6 +19,8 @@ import {
   type LibraryArtifact,
   type LibraryView,
   type NotificationsView,
+  type ScheduleRow,
+  type ScheduleView,
   type Summary,
   type SystemView,
   type TimelineEntry,
@@ -50,13 +53,15 @@ const SystemGraph = lazy(() => import('./SystemGraph'))
 /** Mirrors `LIBRARY_SETTLED_CAP` in `graph/workspace/read.ts` - display copy only. */
 const LIBRARY_SETTLED_SHOWN = 90
 
-type ViewName = 'library' | 'system' | 'timeline' | 'notifications'
+type ViewName = 'library' | 'system' | 'schedule' | 'timeline' | 'notifications'
 
 const GLYPHS: Record<string, string> = {
   library: '▤',
   system: '⌘',
   timeline: '◷',
+  schedule: '◴',
   notifications: '◍',
+  clock: '◴',
   pr: '⑂',
   post: '✎',
   report: '◫',
@@ -765,6 +770,80 @@ function TimelinePane({ timeline }: { timeline: TimelineView }) {
   )
 }
 
+// ---- Schedule ----
+
+/**
+ * THE CLOCK, as a person can see it: every cadence in the workspace, what it fires,
+ * and when it is next due.
+ *
+ * The one distinction this pane is built around is ARMED vs CONFIGURED. A cadence
+ * is configuration; a cursor is what makes it live. This workspace replays real
+ * production loops, cadences and all, and none of them fires here - so a row that
+ * said "every day at 07:00" without saying it is not armed would be telling a
+ * person about something that is not happening. `not armed` says it plainly.
+ *
+ * `overdue` is deliberately not styled as an error either: the scheduler ticks
+ * faster than any legal cadence, so a cursor in the past means the clock is not
+ * running - which is a fact about this server, and exactly what a person needs to
+ * see instead of a green "scheduler: on" light.
+ */
+function SchedulePane({ schedule }: { schedule: ScheduleView }) {
+  return (
+    <div className="document-view">
+      <ViewHeader
+        eyebrow="Schedule"
+        title="Schedule"
+        description="Cadences as data. An armed schedule fires itself: a clock event, then whatever that transition dispatches — with nobody watching."
+        meta={`${schedule.armed} armed · ${schedule.items.length} with a cadence${schedule.overdue ? ` · ${schedule.overdue} overdue` : ''}`}
+      />
+      {schedule.items.length === 0 ? (
+        <p className="attn-empty" style={{ marginTop: 26 }}>
+          Nothing carries a cadence yet. <code>pnpm graph:schedule</code> arms one.
+        </p>
+      ) : (
+        <div className="effects-list" style={{ marginTop: 22 }}>
+          {schedule.items.map((row) => (
+            <article className={`effect-row is-${scheduleState(row)}`} key={row.objectId}>
+              <span className="effect-icon">
+                <Glyph name="schedule" />
+              </span>
+              <div className="effect-main">
+                <h3>
+                  {row.title} <em style={{ opacity: 0.6 }}>· {row.cadence}</em>
+                </h3>
+                <p>{schedulePhrase(row)}</p>
+              </div>
+              <span className={`effect-state is-${scheduleState(row)}`}>{row.armed ? 'armed' : 'not armed'}</span>
+              <time title={row.nextFire ?? undefined}>{row.dueIn ? `in ${row.dueIn}` : (row.overdueBy ?? '—')}</time>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Reuses the effects row's visual states, so the two panes read alike: a live
+ *  cursor is `claimed` (something is happening), an overdue one `failed` (the clock
+ *  is not running), a cadence with no cursor `pending` (configured, not live). */
+function scheduleState(row: ScheduleRow): string {
+  if (row.overdueBy !== undefined) return 'failed'
+  if (row.armed) return 'claimed'
+  return 'pending'
+}
+
+function schedulePhrase(row: ScheduleRow): string {
+  const bits: string[] = []
+  if (!row.armed) bits.push('configured, not armed on this server — the clock will not fire it')
+  else if (row.overdueBy !== undefined) bits.push(`overdue by ${row.overdueBy} — is the scheduler running?`)
+  else bits.push(`fires ${row.fireTransition ?? 'its clock transition'} next`)
+  if (row.lastFiredAge) bits.push(`last fired ${row.lastFiredAge}`)
+  if (row.fires) bits.push(`${row.fires} fire${row.fires === 1 ? '' : 's'} recorded`)
+  if (row.misses) bits.push(`${row.misses} missed`)
+  if (row.armed && !row.armedByEvent) bits.push('no arming approval — an outward fire would be refused')
+  return bits.join(' · ')
+}
+
 // ---- shell ----
 
 /**
@@ -786,11 +865,26 @@ function sensingPhrase(s: Summary['sensing']): string {
   return `sensed by the machine agent ${ago}${stale}${unobserved}`
 }
 
+/**
+ * One line answering "is the clock running?".
+ *
+ * Same posture as `sensingPhrase`: it says what the rows say. The scheduler ticks
+ * faster than any legal cadence, so an armed cursor sitting in the past means the
+ * clock is stopped - and that is the one reading a "scheduler: on" indicator could
+ * never give, because the indicator would be on either way.
+ */
+function clockPhrase(s: Summary['schedules']): string {
+  const armed = `${s.armed} armed cadence${s.armed === 1 ? '' : 's'}`
+  if (!s.overdue) return `${armed} · the clock is current`
+  return `${armed} · ${s.overdue} overdue — is the scheduler running?`
+}
+
 function Sidebar({ view, setView, summary }: { view: ViewName; setView: (v: ViewName) => void; summary: Summary | null }) {
   const items: { id: ViewName; label: string }[] = [
     { id: 'library', label: 'Library' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'system', label: 'System' },
+    { id: 'schedule', label: 'Schedule' },
     { id: 'timeline', label: 'Timeline' },
   ]
   return (
@@ -849,6 +943,13 @@ function Sidebar({ view, setView, summary }: { view: ViewName; setView: (v: View
               poller is running", it is WHEN THE ROWS WERE LAST OBSERVED, computed
               from the observation stamps themselves. Without this line an agent
               that stopped would be indistinguishable from a quiet week on GitHub. */}
+          {/* THE CLOCK'S OWN VITAL SIGN, on the same footing as sensing's and for
+              the same reason: an armed cadence that is not firing looks exactly
+              like a quiet one. `overdue` is computed from the cursors themselves,
+              so it cannot claim a clock the rows do not show. */}
+          {summary && summary.schedules.armed > 0 && (
+            <small className="sensing-line">{clockPhrase(summary.schedules)}</small>
+          )}
           {summary && <small className="sensing-line">{sensingPhrase(summary.sensing)}</small>}
         </div>
       </div>
@@ -863,7 +964,9 @@ export function WorkspaceView() {
   const [view, setView] = useState<ViewName>('library')
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get('view')
-    if (requested === 'system' || requested === 'timeline' || requested === 'notifications') setView(requested)
+    if (requested === 'system' || requested === 'timeline' || requested === 'notifications' || requested === 'schedule') {
+      setView(requested)
+    }
   }, [])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [system, setSystem] = useState<SystemView | null>(null)
@@ -872,6 +975,7 @@ export function WorkspaceView() {
   const [attention, setAttention] = useState<AttentionView | null>(null)
   const [effects, setEffects] = useState<EffectsView | null>(null)
   const [work, setWork] = useState<WorkView | null>(null)
+  const [schedule, setSchedule] = useState<ScheduleView | null>(null)
   const [notifications, setNotifications] = useState<NotificationsView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [highlighted, setHighlighted] = useState<string[]>([])
@@ -880,7 +984,7 @@ export function WorkspaceView() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, sys, lib, tl, att, eff, wk, notes] = await Promise.all([
+      const [s, sys, lib, tl, att, eff, wk, sch, notes] = await Promise.all([
         fetchSummary(),
         fetchSystem(),
         fetchLibrary(),
@@ -888,6 +992,7 @@ export function WorkspaceView() {
         fetchAttention(),
         fetchEffects(),
         fetchWork(),
+        fetchSchedule(),
         fetchNotifications(),
       ])
       setSummary(s)
@@ -897,6 +1002,7 @@ export function WorkspaceView() {
       setAttention(att)
       setEffects(eff)
       setWork(wk)
+      setSchedule(sch)
       setNotifications(notes)
       setError(null)
     } catch (err) {
@@ -1072,6 +1178,7 @@ export function WorkspaceView() {
                 </Suspense>
               </div>
             )}
+            {view === 'schedule' && schedule && <SchedulePane schedule={schedule} />}
             {view === 'timeline' && timeline && <TimelinePane timeline={timeline} />}
           </>
         )}

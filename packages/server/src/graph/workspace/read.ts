@@ -40,6 +40,8 @@ import { applyTransition, CHAIN_PARK_KEY, type ApplyTransitionResult } from "../
 import { attentionView as attention, type AttentionView } from "../outbox/attention.js";
 import { drainOutbox } from "../outbox/executor.js";
 import { sensingHealth, type SensingHealth } from "../sensing/watch.js";
+import { cadenceOf, describeCadence } from "../schedule/cadence.js";
+import { CLOCK_SKIPPED_EVENT } from "../schedule/scheduler.js";
 import { RUN_FINISHED_EVENT, RUN_STARTED_EVENT } from "../effects/instruction.js";
 import type { TypeSpec } from "../types.js";
 import { CATEGORY_OF_TYPE, DEMO_TEAM_ID, DEMO_USER_ID, LIBRARY_CATEGORIES, SHEPHERD_TYPES, WORK_TYPE } from "./specs.js";
@@ -642,7 +644,7 @@ export interface TimelineEntry {
   entrance: string;
   actorId: string;
   band: string;
-  kind: "decision" | "artifact" | "observe" | "run";
+  kind: "decision" | "artifact" | "observe" | "run" | "clock";
   objectId: string | null;
 }
 
@@ -693,6 +695,13 @@ export async function timelineView(teamId = DEMO_TEAM_ID, limit = 120): Promise<
  * it, and without this a run against a doc-shaped object would read as an artifact
  * event - which is exactly wrong: the whole point of surfacing a run in the
  * Timeline is that a person can see the machine working.
+ *
+ * THE CLOCK GETS ITS OWN ROW TYPE, straight off the `entrance` column. "Time
+ * arrived" is a different kind of cause from a person deciding, an agent producing
+ * or a sensor observing, and it used to render as `run` - so a fire, and the run it
+ * caused, looked like the same sort of thing. They are not: one is the reason and
+ * the other is the consequence, and a person reading the feed should be able to see
+ * the cadence firing on its own with nobody watching.
  */
 function classify(
   entrance: string,
@@ -700,6 +709,7 @@ function classify(
   kind?: string,
 ): TimelineEntry["kind"] {
   if (kind === RUN_STARTED_EVENT || kind === RUN_FINISHED_EVENT) return "run";
+  if (entrance === "clock") return "clock";
   if (entrance === "human") return "decision";
   if (object && (object.archetype === "doc" || object.type === "merge-review")) return "artifact";
   if (object && str(payloadOf(object).kind) === "sensor") return "observe";
@@ -1088,14 +1098,23 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
   sensing: SensingHealth;
   /** Work awaiting a go-ahead, and runs in flight - the runs bridge's own vitals. */
   work: { awaiting: number; inFlight: number };
+  /**
+   * THE CLOCK'S OWN VITALS: cadences carrying a live cursor, and how many of those
+   * cursors are already in the past. `overdue` is the honest "is the scheduler
+   * running?" indicator - it ticks faster than any legal cadence, so a standing
+   * backlog means the clock is stopped, which a "scheduler: on" light would hide.
+   */
+  schedules: { armed: number; overdue: number };
 }> {
   const { objects, obligations } = await load(teamId);
   const pending = await graph.listPendingActions(undefined, { teamId });
   const att = await attention(teamId);
   const notes = await graph.listNotifications(undefined, teamId, 200);
+  const clock = await scheduleCounters(teamId);
   return {
     sensing: await sensingHealth({ now: new Date().toISOString(), teamId }),
     work: await workCounters(teamId),
+    schedules: clock,
     loops: objects.filter((o) => o.type === "loop" && o.status !== "planned").length,
     artifacts: objects.filter((o) => CATEGORY_OF_TYPE[o.type]).length,
     // A parked chain is counted by `attention`, not here - see `inboxView`.
@@ -1113,6 +1132,15 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
   };
 }
 
+/** Just the clock's two counters, for the shell. Reads the schedule columns only -
+ *  no per-object event scan, unlike the full `scheduleView`. */
+async function scheduleCounters(teamId: string): Promise<{ armed: number; overdue: number }> {
+  const rows = await graph.listScheduled(undefined, teamId);
+  const nowIso = new Date().toISOString();
+  const live = rows.filter((r) => r.nextFire != null);
+  return { armed: live.length, overdue: live.filter((r) => r.nextFire! <= nowIso).length };
+}
+
 /** Just the two work counters, for the shell. Cheaper than the whole view, which
  *  reads every task's event history. */
 async function workCounters(teamId: string): Promise<{ awaiting: number; inFlight: number }> {
@@ -1124,6 +1152,102 @@ async function workCounters(teamId: string): Promise<{ awaiting: number; inFligh
     awaiting: tasks.filter((t) => gated.has(t.id)).length,
     inFlight: tasks.filter((t) => t.status === "dispatched").length,
   };
+}
+
+// ---- Schedule ----
+
+/**
+ * ONE SCHEDULED OBJECT and what its clock is doing.
+ *
+ * The distinction this view exists to make VISIBLE is armed-vs-configured. A
+ * cadence is configuration; a cursor (`next_fire`) is what makes it live. This
+ * workspace replays real production loops, cadences and all, and none of them fires
+ * here - so a view that showed only "every day at 07:00" would be telling a person
+ * something that is not happening. `armed: false` says so out loud.
+ */
+export interface ScheduleRow {
+  objectId: string;
+  title: string;
+  type: string;
+  status: string;
+  /** The cadence in words (`every 2m`, `0 7 * * * (Asia/Shanghai)`). */
+  cadence: string;
+  /** True when a cursor exists - i.e. the clock will actually fire this. */
+  armed: boolean;
+  /** The cursor, and how far off it is. Absent when not armed. */
+  nextFire?: string;
+  dueIn?: string;
+  /** Overdue by this much, when the cursor is already in the past (a scheduler that
+   *  is not running is exactly what this makes visible). */
+  overdueBy?: string;
+  /** The transition the clock enters, when the schedule names one. */
+  fireTransition?: string;
+  lastFiredAt?: string;
+  lastFiredAge?: string;
+  /** Fires the clock recorded, and misses it recorded - both from events, so
+   *  neither can claim something the log does not show. */
+  fires: number;
+  misses: number;
+  /** The human event the cadence rests on. Absent ⇒ an outward fire would be
+   *  refused, which is the fail-closed posture and worth seeing. */
+  armedByEvent?: string;
+}
+
+export interface ScheduleView {
+  items: ScheduleRow[];
+  armed: number;
+  /** Armed rows whose cursor is already in the past. Zero on a healthy server:
+   *  the scheduler ticks faster than any legal cadence, so a standing backlog
+   *  means the clock is not running. */
+  overdue: number;
+}
+
+export async function scheduleView(teamId = DEMO_TEAM_ID): Promise<ScheduleView> {
+  const rows = await graph.listScheduled(undefined, teamId);
+  const nowMs = Date.now();
+  const items: ScheduleRow[] = [];
+  for (const row of rows) {
+    const events = await graph.listObjectEvents(undefined, row.id);
+    const fires = events.filter((e) => e.entrance === "clock" && e.kind === "status-changed").length;
+    const misses = events.filter((e) => e.kind === CLOCK_SKIPPED_EVENT).length;
+    const nextMs = row.nextFire ? Date.parse(row.nextFire) : NaN;
+    items.push({
+      objectId: row.id,
+      title: row.title ?? row.id,
+      type: row.type,
+      status: row.status,
+      cadence: describeCadence(cadenceOf(row)),
+      armed: row.nextFire != null,
+      ...(row.nextFire ? { nextFire: row.nextFire } : {}),
+      ...(Number.isFinite(nextMs) && nextMs > nowMs ? { dueIn: gap(nextMs - nowMs) } : {}),
+      ...(Number.isFinite(nextMs) && nextMs <= nowMs ? { overdueBy: gap(nowMs - nextMs) } : {}),
+      ...(str(payloadOf(row).fireTransition) ? { fireTransition: str(payloadOf(row).fireTransition)! } : {}),
+      // Ages here are measured against the REAL clock, not the demo's newest-event
+      // "now" the Library uses: a fire is something that happened on this server a
+      // moment ago, and dating it from a replayed history would be nonsense.
+      ...(row.lastFiredAt ? { lastFiredAt: row.lastFiredAt, lastFiredAge: relativeAge(row.lastFiredAt, nowMs) } : {}),
+      fires,
+      misses,
+      ...(row.scheduleArmedByEvent ? { armedByEvent: row.scheduleArmedByEvent } : {}),
+    });
+  }
+  return {
+    items,
+    armed: items.filter((i) => i.armed).length,
+    overdue: items.filter((i) => i.overdueBy !== undefined).length,
+  };
+}
+
+/** A duration in words. Coarse on purpose: "in 2m" is what a person wants from a
+ *  cadence row, and a ticking seconds counter would be a live clock this view is
+ *  not (it re-renders on refresh, like every other pane here). */
+function gap(ms: number): string {
+  const mins = Math.round(ms / 60_000);
+  if (mins < 1) return "under a minute";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
 /** Mark every notification read (an explicit human action from the UI). */

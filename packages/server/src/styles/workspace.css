@@ -331,6 +331,13 @@
   .event-artifact { background: var(--blue-soft); color: var(--blue); }
   .event-observe { background: var(--green-soft); color: var(--green); }
   .event-run { background: #f0efec; color: #6c6963; }
+  /* THE CLOCK ENTRANCE, visibly its own thing. A fire is a cause, not a
+     consequence, so it must not read like the run it dispatched (`event-run`) or
+     like an observation (`event-observe`). Violet is the one hue the timeline was
+     not already using, and the inner ring marks it as the one event kind with no
+     actor but time itself. (An inner ring rather than a dashed border: the 4px
+     paper border is what masks the day's vertical spine behind each dot.) */
+  .event-clock { background: #f2eefb; color: #5b4a9c; box-shadow: inset 0 0 0 1px #cdc3ea; }
   .timeline-event p { min-width: 0; margin: 4px 0 0; color: #4d4a45; font-size: .8125rem; line-height: 1.5; }
   .timeline-event p strong { color: var(--ink); font-weight: 600; }
   .timeline-event p em { color: var(--faint); font-size: .6875rem; font-style: normal; }

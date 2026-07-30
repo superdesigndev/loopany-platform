@@ -41,7 +41,7 @@ import {
   typeRegistry as typeRegistryTable,
 } from "../../db/graph-schema.js";
 import * as graph from "../../db/graphStore.js";
-import { applyTransition } from "../applyTransition.js";
+import { applyTransition, type ApplyTransitionResult } from "../applyTransition.js";
 import { ARTIFACTS, HISTORY, LOOPS, PULL_REQUESTS, RELATIONS } from "./fleet.js";
 import { DEMO_TEAM_ID, DEMO_TYPES } from "./specs.js";
 import { parseArtifact } from "@loopany/artifact-format";
@@ -247,6 +247,18 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
 
   const refusals: string[] = [];
 
+  /**
+   * Loop key → the HUMAN event that armed it (its `activate`).
+   *
+   * A loop's `fire` declares an outward dispatch (R3), so every replayed fire needs
+   * the standing human approval the live scheduler also uses - the arming act. The
+   * seeded history's arming act is the captain's `activate`, so that is the event
+   * the replay names. Nothing outward actually happens: the seed's minimal executor
+   * stamps the action done without running the handler, exactly as it does for every
+   * other action in the replay.
+   */
+  const armEvents = new Map<string, string>();
+
   /** Run one transition and drain (or deliberately keep) its outbox actions. */
   const step = async (input: {
     key: string;
@@ -257,9 +269,10 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
     note?: string;
     fields?: Record<string, unknown>;
     keepPending?: boolean;
-  }): Promise<void> => {
+  }): Promise<ApplyTransitionResult | undefined> => {
     const objectId = ids.get(input.key);
     if (!objectId) throw new Error(`history step for unknown object key "${input.key}"`);
+    const approval = armEvents.get(input.key);
     const result = await applyTransition({
       objectId,
       transition: input.transition,
@@ -267,20 +280,25 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
       now: input.at,
       ...(input.fields ? { fields: input.fields } : {}),
       ...(input.note ? { eventPayload: { note: input.note } } : {}),
+      // The standing approval for whatever outward action this transition declares.
+      // Harmless on a transition that declares none - an unused approval index is
+      // never consulted, and the whole point is that a clock cannot self-approve.
+      ...(approval ? { approvals: { 0: approval } } : {}),
     });
     if (!result.ok) {
       refusals.push(`${input.key}.${input.transition} @ ${input.at}: ${result.code} - ${result.message}`);
-      return;
+      return result;
     }
-    if (input.keepPending) return;
+    if (input.keepPending) return result;
     // Minimal executor: an action a real executor would have delivered. Without
     // this a later terminal transition is (correctly) refused for pending actions.
     for (const action of result.actions) await graph.markActionDone(undefined, action.id, input.at);
+    return result;
   };
 
   for (const loop of LOOPS) {
     if (loop.planned) continue;
-    await step({
+    const armed = await step({
       key: loop.key,
       transition: "activate",
       entrance: "human",
@@ -288,6 +306,12 @@ export async function seedGraphDemo(options: { teamId?: string; reset?: boolean 
       at: loop.createdAt,
       note: `armed ${loop.name}`,
     });
+    // The cadence stays CONFIGURATION here: `objects.cron` is set, `next_fire` is
+    // NOT. This workspace replays production loops, and importing a cadence must
+    // never be the same act as agreeing to run it on this server - arming is a
+    // deliberate step (`pnpm graph:schedule`). What the activate event DOES supply
+    // is the standing approval a replayed (or later armed) fire rests on.
+    if (armed?.ok) armEvents.set(loop.key, armed.event.id);
   }
 
   for (const h of HISTORY) {

@@ -216,8 +216,20 @@ export async function seedFromProdSnapshot(
     await graph.armTypeVersion(undefined, { teamId, name: t.name, version: 1, now: seedAt });
   }
 
+  /**
+   * Loop object id → the HUMAN event that armed it (its `activate`).
+   *
+   * A loop's `fire` declares an outward dispatch (R3), which cannot be
+   * auto-approved (captain decision 2) - so a replayed fire names the same standing
+   * approval a live one would: the arming act. Nothing outward happens here; the
+   * replay's minimal executor stamps the action done without running the handler,
+   * exactly as it does for every other action it replays.
+   */
+  const armEvents = new Map<string, string>();
+
   /** Run one transition; drain its engine-local actions so a later terminal
-   *  transition is not blocked by an executor that does not exist yet. */
+   *  transition is not blocked by an executor that does not exist yet. Returns the
+   *  event id on success (truthy), so a caller can both branch on it and keep it. */
   const step = async (input: {
     objectId: string;
     transition: string;
@@ -228,7 +240,8 @@ export async function seedFromProdSnapshot(
     fields?: Record<string, unknown>;
     keepPending?: boolean;
     label: string;
-  }): Promise<boolean> => {
+  }): Promise<string | undefined> => {
+    const approval = armEvents.get(input.objectId);
     const out = await applyTransition({
       objectId: input.objectId,
       transition: input.transition,
@@ -236,15 +249,16 @@ export async function seedFromProdSnapshot(
       now: input.now,
       ...(input.fields && Object.keys(input.fields).length ? { fields: input.fields } : {}),
       ...(input.note ? { eventPayload: { note: input.note } } : {}),
+      ...(approval ? { approvals: { 0: approval } } : {}),
     });
     if (!out.ok) {
       refusals.push(`${input.label}.${input.transition} @ ${input.now}: ${out.code} - ${out.message}`);
-      return false;
+      return undefined;
     }
     if (!input.keepPending) {
       for (const a of out.actions) await graph.markActionDone(undefined, a.id, input.now);
     }
-    return true;
+    return out.event.id;
   };
 
   // ---- 1. loops ----
@@ -278,7 +292,7 @@ export async function seedFromProdSnapshot(
     });
     loopObjectId.set(loop.id, row.id);
 
-    await step({
+    const armed = await step({
       objectId: row.id,
       transition: "activate",
       entrance: "human",
@@ -287,6 +301,10 @@ export async function seedFromProdSnapshot(
       note: `armed ${loop.name}`,
       label: loop.name,
     });
+    // The cadence lands as CONFIGURATION (`cron` set, `next_fire` NOT): these are
+    // real production loops, and importing one must never be the same act as
+    // agreeing to run it here. `pnpm graph:schedule` is the deliberate arming step.
+    if (armed) armEvents.set(row.id, armed);
   }
 
   // ---- 2. runs → transitions, chronologically per loop ----

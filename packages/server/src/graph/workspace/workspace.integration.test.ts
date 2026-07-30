@@ -179,6 +179,40 @@ describe('the read projections derive from rows, not from fixtures', () => {
     expect([...times].sort((a, b) => b - a)).toEqual(times)
   })
 
+  it('renders a clock-entrance event as its own row type, not as a run', async () => {
+    const timeline = await read.timelineView(undefined, 500)
+    const fires = timeline.events.filter((e) => e.entrance === 'clock')
+    // The seeded history is full of scheduled fires; every one of them must read as
+    // a clock row. "Time arrived" is a cause, and it used to render like the run it
+    // caused - which made the feed unable to show a cadence firing on its own.
+    expect(fires.length).toBeGreaterThan(10)
+    for (const e of fires) {
+      expect(e.kind).toBe('clock')
+      expect(e.actorId).toMatch(/^sched-/)
+    }
+    // And nothing else claims that row type.
+    for (const e of timeline.events.filter((e) => e.kind === 'clock')) expect(e.entrance).toBe('clock')
+  })
+
+  it('shows the seeded fleet as CONFIGURED cadences that this server will not fire', async () => {
+    const schedule = await read.scheduleView()
+    // Every non-planned loop carries its production cron.
+    expect(schedule.items.length).toBeGreaterThan(10)
+    for (const row of schedule.items) expect(row.cadence).not.toBe('no cadence')
+    // NOT ONE of them is armed. Importing a cadence must never be the same act as
+    // agreeing to run it here, so the seed writes `cron` and leaves the cursor null
+    // (`pnpm graph:schedule` is the deliberate arming step).
+    expect(schedule.armed).toBe(0)
+    expect(schedule.overdue).toBe(0)
+    for (const row of schedule.items) {
+      expect(row.armed).toBe(false)
+      expect(row.nextFire).toBeUndefined()
+    }
+    // The summary agrees, since both read the same columns.
+    const summary = await read.summaryView()
+    expect(summary.schedules).toEqual({ armed: 0, overdue: 0 })
+  })
+
   it('computes the inbox opened-minus-closed', async () => {
     const inbox = await read.inboxView()
     const open = await graph.listOpenObligations(undefined, read.DEMO_TEAM_ID, { class: 'human-verdict' })

@@ -8,6 +8,9 @@
  *   pnpm graph:demo --synthetic  use the hand-built fleet instead of the real snapshot
  *   pnpm graph:pr <repo> <n>     register a REAL pull request + a merge review
  *   pnpm graph:dispatch          stage an approvable agent task (the runs bridge)
+ *   pnpm graph:schedule -- --every 2m
+ *                               ARM a cadence, so the clock fires it with nobody
+ *                               watching (the clock shadow)
  *   pnpm graph:pull              READ-ONLY snapshot of the real production fleet
  *   pnpm graph:bodies            READ-ONLY fetch of those artifacts' real bytes
  *
@@ -43,6 +46,7 @@ const pullOnly = process.argv.includes('--pull')
 const bodiesOnly = process.argv.includes('--bodies')
 const prOnly = process.argv.includes('--pr')
 const dispatchOnly = process.argv.includes('--dispatch')
+const scheduleOnly = process.argv.includes('--schedule')
 
 const env = {
   ...process.env,
@@ -114,6 +118,21 @@ try {
       'graph:dispatch',
       '--',
       ...process.argv.slice(2).filter((a) => a !== '--dispatch'),
+    ])
+    process.exit(0)
+  }
+
+  if (scheduleOnly) {
+    // Arms a cadence - the deliberate act that makes a schedule live. Routed
+    // through here for the same reason as the seeder and `--dispatch`: it writes
+    // the DEMO's database, and pglite is single-writer, so stop the server first.
+    step('arming a cadence in the demo workspace')
+    await run('pnpm', [
+      '--filter',
+      '@loopany/server',
+      'graph:schedule',
+      '--',
+      ...process.argv.slice(2).filter((a) => a !== '--schedule'),
     ])
     process.exit(0)
   }

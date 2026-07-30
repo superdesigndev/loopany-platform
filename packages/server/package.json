@@ -19,6 +19,7 @@
     "graph:seed": "tsx src/graph/workspace/seed-cli.ts",
     "graph:pr": "tsx src/graph/workspace/pr-cli.ts",
     "graph:dispatch": "tsx src/graph/workspace/dispatch-cli.ts",
+    "graph:schedule": "tsx src/graph/workspace/schedule-cli.ts",
     "graph:demo": "pnpm graph:seed && vite dev"
   },
   "dependencies": {

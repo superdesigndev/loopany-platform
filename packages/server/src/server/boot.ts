@@ -128,6 +128,14 @@ async function boot(): Promise<Booted> {
     const { startOutboxExecutor } = await import("../graph/outbox/executor.js");
     startOutboxExecutor({ signal: abort.signal });
 
+    // GRAPH SCHEDULER - "time arrived" as a first-class entrance, on the same
+    // footing and behind the same gate as the executor. It writes graph facts and
+    // nothing else: a due object gets a clock-entrance transition, whose declared
+    // actions the executor above turns into work orders a MACHINE executes. So
+    // this adds a clock to the server, never an executor of user work.
+    const { startGraphScheduler } = await import("../graph/schedule/scheduler.js");
+    startGraphScheduler({ signal: abort.signal });
+
     // NO SENSING LOOP HERE, AND THAT IS THE POINT (captain decision 10). External
     // observation executes on the USER'S MACHINE with the user's credentials, so
     // this process starts no poller and holds no GitHub transport - it serves the

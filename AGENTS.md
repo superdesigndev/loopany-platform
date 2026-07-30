@@ -1034,8 +1034,8 @@ computes pure functions. Run instructions: `README.md`.
 
 - **What it is:** a locally runnable proof that the dormant v3 kernel carries a real
   fleet. `pnpm graph:demo` (repo root) builds artifact-format, seeds a demo workspace,
-  and serves `http://127.0.0.1:3700/dev/workspace` - Library / System / Timeline over
-  the six kernel tables. `pnpm graph:seed` re-seeds without serving.
+  and serves `http://127.0.0.1:3700/dev/workspace` - Library / System / Schedule /
+  Timeline over the six kernel tables. `pnpm graph:seed` re-seeds without serving.
 - **The DEFAULT dataset is the REAL production fleet**, replayed from a local snapshot;
   `--synthetic` selects the hand-built fleet (which is what the test suite uses). With no
   snapshot on disk the seeder STOPS and names both commands - it never silently falls
@@ -1196,6 +1196,8 @@ computes pure functions. Run instructions: `README.md`.
   on every request. The second one is not belt-and-braces: nothing on the workspace surface
   triggers `ensureServer`, so without it the background loop would never start on a server
   that only serves the workspace, and only inline drains would settle anything.
+  `startGraphScheduler` (the clock shadow) rides BOTH of those starting points for exactly
+  the same reason - see "Graph clock shadow" below.
 - **Surfaces:** `GET /api/graph/attention|notifications`, `POST /api/graph/attention`
   (`{kind,ref,verb}`), `POST /api/graph/notifications/read`, `POST /api/graph/drain` (one
   pass on demand - for a demo or a check, not how effects normally happen). UI: an Attention
@@ -1441,8 +1443,9 @@ computes pure functions. Run instructions: `README.md`.
   title and `runFinished` defaults an untitled report doc to the same - otherwise every Timeline
   row and every Library report reads identically. Caught by the live demo, pinned by two probes.
 - **Live-demo order** (pglite is SINGLE-WRITER, and the server holds the dir): stop the dev
-  server → `pnpm graph:dispatch` / `graph:pr` → start the server → approve in `/dev/workspace`
-  → `pnpm agent --once`. Staging while the server runs appears to succeed and the server never
+  server → `pnpm graph:dispatch` / `graph:pr` / `graph:schedule` → start the server → approve
+  in `/dev/workspace` (a SCHEDULED fire needs no approval - the arming act was it) →
+  `pnpm agent --once`. Staging while the server runs appears to succeed and the server never
   sees the row.
 - **Probes:** `graph/agent/runs.integration.test.ts` (18: dispatch idempotency, claim
   exclusivity, lease expiry → attention naming the task, exactly-once advance + replay,
@@ -1451,6 +1454,96 @@ computes pure functions. Run instructions: `README.md`.
   `machine-agent/src/run.test.ts` (the jail incl. traversal and prefix-sibling, the guards,
   the composed prompt, and a REAL child process for stdin-not-argv, timeout killing a
   grandchild, output bounding).
+
+## Graph clock shadow — the scheduler entrance (`src/graph/schedule/`)
+
+- **What it is:** the fourth entrance class, `clock`, given something to stand behind it.
+  An in-process loop (`schedule/scheduler.ts`, started exactly like the outbox executor -
+  `boot.ts` behind `graphWorkspaceEnabled()` + `ensureExecutor` on every `/api/graph/*`
+  request) turns a due cursor into a real clock-entrance transition and lets the EXISTING
+  machinery carry it: the transition's declared actions land in the outbox, the executor
+  writes a `run-task` DIRECTIVE, a machine agent runs it, and `graph/agent/runs.ts` reports
+  back and advances the object. The scheduler writes graph facts and NOTHING else - no
+  fetch, no spawn, no second dispatch channel (decisions 10/12 layering intact).
+- **Schedules are DATA, in four columns on `objects`** (migration `0006`): `cron` OR
+  `interval_ms` (the CADENCE - one form each, CHECK-enforced), `next_fire` (the CURSOR),
+  `schedule_armed_by_event`, `last_fired_at`. Nothing branches on archetype or type: the
+  claim scan is a column predicate, so a plain Task carrying a bounded recurring watch
+  schedules identically to a loop (the 2026-07-28 closed-loop ruling).
+- **A CADENCE IS CONFIGURATION; A CURSOR IS WHAT MAKES IT LIVE.** `next_fire IS NULL` is
+  not "no cadence" - the whole claim predicate is `next_fire <= now`, so the replayed
+  production fleet carries its real crons and fires NOTHING here. `seed.ts`/`seed-real.ts`
+  write `cron` and leave the cursor null; `pnpm graph:schedule` is the deliberate arming
+  step. This is a safety property, not tidiness: importing a cadence must never be the
+  same act as agreeing to run it.
+- **THE STANDING APPROVAL.** A loop's `fire` declares a `dispatch-outward-run` (R3), which
+  cannot be auto-approved (decision 2) - and a schedule cannot ask a person per fire,
+  which is the entire point of a schedule. So the approval is the ARMING act:
+  `schedule/arm.ts` writes a `schedule-armed` event with `entrance: "human"`, stamps its id
+  on `schedule_armed_by_event`, and the scheduler passes THAT as `approvals[i]` for every
+  R3/R4 action the fire declares. Nothing is relaxed - the executor re-resolves the id and
+  refuses a non-human approval, and the agent re-checks a third time. An UNARMED cursor
+  therefore cannot dispatch: the seam refuses `APPROVAL_REQUIRED` and the miss surfaces as
+  a `clock-skipped` event (pinned by a probe).
+- **Catch-up is LEVEL-TRIGGERED, and that is one argument.** After a fire the cursor
+  advances to the next occurrence after **NOW**, never after the instant just fired - so
+  three intervals of downtime owe exactly ONE catch-up fire. There is no loop over missed
+  occurrences anywhere, so a burst of back-fires is not merely avoided, it is
+  unrepresentable. The background loop also ticks ONCE immediately at start, which is the
+  boot misfire catch-up with no special path.
+- **Idempotent firing = derived identity.** The fire's event id is
+  `derivedFrom: {fire: <scheduled instant>}` - NOT `now` - so a crash after the fire
+  commits but before the cursor advances re-derives the SAME event id on retry: the replay
+  latch returns, nothing is re-enqueued, and the action id (`<eventId>-<seq>`) and hence
+  the directive id collide instead of twinning. The cursor advance is DELIBERATELY a
+  second transaction: folding it in would make that retry path dead code, and committing
+  the fire first is the only order that cannot LOSE a fire.
+- **A refused fire still advances the cursor** (else it re-refuses every tick forever) but
+  does NOT stamp `last_fired_at` - a column called "last fired" must never record a fire
+  that did not happen. The miss is a derived `clock-skipped` event instead: one row per
+  missed instant, visible in the Timeline. A fire landing while the previous run is still
+  going is ORDINARY, not an attention item.
+- **Jitter is deterministic per object** (`cadence.ts jitterMsFor` = hash of the object id,
+  modulo a 2-minute window), so forty objects on `0 7 * * *` do not fire in one second AND
+  "when will this fire?" stays answerable across restarts and recomputes. Interval cadences
+  are EPOCH-ANCHORED (`k · interval`), never "last fire + interval", so a late fire cannot
+  make a cadence drift.
+- **The claim is per object, not per batch:** `dueObjects` scans (bounding the batch) and
+  `claimDueObject` re-reads under `FOR UPDATE SKIP LOCKED` with an EXACT `next_fire = dueAt`
+  match (bounding the race). Two schedulers take disjoint work, and a rival that already
+  fired and advanced leaves a row this cannot re-fire.
+- **Which transition the clock enters is DATA** (`fireTransitionOf`): an explicit name
+  (the arm request, or the `fireTransition` the arm stamped into the payload) wins;
+  otherwise the UNIQUE clock-enterable transition that MOVES the object - a self-transition
+  (`skip`/`evolve`) is excluded, and AMBIGUITY IS REFUSED at arm time rather than resolved
+  by list order. That is why `LOOP_SPEC`'s `activate`/`pause` now declare
+  `entrance: "human"`: an unrestricted transition admits the clock, and a cadence that
+  could enter `activate` would arm the loop instead of running it.
+- **`LOOP_SPEC.fire` now dispatches the loop's run** (standing intent + `onSuccess:
+  "complete"` / `onFailure: "fail"` + `report: true`; the instance supplies
+  `payload.brief`/`workdir`/`repos`), and `complete`/`stand-down`/`fail` accept
+  `["agent-run","rule"]` - `agent-run` is the replayed history's shape, `rule` is the runs
+  bridge's. Both seeders pass the loop's `activate` event as `approvals[0]` for every
+  replayed `fire`, so the replay names the same standing approval a live fire would.
+- **Surfaces:** `GET /api/graph/schedule` + the workspace's **Schedule** pane (armed vs
+  "configured, not armed on this server", next fire, fires/misses from EVENTS) and one
+  sidebar line (`clockPhrase`), plus `summary.schedules`. `overdue` is the honest "is the
+  scheduler running?" reading - the tick is faster than any legal cadence, so a standing
+  backlog means the clock is stopped, which a "scheduler: on" light could never show.
+  A `clock`-entrance event is its own Timeline row type (`.event-clock`, violet + inner
+  ring): a fire is a CAUSE and must not read like the run it caused.
+- **Demo:** `pnpm graph:schedule -- --every 2m [--loop <title|id>] [--brief …] [--workdir …]`
+  arms a cadence (creating + activating a scratch loop when given no target);
+  `--disarm` drops the cursor and the standing approval and keeps the cadence. Same
+  single-writer pglite rule as `graph:seed`/`graph:dispatch`: **stop the server first**.
+- **Probes:** `graph/schedule/cadence.test.ts` (pure: interval grammar, jitter spread and
+  determinism, strict monotonicity, backlog collapse) + `schedule.integration.test.ts`
+  (due fires once / not-due untouched, crash-before-advance ⇒ one directive, 3 missed
+  intervals ⇒ one catch-up, same cron line ⇒ different instants, a plain builtin Task
+  fires the same way, ambiguity + mirror refusals, the unarmed R3 ceiling, a busy object's
+  recorded miss, an unfireable cursor retired, disarm). **Each probe gets its OWN team** -
+  a pass is team-scoped and otherwise scans everything due, so probes sharing a team leak
+  into each other's totals.
 
 ## Graph v1 demo — the real-data pull (`graph/workspace/pull-prod.ts` + `seed-real.ts`)
 

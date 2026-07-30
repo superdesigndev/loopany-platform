@@ -331,6 +331,112 @@ export async function listMirrors(
   return filter.limit ? q.limit(filter.limit) : q;
 }
 
+// ---- schedules (the clock's own three statements) ----
+
+/**
+ * CANDIDATES the clock owes a fire: live cursors at or before `now`, soonest first.
+ *
+ * A plain read, deliberately. The claim happens per object in
+ * `claimDueObject` (one transaction each) because a fire is not a row flip - it
+ * runs a whole transition with its own object lock, and holding one transaction
+ * over a batch of them would make a crash's recovery window as long as the batch.
+ * So this scan bounds the BATCH and the claim below bounds the RACE.
+ *
+ * Nothing here mentions an archetype or a type: due-ness is a column, so a loop
+ * and a plain task carrying a bounded recurring watch are found by the same query
+ * (the closed-loop ruling - a schedule is not loop-archetype-exclusive).
+ */
+export async function dueObjects(
+  x: GraphExec | undefined,
+  input: { now: string; limit: number; teamId?: string },
+): Promise<GraphObject[]> {
+  const where = [sql`${objects.nextFire} is not null`, sql`${objects.nextFire} <= ${input.now}`];
+  if (input.teamId) where.push(eq(objects.teamId, input.teamId));
+  return X(x)
+    .select()
+    .from(objects)
+    .where(and(...where))
+    .orderBy(asc(objects.nextFire), asc(objects.id))
+    .limit(input.limit);
+}
+
+/**
+ * CLAIM one due object for this pass: read it under `FOR UPDATE SKIP LOCKED` with
+ * the due predicate re-checked, so two schedulers racing take disjoint work and
+ * neither blocks on the other.
+ *
+ * `dueAt` is matched EXACTLY. That is the second half of the guarantee: a rival
+ * pass that already fired this object and advanced its cursor leaves a row whose
+ * `next_fire` no longer equals the instant we set out to fire, and this returns
+ * undefined rather than firing the same instant twice. Undefined therefore means
+ * "somebody else has it, or it is no longer due" - both of which are "skip", never
+ * an error.
+ *
+ * MUST be called inside a transaction; outside one the lock is released by the
+ * implicit commit and buys nothing (same contract as `getObjectForUpdate`).
+ */
+export async function claimDueObject(
+  x: GraphExec | undefined,
+  input: { objectId: string; dueAt: string },
+): Promise<GraphObject | undefined> {
+  return (
+    await X(x)
+      .select()
+      .from(objects)
+      .where(and(eq(objects.id, input.objectId), eq(objects.nextFire, input.dueAt)))
+      .for("update", { skipLocked: true })
+  )[0];
+}
+
+/**
+ * ADVANCE the cursor after a fire - the level-triggered stamp.
+ *
+ * Guarded on `next_fire` still being the instant we fired (`from`), so it is
+ * idempotent under the at-least-once boundary: a second pass that re-fired the same
+ * instant as a replay and then advanced writes nothing the first one did not, and a
+ * rival that advanced first is not overwritten. `to` is null when the cadence has
+ * no future occurrence, which retires the schedule rather than pinning it in the
+ * past - a cursor that can never be reached would be a permanently-due object.
+ *
+ * `firedAt` is NULL when the clock came round but the transition did not run (the
+ * object was busy, or its schedule no longer resolves). The cursor still advances -
+ * a scheduler that re-refused the same instant every tick would be a busy loop -
+ * but `last_fired_at` is left alone, because a column called "last fired" must
+ * never record a fire that did not happen.
+ */
+export async function advanceNextFire(
+  x: GraphExec | undefined,
+  input: { objectId: string; from: string; to: string | null; firedAt: string | null; now: string },
+): Promise<GraphObject | undefined> {
+  const out = await X(x)
+    .update(objects)
+    .set({
+      nextFire: input.to,
+      ...(input.firedAt ? { lastFiredAt: input.firedAt } : {}),
+      updatedAt: input.now,
+    })
+    .where(and(eq(objects.id, input.objectId), eq(objects.nextFire, input.from)))
+    .returning();
+  return out[0];
+}
+
+/** Every object carrying a cadence - configured or live. The Schedule view's
+ *  source: an object with a cadence and NO cursor is real and worth showing (a
+ *  replayed production loop, whose cadence exists and is deliberately not armed
+ *  here), so this filters on the cadence and not on due-ness. */
+export async function listScheduled(x: GraphExec | undefined, teamId: string): Promise<GraphObject[]> {
+  return X(x)
+    .select()
+    .from(objects)
+    .where(
+      and(
+        eq(objects.teamId, teamId),
+        sql`(${objects.cron} is not null or ${objects.intervalMs} is not null or ${objects.nextFire} is not null)`,
+      ),
+    )
+    .orderBy(asc(objects.nextFire), asc(objects.title), asc(objects.id));
+}
+
 // ---- edges ----
 
 /**

@@ -63,17 +63,76 @@ export const LOOP_SPEC: TypeSpec = {
   // attested "no open obligations, no pending actions" like any other.
   terminalStates: ["completed"],
   transitions: [
-    { name: "activate", from: ["planned", "paused"], to: "idle" },
-    // The scheduler fires it. `clock` provenance means the actor id is a
-    // schedule id, never a person - the Timeline says so.
-    { name: "fire", from: ["idle"], to: "running", entrance: "clock" },
-    { name: "complete", from: ["running"], to: "idle", entrance: "agent-run" },
+    // ARMING AND PAUSING ARE HUMAN ACTS. Stated rather than left unrestricted,
+    // because an unrestricted transition admits the CLOCK - and a cadence that
+    // could enter `activate` or `pause` would be a schedule that arms or stops the
+    // loop instead of running it. Saying so here is also what lets the scheduler
+    // resolve a loop's fire transition unambiguously (`schedule/scheduler.ts`
+    // `fireTransitionOf`) instead of every arm having to name it.
+    { name: "activate", from: ["planned", "paused"], to: "idle", entrance: "human" },
+    /**
+     * THE CLOCK ENTRANCE. `clock` provenance means the actor id is a schedule id,
+     * never a person - the Timeline says so.
+     *
+     * The fire DISPATCHES the loop's run, as a generic instruction work order down
+     * the same directive channel every other outward effect uses (captain decision
+     * 12: "an agent does it from an instruction"). The server itself does nothing -
+     * it writes the action, the executor writes the directive, a machine agent runs
+     * the work with its own credentials, and `graph/agent/runs.ts` reports back and
+     * moves this loop through `complete` / `fail`.
+     *
+     * The dispatch is R3, so it needs a HUMAN approval event - and a schedule
+     * cannot ask per fire, which is what a schedule is FOR. The approval is
+     * therefore the standing one: the human event that ARMED the cadence
+     * (`schedule/arm.ts`), which the scheduler passes as `approvals[0]`. An unarmed
+     * loop's fire is refused rather than dispatched, which is the fail-closed
+     * answer and is what keeps decision 2 intact under a clock.
+     *
+     * The STANDING intent is here; the particulars ride the instance
+     * (`payload.brief` / `workdir` / `repos`), so one declaration serves every loop.
+     */
+    {
+      name: "fire",
+      from: ["idle"],
+      to: "running",
+      entrance: "clock",
+      actions: [
+        {
+          kind: "dispatch-outward-run",
+          payload: {
+            intent: [
+              "You are this loop's scheduled run. Carry out the work described in `context.object.brief`.",
+              "",
+              "Before acting, CHECK REALITY: read the current state of whatever you are about to change and",
+              "stop if this run's work has already been done. A schedule can deliver the same instruction twice.",
+              "",
+              "Stay inside the scope you were given. Do not touch anything outside `scope.workdir`, do not act",
+              "on a repository that is not in `scope.repos`, and never copy a credential, token or personal",
+              "detail into anything you write or publish.",
+              "",
+              "Finish by printing a short markdown report of what you found and what you changed. If there was",
+              "nothing to do, say so plainly - a clean stop is a real outcome, not a failure.",
+            ].join("\n"),
+            scope: { writes: ["report.md"] },
+            onSuccess: "complete",
+            onFailure: "fail",
+            report: true,
+          },
+        },
+      ],
+    },
+    // The two outcome transitions a run's report drives. `agent-run` is the
+    // replayed history's shape (a run reporting for itself); `rule` is the runs
+    // bridge's (design: the state change is the engine's declarative consequence of
+    // a run finishing, so `graph/agent/runs.ts` enters it as a rule). Both are real
+    // and both belong, which is why this is a SET rather than a widening to "any".
+    { name: "complete", from: ["running"], to: "idle", entrance: ["agent-run", "rule"] },
     // "Nothing found" is a first-class outcome: a run that manufactured no
     // activity is a clean stop, not a failure.
-    { name: "stand-down", from: ["running"], to: "idle", entrance: "agent-run" },
+    { name: "stand-down", from: ["running"], to: "idle", entrance: ["agent-run", "rule"] },
     // A run that reported a failure. Distinct from `stand-down` on purpose: the
     // Timeline must not read a failed run as a quiet one.
-    { name: "fail", from: ["running"], to: "idle", entrance: "agent-run" },
+    { name: "fail", from: ["running"], to: "idle", entrance: ["agent-run", "rule"] },
     // A fire the machine never claimed (asleep/offline), superseded by the next
     // one. Neither success nor failure - it is the scheduler's own record.
     { name: "skip", from: ["idle"], to: "idle", entrance: "clock" },
@@ -145,10 +204,22 @@ export const LOOP_SPEC: TypeSpec = {
         },
       ],
     },
-    { name: "pause", from: ["idle", "running"], to: "paused" },
+    { name: "pause", from: ["idle", "running"], to: "paused", entrance: "human" },
     { name: "finish", from: ["idle", "running", "paused"], to: "completed", entrance: "agent-run" },
   ],
-  fields: { band: "string", cadence: "string", stat: "string", runs: "number" },
+  /** `brief`/`workdir`/`repos` are the INSTANCE half of the fire's work order -
+   *  what this particular loop's scheduled run should do, and where it may do it.
+   *  A static declaration cannot know them, so `withObjectScope` and the resolved
+   *  `context.object` carry them from here into the instruction. */
+  fields: {
+    band: "string",
+    cadence: "string",
+    stat: "string",
+    runs: "number",
+    brief: "string",
+    workdir: "string",
+    repos: "string",
+  },
 };
 
 /**
