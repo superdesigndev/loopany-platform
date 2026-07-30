@@ -121,6 +121,8 @@ export interface Summary {
   attention: number
   notifications: number
   unreadNotifications: number
+  /** Outward effects queued or in flight - decisions on their way out. */
+  effectsInFlight: number
 }
 
 /**
@@ -128,9 +130,11 @@ export interface Summary {
  * refused close. Visually and structurally separate from a verdict: "decide this"
  * and "this is stuck" are different asks, and one must not hide inside the other.
  */
+export type AttentionKind = 'dead-letter' | 'chain-parked' | 'close-refused' | 'directive-failed'
+
 export interface AttentionItem {
   id: string
-  kind: 'dead-letter' | 'chain-parked' | 'close-refused'
+  kind: AttentionKind
   ref: string
   title: string
   detail: string
@@ -145,7 +149,37 @@ export interface AttentionItem {
 
 export interface AttentionView {
   items: AttentionItem[]
-  counts: Record<'dead-letter' | 'chain-parked' | 'close-refused', number>
+  counts: Record<AttentionKind, number>
+}
+
+/**
+ * ONE OUTWARD WORK ORDER and what became of it - the surface that makes
+ * "approve in the platform" honest.
+ *
+ * Without it a person clicks Approve, sees a notification, and still has to open
+ * GitHub to find out whether anything actually happened. `pending` means no agent
+ * has picked it up; `claimed` means a machine is on it right now; `done` carries
+ * the URL of the thing that now exists out there because somebody approved it.
+ */
+export interface EffectRow {
+  id: string
+  kind: string
+  state: string
+  target: string
+  resultUrl: string | null
+  detail: string | null
+  reason: string | null
+  attempts: number
+  createdAt: string
+  age: string
+  settledAt: string | null
+  objectId: string | null
+}
+
+export interface EffectsView {
+  items: EffectRow[]
+  /** Queued or in flight - decisions on their way out of the building. */
+  unsettled: number
 }
 
 /** What the `notify` action produced - a verdict's visible consequence. */
@@ -197,6 +231,7 @@ export const fetchLibrary = () => getJson<LibraryView>('/api/graph/library')
 export const fetchTimeline = () => getJson<TimelineView>('/api/graph/timeline')
 export const fetchAttention = () => getJson<AttentionView>('/api/graph/attention')
 export const fetchNotifications = () => getJson<NotificationsView>('/api/graph/notifications')
+export const fetchEffects = () => getJson<EffectsView>('/api/graph/effects')
 
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {

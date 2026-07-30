@@ -25,17 +25,20 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "./index.js";
 import {
   edges,
+  effectDirectives,
   events,
   gateObligations,
   graphNotifications,
   objects,
   outboxActions,
   typeRegistry,
+  type EffectDirective,
   type GateObligation,
   type GraphEdge,
   type GraphEvent,
   type GraphNotification,
   type GraphObject,
+  type NewEffectDirective,
   type NewGraphEvent,
   type NewGraphNotification,
   type OutboxAction,
@@ -44,12 +47,14 @@ import {
 import {
   BUILTIN_TYPE_SPECS,
   ARCHETYPES,
+  DIRECTIVE_UNSETTLED_STATES,
   OUTBOX_UNSETTLED_STATES,
   consequenceOf,
   isActionKind,
   requiresApproval,
   type ActionKind,
   type Archetype,
+  type DirectiveRefusalCode,
   type EventDiff,
   type ObligationClass,
   type OutboxRefusalCode,
@@ -851,6 +856,276 @@ export async function markNotificationsRead(
     .where(and(eq(graphNotifications.teamId, teamId), isNull(graphNotifications.readAt)))
     .returning();
   return out.length;
+}
+
+// ---- effect directives (the outward-effect work orders) ----
+
+/**
+ * Write a directive. IDEMPOTENT BY IDENTITY, exactly like `insertNotification`:
+ * the id IS the producing outbox action's id, so the executor's at-least-once
+ * boundary produces ONE work order however many times the handler runs. There is
+ * no read-then-write and no "already exists?" branch - the primary key is the
+ * check.
+ */
+export async function insertDirective(
+  x: GraphExec | undefined,
+  row: NewEffectDirective,
+): Promise<{ directive: EffectDirective; created: boolean }> {
+  const exec = X(x);
+  const out = await exec.insert(effectDirectives).values(row).onConflictDoNothing().returning();
+  if (out[0]) return { directive: out[0], created: true };
+  const existing = (await exec.select().from(effectDirectives).where(eq(effectDirectives.id, row.id)))[0];
+  if (!existing) throw new Error(`directive insert was swallowed but no row exists: ${row.id}`);
+  return { directive: existing, created: false };
+}
+
+export async function getDirective(x: GraphExec | undefined, id: string): Promise<EffectDirective | undefined> {
+  return (await X(x).select().from(effectDirectives).where(eq(effectDirectives.id, id)))[0];
+}
+
+export async function listDirectives(
+  x: GraphExec | undefined,
+  teamId: string,
+  limit = 50,
+): Promise<EffectDirective[]> {
+  return X(x)
+    .select()
+    .from(effectDirectives)
+    .where(eq(effectDirectives.teamId, teamId))
+    .orderBy(desc(effectDirectives.createdAt), desc(effectDirectives.id))
+    .limit(limit);
+}
+
+export async function listFailedDirectives(x: GraphExec | undefined, teamId: string): Promise<EffectDirective[]> {
+  return X(x)
+    .select()
+    .from(effectDirectives)
+    .where(and(eq(effectDirectives.teamId, teamId), eq(effectDirectives.state, "failed")))
+    .orderBy(asc(effectDirectives.settledAt));
+}
+
+export async function countUnsettledDirectives(x: GraphExec | undefined, teamId: string): Promise<number> {
+  const r = (
+    await X(x)
+      .select({ n: sql<number>`count(*)` })
+      .from(effectDirectives)
+      .where(and(eq(effectDirectives.teamId, teamId), inArray(effectDirectives.state, [...DIRECTIVE_UNSETTLED_STATES])))
+  )[0];
+  return Number(r?.n ?? 0);
+}
+
+/**
+ * CLAIM a batch of directives for one agent, with a LEASE.
+ *
+ * The same `SELECT … FOR UPDATE SKIP LOCKED` shape the outbox claim uses, and for
+ * the same reason: two agents polling at once take DISJOINT sets instead of one
+ * blocking on the other, so "run a second effect agent" is a capacity decision
+ * rather than a correctness risk. `attempts` increments AT CLAIM TIME, so an agent
+ * that dies on the same row every time exhausts its budget instead of holding the
+ * directive hostage forever.
+ *
+ * Claimable = `pending`. Rows whose lease has expired are returned to `pending`
+ * by `expireDirectiveLeases` FIRST - a separate statement on purpose, because
+ * "this claim is dead" is a decision worth being able to observe (and to bound by
+ * an attempt budget) rather than a subclause of the claim query.
+ */
+export async function claimDirectives(
+  x: GraphExec | undefined,
+  input: { limit: number; now: string; agent: string; leaseUntil: string; teamId?: string; machine?: string },
+): Promise<EffectDirective[]> {
+  const teamFilter = input.teamId ? sql`and team_id = ${input.teamId}` : sql``;
+  // A directive BOUND to a machine is only ever offered to that machine; an
+  // unbound one is offered to anybody. Never the other way round - silently
+  // handing somebody else's work order to a machine with different credentials is
+  // exactly the class of mistake this column exists to prevent.
+  const machineFilter = input.machine
+    ? sql`and (target_machine is null or target_machine = ${input.machine})`
+    : sql`and target_machine is null`;
+  const rows = await X(x).execute(sql`
+    update effect_directives set
+      state = 'claimed',
+      claimed_at = ${input.now},
+      claimed_by = ${input.agent},
+      heartbeat_at = ${input.now},
+      lease_expires_at = ${input.leaseUntil},
+      attempts = attempts + 1
+    where id in (
+      select id from effect_directives
+      where state = 'pending'
+        ${teamFilter}
+        ${machineFilter}
+      order by created_at asc, id asc
+      limit ${input.limit}
+      for update skip locked
+    )
+    returning *
+  `);
+  return normalizeDirectiveRows(rows);
+}
+
+/** Extend the lease on a claim the agent still holds. Guarded on the holder, so a
+ *  heartbeat from an agent whose lease was already reclaimed cannot resurrect it
+ *  under the new owner - it simply matches nothing, and the agent learns it lost
+ *  the row when it tries to report. */
+export async function heartbeatDirective(
+  x: GraphExec | undefined,
+  input: { id: string; agent: string; now: string; leaseUntil: string },
+): Promise<EffectDirective | undefined> {
+  const out = await X(x)
+    .update(effectDirectives)
+    .set({ heartbeatAt: input.now, leaseExpiresAt: input.leaseUntil })
+    .where(
+      and(
+        eq(effectDirectives.id, input.id),
+        eq(effectDirectives.state, "claimed"),
+        eq(effectDirectives.claimedBy, input.agent),
+      ),
+    )
+    .returning();
+  return out[0];
+}
+
+/**
+ * Settle a directive, either way. Guarded on it still being CLAIMED BY THIS AGENT:
+ * a report that arrives after the lease was reclaimed changes nothing, so a
+ * zombie agent waking up an hour later cannot overwrite the outcome its successor
+ * recorded. The caller learns that from the `undefined` return.
+ */
+export async function settleDirective(
+  x: GraphExec | undefined,
+  input: {
+    id: string;
+    agent: string;
+    now: string;
+    ok: boolean;
+    result?: Record<string, unknown> | null;
+    refusalCode?: DirectiveRefusalCode | null;
+    error?: string | null;
+  },
+): Promise<EffectDirective | undefined> {
+  const out = await X(x)
+    .update(effectDirectives)
+    .set({
+      state: input.ok ? "done" : "failed",
+      result: input.result ?? null,
+      refusalCode: input.ok ? null : (input.refusalCode ?? "AGENT_ERROR"),
+      lastError: input.error ?? null,
+      settledAt: input.now,
+      leaseExpiresAt: null,
+    })
+    .where(
+      and(
+        eq(effectDirectives.id, input.id),
+        eq(effectDirectives.state, "claimed"),
+        eq(effectDirectives.claimedBy, input.agent),
+      ),
+    )
+    .returning();
+  return out[0];
+}
+
+/**
+ * Return every EXPIRED claim to `pending` - the dead-agent recovery path.
+ *
+ * Two outcomes, decided by the attempt budget: under it the row is claimable
+ * again (a laptop that slept comes back and somebody re-runs the effect, which is
+ * safe because every effect is idempotent at the far end); at or over it the row
+ * FAILS with `LEASE_EXPIRED`, because an effect that has eaten N leases without
+ * reporting is not going to complete on its own and a person should hear about it.
+ */
+export async function expireDirectiveLeases(
+  x: GraphExec | undefined,
+  input: { now: string; maxAttempts: number; teamId?: string },
+): Promise<{ requeued: EffectDirective[]; failed: EffectDirective[] }> {
+  const exec = X(x);
+  const where = [
+    eq(effectDirectives.state, "claimed"),
+    sql`${effectDirectives.leaseExpiresAt} is not null and ${effectDirectives.leaseExpiresAt} <= ${input.now}`,
+  ];
+  if (input.teamId) where.push(eq(effectDirectives.teamId, input.teamId));
+  const stale = await exec.select().from(effectDirectives).where(and(...where));
+  const requeued: EffectDirective[] = [];
+  const failed: EffectDirective[] = [];
+  for (const row of stale) {
+    if (row.attempts >= input.maxAttempts) {
+      const out = await exec
+        .update(effectDirectives)
+        .set({
+          state: "failed",
+          refusalCode: "LEASE_EXPIRED",
+          lastError: `claimed ${row.attempts} time(s) and never reported - the effect agent went away`,
+          settledAt: input.now,
+          leaseExpiresAt: null,
+        })
+        .where(and(eq(effectDirectives.id, row.id), eq(effectDirectives.state, "claimed")))
+        .returning();
+      if (out[0]) failed.push(out[0]);
+      continue;
+    }
+    const out = await exec
+      .update(effectDirectives)
+      .set({ state: "pending", claimedAt: null, claimedBy: null, leaseExpiresAt: null })
+      .where(and(eq(effectDirectives.id, row.id), eq(effectDirectives.state, "claimed")))
+      .returning();
+    if (out[0]) requeued.push(out[0]);
+  }
+  return { requeued, failed };
+}
+
+/** Put a FAILED directive back in the queue with a fresh attempt budget - the
+ *  human "retry" verdict on an attention item. Only a failed row can be revived,
+ *  so this can never disturb an effect in flight. Symmetric with
+ *  `requeueDeadLetter`, deliberately: the two attention verbs behave the same. */
+export async function requeueDirective(
+  x: GraphExec | undefined,
+  id: string,
+): Promise<EffectDirective | undefined> {
+  const out = await X(x)
+    .update(effectDirectives)
+    .set({
+      state: "pending",
+      attempts: 0,
+      refusalCode: null,
+      lastError: null,
+      settledAt: null,
+      claimedAt: null,
+      claimedBy: null,
+      leaseExpiresAt: null,
+    })
+    .where(and(eq(effectDirectives.id, id), eq(effectDirectives.state, "failed")))
+    .returning();
+  return out[0];
+}
+
+/** The claim statement is raw SQL for the same reason `claimActions` is (there is
+ *  no builder form of `FOR UPDATE SKIP LOCKED` inside an `UPDATE … IN`), so its
+ *  driver-shaped, snake_cased result is mapped here - once. */
+function normalizeDirectiveRows(raw: unknown): EffectDirective[] {
+  const rows = (Array.isArray(raw) ? raw : ((raw as { rows?: unknown[] })?.rows ?? [])) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    id: String(r.id),
+    teamId: String(r.team_id),
+    actionId: String(r.action_id),
+    eventId: String(r.event_id),
+    objectId: (r.object_id ?? null) as string | null,
+    kind: r.kind as EffectDirective["kind"],
+    targetSource: String(r.target_source),
+    targetExternalId: String(r.target_external_id),
+    targetMachine: (r.target_machine ?? null) as string | null,
+    payload: (r.payload ?? null) as Record<string, unknown> | null,
+    approvalEvent: String(r.approval_event),
+    state: r.state as EffectDirective["state"],
+    attempts: Number(r.attempts ?? 0),
+    claimedAt: (r.claimed_at ?? null) as string | null,
+    claimedBy: (r.claimed_by ?? null) as string | null,
+    leaseExpiresAt: (r.lease_expires_at ?? null) as string | null,
+    heartbeatAt: (r.heartbeat_at ?? null) as string | null,
+    result: (r.result ?? null) as Record<string, unknown> | null,
+    refusalCode: (r.refusal_code ?? null) as EffectDirective["refusalCode"],
+    lastError: (r.last_error ?? null) as string | null,
+    createdAt: String(r.created_at),
+    settledAt: (r.settled_at ?? null) as string | null,
+  }));
 }
 
 /** Events of one kind for a team, newest first - the attention section's feed

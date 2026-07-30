@@ -8,8 +8,12 @@ import { createFileRoute } from '@tanstack/react-router'
  *   GET  /api/graph/library    artifacts with sanitized rendered HTML
  *   GET  /api/graph/timeline   the event feed (?limit=N)
  *   GET  /api/graph/inbox      open human-verdict obligations
- *   GET  /api/graph/attention  dead-letters / parked chains / refused closes
+ *   GET  /api/graph/attention  dead-letters / parked chains / refused closes /
+ *                              outward effects that never landed
  *   GET  /api/graph/notifications  what the `notify` action produced
+ *   GET  /api/graph/effects    outward work orders and what became of them
+ *                              (the AGENT's own wire is `/api/effects/*`, which is
+ *                              bearer-token authed and never session authed)
  *   POST /api/graph/verdict    {objectId, transition} → applyTransition (human)
  *   POST /api/graph/attention  {kind, ref, verb} → acknowledge | retry (human)
  *   POST /api/graph/notifications/read   mark every notification read
@@ -141,6 +145,8 @@ export const Route = createFileRoute('/api/graph/$')({
             return Response.json(await read.attentionView())
           case 'notifications':
             return Response.json(await read.notificationsView())
+          case 'effects':
+            return Response.json(await read.effectsView())
           default:
             return notFound()
         }

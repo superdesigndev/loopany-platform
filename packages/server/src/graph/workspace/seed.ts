@@ -32,6 +32,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import {
   edges as edgesTable,
+  effectDirectives as effectDirectivesTable,
   events as eventsTable,
   gateObligations as gateObligationsTable,
   graphNotifications as graphNotificationsTable,
@@ -79,6 +80,9 @@ export async function resetGraphDemo(teamId = DEMO_TEAM_ID): Promise<void> {
   // this reset is about to delete - and the workspace would show a notification
   // for a decision that no longer exists in its own history.
   await db.delete(graphNotificationsTable).where(eq(graphNotificationsTable.teamId, teamId));
+  // Effect directives are an outbox action's effect too - keyed by the action id
+  // for exactly the same reason, so they strand for exactly the same reason.
+  await db.delete(effectDirectivesTable).where(eq(effectDirectivesTable.teamId, teamId));
   await db.delete(outboxActionsTable).where(eq(outboxActionsTable.teamId, teamId));
   await db.delete(gateObligationsTable).where(eq(gateObligationsTable.teamId, teamId));
   await db.delete(eventsTable).where(eq(eventsTable.teamId, teamId));

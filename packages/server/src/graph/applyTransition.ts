@@ -76,6 +76,7 @@ import {
   ACTION_CONSEQUENCE,
   CHAIN_PARKED_EVENT,
   CLOSE_REFUSED_EVENT,
+  requiresApproval,
   type ActionKind,
   type ConsequenceClass,
   type EntranceClass,
@@ -401,15 +402,31 @@ export async function applyTransitionIn(
   // Actions are validated BEFORE anything is written: an R3/R4 action without an
   // approval event refuses the WHOLE transition rather than landing a state change
   // whose consequences then cannot be enqueued (decision 2).
+  //
+  // THE SELF-APPROVAL RULE. A transition entered by a HUMAN is itself the approval
+  // for the outward actions it declares - its own event is a `human`-entrance row
+  // in the log with a real user as `actorId`, which is precisely what decision 2
+  // demands the outward effect rest on. Requiring the caller to pass an approval
+  // id in that case would mean minting an event to approve an event, and the UI
+  // could not do it anyway: this transition's id does not exist until this call
+  // computes it (four lines above).
+  //
+  // What this does NOT relax: any entrance other than `human` still refuses. So a
+  // rule, a clock or an agent run may never carry an outward action to the outbox
+  // on its own authority, an explicit `approvals[i]` still wins where a caller has
+  // a different event in mind, and the executor re-resolves whatever id lands on
+  // the row and re-checks that it was entered by a human before any effect runs.
   const declared = t.actions ?? [];
+  const selfApproval = actor.entrance === "human" ? eventId : undefined;
+  const approvalFor = (i: number): string | undefined => input.approvals?.[i] ?? selfApproval;
   for (let i = 0; i < declared.length; i++) {
     const kind = declared[i]!.kind;
     const cls = actionClass(kind);
-    if ((cls === "R3" || cls === "R4") && !input.approvals?.[i]) {
+    if ((cls === "R3" || cls === "R4") && !approvalFor(i)) {
       return fail(
         "APPROVAL_REQUIRED",
         `action ${i} ("${kind}") is ${cls} - outward/governance effects cannot be auto-approved; ` +
-          "supply approvals[" + i + "] = <approval event id>",
+          `entered via ${actor.entrance}, so supply approvals[${i}] = <human approval event id>`,
         where,
       );
     }
@@ -608,7 +625,10 @@ export async function applyTransitionIn(
     actions: declared.map((a, i) => ({
       kind: a.kind,
       payload: a.payload ?? null,
-      approvalEvent: input.approvals?.[i] ?? null,
+      // For an R3/R4 action this is the id validated above - an explicit approval,
+      // or this human transition's own event. For everything else it is null,
+      // because a non-outward action needs no approval to reference.
+      approvalEvent: requiresApproval(actionClass(a.kind)) ? (approvalFor(i) ?? null) : null,
     })),
     now,
   });

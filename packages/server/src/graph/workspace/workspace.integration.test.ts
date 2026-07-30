@@ -221,14 +221,31 @@ describe('the write path is the transition seam, not a shortcut', () => {
     expect(second.code).toBe('ILLEGAL_FROM_STATE')
   }, 120_000)
 
-  it('never performs an outward or governance action - it dead-letters it into Attention', async () => {
+  /**
+   * THE SERVER STILL PERFORMS NOTHING OUTWARD - but the ceiling no longer holds
+   * by the ABSENCE of a handler, because effect delivery gave outward actions
+   * somewhere to go. So this pins what actually holds now:
+   *
+   *   R3 with a human approval  → a DIRECTIVE, not an effect. The server wrote a
+   *                               work order and stopped; something with
+   *                               credentials has to pick it up.
+   *   R4 (governance)           → still NO_HANDLER, still an attention item. The
+   *                               absence argument survives where it still applies.
+   */
+  it('never performs an outward effect itself - it queues a directive for a machine agent', async () => {
     await seed.seedGraphDemo()
-    const objects = await graph.listObjects(undefined, read.DEMO_TEAM_ID)
-    const holder = objects.find((o) => o.type === 'merge-review' && o.status === 'awaiting-verdict')!
-    // Plant an R3 action on the object, WITH a real human approval - so nothing
-    // about the approval ceiling is what stops it. What stops it is that no
-    // handler for an outward effect exists in this build: the ceiling holds by
-    // ABSENCE, and the action ends up visible rather than quietly marked done.
+    // A PR mirror to aim at: an outward effect names something in the outside
+    // world, and the demo's own merge reviews track docs (replayed history).
+    const { object: mirror } = await graph.getOrCreateMirror(undefined, {
+      teamId: read.DEMO_TEAM_ID,
+      externalSource: 'github',
+      externalId: 'acme/widgets/pull/9001',
+      type: 'pull-request',
+      status: 'open',
+      title: 'PR #9001',
+      payload: { repo: 'acme/widgets', number: 9001, state: 'open', merged: false, checks: 'none', draft: false },
+      now: '2026-07-30T09:00:00+08:00',
+    })
     await graph.appendEvent(undefined, {
       id: 'ev-test-approval',
       teamId: read.DEMO_TEAM_ID,
@@ -241,21 +258,31 @@ describe('the write path is the transition seam, not a shortcut', () => {
     await graph.enqueueActions(undefined, {
       eventId: 'ev-test-approval',
       teamId: read.DEMO_TEAM_ID,
-      objectId: holder.id,
-      actions: [{ kind: 'external-comment', approvalEvent: 'ev-test-approval' }],
+      objectId: mirror.id,
+      actions: [
+        { kind: 'external-comment', payload: { via: 'self' }, approvalEvent: 'ev-test-approval' },
+        { kind: 'arm-type', approvalEvent: 'ev-test-approval' },
+      ],
       now: '2026-07-30T09:00:00+08:00',
     })
 
-    const r = await drainOutbox({ now: '2026-07-30T09:01:00+08:00', teamId: read.DEMO_TEAM_ID })
-    expect(r.done).toBeGreaterThan(0)
+    await drainOutbox({ now: '2026-07-30T09:01:00+08:00', teamId: read.DEMO_TEAM_ID })
+    const [outward, governance] = await graph.listActionsForEvent(undefined, 'ev-test-approval')
 
-    const outward = (await graph.listActionsForEvent(undefined, 'ev-test-approval'))[0]!
-    expect(outward.state).toBe('dead-letter')
-    expect(outward.refusalCode).toBe('NO_HANDLER')
-    expect(outward.deliveredAt).toBeNull()
+    // The outward action is DONE - and what it did was write a work order.
+    expect(outward!.state).toBe('done')
+    const directive = await graph.getDirective(undefined, outward!.id)
+    expect(directive?.kind).toBe('github-comment')
+    expect(directive?.state).toBe('pending')
+    expect(directive?.approvalEvent).toBe('ev-test-approval')
+    // Nothing has happened out there yet, and this server cannot make it happen.
+    expect(directive?.settledAt).toBeNull()
 
+    // Governance is still unimplemented, and still says so out loud.
+    expect(governance!.state).toBe('dead-letter')
+    expect(governance!.refusalCode).toBe('NO_HANDLER')
     const attention = await read.attentionView()
-    expect(attention.items.some((i) => i.kind === 'dead-letter' && i.ref === outward.id)).toBe(true)
+    expect(attention.items.some((i) => i.kind === 'dead-letter' && i.ref === governance!.id)).toBe(true)
   }, 120_000)
 
   it('re-seeding leaves NO orphaned rows behind, notifications included', async () => {

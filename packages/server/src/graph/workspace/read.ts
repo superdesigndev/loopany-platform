@@ -873,6 +873,62 @@ export async function notificationsView(
   };
 }
 
+// ---- effect delivery: what our verdicts are doing to the outside world ----
+
+export interface EffectRow {
+  id: string;
+  kind: string;
+  state: string;
+  /** `owner/repo/pull/N` - the same string the mirror carries. */
+  target: string;
+  /** Where the effect landed, when it did: a comment url, a merge sha. */
+  resultUrl: string | null;
+  detail: string | null;
+  /** Typed refusal, for a failed one. */
+  reason: string | null;
+  attempts: number;
+  createdAt: string;
+  age: string;
+  settledAt: string | null;
+  objectId: string | null;
+}
+
+/**
+ * The effect-delivery feed: every outward work order this workspace produced and
+ * what became of it.
+ *
+ * This is the surface that makes "approve in the platform" honest. Without it a
+ * person clicks Approve, sees a notification, and has to go to GitHub to find out
+ * whether anything actually happened out there - which is the same gap the outbox
+ * executor closed one layer down. `pending` means the agent has not picked it up
+ * yet; `claimed` means a machine is working on it right now; `done` carries the
+ * URL of the thing that exists in the world because somebody approved it.
+ */
+export async function effectsView(teamId = DEMO_TEAM_ID, limit = 25): Promise<{ items: EffectRow[]; unsettled: number }> {
+  const rows = await graph.listDirectives(undefined, teamId, limit);
+  const nowMs = Date.now();
+  return {
+    items: rows.map((d) => {
+      const result = (d.result ?? {}) as Record<string, unknown>;
+      return {
+        id: d.id,
+        kind: d.kind,
+        state: d.state,
+        target: d.targetExternalId,
+        resultUrl: typeof result.url === "string" ? result.url : null,
+        detail: typeof result.detail === "string" ? result.detail : d.lastError,
+        reason: d.refusalCode,
+        attempts: d.attempts,
+        createdAt: d.createdAt,
+        age: relativeAge(d.createdAt, Math.max(nowMs, Date.parse(d.createdAt))),
+        settledAt: d.settledAt,
+        objectId: d.objectId,
+      };
+    }),
+    unsettled: await graph.countUnsettledDirectives(undefined, teamId),
+  };
+}
+
 /** Workspace-level counters for the shell (sidebar badge, machine line). */
 export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
   loops: number;
@@ -890,6 +946,9 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
   attention: number;
   notifications: number;
   unreadNotifications: number;
+  /** Outward effects still in flight - queued for an agent or being executed by
+   *  one. The counter that says "your decision is on its way out there". */
+  effectsInFlight: number;
 }> {
   const { objects, obligations } = await load(teamId);
   const pending = await graph.listPendingActions(undefined, { teamId });
@@ -909,6 +968,7 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
     attention: att.items.length,
     notifications: notes.length,
     unreadNotifications: await graph.countUnreadNotifications(undefined, teamId),
+    effectsInFlight: await graph.countUnsettledDirectives(undefined, teamId),
   };
 }
 

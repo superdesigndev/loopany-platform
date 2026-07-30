@@ -7,12 +7,20 @@
  * silently dropped. That posture is why this registry is a plain lookup and not a
  * default-to-noop map.
  *
- * EVERY V1 HANDLER IS IN-GRAPH. Nothing here writes to the world outside Loopany:
- * `notify` writes a notification row, `enqueue-review` creates a shepherd task
- * through `applyTransition`, `update-fields` writes plain fields on a tracked
- * object. Outward (R3) and governance (R4) kinds have no handler at all, which
- * means the ceiling holds by ABSENCE as well as by the approval re-check - there
- * is no code path that could perform one even with an approval in hand.
+ * NO HANDLER HERE EVER TOUCHES THE OUTSIDE WORLD. Most are in-graph: `notify`
+ * writes a notification row, `enqueue-review` creates a shepherd task through
+ * `applyTransition`, `update-fields` writes plain fields on a tracked object. The
+ * two OUTWARD (R3) handlers - `external-comment` and `external-merge` - do not
+ * perform their effect either: they write an EFFECT DIRECTIVE, a work order a
+ * machine-side agent claims and executes with local credentials
+ * (`graph/effects/`). The server stays zero-exec; what changed is that an outward
+ * consequence now has somewhere to go instead of dead-lettering.
+ *
+ * The outward ceiling therefore no longer holds by ABSENCE. It holds by three
+ * independent checks on the same fact: the schema CHECK when the action was
+ * enqueued, the executor's re-check that the approval event exists and was
+ * entered by a HUMAN, and the agent's own re-check of the approval block that
+ * rides with the work order. Governance (R4) kinds still have no handler at all.
  *
  * ── idempotency, which is the whole contract ─────────────────────────────────
  *
@@ -21,11 +29,14 @@
  * not idempotent is a bug waiting for a bad deploy. Each one below derives its
  * effect's IDENTITY from the action id rather than checking-then-writing:
  *
- *   notify          the notification row's primary key IS the action id
- *   enqueue-review  the shepherd's object id is `obj-rev-<sha256(action, target)>`,
- *                   and its gate-opening transition is `derivedFrom` the action -
- *                   so a replay collides on both the object and the event
- *   update-fields   a field write is naturally idempotent (same value, same result)
+ *   notify            the notification row's primary key IS the action id
+ *   enqueue-review    the shepherd's object id is `obj-rev-<sha256(action, target)>`,
+ *                     and its gate-opening transition is `derivedFrom` the action -
+ *                     so a replay collides on both the object and the event
+ *   update-fields     a field write is naturally idempotent (same value, same result)
+ *   external-comment  the directive row's primary key IS the action id, and the
+ *   external-merge    comment it asks for carries that id as a marker - so the
+ *                     idempotency survives all the way out to GitHub
  *
  * None of them reads "have I run before?". Identity does that work, which is the
  * one dedup strategy that does not degrade with history length (design §12 item 6).
@@ -35,6 +46,13 @@ import type { GraphObject, OutboxAction } from "../../db/graph-schema.js";
 import * as graph from "../../db/graphStore.js";
 import type { GraphExec } from "../../db/graphStore.js";
 import { applyTransitionIn } from "../applyTransition.js";
+import {
+  buildCommentBody,
+  directiveMarker,
+  effectKindOf,
+  mergeMethodOf,
+  targetOfMirror,
+} from "../effects/directive.js";
 import { derivedEventId, reviewObjectId } from "../ids.js";
 import { conditionOf, observedFromPayload, waitSatisfied } from "../sensing/pr.js";
 import type { ActionKind, TypeSpec } from "../types.js";
@@ -352,9 +370,26 @@ function loopKeyOf(o: GraphObject): string | undefined {
  * this action applies its consequence.
  *
  * `via: "tracks"` is what lets a STATIC spec name an instance-specific target:
- * the executor follows the edge at execution time. A MIRROR target is refused
- * outright - a mirror is an external fact we observe, and writing our verdict
- * into one would record a belief as an observation.
+ * the executor follows the edge at execution time.
+ *
+ * A MIRROR IS NEVER WRITTEN. A mirror is an external fact we observe, and putting
+ * our verdict in one would record a belief as an observation - the mirror's
+ * `merged` comes from the poller seeing GitHub say so, never from us deciding it
+ * should. What differs is how loudly we say no:
+ *
+ *   via: "self"              REFUSAL. The action named this object; a mirror here
+ *                            is a real mismatch between the spec and the graph.
+ *   via: tracks / produces   CLEAN SKIP. A selector landed somewhere this
+ *                            declaration does not apply, which is ordinary - the
+ *                            merge-review type tracks a doc in the replayed
+ *                            history and a PR mirror in the live flow, and the
+ *                            live flow's outward effect is a DIRECTIVE, not a
+ *                            field write. Dead-lettering that would put an
+ *                            attention item on every real merge approval.
+ *
+ * Same distinction `external-comment`/`external-merge` draw, deliberately: across
+ * the vocabulary, an explicitly-named wrong target is an error and a selector
+ * that matches nothing applicable is a no-op.
  */
 const updateFields: ActionHandler = async ({ tx, action, now }) => {
   const p = payloadOf(action);
@@ -375,7 +410,10 @@ const updateFields: ActionHandler = async ({ tx, action, now }) => {
   const target = await graph.getObject(tx, targetId);
   if (!target) return { ok: false, retryable: false, detail: `target ${targetId} is gone` };
   if (target.archetype === "mirror") {
-    return { ok: false, retryable: false, detail: "refusing to write our verdict into an observed mirror" };
+    const why = "a mirror is an observed external fact - our verdict is never written into one";
+    return via === "self"
+      ? { ok: false, retryable: false, detail: `refusing: ${why}` }
+      : { ok: true, detail: `${target.id} is a mirror - nothing written (${why})` };
   }
 
   await graph.updateObjectFields(
@@ -489,6 +527,145 @@ function msOf(iso: string): number {
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+// ---- external-comment / external-merge (R3): the outward effects ----
+
+/**
+ * Turn an approved OUTWARD action into a work order for a machine agent.
+ *
+ * This is the handler that changes what R3 means in this codebase. It still does
+ * not perform the effect - the server holds no GitHub credentials and executes
+ * nothing outward, which is the zero-exec invariant the whole product rests on -
+ * but it no longer dead-ends either. It resolves the target, authors the exact
+ * bytes to be posted, and writes ONE row in `effect_directives`. An agent running
+ * where the credentials live claims it, does the thing, and reports back through
+ * the same channel (`graph/effects/channel.ts`).
+ *
+ * Payload contract:
+ *
+ *   via        `tracks` (default) | `self` | `produces` - how to find the mirror,
+ *              through the SAME resolver `enqueue-review` and `register-watch`
+ *              use, so "which instance?" has one answer across the vocabulary.
+ *   select     for `via: "produces"`: `{type?}` filter.
+ *   requires   `{field, equals}` evaluated against the ACTION'S OWN OBJECT (the
+ *              shepherd), NOT the target. This is how a static spec declares an
+ *              effect that only some instances want - the merge-review type
+ *              declares both a comment and a merge, and the merge stands down
+ *              unless that review carries explicit merge intent. A stand-down is
+ *              a clean success with the reason in its detail, never a refusal:
+ *              an inapplicable declaration is not a stuck consequence.
+ *   note       one line of prose for the comment body.
+ *   method     merge strategy (`squash` default).
+ *   machine    bind the directive to one machine. Omitted ⇒ any agent may claim.
+ *
+ * ── the two shapes of "this target is not deliverable" ──────────────────────
+ *
+ * A SELECTOR that lands on something outside GitHub is a clean skip. The
+ * merge-review type tracks a PR mirror in the live flow and a plain playbook doc
+ * in the replayed history, and there is nothing to comment on about a doc;
+ * dead-lettering that would turn "this declaration does not apply here" into an
+ * attention item, which is the mistake `register-watch` already refuses to make.
+ *
+ * `via: "self"` is different: the action NAMED this object, so a non-deliverable
+ * target is a real mismatch between the spec and the graph, and it refuses.
+ */
+const outwardEffect: ActionHandler = async (ctx) => {
+  const { tx, action, now } = ctx;
+  const p = payloadOf(action);
+  const effectKind = effectKindOf(action.kind);
+  if (!effectKind) {
+    return { ok: false, retryable: false, detail: `"${action.kind}" has no directive shape in this build` };
+  }
+  if (!action.objectId) return { ok: false, retryable: false, detail: "action carries no object" };
+  // The executor already refused an R3 row without a resolvable HUMAN approval.
+  // Re-read it here anyway: this is the value that gets WRITTEN onto the work
+  // order, and a directive whose approval column was somehow empty would be a
+  // work order the agent could not check.
+  if (!action.approvalEvent) {
+    return { ok: false, retryable: false, detail: "outward action carries no approval event - refusing to build a work order" };
+  }
+
+  const holder = await graph.getObject(tx, action.objectId);
+  if (!holder) return { ok: false, retryable: false, detail: `object ${action.objectId} is gone` };
+
+  const stand = standDownReason(holder, p.requires);
+  if (stand) return { ok: true, detail: stand };
+
+  const via = str(p.via) ?? "tracks";
+  const targets = await resolveReviewTargets(ctx, via);
+  if (!targets.ok) return targets.fail;
+  if (!targets.objects.length) {
+    return { ok: true, detail: `no ${effectKind} target matched (via ${via})` };
+  }
+
+  const detail: string[] = [];
+  for (const target of targets.objects) {
+    const resolved = targetOfMirror(target);
+    if (!resolved.ok) {
+      if (via === "self") return { ok: false, retryable: false, detail: resolved.why };
+      detail.push(`${target.id}: ${resolved.why} - nothing to deliver`);
+      continue;
+    }
+    const approvalEvent = await graph.getEvent(tx, action.approvalEvent);
+    const body =
+      effectKind === "github-comment"
+        ? buildCommentBody(action.id, {
+            reviewTitle: holder.title,
+            transition: approvalEvent?.transition ?? null,
+            approvalEvent: action.approvalEvent,
+            note: str(p.note) ?? null,
+          })
+        : undefined;
+
+    const { created } = await graph.insertDirective(tx, {
+      // IDEMPOTENCY: the action id IS the primary key, and (for a comment) the
+      // marker embedded in the body - so one work order and one comment, however
+      // many times the at-least-once boundary fires.
+      id: action.id,
+      teamId: action.teamId,
+      actionId: action.id,
+      eventId: action.eventId,
+      objectId: target.id,
+      kind: effectKind,
+      targetSource: resolved.target.source,
+      targetExternalId: resolved.target.externalId,
+      targetMachine: str(p.machine) ?? null,
+      payload: {
+        repo: resolved.target.repo,
+        number: resolved.target.number,
+        ...(body !== undefined ? { body, marker: directiveMarker(action.id) } : {}),
+        ...(effectKind === "github-merge" ? { method: mergeMethodOf(p.method) } : {}),
+      },
+      approvalEvent: action.approvalEvent,
+      state: "pending",
+      attempts: 0,
+      createdAt: now,
+    });
+    detail.push(
+      created
+        ? `${effectKind} directive queued for ${resolved.target.externalId}`
+        : `${effectKind} directive already queued for ${resolved.target.externalId} (replay)`,
+    );
+  }
+  return { ok: true, detail: detail.join("; ") };
+};
+
+/**
+ * Should this instance stand down? `requires: {field, equals}` is checked against
+ * the shepherd's own payload, so one static spec can declare "comment always,
+ * merge only when this review was opened with merge intent". A missing `requires`
+ * means the effect always applies.
+ */
+function standDownReason(holder: GraphObject, requires: unknown): string | undefined {
+  if (requires == null) return undefined;
+  const r = requires as { field?: unknown; equals?: unknown };
+  const field = str(r.field);
+  if (!field) return undefined;
+  const actual = ((holder.payload ?? {}) as Record<string, unknown>)[field];
+  const want = r.equals ?? true;
+  if (JSON.stringify(actual ?? null) === JSON.stringify(want ?? null)) return undefined;
+  return `${holder.id} does not declare ${field} = ${JSON.stringify(want)} - standing down, no outward effect`;
+}
+
 // ---- the registry ----
 
 /**
@@ -501,6 +678,10 @@ const HANDLERS: Partial<Record<ActionKind, ActionHandler>> = {
   "enqueue-review": enqueueReview,
   "update-fields": updateFields,
   "register-watch": registerWatch,
+  // R3. These do not perform their effect either - they write a work order for a
+  // machine agent (see `outwardEffect`). Governance (R4) kinds remain absent.
+  "external-comment": outwardEffect,
+  "external-merge": outwardEffect,
 };
 
 export function handlerFor(kind: string): ActionHandler | undefined {
@@ -529,4 +710,12 @@ export function registerHandler(kind: ActionKind, handler: ActionHandler): () =>
   };
 }
 
-export const _internals = { notify, enqueueReview, updateFields, registerWatch, describeObject };
+export const _internals = {
+  notify,
+  enqueueReview,
+  updateFields,
+  registerWatch,
+  outwardEffect,
+  describeObject,
+  standDownReason,
+};

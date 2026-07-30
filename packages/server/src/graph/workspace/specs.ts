@@ -200,20 +200,55 @@ export const MERGE_REVIEW_SPEC: TypeSpec = {
         },
       ],
     },
+    /**
+     * THE VERDICT THAT REACHES GITHUB.
+     *
+     * Four declared consequences, and which of them apply is decided per instance
+     * at execution time rather than by four variants of this type:
+     *
+     *  1. `update-fields {merged:true}` - the DOC case. The replayed history's
+     *     merge reviews track a playbook, and this is what marks it landed. When
+     *     the tracked object is a MIRROR the handler cleanly writes nothing: the
+     *     world's `merged` comes from observing GitHub, never from our verdict.
+     *  2. `external-comment` (R3) - the DEFAULT outward effect and the low-risk
+     *     one. It says a person approved this, and names the verdict event so the
+     *     comment can be traced back into our log. It changes nothing.
+     *  3. `external-merge` (R3) - guarded twice over. `requires` stands it down
+     *     unless THIS review was opened with explicit merge intent, and the agent
+     *     that would perform it refuses a repo off its allowlist or a PR aimed at
+     *     the repo's default branch. Approving a review is not, by itself, an
+     *     instruction to land code.
+     *  4. `notify` - the in-workspace trace of the decision.
+     *
+     * Both R3 actions rest on the approval this very transition IS: a human
+     * entered it, so its own event is the approval event, re-resolved and
+     * re-checked by the executor before any directive is written and a third time
+     * by the agent before anything is posted.
+     */
     {
       name: "approve",
       from: ["awaiting-verdict"],
       to: "approved",
       entrance: "human",
       closes: ["merge-verdict"],
-      // Same shape as the doc shepherds. When the tracked object is a MIRROR the
-      // executor refuses the field write - we do not record our beliefs as an
-      // observation of the outside world.
-      actions: REVIEW_ACTIONS({ merged: true }),
+      actions: [
+        { kind: "update-fields", payload: { via: "tracks", set: { merged: true } } },
+        {
+          kind: "external-comment",
+          payload: { via: "tracks", note: "Approved via the Loopany workspace." },
+        },
+        {
+          kind: "external-merge",
+          payload: { via: "tracks", requires: { field: "mergeIntent", equals: true }, method: "squash" },
+        },
+        { kind: "notify", payload: { channel: "inbox" } },
+      ],
     },
     { name: "reject", from: ["awaiting-verdict"], to: "rejected", entrance: "human", closes: ["merge-verdict"] },
   ],
-  fields: { repo: "string", number: "number" },
+  /** `mergeIntent` is the field the `external-merge` action's `requires` clause
+   *  reads. Absent or false ⇒ approving comments and stops there. */
+  fields: { repo: "string", number: "number", mergeIntent: "boolean" },
 };
 
 // ---- docs: content, no lifecycle (decision 8) ----

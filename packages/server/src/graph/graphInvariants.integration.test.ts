@@ -48,6 +48,15 @@ function defectSpec(): import('./types.js').TypeSpec {
     terminalStates: ['closed'],
     transitions: [
       { name: 'fix', from: ['reproducing'], to: 'fixing' },
+      // An outward action on a NON-gate transition, so the approval ceiling can
+      // be probed on its own: out of a gate state the human-entrance guard fires
+      // first, and would mask whether the ceiling itself still holds.
+      {
+        name: 'nudge',
+        from: ['fixing'],
+        to: 'fixing',
+        actions: [{ kind: 'external-comment', payload: { body: 'any news?' } }],
+      },
       {
         name: 'submit',
         from: ['fixing'],
@@ -600,7 +609,7 @@ describe('probe: obligations open and close by events; the inbox is opened-minus
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('probe: an R3/R4 action cannot be enqueued without an approval event', () => {
-  it('refuses the WHOLE transition when an outward action has no approval', async () => {
+  it('refuses the WHOLE transition when a NON-HUMAN entrance carries an outward action', async () => {
     const obj = await newDefect('r3-refused')
     await at.applyTransition({
       objectId: obj.id,
@@ -608,27 +617,57 @@ describe('probe: an R3/R4 action cannot be enqueued without an approval event', 
       actor: { entrance: 'agent-run', actorId: 'r' },
       now: NOW,
     })
-    await at.applyTransition({
-      objectId: obj.id,
-      transition: 'submit',
-      actor: { entrance: 'agent-run', actorId: 'r' },
-      now: NOW,
-    })
 
     const r = await at.applyTransition({
       objectId: obj.id,
-      transition: 'approve-merge',
-      actor: { entrance: 'human', actorId: 'u_captain' },
+      transition: 'nudge',
+      actor: { entrance: 'agent-run', actorId: 'r' },
       now: NOW,
-      // no approvals - the R3 `external-comment` has nothing authorizing it
+      // no approvals - and an agent run is not a person, so there is nothing for
+      // the R3 `external-comment` to rest on.
     })
     expect(r.ok).toBe(false)
     expect(!r.ok && r.code).toBe('APPROVAL_REQUIRED')
     // Nothing landed: the state did not move and no event was written, so an
     // unauthorized outward effect can never be "already half applied".
-    expect((await graph.getObject(undefined, obj.id))!.status).toBe('awaiting-merge')
-    const events = (await graph.listObjectEvents(undefined, obj.id)).filter((e) => e.transition === 'approve-merge')
+    expect((await graph.getObject(undefined, obj.id))!.status).toBe('fixing')
+    const events = (await graph.listObjectEvents(undefined, obj.id)).filter((e) => e.transition === 'nudge')
     expect(events).toHaveLength(0)
+  })
+
+  /**
+   * THE SELF-APPROVAL RULE, which is what makes an outward effect reachable from
+   * the product at all: a transition a HUMAN entered is itself the approval for
+   * the outward actions it declares. Its own event carries `entrance: "human"`
+   * and a real user id, which is exactly what decision 2 requires - and the UI
+   * could not supply an approval id anyway, since this transition's event does
+   * not exist until the call that writes it.
+   *
+   * What is NOT relaxed is the probe above: any other entrance still refuses.
+   */
+  it('a HUMAN transition self-approves its outward actions against its OWN event', async () => {
+    const obj = await newDefect('r3-self')
+    await at.applyTransition({
+      objectId: obj.id,
+      transition: 'fix',
+      actor: { entrance: 'agent-run', actorId: 'r' },
+      now: NOW,
+    })
+    const r = await at.applyTransition({
+      objectId: obj.id,
+      transition: 'nudge',
+      actor: { entrance: 'human', actorId: 'u_captain' },
+      now: NOW,
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.actions).toHaveLength(1)
+    expect(r.actions[0]!.consequenceClass).toBe('R3')
+    expect(r.actions[0]!.approvalEvent).toBe(r.event.id)
+    // And the approval it names really is a human-entrance row - which is what
+    // the executor re-reads before letting the effect happen.
+    expect(r.event.entrance).toBe('human')
+    expect(r.event.actorId).toBe('u_captain')
   })
 
   it('enqueues the outward action once an approval event authorizes it', async () => {

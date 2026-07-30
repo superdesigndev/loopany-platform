@@ -168,6 +168,11 @@ export const ACTION_CONSEQUENCE = {
   "dispatch-outward-run": "R3",
   "external-comment": "R3",
   "external-close": "R3",
+  /** Land a change in the outside world - merge the pull request under review.
+   *  SEPARATE from `external-close` on purpose: a merge and a close-without-merge
+   *  are different effects with different guards, and collapsing them would make
+   *  "merge it" reachable from a declaration that only ever meant "close it". */
+  "external-merge": "R3",
   // R4 - governance
   "create-type": "R4",
   "version-type": "R4",
@@ -243,21 +248,119 @@ export const OUTBOX_REFUSAL_CODES = [
 ] as const;
 export type OutboxRefusalCode = (typeof OUTBOX_REFUSAL_CODES)[number];
 
+// ---- effect directives: how an R3 action reaches the outside world ----
+
+/**
+ * THE SERVER NEVER EXECUTES AN OUTWARD EFFECT. That is the zero-exec invariant
+ * this whole product is built on, and an R3 action does not get to bend it: the
+ * credentials that could act on GitHub live on a user's machine, not in the
+ * server process, so the server's job for an R3 action is to write a DIRECTIVE
+ * and wait. A machine-side effect agent claims it, executes it with LOCAL
+ * credentials, and reports the outcome back.
+ *
+ * The two kinds this build can deliver. A closed set, because the agent branches
+ * on it and an unknown kind must fail LOUDLY at the wire rather than be
+ * interpreted generously at the far end:
+ *
+ *  - `github-comment` post a comment on the pull request under review. The
+ *                     low-risk default: it says something, it changes nothing.
+ *  - `github-merge`   merge the pull request. Guarded at the agent by an explicit
+ *                     repo allowlist and a default-branch refusal, because the
+ *                     blast radius of getting this wrong is somebody's `main`.
+ */
+export const EFFECT_KINDS = ["github-comment", "github-merge"] as const;
+export type EffectKind = (typeof EFFECT_KINDS)[number];
+
+export function isEffectKind(v: unknown): v is EffectKind {
+  return typeof v === "string" && (EFFECT_KINDS as readonly string[]).includes(v);
+}
+
+/**
+ * A directive's lifecycle.
+ *
+ *   pending → nobody holds it. The only state an agent may claim from.
+ *   claimed → an agent holds a LEASE on it. The lease is what makes a dead agent
+ *             recoverable: it expires, and the row goes back to `pending` for
+ *             somebody else. A heartbeat extends it while real work is happening.
+ *   done    → the effect landed in the outside world, and the agent said so.
+ *   failed  → TERMINAL WITHOUT EFFECT, with a typed reason. Never silent: a
+ *             failed directive is an attention item until a person resolves it.
+ *
+ * Deliberately NOT the outbox's five states. An outbox row's failure ladder is
+ * about a handler this process runs; a directive's is about a process on somebody
+ * else's laptop that may simply have gone away, which is why the lease - and not
+ * a retry backoff - is the load-bearing mechanism here.
+ */
+export const DIRECTIVE_STATES = ["pending", "claimed", "done", "failed"] as const;
+export type DirectiveState = (typeof DIRECTIVE_STATES)[number];
+
+/** States in which a directive's effect has NOT yet landed. */
+export const DIRECTIVE_UNSETTLED_STATES: readonly DirectiveState[] = ["pending", "claimed"];
+
+/**
+ * Why a directive ended `failed`. TYPED, like `OUTBOX_REFUSAL_CODES` and for the
+ * same reason: the attention list groups on it and decides whether to offer a
+ * retry, and a UI that string-matches an error message is one wording change away
+ * from offering the wrong button.
+ *
+ *  - `AGENT_ERROR`            the command failed on the machine (network, gh, API)
+ *  - `LEASE_EXPIRED`          claimed and then abandoned, past the reclaim budget
+ *  - `REPO_NOT_ALLOWED`       the target repo is not on the agent's allowlist
+ *  - `DEFAULT_BRANCH_REFUSED` the PR targets the repo's default branch and the
+ *                             agent was not explicitly told that is allowed
+ *  - `APPROVAL_INVALID`       the agent's own re-check of the R3 approval failed
+ *  - `TARGET_UNRESOLVED`      the directive names a PR the agent cannot resolve
+ *  - `NOT_MERGEABLE`          GitHub refused the merge (conflicts, blocked checks)
+ *  - `UNSUPPORTED_KIND`       the agent does not implement this effect kind
+ */
+export const DIRECTIVE_REFUSAL_CODES = [
+  "AGENT_ERROR",
+  "LEASE_EXPIRED",
+  "REPO_NOT_ALLOWED",
+  "DEFAULT_BRANCH_REFUSED",
+  "APPROVAL_INVALID",
+  "TARGET_UNRESOLVED",
+  "NOT_MERGEABLE",
+  "UNSUPPORTED_KIND",
+] as const;
+export type DirectiveRefusalCode = (typeof DIRECTIVE_REFUSAL_CODES)[number];
+
+/**
+ * Which failures are worth another go. A GUARD REFUSAL IS NOT: a repo does not
+ * join the allowlist by being retried, and a rule does not become a person. The
+ * distinction rides here rather than in the UI so both ends agree on it.
+ */
+export const DIRECTIVE_RETRYABLE_CODES: readonly DirectiveRefusalCode[] = [
+  "AGENT_ERROR",
+  "LEASE_EXPIRED",
+  "NOT_MERGEABLE",
+];
+
+export function directiveRetryable(code: DirectiveRefusalCode | null | undefined): boolean {
+  return code != null && DIRECTIVE_RETRYABLE_CODES.includes(code);
+}
+
 // ---- attention items (design §8: the inbox aggregates budget-exceeded parked chains) ----
 
 /**
- * The three ways the engine can end up needing a person's attention for a reason
+ * The four ways the engine can end up needing a person's attention for a reason
  * that is NOT an ordinary verdict. Every one is COMPUTED from real rows - a
- * dead-lettered action, a `chain-parked` event, a `close-refused` event - and
- * never from a hand-set flag, so an attention item cannot be forgotten into
- * existence or dismissed into silence.
+ * dead-lettered action, a `chain-parked` event, a `close-refused` event, a failed
+ * effect directive - and never from a hand-set flag, so an attention item cannot
+ * be forgotten into existence or dismissed into silence.
  *
- *  - `dead-letter`    an action that will never take effect on its own
- *  - `chain-parked`   a transition refused because its chain ran past budget
- *  - `close-refused`  an attested close blocked by an open obligation or an
- *                     unsettled action (design §12 item 8)
+ *  - `dead-letter`      an action that will never take effect on its own
+ *  - `chain-parked`     a transition refused because its chain ran past budget
+ *  - `close-refused`    an attested close blocked by an open obligation or an
+ *                       unsettled action (design §12 item 8)
+ *  - `directive-failed` an OUTWARD effect that never reached the world: the agent
+ *                       failed, its lease expired, or one of its guards refused.
+ *                       Computed from the directive row, not from the action that
+ *                       created it - the action DID what it was asked to do (it
+ *                       wrote a directive), and blaming it would point a person at
+ *                       the wrong row.
  */
-export const ATTENTION_KINDS = ["dead-letter", "chain-parked", "close-refused"] as const;
+export const ATTENTION_KINDS = ["dead-letter", "chain-parked", "close-refused", "directive-failed"] as const;
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
 
 /** The event kind that RESOLVES an attention item. Human entrance only, and its

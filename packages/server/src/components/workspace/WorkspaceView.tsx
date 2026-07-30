@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react
 
 import {
   fetchAttention,
+  fetchEffects,
   fetchLibrary,
   fetchNotifications,
   fetchSummary,
@@ -12,6 +13,7 @@ import {
   postVerdict,
   type AttentionItem,
   type AttentionView,
+  type EffectsView,
   type LibraryArtifact,
   type LibraryView,
   type NotificationsView,
@@ -64,6 +66,8 @@ const GLYPHS: Record<string, string> = {
   'dead-letter': '⊘',
   'chain-parked': '⧗',
   'close-refused': '⊝',
+  'directive-failed': '⤬',
+  effects: '↗',
 }
 
 function Glyph({ name }: { name: string }) {
@@ -324,6 +328,7 @@ const ATTENTION_LABEL: Record<AttentionItem['kind'], { one: string; many: string
   'dead-letter': { one: 'effect never landed', many: 'effects never landed' },
   'chain-parked': { one: 'parked rule chain', many: 'parked rule chains' },
   'close-refused': { one: 'refused close', many: 'refused closes' },
+  'directive-failed': { one: 'outward effect refused', many: 'outward effects refused' },
 }
 
 function AttentionSection({
@@ -385,6 +390,72 @@ function AttentionSection({
       </div>
     </section>
   )
+}
+
+// ---- Outward effects ----
+
+/**
+ * WHAT YOUR VERDICTS DID TO THE OUTSIDE WORLD.
+ *
+ * A notification says a decision was recorded. This says whether it LANDED - and
+ * they are not the same claim. The server holds no GitHub credentials, so
+ * approving a merge review writes a work order and stops; a machine agent claims
+ * it, acts with local credentials, and reports back. Every stage of that is a row
+ * here, which is the difference between "we told somebody" and "it happened".
+ *
+ * `pending` reads as waiting, not as broken: an agent that is not running yet is
+ * an ordinary state, and the alarm for one that never runs is the lease expiring
+ * into Attention - not this list going red.
+ */
+function EffectsSection({ effects }: { effects: EffectsView }) {
+  if (!effects.items.length) return null
+  return (
+    <section className="effects-section">
+      <div className="section-heading">
+        <div>
+          <span className="effects-dot" />
+          <h2>Outward effects</h2>
+          <span>{effects.items.length}</span>
+        </div>
+        <p>
+          {effects.unsettled
+            ? `${effects.unsettled} on the way out — a machine agent executes these, not this server`
+            : 'Everything your verdicts asked for has been settled'}
+        </p>
+      </div>
+      <div className="effects-list">
+        {effects.items.map((e) => (
+          <article className={`effect-row is-${e.state}`} key={e.id}>
+            <span className="effect-icon">
+              <Glyph name="effects" />
+            </span>
+            <div className="effect-main">
+              <h3>
+                {e.kind} · {e.target}
+              </h3>
+              <p title={e.detail ?? undefined}>{e.detail ?? statePhrase(e.state)}</p>
+            </div>
+            {e.reason && <span className="attn-reason">{e.reason}</span>}
+            <span className={`effect-state is-${e.state}`}>{e.state}</span>
+            {e.resultUrl && (
+              <a className="effect-link" href={e.resultUrl} target="_blank" rel="noreferrer">
+                View
+              </a>
+            )}
+            <time title={e.createdAt}>{e.age}</time>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+/** What a state means when the row carries no detail of its own. */
+function statePhrase(state: string): string {
+  if (state === 'pending') return 'queued — waiting for an effect agent to claim it'
+  if (state === 'claimed') return 'an agent is executing this right now'
+  if (state === 'done') return 'landed'
+  return 'did not land'
 }
 
 // ---- Notifications ----
@@ -451,6 +522,7 @@ function NotificationsPane({
 function LibraryPane({
   library,
   attention,
+  effects,
   highlighted,
   onVerdict,
   onResolveAttention,
@@ -458,6 +530,7 @@ function LibraryPane({
 }: {
   library: LibraryView
   attention: AttentionView | null
+  effects: EffectsView | null
   highlighted: string[]
   onVerdict: (a: LibraryArtifact) => void
   onResolveAttention: (item: AttentionItem, verb: 'acknowledge' | 'retry') => void
@@ -497,6 +570,7 @@ function LibraryPane({
         }
       />
       {attention && <AttentionSection attention={attention} onResolve={onResolveAttention} busyId={busyId} />}
+      {effects && <EffectsSection effects={effects} />}
       <section className="needs-section">
         <div className="section-heading">
           <div>
@@ -690,6 +764,7 @@ export function WorkspaceView() {
   const [library, setLibrary] = useState<LibraryView | null>(null)
   const [timeline, setTimeline] = useState<TimelineView | null>(null)
   const [attention, setAttention] = useState<AttentionView | null>(null)
+  const [effects, setEffects] = useState<EffectsView | null>(null)
   const [notifications, setNotifications] = useState<NotificationsView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [highlighted, setHighlighted] = useState<string[]>([])
@@ -698,12 +773,13 @@ export function WorkspaceView() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, sys, lib, tl, att, notes] = await Promise.all([
+      const [s, sys, lib, tl, att, eff, notes] = await Promise.all([
         fetchSummary(),
         fetchSystem(),
         fetchLibrary(),
         fetchTimeline(),
         fetchAttention(),
+        fetchEffects(),
         fetchNotifications(),
       ])
       setSummary(s)
@@ -711,6 +787,7 @@ export function WorkspaceView() {
       setLibrary(lib)
       setTimeline(tl)
       setAttention(att)
+      setEffects(eff)
       setNotifications(notes)
       setError(null)
     } catch (err) {
@@ -823,6 +900,7 @@ export function WorkspaceView() {
               <LibraryPane
                 library={library}
                 attention={attention}
+                effects={effects}
                 highlighted={highlighted}
                 onVerdict={onVerdict}
                 onResolveAttention={onResolveAttention}

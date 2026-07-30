@@ -30,6 +30,9 @@ import { pgTable, text, integer, jsonb, index, uniqueIndex, primaryKey, check } 
 import {
   ACTION_KINDS,
   ARCHETYPES,
+  DIRECTIVE_REFUSAL_CODES,
+  DIRECTIVE_STATES,
+  EFFECT_KINDS,
   ENTRANCE_CLASSES,
   CONSEQUENCE_CLASSES,
   EVENT_ORIGINS,
@@ -396,6 +399,115 @@ export const graphNotifications = pgTable(
   ],
 );
 
+// ---- effect_directives: the ONE way an outward effect leaves this server ----
+
+/**
+ * An R3 action's work order for a MACHINE-SIDE AGENT.
+ *
+ * The server computes and stores; it does not act on the world. So the outbox
+ * handler for an outward action writes a row HERE instead of calling GitHub, an
+ * effect agent running where the credentials live claims it, executes it, and
+ * reports back. The table is the whole boundary: everything above it is pure
+ * server, everything below it is somebody's laptop.
+ *
+ * ── two things this table is careful about ──────────────────────────────────
+ *
+ * IDENTITY IS INHERITED, NOT INVENTED. `id` IS the producing outbox action's id,
+ * which is itself `<eventId>-<seq>` - a pure function of the verdict event and
+ * the action's position in the spec. So the at-least-once outbox boundary costs
+ * nothing here: a handler that runs twice inserts the same primary key twice and
+ * the second insert is a no-op. There is no "have I already made a directive for
+ * this?" lookup, because identity does that work (the same trick `events`,
+ * `edges` and `graph_notifications` use).
+ *
+ * THE LEASE IS THE LIVENESS STORY. A claim is not a flag - it is a claim with an
+ * expiry. An agent that dies mid-effect leaves a `claimed` row whose
+ * `lease_expires_at` passes, and the row returns to `pending` for whoever polls
+ * next. That is safe only because every effect is idempotent at the far end (a
+ * comment carries a directive-id marker and is skipped if present; a merge of an
+ * already-merged PR is a no-op), which is the same contract the outbox executor
+ * makes with its handlers - stated once more here because this side of the wire
+ * is the one that can be power-cycled.
+ *
+ * `approval_event` is NOT NULL by CHECK. A directive exists only because an R3
+ * action existed, and an R3 action cannot exist without a human approval
+ * (`outbox_actions_approval_required`). Re-stating it here means the constraint
+ * survives even if a future writer reaches this table by another road - and the
+ * agent re-checks the resolved event a THIRD time, because the whole point of the
+ * ceiling is that it does not rest on one guard.
+ */
+export const effectDirectives = pgTable(
+  "effect_directives",
+  {
+    /** The producing outbox action's id - idempotency, inherited. */
+    id: text("id").primaryKey(),
+    teamId: text("team_id").notNull(),
+    /** The outbox action that wrote this row (equal to `id`; kept as its own
+     *  column so the join is explicit rather than a convention). */
+    actionId: text("action_id").notNull(),
+    /** The event whose transition enqueued that action - the audit trail back to
+     *  the verdict a person actually gave. */
+    eventId: text("event_id").notNull(),
+    /** The graph object the effect is ABOUT: the mirror of the external thing. */
+    objectId: text("object_id"),
+    /** What to do out there (`graph/types.ts` EFFECT_KINDS). */
+    kind: text("kind", { enum: EFFECT_KINDS }).notNull(),
+    /** The external system this targets - `github` today. Stored rather than
+     *  implied by `kind` so a second system does not need a column. */
+    targetSource: text("target_source").notNull(),
+    /** The external entity, in the mirror's own `external_id` form
+     *  (`owner/repo/pull/N`) - so a directive and its mirror name the same thing
+     *  with the same string. */
+    targetExternalId: text("target_external_id").notNull(),
+    /** Which machine should execute this. NULL ⇒ any agent may claim it, which is
+     *  the single-machine case; a bound directive is only offered to its own. */
+    targetMachine: text("target_machine"),
+    /** Kind-specific instructions (comment body, merge method). Never credentials. */
+    payload: jsonb("payload").$type<Record<string, unknown>>(),
+    /** The HUMAN approval this outward effect rests on. */
+    approvalEvent: text("approval_event").notNull(),
+    state: text("state", { enum: DIRECTIVE_STATES }).notNull().default("pending"),
+    /** Claims taken so far. Bounded, so an effect that keeps killing its agent
+     *  surfaces to a person instead of cycling through leases forever. */
+    attempts: integer("attempts").notNull().default(0),
+    claimedAt: text("claimed_at"),
+    /** Which agent instance holds it (forensics; the LEASE is the mechanism). */
+    claimedBy: text("claimed_by"),
+    /** When the current claim stops being believed (ISO). A heartbeat pushes it
+     *  out; passing it returns the row to `pending`. */
+    leaseExpiresAt: text("lease_expires_at"),
+    /** Last sign of life from the holder - what the agent's heartbeat stamps. */
+    heartbeatAt: text("heartbeat_at"),
+    /** What the effect produced out there (a comment url, a merge sha) - the
+     *  PROOF, so "did it actually happen?" is answerable from the row. */
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    /** TYPED reason for a terminal failure (`DIRECTIVE_REFUSAL_CODES`). */
+    refusalCode: text("refusal_code", { enum: DIRECTIVE_REFUSAL_CODES }),
+    lastError: text("last_error"),
+    createdAt: text("created_at").notNull(),
+    /** Stamped when the row went terminal, either way. */
+    settledAt: text("settled_at"),
+  },
+  (t) => [
+    // The agent's claim query: claimable rows, oldest first.
+    index("effect_directives_claim_idx").on(t.createdAt).where(sql`${t.state} = 'pending'`),
+    // Lease-expiry recovery. Small partial index - its size tracks work in
+    // flight, not history.
+    index("effect_directives_lease_idx").on(t.leaseExpiresAt).where(sql`${t.state} = 'claimed'`),
+    // The attention feed.
+    index("effect_directives_failed_idx").on(t.teamId, t.settledAt).where(sql`${t.state} = 'failed'`),
+    index("effect_directives_team_idx").on(t.teamId, t.createdAt),
+    index("effect_directives_object_idx").on(t.objectId),
+    // A failure is never reasonless, and a reason never rides a live row - the
+    // same pairing `outbox_actions` makes, for the same reason.
+    check("effect_directives_failure_reason", sql`(${t.state} = 'failed') = (${t.refusalCode} IS NOT NULL)`),
+    // A claim is a claim WITH AN EXPIRY. A `claimed` row without a lease would be
+    // unrecoverable by construction, which is the one failure this table exists
+    // to make impossible.
+    check("effect_directives_claim_has_lease", sql`${t.state} <> 'claimed' OR ${t.leaseExpiresAt} IS NOT NULL`),
+  ],
+);
+
 // ---- type_registry: proposed vs effective, split at schema level ----
 
 /**
@@ -458,6 +570,8 @@ export type OutboxAction = typeof outboxActions.$inferSelect;
 export type NewOutboxAction = typeof outboxActions.$inferInsert;
 export type GraphNotification = typeof graphNotifications.$inferSelect;
 export type NewGraphNotification = typeof graphNotifications.$inferInsert;
+export type EffectDirective = typeof effectDirectives.$inferSelect;
+export type NewEffectDirective = typeof effectDirectives.$inferInsert;
 export type TypeRegistryRow = typeof typeRegistry.$inferSelect;
 export type NewTypeRegistryRow = typeof typeRegistry.$inferInsert;
 
@@ -469,5 +583,6 @@ export const graphSchema = {
   gateObligations,
   outboxActions,
   graphNotifications,
+  effectDirectives,
   typeRegistry,
 };

@@ -39,6 +39,7 @@ const seedOnly = process.argv.includes('--seed')
 const synthetic = process.argv.includes('--synthetic')
 const pullOnly = process.argv.includes('--pull')
 const bodiesOnly = process.argv.includes('--bodies')
+const prOnly = process.argv.includes('--pr')
 
 const env = {
   ...process.env,
@@ -81,6 +82,21 @@ try {
   if (bodiesOnly) {
     step("fetching the artifacts' real bytes (read-only)")
     await run('pnpm', ['--filter', '@loopany/server', 'graph:bodies'])
+    process.exit(0)
+  }
+
+  if (prOnly) {
+    // Registers a REAL pull request as a mirror and opens a merge review on it.
+    // Routed through here for the same reason the seeder is: it must write the
+    // DEMO's database, and pglite is single-writer - stop the server first.
+    step('registering a pull request in the demo workspace')
+    await run('pnpm', [
+      '--filter',
+      '@loopany/server',
+      'graph:pr',
+      '--',
+      ...process.argv.slice(2).filter((a) => a !== '--pr'),
+    ])
     process.exit(0)
   }
 

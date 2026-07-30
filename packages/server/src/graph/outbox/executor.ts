@@ -311,10 +311,25 @@ export function startOutboxExecutor(options: { signal?: AbortSignal; tickMs?: nu
     // stack up passes that all contend for the same rows.
     if (draining) return;
     draining = true;
+    const now = new Date().toISOString();
     try {
-      await runOnce({ now: new Date().toISOString() });
+      await runOnce({ now });
     } catch (err) {
       logger.error({ err: String(err) }, "outbox: drain tick failed");
+    }
+    try {
+      // EFFECT-DIRECTIVE LEASE RECOVERY rides this tick as well.
+      //
+      // The claim endpoint expires leases too, and while an agent is polling that
+      // is the livelier clock. But the case that matters most is the one where NO
+      // agent is polling - the machine went away mid-effect - and then nothing
+      // would ever notice the abandoned claim. A directive that silently sits
+      // `claimed` forever is exactly the invisible outward failure this whole
+      // unit exists to prevent, so the server keeps its own clock on it.
+      const { expired } = await expireDirectiveLeasesNow(now);
+      if (expired) logger.warn({ expired }, "outbox tick: effect directives gave up after repeated lease expiry");
+    } catch (err) {
+      logger.error({ err: String(err) }, "outbox: directive lease sweep failed");
     } finally {
       draining = false;
     }
@@ -367,4 +382,16 @@ export async function drainOutbox(
 
 function defaultOwner(): string {
   return `exec-${process.pid}`;
+}
+
+/**
+ * Return abandoned effect-directive claims to the queue, and give up on the ones
+ * that have burned their budget. Exported so the background tick has one call and
+ * a probe can drive it at a chosen instant; the claim endpoint runs the same store
+ * function directly.
+ */
+export async function expireDirectiveLeasesNow(now: string): Promise<{ requeued: number; expired: number }> {
+  const { maxClaims } = await import("../effects/config.js");
+  const r = await graph.expireDirectiveLeases(undefined, { now, maxAttempts: maxClaims() });
+  return { requeued: r.requeued.length, expired: r.failed.length };
 }

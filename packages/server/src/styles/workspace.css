@@ -162,6 +162,35 @@
   .attn-button.is-quiet:hover:not(:disabled) { background: #f4f2ee; border-color: var(--line-strong); }
   .attn-empty { padding: 4px 4px 14px; color: #97757a; font-size: .8125rem; }
 
+  /**
+   * Outward effects — what a verdict did to the world OUTSIDE Loopany.
+   *
+   * Deliberately the calm BLUE, not Attention's rose and not the verdict queue's
+   * amber. A queued or in-flight effect is neither an alarm nor a decision you
+   * owe: it is a decision already made, on its way out. The rose is reserved for
+   * the one that did NOT land, and that row surfaces in Attention rather than
+   * turning this whole section red.
+   */
+  .effects-section { margin-top: 28px; padding: 18px 20px 6px; border: 1px solid #d8e4f2; border-radius: 10px; background: var(--blue-soft); }
+  .effects-section .section-heading p { color: #64789a; }
+  .effects-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 3px rgba(25, 88, 166, .13); }
+  .effects-list { display: flex; flex-direction: column; }
+  /* Content-sized tracks for the same reason the attention row uses them: a typed
+     refusal code and a state word are as long as they are. */
+  .effect-row { min-width: 0; display: grid; grid-template-columns: 26px minmax(160px, 1fr) auto auto auto auto; align-items: center; gap: 12px; padding: 11px 8px; border-bottom: 1px solid #e0e8f3; border-radius: 4px; }
+  .effect-row:last-child { border-bottom: 0; }
+  .effect-row:hover { background: #f3f7fc; }
+  .effect-icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 5px; background: #e2ebf7; color: #1e5493; font-size: .8125rem; }
+  .effect-main { min-width: 0; }
+  .effect-main h3 { overflow: hidden; margin: 0; color: #35332f; font-size: .875rem; font-weight: 500; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+  .effect-main p { overflow: hidden; margin: 4px 0 0; color: #6d7f99; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+  .effect-state { justify-self: start; padding: 3px 8px; border-radius: 999px; background: #e2ebf7; color: #24548f; font-size: .625rem; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
+  .effect-state.is-done { background: var(--green-soft); color: var(--green); }
+  .effect-state.is-failed { background: #f7e4e6; color: #8f4c53; }
+  .effect-link { color: var(--blue); font-size: .75rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
+  .effect-link:hover { text-decoration: underline; }
+  .effect-row time { color: #8f9db3; font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
   /* Notifications — what the `notify` action actually produced. */
   .notif-list { display: flex; flex-direction: column; margin-top: 26px; }
   .notif-row { min-width: 0; display: grid; grid-template-columns: 26px minmax(240px, 1fr) 84px 78px; align-items: center; gap: 12px; padding: 11px 8px; border-bottom: 1px solid var(--line); border-radius: 4px; }

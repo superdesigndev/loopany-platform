@@ -11,13 +11,24 @@
  *
  * ── computed from reality, never a flag ─────────────────────────────────────
  *
- * Three real sources, one shape:
+ * Four real sources, one shape:
  *
- *   dead-letter    `outbox_actions` rows in state `dead-letter` (typed
- *                  `refusal_code`, so grouping never parses a message)
- *   chain-parked   `chain-parked` events - a transition refused past budget
- *   close-refused  `close-refused` events - an attested close blocked by an open
- *                  obligation or an unsettled action (design §12 item 8)
+ *   dead-letter      `outbox_actions` rows in state `dead-letter` (typed
+ *                    `refusal_code`, so grouping never parses a message)
+ *   chain-parked     `chain-parked` events - a transition refused past budget
+ *   close-refused    `close-refused` events - an attested close blocked by an open
+ *                    obligation or an unsettled action (design §12 item 8)
+ *   directive-failed `effect_directives` rows in state `failed` - an OUTWARD
+ *                    effect that never reached the world. The row read is the
+ *                    DIRECTIVE, not the action that wrote it: that action did
+ *                    exactly what it was asked to (it queued a work order) and
+ *                    is legitimately `done`, so surfacing it instead would point
+ *                    a person at a row with nothing wrong with it.
+ *
+ * That fourth source is the one place an attention item can be raised by
+ * something OUTSIDE this server - an agent's guard refusal, or its silence until
+ * the lease budget ran out. Which is exactly why it has to land here: an outward
+ * effect that quietly did not happen is the worst failure this system can have.
  *
  * Nothing sets an "attention" bit. That matters more than it sounds: a flag can
  * be set and never cleared (an item that nags forever) or cleared and never set
@@ -39,7 +50,7 @@
  *                silence the second failure, which is the one worth hearing.
  */
 import { logger } from "../../logger.js";
-import type { GraphEvent, GraphObject, OutboxAction } from "../../db/graph-schema.js";
+import type { EffectDirective, GraphEvent, GraphObject, OutboxAction } from "../../db/graph-schema.js";
 import * as graph from "../../db/graphStore.js";
 import { CHAIN_PARK_KEY } from "../applyTransition.js";
 import { derivedEventId, organicEventId } from "../ids.js";
@@ -48,6 +59,7 @@ import {
   ATTENTION_KINDS,
   CHAIN_PARKED_EVENT,
   CLOSE_REFUSED_EVENT,
+  directiveRetryable,
   type AttentionKind,
 } from "../types.js";
 
@@ -115,6 +127,10 @@ export async function attentionView(teamId: string): Promise<AttentionView> {
     const item = await eventItem(event, "close-refused");
     if (!acked.has(ackEventId(item.kind, item.ref))) items.push(item);
   }
+  for (const directive of await graph.listFailedDirectives(undefined, teamId)) {
+    const item = await directiveItem(directive);
+    if (!acked.has(ackEventId(item.kind, item.ref))) items.push(item);
+  }
 
   items.sort((a, b) => a.raisedAt.localeCompare(b.raisedAt));
   const counts = Object.fromEntries(ATTENTION_KINDS.map((k) => [k, 0])) as Record<AttentionKind, number>;
@@ -140,6 +156,34 @@ async function deadLetterItem(action: OutboxAction): Promise<AttentionItem> {
     retryable: action.refusalCode === "RETRIES_EXHAUSTED",
     actionKind: action.kind,
     attempts: action.attempts,
+  };
+}
+
+/**
+ * A failed OUTWARD effect. The title names the external target rather than the
+ * graph object, because "the comment on org/repo#12 never got posted" is the
+ * sentence a person can act on - the object id is not.
+ *
+ * `retryable` comes from the TYPED refusal code, not from a guess: a transient
+ * agent error or an expired lease is worth another go, and a guard refusal is
+ * not. A repo does not join an allowlist by being retried, and offering a button
+ * that always loses is worse than offering none.
+ */
+async function directiveItem(d: EffectDirective): Promise<AttentionItem> {
+  const object = d.objectId ? await graph.getObject(undefined, d.objectId) : undefined;
+  return {
+    id: `directive-failed:${d.id}`,
+    kind: "directive-failed",
+    ref: d.id,
+    title: `“${d.kind}” never reached ${d.targetExternalId}`,
+    detail: d.lastError ?? "no error recorded",
+    reason: d.refusalCode ?? "UNKNOWN",
+    raisedAt: d.settledAt ?? d.createdAt,
+    objectId: d.objectId,
+    subject: subjectOf(object),
+    retryable: directiveRetryable(d.refusalCode),
+    actionKind: d.kind,
+    attempts: d.attempts,
   };
 }
 
@@ -206,6 +250,49 @@ export type ResolveResult =
  */
 export async function resolveAttention(input: ResolveInput): Promise<ResolveResult> {
   const { teamId, kind, ref, verb, now, userId } = input;
+
+  if (verb === "retry" && kind === "directive-failed") {
+    // The directive-channel twin of the dead-letter retry below, and deliberately
+    // the same shape: audit first, re-queue second, and NO acknowledgement - so a
+    // second failure comes straight back to this list instead of being silenced
+    // by the act of asking for one more try.
+    const directive = await graph.getDirective(undefined, ref);
+    if (!directive || directive.teamId !== teamId) {
+      return { ok: false, code: "UNKNOWN_ITEM", message: `no effect directive ${ref} in this workspace` };
+    }
+    if (directive.state !== "failed") {
+      return { ok: false, code: "NOT_RETRYABLE", message: `directive ${ref} is "${directive.state}", not failed` };
+    }
+    if (!directiveRetryable(directive.refusalCode)) {
+      // A guard refusal is a decision about the world, not a blip. Re-queueing it
+      // would hand the agent the same work order to refuse identically.
+      return {
+        ok: false,
+        code: "NOT_RETRYABLE",
+        message: `${directive.refusalCode} is a refusal, not a failure - retrying cannot change it`,
+      };
+    }
+    const { event } = await graph.appendEvent(undefined, {
+      id: organicEventId(Date.parse(now) || 0),
+      teamId,
+      objectId: directive.objectId,
+      kind: ATTENTION_RETRY_EVENT,
+      origin: "organic",
+      payload: { directive: ref, previousError: directive.lastError, previousCode: directive.refusalCode },
+      entrance: "human",
+      actorId: userId,
+      ts: now,
+    });
+    await graph.requeueDirective(undefined, ref);
+    logger.info({ directive: ref, userId }, "attention: failed effect directive re-queued by a human");
+    return {
+      ok: true,
+      verb,
+      eventId: event.id,
+      replay: false,
+      detail: `${ref} is queued again - the next agent poll will pick it up, and it comes back here if it fails`,
+    };
+  }
 
   if (verb === "retry") {
     if (kind !== "dead-letter") {
@@ -279,5 +366,6 @@ export async function resolveAttention(input: ResolveInput): Promise<ResolveResu
 /** Which object an item hangs off, so its ack event is attributed to it. */
 async function refObjectId(kind: AttentionKind, ref: string): Promise<string | null> {
   if (kind === "dead-letter") return (await graph.getAction(undefined, ref))?.objectId ?? null;
+  if (kind === "directive-failed") return (await graph.getDirective(undefined, ref))?.objectId ?? null;
   return (await graph.getEvent(undefined, ref))?.objectId ?? null;
 }
