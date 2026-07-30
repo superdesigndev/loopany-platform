@@ -43,7 +43,7 @@ import path from "node:path";
 
 import type { AgentConfig } from "./config.js";
 import { checkRunPermitted, type Refusal } from "./guards.js";
-import type { Instruction } from "./types.js";
+import { RUN_FINDINGS, wantsFinding, type Instruction, type RunFinding } from "./types.js";
 
 /** Environment variables a run inherits. An ALLOWLIST, not a filter: this process's
  *  environment holds the channel token and whatever else the operator's shell had,
@@ -143,6 +143,12 @@ export function resolveWorkdir(root: string, workdir: string | undefined): { ok:
  *
  *   THE REPORTING CONTRACT. What the run prints IS the product (the report doc and
  *   the Timeline summary come from it), so the prompt has to say so.
+ *
+ *   THE FINDING, when the work order declares a path for one. A run's outcome says
+ *   whether it worked; only the run can say whether it found anything, and that
+ *   answer decides whether a person is asked to look. It is a DECLARED LINE rather
+ *   than an inference over prose, because "does this need a human?" must be
+ *   answerable without a second model reading the first one's output.
  */
 export function composeInstruction(spec: Instruction): string {
   const lines: string[] = [];
@@ -186,7 +192,52 @@ export function composeInstruction(spec: Instruction): string {
   lines.push("Print short markdown - what you found, what you changed, and anything a person now has to decide.");
   lines.push('If there was nothing to do, say so plainly. A clean stop is a real outcome, not a failure.');
   lines.push("");
+  if (wantsFinding(spec)) {
+    lines.push("# Your verdict on your own run");
+    lines.push("");
+    lines.push("End your output with EXACTLY ONE of these lines, on a line of its own and nothing else on it:");
+    lines.push("");
+    lines.push(`${FINDING_PREFIX} discovery      — you found something a person has to look at or decide`);
+    lines.push(`${FINDING_PREFIX} nothing-new    — you looked and there was nothing new; nobody needs to be woken`);
+    lines.push("");
+    lines.push("This line is how your report reaches a person, so do not omit it and do not invent a third value.");
+    lines.push("Say `discovery` only when a HUMAN decision is genuinely needed - a report nobody had to read is");
+    lines.push("noise, and noise is how a queue stops being read at all.");
+    lines.push("");
+  }
   return lines.join("\n");
+}
+
+/** The declared line a run prints to report what it found. A literal prefix rather
+ *  than prose to be interpreted: this is the one part of a run's output that a
+ *  deterministic reader has to be able to trust. */
+export const FINDING_PREFIX = "FINDING:";
+
+const FINDING_LINE = /^\s*FINDING:\s*([A-Za-z-]+)\s*$/;
+
+/**
+ * Read the run's finding off its output, or nothing.
+ *
+ * Pure, and deliberately strict in both directions:
+ *
+ *  - the LAST matching line wins. An agent that revises its verdict mid-run (or
+ *    quotes the contract back before answering) means the final declaration, and
+ *    reading the first would let a rehearsal outrank the answer.
+ *  - a value outside the closed set yields UNDEFINED, never a guess. An unparseable
+ *    verdict is a run that did not answer, and the server falls back to the plain
+ *    success path - which is quiet. Guessing `discovery` from a typo would put noise
+ *    in front of a person; guessing `nothing-new` would hide a real find. Neither is
+ *    a decision this parser is entitled to make.
+ */
+export function readFinding(output: string): RunFinding | undefined {
+  let found: RunFinding | undefined;
+  for (const line of output.split("\n")) {
+    const m = FINDING_LINE.exec(line);
+    if (!m) continue;
+    const value = m[1]!.toLowerCase();
+    if ((RUN_FINDINGS as readonly string[]).includes(value)) found = value as RunFinding;
+  }
+  return found;
 }
 
 /**

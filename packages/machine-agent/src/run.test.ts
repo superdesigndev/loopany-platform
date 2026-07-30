@@ -10,6 +10,7 @@ import { checkRunPermitted, NEVER_EXECUTE } from "./guards.js";
 import {
   composeInstruction,
   nodeExec,
+  readFinding,
   resolveWorkdir,
   runEnv,
   runInstruction,
@@ -189,6 +190,46 @@ describe("the instruction handed to the executor", () => {
 
   it("always forbids copying a credential outward", () => {
     expect(composeInstruction(spec())).toContain("Never copy a credential");
+  });
+
+  /**
+   * THE FINDING CONTRACT - stated only when the work order declares a path for one.
+   *
+   * Asking every run for a verdict its declaration binds nothing to would be putting
+   * words in a spec's mouth, and would train agents to emit a line nobody reads.
+   */
+  it("asks for a finding only when the work order declares one", () => {
+    expect(composeInstruction(spec())).not.toContain("FINDING:");
+    const asked = composeInstruction(spec({ onFinding: "escalate" }));
+    expect(asked).toContain("FINDING: discovery");
+    expect(asked).toContain("FINDING: nothing-new");
+    // Both halves of the declaration ask for it: a spec may care only about the
+    // quiet path, and it still needs the run to say which one this was.
+    expect(composeInstruction(spec({ onNothingNew: "stand-down" }))).toContain("FINDING:");
+  });
+});
+
+describe("reading the run's own verdict off its output", () => {
+  it("reads a declared line, anywhere in the output", () => {
+    expect(readFinding("# Report\n\nfound a thing\n\nFINDING: discovery\n")).toBe("discovery");
+    expect(readFinding("nothing changed\nFINDING: nothing-new")).toBe("nothing-new");
+    // Case and surrounding whitespace are the agent's business, not ours.
+    expect(readFinding("  FINDING:   Discovery  ")).toBe("discovery");
+  });
+
+  it("takes the LAST declaration, so a rehearsal never outranks the answer", () => {
+    const output = ["End with FINDING: nothing-new if it was quiet.", "", "I found something.", "FINDING: discovery"].join("\n");
+    expect(readFinding(output)).toBe("discovery");
+  });
+
+  it("returns nothing for a value outside the closed set, and never guesses", () => {
+    // Guessing `discovery` would put noise in front of a person; guessing
+    // `nothing-new` would hide a real find. An unparseable verdict is a run that did
+    // not answer, and the server falls back to the plain success path.
+    expect(readFinding("FINDING: maybe")).toBeUndefined();
+    expect(readFinding("FINDING: discovery and also some prose")).toBeUndefined();
+    expect(readFinding("a report with no verdict at all")).toBeUndefined();
+    expect(readFinding("")).toBeUndefined();
   });
 });
 
@@ -390,17 +431,20 @@ describe("the run lifecycle an executed work order reports", () => {
     };
   }
 
-  function reporter(): RunReporter & { calls: string[]; reports: string[] } {
+  function reporter(): RunReporter & { calls: string[]; reports: string[]; findings: (string | undefined)[] } {
     const calls: string[] = [];
     const reports: string[] = [];
+    const findings: (string | undefined)[] = [];
     return {
       calls,
       reports,
+      findings,
       async started() {
         calls.push("started");
       },
       async finished(_d, outcome, detail) {
         calls.push(`finished:${outcome}`);
+        findings.push(detail.finding);
         if (detail.report) reports.push(detail.report);
       },
     };
@@ -422,6 +466,52 @@ describe("the run lifecycle an executed work order reports", () => {
     expect(r.reports[0]).toContain("nothing needed changing");
     // The Timeline summary skips the markdown heading marker and reads as prose.
     if (outcome.ok) expect(outcome.result.detail).toContain("Did the thing");
+  });
+
+  /**
+   * THE WHOLE POINT OF THE CONTRACT, end to end on the machine side: a run that
+   * declares a discovery is reported as one, so the server can take the declared
+   * `onFinding` path and put the report in front of a person.
+   */
+  it("reports the finding the run declared, when the work order asked for one", async () => {
+    const script = path.join(root, "lifecycle-finding.sh");
+    fs.writeFileSync(script, '#!/bin/sh\ncat > /dev/null\necho "# Found it"\necho "FINDING: discovery"\n', { mode: 0o755 });
+    const r = reporter();
+    await executeDirective(
+      config({}, { command: "sh", args: [script] }),
+      { gh, run: { exec: nodeExec, ensureDir: async (d) => fs.promises.mkdir(d, { recursive: true }).then(() => undefined), now: () => Date.now() }, runReporter: r },
+      runDirective({ onFinding: "escalate", onNothingNew: "stand-down" }),
+    );
+    expect(r.calls).toEqual(["started", "finished:success"]);
+    expect(r.findings).toEqual(["discovery"]);
+  });
+
+  it("reports NO finding when the work order never asked for one", async () => {
+    // The same output against a declaration with no finding path: the line is prose
+    // the agent happened to print, and reporting it would claim a contract the spec
+    // never entered into.
+    const script = path.join(root, "lifecycle-unasked.sh");
+    fs.writeFileSync(script, '#!/bin/sh\ncat > /dev/null\necho "FINDING: discovery"\n', { mode: 0o755 });
+    const r = reporter();
+    await executeDirective(
+      config({}, { command: "sh", args: [script] }),
+      { gh, run: { exec: nodeExec, ensureDir: async (d) => fs.promises.mkdir(d, { recursive: true }).then(() => undefined), now: () => Date.now() }, runReporter: r },
+      runDirective(),
+    );
+    expect(r.findings).toEqual([undefined]);
+  });
+
+  it("reports no finding from a run that BROKE, whatever it printed", async () => {
+    const script = path.join(root, "lifecycle-finding-fail.sh");
+    fs.writeFileSync(script, '#!/bin/sh\ncat > /dev/null\necho "FINDING: discovery"\nexit 3\n', { mode: 0o755 });
+    const r = reporter();
+    await executeDirective(
+      config({}, { command: "sh", args: [script] }),
+      { gh, run: { exec: nodeExec, ensureDir: async (d) => fs.promises.mkdir(d, { recursive: true }).then(() => undefined), now: () => Date.now() }, runReporter: r },
+      runDirective({ onFinding: "escalate" }),
+    );
+    expect(r.calls).toEqual(["started", "finished:failure"]);
+    expect(r.findings).toEqual([undefined]);
   });
 
   it("reports finished:failure and the typed refusal when the run breaks", async () => {

@@ -14,7 +14,7 @@ import { createFileRoute } from '@tanstack/react-router'
  *
  * RUNS — the runs bridge's report-back half:
  *   POST /api/agent/runs/started   {agent, directive}                    → run-started
- *   POST /api/agent/runs/finished  {agent, directive, outcome, summary?…} → run-finished
+ *   POST /api/agent/runs/finished  {agent, directive, outcome, finding?, summary?…} → run-finished
  *
  * ── one route, one credential, both directions ───────────────────────────────
  *
@@ -279,7 +279,7 @@ function parseUnresolved(raw: unknown): { externalId: string; why: string }[] {
 // ---- runs: the runs bridge's report-back half ----
 
 async function runs(verb: string, ctx: Omit<Ctx, 'teamId'>): Promise<Response> {
-  const { runStarted, runFinished, isRunOutcome } = await import('../graph/agent/runs.js')
+  const { runStarted, runFinished, isRunOutcome, isRunFinding, RUN_FINDINGS } = await import('../graph/agent/runs.js')
   const { agent, now, body } = ctx
   const directiveId = str(body.directive) ?? str(body.id)
   if (!directiveId) return json({ error: 'directive is required (the run work order this reports on)' }, 400)
@@ -292,12 +292,21 @@ async function runs(verb: string, ctx: Omit<Ctx, 'teamId'>): Promise<Response> {
   if (verb === 'finished') {
     const outcome = body.outcome
     if (!isRunOutcome(outcome)) return json({ error: 'outcome must be "success" or "failure"' }, 400)
+    // ABSENT is legal (an executor that does not speak the contract); a value
+    // outside the closed set is REFUSED rather than coerced, for the same reason an
+    // unknown observation `state` is - a coerced finding is a fabricated one, and
+    // this one decides which transition the dispatching object runs.
+    const finding = body.finding
+    if (finding !== undefined && finding !== null && !isRunFinding(finding)) {
+      return json({ error: `finding must be one of ${RUN_FINDINGS.join('|')} (or absent)` }, 400)
+    }
     const report = (body.report ?? null) as { title?: unknown; body?: unknown } | null
     const r = await runFinished({
       now,
       agent,
       directiveId,
       outcome,
+      ...(isRunFinding(finding) ? { finding } : {}),
       summary: str(body.summary) ?? null,
       exitCode: num(body.exitCode) ?? null,
       durationMs: num(body.durationMs) ?? null,

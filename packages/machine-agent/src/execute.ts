@@ -25,8 +25,15 @@
 import type { AgentConfig } from "./config.js";
 import type { Gh } from "./gh.js";
 import { checkApproval, checkMergeTarget, checkRepo, findMarkedComment } from "./guards.js";
-import { runInstruction, type RunDeps, type RunOutcomeDetail } from "./run.js";
-import { instructionOf, type Directive, type ExecuteOutcome, type RunOutcome } from "./types.js";
+import { readFinding, runInstruction, type RunDeps, type RunOutcomeDetail } from "./run.js";
+import {
+  instructionOf,
+  wantsFinding,
+  type Directive,
+  type ExecuteOutcome,
+  type RunFinding,
+  type RunOutcome,
+} from "./types.js";
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
 
@@ -40,7 +47,15 @@ export interface RunReporter {
   finished: (
     directive: Directive,
     outcome: RunOutcome,
-    detail: { summary?: string; exitCode: number | null; durationMs: number; report?: string },
+    detail: {
+      summary?: string;
+      /** What the run declared it found, when the work order asked and the run
+       *  answered. Absent is a real value - see `readFinding`. */
+      finding?: RunFinding;
+      exitCode: number | null;
+      durationMs: number;
+      report?: string;
+    },
   ) => Promise<void>;
 }
 
@@ -184,10 +199,15 @@ async function executeRun(config: AgentConfig, deps: ExecuteDeps, directive: Dir
 
   const outcome: RunOutcomeDetail = await runInstruction(config, spec, deps.run);
   const summary = firstMeaningfulLine(outcome.output) ?? outcome.refusal?.error;
+  // Only a run that WORKED has standing to say what it found; a failed run's output
+  // is an account of a run that did not finish, and the server ignores the finding
+  // on that path anyway. Reading it only here keeps the two ends agreeing.
+  const finding = outcome.ok && wantsFinding(spec) ? readFinding(outcome.output) : undefined;
 
   await report(() =>
     deps.runReporter?.finished(directive, outcome.ok ? "success" : "failure", {
       ...(summary ? { summary } : {}),
+      ...(finding ? { finding } : {}),
       exitCode: outcome.exitCode,
       durationMs: outcome.durationMs,
       // The run's own output IS the product, when the work order asked for one. A

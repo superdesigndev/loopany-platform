@@ -153,6 +153,7 @@ function executeDeps(config: AgentConfig, deps: AgentDeps): ExecuteDeps {
         agent: config.agent,
         directive: directive.id,
         outcome,
+        ...(detail.finding ? { finding: detail.finding } : {}),
         ...(detail.summary ? { summary: detail.summary } : {}),
         exitCode: detail.exitCode,
         durationMs: detail.durationMs,

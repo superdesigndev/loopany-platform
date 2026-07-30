@@ -90,6 +90,18 @@ export const LOOP_SPEC: TypeSpec = {
      *
      * The STANDING intent is here; the particulars ride the instance
      * (`payload.brief` / `workdir` / `repos`), so one declaration serves every loop.
+     *
+     * ── FOUR report-back paths, not two ─────────────────────────────────────
+     *
+     * The work order declares what each kind of report-back does, and "the run
+     * found something a person must decide" is one of them (`onFinding` →
+     * `escalate`). That is what makes UNATTENDED DISCOVERY reach a human: the
+     * clock dispatches, the agent run does the work and prepares the context, and
+     * the RUN'S OWN REPORT-BACK opens the review through the `agent-run`/`rule`
+     * entrance every review already admits. The clock gains nothing - it still
+     * only dispatches - which is the captain's ruling: a periodic human review is
+     * always worth an agent gathering the materials first, and a bare
+     * clock-created review is the lazy version of the same thing.
      */
     {
       name: "fire",
@@ -115,6 +127,11 @@ export const LOOP_SPEC: TypeSpec = {
             ].join("\n"),
             scope: { writes: ["report.md"] },
             onSuccess: "complete",
+            // The run said it turned something up: hand its report to a person.
+            onFinding: "escalate",
+            // The run said there was nothing new: a clean stop, and the transition
+            // that says so out loud rather than reading as ordinary completion.
+            onNothingNew: "stand-down",
             onFailure: "fail",
             report: true,
           },
@@ -133,6 +150,39 @@ export const LOOP_SPEC: TypeSpec = {
     // A run that reported a failure. Distinct from `stand-down` on purpose: the
     // Timeline must not read a failed run as a quiet one.
     { name: "fail", from: ["running"], to: "idle", entrance: ["agent-run", "rule"] },
+    /**
+     * THE RUN FOUND SOMETHING A PERSON MUST DECIDE - the fourth outcome, and the hop
+     * that makes an UNATTENDED loop reach a human.
+     *
+     * Same entrance set as the other three outcome transitions (`agent-run` for a run
+     * reporting for itself, `rule` for the runs bridge entering it as the engine's
+     * declarative consequence), so this is the RUN REPORT-BACK path and nothing else.
+     * The clock is deliberately absent: a fire can only `dispatch-outward-run`, and
+     * the review is opened by the work the fire caused, never by the fire.
+     *
+     * Its `enqueue-review` targets `via: "run-report"` - the report doc THIS run
+     * wrote, named on the very event that entered this transition - so the person
+     * gets the run's findings as the thing they are deciding about. Not
+     * `via: "produces"`: that would fan out over every report the loop ever made and
+     * open a review for the whole unreviewed archive.
+     *
+     * The gate itself opens on the created `decision-review` shepherd (entrance
+     * `rule`, actor = the action id), exactly as `queue-review` does for a post. The
+     * loop holds no gate of its own - a loop is never "waiting on you", the work
+     * around its products is.
+     */
+    {
+      name: "escalate",
+      from: ["running"],
+      to: "idle",
+      entrance: ["agent-run", "rule"],
+      actions: [
+        {
+          kind: "enqueue-review",
+          payload: { queue: "decision", review: "decision-review", via: "run-report" },
+        },
+      ],
+    },
     // A fire the machine never claimed (asleep/offline), superseded by the next
     // one. Neither success nor failure - it is the scheduler's own record.
     { name: "skip", from: ["idle"], to: "idle", entrance: "clock" },

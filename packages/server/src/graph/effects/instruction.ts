@@ -50,6 +50,33 @@
 export const RUN_STARTED_EVENT = "run-started";
 export const RUN_FINISHED_EVENT = "run-finished";
 
+/**
+ * WHAT THE RUN FOUND - the run's own verdict on its own work.
+ *
+ * An outcome says whether the run WORKED (`success`/`failure`); a FINDING says what
+ * it found, and the two are genuinely different questions. A watch that ran
+ * perfectly and turned up a regression is a `success` whose result a person has to
+ * look at; the identical run on a quiet day is a `success` that should wake nobody.
+ * Collapsing them would leave a loop with exactly two report-back paths and no way
+ * to say "this needs you" without lying about having failed.
+ *
+ * Closed on purpose, and small. The vocabulary is what a DECLARATION can bind a
+ * transition to (`onFinding` / `onNothingNew`), so every value here must mean the
+ * same thing for every type in the registry - richer, run-specific nuance belongs in
+ * the report the run writes, which is the thing a person then reads.
+ *
+ * ABSENT is a real third value and NOT a default of either: an executor that does
+ * not speak this contract (or a run that never said) reports no finding at all, and
+ * the resolver falls back to the plain `onSuccess` path - which is exactly what
+ * every work order did before this existed.
+ */
+export const RUN_FINDINGS = ["discovery", "nothing-new"] as const;
+export type RunFinding = (typeof RUN_FINDINGS)[number];
+
+export function isRunFinding(v: unknown): v is RunFinding {
+  return typeof v === "string" && (RUN_FINDINGS as readonly string[]).includes(v);
+}
+
 /** The external "system" an instruction targets. It does not act on GitHub or
  *  Linear - it acts through the MACHINE - and `effect_directives.target_source` is
  *  stored rather than implied by kind precisely so a second kind of target needs no
@@ -117,6 +144,17 @@ export interface InstructionSpec {
    *  is a legitimate posture for a pure investigation. */
   onSuccess?: string;
   onFailure?: string;
+  /**
+   * The transition for a SUCCESSFUL run that reported a FINDING (see `RUN_FINDINGS`).
+   * This is how a declaration says "and if the run turns something up, do this
+   * instead" - the loop spec binds `onFinding` to a transition whose `enqueue-review`
+   * action puts the run's report in front of a person.
+   *
+   * Both fall back to `onSuccess` when absent, so a work order that declares neither
+   * behaves exactly as it did before findings existed.
+   */
+  onFinding?: string;
+  onNothingNew?: string;
   /** Should the run's captured output become a report DOC? A run that produces a
    *  page of analysis wants this; one that only acts does not. */
   report: boolean;
@@ -201,6 +239,8 @@ export function parseInstruction(directiveId: string, payload: unknown): ParseIn
 
   const onSuccess = str(p.onSuccess);
   const onFailure = str(p.onFailure);
+  const onFinding = str(p.onFinding);
+  const onNothingNew = str(p.onNothingNew);
 
   return {
     ok: true,
@@ -212,9 +252,34 @@ export function parseInstruction(directiveId: string, payload: unknown): ParseIn
       label: str(p.label) ?? firstLine(intent),
       ...(onSuccess ? { onSuccess } : {}),
       ...(onFailure ? { onFailure } : {}),
+      ...(onFinding ? { onFinding } : {}),
+      ...(onNothingNew ? { onNothingNew } : {}),
       report: p.report === true,
     },
   };
+}
+
+/**
+ * WHICH TRANSITION A REPORT-BACK RUNS - the one place the mapping lives.
+ *
+ * Pure, and deliberately the whole rule rather than three branches spread over the
+ * bridge: a run's outcome and its finding together decide what the dispatching
+ * object does next, and a second copy of that decision anywhere would be a place for
+ * the two to disagree about what "nothing found" means.
+ *
+ * A failure never consults the finding. A run that broke has no standing to say what
+ * it found - whatever it printed is an account of a run that did not finish - so the
+ * failure path is `onFailure` or nothing, exactly as before.
+ */
+export function outcomeTransition(
+  spec: Pick<InstructionSpec, "onSuccess" | "onFailure" | "onFinding" | "onNothingNew">,
+  outcome: "success" | "failure",
+  finding?: RunFinding | null,
+): string | undefined {
+  if (outcome === "failure") return spec.onFailure;
+  if (finding === "discovery") return spec.onFinding ?? spec.onSuccess;
+  if (finding === "nothing-new") return spec.onNothingNew ?? spec.onSuccess;
+  return spec.onSuccess;
 }
 
 function parseScope(raw: unknown): { ok: true; scope: RunScope } | { ok: false; why: string } {
@@ -307,6 +372,8 @@ export function instructionOf(payload: unknown): InstructionSpec | undefined {
   const scope = parseScope(p.scope);
   const onSuccess = str(p.onSuccess);
   const onFailure = str(p.onFailure);
+  const onFinding = str(p.onFinding);
+  const onNothingNew = str(p.onNothingNew);
   return {
     runId,
     intent,
@@ -318,6 +385,8 @@ export function instructionOf(payload: unknown): InstructionSpec | undefined {
     label: str(p.label) ?? firstLine(intent),
     ...(onSuccess ? { onSuccess } : {}),
     ...(onFailure ? { onFailure } : {}),
+    ...(onFinding ? { onFinding } : {}),
+    ...(onNothingNew ? { onNothingNew } : {}),
     report: p.report === true,
   };
 }

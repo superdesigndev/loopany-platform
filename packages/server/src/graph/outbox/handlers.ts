@@ -152,7 +152,8 @@ function describeObject(o: GraphObject): string {
  *                review type needs no payload change.
  *   via          `self` (default) - the review target is the action's own object;
  *                `tracks`        - follow the object's `tracks` edge;
- *                `produces`      - fan out over the object's `produces` edges.
+ *                `produces`      - fan out over the object's `produces` edges;
+ *                `run-report`    - the report THIS run produced (see below).
  *   select       for `via: "produces"`: `{type?, unpublished?}` filter, so a loop
  *                can declare "review the posts I make" without naming instances.
  *
@@ -211,6 +212,33 @@ async function resolveReviewTargets(ctx: HandlerContext, via: string): Promise<T
     if (!edge) return { ok: true, objects: [] };
     const target = await graph.getObject(tx, edge.dstId);
     return { ok: true, objects: target ? [target] : [] };
+  }
+  /**
+   * THE REPORT THIS RUN JUST WROTE - and not every report the loop ever produced.
+   *
+   * A scheduled loop accumulates one report per run, all of them hanging off the
+   * same `produces` edges, so `via: "produces"` on a long-lived loop would open a
+   * review for the whole unreviewed archive the first time one run escalated. The
+   * run's own product is the only honest target for "this run found something",
+   * and the CAUSING EVENT is where it is named: `agent/runs.ts` writes the report's
+   * id onto the very event whose transition enqueued this action, inside the same
+   * transaction that created the doc.
+   *
+   * Nothing to review is a CLEAN STOP, not a refusal - a work order that did not
+   * ask for a report (`report: false`) still legitimately declares an escalation
+   * path, and the caller says "no review target matched" rather than dead-lettering
+   * a consequence nobody could have delivered.
+   */
+  if (via === "run-report") {
+    const event = await graph.getEvent(tx, action.eventId);
+    const reportId = str((event?.payload as Record<string, unknown> | null)?.report);
+    if (!reportId) return { ok: true, objects: [] };
+    const target = await graph.getObject(tx, reportId);
+    if (!target) return { ok: true, objects: [] };
+    // Already reviewed by something: the question has been asked, and a second
+    // shepherd on one report would ask it twice. Same rule as `produces`.
+    if (await hasReviewer(ctx, target.id)) return { ok: true, objects: [] };
+    return { ok: true, objects: [target] };
   }
   if (via === "produces") {
     const select = (p.select ?? {}) as { type?: unknown; unpublished?: unknown };

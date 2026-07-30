@@ -4,6 +4,7 @@ import {
   fetchAttention,
   fetchEffects,
   fetchWork,
+  fetchInbox,
   fetchLibrary,
   fetchNotifications,
   fetchSchedule,
@@ -16,6 +17,8 @@ import {
   type AttentionItem,
   type AttentionView,
   type EffectsView,
+  type InboxItem,
+  type InboxView,
   type LibraryArtifact,
   type LibraryView,
   type NotificationsView,
@@ -38,9 +41,14 @@ import {
  * naming:
  *
  *  - the "Needs you" section is not a filter over a `needsHuman` flag someone
- *    typed; it is the open `human-verdict` obligations, and each row carries the
- *    exact transition that discharges it (resolved server-side from the object's
- *    EFFECTIVE type spec).
+ *    typed; it is `/api/graph/inbox` - THE open `human-verdict` obligations - and
+ *    each row carries the exact transition that discharges it (resolved server-side
+ *    from the object's EFFECTIVE type spec). It is deliberately NOT built by
+ *    filtering the Library: the Library lists CONTENT, so a gate on an object with
+ *    no Library row (a plain Task, which is exactly what a run's escalation
+ *    produces) was counted by the badge and never rendered, and a person could owe
+ *    a verdict the UI never showed them. The list and the count now read the same
+ *    rows, so they cannot disagree.
  *  - the preview's body HTML is rendered server-side from the stored artifact
  *    file by `@loopany/artifact-format`, already sanitized. It is injected with
  *    `dangerouslySetInnerHTML` for the same reason the product's markdown
@@ -183,6 +191,57 @@ function ArtifactRow({
         <span className="artifact-action">
           {artifact.bodyAvailable ? 'Preview' : 'Details'} <Glyph name="chevron" />
         </span>
+      )}
+    </article>
+  )
+}
+
+/**
+ * AN INBOX ITEM WITH NO LIBRARY ROW - a verdict owed on something that is not
+ * content.
+ *
+ * The minimal counterpart to `ArtifactRow`, and the reason "Needs you" can now be
+ * complete. A gate lives on a TASK; most of today's tasks shepherd a doc or a PR
+ * mirror, and those rows render the content. But nothing guarantees it - a run that
+ * escalates its own findings, a probe's plain Task, any future type that owes a
+ * verdict about something with no body - and for those the honest answer is a row of
+ * their own rather than an absence.
+ *
+ * It says what it can and does not invent the rest: no preview (there is nothing to
+ * preview) and no state chip pretending to be a document state - just what is owed,
+ * on what, since when, and the button that discharges it.
+ */
+function InboxRow({
+  item,
+  onVerdict,
+  busy,
+}: {
+  item: InboxItem
+  onVerdict: (item: InboxItem) => void
+  busy: boolean
+}) {
+  return (
+    <article className="artifact-row needs-human is-mirror" id={`inbox-${item.objectId}-${item.key}`}>
+      <span className="artifact-icon icon-doc">
+        <Glyph name="decision" />
+      </span>
+      <div className="artifact-main">
+        <h3>{item.title}</h3>
+        <p>
+          {item.source} · {item.type}
+        </p>
+      </div>
+      <span className="state-label state-human">{item.label}</span>
+      <time title={item.openedAt}>{relativeAge(item.openedAt)}</time>
+      {item.verdict ? (
+        <button className="verdict-button" disabled={busy} onClick={() => onVerdict(item)}>
+          {busy ? 'Working…' : item.verdict.label}
+        </button>
+      ) : (
+        // No declared transition closes this key from the object's current state.
+        // Saying so is better than a dead button: the obligation is real, and the
+        // spec is what has to change.
+        <span className="artifact-action">No verdict declared</span>
       )}
     </article>
   )
@@ -601,29 +660,44 @@ function NotificationsPane({
 
 function LibraryPane({
   library,
+  inbox,
   attention,
   effects,
   work,
   highlighted,
   onVerdict,
+  onInboxVerdict,
   onWorkVerdict,
   onResolveAttention,
   busyId,
 }: {
   library: LibraryView
+  inbox: InboxView | null
   attention: AttentionView | null
   effects: EffectsView | null
   work: WorkView | null
   highlighted: string[]
   onVerdict: (a: LibraryArtifact) => void
+  onInboxVerdict: (item: InboxItem) => void
   onWorkVerdict: (row: WorkRow) => void
   onResolveAttention: (item: AttentionItem, verb: 'acknowledge' | 'retry') => void
   busyId: string | null
 }) {
   const [preview, setPreview] = useState<LibraryArtifact | null>(null)
-  const needsYou = library.artifacts.filter((a) => a.needsHuman)
+  // THE ACCOUNT, not the Library projection. Every open human-verdict obligation
+  // gets a row: the CONTENT row when the gate's shepherd tracks something the
+  // Library holds, and a minimal row of its own when it does not.
+  const needsYou = inbox?.items ?? []
+  const artifactById = new Map(library.artifacts.map((a) => [a.id, a]))
+  const inRows = needsYou.map((item) => ({ item, artifact: item.reviews ? artifactById.get(item.reviews) : undefined }))
+  // A category listing skips exactly what "Needs you" already rendered - derived
+  // from the SAME rows, so an artifact can never be in both places or in neither.
+  const shownAbove = new Set(inRows.map((r) => r.artifact?.id).filter(Boolean) as string[])
   const grouped = library.categories
-    .map((category) => ({ category, items: library.artifacts.filter((a) => a.category === category && !a.needsHuman) }))
+    .map((category) => ({
+      category,
+      items: library.artifacts.filter((a) => a.category === category && !shownAbove.has(a.id)),
+    }))
     .filter((g) => g.items.length)
 
   useEffect(() => {
@@ -667,16 +741,25 @@ function LibraryPane({
         </div>
         <div className="artifact-list attention-list">
           {needsYou.length === 0 && <p style={{ padding: '10px 4px 16px', color: '#94866a', fontSize: '.8125rem' }}>Nothing is waiting on you.</p>}
-          {needsYou.map((a) => (
-            <ArtifactRow
-              key={a.id}
-              artifact={a}
-              highlighted={highlightSet.has(a.id)}
-              onOpen={setPreview}
-              onVerdict={onVerdict}
-              busy={busyId === a.id}
-            />
-          ))}
+          {inRows.map(({ item, artifact }) =>
+            artifact ? (
+              <ArtifactRow
+                key={`${item.objectId}:${item.key}`}
+                artifact={artifact}
+                highlighted={highlightSet.has(artifact.id)}
+                onOpen={setPreview}
+                onVerdict={onVerdict}
+                busy={busyId === artifact.id}
+              />
+            ) : (
+              <InboxRow
+                key={`${item.objectId}:${item.key}`}
+                item={item}
+                onVerdict={onInboxVerdict}
+                busy={busyId === item.objectId}
+              />
+            ),
+          )}
         </div>
       </section>
       {library.truncated > 0 && (
@@ -971,6 +1054,7 @@ export function WorkspaceView() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [system, setSystem] = useState<SystemView | null>(null)
   const [library, setLibrary] = useState<LibraryView | null>(null)
+  const [inbox, setInbox] = useState<InboxView | null>(null)
   const [timeline, setTimeline] = useState<TimelineView | null>(null)
   const [attention, setAttention] = useState<AttentionView | null>(null)
   const [effects, setEffects] = useState<EffectsView | null>(null)
@@ -984,10 +1068,11 @@ export function WorkspaceView() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, sys, lib, tl, att, eff, wk, sch, notes] = await Promise.all([
+      const [s, sys, lib, inb, tl, att, eff, wk, sch, notes] = await Promise.all([
         fetchSummary(),
         fetchSystem(),
         fetchLibrary(),
+        fetchInbox(),
         fetchTimeline(),
         fetchAttention(),
         fetchEffects(),
@@ -998,6 +1083,7 @@ export function WorkspaceView() {
       setSummary(s)
       setSystem(sys)
       setLibrary(lib)
+      setInbox(inb)
       setTimeline(tl)
       setAttention(att)
       setEffects(eff)
@@ -1039,6 +1125,29 @@ export function WorkspaceView() {
       } else {
         setNotice(`refused: ${result.code} — ${result.message}`)
       }
+      await refresh()
+      setBusyId(null)
+    },
+    [refresh],
+  )
+
+  /**
+   * A verdict on an inbox item that has no Library row. The SAME write path as every
+   * other verdict - `applyTransition` on the task that owes it - which is the point:
+   * a row rendered from the inbox is not a second kind of decision, it is the same
+   * decision on something the Library was never going to list.
+   */
+  const onInboxVerdict = useCallback(
+    async (item: InboxItem) => {
+      if (!item.verdict) return
+      setBusyId(item.objectId)
+      setNotice(null)
+      const result = await postVerdict(item.objectId, item.verdict.transition)
+      setNotice(
+        result.ok
+          ? `${item.title} → ${result.status} (closed ${result.closed.join(', ') || 'nothing'}; event ${result.eventId})`
+          : `refused: ${result.code} — ${result.message}`,
+      )
       await refresh()
       setBusyId(null)
     },
@@ -1145,11 +1254,13 @@ export function WorkspaceView() {
             {view === 'library' && library && (
               <LibraryPane
                 library={library}
+                inbox={inbox}
                 attention={attention}
                 effects={effects}
                 work={work}
                 highlighted={highlighted}
                 onVerdict={onVerdict}
+                onInboxVerdict={onInboxVerdict}
                 onWorkVerdict={onWorkVerdict}
                 onResolveAttention={onResolveAttention}
                 busyId={busyId}

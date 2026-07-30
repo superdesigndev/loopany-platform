@@ -1108,6 +1108,15 @@ computes pure functions. Run instructions: `README.md`.
   block a terminal verdict) and AFTER (to apply the verdict's own consequence), so the
   decision and the field write never come apart - and the AFTER pass is what lets the
   response report `effects`, i.e. what the verdict actually caused.
+- **"Needs you" renders from `/api/graph/inbox`, NEVER from a Library filter**
+  (`WorkspaceView.tsx` `LibraryPane`). The Library lists CONTENT, so a gate on an object with
+  no Library row - a plain Task, which is exactly what a run's `escalate` or a
+  `graph:dispatch` produces - was COUNTED by the badge (`summary.needsYou`, open
+  human-verdict obligations) and never SHOWN. An inbox item with no `reviews` artifact gets
+  its own minimal `InboxRow`; the category listings skip whatever "Needs you" rendered, so a
+  row is never in both places or in neither, and count == list by construction. Pinned by
+  `components/workspace/needsYou.test.ts` (a real jsdom render - a source-shaped guard would
+  have passed on the broken version).
 - **The Library row is the CONTENT**; its shepherd supplies the verdict, and
   `verdict.objectId` is the SHEPHERD's id so the client never has to infer it. Row recency
   and age read `updatedAt`, NOT `statusChangedAt` - a doc's status never changes, so a
@@ -1399,6 +1408,23 @@ computes pure functions. Run instructions: `README.md`.
   TRANSITION they cause carries `entrance: "rule"` with the action id as actor, because the
   state change is the engine's declarative consequence of a run finishing - the same shape an
   observation takes when it closes a wait.
+- **A run reports an OUTCOME and, optionally, a FINDING** (`RUN_FINDINGS` =
+  `discovery | nothing-new`, `instruction.ts`). "Did the run work?" and "did it turn anything
+  up?" are different questions, so a work order can bind a transition to each:
+  `onSuccess`/`onFailure` plus `onFinding`/`onNothingNew`, resolved in ONE pure place
+  (`outcomeTransition`) - a failure never consults the finding, and an ABSENT finding falls
+  back to `onSuccess`, so an executor that does not speak the contract behaves exactly as
+  before. THIS is how an unattended discovery reaches a person: `LOOP_SPEC.fire` still only
+  dispatches, and the RUN'S REPORT-BACK enters `escalate`, whose `enqueue-review` opens the
+  gate (captain ruling `clock-opens-review`: never widen a gate-opening entrance to `clock` -
+  a periodic review is worth an agent gathering the materials first). The finding joins the
+  `run-finished` event's derived id, so a re-delivery dedups and a report that CHANGED its
+  mind is its own row. Machine side: `composeInstruction` states the `FINDING: <value>` line
+  contract ONLY when the declaration binds one, and `readFinding` takes the LAST match and
+  NEVER guesses - an unparseable verdict is a run that did not answer.
+- **`enqueue-review` `via: "run-report"`** targets the report doc THIS run wrote, read off the
+  causing event's `payload.report` (written by `runFinished` in the same transaction).
+  `via: "produces"` would fan out over a long-lived loop's whole unreviewed archive.
 - **The lease is the authority.** Both run verbs require the caller to still HOLD the
   directive's lease, else `LEASE_LOST` (409). Without it any process with the channel token
   could advance any task by naming a directive id, and a zombie could overwrite what its

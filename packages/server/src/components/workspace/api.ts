@@ -90,6 +90,36 @@ export interface LibraryView {
   truncated: number
 }
 
+/**
+ * ONE OPEN HUMAN-VERDICT OBLIGATION - what a person actually owes.
+ *
+ * THE source for "Needs you", and deliberately not the Library. The Library lists
+ * CONTENT (docs and PR mirrors) and can only show a gate that happens to sit on a
+ * shepherd tracking a Library row; an obligation on a plain Task has no Library row
+ * at all, so filtering the Library would COUNT it (the count comes from here) and
+ * never SHOW it. A person owing a verdict the UI never renders is the one failure
+ * an inbox cannot have.
+ */
+export interface InboxItem {
+  /** The TASK that owes the verdict - what `postVerdict` moves. */
+  objectId: string
+  key: string
+  class: string
+  label: string
+  openedAt: string
+  title: string
+  type: string
+  source: string
+  /** The content object this task reviews, when it shepherds one. Absent ⇒ there is
+   *  no Library row, and the list renders the item on its own terms. */
+  reviews?: string
+  verdict?: { transition: string; label: string }
+}
+
+export interface InboxView {
+  items: InboxItem[]
+}
+
 export interface TimelineEntry {
   id: string
   ts: string
@@ -311,6 +341,7 @@ async function getJson<T>(path: string): Promise<T> {
 export const fetchSummary = () => getJson<Summary>('/api/graph/summary')
 export const fetchSystem = () => getJson<SystemView>('/api/graph/system')
 export const fetchLibrary = () => getJson<LibraryView>('/api/graph/library')
+export const fetchInbox = () => getJson<InboxView>('/api/graph/inbox')
 export const fetchTimeline = () => getJson<TimelineView>('/api/graph/timeline')
 export const fetchAttention = () => getJson<AttentionView>('/api/graph/attention')
 export const fetchNotifications = () => getJson<NotificationsView>('/api/graph/notifications')

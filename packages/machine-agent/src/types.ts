@@ -106,7 +106,19 @@ export interface Instruction {
   label: string;
   onSuccess?: string;
   onFailure?: string;
+  /** The transitions a work order binds to what the run FOUND (see `RunFinding`).
+   *  Their PRESENCE is what tells this agent the declaration wants a finding at all,
+   *  which is why they are mirrored here even though the agent never runs one. */
+  onFinding?: string;
+  onNothingNew?: string;
   report: boolean;
+}
+
+/** Does this work order care what the run found? Asking for a verdict a declaration
+ *  binds nothing to would be putting words in a spec's mouth, so the prompt only
+ *  states the contract when one of the two paths is declared. */
+export function wantsFinding(spec: Instruction): boolean {
+  return Boolean(spec.onFinding || spec.onNothingNew);
 }
 
 /** Read an instruction off a directive's payload, or undefined when it is not one.
@@ -120,6 +132,8 @@ export function instructionOf(payload: Record<string, unknown>): Instruction | u
   const workdir = str(rawScope.workdir);
   const onSuccess = str(payload.onSuccess);
   const onFailure = str(payload.onFailure);
+  const onFinding = str(payload.onFinding);
+  const onNothingNew = str(payload.onNothingNew);
   return {
     runId,
     intent,
@@ -133,6 +147,8 @@ export function instructionOf(payload: Record<string, unknown>): Instruction | u
     label: str(payload.label) ?? intent.split("\n")[0]!.slice(0, 120),
     ...(onSuccess ? { onSuccess } : {}),
     ...(onFailure ? { onFailure } : {}),
+    ...(onFinding ? { onFinding } : {}),
+    ...(onNothingNew ? { onNothingNew } : {}),
     report: payload.report === true,
   };
 }
@@ -187,6 +203,18 @@ export interface ObservationReportResponse {
 
 export type RunOutcome = "success" | "failure";
 
+/**
+ * WHAT THE RUN FOUND - mirrors the server's `RUN_FINDINGS` (see
+ * `graph/effects/instruction.ts`), and a closed union for the same reason
+ * `RefusalCode` is: a typo must be a compile error here, not a 400 at the far end.
+ *
+ * Distinct from the OUTCOME on purpose. "Did the run work?" and "did it turn
+ * anything up?" are different questions, and a watch that ran perfectly on a quiet
+ * day must not have to claim failure to avoid waking somebody.
+ */
+export const RUN_FINDINGS = ["discovery", "nothing-new"] as const;
+export type RunFinding = (typeof RUN_FINDINGS)[number];
+
 export interface RunStartedResponse {
   ok: true;
   runId: string;
@@ -199,6 +227,7 @@ export interface RunFinishedResponse {
   runId: string;
   objectId: string;
   outcome: RunOutcome;
+  finding?: RunFinding;
   replay: boolean;
   advanced?: { transition: string; status: string; replay: boolean };
   notAdvanced?: string;

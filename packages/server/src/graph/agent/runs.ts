@@ -53,7 +53,15 @@ import type { EffectDirective, GraphEvent, GraphObject } from "../../db/graph-sc
 import * as graph from "../../db/graphStore.js";
 import type { GraphExec } from "../../db/graphStore.js";
 import { applyTransitionIn } from "../applyTransition.js";
-import { instructionOf, runIdOf, runReportDocId, RUN_FINISHED_EVENT, RUN_STARTED_EVENT } from "../effects/instruction.js";
+import {
+  instructionOf,
+  outcomeTransition,
+  runIdOf,
+  runReportDocId,
+  RUN_FINISHED_EVENT,
+  RUN_STARTED_EVENT,
+  type RunFinding,
+} from "../effects/instruction.js";
 import { derivedEventId } from "../ids.js";
 
 /** The outcome a finished run reports. Two values, closed: a run either did the
@@ -66,6 +74,10 @@ export type RunOutcome = (typeof RUN_OUTCOMES)[number];
 export function isRunOutcome(v: unknown): v is RunOutcome {
   return typeof v === "string" && (RUN_OUTCOMES as readonly string[]).includes(v);
 }
+
+/** Re-exported at the bridge so the route validates the wire against the SAME closed
+ *  set the resolver reads. */
+export { isRunFinding, RUN_FINDINGS, type RunFinding } from "../effects/instruction.js";
 
 export type RunError = "UNKNOWN_DIRECTIVE" | "NOT_A_RUN" | "LEASE_LOST" | "NO_OBJECT";
 
@@ -89,6 +101,9 @@ export interface RunFinishedOk {
   runId: string;
   objectId: string;
   outcome: RunOutcome;
+  /** What the run said it found, when it said - echoed back so an agent's log can
+   *  show which of the declared paths its report chose. */
+  finding?: RunFinding;
   /** True when this exact outcome had already been recorded. */
   replay: boolean;
   /** The transition the outcome ran on the dispatching object, when the work
@@ -203,6 +218,14 @@ export interface RunFinishedInput {
   agent: string;
   directiveId: string;
   outcome: RunOutcome;
+  /**
+   * WHAT THE RUN FOUND, when it said. Not the same claim as the outcome: a run that
+   * worked perfectly and turned up something a person must decide is a `success`
+   * carrying `discovery`, and the work order's `onFinding` is what turns that into a
+   * review. Absent ⇒ the plain `onSuccess` path, so an executor that does not speak
+   * the contract behaves exactly as it did before.
+   */
+  finding?: RunFinding | null;
   /** One line for the Timeline. The run's own words about what it did. */
   summary?: string | null;
   exitCode?: number | null;
@@ -239,6 +262,7 @@ export async function runFinished(input: RunFinishedInput): Promise<RunFinishedO
   if (isFail(resolved)) return refuse(resolved);
   const { directive, object, runId } = resolved;
   const spec = instructionOf(directive.payload);
+  const finding = input.finding ?? undefined;
 
   return db.transaction(async (raw) => {
     const tx = raw as unknown as GraphExec;
@@ -247,8 +271,12 @@ export async function runFinished(input: RunFinishedInput): Promise<RunFinishedO
       // The outcome is part of the identity: a run cannot both succeed and fail,
       // so this collides only with a genuine re-delivery of the same outcome, and
       // a contradictory second report is visible as its own row rather than
-      // silently swallowed by a coarser key.
-      id: runEventId(runId, "finished", input.outcome),
+      // silently swallowed by a coarser key. The FINDING joins it for the same
+      // reason and on the same terms - a re-delivery repeats it, so the id is
+      // unchanged, while a report that changed its mind about what it found is a
+      // second row rather than a swallowed one. Absent ⇒ the id is byte-identical
+      // to what a pre-findings report produced.
+      id: runEventId(runId, "finished", input.outcome, finding),
       teamId: directive.teamId,
       objectId: object.id,
       kind: RUN_FINISHED_EVENT,
@@ -258,11 +286,12 @@ export async function runFinished(input: RunFinishedInput): Promise<RunFinishedO
         directive: directive.id,
         agent: input.agent,
         outcome: input.outcome,
+        finding: finding ?? null,
         label: spec?.label ?? null,
         exitCode: input.exitCode ?? null,
         durationMs: input.durationMs ?? null,
         summary: clip(input.summary) ?? null,
-        note: finishedNote(input.outcome, spec?.label, input.summary, input.exitCode),
+        note: finishedNote(input.outcome, spec?.label, input.summary, input.exitCode, finding),
       },
       entrance: "agent-run",
       actorId: runId,
@@ -283,7 +312,12 @@ export async function runFinished(input: RunFinishedInput): Promise<RunFinishedO
         })
       : undefined;
 
-    const transition = input.outcome === "success" ? spec?.onSuccess : spec?.onFailure;
+    // ONE resolver, in the pure module next to the declaration it reads - outcome
+    // plus finding decide the transition, and the bridge does not re-derive that
+    // rule. A run that reported a finding the work order declared no path for falls
+    // back to `onSuccess`, so an executor speaking the contract to a spec that does
+    // not is a no-op rather than a stuck run.
+    const transition = spec ? outcomeTransition(spec, input.outcome, finding) : undefined;
     let advanced: RunFinishedOk["advanced"];
     let notAdvanced: string | undefined;
     if (!transition) {
@@ -301,6 +335,11 @@ export async function runFinished(input: RunFinishedInput): Promise<RunFinishedO
           note: `${transition} after run ${input.outcome}`,
           run: runId,
           directive: directive.id,
+          ...(finding ? { finding } : {}),
+          // The run's PRODUCT, named on the event that advanced the object. This is
+          // what lets a declared consequence act on what THIS run made - see the
+          // `enqueue-review` handler's `via: "run-report"`, which is how a
+          // discovery reaches a person carrying the report as its context.
           ...(report ? { report: report.objectId } : {}),
         },
       });
@@ -325,6 +364,7 @@ export async function runFinished(input: RunFinishedInput): Promise<RunFinishedO
         directive: directive.id,
         object: object.id,
         outcome: input.outcome,
+        finding: finding ?? null,
         replay: !inserted,
         advanced: advanced?.transition ?? null,
         report: report?.objectId ?? null,
@@ -336,6 +376,7 @@ export async function runFinished(input: RunFinishedInput): Promise<RunFinishedO
       runId,
       objectId: object.id,
       outcome: input.outcome,
+      ...(finding ? { finding } : {}),
       replay: !inserted,
       ...(advanced ? { advanced } : {}),
       ...(notAdvanced ? { notAdvanced } : {}),
@@ -450,8 +491,13 @@ function reportArtifact(title: string, body: string, runId: string, now: string)
 /** A run event's id. DERIVED from the run and the phase, so every write in this
  *  module is idempotent on re-delivery. Not exported: nothing outside this module
  *  should be able to mint one. */
-function runEventId(runId: string, phase: "started" | "finished" | "report", outcome?: string): string {
-  return derivedEventId({ run: runId, phase, ...(outcome ? { outcome } : {}) });
+function runEventId(
+  runId: string,
+  phase: "started" | "finished" | "report",
+  outcome?: string,
+  finding?: string,
+): string {
+  return derivedEventId({ run: runId, phase, ...(outcome ? { outcome } : {}), ...(finding ? { finding } : {}) });
 }
 
 function finishedNote(
@@ -459,10 +505,16 @@ function finishedNote(
   label: string | undefined,
   summary: string | null | undefined,
   exitCode: number | null | undefined,
+  finding?: RunFinding,
 ): string {
   const what = label ?? "dispatched run";
   const said = clip(summary);
-  if (outcome === "success") return said ? `run finished: ${what} — ${said}` : `run finished: ${what}`;
+  if (outcome === "success") {
+    // The finding rides IN the note, because the Timeline row is where a person
+    // reads why a quiet run and a loud one look different.
+    const found = finding === "discovery" ? " · found something for you" : finding === "nothing-new" ? " · nothing new" : "";
+    return said ? `run finished: ${what}${found} — ${said}` : `run finished: ${what}${found}`;
+  }
   const why = said ?? (typeof exitCode === "number" ? `exit ${exitCode}` : "no reason reported");
   return `run FAILED: ${what} — ${why}`;
 }
