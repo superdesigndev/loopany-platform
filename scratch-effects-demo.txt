@@ -1,0 +1,2 @@
+Scratch file for the effect-delivery v1 demo.
+Safe to delete: it only ever lived on scratch branches.
