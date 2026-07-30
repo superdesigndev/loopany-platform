@@ -296,10 +296,27 @@ function ArtifactPreview({
  * accepts this is not happening, and "Retry" re-queues the action WITHOUT
  * acknowledging it, so a second failure comes straight back to this list.
  */
-const ATTENTION_LABEL: Record<AttentionItem['kind'], string> = {
-  'dead-letter': 'Effect never landed',
-  'chain-parked': 'Rule chain parked',
-  'close-refused': 'Close refused',
+/**
+ * Compact relative age, so an attention row reads like a Library row ("3h ago")
+ * instead of a raw timestamp. Computed against the real clock, NOT the workspace's
+ * seeded "now": these rows are things that just went wrong, and their age is a
+ * fact about the present. The exact instant stays available as a `title`.
+ */
+function relativeAge(iso: string): string {
+  const min = Math.round((Date.now() - Date.parse(iso)) / 60_000)
+  if (!Number.isFinite(min)) return '—'
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min}m ago`
+  const hours = Math.round(min / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  return days === 1 ? 'yesterday' : `${days}d ago`
+}
+
+const ATTENTION_LABEL: Record<AttentionItem['kind'], { one: string; many: string }> = {
+  'dead-letter': { one: 'effect never landed', many: 'effects never landed' },
+  'chain-parked': { one: 'parked rule chain', many: 'parked rule chains' },
+  'close-refused': { one: 'refused close', many: 'refused closes' },
 }
 
 function AttentionSection({
@@ -314,7 +331,7 @@ function AttentionSection({
   if (!attention.items.length) return null
   const summary = (Object.keys(attention.counts) as AttentionItem['kind'][])
     .filter((k) => attention.counts[k] > 0)
-    .map((k) => `${attention.counts[k]} ${ATTENTION_LABEL[k].toLowerCase()}`)
+    .map((k) => `${attention.counts[k]} ${attention.counts[k] === 1 ? ATTENTION_LABEL[k].one : ATTENTION_LABEL[k].many}`)
     .join(' · ')
 
   return (
@@ -341,7 +358,7 @@ function AttentionSection({
               </p>
             </div>
             <span className="attn-reason">{item.reason}</span>
-            <time>{item.raisedAt.slice(0, 16).replace('T', ' ')}</time>
+            <time title={item.raisedAt}>{relativeAge(item.raisedAt)}</time>
             <div className="attn-actions">
               {item.retryable && (
                 <button className="attn-button" disabled={busyId === item.id} onClick={() => onResolve(item, 'retry')}>

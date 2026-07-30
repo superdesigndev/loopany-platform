@@ -69,6 +69,25 @@ async function guard(): Promise<Guarded> {
   return { ok: true, userId: user.id }
 }
 
+/**
+ * Make sure the OUTBOX EXECUTOR loop is running.
+ *
+ * `boot.ts` starts it too, but boot only happens when something touches the
+ * machine gateway or a server fn - and nothing on this surface does. Without this
+ * the workspace would still WORK (a verdict drains its own consequences inline,
+ * and `POST /api/graph/drain` runs a pass on demand), but the background loop -
+ * the thing that settles an action nobody is watching - would never start on a
+ * server that only ever serves the workspace. That is exactly the silent gap this
+ * unit exists to close, so it is closed here rather than assumed.
+ *
+ * `startOutboxExecutor` is globalThis-guarded and idempotent, so calling it on
+ * every request costs one map lookup after the first.
+ */
+async function ensureExecutor(): Promise<void> {
+  const { startOutboxExecutor } = await import('../graph/outbox/executor.js')
+  startOutboxExecutor()
+}
+
 const notFound = () => Response.json({ error: 'not found' }, { status: 404 })
 
 export const Route = createFileRoute('/api/graph/$')({
@@ -80,6 +99,7 @@ export const Route = createFileRoute('/api/graph/$')({
 
         const view = String((params as { _splat?: string })._splat ?? '')
         const read = await import('../graph/workspace/read.js')
+        await ensureExecutor()
         const url = new URL(request.url)
 
         switch (view) {
@@ -120,6 +140,7 @@ export const Route = createFileRoute('/api/graph/$')({
 
         const gate = await guard()
         if (!gate.ok) return gate.response
+        await ensureExecutor()
         if (action === 'verdict') return verdict(request, gate.userId)
         if (action === 'attention') return resolveAttention(request, gate.userId)
         if (action === 'notifications/read') return markNotificationsRead()

@@ -139,7 +139,10 @@
   .attention-section .section-heading p { color: #9d6d72; }
   .attn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 3px rgba(179, 70, 78, .13); }
   .attn-list { display: flex; flex-direction: column; }
-  .attn-row { min-width: 0; display: grid; grid-template-columns: 26px minmax(220px, 1fr) 104px 78px auto; align-items: center; gap: 12px; padding: 11px 8px; border-bottom: 1px solid #f0dcde; border-radius: 4px; }
+  /* The reason chip and the age are CONTENT-SIZED (`auto`), not fixed: a typed
+     refusal code is as long as it is (`APPROVAL_NOT_HUMAN`), and a fixed track
+     just makes it collide with its neighbours. Only the title column flexes. */
+  .attn-row { min-width: 0; display: grid; grid-template-columns: 26px minmax(160px, 1fr) auto auto auto; align-items: center; gap: 12px; padding: 11px 8px; border-bottom: 1px solid #f0dcde; border-radius: 4px; }
   .attn-row:last-child { border-bottom: 0; }
   .attn-row:hover { background: #fdf5f5; }
   .attn-icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 5px; background: #f7e4e6; color: #9d4f56; font-size: .8125rem; }

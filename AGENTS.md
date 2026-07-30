@@ -976,8 +976,10 @@ computes pure functions. Run instructions: `README.md`.
 - **ADDITIVE AND DORMANT.** Migration `0003` lands six kernel tables - `objects`
   (task/doc/mirror archetypes as data), `edges`, `events`, `gate_obligations`,
   `outbox_actions`, `type_registry` - plus `db/graphStore.ts` (DAL) and
-  `graph/applyTransition.ts`. NO existing runtime path reads or writes any of it;
-  loops/runs/events are untouched. The loops→objects migration is a later unit.
+  `graph/applyTransition.ts`; `0004` adds `graph_notifications` and the outbox
+  executor's columns (see the outbox section below). NO existing runtime path reads or
+  writes any of it; loops/runs/events are untouched. The loops→objects migration is a
+  later unit.
   Authoritative design: `firstmate/data/graph-engineering-design/design.md` (§12
   adopted revisions is binding) + `decisions-2026-07-28.md`.
 - **`applyTransition` is the ONLY writer of `objects.status`** - 5 steps in one
@@ -1082,11 +1084,12 @@ computes pure functions. Run instructions: `README.md`.
 - **A shepherd's approving transition does not write the doc itself.** It declares an
   `update-fields` action with `via: "tracks"`, and the executor follows the task's `tracks`
   edge to resolve the instance-specific target - that is how a static spec names a
-  per-instance object. `read.ts` `applyUpdateFields` performs it and REFUSES a mirror
+  per-instance object. The `update-fields` HANDLER performs it and REFUSES a mirror
   target: writing our verdict into an observed external fact would record a belief as an
   observation. `recordVerdict` drains BEFORE (to clear the gate-opening action that would
   block a terminal verdict) and AFTER (to apply the verdict's own consequence), so the
-  decision and the field write never come apart.
+  decision and the field write never come apart - and the AFTER pass is what lets the
+  response report `effects`, i.e. what the verdict actually caused.
 - **The Library row is the CONTENT**; its shepherd supplies the verdict, and
   `verdict.objectId` is the SHEPHERD's id so the client never has to infer it. Row recency
   and age read `updatedAt`, NOT `statusChangedAt` - a doc's status never changes, so a
@@ -1095,14 +1098,98 @@ computes pure functions. Run instructions: `README.md`.
   has held) obligations over itself and its `produces` products, badge = live open count.
   `assignColumns` then densifies each band's columns, because how many gates a band grows
   is a property of the data.
-- **The seed and the verdict path both stand in for the not-yet-built outbox executor.**
-  Entering a terminal state is refused while actions are pending (design §12 item 8), so
-  `seed.ts` stamps each step's actions delivered (except `keepPending` steps, which leave
-  a real backlog) and `read.ts` `drainEngineLocalActions` drains R0-R2 before a verdict.
-  R3/R4 are NEVER auto-delivered there - that ceiling is the point, and a test pins it.
+- **The SEEDERS still stand in for the executor on replayed HISTORY, and only there.**
+  Entering a terminal state is refused while actions are unsettled (design §12 item 8),
+  so `seed.ts`/`seed-real.ts` stamp a replayed step's actions `done` via
+  `graphStore.markActionDone` (except `keepPending` steps, which leave a real backlog).
+  That is deliberate rather than lazy: those consequences already happened in the real
+  world weeks ago, and re-running them through the handlers would fabricate a notification
+  backlog that never existed. The LIVE path does go through the real executor - see
+  `seed-real.ts` step 5 in the outbox section below.
 - The demo's CSS (`styles/workspace.css`, loaded `?url` by the route only) is nested under
   `.loopany-workspace` so the skin cannot leak into the Tailwind app; it re-declares
   `list-style` because the app-wide preflight strips markers.
+
+## Graph outbox executor + attention items (`src/graph/outbox/`)
+
+- **What it is:** the consumer of `outbox_actions`. `applyTransition` always wrote a
+  transition and its actions in one transaction; nothing drained them, so a verdict was
+  recorded and then had no effect. Migration `0004` adds the executor's columns
+  (`next_attempt_at`, `claimed_at`/`claimed_by`, `dead_lettered_at`, typed `refusal_code`)
+  plus `graph_notifications`, and renames the terminal success state `delivered` → `done`
+  (hand-added `UPDATE` in the migration - drizzle-kit diffs schema, not row values).
+- **Row state machine:** `pending → executing → done | failed | dead-letter`.
+  `failed` is a SCHEDULED RETRY, distinct from `pending` on purpose ("never tried" and
+  "tried and failed" are different facts). `OUTBOX_UNSETTLED_STATES` (`graph/types.ts`) is
+  what the attested-close check counts, so a row mid-flight or backing off blocks a
+  terminal transition exactly like one never attempted.
+- **The claim is `SELECT … FOR UPDATE SKIP LOCKED` inside the UPDATE that flips rows to
+  `executing`** (`graphStore.claimActions` - the one raw-SQL statement in that file, since
+  the query builder has no form for it; `normalizeActionRows` maps the snake_case result
+  for both driver tiers). Two passes take DISJOINT batches, so "single instance" is a
+  deployment convenience, not a correctness requirement. `attempts` increments AT CLAIM
+  TIME, so a handler that kills the process still burns an attempt.
+- **A claim left `executing` by a crash is re-claimed after `EXECUTING_STALE_MS`** and its
+  effect re-run. That is safe only because every handler is idempotent, so if you add one,
+  derive its effect's IDENTITY from the action id - never check-then-write.
+- **Nothing is ever silently dropped.** Retries exhausted, a safety refusal, a handler
+  refusal and an UNIMPLEMENTED KIND all `dead-letter` with a typed `refusal_code`. There is
+  deliberately no default-to-noop handler: `HANDLERS` in `handlers.ts` is PARTIAL, so an
+  unimplemented consequence surfaces instead of being marked done. R3/R4 kinds have no
+  handler at all - the outward ceiling holds by ABSENCE as well as by the approval check.
+- **Execution-time safety re-checks are NOT redundant with the enqueue constraints.** The
+  schema CHECK can only require `approval_event` to be non-null; it cannot verify the id
+  resolves to a real event, nor that the event's `entrance` is `human`. Both are checked at
+  the moment of effect (plus `chain_depth > budget`), and each refusal is TERMINAL - none
+  of those conditions becomes true by waiting.
+- **`enqueue-review` creates the shepherd THROUGH `applyTransition`** (entrance `rule`,
+  `actorId` = the action id) so its gate obligation opens the normal way and the Timeline
+  can name the cause. Object id is `ids.reviewObjectId(actionId, targetId)` - BOTH halves
+  are load-bearing (the action alone collides across a fan-out; the target alone collides
+  across two real review rounds). Payload is a declarative selector - `via`
+  (`self`/`tracks`/`produces`) + `select` - which is how a STATIC spec names instances it
+  cannot know. "Already queued" (a shepherd holding an open obligation) is SUCCESS, not a
+  no-op to work around: today's specs declare this action on the gate-opening transition
+  itself, so confirming what that transition just opened is the common path.
+- **`TransitionSpec.entrance` accepts a SET** (`EntranceClass | readonly EntranceClass[]`,
+  checked by `allowsEntrance`). Review gate-opening transitions use `OPENS_A_REVIEW`
+  = `["agent-run","rule"]` (`workspace/specs.ts`): the run that produced the content, or the
+  rule that noticed it. Unrestricting them would also have admitted `human`/`clock`.
+- **ATTENTION ITEMS are a new inbox category, COMPUTED from reality** (`outbox/attention.ts`)
+  - dead-lettered actions + `chain-parked` events + `close-refused` events, minus human
+  acknowledgements. Never a flag. Resolution is a human-entrance event through the counter:
+  `acknowledge` writes an ack whose id is derived from `(kind, ref)` (idempotent, and for a
+  parked chain it also closes the `CHAIN_PARK_KEY` obligation, keeping the park
+  terminal-until-verdict rather than permanent); `retry` re-queues a dead-letter and
+  DELIBERATELY does not acknowledge, so a second failure comes back.
+- **`applyTransition` now WRITES on an attested-close refusal** (`close-refused` event),
+  which is the second exception to its no-writes-on-refusal posture after the chain park.
+  Same reason both times: a refusal a person must act on cannot live only in a log line.
+  `inboxView`/`summaryView` EXCLUDE `CHAIN_PARK_KEY` - no spec declares a transition that
+  closes it, so it would render as a verdict row with no button; Attention owns it.
+- **The live engine-created path is `seed-real.ts` step 5.** For a post still awaiting a
+  publish verdict the seeder does NOT build the shepherd; the loop runs `queue-review` (an
+  auditable self-transition, same shape as `skip`/`evolve`/`edit`) and the EXECUTOR creates
+  it. Gated on the loop being in a `from` state of that transition, decided BEFORE skipping
+  the seeded path - a truncated archive is fine, a truncated inbox is a lie. Pinned by
+  `realSeed.integration.test.ts` ("has the OUTBOX EXECUTOR create the publish review").
+- **Lifecycle: `startOutboxExecutor` is globalThis-guarded and started from TWO places** -
+  `boot.ts` (gated on `graphWorkspaceEnabled()`) and `routes/api.graph.$.ts` `ensureExecutor`
+  on every request. The second one is not belt-and-braces: nothing on the workspace surface
+  triggers `ensureServer`, so without it the background loop would never start on a server
+  that only serves the workspace, and only inline drains would settle anything.
+- **Surfaces:** `GET /api/graph/attention|notifications`, `POST /api/graph/attention`
+  (`{kind,ref,verb}`), `POST /api/graph/notifications/read`, `POST /api/graph/drain` (one
+  pass on demand - for a demo or a check, not how effects normally happen). UI: an Attention
+  section above "Needs you" in the Library pane, in muted rose rather than the verdict
+  queue's amber (a stuck consequence must not read as ordinary work, or vice versa), plus a
+  Notifications pane.
+- **Probes:** `graph/outbox/outbox.integration.test.ts` - double execution ⇒ one effect for
+  all three handlers, kill-mid-batch recovery, R3 without a human approval, a REAL chain
+  bomb (a `relay` type whose rule-entrance transition spawns the next one) stopping at the
+  budget, retry exhaustion surfacing and RE-surfacing after a retry, attested close refusing
+  on both an open obligation and an unsettled action. `replayRows` in that file writes rows
+  directly on purpose: there is no production verb for "un-stamp a delivered action".
 
 ## Graph v1 demo — the real-data pull (`graph/workspace/pull-prod.ts` + `seed-real.ts`)
 
