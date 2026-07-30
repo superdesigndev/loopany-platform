@@ -18,8 +18,11 @@
  *
  * Usage:  DATABASE_URL=… npx tsx scripts/migrate-v2-split.ts [--json | --execute]
  */
-import { addEvent, listEvents, listLoops, listMachines } from "../src/db/store.js";
+import { pathToFileURL } from "node:url";
+
+import { listLoops, listMachines } from "../src/db/store.js";
 import { splitTaskDoc } from "../src/server/docSplit.js";
+import { seedTimelineEvents } from "../src/gateway/timelineSeed.js";
 import { machinePresence } from "../src/lib/machinePresence.js";
 
 /** Mirrors the gateway's wire-field clip budget (`gateway/http.ts` WIRE_TEXT_CAP). */
@@ -43,7 +46,7 @@ interface RowReport {
  *  (a subtracted front-matter line, whose key the splitter reports as
  *  represented). Dates/actors move into event columns, so a dated line matches
  *  on its text remainder. */
-function lostLines(original: string, doc: string, events: Array<{ text: string }>, representedKeys: string[]): string[] {
+export function lostLines(original: string, doc: string, events: Array<{ text: string }>, representedKeys: string[]): string[] {
   const eventText = events.map((e) => e.text).join("\n");
   const represented = new Set(representedKeys);
   const lost: string[] = [];
@@ -54,7 +57,11 @@ function lostLines(original: string, doc: string, events: Array<{ text: string }
     const fmKey = /^([A-Za-z0-9][A-Za-z0-9_.-]*):\s/.exec(t)?.[1];
     if (fmKey && represented.has(fmKey)) continue;
     // Match on the line's content tail (front-matter values, timeline text, prose).
-    const tail = t.replace(/^[-*]\s+/, "").replace(/^(\*\*|\[)?\d{4}-\d{2}-\d{2}(\*\*|\])?\s*(\([^)]+\))?\s*[:—–-]?\s*/, "");
+    // The separator class MUST match docSplit's TIMELINE_LINE — `|` included: it is
+    // what the daemon's own appendTimeline writes (`- 2026-07-01 | text`). Omitting
+    // it left a `| ` glued to every tail, so the splitter's event text never matched
+    // and the rehearsal reported a false LOSS (exit 1) on every daemon-authored row.
+    const tail = t.replace(/^[-*]\s+/, "").replace(/^(\*\*|\[)?\d{4}-\d{2}-\d{2}(\*\*|\])?\s*(\([^)]+\))?\s*[:—–|-]?\s*/, "");
     const needle = tail || t;
     if (!doc.includes(needle) && !eventText.includes(needle)) lost.push(t.slice(0, 120));
   }
@@ -63,45 +70,33 @@ function lostLines(original: string, doc: string, events: Array<{ text: string }
 
 /**
  * Execute mode (CONSERVATIVE, idempotent): seed each row's historical dated
- * Timeline entries into the event stream, deduped on (day, text) exactly like
- * the live ingest path — the doc itself is left byte-identical (nothing to
- * retain, nothing to race: a concurrent watcher flush just re-runs the same
- * dedup). Re-running is a no-op. Undated/continuation-only rows seed nothing.
+ * Timeline entries into the event stream through `gateway/timelineSeed.ts` — the
+ * SAME module the live ingest path uses, so this rehearsal/execute pass and a
+ * concurrent watcher flush can never dedup differently. The doc itself is left
+ * byte-identical (nothing to retain, nothing to race).
+ *
+ * Re-running IS a no-op, and now actually is: dedup keys on (day, clipped text)
+ * against the rows the seeder wrote — a keyed, unbounded query — plus a
+ * deterministic row id, instead of the newest-200-event window this script used
+ * to compare against. Seeded rows carry historical `at` values, so on any loop
+ * with >200 events that window held none of them and the whole Timeline
+ * re-seeded on every run. Undated/continuation-only rows seed nothing.
  */
-async function executeSeed(): Promise<number> {
+export async function executeSeed(): Promise<number> {
   const loops = await listLoops();
   let rows = 0;
   let seeded = 0;
   for (const loop of loops) {
     const { events } = splitTaskDoc(loop.taskFileContent ?? "");
-    const dated = events.filter((e) => e.at);
-    if (!dated.length) continue;
+    if (!events.some((e) => e.at)) continue;
     rows++;
-    const existing = await listEvents(loop.id, { limit: 200 });
-    const seen = new Set(existing.map((e) => `${e.at?.slice(0, 10)}|${e.text ?? ""}`));
-    for (const e of dated) {
-      // Key on the CLIPPED text — the stored row is clipped, so an unclipped
-      // key would re-seed every over-cap entry on re-run.
-      const text = e.text.slice(0, 2000);
-      const key = `${e.at!.slice(0, 10)}|${text}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      await addEvent({
-        loopId: loop.id,
-        type: "note",
-        actor: e.actor ?? "timeline",
-        at: e.at,
-        text,
-        data: { source: "timeline" },
-      });
-      seeded++;
-    }
+    seeded += await seedTimelineEvents(loop.id, loop.taskFileContent, (e) => e.actor ?? "timeline");
   }
   console.log(`seeded ${seeded} events across ${rows} rows (re-run is a no-op)`);
   return 0;
 }
 
-async function main(): Promise<number> {
+export async function main(): Promise<number> {
   if (process.argv.includes("--execute")) return executeSeed();
   const json = process.argv.includes("--json");
   const machines = new Map((await listMachines()).map((m) => [m.id, m]));
@@ -148,10 +143,15 @@ async function main(): Promise<number> {
   return losses.length ? 1 : 0;
 }
 
-main().then(
-  (code) => process.exit(code),
-  (e) => {
-    console.error(e);
-    process.exit(1);
-  },
-);
+/** Run only when invoked as a script — importing the module (the idempotency
+ *  regression test does) must not connect to a DB or exit the process. */
+const invokedDirectly = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedDirectly) {
+  main().then(
+    (code) => process.exit(code),
+    (e) => {
+      console.error(e);
+      process.exit(1);
+    },
+  );
+}

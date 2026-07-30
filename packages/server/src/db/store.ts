@@ -128,11 +128,44 @@ export async function loopsForTeams(teamIds: string[]): Promise<Loop[]> {
 
 // ---- events (the append-only per-node record) ----
 
+type EventInput = Omit<NewEvent, "id" | "at"> & { id?: string; at?: string };
+
+function eventRow(input: EventInput): NewEvent {
+  return { ...input, id: input.id ?? `ev-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`, at: input.at ?? nowIso() };
+}
+
 /** Append one immutable event. The ONLY write path — there is no update/delete
  *  by design; the stream is the record plane the Timeline renders from. */
-export async function addEvent(input: Omit<NewEvent, "id" | "at"> & { id?: string; at?: string }): Promise<EventRow> {
-  const row: NewEvent = { ...input, id: input.id ?? `ev-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`, at: input.at ?? nowIso() };
-  return (await db.insert(events).values(row).returning())[0]!;
+export async function addEvent(input: EventInput): Promise<EventRow> {
+  return (await db.insert(events).values(eventRow(input)).returning())[0]!;
+}
+
+/** Append an event whose caller supplies a DETERMINISTIC id, skipping the insert
+ *  when that id already exists (returns undefined). This is the write half of
+ *  content-keyed idempotency: the id encodes the row's identity, so a retry or a
+ *  concurrent writer converges on one row without a read-then-write race. Used
+ *  by the legacy-Timeline seeder (`gateway/timelineSeed.ts`). */
+export async function addEventIfAbsent(input: EventInput & { id: string }): Promise<EventRow | undefined> {
+  return (await db.insert(events).values(eventRow(input)).onConflictDoNothing().returning())[0];
+}
+
+/** Every (day, text) identity already seeded into this node's stream from a
+ *  legacy `## Timeline` section — i.e. exactly the rows `gateway/timelineSeed.ts`
+ *  wrote (`type = note` carrying the `timeline` source marker).
+ *
+ *  Deliberately NOT expressed as a `listEvents` window: a seeded row carries the
+ *  Timeline entry's HISTORICAL `at`, so it sorts OLDEST and drops out of any
+ *  newest-N window once the node accumulates N newer events — which re-seeds the
+ *  whole Timeline on every subsequent sync. The query is keyed and unbounded;
+ *  DISTINCT bounds the result to the number of distinct entries (itself bounded
+ *  by the doc's WIRE_TEXT_CAP), not to the row count, so even an already-
+ *  duplicated stream collapses to one key per entry. */
+export async function seededTimelineKeys(loopId: string): Promise<Set<string>> {
+  const rows = await db
+    .selectDistinct({ day: sql<string>`substr(${events.at}, 1, 10)`, text: events.text })
+    .from(events)
+    .where(and(eq(events.loopId, loopId), eq(events.type, "note"), sql`${events.data}->>'source' = 'timeline'`));
+  return new Set(rows.map((r) => `${r.day}|${r.text ?? ""}`));
 }
 
 /** A node's events, NEWEST first, bounded. `since` filters strictly-after (the

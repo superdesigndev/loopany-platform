@@ -59,6 +59,12 @@ export interface HttpResult {
  *  clipping discipline for every large string the daemon can send. */
 export const WIRE_TEXT_CAP = 512 * 1024;
 
+/** Run messages (report --message / workflow direct message / finalText fallback)
+ *  and event text. Run errors share the same cap. It lives in this leaf module so
+ *  every consumer — index.ts, cli.ts, timelineSeed.ts — clips to one budget without
+ *  importing the run-lifecycle core (index.ts re-exports it for existing callers). */
+export const MESSAGE_CAP = 2000;
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
