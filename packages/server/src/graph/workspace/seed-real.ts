@@ -53,6 +53,7 @@ import * as graph from "../../db/graphStore.js";
 import { cronText } from "../../lib/format.js";
 import { applyTransition } from "../applyTransition.js";
 import { drainOutbox } from "../outbox/executor.js";
+import { parsePrExternalId } from "../sensing/pr.js";
 import { resetGraphDemo, type SeedResult } from "./seed.js";
 import { DEMO_TEAM_ID, DEMO_TYPES, LOOP_SPEC } from "./specs.js";
 import { readSnapshot, type ProdFile, type ProdLoop, type ProdRun, type ProdSnapshot } from "./pull-prod.js";
@@ -290,6 +291,10 @@ export async function seedFromProdSnapshot(
 
   // ---- 2. runs → transitions, chronologically per loop ----
   const prMirrors = new Map<string, string>(); // externalId → object id
+  /** Loop object id → the PR mirrors IT first referenced. Only the discovering
+   *  loop takes the wait: a PR mentioned again by a second loop is the same
+   *  external fact, and two loops waiting on one merge would double-count it. */
+  const watchedByLoop = new Map<string, string[]>();
   for (const loop of snap.loops) {
     const objectId = loopObjectId.get(loop.id)!;
     const runs = [...(runsByLoop.get(loop.id) ?? [])].sort((a, b) => a.ts.localeCompare(b.ts));
@@ -337,6 +342,7 @@ export async function seedFromProdSnapshot(
       for (const [externalId, url] of prReferences(run.message)) {
         let mirrorId = prMirrors.get(externalId);
         if (!mirrorId) {
+          const identity = parsePrExternalId(externalId);
           const { object } = await graph.getOrCreateMirror(undefined, {
             teamId,
             externalSource: "github",
@@ -344,13 +350,55 @@ export async function seedFromProdSnapshot(
             type: "pull-request",
             status: "observed",
             title: `PR #${externalId.split("/").pop()} · ${externalId.split("/").slice(0, 2).join("/")}`,
-            payload: { sourceUrl: url, referencedBy: loop.name },
+            // `repo`/`number` are the identity `PULL_REQUEST_SPEC` declares as
+            // fields, so they are stored rather than left implicit in the
+            // external id - the poller reads them straight off the payload.
+            payload: {
+              ...(identity ? { repo: identity.repo, number: identity.number } : {}),
+              sourceUrl: url,
+              referencedBy: loop.name,
+            },
             now: run.ts,
           });
           mirrorId = object.id;
           prMirrors.set(externalId, mirrorId);
+          watchedByLoop.set(objectId, [...(watchedByLoop.get(objectId) ?? []), mirrorId]);
         }
         await graph.upsertEdge(undefined, { teamId, kind: "produces", srcId: objectId, dstId: mirrorId, now: run.ts });
+      }
+    }
+
+    // ── the standing wait on every PR this loop opened ───────────────────────
+    //
+    // The ENGINE opens these, not the seeder: `watch-prs` is an ordinary
+    // auditable self-transition whose `register-watch` action fans out over the
+    // loop's `produces` edges, and the EXECUTOR opens one `external-wait`
+    // obligation per pull-request mirror. So every wait the workspace shows was
+    // opened the normal way, by a rule, with provenance a person can read in the
+    // Timeline - and the mirror poller closes it from a real observation.
+    //
+    // Gated on the loop actually being able to run it (`from: ["idle"]`), which
+    // is why it happens HERE - before the pause/finish step below moves the loop
+    // out of `idle` for good. The actions are left PENDING and drained
+    // immediately: a terminal `finish` is refused while an action is unsettled
+    // (design §12 item 8), so the queue has to be clear before it runs.
+    const watched = watchedByLoop.get(objectId);
+    if (watched?.length) {
+      const ok = await step({
+        objectId,
+        transition: "watch-prs",
+        entrance: "agent-run",
+        actorId: `run-watch-prs-${loop.id}`,
+        now: latestRunTs(runs) ?? loop.updatedAt,
+        note: `waiting on ${watched.length} pull request${watched.length === 1 ? "" : "s"} to land`,
+        keepPending: true,
+        label: loop.name,
+      });
+      if (ok) {
+        const drained = await drainOutbox({ now: snap.pulledAt, teamId, limit: 50, maxPasses: 8 });
+        if (drained.deadLettered) {
+          bump("pr watches", `${drained.deadLettered} action(s) dead-lettered - see the Attention section`);
+        }
       }
     }
 
@@ -612,6 +660,12 @@ function loopStat(loop: ProdLoop): string {
     .join(" · ");
   const cadence = loop.cron ? cronText(loop.cron) : "unscheduled";
   return shown ? `${cadence} · ${shown}` : `${cadence} · ${loop.runCount} runs`;
+}
+
+/** The last instant this loop actually did something - when the standing PR watch
+ *  is stamped as opened. Falls back to the loop's own `updatedAt` at the caller. */
+function latestRunTs(runs: ProdRun[]): string | undefined {
+  return runs.length ? runs[runs.length - 1]!.ts : undefined;
 }
 
 function* prReferences(message: string | null): Generator<[string, string]> {

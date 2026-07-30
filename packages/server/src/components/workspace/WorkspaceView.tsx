@@ -135,7 +135,14 @@ function ArtifactRow({
       </span>
       <div className="artifact-main">
         <h3>{artifact.title}</h3>
-        <p>{artifact.source}</p>
+        <p>
+          {artifact.source}
+          {/* An open external wait, spelled out. Deliberately NOT styled as a
+              verdict and given no button: nobody owes anything here, we are
+              waiting on the outside world, and the mirror poller clears it from a
+              real observation (design §12 item 5). */}
+          {artifact.watching && <span className="artifact-watch"> · ⌁ {artifact.watching}</span>}
+        </p>
       </div>
       <span className={`state-label ${artifact.needsHuman ? 'state-human' : ''}`}>{artifact.state}</span>
       <time>{artifact.age}</time>
@@ -648,12 +655,21 @@ function Sidebar({ view, setView, summary }: { view: ViewName; setView: (v: View
         <div>
           <strong>{summary ? `${summary.loops} armed loop classes` : 'loading…'}</strong>
           {/* The queue depth is the executor's own vital sign: `pending` is work
-              it will do, `attention` is work it CANNOT do without a person. */}
+              it will do, `attention` is work it CANNOT do without a person. The
+              mirror line is the POLLER's: how many external facts we keep fresh,
+              and how many waits the world still owes us. Both move with nobody
+              watching, which is the whole point of live ingestion. */}
           <small>
             {summary
               ? `${summary.events} events · ${summary.pendingActions} queued${summary.attention ? ` · ${summary.attention} need attention` : ''}`
               : ''}
           </small>
+          {summary && summary.mirrors > 0 && (
+            <small>
+              {summary.mirrors} mirror{summary.mirrors === 1 ? '' : 's'} watched
+              {summary.watching ? ` · ${summary.watching} waiting on GitHub` : ''}
+            </small>
+          )}
         </div>
       </div>
     </aside>

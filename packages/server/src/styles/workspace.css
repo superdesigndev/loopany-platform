@@ -117,6 +117,9 @@
   .artifact-main { min-width: 0; }
   .artifact-main h3 { overflow: hidden; margin: 0; color: #35332f; font-size: .875rem; font-weight: 500; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
   .artifact-main p { margin: 4px 0 0; color: var(--faint); font-size: .75rem; }
+  /* An open external wait. Deliberately quiet - it is not a call to action, it is
+     a statement that the outside world owes us something. */
+  .artifact-watch { color: var(--muted); }
   .state-label { justify-self: start; padding: 3px 7px; border-radius: 999px; background: #efede9; color: #716e67; font-size: .6875rem; white-space: nowrap; }
   .state-human { background: #fff0c8; color: #86600d; }
   .artifact-row time { color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }

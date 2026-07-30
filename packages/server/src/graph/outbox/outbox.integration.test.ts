@@ -638,7 +638,12 @@ describe('probe: a handler that keeps failing dead-letters instead of vanishing'
       eventId: carrier,
       teamId: TEAM,
       objectId: holder.id,
-      actions: [{ kind: 'register-watch', payload: {} }],
+      // `set-follow-up-date` is an R1 kind this build declares and does NOT
+      // implement - which is the point: an unimplemented consequence must stay
+      // visible. (This probe used `register-watch` until the sensing unit gave it a
+      // handler; the assertion is about the ABSENCE of a handler, so it moved to a
+      // kind that still has none rather than being weakened.)
+      actions: [{ kind: 'set-follow-up-date', payload: {} }],
       now: NOW,
     })
     await exec.runOnce({ now: NOW, teamId: TEAM })

@@ -90,6 +90,14 @@ function ClassNode({ data, selected }: NodeProps) {
         <b>{d.name}</b>
         <span>{d.stat}</span>
         {d.planned && <em>Planned class · no runs yet</em>}
+        {/* An external wait is NOT a verdict, so it gets its own line rather than
+            inflating the "waiting on you" count - and this is the number the
+            mirror poller moves without anyone touching the page. */}
+        {(d.watching ?? 0) > 0 && (
+          <em>
+            {d.watching} external wait{d.watching === 1 ? '' : 's'} on GitHub · closed by observation
+          </em>
+        )}
         {hasArtifacts && <em>Open what it is holding in Library →</em>}
       </div>
     </div>

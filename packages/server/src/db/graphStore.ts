@@ -241,6 +241,83 @@ export async function stampMirrorObserved(x: GraphExec | undefined, id: string, 
   await X(x).update(objects).set({ externalObservedAt: now, updatedAt: now }).where(eq(objects.id, id));
 }
 
+/**
+ * INGEST AN OBSERVATION onto a mirror - the ONE write path that may move a
+ * mirror's `status`, and the counterpart to `applyTransition` for the other side
+ * of the world.
+ *
+ * WHY THIS IS NOT A HOLE IN THE CHOKEPOINT. `objects.status` moves through
+ * `applyTransition` for everything we own, and `applyTransition` refuses a mirror
+ * STRUCTURALLY (`ARCHETYPE_HAS_NO_STATE_MACHINE`) because a mirror has no
+ * our-side state machine - its state is the external world's. That leaves exactly
+ * one legitimate way for a mirror's status to change: an observation. This
+ * function is that way, and it is narrowed on three axes so it can never become a
+ * second, softer transition seam:
+ *
+ *   - `WHERE archetype = 'mirror'` is in the statement itself, so it physically
+ *     cannot touch a task or a doc. A caller that passes a task id writes
+ *     nothing and gets `undefined` back - not a silent success;
+ *   - it takes no transition name and consults no spec: there is nothing to
+ *     guard, because an observation is not a decision;
+ *   - it is called only from `graph/sensing/observe.ts`, which writes the derived
+ *     `external-changed` event in the SAME transaction. The event is what makes
+ *     the change auditable, and pairing them there rather than here keeps this
+ *     function a single statement.
+ *
+ * `status` is optional: a sweep that found nothing changed still stamps freshness
+ * (`externalObservedAt`) so "when did we last look?" is answerable separately
+ * from "when did it last move?".
+ */
+export async function recordMirrorObservation(
+  x: GraphExec | undefined,
+  input: {
+    id: string;
+    /** The projected observed state. Omitted ⇒ freshness stamp only. */
+    status?: string;
+    /** Full replacement payload (the caller merges onto the existing one). */
+    payload?: Record<string, unknown> | null;
+    title?: string | null;
+    now: string;
+  },
+): Promise<GraphObject | undefined> {
+  const out = await X(x)
+    .update(objects)
+    .set({
+      ...(input.status !== undefined ? { status: input.status, statusChangedAt: input.now } : {}),
+      ...(input.payload !== undefined ? { payload: input.payload } : {}),
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      externalObservedAt: input.now,
+      updatedAt: input.now,
+    })
+    .where(and(eq(objects.id, input.id), eq(objects.archetype, "mirror")))
+    .returning();
+  return out[0];
+}
+
+/**
+ * Every mirror of one external source, oldest first - the FRESHNESS sweep's scope
+ * (design §7: the watch list is "derived mechanically", never an external query).
+ *
+ * Unbounded by design: the whole point of the dedup invariant is that a re-poll
+ * of a known entity is free, so the sweep looks at all of them and the diff
+ * decides what is news. `limit` exists for a bounded first pass, not for
+ * correctness.
+ */
+export async function listMirrors(
+  x: GraphExec | undefined,
+  teamId: string,
+  filter: { externalSource: string; type?: string; limit?: number },
+): Promise<GraphObject[]> {
+  const where = [
+    eq(objects.teamId, teamId),
+    eq(objects.archetype, "mirror"),
+    eq(objects.externalSource, filter.externalSource),
+  ];
+  if (filter.type) where.push(eq(objects.type, filter.type));
+  const q = X(x).select().from(objects).where(and(...where)).orderBy(asc(objects.createdAt), asc(objects.id));
+  return filter.limit ? q.limit(filter.limit) : q;
+}
+
 // ---- edges ----
 
 /**

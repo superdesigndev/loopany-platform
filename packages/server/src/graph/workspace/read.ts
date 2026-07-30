@@ -108,7 +108,19 @@ export interface SystemNode {
   activity?: "running" | "waiting" | "idle" | "online";
   band: string;
   bandLabel?: string;
+  /** Open HUMAN-VERDICT obligations in this node's scope - what a person owes. */
   waiting?: number;
+  /**
+   * Open EXTERNAL-WAIT obligations in scope - what the outside world owes us.
+   *
+   * Counted SEPARATELY from `waiting` on purpose, and not merely for display:
+   * design §12 item 5 draws the line that waiting for the world to reflect a
+   * decision is an obligation and NOT a gate, so folding a merge watch into
+   * "waiting on you" would tell a person they owe something they do not. The
+   * poller closes these from observations, so this is the count that MOVES on its
+   * own - the visible proof that the graph updates itself.
+   */
+  watching?: number;
   /** Library artifact ids this node opens (a gate opens what it is holding). */
   artifactIds?: string[];
 }
@@ -184,11 +196,18 @@ export async function systemView(teamId = DEMO_TEAM_ID): Promise<SystemView> {
   }
 
   // ---- derived gate nodes: one per loop that holds (or has held) obligations ----
+  //
+  // The two obligation CLASSES are counted apart. `waiting` is the human-verdict
+  // count - the gate's whole reason to exist - while `watching` is the passive
+  // external-wait count, which belongs to the same node (it is the same loop's
+  // products) but must never read as a debt a person owes.
   for (const loop of loops) {
     const scope = new Set<string>([loop.id, ...(products.get(loop.id) ?? [])]);
     const held = obligations.filter((o) => scope.has(o.objectId));
     if (!held.length) continue;
-    const open = held.filter((o) => o.closedByEvent === null);
+    const openAll = held.filter((o) => o.closedByEvent === null);
+    const open = openAll.filter((o) => o.class === "human-verdict");
+    const watching = openAll.filter((o) => o.class === "external-wait");
     const types = new Set(held.map((o) => byId.get(o.objectId)?.type ?? "").filter(Boolean));
     const gateId = `gate:${loop.id}`;
     const p = payloadOf(loop);
@@ -197,13 +216,21 @@ export async function systemView(teamId = DEMO_TEAM_ID): Promise<SystemView> {
       kind: "gate",
       name: gateName(types),
       eyebrow: `${loop.title} · gate class`,
-      stat: open.length ? `${open.length} waiting on you` : "Clear",
-      badge: String(open.length),
+      stat: open.length
+        ? `${open.length} waiting on you`
+        : watching.length
+          ? `watching ${watching.length} on GitHub`
+          : "Clear",
+      badge: String(open.length || watching.length),
       rank: num(p.rank) + 0.5,
       ...(p.yOffset ? { yOffset: num(p.yOffset) } : {}),
       activity: open.length ? "waiting" : "idle",
       band: str(p.band) ?? "platform",
       waiting: open.length,
+      ...(watching.length ? { watching: watching.length } : {}),
+      // What clicking the gate OPENS in the Library: the things a person owes a
+      // verdict on. An external wait has no button, so listing it here would offer
+      // a row nobody can act on.
       artifactIds: open.map((o) => o.objectId),
     });
     outEdges.push({
@@ -211,9 +238,13 @@ export async function systemView(teamId = DEMO_TEAM_ID): Promise<SystemView> {
       source: loop.id,
       target: gateId,
       label: "produces",
-      animated: open.length > 0,
+      animated: openAll.length > 0,
     });
-    outEdges.push({ id: `e-you-${loop.id}`, source: gateId, target: "you", label: "needs verdict", shared: true, animated: open.length > 0 });
+    // Only a HUMAN-VERDICT obligation draws a line to the person. An external wait
+    // is owed by GitHub, and an arrow saying "needs verdict" would be a lie.
+    if (open.length) {
+      outEdges.push({ id: `e-you-${loop.id}`, source: gateId, target: "you", label: "needs verdict", shared: true, animated: true });
+    }
   }
 
   // ---- the shared band: the person and the machines ----
@@ -344,6 +375,15 @@ export interface LibraryArtifact {
   bodyAbsentReason?: string;
   /** The doc's `published` FIELD - a field, not a state (decision 8). */
   published: boolean;
+  /**
+   * The open `external-wait` this row is holding, if any - "we are waiting on the
+   * outside world for this". NOT a verdict: there is no button, and it clears
+   * itself when the mirror poller observes the condition.
+   */
+  watching?: string;
+  /** When an observation last ingested facts for this mirror. The one field on a
+   *  Library row that moves without anybody doing anything. */
+  observedAt?: string;
 }
 
 /** How a stored body was projected to HTML. */
@@ -420,8 +460,15 @@ function relativeAge(iso: string, nowMs: number): string {
 export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
   const { objects, byId, edges, obligations, now } = await load(teamId);
   const producer = producerIndex(edges);
+  // Two indexes, because the two obligation CLASSES mean different things to a
+  // row: a human-verdict gives it a button, an external-wait gives it a note.
   const openByObject = new Map<string, GateObligation>();
-  for (const o of obligations) if (o.closedByEvent === null) openByObject.set(o.objectId, o);
+  const watchByObject = new Map<string, GateObligation>();
+  for (const o of obligations) {
+    if (o.closedByEvent !== null) continue;
+    if (o.class === "external-wait") watchByObject.set(o.objectId, o);
+    else openByObject.set(o.objectId, o);
+  }
 
   // A merge review points at its mirror through a `tracks` edge.
   const tracks = new Map<string, string>();
@@ -488,6 +535,12 @@ export async function libraryView(teamId = DEMO_TEAM_ID): Promise<LibraryView> {
       ...(str(p.prodPath) ? { path: str(p.prodPath) } : {}),
       ...(str(p.originalType) ? { originalType: str(p.originalType) } : {}),
       published: p.published === true,
+      // A mirror's own external wait, plus when we last looked. Both move with no
+      // human involved - this is where the live pipe shows up in the Library.
+      ...(watchByObject.has(o.id)
+        ? { watching: watchByObject.get(o.id)!.label ?? watchByObject.get(o.id)!.key }
+        : {}),
+      ...(o.externalObservedAt ? { observedAt: o.externalObservedAt } : {}),
     });
   }
 
@@ -825,6 +878,13 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
   loops: number;
   artifacts: number;
   needsYou: number;
+  /** Open `external-wait` obligations - what the outside world owes us. Distinct
+   *  from `needsYou` by design (§12 item 5), and the counter that moves on its
+   *  own as the mirror poller observes. */
+  watching: number;
+  /** Mirrors this workspace keeps fresh - the poller's scope, derived from the
+   *  same table it sweeps rather than from a config number. */
+  mirrors: number;
   events: number;
   pendingActions: number;
   attention: number;
@@ -842,6 +902,8 @@ export async function summaryView(teamId = DEMO_TEAM_ID): Promise<{
     needsYou: obligations.filter(
       (o) => o.closedByEvent === null && o.class === "human-verdict" && o.key !== CHAIN_PARK_KEY,
     ).length,
+    watching: obligations.filter((o) => o.closedByEvent === null && o.class === "external-wait").length,
+    mirrors: objects.filter((o) => o.archetype === "mirror").length,
     events: await graph.countEvents(undefined, teamId),
     pendingActions: pending.length,
     attention: att.items.length,

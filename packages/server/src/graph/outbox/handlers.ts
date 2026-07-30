@@ -36,6 +36,7 @@ import * as graph from "../../db/graphStore.js";
 import type { GraphExec } from "../../db/graphStore.js";
 import { applyTransitionIn } from "../applyTransition.js";
 import { derivedEventId, reviewObjectId } from "../ids.js";
+import { conditionOf, observedFromPayload, waitSatisfied } from "../sensing/pr.js";
 import type { ActionKind, TypeSpec } from "../types.js";
 
 /** What a handler is given. `now` is passed in - handlers never read a clock,
@@ -399,6 +400,95 @@ const updateFields: ActionHandler = async ({ tx, action, now }) => {
   return { ok: true, detail: `wrote ${Object.keys(set).join(", ")} on ${target.id}` };
 };
 
+// ---- register-watch (R1) ----
+
+/**
+ * Open an EXTERNAL-WAIT obligation on the mirror a task is waiting on - design
+ * §7's "a Task entering a waiting state registers watch interest on its linked
+ * Mirror (declarative action)", and design §12 item 5's rule that waiting for the
+ * world to reflect a decision is an obligation and NOT a gate.
+ *
+ * Payload contract:
+ *
+ *   via        `self` (default) | `tracks` | `produces` - how to find the mirror,
+ *              reusing the SAME resolver `enqueue-review` uses, so "which
+ *              instance?" has one answer across the action vocabulary.
+ *   select     for `via: "produces"`: `{type?}` filter, so a loop can declare
+ *              "the pull requests I open" without naming instances.
+ *   wait       the obligation KEY (default `merge-wait`). The condition rides the
+ *              key (`merge-wait` ⇒ `merged`, `merge-wait:checks-green` ⇒ that) -
+ *              see `sensing/observe.ts` `conditionOf`, which is what lets a sweep
+ *              read the binding off the row with no side table.
+ *   label      the prose an inbox row would show.
+ *
+ * ── two deliberate no-ops ───────────────────────────────────────────────────
+ *
+ * A NON-MIRROR target is a clean success, not a refusal: today's `merge-review`
+ * type tracks a pull-request mirror in the live flow and a plain doc in the
+ * replayed history, and there is nothing to watch about a doc. Dead-lettering the
+ * doc case would turn an inapplicable declaration into an attention item.
+ *
+ * An ALREADY-SATISFIED condition opens nothing. A wait for something that is
+ * already true would never be closed by a sweep (no change ⇒ no observation event
+ * to close it with) and would sit open forever looking like a stuck watch. Not
+ * opening it is the honest answer, and the detail says so.
+ *
+ * IDEMPOTENT by identity: `(objectId, key)` is the obligation's primary key, so a
+ * re-executed action re-opens nothing and the original `openedByEvent` stands.
+ */
+const registerWatch: ActionHandler = async (ctx) => {
+  const { tx, action, now } = ctx;
+  const p = payloadOf(action);
+  if (!action.objectId) return { ok: false, retryable: false, detail: "action carries no object" };
+
+  const targets = await resolveReviewTargets(ctx, str(p.via) ?? "self");
+  if (!targets.ok) return targets.fail;
+
+  const key = str(p.wait) ?? "merge-wait";
+  const condition = conditionOf(key);
+
+  const detail: string[] = [];
+  for (const target of targets.objects) {
+    if (target.archetype !== "mirror") {
+      detail.push(`${target.id} is a ${target.archetype} - nothing external to watch`);
+      continue;
+    }
+    // Already true upstream? Then there is no wait, and inventing one would be a
+    // watch nothing can ever close.
+    const facts = observedFromPayload(target);
+    if (facts && waitSatisfied(condition, facts)) {
+      detail.push(`${target.id} already satisfies "${condition}" - no wait opened`);
+      continue;
+    }
+    const { opened } = await graph.openObligation(tx, {
+      objectId: target.id,
+      key,
+      teamId: action.teamId,
+      class: "external-wait",
+      label: str(p.label) ?? `Waiting for the world to show "${condition}"`,
+      // Every obligation is opened BY an event; a mirror cannot run a transition,
+      // so the opener is the event whose transition enqueued this action.
+      openedByEvent: action.eventId,
+      // A passive wait re-surfaces on a bounded schedule so a forgotten watch
+      // cannot rot invisibly (decision 3).
+      nextReminderAt: new Date(msOf(now) + WAIT_REMINDER_MS).toISOString(),
+      now,
+    });
+    detail.push(opened ? `watching ${target.id} for "${condition}"` : `${target.id} was already watched for "${key}"`);
+  }
+  return { ok: true, detail: detail.join("; ") || "no watch target matched" };
+};
+
+/** How long a passive wait sits before it re-surfaces (decision 3's bounded
+ *  schedule). A stamp today - nothing consumes it yet - but writing it is what
+ *  makes the reminder a later read rather than a later migration. */
+export const WAIT_REMINDER_MS = 24 * 60 * 60 * 1000;
+
+function msOf(iso: string): number {
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
 // ---- the registry ----
 
 /**
@@ -410,6 +500,7 @@ const HANDLERS: Partial<Record<ActionKind, ActionHandler>> = {
   notify,
   "enqueue-review": enqueueReview,
   "update-fields": updateFields,
+  "register-watch": registerWatch,
 };
 
 export function handlerFor(kind: string): ActionHandler | undefined {
@@ -438,4 +529,4 @@ export function registerHandler(kind: ActionKind, handler: ActionHandler): () =>
   };
 }
 
-export const _internals = { notify, enqueueReview, updateFields, describeObject };
+export const _internals = { notify, enqueueReview, updateFields, registerWatch, describeObject };

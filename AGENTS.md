@@ -982,11 +982,17 @@ computes pure functions. Run instructions: `README.md`.
   later unit.
   Authoritative design: `firstmate/data/graph-engineering-design/design.md` (§12
   adopted revisions is binding) + `decisions-2026-07-28.md`.
-- **`applyTransition` is the ONLY writer of `objects.status`** - 5 steps in one
-  transaction (validate against the EFFECTIVE type version → apply → derive the
-  event with per-field {old,new} diffs → open/close obligations → enqueue outbox
-  rows). `graphStore.updateObjectFields` THROWS on a `status` key, so a content
+- **`applyTransition` is the ONLY writer of `objects.status` for anything WE own** -
+  5 steps in one transaction (validate against the EFFECTIVE type version → apply →
+  derive the event with per-field {old,new} diffs → open/close obligations → enqueue
+  outbox rows). `graphStore.updateObjectFields` THROWS on a `status` key, so a content
   write can never smuggle a state change (the v2 doc-push-bypass class).
+  The ONE exception is a MIRROR, whose status is the external world's:
+  `applyTransition` refuses it structurally (`ARCHETYPE_HAS_NO_STATE_MACHINE`) and
+  `graphStore.recordMirrorObservation` is its sanctioned write, narrowed by a
+  `WHERE archetype = 'mirror'` in the statement itself. The two doors are exact
+  complements - neither is a softer way into the other's rows (see "Graph live
+  ingestion" below).
 - **The DB-level chokepoint is a PENDING captain decision** (trigger-token vs
   grants). Do not implement either ad hoc: the seam is `StatusWriteAuthorizer`
   (`begin`/`end` around the status UPDATE, no-op today). Its three-probe
@@ -1190,6 +1196,69 @@ computes pure functions. Run instructions: `README.md`.
   budget, retry exhaustion surfacing and RE-surfacing after a retry, attested close refusing
   on both an open obligation and an unsettled action. `replayRows` in that file writes rows
   directly on purpose: there is no production verb for "un-stamp a delivered action".
+
+## Graph live ingestion — the PR mirror poller (`src/graph/sensing/`)
+
+- **The first thing that makes the workspace update ITSELF.** Four modules, one job each:
+  `pr.ts` (PURE - identity, the observed fact set, the diff, the event-id derivation, the
+  wait conditions), `observe.ts` (`recordObservation` - the sanctioned mirror write),
+  `fetch-gh.ts` (the read-only `gh api graphql` transport behind the injectable
+  `PrFetcher`), `poller.ts` (`sweepOnce` + the globalThis-guarded background loop).
+  Design reference: `design.md` §7 (mirrors and sensing) + §12 item 6 (the dedup invariant).
+- **This is FRESHNESS sensing, not discovery** (§7 splits them). Scope is a query over our
+  OWN tables (`graphStore.listMirrors`) - never a GitHub search - so it cannot widen on its
+  own. The one discovery nod: a fetched PR whose prose references an unmirrored PR gets a
+  mirror through the existing `getOrCreateMirror` upsert, at status `observed` with NO
+  facts (we learned it exists; the NEXT sweep observes it, because scope is derived from
+  the table).
+- **Crash-safety is the dedup invariant, not a code path.** There is no cursor and no
+  high-water mark: a sweep re-reads everything and the DIFF decides what is news. So a kill
+  mid-sweep loses nothing and duplicates nothing, and there is no recovery logic to get
+  wrong. Do not add a "last polled" gate on which rows are swept - it would buy nothing and
+  break exactly this property.
+- **The event seed carries `from` AS WELL AS the new value**
+  (`{source, repo, number, field, from, to}`). A seed of only the new value looks right and
+  silently rots: checks go `pending → passing → pending` on every push, so the second
+  arrival at `pending` would collide with the first, `ON CONFLICT DO NOTHING` would swallow
+  it, and the mirror would keep a stale field forever. `from` is the stored value read under
+  the row lock, so it is identical across derivations of the same change - not a clock, not
+  a counter. Pinned by `pr.test.ts` ("distinguishes a FLIP BACK").
+- **Five observed fields per PR**: `state`, `merged`, `checks`, `title`, plus the projected
+  `status` (`mirrorStatusFor`, which must return a state `PULL_REQUEST_SPEC` declares - an
+  observation cannot invent a state any more than a transition can). One derived
+  `external-changed` event per CHANGED field, `entrance: "rule"`, `actorId` =
+  `PR_POLLER_ACTOR`. Unchanged facts write ZERO rows and do not touch `statusChangedAt`
+  (only `externalObservedAt` moves - "when did we last look?" is a different question from
+  "when did it last move?").
+- **external-wait auto-close.** `register-watch` (an R1 outbox handler in
+  `outbox/handlers.ts`) opens an `external-wait` obligation ON THE MIRROR; the sweep closes
+  it with `closed_by_event` = the OBSERVATION that satisfied it. The condition rides the
+  obligation KEY - `merge-wait` ⇒ `merged`, `merge-wait:checks-green` ⇒ that (`conditionOf`)
+  - so the binding lives on the row and needs no side table. An UNKNOWN condition is never
+  satisfied (a wait this build cannot evaluate stays open and visible). Two deliberate
+  no-ops in the handler: a non-mirror target (the replayed history's merge reviews track
+  docs) and an ALREADY-SATISFIED condition, which would open a watch no observation could
+  ever close.
+- **The two obligation CLASSES must stay separated in the read model.** `external-wait` is
+  NOT a gate (§12 item 5), so `read.ts` counts it as `watching` and never folds it into a
+  gate node's `waiting`, its `artifactIds`, `summary.needsYou`, or the `needs verdict` edge
+  to the human. Folding them would tell a person they owe something GitHub owes.
+  `workspace.integration.test.ts` pins `sum(gate.waiting) === open human-verdict count`.
+- Two spec surfaces declare the watch: `LOOP_SPEC.watch-prs` (fans out over `produces` to
+  the pull-request mirrors a loop opened - the loop's real "one PR at a time" house rule)
+  and `MERGE_REVIEW_SPEC.submit` (alongside its human-verdict gate: two independent waits,
+  on two objects, from one transition). `seed-real.ts` runs `watch-prs` per loop while it is
+  still `idle` and drains immediately - a terminal `finish` is refused while an action is
+  unsettled.
+- Ops: started from `boot.ts` and `routes/api.graph.$.ts` `ensurePoller()` behind the SAME
+  `graphWorkspaceEnabled()` gate as the executor, plus its own opt-out `LOOPANY_GRAPH_POLL=off`
+  (it reaches the network; the executor does not). Cadence `LOOPANY_GRAPH_POLL_MS` (default
+  2min), ONE immediate catch-up sweep on start. `POST /api/graph/poll` runs one sweep now and
+  reports it (same posture as `/api/graph/drain`). OFF under vitest unless
+  `LOOPANY_GRAPH_POLL=on`, so no probe reaches GitHub by accident.
+- **Adding an action kind with a handler? Check `outbox.integration.test.ts`'s NO_HANDLER
+  probe** - it asserts the ABSENCE of a handler and must be moved to a kind that still has
+  none (it used `register-watch` until this unit; it now uses `set-follow-up-date`).
 
 ## Graph v1 demo — the real-data pull (`graph/workspace/pull-prod.ts` + `seed-real.ts`)
 

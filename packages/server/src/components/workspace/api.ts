@@ -22,7 +22,12 @@ export interface SystemNode {
   activity?: 'running' | 'waiting' | 'idle' | 'online'
   band: string
   bandLabel?: string
+  /** Open human-verdict obligations - what a person owes. */
   waiting?: number
+  /** Open external-wait obligations - what the outside world owes us. Counted
+   *  apart from `waiting` because only one of the two is a gate (design §12
+   *  item 5), and this is the count the mirror poller moves on its own. */
+  watching?: number
   artifactIds?: string[]
 }
 
@@ -70,6 +75,11 @@ export interface LibraryArtifact {
   bodyAbsentReason?: string
   /** The doc's `published` field - a field, not a state. */
   published: boolean
+  /** An open external-wait this row holds ("waiting on GitHub to show it
+   *  merged"). No button: the mirror poller clears it from an observation. */
+  watching?: string
+  /** When an observation last ingested facts for this mirror. */
+  observedAt?: string
 }
 
 export interface LibraryView {
@@ -102,6 +112,10 @@ export interface Summary {
   loops: number
   artifacts: number
   needsYou: number
+  /** Open external-wait obligations - what the world owes us, not what you do. */
+  watching: number
+  /** Mirrors the poller keeps fresh. */
+  mirrors: number
   events: number
   pendingActions: number
   attention: number
@@ -205,6 +219,25 @@ export const postNotificationsRead = () => postJson<{ ok: true; marked: number }
  *  a check that wants the effect immediately rather than within a tick. */
 export const postDrain = () =>
   postJson<{ ok: true; claimed: number; done: number; failed: number; deadLettered: number }>('/api/graph/drain')
+
+export interface SweepReport {
+  ok: true
+  mirrors: number
+  repos: number
+  changed: number
+  events: number
+  waitsClosed: number
+  discovered: number
+  unresolved: { externalId: string; why: string }[]
+  refusals: string[]
+  rateLimitRemaining?: number
+  rateLimited: boolean
+}
+
+/** Run ONE mirror-poll sweep now. Same posture as `postDrain`: the poller loops
+ *  on its own, and this exists so a demo can see the graph move without waiting
+ *  out an interval - and so the response can say exactly what moved. */
+export const postPoll = () => postJson<SweepReport | { ok: false; error: string }>('/api/graph/poll')
 
 /**
  * The one write. A refusal comes back as a 409 with the transition seam's own

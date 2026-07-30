@@ -127,6 +127,17 @@ async function boot(): Promise<Booted> {
   if (graphWorkspaceEnabled()) {
     const { startOutboxExecutor } = await import("../graph/outbox/executor.js");
     startOutboxExecutor({ signal: abort.signal });
+
+    // GRAPH MIRROR POLLER - the loop that makes the graph update ITSELF.
+    //
+    // Same gate as the executor, plus its own opt-out: unlike the executor this
+    // one reaches the NETWORK (read-only GitHub queries), so a machine without
+    // `gh` - or an operator who simply does not want a background API spend -
+    // sets `LOOPANY_GRAPH_POLL=off` and the workspace still serves, just from
+    // whatever facts it already holds. Crash-safety needs nothing here: a sweep
+    // has no cursor, so the next one is the recovery (`sensing/poller.ts`).
+    const { startMirrorPoller, pollEnabled } = await import("../graph/sensing/poller.js");
+    if (pollEnabled()) startMirrorPoller({ signal: abort.signal });
   }
 
   logger.info("loopany server booted");

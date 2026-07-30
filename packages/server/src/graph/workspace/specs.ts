@@ -111,6 +111,40 @@ export const LOOP_SPEC: TypeSpec = {
         },
       ],
     },
+    /**
+     * The run opened pull requests and now WAITS for the world to land them -
+     * another auditable self-transition, the same shape as `queue-review`.
+     *
+     * This is the loop's own house rule made mechanical: a coding loop lands one
+     * PR at a time and does not stack a second on an unmerged first, so "is that
+     * PR merged yet?" is a real, standing wait. Its `register-watch` action fans
+     * out over the loop's `produces` edges and opens an `external-wait`
+     * obligation on each pull-request MIRROR it made (design §7: "a Task entering
+     * a waiting state registers watch interest on its linked Mirror").
+     *
+     * Note what it is NOT: a gate. Nobody owes a verdict here - we are waiting on
+     * GitHub, and design §12 item 5 is explicit that this is an `external-wait`
+     * obligation rather than a gate state. The mirror poller
+     * (`graph/sensing/poller.ts`) closes it when it observes the merge, with the
+     * observation itself as the closing event.
+     */
+    {
+      name: "watch-prs",
+      from: ["idle"],
+      to: "idle",
+      entrance: "agent-run",
+      actions: [
+        {
+          kind: "register-watch",
+          payload: {
+            via: "produces",
+            select: { type: "pull-request" },
+            wait: "merge-wait",
+            label: "Waiting for GitHub to show the PR merged",
+          },
+        },
+      ],
+    },
     { name: "pause", from: ["idle", "running"], to: "paused" },
     { name: "finish", from: ["idle", "running", "paused"], to: "completed", entrance: "agent-run" },
   ],
@@ -152,7 +186,19 @@ export const MERGE_REVIEW_SPEC: TypeSpec = {
       // person does not open their own review queue - and not the clock.
       entrance: OPENS_A_REVIEW,
       opens: [{ key: "merge-verdict", class: "human-verdict", label: "Approve the merge" }],
-      actions: [{ kind: "enqueue-review", payload: { queue: "merge" } }],
+      actions: [
+        { kind: "enqueue-review", payload: { queue: "merge" } },
+        // TWO INDEPENDENT WAITS, on two objects, from one transition - which is
+        // exactly what keyed obligations are for (decision 3). The human owes a
+        // verdict on THIS task; the world owes us a merge on the MIRROR this task
+        // tracks, and only one of those is a gate. When the tracked object is a
+        // doc rather than a mirror (the replayed history's merge reviews) the
+        // handler cleanly no-ops - there is nothing external to watch.
+        {
+          kind: "register-watch",
+          payload: { via: "tracks", wait: "merge-wait", label: "Waiting for GitHub to show the PR merged" },
+        },
+      ],
     },
     {
       name: "approve",
