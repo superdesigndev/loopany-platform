@@ -34,6 +34,7 @@ import {
   edges as edgesTable,
   events as eventsTable,
   gateObligations as gateObligationsTable,
+  graphNotifications as graphNotificationsTable,
   objects as objectsTable,
   outboxActions as outboxActionsTable,
   typeRegistry as typeRegistryTable,
@@ -73,6 +74,11 @@ export interface SeedResult {
 /** Drop every row this demo owns. Scoped to the demo team id, so a real
  *  workspace sharing the database is untouched. */
 export async function resetGraphDemo(teamId = DEMO_TEAM_ID): Promise<void> {
+  // Notifications FIRST: they are an outbox action's effect, keyed by the action
+  // id, so leaving them behind would strand rows pointing at actions and events
+  // this reset is about to delete - and the workspace would show a notification
+  // for a decision that no longer exists in its own history.
+  await db.delete(graphNotificationsTable).where(eq(graphNotificationsTable.teamId, teamId));
   await db.delete(outboxActionsTable).where(eq(outboxActionsTable.teamId, teamId));
   await db.delete(gateObligationsTable).where(eq(gateObligationsTable.teamId, teamId));
   await db.delete(eventsTable).where(eq(eventsTable.teamId, teamId));

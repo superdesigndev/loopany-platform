@@ -257,4 +257,27 @@ describe('the write path is the transition seam, not a shortcut', () => {
     const attention = await read.attentionView()
     expect(attention.items.some((i) => i.kind === 'dead-letter' && i.ref === outward.id)).toBe(true)
   }, 120_000)
+
+  it('re-seeding leaves NO orphaned rows behind, notifications included', async () => {
+    // A real bug this pins: `resetGraphDemo` deleted the six kernel tables but not
+    // `graph_notifications`, so a re-seed left notifications pointing at actions
+    // and events it had just deleted - the workspace showed a notification for a
+    // decision absent from its own history. Any table added to the graph must be
+    // added to the reset, and this is what will say so.
+    const objects = await graph.listObjects(undefined, read.DEMO_TEAM_ID)
+    const holder = objects.find((o) => o.type === 'merge-review' && o.status === 'awaiting-verdict')
+    if (holder) {
+      await read.recordVerdict({ objectId: holder.id, transition: 'approve', now: '2026-07-30T10:00:00+08:00' })
+    }
+    expect((await read.notificationsView()).items.length).toBeGreaterThan(0)
+
+    await seed.seedGraphDemo()
+    const after = await read.notificationsView()
+    for (const n of after.items) {
+      // Every surviving notification must still resolve to a live event.
+      expect(await graph.getEvent(undefined, n.id.replace(/-\d+$/, ''))).toBeDefined()
+    }
+    expect(after.items).toEqual([])
+    expect((await read.summaryView()).notifications).toBe(0)
+  }, 120_000)
 })
