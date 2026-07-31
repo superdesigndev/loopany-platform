@@ -58,6 +58,7 @@ import { parsePrExternalId } from "../sensing/pr.js";
 import { resetGraphDemo, type SeedResult } from "./seed.js";
 import { DEMO_TEAM_ID, DEMO_TYPES, LOOP_SPEC, REVIEW_PRESETS, REVIEW_TYPE } from "./specs.js";
 import { readSnapshot, type ProdFile, type ProdLoop, type ProdRun, type ProdSnapshot } from "./pull-prod.js";
+import { restrictConfiguredSnapshot } from "./snapshot-scope.js";
 import { MAX_BODY_BYTES, readCachedBody } from "./fetch-bodies.js";
 
 const SEED_ACTOR = "u-demo-captain";
@@ -191,7 +192,12 @@ export interface RealSeedResult extends SeedResult {
 export async function seedFromProdSnapshot(
   options: { snapshot?: ProdSnapshot; teamId?: string; reset?: boolean } = {},
 ): Promise<RealSeedResult> {
-  const snap = options.snapshot ?? readSnapshot();
+  // The SEED SCOPE (`LOOPANY_GRAPH_SEED_LOOPS`) is applied here because this is
+  // the chokepoint every caller passes through - the CLI and the operator seed
+  // endpoint alike - so a scoped deploy cannot be defeated by picking the other
+  // door. It is pure and idempotent, so the route applying it first (to avoid
+  // fetching bodies it will not seed) costs nothing here.
+  const snap = restrictConfiguredSnapshot(options.snapshot ?? readSnapshot()).snapshot;
   const teamId = options.teamId ?? DEMO_TEAM_ID;
   if (options.reset !== false) await resetGraphDemo(teamId);
 

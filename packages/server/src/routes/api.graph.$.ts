@@ -446,6 +446,21 @@ async function seed(request: Request): Promise<Response> {
 
   const { fetchArtifactBodies } = await import('../graph/workspace/fetch-bodies.js')
   const { seedFromProdSnapshot } = await import('../graph/workspace/seed-real.js')
+  const { restrictConfiguredSnapshot } = await import('../graph/workspace/snapshot-scope.js')
+
+  // SCOPE FIRST (`LOOPANY_GRAPH_SEED_LOOPS`), so bodies are never fetched for a
+  // loop this deploy is not going to seed. The seeder applies the same pure
+  // restriction again — it is idempotent, and being the chokepoint is what makes
+  // the scope hold for every caller.
+  let scoped: import('../graph/workspace/snapshot-scope.js').RestrictedSnapshot
+  try {
+    scoped = restrictConfiguredSnapshot(snapshot)
+  } catch (err) {
+    // A scope naming a loop the snapshot lacks is an operator error, and seeding
+    // an empty workspace would look exactly like a broken deploy. Say so.
+    return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 })
+  }
+  snapshot = scoped.snapshot
 
   // Read-only GETs against the artifact store, cached on this machine's volume
   // so a re-seed is cheap and offline.
@@ -455,6 +470,7 @@ async function seed(request: Request): Promise<Response> {
   return Response.json({
     ok: true,
     pulledAt: snapshot.pulledAt,
+    scope: { kept: scoped.kept, excluded: scoped.excluded.length },
     bodies: { requested: bodies.requested, fetched: bodies.fetched, cached: bodies.cached, missing: bodies.missing },
     objects: result.objects,
     edges: result.edges,
