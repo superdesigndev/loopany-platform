@@ -1069,7 +1069,20 @@ computes pure functions. Run instructions: `README.md`.
   reachable URL and pglite is single-writer — the running app is the only process that
   can write it. The request carries ONLY the snapshot; the server fetches artifact bodies
   from R2 with its own credentials, so no keys cross the wire. It rewrites only the graph
-  tables' rows for the demo team.
+  tables' rows for the demo team. A snapshot already on the volume is used when the body is
+  `{}`, so a re-seed after a config change is one curl with the operator bearer.
+- **A deploy can seed a SUBSET of the snapshot** (`workspace/snapshot-scope.ts`):
+  `LOOPANY_GRAPH_SEED_LOOPS="<loop name or id>, …"` keeps only those loops and everything
+  hanging off them (runs, artifact files); UNSET means the whole snapshot, which is the
+  historical behaviour. Matching is EXACT on the trimmed name (case-insensitive) or the id -
+  a substring rule would let `React Doctor` silently keep `React Doctor daily health` - and an
+  entry matching nothing THROWS (400 on the seed route) rather than seeding an empty workspace
+  that looks like a broken deploy. The restriction is pure and idempotent, applied at BOTH the
+  seed route (before artifact bodies are fetched) and inside `seedFromProdSnapshot` (the
+  chokepoint every caller passes through). What it left behind rides the snapshot's own
+  `dropped` ledger, so the seed response reports it like every other omission.
+  loopany-testing runs scoped to ONE loop for exactly this reason: it exercises the shape,
+  not twenty-seven other loops' customer correspondence. Widening is a secret edit + a re-seed.
 - **Its own database.** `scripts/graph-demo.mjs` points `LOOPANY_DATA_DIR` at
   `.graph-demo-data/` (gitignored) and clears `DATABASE_URL`, so the demo never touches
   `~/.loopany` or a real Postgres. Port 3700 avoids the live review environments on
@@ -1364,6 +1377,17 @@ computes pure functions. Run instructions: `README.md`.
   observe it, because no server process can; run `pnpm agent --sense` for that. Then approve
   in `/dev/workspace` and run `pnpm agent --once`. Same single-writer pglite rule as
   `graph:seed`: stop the server before `graph:pr`.
+- **Pointing an agent at a DEPLOYED server** (loopany-testing gets its freshness this way,
+  since nothing server-side observes anything): the agent is env-only, so it is the same
+  process with `LOOPANY_AGENT_SERVER_URL=https://…` and the app's `LOOPANY_AGENT_TOKEN`
+  secret. Give it its OWN `LOOPANY_AGENT_ID` - the lease is per holder, and a second agent
+  sharing an id is the one way two processes fight over one claim. Sensing needs no
+  allowlist (it is a read, batched per repo through local `gh`), so an agent can keep a
+  workspace's mirrors fresh while `LOOPANY_AGENT_ALLOWED_REPOS` still permits NO outward
+  effect at all - which is the right posture for an environment that is not authorized to
+  act. `scripts/agent-exec-success-stub.sh` is the executor for that posture: it reads the
+  instruction, reports honestly that it did nothing, and exits 0, so the run channel is
+  proven end to end without an LLM touching a repository.
 - **Probes:** `graph/effects/effects.integration.test.ts` (idempotency, claim
   exclusivity, lease recovery then give-up, the zombie report, guard refusals, the
   ceiling, the bearer) + the agent's `guards.test.ts`/`execute.test.ts` against an
@@ -1641,7 +1665,11 @@ computes pure functions. Run instructions: `README.md`.
   loopany.ai, `--ha=false` single machine (single-scheduler invariant). It triggers on
   `workflow_run` of "Deploy (Fly)" and the job `if:` gates on
   `conclusion == 'success'`, so prod is NEVER deployed straight off a raw push to main or
-  a `v*` tag - only after loopany-testing serves the commit. `workflow_dispatch` stays for
+  a `v*` tag - only after loopany-testing serves the commit. **A branch dispatch of
+  "Deploy (Fly)" is STAGING-ONLY**: the `workflow_run` trigger carries `branches: [main]`,
+  which filters on the TRIGGERING run's branch, so `gh workflow run deploy.yml --ref
+  <branch>` deploys loopany-testing and can never promote. That is what makes the branch
+  dispatch the safe way to put a feature branch in front of a person. `workflow_dispatch` stays for
   out-of-band promotes/retries, and the `production` GitHub Environment can add required
   reviewers on top. Builds `DEPLOY_SHA` = the triggering run's `head_sha` (a `workflow_run`
   event's `github.sha` is default-branch HEAD, which can drift past the staged commit;
