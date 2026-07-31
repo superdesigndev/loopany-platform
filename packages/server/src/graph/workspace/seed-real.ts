@@ -59,9 +59,17 @@ import { resetGraphDemo, type SeedResult } from "./seed.js";
 import { DEMO_TEAM_ID, DEMO_TYPES, LOOP_SPEC, REVIEW_PRESETS, REVIEW_TYPE } from "./specs.js";
 import { readSnapshot, type ProdFile, type ProdLoop, type ProdRun, type ProdSnapshot } from "./pull-prod.js";
 import { restrictConfiguredSnapshot } from "./snapshot-scope.js";
+import { armSchedule } from "../schedule/arm.js";
+import { SEED_ARM_ENV, armMatches, configuredArms, firstFireAt, workflowFor } from "./seed-arm.js";
 import { MAX_BODY_BYTES, readCachedBody } from "./fetch-bodies.js";
 
 const SEED_ACTOR = "u-demo-captain";
+
+/** Where an armed loop's runs work, and on what. The workdir is relative to the
+ *  machine agent's own run root - the machine owns the jail, so a work order names
+ *  a folder inside it and never an absolute path. */
+const SEEDED_REPO = "superdesigndev/superdesign-platform";
+const SEEDED_WORKDIR = "react-doctor";
 
 /**
  * Band is the System view's horizontal lane - LAYOUT ONLY, and the one editorial
@@ -187,6 +195,8 @@ export interface RealSeedResult extends SeedResult {
   snapshot: { pulledAt: string; team: string; window: ProdSnapshot["window"] };
   /** Everything the REPLAY dropped, on top of what the pull already dropped. */
   dropped: { what: string; count: number; why: string }[];
+  /** Loops this deploy ARMED, i.e. agreed to actually run here. Empty by default. */
+  armed: { loop: string; cadence: string; nextFire: string; transition: string }[];
 }
 
 export async function seedFromProdSnapshot(
@@ -622,6 +632,52 @@ export async function seedFromProdSnapshot(
     }
   }
 
+  // ---- arm what this deploy has agreed to actually RUN ----
+  //
+  // Last, and separately, because it is a different act from importing: everything
+  // above replays a past, and this decides that a future happens here. See
+  // `seed-arm.ts` for why it rides the seed at all.
+  const armed: RealSeedResult["armed"] = [];
+  const arms = configuredArms();
+  if (arms) {
+    for (const request of arms) {
+      const loop = snap.loops.find((l) => armMatches(request, l));
+      if (!loop) {
+        throw new Error(
+          `${SEED_ARM_ENV} names a loop this seed does not contain: ${request.key}. ` +
+            `Seeded: ${snap.loops.map((l) => l.name).join(" | ")}`,
+        );
+      }
+      const workflow = workflowFor(loop);
+      if (!workflow) {
+        // An armed loop with no instructions fires a work order a run cannot act
+        // on, every morning, forever. Refuse rather than schedule silence.
+        throw new Error(`${loop.name} has no authored workflow (seed-arm.ts SEEDED_WORKFLOWS) - refusing to arm it`);
+      }
+      const objectId = loopObjectId.get(loop.id)!;
+      const now = new Date().toISOString();
+      const result = await armSchedule({
+        objectId,
+        userId: SEED_ACTOR,
+        now,
+        ...(firstFireAt(request, now) ? { firstFire: firstFireAt(request, now)! } : {}),
+        // THE INSTANCE HALF of every work order this loop dispatches. `role` picks
+        // the verb subset (`cli/roles.ts`): discovery = create a task, push an
+        // artifact, request a review - which is exactly a triage run's whole job,
+        // and structurally excludes moving state or opening waits.
+        fields: {
+          role: "discovery",
+          workflow,
+          brief: `Triage the frontend health of ${SEEDED_REPO} and file the top in-scope problem for a decision.`,
+          workdir: SEEDED_WORKDIR,
+          repos: SEEDED_REPO,
+        },
+      });
+      if (!result.ok) throw new Error(`arming ${loop.name} refused: ${result.code} - ${result.message}`);
+      armed.push({ loop: loop.name, cadence: result.cadence, nextFire: result.nextFire, transition: result.fireTransition });
+    }
+  }
+
   // ---- tally ----
   const objects = await graph.listObjects(undefined, teamId);
   const edges = await db.select().from(edgesTable).where(eq(edgesTable.teamId, teamId));
@@ -636,6 +692,7 @@ export async function seedFromProdSnapshot(
     pendingActions: pending.length,
     refusals,
     dropped,
+    armed,
     snapshot: { pulledAt: snap.pulledAt, team: `${snap.team.name} (${snap.team.id})`, window: snap.window },
   };
 }

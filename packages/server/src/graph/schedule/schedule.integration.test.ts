@@ -349,6 +349,48 @@ describe('probe: two objects on the same cron line get different fire instants',
   })
 })
 
+describe('probe: arming can pull the FIRST fire forward without changing the cadence', () => {
+  it('honours an earlier first cursor, and ignores one that is not earlier', async () => {
+    const team = await world('firstfire')
+    // A daily loop armed at midnight would first prove itself tomorrow. `firstFire`
+    // is the "start now, then keep the cadence" lever that makes a deployed arm
+    // verifiable the same day.
+    const object = await newWatch(team, 'daily', {})
+    const parsed = cadence.parseCadence({ cron: '0 6 * * *', timezone: 'UTC' })
+    if (!parsed.ok) throw new Error(parsed.why)
+
+    const soon = new Date(Date.parse(T0) + 3 * 60_000).toISOString()
+    const armed = await arm.armSchedule({
+      objectId: object.id,
+      cadence: parsed.spec,
+      userId: USER,
+      now: T0,
+      firstFire: soon,
+    })
+    expect(armed.ok && armed.nextFire).toBe(soon)
+    // The CADENCE is untouched, which is the whole point: after this one fire the
+    // scheduler advances by the cron, so nothing has to be restored afterwards.
+    const row = (await graph.getObject(undefined, object.id))!
+    expect(row.cron).toBe('0 6 * * *')
+
+    // EARLIER ONLY. A request at or past the natural occurrence is ignored, so the
+    // lever can never be used to skip a fire.
+    const natural = (await arm.armSchedule({ objectId: object.id, cadence: parsed.spec, userId: USER, now: T0 })) as {
+      ok: true
+      nextFire: string
+    }
+    const late = new Date(Date.parse(natural.nextFire) + 86_400_000).toISOString()
+    const pushed = await arm.armSchedule({
+      objectId: object.id,
+      cadence: parsed.spec,
+      userId: USER,
+      now: T0,
+      firstFire: late,
+    })
+    expect(pushed.ok && pushed.nextFire).toBe(natural.nextFire)
+  })
+})
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PROBE 5 - a schedule is not loop-archetype-exclusive
 // ─────────────────────────────────────────────────────────────────────────────

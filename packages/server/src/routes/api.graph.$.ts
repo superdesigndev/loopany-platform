@@ -479,5 +479,8 @@ async function seed(request: Request): Promise<Response> {
     pendingActions: result.pendingActions,
     refusals: result.refusals.length,
     dropped: result.dropped,
+    // What this deploy AGREED TO RUN, not merely to display. Empty unless
+    // LOOPANY_GRAPH_SEED_ARM named something (see `workspace/seed-arm.ts`).
+    armed: result.armed,
   })
 }

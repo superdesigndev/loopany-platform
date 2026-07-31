@@ -76,6 +76,19 @@ export interface AgentConfig {
   pollMs: number;
   /** Repos this agent may act on, `owner/name`, lower-cased. EMPTY = none. */
   allowedRepos: Set<string>;
+  /**
+   * Repos a RUN may be scoped to - the read side of the boundary.
+   *
+   * Running an instruction against a repository inside the jail and posting a
+   * comment or a merge onto it are different powers, and a machine can reasonably
+   * grant the first without the second: a triage run has to read the code it is
+   * triaging, and has no business writing to it. Effects NEVER consult this list;
+   * `checkRepoAllowed` reads `allowedRepos` and nothing else.
+   *
+   * UNSET falls back to `allowedRepos`, so a machine that has not thought about the
+   * distinction keeps the older, stricter behaviour exactly.
+   */
+  runRepos: Set<string>;
   /** May a merge target the repo's DEFAULT branch? Off unless explicitly on. */
   allowDefaultBranch: boolean;
   /** Refuse every `github-merge` outright, whatever the allowlist says - the
@@ -162,6 +175,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     ...(env.LOOPANY_AGENT_TEAM?.trim() ? { teamId: env.LOOPANY_AGENT_TEAM.trim() } : {}),
     pollMs: positive(env.LOOPANY_AGENT_POLL_MS, DEFAULT_POLL_MS, 500),
     allowedRepos: parseRepoAllowlist(env.LOOPANY_AGENT_ALLOWED_REPOS),
+    runRepos: env.LOOPANY_AGENT_RUN_REPOS?.trim()
+      ? parseRepoAllowlist(env.LOOPANY_AGENT_RUN_REPOS)
+      : parseRepoAllowlist(env.LOOPANY_AGENT_ALLOWED_REPOS),
     allowDefaultBranch: flag(env, "LOOPANY_AGENT_ALLOW_DEFAULT_BRANCH"),
     commentOnly: flag(env, "LOOPANY_AGENT_COMMENT_ONLY"),
     sensing: flagUnlessOff(env, "LOOPANY_AGENT_SENSING"),
@@ -182,12 +198,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
  *  process that has since exited. */
 export function describeConfig(c: AgentConfig): string {
   const repos = c.allowedRepos.size ? [...c.allowedRepos].sort().join(", ") : "(none - every GitHub effect will refuse)";
+  const runRepos = c.runRepos.size ? [...c.runRepos].sort().join(", ") : "(none - every run with a declared repo will refuse)";
   const executor = c.run.command ? [c.run.command, ...c.run.args].join(" ") : "(none - every run will refuse)";
   return [
     `server        ${c.serverUrl}`,
     `agent         ${c.agent}${c.machine ? ` on ${c.machine}` : ""}`,
     `poll          ${c.pollMs}ms · sensing ${c.sensing ? `every ${Math.round(c.sensingIntervalMs / 1000)}s` : "OFF"}`,
     `repos         ${repos}`,
+    `run scope     ${runRepos}`,
     `merge         ${c.commentOnly ? "DISABLED (comment-only)" : "allowed on allowlisted repos"}`,
     `default base  ${c.allowDefaultBranch ? "ALLOWED" : "refused"}`,
     `executor      ${executor}`,

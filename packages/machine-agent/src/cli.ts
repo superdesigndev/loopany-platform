@@ -33,7 +33,11 @@ Wire:
   LOOPANY_AGENT_POLL_MS               effects cadence (default 3000)
 
 GitHub effects — EVERY GUARD FAILS CLOSED:
-  LOOPANY_AGENT_ALLOWED_REPOS         "owner/name, owner/other" — EMPTY ALLOWS NOTHING
+  LOOPANY_AGENT_ALLOWED_REPOS         "owner/name, owner/other" — EMPTY ALLOWS NOTHING.
+                                      This is the EFFECT list: comments and merges.
+  LOOPANY_AGENT_RUN_REPOS             repos a RUN may be scoped to (read side). Unset
+                                      falls back to the effect list. Setting it grants
+                                      work-in-the-jail WITHOUT granting any write.
   LOOPANY_AGENT_ALLOW_DEFAULT_BRANCH  set to allow merging into a repo's DEFAULT branch
   LOOPANY_AGENT_COMMENT_ONLY          refuse every merge, whatever the allowlist says
   LOOPANY_AGENT_GH_BIN                path to the gh CLI (default: gh)

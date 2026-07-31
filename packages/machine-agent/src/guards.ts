@@ -178,10 +178,12 @@ function basename(command: string): string {
  *   3. NO RUN ROOT. A run with nowhere safe to work has nowhere to work. The jail is
  *      required, so "I forgot to set it" cannot mean "anywhere on this disk".
  *   4. OUT OF SCOPE. The work order asks for a repository this machine does not
- *      allow. Note the direction: the instruction's declared scope and the machine's
- *      allowlist COMPOSE - the run may touch the intersection, and a declaration
- *      cannot widen the machine's boundary any more than the machine can widen the
- *      declaration's.
+ *      allow a run to be scoped to. Note the direction: the instruction's declared
+ *      scope and the machine's list COMPOSE - the run may touch the intersection,
+ *      and a declaration cannot widen the machine's boundary any more than the
+ *      machine can widen the declaration's. The list consulted is `runRepos`, which
+ *      DEFAULTS to the effect allowlist; a machine that sets it separately is saying
+ *      "a run may work in this repo" WITHOUT saying "an effect may write to it".
  *
  * All four are `RUN_NOT_PERMITTED`, which is deliberately NOT retryable: a command
  * does not join an allowlist by being asked twice.
@@ -208,9 +210,13 @@ export function checkRunPermitted(config: AgentConfig, scope: { repos: string[] 
       error: "this agent has NO run root, so a run has nowhere safe to work - set LOOPANY_AGENT_RUN_ROOT",
     };
   }
-  const outside = scope.repos.map((r) => r.trim().toLowerCase()).filter((r) => r && !config.allowedRepos.has(r));
+  // The RUN scope list, which defaults to the effect allowlist (`config.ts`): a
+  // run may READ a repo this machine permits it to work in, which is not the same
+  // permission as commenting on it or merging into it. `checkRepoAllowed` - the
+  // effect guard - never looks here.
+  const outside = scope.repos.map((r) => r.trim().toLowerCase()).filter((r) => r && !config.runRepos.has(r));
   if (outside.length) {
-    const allowed = config.allowedRepos.size ? [...config.allowedRepos].sort().join(", ") : "(none)";
+    const allowed = config.runRepos.size ? [...config.runRepos].sort().join(", ") : "(none)";
     return {
       code: "RUN_NOT_PERMITTED",
       error: `the instruction claims scope over ${outside.join(", ")}, which this agent does not allow (allowlist: ${allowed})`,

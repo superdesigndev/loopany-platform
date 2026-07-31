@@ -64,6 +64,14 @@ async function main(): Promise<void> {
   );
   process.stdout.write(lines.join("\n"));
 
+  // What this deploy agreed to RUN. Loud, because arming is the act that makes a
+  // workspace dispatch real work on a clock with nobody watching.
+  if (isReal(result)) {
+    for (const a of result.armed) {
+      process.stdout.write(`  ARMED    ${a.loop} - ${a.cadence}, first fire ${a.nextFire} (${a.transition})\n`);
+    }
+  }
+
   // What the replay chose not to carry, and why. Never silent.
   if (isReal(result)) {
     for (const d of result.dropped) process.stdout.write(`  dropped  ${d.count} ${d.what} — ${d.why}\n`);

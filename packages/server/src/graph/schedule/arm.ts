@@ -58,6 +58,20 @@ export interface ArmScheduleInput {
   /** Instance fields the fire's work order needs (`brief`, `workdir`, `repos`).
    *  Merged into the object's payload, because a static type spec cannot know them. */
   fields?: Record<string, unknown>;
+  /**
+   * Put the FIRST cursor here instead of at the cadence's next occurrence.
+   *
+   * Arming a daily loop at 10am means the first proof it works arrives tomorrow,
+   * and "wait a day to find out whether the wiring is right" is how a schedule
+   * ships broken. This lets the arming act say "start now, then keep the cadence":
+   * only the first cursor moves - the scheduler advances by the CADENCE after it
+   * fires, so nothing about the standing rhythm changes and there is no second act
+   * required to restore it.
+   *
+   * It can only make the first fire EARLIER. A value at or past the natural
+   * occurrence is ignored, so this can never be used to skip one.
+   */
+  firstFire?: string;
 }
 
 export type ArmScheduleResult =
@@ -95,8 +109,12 @@ export async function armSchedule(input: ArmScheduleInput): Promise<ArmScheduleR
     const resolved = fireTransitionOf(spec, object, input.fireTransition);
     if (!resolved.ok) return refuse("NO_FIRE_TRANSITION", resolved.why);
 
-    const nextFire = nextFireAfter(cadence, input.now, object.id);
-    if (!nextFire) return refuse("NEVER_FIRES", `${describeCadence(cadence)} has no future occurrence`);
+    const natural = nextFireAfter(cadence, input.now, object.id);
+    if (!natural) return refuse("NEVER_FIRES", `${describeCadence(cadence)} has no future occurrence`);
+    // EARLIER ONLY (see `firstFire`): a request at or past the natural occurrence
+    // is ignored rather than honoured, so this lever can pull a first fire forward
+    // but can never push one away.
+    const nextFire = input.firstFire && input.firstFire < natural ? input.firstFire : natural;
 
     // The STANDING APPROVAL. Organic (a person arming a cadence twice is two real
     // acts, a week apart or a second apart) and `entrance: "human"`, which is the

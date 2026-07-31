@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseRepoAllowlist, type AgentConfig } from "./config.js";
 import { executeDirective, type RunReporter } from "./execute.js";
 import type { Gh } from "./gh.js";
-import { checkRunPermitted, NEVER_EXECUTE } from "./guards.js";
+import { checkRepo, checkRunPermitted, NEVER_EXECUTE } from "./guards.js";
 import {
   composeInstruction,
   nodeExec,
@@ -39,12 +39,16 @@ import type { Directive, Instruction } from "./types.js";
 let root: string;
 
 function config(over: Partial<AgentConfig> = {}, run: Partial<AgentConfig["run"]> = {}): AgentConfig {
+  const allowedRepos = over.allowedRepos ?? parseRepoAllowlist("acme/widgets");
   return {
     serverUrl: "http://127.0.0.1:3780",
     token: "t",
     agent: "probe",
     pollMs: 1000,
-    allowedRepos: parseRepoAllowlist("acme/widgets"),
+    allowedRepos,
+    // Mirrors `loadConfig`: an unset run-scope list IS the effect allowlist, so a
+    // probe that says nothing about it exercises the old, stricter behaviour.
+    runRepos: over.runRepos ?? allowedRepos,
     allowDefaultBranch: false,
     commentOnly: false,
     sensing: false,
@@ -158,6 +162,22 @@ describe("what this machine will execute", () => {
     // GitHub, and refusing those would make the channel useless on a machine with no
     // repo allowlist at all.
     expect(checkRunPermitted(bare, { repos: [] })).toBeUndefined();
+  });
+
+  it("a separate RUN scope grants work-in-the-jail without granting any effect", () => {
+    // The posture this exists for: a triage run must read the repository it is
+    // triaging, and must not be able to comment on it or merge into it.
+    const split = config({
+      allowedRepos: parseRepoAllowlist("acme/sandbox"),
+      runRepos: parseRepoAllowlist("acme/private-monorepo"),
+    });
+    expect(checkRunPermitted(split, { repos: ["acme/private-monorepo"] })).toBeUndefined();
+    // …and the EFFECT guard is untouched by it: the repo a run may work in is still
+    // not a repo this machine will write to.
+    expect(checkRepo(split, "acme/private-monorepo")?.code).toBe("REPO_NOT_ALLOWED");
+    // The run list does not widen backwards either: the sandbox is an effect target,
+    // not automatically a run scope, once the two are stated separately.
+    expect(checkRunPermitted(split, { repos: ["acme/sandbox"] })?.code).toBe("RUN_NOT_PERMITTED");
   });
 });
 
