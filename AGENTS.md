@@ -1083,6 +1083,21 @@ computes pure functions. Run instructions: `README.md`.
   `dropped` ledger, so the seed response reports it like every other omission.
   loopany-testing runs scoped to ONE loop for exactly this reason: it exercises the shape,
   not twenty-seven other loops' customer correspondence. Widening is a secret edit + a re-seed.
+- **A deployed workspace can AGREE TO RUN a loop** (`workspace/seed-arm.ts`):
+  `LOOPANY_GRAPH_SEED_ARM="<loop name or id>"` arms the named loops at seed time and
+  attaches the standing workflow authored for them; `LOOPANY_GRAPH_SEED_ARM_IN=<minutes>`
+  puts only the FIRST cursor that far out, so a daily loop proves itself the same day and
+  the cadence needs no restoring afterwards (`armSchedule` gained `firstFire`, which can
+  only pull a first fire EARLIER). Unset arms nothing, keeping the import-is-not-consent
+  rule. Arming mints no new authority: the seeder already writes the human-entrance events
+  arming needs. An armed loop with no authored workflow is REFUSED - a loop that fires into
+  silence every morning is worse than one that does not fire.
+- **The machine agent splits READ scope from EFFECT scope**: `LOOPANY_AGENT_RUN_REPOS` is
+  the repos a RUN may be scoped to (checked by `checkRunPermitted`), `LOOPANY_AGENT_ALLOWED_REPOS`
+  is what a comment or a merge may target (`checkRepo`). Unset run-repos falls back to the
+  effect allowlist, so nothing changes for a machine that has not thought about it. This is
+  what lets a triage run read a private monorepo in its jail while the machine will still
+  write nothing to it.
 - **Its own database.** `scripts/graph-demo.mjs` points `LOOPANY_DATA_DIR` at
   `.graph-demo-data/` (gitignored) and clears `DATABASE_URL`, so the demo never touches
   `~/.loopany` or a real Postgres. Port 3700 avoids the live review environments on
