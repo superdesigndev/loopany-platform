@@ -870,7 +870,16 @@ const dispatchRun: ActionHandler = async ({ tx, action, now }) => {
         // apart found the same problem and filed it twice. The server is the only
         // side that can see the graph (the agent never queries it), so the facts
         // have to ride the work order - the same reasoning `waits` rests on.
-        ...(already.length ? { alreadyRecorded: already } : {}),
+        //
+        // ALWAYS PRESENT, EMPTY INCLUDED. Omitting it when there is nothing looks
+        // like thrift and reads as a harness failure: absent says "nobody told me",
+        // empty says "you have recorded nothing", and a run cannot tell the first
+        // from the second. The first live triage run on loopany-testing found
+        // exactly this - it reconstructed a duplicate-check out of loop counters and
+        // `git log` archaeology, then said in its report that the key was "absent,
+        // not empty". A fact this instruction depends on must be stated, including
+        // when the fact is "none".
+        alreadyRecorded: already,
         // WHAT THIS WORK IS ABOUT, with its bytes. A review tracks the thing
         // under review, and until the first live chain the run approved to act on
         // it could not READ it: the dry-run post run was handed "post the approved

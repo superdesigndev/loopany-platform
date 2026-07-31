@@ -325,6 +325,49 @@ describe('probe: an unattended fire whose run finds something reaches a person',
 // PROBE 2 — a run that found nothing wakes nobody
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe('probe: a work order STATES what this loop has already produced, even when nothing', () => {
+  it('carries `alreadyRecorded` as an empty list rather than omitting the key', async () => {
+    // Absent and empty are different answers to "what have I already filed?", and a
+    // run cannot tell a harness that stayed silent from a graph that holds nothing.
+    // The first live triage run on loopany-testing hit exactly this: it fell back to
+    // reconstructing a duplicate-check from `git log`, and said in its own report
+    // that the key was "absent, not empty".
+    const team = await world('already-empty')
+    const loop = await armedLoop(team, 'Scratch survey (nothing filed yet)')
+    const directive = await fireAndClaim(team, loop.id, '2026-07-30T09:00:05.000Z')
+
+    const context = (directive.payload as { context: Record<string, unknown> }).context
+    expect(context).toHaveProperty('alreadyRecorded')
+    expect(context.alreadyRecorded).toEqual([])
+  })
+
+  it('lists what the loop produced once it has produced something', async () => {
+    const team = await world('already-filled')
+    const loop = await armedLoop(team, 'Scratch survey (one task filed)')
+    const first = await fireAndClaim(team, loop.id, '2026-07-30T09:00:05.000Z')
+    const made = await runCli(first.id, ['task', 'create', '--type', 'task', '--title', 'Empty exports'])
+    expect(made.exitCode).toBe(0)
+    // The loop is `running` until its run reports back, so the second fire needs the
+    // first one closed - the same order a real day has.
+    const done = await runs.runFinished({
+      now: '2026-07-30T09:01:00.000Z',
+      agent: AGENT,
+      directiveId: first.id,
+      outcome: 'success',
+      summary: 'filed one',
+    })
+    expect(done.ok).toBe(true)
+    await exec.drainOutbox({ now: '2026-07-30T09:01:01.000Z', teamId: team, maxPasses: 4 })
+
+    // The NEXT fire tells the next run what the last one already recorded - which is
+    // the whole mechanism behind "check reality before acting".
+    const second = await fireAndClaim(team, loop.id, '2026-07-31T09:00:05.000Z')
+    const context = (second.payload as { context: Record<string, unknown> }).context
+    const already = context.alreadyRecorded as { title: string | null }[]
+    expect(already.map((a) => a.title)).toContain('Empty exports')
+  })
+})
+
 describe('probe: a run reporting nothing-new opens nothing', () => {
   it('stands the loop down and leaves the inbox empty', async () => {
     const team = await world('quiet')
