@@ -130,6 +130,21 @@ export function AgentLoopsHeadline({ as: Tag = 'h1', compact }: { as?: 'h1' | 'h
   return (
     <Tag
       aria-label={`Agent loops ${TYPED_PHRASES[0]}`}
+      /*
+       * `translate="no"` is LOAD-BEARING, not a preference. A browser translator
+       * (Chrome/Edge/Safari) rewrites text by MOVING each text node into an
+       * injected `<font>` wrapper — which silently invalidates React's record of
+       * that node's parent. TypedLine re-renders its text every 26-55ms, so React
+       * soon has to remove a text node the translator has re-parented and throws
+       * `NotFoundError: Failed to execute 'removeChild' on 'Node'`, taking the
+       * whole route down to its error boundary (reproduced on /templates with
+       * translation on, 2026-07-31; the crashing node was TypedLine's `{tail}`).
+       * Opting this subtree out keeps the translator away from the ONE place that
+       * mutates text at animation rate — the static prose around it, and every
+       * other page, still translates normally. Guarded by
+       * `AgentLoopsHeadline.test.ts`; keep it on the element that WRAPS TypedLine.
+       */
+      translate="no"
       className={`mx-auto font-pixel leading-[1.25] text-display ${
         compact ? 'text-[min(38px,2.9vw)] max-sm:text-[5.4vw]' : 'text-[min(56px,3.9vw)] max-sm:text-[6.5vw]'
       }`}
