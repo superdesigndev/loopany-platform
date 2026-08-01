@@ -21,12 +21,12 @@ import { LoadErrorCard } from '../components/actionUi'
  * from the URL), falling back to the default. Open mode renders with no team segment.
  */
 export const Route = createFileRoute('/onboarding')({
-  ssr: false,
   validateSearch: (search: Record<string, unknown>): { team?: string } => {
     const team = typeof search.team === 'string' ? search.team.trim() : ''
     return team ? { team } : {}
   },
   loaderDeps: ({ search }) => ({ team: search.team }),
+  ssr: false,
   loader: async ({
     deps,
   }): Promise<{

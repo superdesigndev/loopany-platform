@@ -18,12 +18,12 @@ import { LoadErrorCard } from '../components/actionUi'
  * single shared workspace.
  */
 export const Route = createFileRoute('/t/$teamId')({
-  ssr: false,
   // `?template=<name>` is forwarded from `/` (the public-market deep link) and preselects
   // the compose modal on this team's dashboard.
   validateSearch: (s: Record<string, unknown>): { template?: string } => ({
     template: typeof s.template === 'string' && s.template ? s.template : undefined,
   }),
+  ssr: false,
   loader: async ({
     params,
   }): Promise<{ mode: 'signin' | 'dashboard'; auth: { enabled: boolean }; teamId: string; initial?: DashboardData }> => {
