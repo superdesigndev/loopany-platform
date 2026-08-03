@@ -1,0 +1,227 @@
+/**
+ * THE REFUSAL CATALOGUE — one structured envelope for every refusal the rewrite
+ * surface can emit (API spec §3.1), plus a first-class template per code.
+ *
+ * Why the templates are constants rather than strings inlined at each call site:
+ * the CLI is a teacher, not a gatekeeper (design §8), and the teaching is
+ * authored HERE, server-side, so a refusal can never reach an agent as an empty
+ * or generic envelope. `refusals.test.ts` renders every entry and asserts each
+ * one carries a real sentence, a real hint, and a distinct HTTP status — the
+ * guard-table the CLI scout asked for. A new code without a template fails to
+ * typecheck, so the catalogue cannot drift behind the code list.
+ *
+ * Call sites may override `message`/`issues`/`hint` with something more specific
+ * (the object's id, the offending value, the caller's own loop id). What they
+ * may NOT do is emit a code with no teaching at all: `refusal()` falls back to
+ * the template, never to an empty string.
+ */
+import type { KernelIssue } from "./types.js";
+
+export interface ApiRefusal {
+  code: RefusalCode;
+  message: string;
+  issues: KernelIssue[];
+  hint: string;
+}
+
+export const REFUSAL_CODES = [
+  "UNKNOWN_KEY", "BAD_DATE", "UNSUPPORTED_FORMAT", "MISSING_FRONT_MATTER",
+  "UNTERMINATED_FRONT_MATTER", "INVALID_YAML", "FRONT_MATTER_NOT_MAPPING",
+  "SCHEMA_VIOLATION", "BAD_CRON", "INVALID_BODY", "UNKNOWN_FILTER",
+  "UNAUTHORIZED", "NOT_HUMAN", "NO_RUN_CONTEXT", "RUN_CONTEXT_UNKNOWN",
+  "NOT_YOUR_LOOP", "NOT_YOUR_RUN", "APPROVAL_REQUIRED", "APPROVAL_UNKNOWN",
+  "APPROVAL_NOT_HUMAN", "APPROVAL_FOREIGN", "NOT_FOUND", "OPEN_QUESTION",
+  "NO_OPEN_QUESTION", "WRONG_KIND", "KEY_KIND_MISMATCH", "IMMUTABLE_KEY",
+  "CLOSED", "PAUSED", "RETIRED", "QUEUED_ALREADY", "LEASE_LOST",
+  "TOO_LARGE", "RATE_LIMITED",
+] as const;
+
+export type RefusalCode = (typeof REFUSAL_CODES)[number];
+
+/** Spec §3.2's code table. The CLI derives its exit code from the status alone
+ *  (§4: 2xx→0, 404→3, 401/429/5xx→1, every other 4xx→2), so no prose is parsed. */
+export const REFUSAL_STATUS: Record<RefusalCode, number> = {
+  UNKNOWN_KEY: 400, BAD_DATE: 400, UNSUPPORTED_FORMAT: 400,
+  MISSING_FRONT_MATTER: 400, UNTERMINATED_FRONT_MATTER: 400, INVALID_YAML: 400,
+  FRONT_MATTER_NOT_MAPPING: 400, SCHEMA_VIOLATION: 400, BAD_CRON: 400,
+  INVALID_BODY: 400, UNKNOWN_FILTER: 400, UNAUTHORIZED: 401,
+  NOT_HUMAN: 403, NO_RUN_CONTEXT: 403, RUN_CONTEXT_UNKNOWN: 403,
+  NOT_YOUR_LOOP: 403, NOT_YOUR_RUN: 403, APPROVAL_REQUIRED: 403,
+  APPROVAL_UNKNOWN: 403, APPROVAL_NOT_HUMAN: 403, APPROVAL_FOREIGN: 403,
+  NOT_FOUND: 404, OPEN_QUESTION: 409, NO_OPEN_QUESTION: 409, WRONG_KIND: 409,
+  KEY_KIND_MISMATCH: 409, IMMUTABLE_KEY: 409, CLOSED: 409, PAUSED: 409,
+  RETIRED: 409, QUEUED_ALREADY: 409, LEASE_LOST: 409, TOO_LARGE: 413,
+  RATE_LIMITED: 429,
+};
+
+interface RefusalTemplate {
+  /** One sentence, present tense, stating the refusal. `%s` is the subject. */
+  message: string;
+  /** The legal next move(s). Never empty — a refusal with no way forward is a wall. */
+  hint: string;
+}
+
+/**
+ * The catalogue. Every string here is the FALLBACK an endpoint gets for free;
+ * endpoints that know the offending value pass a richer message and `issues[]`.
+ * `%s` interpolates the subject (an object id, a key, a field name).
+ */
+export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
+  UNKNOWN_KEY: {
+    message: `%s is not a key this kind accepts`,
+    hint: "front matter is a closed set per kind; custom data goes under payload:",
+  },
+  BAD_DATE: {
+    message: `%s is not a date this server accepts`,
+    hint: "two forms only: RFC 3339 with an offset (2026-08-11T09:00:00Z) or a relative +3d / +12h computed on the server clock",
+  },
+  UNSUPPORTED_FORMAT: {
+    message: `%s names a body format this kernel does not serve`,
+    hint: "markdown is the default and html is doc-only; a task or loop body is always Markdown",
+  },
+  MISSING_FRONT_MATTER: {
+    message: `%s does not open with a front-matter fence`,
+    hint: "an artifact file opens with ---, closes with ---, and carries a flat YAML mapping between them",
+  },
+  UNTERMINATED_FRONT_MATTER: {
+    message: `%s opens a front-matter fence it never closes`,
+    hint: "close the head with a --- line of its own before the body",
+  },
+  INVALID_YAML: {
+    message: `%s does not parse as YAML`,
+    hint: "fix the head so it is a flat YAML mapping, then upload the file again",
+  },
+  FRONT_MATTER_NOT_MAPPING: {
+    message: `%s has front matter that is not a mapping`,
+    hint: "the head must be key: value pairs, not a scalar or a list",
+  },
+  SCHEMA_VIOLATION: {
+    message: `%s carries a known key with the wrong type`,
+    hint: "every offending field is listed in issues; fix them all and retry",
+  },
+  BAD_CRON: {
+    message: `%s is not a cron expression this loop's timezone can read`,
+    hint: "five fields: minute hour day-of-month month day-of-week",
+  },
+  INVALID_BODY: {
+    message: `%s could not be read as the request body this endpoint expects`,
+    hint: "send a JSON object with exactly the documented fields",
+  },
+  UNKNOWN_FILTER: {
+    message: `%s is not a filter this list endpoint evaluates`,
+    hint: "list filters are kernel query predicates; a narrower question is the agent's judgment, not a filter",
+  },
+  UNAUTHORIZED: {
+    message: `%s carried no credential this server recognizes`,
+    hint: "the machine's device credential authenticates every call — re-register the machine, then retry",
+  },
+  NOT_HUMAN: {
+    message: `%s is waiting for a human`,
+    hint: "a run cannot answer or withdraw a pending question, including one its own loop asked; it appears in the owner's inbox",
+  },
+  NO_RUN_CONTEXT: {
+    message: `%s needs a run context and the request carried none`,
+    hint: "agent calls run inside a run: the daemon sets LOOPANY_RUN_ID and the CLI attaches it. Outside a run, use the web UI or the human CLI.",
+  },
+  RUN_CONTEXT_UNKNOWN: {
+    message: `%s is not a run this machine is currently holding`,
+    hint: "the run may have finished or been reclaimed; stop here — the daemon claims a fresh one",
+  },
+  NOT_YOUR_LOOP: {
+    message: `%s is not this run's own loop`,
+    hint: "a run evolves and governs only its own loop; your work order names your loop id on its first line",
+  },
+  NOT_YOUR_RUN: {
+    message: `%s is not the run this request carries context for`,
+    hint: "report the run you were dispatched for; the path and the run context must name the same run",
+  },
+  APPROVAL_REQUIRED: {
+    message: `%s is governance and requires an approval key`,
+    hint: "create a task with needs_human describing the change and watcher: <this loop's id>; when a human answers, present that answer's event id as approval",
+  },
+  APPROVAL_UNKNOWN: {
+    message: `%s is not an approval event in this team`,
+    hint: "take the event id from the answer in the task's event tail — `task show <id>` prints it",
+  },
+  APPROVAL_NOT_HUMAN: {
+    message: `%s was not entered by a human`,
+    hint: "only a person's answer in the inbox can authorize a governance change",
+  },
+  APPROVAL_FOREIGN: {
+    message: `%s hangs on a task this loop did not create`,
+    hint: "propose the change from this loop's own run, then present that answer",
+  },
+  NOT_FOUND: {
+    message: `%s was not found`,
+    hint: "ids are server-issued and printed by every create and every list row — copy, do not compose",
+  },
+  OPEN_QUESTION: {
+    message: `%s cannot be closed while a question is waiting for a human`,
+    hint: "a human answers it in the inbox; after that the task closes normally",
+  },
+  NO_OPEN_QUESTION: {
+    message: `%s has no open question to answer`,
+    hint: "a verdict answers a pending question; refresh the inbox for the ones actually waiting",
+  },
+  WRONG_KIND: {
+    message: `%s is not the kind this verb acts on`,
+    hint: "the id names its own kind: task-, doc- and loop- each have their own verbs",
+  },
+  KEY_KIND_MISMATCH: {
+    message: `%s already names an object of a different kind in this team`,
+    hint: "keys are unique per team across kinds; choose a different key",
+  },
+  IMMUTABLE_KEY: {
+    message: `%s cannot be changed after creation`,
+    hint: "a key is creation-time identity — restore the stored value or remove the line; nothing was written",
+  },
+  CLOSED: {
+    message: `%s is closed`,
+    hint: "closed is terminal and there is no reopen verb; create a new task for the follow-on work",
+  },
+  PAUSED: {
+    message: `%s is paused`,
+    hint: "time never un-pauses a loop — a human resumes it on the loop page",
+  },
+  RETIRED: {
+    message: `%s is retired`,
+    hint: "retirement is terminal: a retired loop's charter is frozen and it never fires again",
+  },
+  QUEUED_ALREADY: {
+    message: `%s already has a queued run`,
+    hint: "one queued run per loop — the queued run will pick this up when it claims",
+  },
+  LEASE_LOST: {
+    message: `%s is no longer yours to report`,
+    hint: "stop work on it — the lease is the authority; the next claim will re-offer it",
+  },
+  TOO_LARGE: {
+    message: `%s is larger than this endpoint accepts`,
+    hint: "artifact uploads cap at 4 MB and JSON bodies at 512 KB",
+  },
+  RATE_LIMITED: {
+    message: `%s was rate limited`,
+    hint: "retry after the Retry-After interval; this is a transport condition, not a refusal of the work",
+  },
+};
+
+/** Render a template, substituting the subject for `%s`. */
+export function renderTemplate(code: RefusalCode, subject = "this request"): Omit<ApiRefusal, "code"> {
+  const template = REFUSAL_TEMPLATES[code];
+  return { message: template.message.replace("%s", subject), issues: [], hint: template.hint };
+}
+
+export function refusal(code: RefusalCode, message?: string, issues: KernelIssue[] = [], hint?: string): ApiRefusal {
+  const base = renderTemplate(code);
+  return { code, message: message ?? base.message, issues, hint: hint ?? base.hint };
+}
+
+/** The same envelope, with the subject filled in — the common call shape. */
+export function refuseAbout(code: RefusalCode, subject: string, issues: KernelIssue[] = [], hint?: string): ApiRefusal {
+  const base = renderTemplate(code, subject);
+  return { code, message: base.message, issues, hint: hint ?? base.hint };
+}
+
+export function refusalResponse(value: ApiRefusal, init?: ResponseInit): Response {
+  return Response.json(value, { ...init, status: init?.status ?? REFUSAL_STATUS[value.code] });
+}

@@ -22,6 +22,7 @@ import {
   reportDocId,
 } from "./ids.js";
 import { nextOccurrenceAfter } from "./schedule.js";
+import { refusal, type RefusalCode } from "./refusals.js";
 
 const log = logger.child({ mod: "run-queue" });
 
@@ -188,7 +189,7 @@ export interface ClaimBody {
 export async function claimRun(machine: Machine, body: ClaimBody, now = new Date()): Promise<HttpResult> {
   const agent = typeof body.agent === "string" ? body.agent.trim() : "";
   if (!agent) return problem(400, "INVALID_BODY", "agent is required");
-  if (body.machine && body.machine !== machine.id) return problem(403, "NOT_YOUR_MACHINE", "machine does not match the device credential");
+  if (body.machine && body.machine !== machine.id) return problem(400, "INVALID_BODY", "machine does not match the device credential");
 
   let claimed = await claimOnce(machine, agent, now);
   let waitedMs = 0;
@@ -543,6 +544,9 @@ function parseReport(report: FinishBody["report"], runId: string, now: Date): Pa
   if (head.payload !== undefined && (!head.payload || typeof head.payload !== "object" || Array.isArray(head.payload))) {
     return plainReport(report);
   }
+  if (head.format !== undefined && typeof head.format !== "string") {
+    return plainReport(report);
+  }
   return {
     ok: true,
     value: {
@@ -593,7 +597,7 @@ function finiteNumber(value: unknown): number | undefined {
 }
 
 function problem(status: number, code: string, message: string): HttpResult {
-  return { status, body: { error: { code, message } } };
+  return { status, body: refusal(code as RefusalCode, message) };
 }
 
 let claimGeneration = 0;

@@ -86,6 +86,16 @@ async function queueAndClaim(loopRow: Awaited<ReturnType<typeof loop>>, machineR
 }
 
 describe("R-clock", () => {
+  it("legacy machine polling excludes rewrite queue rows", async () => {
+    const l = await loop();
+    const base = { loopId: l.id, userId: "u-owner", machineId: "m-poll", role: "exec" as const, ts: T0 };
+    await database.db.insert(legacySchema.runs).values([
+      { ...base, id: "run-legacy", phase: "pending" },
+      { ...base, id: "run-rewrite", phase: "pending", queueState: "queued", scope: "routine", reason: "manual", entrance: "human" },
+    ]);
+    expect((await legacyStore.pendingRunsForMachine("m-poll")).map((run) => run.id)).toEqual(["run-legacy"]);
+  });
+
   it("B1: stays disabled by default and legacy sweep ownership excludes v2 rows", async () => {
     expect(queue.runsV2Enabled({})).toBe(false);
     expect(queue.runsV2Enabled({ LOOPANY_RUNS_V2: "1" })).toBe(true);
@@ -180,11 +190,22 @@ describe("claim leases", () => {
     await queue.reclaimExpired(late);
     const result = await queue.finishRun(m, runId, runId, { outcome: "success", summary: "late" }, late);
     expect(result.status).toBe(409);
-    expect(result.body).toEqual({ error: { code: "LEASE_LOST", message: expect.any(String) } });
+    expect(result.body).toEqual({ code: "LEASE_LOST", message: expect.any(String), issues: [], hint: expect.any(String) });
   });
 });
 
 describe("finish", () => {
+  it("a non-string report format falls back to plain Markdown and cannot wedge finish", async () => {
+    const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
+    const m = await machine("m-a", "dk_machine_a");
+    const runId = await queueAndClaim(l, m, NOW);
+    const raw = "---\ntitle: Odd report\nformat: 42\n---\n\nResult";
+    const result = await queue.finishRun(m, runId, runId, { outcome: "success", report: { body: raw } }, new Date(NOW.getTime() + 1_000));
+    expect(result.status).toBe(200);
+    const doc = await store.getObject(undefined, (await store.getRunRow(undefined, runId))!.reportDocId!);
+    expect(doc).toMatchObject({ format: "markdown", body: raw });
+  });
+
   it("B3: treats ordinary product front matter as raw Markdown and still terminates the run", async () => {
     const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
     const m = await machine("m-a", "dk_machine_a");

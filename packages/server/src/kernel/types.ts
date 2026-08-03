@@ -159,6 +159,7 @@ export type KernelErrorCode =
   | "ILLEGAL_FROM_STATE"
   | "OPEN_QUESTION"
   | "CLOSED"
+  | "NOT_HUMAN"
   | "KEY_KIND_MISMATCH"
   | "SCHEMA_VIOLATION";
 

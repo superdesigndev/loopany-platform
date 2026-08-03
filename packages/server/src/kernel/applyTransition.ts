@@ -415,6 +415,27 @@ export async function applyUpdateIn(tx: KernelExec, input: ApplyUpdateInput): Pr
   const before = await kernel.getObjectForUpdate(tx, objectId);
   if (!before) return fail(refuse("NOT_FOUND", `no object ${objectId}`, []), where);
 
+  // Double-cover the human-only question-clear at the kernel boundary. Replacing
+  // a live question is a clear in disguise: it discards what a person may be
+  // reading. The HTTP seam performs the same early guard for a richer refusal.
+  if (
+    before.kind === "task" &&
+    hasOpenQuestion(before.pendingQuestion) &&
+    input.fields.pendingQuestion !== undefined &&
+    input.fields.pendingQuestion !== before.pendingQuestion &&
+    actor.entrance !== "human"
+  ) {
+    return fail(
+      refuse(
+        "NOT_HUMAN",
+        "a run cannot clear or replace a pending question",
+        [{ path: "pendingQuestion", message: "only a human may clear or replace it", got: String(input.fields.pendingQuestion) }],
+        "a human answers it in the inbox; an agent may update fields that do not discard the question",
+      ),
+      where,
+    );
+  }
+
   // Identity and status are not patchable — a content write can never smuggle a
   // state change (the failure class the single code exit exists to eliminate).
   const immutable = immutableIssues(Object.keys(input.fields));

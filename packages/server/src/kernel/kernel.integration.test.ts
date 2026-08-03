@@ -517,6 +517,15 @@ describe("the closed-pair CHECK", () => {
 // -------------------------------------------------------------- update
 
 describe("applyUpdate", () => {
+  it("kernel itself refuses an agent clearing or replacing a live question", async () => {
+    const t = await task({ pendingQuestion: "Post this reply?" });
+    for (const pendingQuestion of [null, "Ask a different question?"]) {
+      const r = await kernel.applyUpdate({ objectId: t.id, actor: AGENT, now: T1, fields: { pendingQuestion } });
+      expect(!r.ok && r.code).toBe("NOT_HUMAN");
+    }
+    expect((await kernelStore.getObject(undefined, t.id))!.pendingQuestion).toBe("Post this reply?");
+  });
+
   it("writes the diff over exactly the fields it changed", async () => {
     const t = await task({ title: "a", followUpAt: null });
     const r = await kernel.applyUpdate({

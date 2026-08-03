@@ -461,10 +461,9 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
 
 ## Rewrite kernel (`src/kernel/` + `db/kernel-schema.ts`) — landing unit 2
 
-The rewrite's storage + kernel skeleton. **ADDITIVE and DORMANT**: `objects`/`events`
-stand alongside machines/loops/runs, no shipping runtime path reads or writes them, and
-the loop migration COPIES (`loops` is never touched). HTTP, CLI, verdict, scheduler tick,
-daemon claim and UI are units 3-4 — do not build them here. Contracts:
+The rewrite's storage + kernel skeleton. The loop migration COPIES (`loops` is never
+touched). Units 3-4 add the scheduler/claim path and object HTTP/CLI verbs while the
+legacy runtime remains alongside them. Contracts:
 `data/loopany-rewrite-design/design.md` + `data/api-spec-s3/report.md` (§4 kernel
 transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/graph/ids.ts`
 (`fm/graph-clockshadow-c1`).
@@ -501,6 +500,22 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
   done to it. Mapping is spec §5.5; the one judgment call is `charterFromTaskFile`
   (task file `## Spec` section, else the whole file), and `taskFileContent` is the one
   column deliberately not copied into `payload`.
+
+## Rewrite verb endpoints + CLI (`src/kernel/objectApi.ts`) — landing unit 4
+
+- `kernel/artifactSeam.ts` is the single server-owned object-artifact seam: closed
+  top-level keys per kind, BOM/CRLF normalization, date forms, projections, and the
+  deterministic did-you-mean refusal. Keep kind knowledge out of `artifact-format`.
+- `kernel/apiAuth.ts` resolves invisible `X-Loopany-Run` context once into
+  run→loop→team/provenance. `LOOPANY_RUN_ID` is attached by the daemon CLI, never an
+  argument. Human-only verdict/inbox reject any run context.
+- `kernel/objectApi.ts` owns the transactional task/doc/evolve/governance/inbox/verdict
+  verbs. Verdict clears the question, writes the human event, and queues R-answer in
+  one transaction; approval verification is ownership-first, then event/team, human
+  entrance, and approving-task ownership.
+- Every refusal uses the flat `{code,message,issues,hint}` envelope from
+  `kernel/refusals.ts`. `routes/api.events.stream.ts` is a team-scoped DB-tail SSE
+  invalidation stream; authoritative content is always refetched from object/view APIs.
 
 ## Maintaining this file
 

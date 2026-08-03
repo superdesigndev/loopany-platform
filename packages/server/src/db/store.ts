@@ -388,7 +388,7 @@ export async function pendingRunsForMachine(machineId: string): Promise<Run[]> {
   return db
     .select()
     .from(runs)
-    .where(and(eq(runs.machineId, machineId), eq(runs.phase, "pending")));
+    .where(and(eq(runs.machineId, machineId), eq(runs.phase, "pending"), isNull(runs.queueState)));
 }
 
 /** Is a run for this loop still open (drives the "skip overlapping tick" guard)? */
