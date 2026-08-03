@@ -32,12 +32,18 @@ computes pure functions. Run instructions: `README.md`.
 - `packages/daemon` (`@crewlet/loopany`) - one binary, two roles: poll-loop daemon
   and the in-run `loopany` callback; spawns claude.
 - `packages/artifact-format` (`@loopany/artifact-format`) - the Graph-Engineering-v3
-  **artifact file format v1**: YAML front matter + Markdown body, deterministic
-  round-trip, sanitized HTML as a projection. PURE library (no I/O, no server
-  internals) and deliberately NOT yet wired into server or UI. The format contract,
-  the core schema, the error codes and the sanitization posture are documented in
-  its own `README.md` - read that, never a summary here. NB it is STRICT and throws,
-  unlike the soft, never-throwing v2 loop-product reader
+  **artifact file format codec**: YAML front matter + an OPAQUE body,
+  parse/serialize as deterministic inverses. PURE STRUCTURAL library - no I/O, no
+  server internals, and **zero domain knowledge**: it enforces only "the head is a
+  YAML mapping" + "`format` is a known enum", and preserves every other key
+  verbatim. Object kinds and their closed key sets belong to the server seam, NOT
+  here - do not add a field rule to this package. Not yet wired into server or UI.
+  The format contract, key ordering (`keyOrder`), error codes and hostile-input
+  ceilings are documented in its own `README.md` - read that, never a summary here.
+  It renders NOTHING (no markdown/sanitizer deps; a consumer displays a body under
+  its own policy), and its public surface is pinned by `src/codec.surface.test.ts`
+  against `test/target.ts`, so an export cannot appear or vanish unnoticed. NB it
+  is STRICT and throws, unlike the soft, never-throwing v2 loop-product reader
   `packages/server/src/server/frontmatter.ts`; the two coexist by design.
 
 ## Commands

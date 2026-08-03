@@ -1,79 +1,42 @@
 /**
- * The v1 artifact document model.
+ * The artifact document model.
  *
- * An artifact file is ONE YAML front-matter block followed by a Markdown body.
- * Front matter is the MACHINE HEAD: only fields the system acts on live there.
- * Anything that exists purely for a human reader belongs in the body.
+ * An artifact file is ONE YAML front-matter block followed by a body. This
+ * library is a PURE STRUCTURAL CODEC: it knows that the head is a YAML mapping
+ * and that the body is opaque text, and it knows nothing else. Object kinds
+ * (task/doc/loop), their closed front-matter key sets, and every other domain
+ * rule live in the server-side seam — never here.
  */
 
 export const ARTIFACT_FORMAT_VERSION = 1;
 
-/** The only body format v1 implements. An explicit `format:` naming anything
- *  else is a loud error — never a silent fallback to Markdown. */
-export const SUPPORTED_BODY_FORMATS = ["markdown"] as const;
+/** The body formats the head may declare. This is an ENUM and nothing more:
+ *  the codec attaches no rendering semantics to either value, and which object
+ *  kinds may use which format is server-side policy. */
+export const SUPPORTED_BODY_FORMATS = ["markdown", "html"] as const;
 export type ArtifactBodyFormat = (typeof SUPPORTED_BODY_FORMATS)[number];
 
 /**
- * The CORE schema — the fields this library knows and validates. Everything
- * else in the front matter is an unknown field: preserved verbatim through
- * parse/serialize so the per-type registry can add its own fields later
- * WITHOUT this library changing.
+ * The front matter is a plain YAML mapping. `format` is the ONLY key the codec
+ * itself recognizes; every other key is opaque data carried verbatim through
+ * parse and serialize.
+ *
+ * Pass-through is the CORRECT behavior at this level, not a fallback — an
+ * unknown key is not a key the codec failed to understand, it is a key that is
+ * none of the codec's business. Rejection happens at the server seam, against
+ * the object kind's declared key set.
  */
-export interface ArtifactCoreFields {
-  /** Registry type key. Required — an artifact with no type is not addressable. */
-  type: string;
-  /** Current state in the type's state machine. Open vocabulary here; the
-   *  registry (not this library) decides which values a type admits. */
-  status?: string;
-  /** Display title. Machine-acted (listing, search) hence head, not body. */
-  title?: string;
-  /** Body format. Absent means `markdown`. */
-  format?: ArtifactBodyFormat;
-  /** External system this artifact mirrors, e.g. `github`. */
-  source?: string;
-  /** Identity within `source`, e.g. `org/repo/issues/1291`. Requires `source`. */
-  externalId?: string;
-  /** Canonical URL of the external fact. */
-  sourceUrl?: string;
-  /** RFC 3339 instants WITH an explicit offset (`2026-07-29T09:15:00Z`). */
-  createdAt?: string;
-  updatedAt?: string;
-  /** Related file references. Legal DATA in v1 with no rendering semantics —
-   *  nothing in this library resolves, fetches, or embeds them. */
-  attachments?: string[];
-}
-
-/** Core fields plus any number of preserved unknown fields. */
-export type ArtifactFrontMatter = ArtifactCoreFields & { [key: string]: unknown };
+export type ArtifactFrontMatter = { format?: ArtifactBodyFormat } & { [key: string]: unknown };
 
 export interface ArtifactDocument {
   readonly frontMatter: ArtifactFrontMatter;
   /**
    * The body EXACTLY as it appeared after the closing delimiter line — the
    * customary blank line following `---` is part of the body and is preserved.
-   * Always Markdown (CommonMark + GFM tables) in v1.
+   * Opaque text: never parsed, rendered, or normalized by this library.
    */
   readonly body: string;
 }
-
-/**
- * Canonical front-matter key order: core fields in this declared order first,
- * every unknown key after them in lexicographic order. Serialization is a pure
- * function of the data, so two documents with equal data serialize to equal
- * bytes regardless of how their objects were built.
- */
-export const CORE_FIELD_ORDER = [
-  "type",
-  "status",
-  "title",
-  "format",
-  "source",
-  "externalId",
-  "sourceUrl",
-  "createdAt",
-  "updatedAt",
-  "attachments",
-] as const satisfies readonly (keyof ArtifactCoreFields)[];
 
 /** Hostile-input ceilings. Every one of these is a LOUD failure, never a clip. */
 export interface ArtifactLimits {
@@ -81,9 +44,10 @@ export interface ArtifactLimits {
   maxDocumentBytes: number;
   /** The YAML block between the delimiters, in UTF-8 bytes. */
   maxFrontMatterBytes: number;
-  /** Nesting depth of the parsed front-matter value. */
+  /** Nesting depth of the front-matter value, counted from the root mapping:
+   *  the root is 1, its values are 2, and so on. */
   maxFrontMatterDepth: number;
-  /** Total collection entries + scalars in the parsed front matter. */
+  /** Total collection entries + scalars in the front matter. */
   maxFrontMatterNodes: number;
   /** YAML alias expansions before the parser gives up (billion-laughs guard). */
   maxAliasCount: number;
@@ -102,10 +66,25 @@ export interface ParseOptions {
   limits?: Partial<ArtifactLimits>;
 }
 
-/** Serialization honors the SAME ceilings as parsing — the two halves of the
- *  round trip must agree about what is representable, so a document parsed
- *  under raised limits can always be written back under those limits. */
-export type SerializeOptions = ParseOptions;
+export interface SerializeOptions extends ParseOptions {
+  /**
+   * Presentation only: keys listed here are emitted FIRST, in this order, and
+   * every remaining key follows in code-unit lexicographic order. Omit it for
+   * pure lexicographic order.
+   *
+   * There is no privileged key order baked into the codec — a caller that wants
+   * `kind` before `state` says so here, and a caller that does not care gets a
+   * stable order anyway.
+   *
+   * - Applies to the TOP-LEVEL mapping only. Nested mappings are always pure
+   *   lexicographic, so a caller's intent for the head cannot reach down and
+   *   reorder a nested value that merely shares a key name.
+   * - A listed key the data does not have is skipped, never invented.
+   * - A key listed twice keeps its first position.
+   * - `[]` behaves exactly like omitting the option.
+   */
+  keyOrder?: string[];
+}
 
 /** The effective ceilings for one call: `DEFAULT_LIMITS` under any override. */
 export function resolveLimits(options: ParseOptions | undefined): ArtifactLimits {

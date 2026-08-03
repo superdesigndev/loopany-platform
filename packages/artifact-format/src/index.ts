@@ -1,11 +1,12 @@
 /**
- * @loopany/artifact-format — the v1 artifact file format.
+ * @loopany/artifact-format — the artifact file format codec.
  *
- * An artifact file is one YAML front-matter block (the machine head) plus a
- * Markdown body (the content). Parse and serialize are inverse and
- * deterministic; rendering to HTML is a sanitized projection, never storage.
+ * An artifact file is one YAML front-matter block (a plain mapping) plus an
+ * opaque body. Parse and serialize are deterministic inverses.
  *
- * Pure library: no I/O, no server internals, no globals.
+ * A PURE STRUCTURAL CODEC: no I/O, no server internals, no globals, and no
+ * domain knowledge. Object kinds and their front-matter key sets live in the
+ * server seam; this library only knows YAML mappings and bytes.
  */
 
 export {
@@ -20,12 +21,10 @@ export {
 
 export {
   ARTIFACT_FORMAT_VERSION,
-  CORE_FIELD_ORDER,
   DEFAULT_LIMITS,
   SUPPORTED_BODY_FORMATS,
   resolveLimits,
   type ArtifactBodyFormat,
-  type ArtifactCoreFields,
   type ArtifactDocument,
   type ArtifactFrontMatter,
   type ArtifactLimits,
@@ -33,10 +32,9 @@ export {
   type SerializeOptions,
 } from "./types.js";
 
-export { bodyFormatOf, validateFrontMatter } from "./schema.js";
+export { bodyFormatOf, checkTimestamp, validateFrontMatter } from "./schema.js";
 export { parseArtifact, splitArtifact, type ArtifactSplit } from "./parse.js";
 export { serializeArtifact, updateArtifactFrontMatter } from "./serialize.js";
-export { renderArtifactBody, renderMarkdown, type RenderOptions } from "./render.js";
 
 import { toResult, type ArtifactResult } from "./errors.js";
 import { parseArtifact } from "./parse.js";

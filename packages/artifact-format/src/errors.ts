@@ -21,11 +21,12 @@ export type ArtifactErrorCode =
   | "FRONT_MATTER_TOO_MANY_NODES"
   /** `format:` names a body format this version does not implement. */
   | "UNSUPPORTED_FORMAT"
-  /** The core schema rejected one or more fields; see `issues`. */
+  /** Structural validation rejected one or more values; see `issues`. */
   | "SCHEMA_VIOLATION";
 
-/** One field-level complaint. `path` is a dotted front-matter path (`source`,
- *  `attachments[1]`), never a body offset — the body is never validated. */
+/** One field-level complaint. `path` is a dotted front-matter path (`format`,
+ *  `nested.child`, `list[1]`), never a body offset — the body is never
+ *  validated. */
 export interface ArtifactIssue {
   readonly path: string;
   readonly message: string;

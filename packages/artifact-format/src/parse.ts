@@ -111,9 +111,9 @@ function stripCr(s: string): string {
  * Parse an artifact file into its document model.
  *
  * Throws `ArtifactFormatError` on: a missing or unterminated front-matter
- * block, malformed YAML, a non-mapping head, any hostile-input ceiling, an
- * unsupported `format:`, or a core-schema violation. Unknown front-matter
- * fields are preserved untouched.
+ * block, malformed YAML, a non-mapping head, an unsupported `format:`, or any
+ * hostile-input ceiling. Every front-matter key other than `format` is
+ * preserved untouched — the codec has no field vocabulary.
  */
 export function parseArtifact(text: string, options?: ParseOptions): ArtifactDocument {
   const limits = resolveLimits(options);
@@ -139,7 +139,7 @@ function parseFrontMatterYaml(yamlText: string, startLine: number, limits: Artif
   try {
     doc = parseDocument(yamlText, {
       version: "1.2",
-      // The core schema only ever produces strings/numbers/booleans/null —
+      // The YAML 1.2 core schema only produces strings/numbers/booleans/null —
       // no timestamps, no binary, and no path to instantiating a host object.
       schema: "core",
       uniqueKeys: true,
