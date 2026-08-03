@@ -516,6 +516,61 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
 - Every refusal uses the flat `{code,message,issues,hint}` envelope from
   `kernel/refusals.ts`. `routes/api.events.stream.ts` is a team-scoped DB-tail SSE
   invalidation stream; authoritative content is always refetched from object/view APIs.
+- **`kernel/refusals.ts` is a CATALOGUE, not a code list**: every `RefusalCode` has a
+  first-class `{message, hint}` template, so a refusal can never reach an agent as a
+  generic envelope. Adding a code without a template fails to typecheck;
+  `refusals.test.ts` is the guard table (CLI spec §8) and asserts each entry renders a
+  real sentence, a real hint, and a 4xx status. Call sites override with the offending
+  value; they may never emit a bare code.
+- **The human-only question-clear is covered at THREE altitudes** and all three are
+  tested: the route (`resolveApiContext(…, "human")`), the field surface
+  (`patchTask`/`replaceFromArtifact`), and `applyUpdateIn` itself. The unit-2 review's
+  NB-1 asked for two; the third is free because the kernel guard is entrance-based.
+  Note the file path is a clear in disguise — dropping `needs_human` from a whole-file
+  replacement discards a live question, so it is refused too.
+- **A verdict JOINS an already-queued run, it never refuses the human.** One queued run
+  per loop is the queue discipline (`runs_one_queued_idx`), so R-answer reports the
+  existing run with `alreadyQueued: true` and the queued run pulls both answered tasks
+  when it claims. Refusing here would fail a person's answer for a reason that is not
+  about them. Deliberate reading of CLI spec §7.2 over API spec §4.2, whose
+  `ON CONFLICT (id)` does not cover the one-queued-run index at all.
+- Two response fields are ADDITIVE to API spec §1.5, and both exist for the CLI:
+  `total` (so a truncated page prints `count: N of T total` instead of clipping
+  silently) and `viewerLoop` (the caller's own loop id from run context, so a hint can
+  inline a real id instead of a placeholder).
+
+## The rewrite CLI (`packages/daemon/src/kernel-{cli,render,help}.ts`)
+
+- Three modules, split so the goldens are testable without a server: `kernel-render.ts`
+  is the PURE axi/TOON grammar (quoting rule, typed lists, the five-part teaching
+  envelope, status→slug, status→exit) with no I/O and no clock; `kernel-help.ts` is ONE
+  table behind the `--help` screen, the `allowed[N]:` line and the local grammar check,
+  so those three cannot drift; `kernel-cli.ts` routes, validates flags, and renders.
+- **The CLI validates FLAGS, never front matter.** A flag is the CLI's own surface, so
+  unknown flags / contradictory flags / `self` where a loop id belongs / a signed
+  `--since` / a flag-and-file conflict are refused locally at exit 2 before any side
+  effect. Front-matter validation stays server-side at the one artifact seam — a
+  client-side validator would be a second copy of the closed key set.
+- `wrote:`/`expected:` print VERBATIM (unquoted); only the `error:` sentence is quoted.
+  They are the literal "you wrote / expected" pair an agent diffs, not prose it parses.
+- Exit codes are a pure function of the HTTP status (`exitForStatus`): 404→3,
+  401/429/5xx→1, other 4xx→2. **401/429 are exit 1, not 2** — neither is a mistake in
+  the command and rewriting it cannot fix either (adjudicated against the API spec's
+  blanket "all 4xx exit 2", `decisions-2026-08-03.md` item 11).
+- `route.ts` `KERNEL_VERBS` sends `task|doc|loop|inbox|answer` down this path BEFORE the
+  legacy run-token callback branch: the rewrite verbs authenticate with the device
+  credential plus an invisible `LOOPANY_RUN_ID` header, not the legacy run bearer.
+
+**Known spec drift, deliberately unreconciled** (the two blueprints disagree; the API
+spec owns the wire, so it wins):
+- `loop evolve` takes a whole loop ARTIFACT (front matter + body) per API spec §1.12,
+  not the bare charter body CLI spec §6.9/G24 describes. The cron-equal-is-a-no-op /
+  cron-differs-is-`APPROVAL_REQUIRED` rule is unimplementable without front matter.
+- Evolve therefore also writes `title`/`payload` (API spec §1.12 lists them as
+  non-governance), where CLI spec §6.9 says "the body only".
+- The CLI prints `event: ev-…` without CLI spec §6.5's `(seq N)`: mutation responses
+  carry the event id only (API spec §1.7), and inventing a second lookup for a display
+  parenthesis is not worth a round trip.
 
 ## Maintaining this file
 
