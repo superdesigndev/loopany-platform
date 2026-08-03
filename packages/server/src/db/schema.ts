@@ -308,6 +308,12 @@ export const runs = pgTable(
     attempts: integer("attempts").notNull().default(0),
     /** The doc row this run's report became (`objects.id`, kind=doc). */
     reportDocId: text("report_doc_id"),
+    /** Rewrite protocol completion fields. Kept separate from the legacy
+     * message/cost columns because the new cost object is deliberately open. */
+    outcomeSummary: text("outcome_summary"),
+    runCost: jsonb("run_cost").$type<Record<string, unknown>>(),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
   },
   (t) => [
     index("runs_loop_idx").on(t.loopId),

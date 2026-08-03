@@ -36,6 +36,63 @@ const REPOLL_MS = 250;
  *  abort SIGTERMs their claude children; KILL_GRACE is 5s, so 10s covers it). */
 const DRAIN_MS = 10_000;
 
+export function runsV2Enabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.LOOPANY_RUNS_V2 === "1";
+}
+
+interface RunsV2Claim {
+  run: null | { id: string; loopId: string; loopTitle?: string | null; scope: string };
+  charter?: string;
+  identityLine?: string;
+  scopeNote?: string | null;
+  task?: unknown;
+  execution?: {
+    agent?: "claude-code" | "codex" | "grok";
+    workdir?: string | null;
+    taskFile?: string | null;
+    workflow?: string | null;
+    model?: string | null;
+    allowControl?: boolean;
+    prevState?: unknown;
+  };
+  roots?: string[];
+}
+
+/** Adapt the new work order into the existing runner instead of forking its
+ * workflow/spawn/retry machinery. */
+export function deliveryFromRunsV2(claim: RunsV2Claim, deviceToken: string): Delivery | undefined {
+  if (!claim.run) return undefined;
+  const execution = claim.execution ?? {};
+  const prompt = [
+    claim.charter ?? "",
+    claim.identityLine ?? `You are running for ${claim.run.loopId}.`,
+    claim.scopeNote ?? "",
+    claim.task ? `Task in scope:\n${JSON.stringify(claim.task, null, 2)}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    runId: claim.run.id,
+    runToken: deviceToken,
+    role: "exec",
+    loop: {
+      id: claim.run.loopId,
+      name: claim.run.loopTitle ?? claim.run.loopId,
+      workdir: execution.workdir ?? null,
+      taskFile: execution.taskFile ?? null,
+      workflow: execution.workflow ?? null,
+      model: execution.model ?? null,
+      allowControl: execution.allowControl === true,
+      agent: execution.agent ?? "claude-code",
+    },
+    prevState: execution.prevState ?? null,
+    roots: claim.roots,
+    systemPrompt: "",
+    task: prompt,
+    runsV2: { deviceToken, reportTitle: `${claim.run.loopTitle ?? claim.run.loopId} run report` },
+  };
+}
+
 /** Read a `--flag value` from argv. */
 function flag(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -100,6 +157,7 @@ export async function runDaemon(): Promise<number> {
   // `version` is this daemon's own package version, so the web can flag an
   // outdated daemon and show the exact update command.
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
+  const runsV2 = runsV2Enabled();
 
   // Refuse to boot when a live, VERIFIED daemon already owns the pidfile — a
   // second daemon (e.g. a bare `loopany` in a terminal) would overwrite it, and
@@ -153,19 +211,25 @@ export async function runDaemon(): Promise<number> {
       // not the transcript) so the dashboard shows "what's it doing" without WS.
       const progress = snapshotProgress();
       // ac.signal rides along so SIGTERM/`down` aborts an in-flight poll too.
-      const res = await boundedFetch(`${server}/api/machine/poll`, {
+      const res = await boundedFetch(`${server}${runsV2 ? "/api/agent/runs/claim" : "/api/machine/poll"}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest)),
+        body: JSON.stringify(
+          runsV2
+            ? { agent: `daemon-${daemonVersion()}-pid${process.pid}`, wait: inFlight.size === 0 }
+            : buildPollBody(info, progress, inFlight.size === 0, watchDigest),
+        ),
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
-        const data = (await res.json()) as { deliveries?: Delivery[]; watch?: WatchSpec[]; watchDigest?: string };
+        const raw = await res.json();
+        const data = raw as { deliveries?: Delivery[]; watch?: WatchSpec[]; watchDigest?: string };
         // Reconcile the loop-folder watchers against the server's current set.
         // An ABSENT `watch` means "unchanged since the digest you echoed" (the
         // server omits it only after a matching echo) — never an empty set.
         if (Array.isArray(data.watch)) watchManager.reconcile(data.watch);
         if (typeof data.watchDigest === "string") watchDigest = data.watchDigest;
-        for (const d of data.deliveries ?? []) {
+        const v2Delivery = runsV2 ? deliveryFromRunsV2(raw as RunsV2Claim, token) : undefined;
+        for (const d of v2Delivery ? [v2Delivery] : data.deliveries ?? []) {
           if (inFlight.has(d.runId)) continue;
           inFlight.add(d.runId);
           logger.info({ runId: d.runId, role: d.role }, "delivery claimed — running");

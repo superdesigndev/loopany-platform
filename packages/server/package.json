@@ -17,6 +17,7 @@
     "kernel:migrate-loops": "tsx src/kernel/migrate-loops-cli.ts"
   },
   "dependencies": {
+    "@loopany/artifact-format": "workspace:*",
     "@aws-sdk/client-s3": "^3.1075.0",
     "@base-ui/react": "^1.6.0",
     "@electric-sql/pglite": "^0.5.4",

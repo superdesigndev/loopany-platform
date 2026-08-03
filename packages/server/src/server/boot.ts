@@ -22,10 +22,12 @@ import {
   dbWatchdogFailureThreshold,
 } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
+import { RunQueueScheduler } from "../kernel/runQueue.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
   scheduler: Scheduler;
+  runQueueScheduler: RunQueueScheduler;
   gateway: MachineGateway;
   artifactSync: ArtifactSync;
   cliGateway: CliGateway;
@@ -73,6 +75,8 @@ async function boot(): Promise<Booted> {
   const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);
+  const runQueueScheduler = new RunQueueScheduler();
+  await runQueueScheduler.start(abort.signal);
 
   // sweep() is async now: a rejected promise off a bare timer callback is an
   // unhandled rejection (Node can terminate). Catch it so a transient sweep error
@@ -117,7 +121,7 @@ async function boot(): Promise<Booted> {
   }
 
   logger.info("loopany server booted");
-  return { scheduler, gateway, artifactSync, cliGateway, abort };
+  return { scheduler, runQueueScheduler, gateway, artifactSync, cliGateway, abort };
 }
 
 export async function getGateway(): Promise<MachineGateway> {

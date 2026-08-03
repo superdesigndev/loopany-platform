@@ -82,6 +82,9 @@ importers:
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
+      '@loopany/artifact-format':
+        specifier: workspace:*
+        version: link:../artifact-format
       '@tanstack/react-router':
         specifier: ^1.170.16
         version: 1.170.16(react-dom@19.2.7)(react@19.2.7)

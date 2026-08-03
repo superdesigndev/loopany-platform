@@ -50,6 +50,7 @@ import * as kernel from "../db/kernelStore.js";
 import type { KernelExec } from "../db/kernelStore.js";
 import { logger } from "../logger.js";
 import { createdEventId, derivedEventId, msOf, newObjectId, organicEventId } from "./ids.js";
+import { nextOccurrenceAfter } from "./schedule.js";
 import {
   INITIAL_STATUS,
   STATUSES_BY_KIND,
@@ -318,7 +319,12 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     title: input.title ?? null,
     cron: input.cron ?? null,
     timezone: input.timezone ?? null,
-    nextFire: input.nextFire ?? null,
+    nextFire:
+      input.nextFire !== undefined
+        ? input.nextFire
+        : kind === "loop" && status === "active" && input.cron
+          ? nextOccurrenceAfter(input.cron, input.timezone ?? null, now)
+          : null,
     followUpAt: input.followUpAt ?? null,
     pendingQuestion: input.pendingQuestion ?? null,
     watcher: input.watcher ?? null,
@@ -589,6 +595,10 @@ export async function applyTransitionIn(tx: KernelExec, input: ApplyTransitionIn
     // live, so leaving it set would let the tick fire a loop the system stopped.
     patch.nextFire = null;
     diff.nextFire = { old: before.nextFire, new: null };
+  }
+  if (before.kind === "loop" && spec.to === "active" && before.cron) {
+    patch.nextFire = nextOccurrenceAfter(before.cron, before.timezone, now);
+    diff.nextFire = { old: before.nextFire, new: patch.nextFire };
   }
 
   // The event lands FIRST. The latch above catches the ordinary replay; this
