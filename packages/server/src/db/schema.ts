@@ -269,11 +269,62 @@ export const runs = pgTable(
      *  freshness stamp the sweep reads as last-heard-from (optional: rows written
      *  by older daemons lack it). TS-only shape; no migration. */
     progress: jsonb("progress").$type<{ step: number; label: string; at?: string }>(),
+
+    // ---- REWRITE QUEUE COLUMNS (additive; spec §5.3 / design §5) ----
+    //
+    // The rewrite's run lifecycle is `queued → claimed → success | failure`, and
+    // the queued run row IS the dispatch record (the v3 directive table is
+    // deleted — agent execution is the only action kind). These columns land on
+    // the EXISTING runs table rather than a new one, so run history stays in one
+    // place; every one of them is NULLABLE and unset on legacy rows, and the
+    // legacy `phase`/`role`/`outcome` lifecycle is untouched. Unit 3 (scheduler
+    // tick + daemon claim) is what drives them; unit 2 only welds the invariant.
+    //
+    // NAMING DEVIATION, deliberate: spec §5.3 calls the lifecycle column `state`,
+    // but `runs.state` is TAKEN by the shipping per-run metrics jsonb above. The
+    // rewrite column is therefore `queue_state`. Everything else keeps its
+    // spec name.
+    /** queued | claimed | success | failure. NULL on every legacy run row. */
+    queueState: text("queue_state", { enum: ["queued", "claimed", "success", "failure"] }),
+    /** `routine` (the loop's own cadence) or `task:<object id>` (an express run
+     *  born from an answer). Runs belong to LOOPS, never to tasks (design §5). */
+    scope: text("scope"),
+    /** Which birth rule produced this run: R-clock, R-answer, or a manual fire. */
+    reason: text("reason", { enum: ["clock", "answered", "manual"] }),
+    /** The entrance stamped onto this run's events (`clock|answer|human`). */
+    entrance: text("entrance", { enum: ["clock", "answer", "human"] }),
+    /** The cron OCCURRENCE this fire serves (clock runs only) — the id seed, so a
+     *  crash between the fire commit and the cursor advance re-derives it. */
+    scheduledFor: text("scheduled_for"),
+    /** The agent instance holding the claim. */
+    claimedBy: text("claimed_by"),
+    claimedAt: text("claimed_at"),
+    /** THE LEASE IS THE AUTHORITY (design §5): the run row IS the lease record —
+     *  r1 removed per-run bearer tokens, so there is no token column and no token
+     *  table here. A zombie's late report is refused against these fields. */
+    leaseExpiresAt: text("lease_expires_at"),
+    leaseState: text("lease_state", { enum: ["active", "terminal-grace"] }),
+    /** Bounded, so a poison run stops being re-offered and becomes a visible failure. */
+    attempts: integer("attempts").notNull().default(0),
+    /** The doc row this run's report became (`objects.id`, kind=doc). */
+    reportDocId: text("report_doc_id"),
   },
   (t) => [
     index("runs_loop_idx").on(t.loopId),
     index("runs_phase_idx").on(t.phase),
     index("runs_loop_ts_idx").on(t.loopId, t.ts),
+    // ---- rewrite queue indexes (spec §5.3) ----
+    /** ONE QUEUED RUN PER LOOP (design §5 queue discipline). A fire that finds one
+     *  already queued records `clock-skipped` instead of stacking, so a machine
+     *  offline for two days owes one run, not forty-eight. Partial, so legacy
+     *  rows (queue_state NULL) are invisible to it. */
+    uniqueIndex("runs_one_queued_idx").on(t.loopId).where(sql`${t.queueState} = 'queued'`),
+    /** The claim scan: queued rows, oldest first. */
+    index("runs_claim_idx").on(t.ts).where(sql`${t.queueState} = 'queued'`),
+    /** The lease-expiry sweep. */
+    index("runs_lease_idx").on(t.leaseExpiresAt).where(sql`${t.queueState} = 'claimed'`),
+    /** "Runs that cite this task". */
+    index("runs_scope_idx").on(t.scope).where(sql`${t.scope} IS NOT NULL AND ${t.scope} <> 'routine'`),
   ],
 );
 

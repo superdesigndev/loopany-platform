@@ -459,6 +459,49 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   unauthenticated). The destination restriction closes the SSRF regardless of creator;
   tightening create to team-owner-only is a separate change.
 
+## Rewrite kernel (`src/kernel/` + `db/kernel-schema.ts`) — landing unit 2
+
+The rewrite's storage + kernel skeleton. **ADDITIVE and DORMANT**: `objects`/`events`
+stand alongside machines/loops/runs, no shipping runtime path reads or writes them, and
+the loop migration COPIES (`loops` is never touched). HTTP, CLI, verdict, scheduler tick,
+daemon claim and UI are units 3-4 — do not build them here. Contracts:
+`data/loopany-rewrite-design/design.md` + `data/api-spec-s3/report.md` (§4 kernel
+transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/graph/ids.ts`
+(`fm/graph-clockshadow-c1`).
+
+- **`kernel/applyTransition.ts` is THE single code exit for `objects.status`** — three
+  entries (`createObject` / `applyUpdate` / `applyTransition`), each also exposed as
+  `…In(tx, …)` so unit 4's verdict and §6.6's failure backoff can COMPOSE a bigger
+  transaction. Rules it welds: the kernel NEVER reads a clock (`now` is a required
+  input), the row is locked `FOR UPDATE` before any guard, every mutation writes its
+  event with a `{old,new}` diff in the SAME transaction, and a no-op writes no event.
+  Refusals are typed `{ok:false, code, message, issues, hint}` (spec §3.1) with the
+  legal move in `hint` — never thrown, never retried in-seam.
+- **The kind firewalls live at TWO altitudes and both are tested**: `kernel/types.ts`
+  (pure, teaching refusal) and three DDL CHECKs (`objects_cron_loop_only` /
+  `_task_facets_only` / `_format_doc_only`, plus `objects_closed_pair`). Asserting only
+  the verb would let the floor evaporate on a refactor. Drizzle wraps driver errors as
+  a generic "Failed query: …", so assert the constraint NAME off `err.cause.constraint`
+  (SQLSTATE 23514) — `kernel.integration.test.ts` `expectCheckViolation` is the helper.
+- **Dedup is by identity, never by a window.** `kernel/ids.ts` derives a re-derivable
+  row's id from its identity alone (no clock, no attempt counter, no nonce) and every
+  such insert is `ON CONFLICT DO NOTHING`. Changing a seed shape FORKS identity and
+  silently breaks dedup — treat the seeds in `ids.ts` as frozen.
+- **`events.seq` IS sparse — the spec is wrong about this.** §5.4 claims a swallowed
+  insert consumes no identity value; Postgres draws it before detecting the conflict, so
+  gaps exist. Harmless for `WHERE seq > :since ORDER BY seq`, but no consumer may read a
+  gap as a dropped event or derive a count from a delta. Pinned by the integration test.
+- **`runs.state` was already taken** (the per-run metrics jsonb), so spec §5.3's run
+  lifecycle column ships as **`queue_state`**; every other queue/lease column keeps its
+  spec name. All are nullable and NULL on legacy rows, so `runs_one_queued_idx` (the
+  one-queued-run-per-loop partial unique index) is invisible to shipping history.
+- **`pnpm kernel:migrate-loops [--dry-run] [--team <id>]`** (`kernel/loopMigration.ts`)
+  copies each loop into one `objects` row. Insert-only by design: it never UPDATES an
+  already-migrated row, because that would overwrite whatever the kernel side has since
+  done to it. Mapping is spec §5.5; the one judgment call is `charterFromTaskFile`
+  (task file `## Spec` section, else the whole file), and `taskFileContent` is the one
+  column deliberately not copied into `payload`.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

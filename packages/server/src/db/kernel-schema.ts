@@ -1,0 +1,214 @@
+/**
+ * Rewrite kernel tables — `objects` + `events` (Drizzle, Postgres `pg-core`).
+ *
+ * ADDITIVE UNIT. These two tables stand alongside the shipping
+ * machines/loops/runs schema and rewire nothing: no existing runtime path reads
+ * or writes anything here, and the production-loop migration
+ * (`kernel/loopMigration.ts`) COPIES loops in without touching `loops`. The HTTP
+ * surface, the CLI, the verdict, the scheduler tick and the UI are later units.
+ *
+ * Conventions match `db/schema.ts` exactly — text ids, ISO-string timestamps as
+ * `text` with no db-side defaults, typed `jsonb().$type<>()` — so `store.ts`
+ * stays single-sourced across the postgres-js and pglite driver tiers.
+ *
+ * Three invariants are enforced by the SCHEMA, not by callers:
+ *   1. THE KIND FIREWALLS (design §4). A cadence is a loop facet, a question is
+ *      a task facet, `format` is a doc facet — three CHECKs, so a `--cron` on a
+ *      task cannot reach the disk even if every verb guard were removed. The
+ *      verb guards in `kernel/types.ts` remain the teaching surface; these are
+ *      the floor.
+ *   2. PER-TEAM KEY UNIQUENESS — a partial UNIQUE index, so creation-time
+ *      idempotency is an upsert conflict, never a read-then-write race (§4.1).
+ *   3. PAYLOAD SUFFICIENCY (spec §5.2, carried from the graph line's captain
+ *      decision 1) — an event carrying a `status` diff cannot exist without its
+ *      transition name. It cannot be backfilled, so it is decided at schema time.
+ *
+ * Every inbox/worklist index is PARTIAL on its state predicate, so its size
+ * tracks live work rather than total history — the property that keeps the §6
+ * safety floor cheap as the log grows.
+ */
+import { sql } from "drizzle-orm";
+import { pgTable, text, bigint, jsonb, index, uniqueIndex, check } from "drizzle-orm/pg-core";
+
+import { ENTRANCES, EVENT_ORIGINS, OBJECT_KINDS, type EventDiff } from "../kernel/types.js";
+
+// ---- objects: loops, tasks and docs in one table (design §2) ----
+
+export const objects = pgTable(
+  "objects",
+  {
+    /** Kind-prefixed and server-issued: `task-<ulid>` / `doc-…` / `loop-…`,
+     *  or `<kind>-<sha256hex>` when the object is re-derivable (spec §5.4).
+     *  Migrated production loops keep their existing id verbatim (§5.5) — it is
+     *  already `loop-` prefixed, so run history and artifact paths keep resolving. */
+    id: text("id").primaryKey(),
+    /** Owning team — the scope everything is listed and authorized by. */
+    teamId: text("team_id").notNull(),
+    kind: text("kind", { enum: OBJECT_KINDS }).notNull(),
+    /** task: open|closed · loop: active|paused|retired · doc: current.
+     *  WRITES FLOW THROUGH `kernel/applyTransition.ts` — that module is the only
+     *  place in the codebase that moves this column, and it writes the status and
+     *  its event in ONE transaction. DB-level enforcement of that chokepoint
+     *  (a trigger token or a column grant) stays deprioritized per the standing
+     *  decision (design §2 invariant 2: "by convention in v1 — one code exit"). */
+    status: text("status").notNull(),
+    title: text("title"),
+
+    // ---- loop facets (CHECK: null on every other kind) ----
+    /** The cadence. A loop's body is its charter; this is when it runs. */
+    cron: text("cron"),
+    /** IANA tz the cron is read in. Null ⇒ server local. */
+    timezone: text("timezone"),
+    /** THE SCHEDULER'S CURSOR: the next instant this loop is due (ISO). The tick's
+     *  whole claim predicate is `next_fire <= now`, level-triggered, so downtime
+     *  owes exactly ONE catch-up fire (design §5 R-clock). Null ⇒ not armed. */
+    nextFire: text("next_fire"),
+
+    // ---- task facets (CHECK: null on every other kind) ----
+    /** DATA, NOT A TIMER (design §6). "Due" is the query-time predicate
+     *  `follow_up_at <= now` — no armed alarms, so there is no edge to miss. */
+    followUpAt: text("follow_up_at"),
+    /** Non-empty ⇒ a human is owed an answer. This is the attested-close guard
+     *  and the inbox's first branch; it is not a status (design §3). */
+    pendingQuestion: text("pending_question"),
+    /** A loop id naming who acts next; NULL = the unclaimed pool. Set by the
+     *  creator's charter template, never inferred (design §3). */
+    watcher: text("watcher"),
+
+    // ---- doc facets (CHECK: null on every other kind) ----
+    /** `markdown` | `html`. HTML is a doc-only narrow door, always sandbox
+     *  rendered — task and loop bodies stay Markdown (design §7). */
+    format: text("format"),
+
+    /** CREATION-TIME idempotency only (design §8): same key ⇒ the existing object
+     *  is returned, never a twin and never a 409. Unique per team, partial. */
+    key: text("key"),
+    /** The declared free zone — custom data, explicitly namespaced (design §7). */
+    payload: jsonb("payload").$type<Record<string, unknown>>(),
+    /** Markdown (or HTML for a doc). A loop's body IS its charter (design §4). */
+    body: text("body"),
+
+    /** Provenance stamps, pinned at creation (design §10 principle 2). */
+    createdByRun: text("created_by_run"),
+    createdByLoop: text("created_by_loop"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    /** Set with `status='closed'` and cleared with it — the CHECK pairs them. */
+    closedAt: text("closed_at"),
+  },
+  (t) => [
+    // ---- the kind firewalls, welded (design §4 rule 2) ----
+    check("objects_cron_loop_only", sql`${t.kind} = 'loop' OR (${t.cron} IS NULL AND ${t.timezone} IS NULL AND ${t.nextFire} IS NULL)`),
+    check(
+      "objects_task_facets_only",
+      sql`${t.kind} = 'task' OR (${t.followUpAt} IS NULL AND ${t.pendingQuestion} IS NULL AND ${t.watcher} IS NULL)`,
+    ),
+    check("objects_format_doc_only", sql`${t.kind} = 'doc' OR ${t.format} IS NULL`),
+    // A closed task carries its stamp; an open one does not. Other kinds never close.
+    check("objects_closed_pair", sql`${t.kind} <> 'task' OR ((${t.status} = 'closed') = (${t.closedAt} IS NOT NULL))`),
+
+    // ---- indexes, one per named standing query (spec §5.1) ----
+    /** Key idempotency, per team. Partial: an object with no key costs nothing. */
+    uniqueIndex("objects_key_idx").on(t.teamId, t.key).where(sql`${t.key} IS NOT NULL`),
+    /** The scheduler's claim scan; partial, so its size tracks LIVE cadences. */
+    index("objects_due_fire_idx").on(t.nextFire).where(sql`${t.kind} = 'loop' AND ${t.nextFire} IS NOT NULL`),
+    /** Inbox branch 1: decisions (open tasks with a question waiting). */
+    index("objects_question_idx")
+      .on(t.teamId, t.createdAt)
+      .where(sql`${t.kind} = 'task' AND ${t.status} = 'open' AND ${t.pendingQuestion} IS NOT NULL`),
+    /** Inbox branch 2 + `task list --due`: the `follow_up_at <= now` predicate. */
+    index("objects_due_task_idx")
+      .on(t.teamId, t.followUpAt)
+      .where(sql`${t.kind} = 'task' AND ${t.status} = 'open' AND ${t.followUpAt} IS NOT NULL`),
+    /** The unwatched pool (`task list --unwatched`, inbox branches 2 and 3). */
+    index("objects_unwatched_idx")
+      .on(t.teamId, t.createdAt)
+      .where(sql`${t.kind} = 'task' AND ${t.status} = 'open' AND ${t.watcher} IS NULL`),
+    /** THE ORPHAN FLOOR: open + unwatched + no follow-up, oldest first — nothing
+     *  can lie down silently forever (design §6). */
+    index("objects_orphan_idx")
+      .on(t.teamId, t.createdAt)
+      .where(sql`${t.kind} = 'task' AND ${t.status} = 'open' AND ${t.watcher} IS NULL AND ${t.followUpAt} IS NULL`),
+    /** Watcher worklists (`task list --watcher <loop-id>`). */
+    index("objects_watcher_idx").on(t.watcher, t.followUpAt).where(sql`${t.kind} = 'task' AND ${t.status} = 'open'`),
+    /** The `--creator` filter, the loop page's "created" list, graph flow edges. */
+    index("objects_creator_idx").on(t.createdByLoop, t.createdAt),
+    /** Generic scoping. */
+    index("objects_team_kind_status_idx").on(t.teamId, t.kind, t.status),
+  ],
+);
+
+// ---- events: the append-only record (design §2, spec §5.2) ----
+
+export const events = pgTable(
+  "events",
+  {
+    /**
+     * `ev-<sha256hex>` when `origin = 'derived'`, `ev-<ulid>` when `organic`.
+     * The dedup invariant is STRUCTURAL: a re-derivable fact's id is a pure
+     * function of the fact, so re-deriving it collides here and
+     * `ON CONFLICT DO NOTHING` makes the second insert a no-op.
+     */
+    id: text("id").primaryKey(),
+    /**
+     * THE STREAM CURSOR (spec §5.4 "`seq` vs `id`"). A hash id has no
+     * monotonicity, so SSE resume gets its own identity column: **the content id
+     * dedups, the seq orders**.
+     *
+     * CORRECTION TO THE SPEC. §5.4 argues that a dedup collision consumes no seq
+     * and therefore leaves no gap. That is not how Postgres identity columns
+     * behave: the value is drawn BEFORE the conflict is detected, so a swallowed
+     * `ON CONFLICT DO NOTHING` does burn one and the stream is sparse. This costs
+     * nothing — the tail is `WHERE seq > :since ORDER BY seq`, which never needs
+     * contiguity — but a client must not treat a gap as a dropped event, and no
+     * consumer may derive a count from a seq delta. Pinned by
+     * `kernel.integration.test.ts` ("seq is strictly increasing, gaps allowed").
+     */
+    seq: bigint("seq", { mode: "number" }).generatedAlwaysAsIdentity(),
+    teamId: text("team_id").notNull(),
+    /** The object this event is about; NULL for team-level events. */
+    objectId: text("object_id"),
+    /** `object-created`, `object-updated`, `task-closed`, `question-answered`,
+     *  `run-queued`, `run-finished`, … Open vocabulary. */
+    kind: text("kind").notNull(),
+    /** Which half of the dedup invariant minted the id. */
+    origin: text("origin", { enum: EVENT_ORIGINS }).notNull(),
+    /**
+     * PROVENANCE, half one: how the write was entered (`clock|answer|human|agent`).
+     * NOT NULL — it cannot be backfilled, so an event written without it would be
+     * permanently unattributable.
+     */
+    entrance: text("entrance", { enum: ENTRANCES }).notNull(),
+    /** PROVENANCE, half two: the concrete actor — a run id or a user id. Never a
+     *  placeholder. */
+    actorId: text("actor_id").notNull(),
+    /** The transition that produced a status change. NOT NULL for any event whose
+     *  diff carries `status` (the CHECK below). */
+    transition: text("transition"),
+    /** Per-field `{old, new}` for everything this event changed. */
+    diff: jsonb("diff").$type<EventDiff>(),
+    /** The human's answer, the closer's attestation — free text, never parsed. */
+    note: text("note"),
+    /** Everything else (a resolved approval block, a run's cost, …). */
+    payload: jsonb("payload").$type<Record<string, unknown>>(),
+    ts: text("ts").notNull(),
+  },
+  (t) => [
+    check("events_state_change_sufficient", sql`${t.diff} IS NULL OR ${t.transition} IS NOT NULL OR NOT jsonb_exists(${t.diff}, 'status')`),
+    /** The SSE tail (`GET /api/events/stream?since=<seq>`), team-scoped. */
+    index("events_team_seq_idx").on(t.teamId, t.seq),
+    /** The task/loop page's event tail. */
+    index("events_object_ts_idx").on(t.objectId, t.ts),
+    /** "Everything this run did" / "everything this person decided". */
+    index("events_actor_idx").on(t.entrance, t.actorId),
+    index("events_kind_idx").on(t.kind),
+  ],
+);
+
+export type KernelObject = typeof objects.$inferSelect;
+export type NewKernelObject = typeof objects.$inferInsert;
+export type KernelEvent = typeof events.$inferSelect;
+export type NewKernelEvent = typeof events.$inferInsert;
+
+/** Table bag, merged into the Drizzle handle's schema in `db/index.ts`. */
+export const kernelSchema = { objects, events };

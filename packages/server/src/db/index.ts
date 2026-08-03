@@ -32,14 +32,18 @@ import { dataDir, databaseUrl, dbPoolMode } from "../env.js";
 import { logger } from "../logger.js";
 import { isTransactionPooler, poolOptionsFor } from "./poolOptions.js";
 import { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runLeases, connectKeys } from "./schema.js";
+import { objects, events } from "./kernel-schema.js";
 import { user, session, account, verification } from "./auth-schema.js";
 
 // Business tables + Better Auth tables share one Drizzle instance (the auth
-// drizzleAdapter reads its tables from here).
+// drizzleAdapter reads its tables from here). The rewrite kernel tables
+// (`objects`/`events`) are additive and ride the same handle.
 const schema = {
   machines,
   loops,
   runs,
+  objects,
+  events,
   teams,
   teamMembers,
   teamInvites,
