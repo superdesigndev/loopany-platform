@@ -74,7 +74,12 @@ export async function runKernelCli(argv: string[], deps: KernelCliDeps = {}): Pr
   const token = deps.token ?? env.LOOPANY_TOKEN ?? readStored(DEVICE_FILE);
 
   const headers: Record<string, string> = { ...built.headers };
-  if (token) headers.Authorization = `Bearer ${token}`;
+  // The two human verbs authenticate as a PERSON, so they never carry the
+  // machine's credential — the ordinary human runs this CLI on the same machine
+  // the daemon is registered on, and a device token on a human surface names the
+  // wrong actor. Belt and braces with the server's own presence-of-run-context
+  // guard: either side alone is sufficient, both together leave no seam.
+  if (token && !HUMAN_COMMANDS.has(command)) headers.Authorization = `Bearer ${token}`;
   // The run context is INVISIBLE: read from the environment the daemon set,
   // attached as a header, never surfaced as an argument the agent could edit.
   if (env.LOOPANY_RUN_ID) headers["X-Loopany-Run"] = env.LOOPANY_RUN_ID;
@@ -105,6 +110,8 @@ function emit(out: Emit, text: string, exit: number): number { out(text); return
 // -------------------------------------------------------------------- the router
 
 const COMMANDS = new Set(["task list", "task show", "task create", "task update", "task close", "doc show", "doc create", "doc update", "loop evolve", "loop update", "inbox", "answer"]);
+/** The two human verbs (CLI spec §7): a signed-in person on this machine. */
+const HUMAN_COMMANDS = new Set(["inbox", "answer"]);
 
 function commandOf(argv: string[]): string {
   const [noun, verb] = argv;

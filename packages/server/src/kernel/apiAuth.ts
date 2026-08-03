@@ -1,3 +1,26 @@
+/**
+ * THE AUTH SEAM for the rewrite's object endpoints.
+ *
+ * Two credentials, three classes (API spec §2.1): a machine's device credential,
+ * a human's team session, and — the third "class" — a device credential PLUS run
+ * context, which is what makes a request an AGENT's.
+ *
+ * THE LOAD-BEARING RULE: **what separates an agent from a human is the presence
+ * of RUN CONTEXT, not the presence of a credential.** It is a positive test for
+ * `X-Loopany-Run`, never a negative test for a token (CLI spec §2.2). This
+ * matters because the ordinary human runs the CLI on the SAME machine the daemon
+ * is registered on, so a stored device credential is present on every connected
+ * machine — keying the guard on the token would make `loopany inbox`/`answer`
+ * refuse `NOT_HUMAN` for exactly the person the endpoint exists to serve, and the
+ * refusal's teaching ("use the human CLI outside a run") would be wrong: they ARE
+ * outside a run.
+ *
+ * With no run context the device credential is the DAEMON class, and §2.6 gives
+ * it two different answers: `NO_RUN_CONTEXT` on a dual object endpoint (the
+ * machine must say which run it speaks for) and `UNAUTHORIZED` on a human-only
+ * one (a machine's credential is not a person's, and no widening of it ever
+ * makes one).
+ */
 import { authEnabled, currentUser, requestScope } from "../auth.js";
 import type { KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
@@ -16,11 +39,24 @@ export interface ApiContext {
   loop?: KernelObject;
 }
 
+export type ApiAuthResult = { ok: true; context: ApiContext } | { ok: false; error: ApiRefusal };
+
+/** The session half, injected so the seam is testable without the framework's
+ *  request-scoped context. Production always uses the real pair. */
+export interface SessionSeam {
+  currentUser: typeof currentUser;
+  requestScope: typeof requestScope;
+  authEnabled: boolean;
+}
+
+const REAL_SESSION: SessionSeam = { currentUser, requestScope, authEnabled };
+
 export async function resolveApiContext(
   request: Request,
   requirement: "dual" | "agent" | "human",
   mutation = false,
-): Promise<{ ok: true; context: ApiContext } | { ok: false; error: ApiRefusal }> {
+  session: SessionSeam = REAL_SESSION,
+): Promise<ApiAuthResult> {
   const runHeader = request.headers.get("x-loopany-run")?.trim();
   const auth = request.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
@@ -28,12 +64,21 @@ export async function resolveApiContext(
     return { ok: false, error: refusal("RATE_LIMITED", "rate limited — slow down", [], "retry after one second") };
   }
 
-  if (runHeader || token) {
-    if (requirement === "human") return { ok: false, error: refusal("NOT_HUMAN", "this operation is waiting for a human", [], "use the web UI or the human CLI outside a run") };
+  // ---- the agent class: run context present ----
+  if (runHeader) {
+    if (requirement === "human") {
+      return { ok: false, error: refusal(
+        "NOT_HUMAN",
+        "this operation is waiting for a human",
+        [{ path: "X-Loopany-Run", message: "a request carrying run context is an agent's", got: runHeader }],
+        "a run cannot answer or read the human inbox — its worklist is `task list --watcher <your-loop-id> --due`",
+      ) };
+    }
     const machine = await authenticateDevice(token);
     if (!machine) return { ok: false, error: refusal("UNAUTHORIZED", "unknown device credential", [], "connect this machine with `loopany up`") };
-    if (!runHeader) return { ok: false, error: refusal("NO_RUN_CONTEXT", "this endpoint needs a run context and the request carried none", [], "the daemon sets LOOPANY_RUN_ID and the CLI attaches it") };
     const run = await store.getRunRow(undefined, runHeader);
+    // "No such run" and "not yours" are one answer on purpose: the endpoint must
+    // not be usable to enumerate another machine's runs.
     if (!run || run.machineId !== machine.id) {
       return { ok: false, error: refusal("RUN_CONTEXT_UNKNOWN", `${runHeader} is not a run this machine is currently holding`, [{ path: "X-Loopany-Run", message: "unknown or not claimed by this machine", got: runHeader }], "the run may have finished or been reclaimed; stop and let the daemon claim a fresh one") };
     }
@@ -46,9 +91,24 @@ export async function resolveApiContext(
     return { ok: true, context: { teamId: loop.teamId, actor: { entrance: "agent", actorId: run.id }, mode: "agent", machine, run, loop } };
   }
 
-  if (requirement === "agent") return { ok: false, error: refusal("NO_RUN_CONTEXT", "this endpoint needs a run context and the request carried none", [], "run this command from an active Loopany run") };
-  const user = await currentUser();
-  if (authEnabled && !user) return { ok: false, error: refusal("UNAUTHORIZED", "a signed-in human session is required", [], "sign in, then retry") };
-  const scope = await requestScope();
+  // ---- no run context ----
+  if (requirement === "agent") {
+    return { ok: false, error: refusal("NO_RUN_CONTEXT", "this endpoint needs a run context and the request carried none", [], "ownership is resolved from the calling run; a human session has no run to resolve — edit the charter on the loop page instead") };
+  }
+
+  const user = await session.currentUser();
+  if (!user) {
+    // No session. A device credential here is the DAEMON class, and it gets a
+    // different answer per endpoint class (§2.6) — never NOT_HUMAN, which would
+    // misname the caller and mis-teach the fix.
+    if (token && (await authenticateDevice(token))) {
+      return requirement === "dual"
+        ? { ok: false, error: refusal("NO_RUN_CONTEXT", "this endpoint needs a run context and the request carried none", [], "agent calls run inside a run: the daemon sets LOOPANY_RUN_ID and the CLI attaches it. Outside a run, use the web UI or the human CLI.") }
+        : { ok: false, error: refusal("UNAUTHORIZED", "a signed-in human session is required", [{ path: "Authorization", message: "a device credential is a machine's, not a person's" }], "sign in on this machine — the inbox and the verdict are human surfaces, so a machine credential never stands in for one") };
+    }
+    if (session.authEnabled) return { ok: false, error: refusal("UNAUTHORIZED", "a signed-in human session is required", [], "sign in, then retry") };
+  }
+
+  const scope = await session.requestScope();
   return { ok: true, context: { teamId: scope.teamId, actor: { entrance: "human", actorId: user?.id ?? "human:open-mode" }, mode: "human" } };
 }

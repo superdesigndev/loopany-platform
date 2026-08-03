@@ -509,6 +509,21 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
 - `kernel/apiAuth.ts` resolves invisible `X-Loopany-Run` context once into
   run→loop→team/provenance. `LOOPANY_RUN_ID` is attached by the daemon CLI, never an
   argument. Human-only verdict/inbox reject any run context.
+- **The human/agent split keys on RUN-CONTEXT presence, never on the credential.** It is
+  a positive test for `X-Loopany-Run` (CLI spec §2.2). This is load-bearing, not a
+  style note: the ordinary human runs the CLI on the SAME machine the daemon is
+  registered on, so a device token is present on every connected machine — keying on it
+  made `loopany inbox`/`answer` refuse `NOT_HUMAN` for exactly the person the endpoint
+  serves (review f3 B1). With no run context a device credential is the DAEMON class,
+  and §2.6 gives it two answers: `NO_RUN_CONTEXT` on a dual endpoint, `UNAUTHORIZED` on
+  a human-only one. The CLI belts-and-braces it by not attaching the token on
+  `inbox`/`answer` at all (`HUMAN_COMMANDS` in `kernel-cli.ts`).
+- **`resolveApiContext` has its OWN integration test** (`apiAuth.integration.test.ts`)
+  driving real `Request`s against real machine/run/lease rows, one case per §2.6 cell.
+  B1 survived 47 CLI goldens and 33 object-API tests because the goldens stub `fetch`
+  and the API tests hand-construct `ApiContext` — neither touches this seam. Only the
+  session half is injected (`SessionSeam`), since it is bound to the framework's
+  request-scoped context; everything the seam actually decides is driven for real.
 - `kernel/objectApi.ts` owns the transactional task/doc/evolve/governance/inbox/verdict
   verbs. Verdict clears the question, writes the human event, and queues R-answer in
   one transaction; approval verification is ownership-first, then event/team, human

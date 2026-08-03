@@ -38,6 +38,28 @@ describe("routing and the invisible run context", () => {
     expect(request!.url).not.toContain("run-3f8a20");
   });
 
+  it("never sends the machine's credential on the two HUMAN verbs", async () => {
+    // The ordinary human runs this CLI on the same machine the daemon is
+    // registered on, so the device token is always on disk. Sending it names the
+    // wrong actor on a surface that belongs to a person.
+    for (const argv of [["inbox"], ["answer", "task-7f3a91", "yes"]]) {
+      const { request } = await run(argv, { items: [], counts: { total: 0 }, task: { id: "task-7f3a91", kind: "task" }, run: null });
+      expect(request!.headers.get("authorization"), argv[0]).toBeNull();
+    }
+    // …and still sends it on every agent verb.
+    const { request } = await run(["task", "list"], { tasks: [], total: 0 });
+    expect(request!.headers.get("authorization")).toBe("Bearer dk_test");
+  });
+
+  it("carries the human session cookie when one is set", async () => {
+    let request: Request | undefined;
+    await runKernelCli(["inbox"], {
+      server: "https://example.test", token: "dk_test", env: { LOOPANY_SESSION: "sess-abc" }, out: () => {},
+      fetchImpl: async (input, init) => { request = new Request(input, init); return reply({ items: [], counts: { total: 0 } }); },
+    });
+    expect(request!.headers.get("cookie")).toBe("better-auth.session_token=sess-abc");
+  });
+
   it("maps the HTTP status to the four exit codes without parsing prose", async () => {
     for (const [status, exit] of [[200, 0], [401, 1], [403, 2], [404, 3], [409, 2], [429, 1], [500, 1]] as const) {
       const { code, stdout } = await run(["task", "show", "task-7f3a91"], status === 200 ? { task: { id: "task-7f3a91", kind: "task" }, events: [] } : { code: "X", message: "no", issues: [], hint: "next" }, status);
