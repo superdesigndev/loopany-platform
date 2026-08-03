@@ -87,8 +87,16 @@ export class WorkspaceLive {
     this.cursor = since
   }
 
+  /**
+   * Idempotent and RESTARTABLE. React's StrictMode mounts an effect, tears it
+   * down and mounts it again, so a bus that treated `stop()` as terminal would
+   * be permanently dead in development — connected once, closed, never
+   * reopened, with the UI stuck on "connecting" forever. Clearing the flag here
+   * is what makes a remount a reconnect.
+   */
   start(): void {
-    if (this.stopped) return
+    if (this.source) return
+    this.stopped = false
     this.connect()
     // The poll timer runs unconditionally and emits only while degraded, so a
     // stream that dies mid-session starts refetching without any extra wiring.

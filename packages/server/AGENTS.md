@@ -587,6 +587,55 @@ spec owns the wire, so it wins):
   carry the event id only (API spec §1.7), and inventing a second lookup for a display
   parenthesis is not worth a round trip.
 
+## Rewrite workspace UI (`src/kernel/views.ts` + `src/components/workspace/`) — landing unit 5
+
+The five screens over the rewrite kernel, mounted at the flagged `/dev/workspace`
+(`lib/rewriteWorkspace.ts`: local dev always, a deployed build only under
+`LOOPANY_REWRITE_UI`). The shipping dashboard is untouched — its own route, its own
+stylesheet (`styles/workspace.css`, loaded `?url`, every rule scoped under
+`.loopany-workspace`), no import from any shipping surface.
+
+- **`kernel/views.ts` is the BFF layer**: one composed, READ-ONLY endpoint per screen
+  (`/api/views/{inbox,tasks,task/:id,loops,loop/:id,docs,doc/:id,system-graph}`), each
+  gated `resolveApiContext(request, "human")` — a run carrying run context is refused, so
+  a view can never become the composed worklist design §6 forbids. Every payload carries
+  `cursorSeq` (the `events.seq` it was assembled at); the client skips a refetch for any
+  stream message at or below it, which is what keeps a refetch from racing the stream.
+- **The §6 inbox union is single-sourced**: `objectApi.inboxUnion`/`inboxCounts` back BOTH
+  the raw `/api/inbox` (human CLI) and `/api/views/inbox` (the screen). Changing the
+  safety floor in one place changes it everywhere; `views.integration.test.ts` pins the
+  three branches AND the near misses (watched-and-due, fresh-and-unwatched, closed).
+- **Freshness** (`components/workspace/live.ts`): ONE team-scoped `EventSource`, explicit
+  resume at `?since=<highest seq seen>`, `event: reset` → full refetch, two errors inside
+  60 s → 30 s polling while the stream keeps retrying. Every external is an injected seam
+  (`LiveDeps`), so the whole state machine is unit-tested with no network. **`start()`
+  must stay restartable** — StrictMode mounts, tears down and remounts the provider, and a
+  bus that treated `stop()` as terminal was permanently stuck on "connecting".
+- **Two render paths, and the wall between them** (`components/workspace/Render.tsx`):
+  markdown → react-markdown with NO `rehype-raw` (raw inline HTML is simply not rendered —
+  the XSS answer, no sanitizer to drift); `format: html` docs → an iframe with
+  `srcDoc` + `sandbox="allow-scripts"` and deliberately NO `allow-same-origin` (the two
+  together are equivalent to no sandbox). Verified in a browser: the frame reports
+  `origin: null`, `document.cookie` throws `SecurityError`, `parent.location` is blocked.
+  `render.guard.test.ts` pins all of it by reading the sources with comments stripped.
+- **`ExecutionBlock` renders the task payload VERBATIM** next to the answer box — the
+  execution-integrity invariant (design §7). The view echoes `payload` as a separate
+  `execution` key precisely so that contract is visible at the wire and testable.
+- **The system graph is a projection** — `deriveGraphEdges` is pure (one branch per API
+  spec §8.3 row) and `components/workspace/systemLayout.ts` is deterministic banded Dagre
+  (you / loops / pool), ported from `data/graph-demo-r1/`. Same input ⇒ same coordinates,
+  so a refetch never reshuffles the canvas; manual pins live in localStorage.
+  **DEVIATION**: spec §8.3 detects adoption from the `object-created` diff showing
+  `watcher` absent — unimplementable, since that event's diff carries only
+  `pendingQuestion`, so every watched task would read as adopted. We use the positive fact
+  instead: an event moving `watcher` null → a loop id.
+- **Local fixture**: `pnpm --filter @loopany/server workspace:seed` writes a full fixture
+  THROUGH the kernel (real events, diffs, provenance). pglite is single-writer, so seed
+  BEFORE starting `pnpm dev` on the same `LOOPANY_DATA_DIR`.
+- **NOT built** (design §9 names it among UI reads; unit 5's brief scoped it out): a
+  dedicated run history/detail screen and `/api/views/run(s)`. Runs surface as strips on
+  the loop page (`recentRuns`) and the task page (runs that touched it).
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

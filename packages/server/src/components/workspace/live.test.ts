@@ -180,6 +180,24 @@ describe('the degraded fallback', () => {
     h.runTimers()
     expect(h.bus.opened).toHaveLength(1)
   })
+
+  it('restarts after a stop, resuming at the cursor — StrictMode remounts a bus twice', () => {
+    const h = harness()
+    h.bus.start()
+    h.sources[0]!.fire('change', message(120))
+    h.bus.stop()
+    h.bus.start()
+    expect(h.bus.opened).toEqual(['/api/events/stream?since=0', '/api/events/stream?since=120'])
+    h.sources[1]!.fire('open')
+    expect(h.bus.status).toBe('live')
+  })
+
+  it('is idempotent while already connected', () => {
+    const h = harness()
+    h.bus.start()
+    h.bus.start()
+    expect(h.bus.opened).toHaveLength(1)
+  })
 })
 
 describe('shouldRefetch — cursorSeq is what keeps a refetch from racing the stream', () => {
