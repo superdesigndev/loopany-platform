@@ -84,7 +84,10 @@ export async function listTasks(context: ApiContext, query: URLSearchParams, now
   // `total` is what lets the CLI print "count: 30 of 112 total" (CLI spec §6.1)
   // instead of a silent clip. Counted only when the page actually overflowed.
   const total = truncated ? Number((await db.select({ n: count() }).from(objects).where(and(...conds)))[0]?.n ?? page.length) : page.length;
-  return { ok: true, value: { tasks: page.map(taskListShape), total, nextCursor: truncated ? page.at(-1)?.id ?? null : null, truncated } };
+  // `viewerLoop` is the caller's OWN loop id, resolved from the invisible run
+  // context. It is what lets the CLI inline a real id into its next-step hints
+  // instead of a placeholder — the agent never retypes its identity (§3.5).
+  return { ok: true, value: { tasks: page.map(taskListShape), total, nextCursor: truncated ? page.at(-1)?.id ?? null : null, truncated, viewerLoop: context.run?.loopId ?? null } };
 }
 
 export async function showObject(kind: ObjectKind, id: string, context: ApiContext, eventLimit = 20): Promise<ApiResult<Record<string, unknown>>> {

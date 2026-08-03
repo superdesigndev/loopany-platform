@@ -20,6 +20,7 @@ const DAEMON_FLAGS = new Set(["--server-url", "--api-key"]);
 // credential so its crafted run-only 403 reaches the agent, instead of a generic
 // "unknown command". A run report/finishes ITSELF; the owner edits via `edit`.
 const FORWARD_VERBS = new Set(["report", "finish", "complete"]);
+const KERNEL_VERBS = new Set(["task", "doc", "loop", "inbox", "answer"]);
 // Every command word the router recognizes below (the daemon-flag re-exec is a leading
 // FLAG, not a verb, so it is deliberately absent). Any of these carrying `--help`/`-h`
 // short-circuits to that verb's usage BEFORE its handler runs — so a foot-gun like
@@ -32,6 +33,7 @@ function hasHelpFlag(args: string[]): boolean {
 }
 
 export type Route =
+  | { kind: "kernel"; argv: string[] }
   | { kind: "callback"; argv: string[] } // in-run (incl. bare → `home` on the run cred)
   | { kind: "help"; verb?: string } // `verb` set = per-verb usage (`<verb> --help`)
   | { kind: "version" }
@@ -52,6 +54,9 @@ export type Route =
   | { kind: "unknown"; verb: string };
 
 export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
+  // Rewrite object verbs use the device credential plus invisible
+  // LOOPANY_RUN_ID context, not the legacy run bearer/callback protocol.
+  if (argv[0] !== undefined && KERNEL_VERBS.has(argv[0])) return { kind: "kernel", argv };
   // In-run (run token present) EVERY `loopany …` is a callback — including the bare
   // `loopany` (zero args), which now posts `home` for the run's own context (fixing
   // the old `argv.length > 0` guard that let bare `loopany` fall through to the daemon

@@ -50,6 +50,8 @@ import { classify } from "./route.js";
 async function main(): Promise<number> {
   const r = classify(process.argv.slice(2), process.env);
   switch (r.kind) {
+    case "kernel":
+      return (await import("./kernel-cli.js")).runKernelCli(r.argv);
     case "callback":
       return (await import("./callback.js")).runCallback(r.argv);
     case "help": {
