@@ -102,6 +102,10 @@ const issues = ["createdAt", "updatedAt"]
   .filter((issue) => issue !== null);
 ```
 
+`checkTimestamp` requires an **explicit offset** — an instant with no zone is
+ambiguous — and requires the written calendar date to exist: `2026-02-30` is an
+issue, not the March 2nd `Date.parse` would silently roll it into.
+
 ## Guarantees
 
 **Round trip.** `parseArtifact(serializeArtifact(doc))` deep-equals `doc`, and
@@ -110,6 +114,15 @@ front matter and identical bodies produce identical bytes regardless of key
 insertion order **and regardless of the host's locale** (ordering compares code
 units, never `localeCompare`). Lists keep their order — a list is ordered data.
 An `undefined` value means "absent" and is dropped, not emitted as `null`.
+
+The law is **unconditional**: serialization never returns a file the same
+library would refuse to read back, because every ceiling below is enforced on
+the write side too, under the same codes. A caller-built head is the normal
+write path, so a ceiling checked only on read would let one put an unreadable
+artifact on disk. `serializeArtifact(doc, { limits })` and
+`updateArtifactFrontMatter(doc, patch, { limits })` take the same `limits` as
+`parseArtifact`, so a document read under raised ceilings can always be edited
+and written back under those same ceilings.
 
 **Key order is the caller's.** No key is privileged. The default is pure
 lexicographic at every depth; `serializeArtifact(doc, { keyOrder })` puts the
@@ -136,9 +149,10 @@ marching them through one round trip at a time.
 `!!timestamp` coercion (`2026-07-29` stays a string), no YAML 1.1 booleans (`no`
 stays `"no"`), duplicate keys rejected, unresolved tags rejected, alias
 expansion capped (billion-laughs). Size, depth and node-count ceilings are
-enforced and configurable via `limits`; each fails loudly rather than clipping,
-and the depth walk is iterative so a pathological input cannot exhaust the host
-stack. Host objects (`Date`, `Map`, `Set`, class instances, functions, symbols,
+enforced **in both directions** and configurable via `limits`; each fails loudly
+rather than clipping, and the depth/node walk is one shared iterative pass — so
+a pathological input cannot exhaust the host stack, and read and write cannot
+drift about what a ceiling means. Host objects (`Date`, `Map`, `Set`, class instances, functions, symbols,
 bigints) are rejected rather than silently flattened to `{}`.
 
 **No rendering.** The body is bytes. There is no markdown pipeline, no

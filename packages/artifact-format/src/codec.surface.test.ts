@@ -11,7 +11,7 @@ import { parseArtifact } from "./parse.js";
 import { serializeArtifact } from "./serialize.js";
 import { bodyFormatOf } from "./schema.js";
 import { safeParseArtifact } from "./index.js";
-import { SUPPORTED_BODY_FORMATS } from "./types.js";
+import { SUPPORTED_BODY_FORMATS, type ArtifactDocument } from "./types.js";
 import { REMOVED_DEPENDENCIES, REMOVED_EXPORTS, TARGET_EXPORTS, api, surface } from "../test/target.js";
 
 describe("the format field is an enum and nothing more", () => {
@@ -42,7 +42,10 @@ describe("the format field is an enum and nothing more", () => {
   });
 
   it("refuses to serialize an unsupported format", () => {
-    expectCode(() => serializeArtifact({ frontMatter: { format: "rtf" }, body: "" }), "UNSUPPORTED_FORMAT");
+    // The TYPE forbids this value; the point of the case is that the RUNTIME
+    // refuses it too, for the untyped callers a codec actually serves.
+    const doc = { frontMatter: { format: "rtf" }, body: "" } as unknown as ArtifactDocument;
+    expectCode(() => serializeArtifact(doc), "UNSUPPORTED_FORMAT");
   });
 
   it("carries no rendering semantics: an html body is still opaque bytes", () => {
@@ -71,6 +74,8 @@ describe("the timestamp helper", () => {
     "2026-07-29T09:15:00+02:00",
     "2026-07-29T09:15:00-05:30",
     "2026-07-29 09:15:00Z",
+    // A real leap day: February 29 exists in 2024 and must stay accepted.
+    "2024-02-29T00:00:00Z",
   ];
 
   const invalid: Array<[name: string, value: unknown]> = [
@@ -85,6 +90,14 @@ describe("the timestamp helper", () => {
     ["undefined", undefined],
     ["a list", ["2026-07-29T09:15:00Z"]],
     ["a mapping", { at: "2026-07-29T09:15:00Z" }],
+    // A day that never happened is not an instant. `Date.parse` disagrees — it
+    // rolls February 30 forward to March 2 and reports a valid time — so a
+    // caller re-deriving the date would get a different day than the file says.
+    ["a February 30th", "2026-02-30T00:00:00Z"],
+    ["an April 31st", "2026-04-31T00:00:00Z"],
+    ["a leap day in a non-leap year", "2026-02-29T00:00:00Z"],
+    ["a zeroth day", "2026-07-00T00:00:00Z"],
+    ["a thirteenth month", "2026-13-01T00:00:00Z"],
   ];
 
   for (const value of valid) {

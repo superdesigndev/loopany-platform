@@ -19,7 +19,7 @@ import {
 
 /** RFC 3339 date-time with a REQUIRED offset — an instant with no zone is
  *  ambiguous, and ambiguity in a timestamp the engine schedules on is a bug. */
-const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
+const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
 
 const TIMESTAMP_MESSAGE =
   "must be an RFC 3339 date-time with an explicit offset (e.g. 2026-07-29T09:15:00Z)";
@@ -53,10 +53,34 @@ export function checkTimestamp(value: unknown, path: string): ArtifactIssue | nu
   if (typeof value !== "string") {
     return { path, message: `${TIMESTAMP_MESSAGE}; got ${describeValue(value)}` };
   }
-  if (!RFC3339.test(value) || Number.isNaN(Date.parse(value))) {
+  const match = RFC3339.exec(value);
+  if (match === null || Number.isNaN(Date.parse(value)) || !isRealCalendarDate(match)) {
     return { path, message: TIMESTAMP_MESSAGE };
   }
   return null;
+}
+
+/**
+ * Does the written calendar date actually exist?
+ *
+ * `Date.parse` does NOT answer this: V8 rolls `2026-02-30` forward to March 2
+ * and reports a perfectly valid instant, so a day that never happened would
+ * read back as a well-formed one — and a caller re-deriving the date from that
+ * instant would get a different day than the file says. The written year, month
+ * and day must survive the round trip through the calendar unchanged.
+ *
+ * `setUTCFullYear` rather than `Date.UTC`, which maps years 0-99 onto 1900+n
+ * and would reject a legitimate `0026-…` timestamp.
+ */
+function isRealCalendarDate(match: RegExpExecArray): boolean {
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const probe = new Date(0);
+  probe.setUTCFullYear(year, month - 1, day);
+  return (
+    probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day
+  );
 }
 
 /**

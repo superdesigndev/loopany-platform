@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { expectCode, file } from "../test/assert.js";
 import { parseArtifact } from "./parse.js";
+import { serializeArtifact, updateArtifactFrontMatter } from "./serialize.js";
 import { DEFAULT_LIMITS, resolveLimits } from "./types.js";
 
 describe("document byte ceiling", () => {
@@ -139,6 +140,73 @@ describe("alias expansion ceiling", () => {
   it("honours a lowered ceiling", () => {
     const many = Array.from({ length: 20 }, (_, i) => `k${i}: *base`).join("\n");
     expectCode(() => parseArtifact(file(`base: &base value\n${many}`), { limits: { maxAliasCount: 2 } }), "INVALID_YAML");
+  });
+});
+
+describe("the ceilings bind serialization too", () => {
+  /** The round-trip law is unconditional: a document this library agrees to
+   *  write is a document it can read back. A caller-built head is the normal
+   *  write path, so a ceiling enforced on read only would let one put an
+   *  unreadable artifact on disk. Same codes in both directions. */
+  it("rejects a body that would blow the document ceiling", () => {
+    const err = expectCode(
+      () => serializeArtifact({ frontMatter: { kind: "note" }, body: "y".repeat(5 * 1024 * 1024) }),
+      "DOCUMENT_TOO_LARGE",
+    );
+    expect(err.message).toMatch(/\d+/);
+  });
+
+  it("rejects a head that would blow the front-matter byte ceiling", () => {
+    expectCode(
+      () => serializeArtifact({ frontMatter: { pad: "x".repeat(70 * 1024) }, body: "" }),
+      "FRONT_MATTER_TOO_LARGE",
+    );
+  });
+
+  it("rejects a head with too many nodes", () => {
+    expectCode(
+      () => serializeArtifact({ frontMatter: { list: Array.from({ length: 6000 }, () => 1) }, body: "" }),
+      "FRONT_MATTER_TOO_MANY_NODES",
+    );
+  });
+
+  it("rejects a head nested past the depth ceiling", () => {
+    let deep: unknown = 1;
+    for (let i = 0; i < 40; i += 1) deep = [deep];
+    expectCode(() => serializeArtifact({ frontMatter: { deep }, body: "" }), "FRONT_MATTER_TOO_DEEP");
+  });
+
+  it("measures the document ceiling in UTF-8 bytes, not code units", () => {
+    expectCode(
+      () => serializeArtifact({ frontMatter: { kind: "note" }, body: "🚀".repeat(50) }, { limits: { maxDocumentBytes: 120 } }),
+      "DOCUMENT_TOO_LARGE",
+    );
+  });
+
+  it("honours raised ceilings in BOTH directions", () => {
+    const limits = { maxFrontMatterNodes: 20_000, maxFrontMatterBytes: 256 * 1024 };
+    const doc = { frontMatter: { list: Array.from({ length: 6000 }, () => 1) }, body: "" };
+    const text = serializeArtifact(doc, { limits });
+    expect(parseArtifact(text, { limits }).frontMatter["list"]).toHaveLength(6000);
+    expectCode(() => serializeArtifact(doc), "FRONT_MATTER_TOO_MANY_NODES");
+  });
+
+  it("never emits a file a default parse would refuse", () => {
+    // The law stated as a law: whatever serialization returns, parsing reads.
+    const doc = { frontMatter: { kind: "note", pad: "x".repeat(60 * 1024) }, body: "y".repeat(1024) };
+    expect(parseArtifact(serializeArtifact(doc))).toEqual(doc);
+  });
+
+  it("lets a head edit run under the caller's own ceilings", () => {
+    // The three entry points agree: a document read under raised limits can be
+    // edited under those same limits.
+    const limits = { maxFrontMatterDepth: 64 };
+    let deep: unknown = 1;
+    for (let i = 0; i < 30; i += 1) deep = [deep];
+    const doc = parseArtifact(serializeArtifact({ frontMatter: { deep }, body: "" }, { limits }), { limits });
+
+    expectCode(() => updateArtifactFrontMatter(doc, { state: "fixing" }), "FRONT_MATTER_TOO_DEEP");
+    expect(updateArtifactFrontMatter(doc, { state: "fixing" }, { limits }).frontMatter["state"]).toBe("fixing");
   });
 });
 

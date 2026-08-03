@@ -238,6 +238,17 @@ describe("updateArtifactFrontMatter", () => {
     expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
   });
 
+  it("hands back an ordinary object, prototype-shadowing key and all", () => {
+    // The null prototype is load-bearing for the MERGE — it is what makes a
+    // `__proto__` patch key an own property — but a document from this path
+    // must behave like every other one the library returns.
+    const after = updateArtifactFrontMatter(parseArtifact(SOURCE), { ["__proto__"]: { polluted: true } });
+    expect(Object.prototype.hasOwnProperty.call(after.frontMatter, "__proto__")).toBe(true);
+    expect(after.frontMatter.hasOwnProperty("state")).toBe(true);
+    expect(String(after.frontMatter)).toBe("[object Object]");
+    expect(Object.getPrototypeOf(after.frontMatter)).toBe(Object.prototype);
+  });
+
   it("does not mutate the input document", () => {
     const before = parseArtifact(SOURCE);
     updateArtifactFrontMatter(before, { state: "fixing" });

@@ -15,11 +15,13 @@
 import { stringify } from "yaml";
 import { ArtifactFormatError, type ArtifactIssue } from "./errors.js";
 import { validateFrontMatter } from "./schema.js";
+import { guardShape } from "./shape.js";
 import {
   resolveLimits,
   type ArtifactDocument,
   type ArtifactFrontMatter,
   type ArtifactLimits,
+  type ParseOptions,
   type SerializeOptions,
 } from "./types.js";
 
@@ -151,11 +153,20 @@ function canonicalFrontMatter(
 }
 
 export function serializeArtifact(doc: ArtifactDocument, options?: SerializeOptions): string {
+  const limits = resolveLimits(options);
+
   // ONE canonical tree: the bytes emitted are structurally the same value that
   // was validated, and it can never be rebuilt differently between the two.
-  const canonical = canonicalFrontMatter(doc.frontMatter, resolveLimits(options), options?.keyOrder);
+  const canonical = canonicalFrontMatter(doc.frontMatter, limits, options?.keyOrder);
 
-  // Serializing never emits a file this library would refuse to read back.
+  // Serializing never emits a file this library would refuse to read back, so
+  // EVERY ceiling the parser applies is applied here too, under the same codes
+  // and the same walk — the shape ceilings on the canonical value, the byte
+  // ceilings on the text about to be returned. A caller-built head is the write
+  // path this library exists to serve; letting it emit a file the same library
+  // would reject on read would put an unreadable artifact on disk.
+  guardShape(canonical, limits);
+
   validateFrontMatter(canonical);
 
   const head = stringify(canonical, {
@@ -170,7 +181,25 @@ export function serializeArtifact(doc: ArtifactDocument, options?: SerializeOpti
   });
 
   const yamlBlock = head.endsWith("\n") ? head : `${head}\n`;
-  return `---\n${yamlBlock}---\n${doc.body}`;
+  // The emitted block IS what a parse would measure as `frontMatterText`.
+  const fmBytes = Buffer.byteLength(yamlBlock, "utf8");
+  if (fmBytes > limits.maxFrontMatterBytes) {
+    throw new ArtifactFormatError(
+      "FRONT_MATTER_TOO_LARGE",
+      `front matter is ${fmBytes} bytes, over the ${limits.maxFrontMatterBytes}-byte ceiling`,
+    );
+  }
+
+  const text = `---\n${yamlBlock}---\n${doc.body}`;
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > limits.maxDocumentBytes) {
+    throw new ArtifactFormatError(
+      "DOCUMENT_TOO_LARGE",
+      `document is ${bytes} bytes, over the ${limits.maxDocumentBytes}-byte ceiling`,
+    );
+  }
+
+  return text;
 }
 
 /**
@@ -182,10 +211,15 @@ export function serializeArtifact(doc: ArtifactDocument, options?: SerializeOpti
  * status, say — and it exists so that path cannot accidentally rewrite the
  * body. It validates eagerly, so an unrepresentable patch value fails at the
  * edit rather than surfacing later at the save.
+ *
+ * `options` carries the same ceilings as parse and serialize: a caller that
+ * read a document under raised limits must be able to edit it under those same
+ * limits, rather than meeting a ceiling neither the read nor the write applies.
  */
 export function updateArtifactFrontMatter(
   doc: ArtifactDocument,
   patch: Record<string, unknown>,
+  options?: ParseOptions,
 ): ArtifactDocument {
   // Null-prototype accumulator + `defineProperty`: a patch key naming an
   // inherited accessor (`__proto__`) must land as an own property, never reach
@@ -196,11 +230,17 @@ export function updateArtifactFrontMatter(
     else Object.defineProperty(merged, key, { value, writable: true, enumerable: true, configurable: true });
   }
 
+  // The null prototype was load-bearing for the merge only. The document handed
+  // back must behave like every other one this library returns — `hasOwnProperty`
+  // and string coercion included — and the own `__proto__` data property already
+  // created survives the reset untouched.
+  Object.setPrototypeOf(merged, Object.prototype);
+
   // Representability is checked through the SAME walk serialization uses, so
   // the two paths cannot drift about what a front matter may hold. The
   // canonical tree is discarded: the caller keeps its own key order until it
   // actually serializes.
-  canonicalFrontMatter(merged, resolveLimits(undefined));
+  canonicalFrontMatter(merged, resolveLimits(options));
 
   return { frontMatter: validateFrontMatter(merged), body: doc.body };
 }
