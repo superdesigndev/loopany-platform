@@ -70,10 +70,14 @@ describe("depth ceiling", () => {
     expectCode(() => parseArtifact(file(lines.join("\n"))), "FRONT_MATTER_TOO_DEEP");
   });
 
-  it("accepts nesting at the ceiling", () => {
-    const depth = DEFAULT_LIMITS.maxFrontMatterDepth - 1;
-    const nested = `${"[".repeat(depth)}1${"]".repeat(depth)}`;
-    expect(parseArtifact(file(`deep: ${nested}`)).frontMatter["deep"]).toBeDefined();
+  it("accepts nesting exactly at the ceiling and rejects one level deeper", () => {
+    // Depth is counted from the root mapping: root is 1, its values are 2, so
+    // N nested lists put the innermost scalar at N + 2. The boundary is pinned
+    // from both sides so an off-by-one in either direction fails.
+    const lists = DEFAULT_LIMITS.maxFrontMatterDepth - 2;
+    const nest = (n: number) => `deep: ${"[".repeat(n)}1${"]".repeat(n)}`;
+    expect(parseArtifact(file(nest(lists))).frontMatter["deep"]).toBeDefined();
+    expectCode(() => parseArtifact(file(nest(lists + 1))), "FRONT_MATTER_TOO_DEEP");
   });
 
   it("honours a raised ceiling", () => {
