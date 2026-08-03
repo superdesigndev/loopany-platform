@@ -372,7 +372,13 @@ export async function execFailureStreak(loopId: string): Promise<number> {
 
 /** Open runs (pending/running) — used by the timeout-reclaim sweep. */
 export async function openRuns(): Promise<Run[]> {
-  return db.select().from(runs).where(inArray(runs.phase, ["pending", "running"]));
+  // Rewrite queue rows share the table additively but have their own lease
+  // state machine. The legacy sweep must never reclaim, notify, supersede, or
+  // auto-pause from them; queue_state NULL is the legacy ownership marker.
+  return db
+    .select()
+    .from(runs)
+    .where(and(inArray(runs.phase, ["pending", "running"]), isNull(runs.queueState)));
 }
 
 /** Pending runs queued for ONE machine — the poll's claim query. Hot path (every

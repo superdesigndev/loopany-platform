@@ -22,12 +22,12 @@ import {
   dbWatchdogFailureThreshold,
 } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
-import { RunQueueScheduler } from "../kernel/runQueue.js";
+import { RunQueueScheduler, runsV2Enabled } from "../kernel/runQueue.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
   scheduler: Scheduler;
-  runQueueScheduler: RunQueueScheduler;
+  runQueueScheduler?: RunQueueScheduler;
   gateway: MachineGateway;
   artifactSync: ArtifactSync;
   cliGateway: CliGateway;
@@ -75,8 +75,10 @@ async function boot(): Promise<Booted> {
   const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);
-  const runQueueScheduler = new RunQueueScheduler();
-  await runQueueScheduler.start(abort.signal);
+  // Explicit cutover only. Migration leaves kernel loops unarmed; a normal
+  // production restart with the flag off must be byte-for-byte legacy behavior.
+  const runQueueScheduler = runsV2Enabled() ? new RunQueueScheduler() : undefined;
+  if (runQueueScheduler) await runQueueScheduler.start(abort.signal);
 
   // sweep() is async now: a rejected promise off a bare timer callback is an
   // unhandled rejection (Node can terminate). Catch it so a transient sweep error

@@ -2,7 +2,7 @@
 // Source import keeps a fresh checkout typecheckable before the workspace codec
 // has been built to dist; the package remains the dependency/runtime owner.
 import { safeParseArtifact } from "../../../artifact-format/src/index.js";
-import { and, asc, desc, eq, inArray, isNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lte } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { objects, type KernelObject } from "../db/kernel-schema.js";
@@ -31,6 +31,12 @@ export const RUN_MAX_ATTEMPTS = envPositive("LOOPANY_RUN_MAX_ATTEMPTS", 3);
 export const TERMINAL_GRACE_MS = envPositive("LOOPANY_TERMINAL_GRACE_MS", 24 * 60 * 60_000);
 export const FAILURE_AUTOPAUSE_STREAK = envNonNegative("LOOPANY_FAILURE_AUTOPAUSE_STREAK", 10);
 export const RUN_TICK_MS = envPositive("LOOPANY_RUN_TICK_MS", 5_000);
+
+/** Server-side mirror of the daemon cutover flag. Lazy for tests and boot
+ * orchestration: flag off means no arming, tick, claim-state interference. */
+export function runsV2Enabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.LOOPANY_RUNS_V2 === "1";
+}
 
 function envPositive(name: string, fallback: number): number {
   const n = Number(process.env[name]);
@@ -224,6 +230,9 @@ export async function claimRun(machine: Machine, body: ClaimBody, now = new Date
 async function claimOnce(machine: Machine, agent: string, now: Date): Promise<{ run: Run; loop: KernelObject } | undefined> {
   return db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec;
+    // A poll from the holding device is the liveness signal. Renew before the
+    // expiry sweep so healthy unlimited-duration agent runs cannot be reclaimed.
+    await renewMachineLeasesIn(tx, machine.id, now);
     await reclaimExpiredIn(tx, now);
     const rows = await rawTx
       .select({ run: runs, loop: objects })
@@ -274,6 +283,22 @@ async function claimOnce(machine: Machine, agent: string, now: Date): Promise<{ 
     });
     return { run: claimed, loop: picked.loop };
   });
+}
+
+async function renewMachineLeasesIn(tx: store.KernelExec, machineId: string, now: Date): Promise<number> {
+  const rows = await tx
+    .update(runs)
+    .set({ leaseExpiresAt: new Date(now.getTime() + RUN_LEASE_MS).toISOString() })
+    .where(
+      and(
+        eq(runs.queueState, "claimed"),
+        eq(runs.leaseState, "active"),
+        eq(runs.machineId, machineId),
+        gt(runs.leaseExpiresAt, now.toISOString()),
+      ),
+    )
+    .returning({ id: runs.id });
+  return rows.length;
 }
 
 /** Lease-expiry reclaim tick; exported for deterministic tests and maintenance. */
@@ -504,19 +529,19 @@ function parseReport(report: FinishBody["report"], runId: string, now: Date): Pa
   if (typeof report.body !== "string") return { ok: false, result: problem(400, "INVALID_BODY", "report.body must be a string") };
   const parsed = safeParseArtifact(report.body);
   if (!parsed.ok) {
-    if (parsed.error.code !== "MISSING_FRONT_MATTER") {
-      return { ok: false, result: problem(400, parsed.error.code, parsed.error.message) };
-    }
-    return { ok: true, value: { title: cleanString(report.title, 2_000), body: report.body, format: "markdown" } };
+    // Finish is a terminal ingestion seam, not an authored-doc editing API.
+    // Any malformed/unsupported head is ordinary Markdown content here; strict
+    // codec teaching belongs to unit-4 doc verbs where a caller can rewrite it.
+    return plainReport(report);
   }
   const head = parsed.value.frontMatter;
   const unknown = Object.keys(head).find((key) => !["title", "key", "format", "payload"].includes(key));
-  if (unknown) return { ok: false, result: problem(400, "UNKNOWN_KEY", `unknown doc key \"${unknown}\"; custom data goes under payload`) };
+  if (unknown) return plainReport(report);
   if (head.title !== undefined && typeof head.title !== "string") {
-    return { ok: false, result: problem(400, "SCHEMA_VIOLATION", "doc title must be a string") };
+    return plainReport(report);
   }
   if (head.payload !== undefined && (!head.payload || typeof head.payload !== "object" || Array.isArray(head.payload))) {
-    return { ok: false, result: problem(400, "SCHEMA_VIOLATION", "doc payload must be an object") };
+    return plainReport(report);
   }
   return {
     ok: true,
@@ -526,6 +551,13 @@ function parseReport(report: FinishBody["report"], runId: string, now: Date): Pa
       format: head.format ?? "markdown",
       payload: head.payload as Record<string, unknown> | undefined,
     },
+  };
+}
+
+function plainReport(report: { title?: string; body?: string }): ParsedReport {
+  return {
+    ok: true,
+    value: { title: cleanString(report.title, 2_000), body: report.body ?? "", format: "markdown" },
   };
 }
 

@@ -86,6 +86,23 @@ async function queueAndClaim(loopRow: Awaited<ReturnType<typeof loop>>, machineR
 }
 
 describe("R-clock", () => {
+  it("B1: stays disabled by default and legacy sweep ownership excludes v2 rows", async () => {
+    expect(queue.runsV2Enabled({})).toBe(false);
+    expect(queue.runsV2Enabled({ LOOPANY_RUNS_V2: "1" })).toBe(true);
+    const l = await loop();
+    await queue.queueKernelRun(database.db as never, { loop: l, now: T0, reason: "manual" });
+    await database.db.insert(legacySchema.runs).values({
+      id: "run-legacy-open",
+      loopId: l.id,
+      userId: "u-owner",
+      machineId: "m-legacy",
+      phase: "pending",
+      role: "exec",
+      ts: T0,
+    });
+    expect((await legacyStore.openRuns()).map((r) => r.id)).toEqual(["run-legacy-open"]);
+  });
+
   it("arms loop creation, resume, and migrated unarmed cutover after now", async () => {
     const created = await kernel.createObject({
       teamId: TEAM,
@@ -132,6 +149,20 @@ describe("R-clock", () => {
 });
 
 describe("claim leases", () => {
+  it("B2: renews a live machine's lease on poll so the original expiry cannot reclaim it", async () => {
+    const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
+    const m = await machine("m-a", "dk_machine_a");
+    const runId = await queueAndClaim(l, m, NOW);
+    const originalExpiry = Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!);
+    const heartbeatAt = new Date(originalExpiry - 1_000);
+    const heartbeat = await queue.claimRun(m, { agent: "test-daemon", wait: false }, heartbeatAt);
+    expect(heartbeat).toMatchObject({ status: 200, body: { run: null } });
+    const renewedExpiry = Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!);
+    expect(renewedExpiry).toBeGreaterThan(originalExpiry);
+    expect(await queue.reclaimExpired(new Date(originalExpiry + 1))).toBe(0);
+    expect((await store.getRunRow(undefined, runId))!.queueState).toBe("claimed");
+  });
+
   it("reclaims an expired claim into the queue and increments attempts", async () => {
     const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
     const m = await machine("m-a", "dk_machine_a");
@@ -154,6 +185,28 @@ describe("claim leases", () => {
 });
 
 describe("finish", () => {
+  it("B3: treats ordinary product front matter as raw Markdown and still terminates the run", async () => {
+    const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
+    const m = await machine("m-a", "dk_machine_a");
+    const runId = await queueAndClaim(l, m, NOW);
+    const ordinary = "---\ntype: report\ntitle: Daily result\ndate: 2026-08-03\n---\n\n## Result\nDone.";
+    const result = await queue.finishRun(
+      m,
+      runId,
+      runId,
+      { outcome: "success", summary: "done", report: { title: "Daily result", body: ordinary } },
+      new Date(NOW.getTime() + 1_000),
+    );
+    expect(result.status).toBe(200);
+    const run = await store.getRunRow(undefined, runId);
+    expect(run!.queueState).toBe("success");
+    expect(await store.getObject(undefined, run!.reportDocId!)).toMatchObject({
+      kind: "doc",
+      format: "markdown",
+      body: ordinary,
+    });
+  });
+
   it("ingests a structured artifact report as a created_by_run doc", async () => {
     const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
     const m = await machine("m-a", "dk_machine_a");
