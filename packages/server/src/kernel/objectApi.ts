@@ -190,20 +190,57 @@ export async function governLoop(id: string, body: unknown, context: ApiContext,
   });
 }
 
+/** The orphan floor's age: open + unwatched + no follow-up + older than this
+ *  reaches the inbox, so nothing can lie down silently forever (design §6). */
+export const ORPHAN_AGE_MS = 48 * 3_600_000;
+
+/** One inbox row before it is shaped for a consumer: the task row, why it is
+ *  here, and when the question was asked (plus by whom). */
+export interface InboxUnionRow {
+  task: KernelObject;
+  reasons: string[];
+  askedAt: string | null;
+  askedByRun: string | null;
+}
+
+/**
+ * THE §6 UNION, single-sourced. Both the raw `GET /api/inbox` (the human CLI's
+ * surface) and the composed `GET /api/views/inbox` (the screen's) read it, so
+ * the safety floor cannot mean two different things depending on which one you
+ * are looking at. It returns ROWS, not a payload shape — each caller shapes.
+ */
+export async function inboxUnion(teamId: string, now: Date): Promise<{ rows: InboxUnionRow[]; stamp: string }> {
+  const stamp = now.toISOString();
+  const orphanBefore = new Date(now.getTime() - ORPHAN_AGE_MS).toISOString();
+  const rows = await db.select().from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "task"), eq(objects.status, "open"), or(and(isNotNull(objects.pendingQuestion), ne(objects.pendingQuestion, "")), and(lte(objects.followUpAt, stamp), isNull(objects.watcher)), and(isNull(objects.watcher), isNull(objects.followUpAt), lte(objects.createdAt, orphanBefore))))).orderBy(asc(objects.createdAt));
+  const withReasons = await Promise.all(rows.map(async (task): Promise<InboxUnionRow> => {
+    const reasons: string[] = []; if (task.pendingQuestion?.trim()) reasons.push("question"); if (!task.watcher && task.followUpAt && task.followUpAt <= stamp) reasons.push("due-unwatched"); if (!task.watcher && !task.followUpAt && task.createdAt < orphanBefore) reasons.push("orphan");
+    let askedAt: string | null = null; let askedByRun: string | null = null;
+    if (reasons.includes("question")) {
+      const hs = await store.listObjectEvents(undefined, task.id);
+      const asked = [...hs].reverse().find((e) => e.diff?.pendingQuestion?.new === task.pendingQuestion);
+      askedAt = asked?.ts ?? task.updatedAt;
+      askedByRun = asked?.entrance === "agent" ? asked.actorId : null;
+    }
+    return { task, reasons, askedAt, askedByRun };
+  }));
+  withReasons.sort((a, b) => reasonRank(a.reasons) - reasonRank(b.reasons) || a.task.createdAt.localeCompare(b.task.createdAt));
+  return { rows: withReasons, stamp };
+}
+
+/** The three branch counts plus the total — the badge every inbox surface shows. */
+export function inboxCounts(rows: InboxUnionRow[]) {
+  const n = (r: string) => rows.filter((i) => i.reasons.includes(r)).length;
+  return { question: n("question"), dueUnwatched: n("due-unwatched"), orphan: n("orphan"), total: rows.length };
+}
+
 export async function inbox(context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   // The inbox routes HUMAN attention. An agent learns nothing here that
   // `task list` does not already give it (spec §1.14).
   if (context.mode !== "human") return { ok: false, error: notHuman(context, "the inbox is a human surface", "a run's worklist is `task list --watcher <your-loop-id> --due`, or `--unwatched` for the pool") };
-  const stamp = now.toISOString(); const orphanBefore = new Date(now.getTime() - 48 * 3_600_000).toISOString();
-  const rows = await db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.status, "open"), or(and(isNotNull(objects.pendingQuestion), ne(objects.pendingQuestion, "")), and(lte(objects.followUpAt, stamp), isNull(objects.watcher)), and(isNull(objects.watcher), isNull(objects.followUpAt), lte(objects.createdAt, orphanBefore))))).orderBy(asc(objects.createdAt));
-  const withReasons = await Promise.all(rows.map(async (task) => {
-    const reasons: string[] = []; if (task.pendingQuestion?.trim()) reasons.push("question"); if (!task.watcher && task.followUpAt && task.followUpAt <= stamp) reasons.push("due-unwatched"); if (!task.watcher && !task.followUpAt && task.createdAt < orphanBefore) reasons.push("orphan");
-    let askedAt: string | null = null; if (reasons.includes("question")) { const hs = await store.listObjectEvents(undefined, task.id); askedAt = [...hs].reverse().find((e) => e.diff?.pendingQuestion?.new === task.pendingQuestion)?.ts ?? task.updatedAt; }
-    return { task: taskListShape(task), reasons, askedAt };
-  }));
-  withReasons.sort((a, b) => reasonRank(a.reasons) - reasonRank(b.reasons) || String(a.task.createdAt).localeCompare(String(b.task.createdAt)));
-  const count = (r: string) => withReasons.filter((i) => i.reasons.includes(r)).length;
-  return { ok: true, value: { items: withReasons, counts: { question: count("question"), dueUnwatched: count("due-unwatched"), orphan: count("orphan"), total: withReasons.length }, now: stamp } };
+  const { rows, stamp } = await inboxUnion(context.teamId, now);
+  const items = rows.map(({ task, reasons, askedAt }) => ({ task: taskListShape(task), reasons, askedAt }));
+  return { ok: true, value: { items, counts: inboxCounts(rows), now: stamp } };
 }
 
 export async function verdict(id: string, answer: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
@@ -267,7 +304,7 @@ function notHuman(context: ApiContext, message = "this question is waiting for a
 }
 function notYourLoop(context: ApiContext, id: string): ApiRefusal { return refusal("NOT_YOUR_LOOP", `${context.run?.id ?? "this run"} belongs to ${context.run?.loopId ?? "another loop"} and may not write ${id}`, [{ path: "id", message: "must be the run's own loop", got: id, expected: context.run?.loopId ?? "" }], "a run evolves and governs only its own loop") }
 function mergePayload(before: Record<string, unknown> | null, patch: Record<string, unknown>) { const out = { ...(before ?? {}) }; for (const [key, value] of Object.entries(patch)) if (value === null) delete out[key]; else out[key] = value; return out; }
-function taskListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, key: row.key, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
-function eventShape(row: KernelEvent) { return { id: row.id, seq: row.seq, objectId: row.objectId, kind: row.kind, entrance: row.entrance, actor: row.actorId, transition: row.transition, diff: row.diff, note: row.note, ts: row.ts }; }
+export function taskListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, key: row.key, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
+export function eventShape(row: KernelEvent) { return { id: row.id, seq: row.seq, objectId: row.objectId, kind: row.kind, entrance: row.entrance, actor: row.actorId, transition: row.transition, diff: row.diff, note: row.note, ts: row.ts }; }
 function lookbackDate(value: string, now: Date): string | undefined { const m = /^(\d+)(h|d)$/.exec(value); if (m) return new Date(now.getTime() - Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000)).toISOString(); return parseDate(value, now); }
 function reasonRank(reasons: string[]) { return reasons.includes("question") ? 0 : reasons.includes("due-unwatched") ? 1 : 2; }
