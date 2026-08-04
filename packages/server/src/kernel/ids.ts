@@ -284,7 +284,8 @@ export function dueRunId(loopId: string, taskId: string, followUpAt: string): st
 }
 
 /** A manually fired run — an organic occurrence (a person pressed the button
- *  twice on purpose is two real facts; the one-queued-run index bounds it). */
+ *  twice on purpose is two real facts; the transactional open-run join bounds
+ *  simultaneous presses). */
 export function newRunId(attempt = 0, random?: (n: number) => Uint8Array): string {
   return `run-${organicSuffix(attempt, random)}`;
 }

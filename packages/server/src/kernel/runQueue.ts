@@ -3,18 +3,17 @@
 // has been built to dist; the package remains the dependency/runtime owner.
 import { safeParseArtifact } from "../../../artifact-format/src/index.js";
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "../db/index.js";
 import { objects, type KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
 import * as legacyStore from "../db/store.js";
-import { runs, type Machine, type Run } from "../db/schema.js";
+import { loops, runs, type Loop, type Machine, type Run } from "../db/schema.js";
 import { machineIdFromToken, isDeviceTokenShape, sha256 } from "../gateway/tokens.js";
 import { enrollMachine, stampMachineContact, type MachineInfo } from "../gateway/enroll.js";
 import { clipText, type HttpResult } from "../gateway/http.js";
 import { logger } from "../logger.js";
-import { applyTransitionIn, createObjectIn } from "./applyTransition.js";
+import { appendOrganicEvent, applyTransitionIn, createObjectIn } from "./applyTransition.js";
 import {
   ORGANIC_MINT_ATTEMPTS,
   answeredRunId,
@@ -31,6 +30,77 @@ import { REFUSAL_STATUS, refusal, type RefusalCode } from "./refusals.js";
 import type { RunReason } from "./types.js";
 
 const log = logger.child({ mod: "run-queue" });
+
+/** Boot wires the shipping gateway dispatcher here once. Trigger producers live
+ * in kernel modules, but a prod row must wake the same parked machine poll as a
+ * cron-created row. The pending row remains the durable queue if no dispatcher
+ * is installed (unit tests / pre-boot calls). */
+let productionDispatcher: ((loop: Loop, run: Run) => Promise<void> | void) | undefined;
+
+export function setProductionRunDispatcher(dispatcher: (loop: Loop, run: Run) => Promise<void> | void): void {
+  productionDispatcher = dispatcher;
+}
+
+export async function notifyProductionRunQueued(run: Run | undefined): Promise<void> {
+  if (!run || run.queueState !== null || !productionDispatcher) return;
+  const loop = await legacyStore.getLoop(run.loopId);
+  if (loop) await productionDispatcher(loop, run);
+}
+
+/** Shipping run-now, through the same mint seam as every kernel trigger. A
+ * disabled loop is intentionally accepted: the button fires one row now and
+ * never changes `enabled`, so its cadence remains off. */
+export async function queueProductionManualRun(
+  loop: Loop,
+  now: Date = new Date(),
+  actorId = loop.userId,
+): Promise<Awaited<ReturnType<typeof queueKernelRun>>> {
+  const stamp = now.toISOString();
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as store.KernelExec;
+    const queued = await queueKernelRun(tx, { loop, now: stamp, reason: "manual" });
+    if (queued.outcome === "queued") {
+      await appendOrganicEvent(tx, {
+        teamId: queueLoopTeamId(loop),
+        objectId: loop.id,
+        kind: "run-queued",
+        origin: "organic",
+        entrance: "human",
+        actorId,
+        payload: { runId: queued.run!.id, reason: "manual" },
+        ts: stamp,
+      });
+    }
+    return queued;
+  });
+}
+
+/** The shipping report pipeline's S2 finalize hook. Only trigger runs carry
+ * kernel provenance (`reason`/`scope`); ordinary cron/edit/evolve history stays
+ * event-silent. The derived seed is the frozen v2 run-finished seed verbatim. */
+export async function appendProductionRunFinished(
+  run: Run | undefined,
+  outcome: "success" | "failure",
+  stamp: string,
+  summary?: string | null,
+): Promise<void> {
+  if (!run || (run.reason == null && run.scope == null)) return;
+  const loop = await legacyStore.getLoop(run.loopId);
+  if (!loop) return;
+  await db.transaction(async (rawTx) => {
+    await appendDerivedEvent(rawTx as unknown as store.KernelExec, {
+      id: derivedEventId({ runId: run.id, kind: "run-finished", outcome }),
+      teamId: queueLoopTeamId(loop),
+      objectId: loop.id,
+      kind: "run-finished",
+      origin: "derived",
+      entrance: "agent",
+      actorId: run.id,
+      payload: { outcome, reason: run.reason, scope: run.scope, summary: summary ?? null },
+      ts: stamp,
+    });
+  });
+}
 
 export const RUN_LEASE_MS = envPositive("LOOPANY_RUN_LEASE_MS", 20 * 60_000);
 export const CLAIM_HOLD_MS = envPositive("LOOPANY_CLAIM_HOLD_MS", 20_000);
@@ -55,8 +125,16 @@ function envNonNegative(name: string, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
 }
 
+export type QueueLoop = KernelObject | Loop;
+
+export function queueLoopTeamId(loop: QueueLoop): string {
+  if (loop.teamId) return loop.teamId;
+  if (!("kind" in loop)) return legacyStore.teamIdForUser(loop.userId);
+  throw new Error(`kernel loop ${loop.id} has no team and cannot emit trigger events`);
+}
+
 export interface QueueInput {
-  loop: KernelObject;
+  loop: QueueLoop;
   now: string;
   reason: RunReason;
   scope?: string;
@@ -75,6 +153,7 @@ export interface QueueInput {
 /** Callable insertion seam for unit 4's R-answer transaction. */
 export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
   const { loop, now, reason } = input;
+  const kernelLoop = "kind" in loop;
   if (reason === "answered" && !input.verdictEventId) {
     throw new Error("answered runs require verdictEventId for deterministic identity");
   }
@@ -96,14 +175,15 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
             : undefined;
   const row = {
     loopId: loop.id,
-    // Additive reuse of the legacy table requires these columns. They are not
-    // authority in v2: claim stamps the actual machine and loop→team owns scope.
-    userId: loop.teamId,
-    machineId: "",
+    // Convergence S2 fixes the old kernel team-as-user shim and makes a prod
+    // watcher's row immediately claimable by the shipping poll path. Kernel
+    // watchers stay on their queue lifecycle until S3.
+    userId: kernelLoop ? loop.teamId : loop.userId,
+    machineId: kernelLoop ? "" : loop.machineId,
     phase: "pending",
     role: "exec",
     ts: now,
-    queueState: "queued",
+    queueState: kernelLoop ? "queued" : null,
     scope: input.scope ?? "routine",
     reason,
     // A DUE fire is the CLOCK's entrance, not a person's: nobody entered
@@ -117,6 +197,15 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
     // person's instruction in the work order instead of making the agent hunt.
     triggerEventId: input.triggerEventId ?? input.verdictEventId ?? null,
   } as const;
+
+  // The unique one-queued index retired in S2. Serialize every trigger for this
+  // loop on its authoritative row, then let `queueRun` transactionally join an
+  // existing open run. Kernel wins an id collision during the dual-read stage.
+  if (kernelLoop) {
+    await store.getObjectForUpdate(tx, loop.id);
+  } else {
+    await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, loop.id)).for("update");
+  }
 
   if (derivedId) {
     const queued = await store.queueRun(tx, { ...row, id: derivedId });
@@ -164,7 +253,7 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
  * surfaces. Runs' events are the fastest-growing, never-pruned pool of derived
  * ids in the system, so this is the pool where the collision math actually bites.
  */
-async function appendDerivedEvent(
+export async function appendDerivedEvent(
   tx: store.KernelExec,
   row: Parameters<typeof store.appendEvent>[1],
 ): Promise<Awaited<ReturnType<typeof store.appendEvent>>> {
@@ -322,29 +411,34 @@ async function queueOneFire(
  */
 export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> {
   const nowIso = now.toISOString();
-  const due = await db
-    .select({ task: objects, loop: LOOPS })
+  const dueTasks = await db
+    .select()
     .from(objects)
-    .innerJoin(LOOPS, eq(LOOPS.id, objects.watcher))
     .where(
       and(
         eq(objects.kind, "task"),
         eq(objects.status, "open"),
         isNotNull(objects.followUpAt),
         lte(objects.followUpAt, nowIso),
-        eq(LOOPS.kind, "loop"),
-        eq(LOOPS.status, "active"),
       ),
     )
     .orderBy(asc(objects.followUpAt))
     .limit(50);
-  const result: TickResult = { scanned: due.length, queued: 0, skipped: 0, replayed: 0, failed: 0 };
+  const result: TickResult = { scanned: 0, queued: 0, skipped: 0, replayed: 0, failed: 0 };
 
-  for (const { task, loop } of due) {
+  for (const task of dueTasks) {
     const followUpAt = task.followUpAt!;
     try {
-      const outcome = await db.transaction(async (rawTx) => {
+      const queuedResult = await db.transaction(async (rawTx) => {
         const tx = rawTx as unknown as store.KernelExec;
+        const loop = await resolveQueueLoopIn(tx, task.teamId, task.watcher!);
+        if (!loop) {
+          log.info({ taskId: task.id, watcher: task.watcher }, "due task skipped: watcher loop was deleted");
+          return null;
+        }
+        // Due is the only trigger governed by enablement. Kernel pause and prod
+        // disable both stand down; the level trigger fires after re-enable.
+        if (("kind" in loop && loop.status !== "active") || (!("kind" in loop) && !loop.enabled)) return null;
         const queued = await queueKernelRun(tx, {
           loop, now: nowIso, reason: "due", scope: `task:${task.id}`,
           scheduledFor: followUpAt, due: { taskId: task.id, followUpAt },
@@ -352,7 +446,7 @@ export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> 
         if (queued.outcome === "queued") {
           await appendDerivedEvent(tx, {
             id: derivedEventId({ loopId: loop.id, taskId: task.id, kind: "run-queued", followUpAt }),
-            teamId: loop.teamId,
+            teamId: queueLoopTeamId(loop),
             objectId: loop.id,
             kind: "run-queued",
             origin: "derived",
@@ -362,15 +456,20 @@ export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> 
             ts: nowIso,
           });
         }
-        return queued.outcome;
+        return { queued, loop };
       });
+      if (!queuedResult) continue;
+      result.scanned += 1;
+      const { queued, loop } = queuedResult;
+      const outcome = queued.outcome;
       if (outcome === "queued") result.queued += 1;
       else if (outcome === "loop-busy") result.skipped += 1;
       else result.replayed += 1;
+      if (outcome === "queued" && !("kind" in loop)) await notifyProductionRunQueued(queued.run);
     } catch (err) {
       // Same isolation as the cadence tick: one task's identity fault must not
       // starve the rest, and nothing was consumed, so it is still due next pass.
-      log.error({ err: String(err), loopId: loop.id, taskId: task.id, followUpAt }, "due task could not wake its watcher");
+      log.error({ err: String(err), loopId: task.watcher, taskId: task.id, followUpAt }, "due task could not wake its watcher");
       result.failed += 1;
     }
   }
@@ -378,9 +477,22 @@ export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> 
   return result;
 }
 
-/** The watcher side of the due join. `objects` appears twice in one query (the
- *  task and the loop watching it), so the loop side needs its own alias. */
-const LOOPS = alias(objects, "watcher_loop");
+/** Resolve a trigger target kernel-first, matching `loopRefs.ts`'s S1 collision
+ * rule. The caller is already in the mutation transaction; queueKernelRun takes
+ * the authoritative row lock before the open-run lookup. */
+export async function resolveQueueLoopIn(
+  tx: store.KernelExec,
+  teamId: string,
+  loopId: string,
+): Promise<QueueLoop | undefined> {
+  const kernel = (
+    await tx.select().from(objects).where(and(eq(objects.id, loopId), eq(objects.teamId, teamId), eq(objects.kind, "loop")))
+  )[0];
+  if (kernel) return kernel;
+  return (
+    await tx.select().from(loops).where(and(eq(loops.id, loopId), eq(loops.teamId, teamId)))
+  )[0];
+}
 
 /** Cutover repair for migrated active loops plus the create/resume arming seam. */
 export async function armUnarmedLoops(now: Date = new Date()): Promise<number> {

@@ -21,5 +21,6 @@ loopany finish --message "<what was achieved>" --reason "<why the goal is met>" 
 
 Run now.
 {{goalLine}}
+{{triggerBlock}}
 
 For the full run protocol — task-file `## Spec`/`## Current understanding`/`## Timeline` discipline, when to speak, schedule levers (`loopany show` → `reschedule`/`set-cron`), and dashboard/front-matter conventions — use the loopany skill installed at user scope. If it is unavailable, the rules above are sufficient.

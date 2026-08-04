@@ -602,7 +602,7 @@ describe("applyUpdate", () => {
 
 // --------------------------------------------------------- runs queue
 
-describe("one queued run per loop (design §5 queue discipline)", () => {
+describe("transactional open-run join (convergence S2 queue discipline)", () => {
   const baseRun = { userId: "u_alice", machineId: "m_1", phase: "pending" as const, role: "exec" as const };
 
   it("admits the first queued run", async () => {
@@ -635,7 +635,7 @@ describe("one queued run per loop (design §5 queue discipline)", () => {
     expect(replay.outcome).toBe("replay");
   });
 
-  it("frees the slot once the run leaves `queued`", async () => {
+  it("joins a claimed run, then frees the slot after it finishes", async () => {
     await kernelStore.queueRun(undefined, {
       ...baseRun, id: "run-a", loopId: "loop-1", ts: T0, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
     });
@@ -643,7 +643,12 @@ describe("one queued run per loop (design §5 queue discipline)", () => {
     const next = await kernelStore.queueRun(undefined, {
       ...baseRun, id: "run-b", loopId: "loop-1", ts: T1, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
     });
-    expect(next.outcome).toBe("queued");
+    expect(next.outcome).toBe("loop-busy");
+    await db.db.update(runsTable).set({ queueState: "success", phase: "done" }).where((await import("drizzle-orm")).eq(runsTable.id, "run-a"));
+    const after = await kernelStore.queueRun(undefined, {
+      ...baseRun, id: "run-b", loopId: "loop-1", ts: T1, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+    });
+    expect(after.outcome).toBe("queued");
   });
 
   it("bounds nothing ACROSS loops — two loops each get their own queued run", async () => {

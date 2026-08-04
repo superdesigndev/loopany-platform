@@ -337,11 +337,9 @@ export const runs = pgTable(
     index("runs_phase_idx").on(t.phase),
     index("runs_loop_ts_idx").on(t.loopId, t.ts),
     // ---- rewrite queue indexes (spec §5.3) ----
-    /** ONE QUEUED RUN PER LOOP (design §5 queue discipline). A fire that finds one
-     *  already queued records `clock-skipped` instead of stacking, so a machine
-     *  offline for two days owes one run, not forty-eight. Partial, so legacy
-     *  rows (queue_state NULL) are invisible to it. */
-    uniqueIndex("runs_one_queued_idx").on(t.loopId).where(sql`${t.queueState} = 'queued'`),
+    // `runs_one_queued_idx` retired in convergence S2. Trigger paths serialize
+    // on the owning loop row, then transactionally join any open run; production
+    // legitimately holds multiple pending rows briefly during cron supersede.
     /** The claim scan: queued rows, oldest first. */
     index("runs_claim_idx").on(t.ts).where(sql`${t.queueState} = 'queued'`),
     /** The lease-expiry sweep. */

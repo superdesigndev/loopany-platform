@@ -3,12 +3,20 @@ import { and, asc, count, desc, eq, gt, isNotNull, lte, ne, or } from "drizzle-o
 import { db } from "../db/index.js";
 import { events, objects, type KernelEvent, type KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
-import { runs } from "../db/schema.js";
+import { loops as productionLoops, runs } from "../db/schema.js";
 import { appendOrganicEvent, applyTransitionIn, applyUpdateIn, buildFieldDiff, createObjectIn, sameValue, type WritableFields } from "./applyTransition.js";
 import { MIRRORS_KEY, MIRRORS_UPDATE_HINT, parseDate, parseKindArtifact, serializeKindArtifact, type ArtifactProjection } from "./artifactSeam.js";
-import { derivedEventId, directiveRunId } from "./ids.js";
+import { derivedEventId } from "./ids.js";
 import { attachMirrorIn, mirrorsFor } from "./mirrorApi.js";
-import { notifyRunQueued, queueKernelRun } from "./runQueue.js";
+import {
+  appendDerivedEvent,
+  notifyProductionRunQueued,
+  notifyRunQueued,
+  queueKernelRun,
+  queueLoopTeamId,
+  resolveQueueLoopIn,
+  type QueueLoop,
+} from "./runQueue.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 import { nextOccurrenceAfter } from "./schedule.js";
 import type { ApiContext } from "./apiAuth.js";
@@ -427,8 +435,8 @@ export function retirementWarning(loopId: string, openTasks: number) {
  * a manual run is claimed, leased, reported and retried by exactly the machinery
  * a clock fire uses — the only difference is the entrance recorded on the event.
  *
- * `runs_one_queued_idx` (one queued run per loop) is the queue discipline, and a
- * manual fire OBEYS it rather than jumping it: an already-queued run is reported
+ * The transactional open-run lookup is the queue discipline, and a manual fire
+ * OBEYS it rather than jumping it: an already-open run is reported
  * back with `alreadyQueued: true`, the same ruling the verdict path takes.
  *
  * **A PAUSED loop accepts a manual fire** (captain ruling 2026-08-04). Pause
@@ -448,16 +456,19 @@ export async function runLoopNow(id: string, context: ApiContext, now = new Date
   }
   const result = await db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec;
-    const loop = await store.getObjectForUpdate(tx, id);
-    const guard = scopedKindGuard(loop, "loop", context.teamId); if (guard) return guard;
-    if (loop!.status === "retired") {
-      return { ok: false as const, error: refusal("RETIRED", `${id} is retired, so it has no runs to fire`, [{ path: "status", message: "a retired loop is ended, not parked", got: loop!.status, expected: "active or paused" }], "retirement is terminal — create a new loop") };
+    const loop = await resolveQueueLoopIn(tx, context.teamId, id);
+    if (!loop) return { ok: false as const, error: refusal("NOT_FOUND", "object was not found") };
+    if ("kind" in loop && loop.status === "retired") {
+      return { ok: false as const, error: refusal("RETIRED", `${id} is retired, so it has no runs to fire`, [{ path: "status", message: "a retired loop is ended, not parked", got: loop.status, expected: "active or paused" }], "retirement is terminal — create a new loop") };
     }
-    const queued = await queueKernelRun(tx, { loop: loop!, now: now.toISOString(), reason: "manual" });
+    if (!("kind" in loop) && loop.nextRunAt) {
+      await tx.update(productionLoops).set({ nextRunAt: null }).where(eq(productionLoops.id, loop.id));
+    }
+    const queued = await queueKernelRun(tx, { loop, now: now.toISOString(), reason: "manual" });
     if (queued.outcome === "queued") {
       await appendOrganicEvent(tx, {
-        teamId: loop!.teamId,
-        objectId: loop!.id,
+        teamId: queueLoopTeamId(loop),
+        objectId: loop.id,
         kind: "run-queued",
         origin: "organic",
         entrance: "human",
@@ -466,11 +477,11 @@ export async function runLoopNow(id: string, context: ApiContext, now = new Date
         ts: now.toISOString(),
       });
     }
-    return { ok: true as const, value: { queued: queued.outcome === "queued", alreadyQueued: queued.outcome === "loop-busy", run: queued.run ? { id: queued.run.id, state: queued.run.queueState, reason: queued.run.reason } : null, loop: objectShape(loop!) } };
+    return { ok: true as const, value: { queued: queued.outcome === "queued", alreadyQueued: queued.outcome === "loop-busy", run: queued.run ? { id: queued.run.id, state: runQueueState(queued.run), reason: queued.run.reason } : null, loop: queueLoopShape(loop) } };
   });
   // Wake any daemon parked on the claim long-poll: without this the manual fire
   // waits out the hold (~20s) for no reason.
-  if (result.ok && result.value.queued) notifyRunQueued();
+  await wakeQueuedResult(result);
   return result;
 }
 
@@ -541,13 +552,13 @@ export async function verdict(id: string, answer: unknown, context: ApiContext, 
   // (spec §4.2) — including on a task the run's own loop created.
   if (context.mode !== "human") return { ok: false, error: notHuman(context) };
   if (typeof answer !== "string" || !answer.trim()) return { ok: false, error: refusal("INVALID_BODY", "answer must be non-empty text", [{ path: "answer", message: "required" }], "free text — approve, reject and instructions are all just the answer; a reason is what lets the loop converge next time") };
-  return db.transaction(async (rawTx) => {
+  const result: ApiResult<Record<string, unknown>> = await db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec; const task = await store.getObjectForUpdate(tx, id);
     const guard = scopedKindGuard(task, "task", context.teamId); if (guard) return guard;
     if (task!.status !== "open") return { ok: false, error: refusal("CLOSED", `${id} is closed`) };
     if (!task!.pendingQuestion?.trim()) return { ok: false, error: refusal("NO_OPEN_QUESTION", `${id} has no open question`, [], "refresh the inbox; this question may already have been answered") };
     let queuedAlready = false;
-    const watcherLoop = task!.watcher ? await store.getObjectForUpdate(tx, task!.watcher) : undefined;
+    const watcherLoop = task!.watcher ? await resolveQueueLoopIn(tx, context.teamId, task!.watcher) : undefined;
     const updated = await applyUpdateIn(tx, { objectId: id, actor: context.actor, now: now.toISOString(), fields: { pendingQuestion: null }, note: answer, eventKind: "question-answered" });
     // A kernel refusal is propagated verbatim — flattening it to a generic body
     // error would lose exactly the teaching the refusal exists to carry.
@@ -559,16 +570,18 @@ export async function verdict(id: string, answer: unknown, context: ApiContext, 
     // not refuse the human and does not mint a twin: it reports the run already
     // queued, which will pull both answered tasks when it claims. Refusing here
     // would make a person's answer fail for a reason that is not about them.
-    if (watcherLoop?.kind === "loop" && watcherLoop.teamId === context.teamId) {
+    if (watcherLoop) {
       const q = await queueKernelRun(tx, { loop: watcherLoop, now: now.toISOString(), reason: "answered", scope: `task:${id}`, verdictEventId: updated.event.id });
       queued = q.run;
       if (queued && q.outcome === "queued") {
-        await store.appendEvent(tx, { id: derivedEventId({ runId: queued.id, kind: "run-queued" }), teamId: watcherLoop.teamId, objectId: watcherLoop.id, kind: "run-queued", origin: "derived", entrance: "answer", actorId: queued.id, payload: { reason: "answered", scope: `task:${id}` }, ts: now.toISOString() });
+        await appendDerivedEvent(tx, { id: derivedEventId({ runId: queued.id, kind: "run-queued" }), teamId: queueLoopTeamId(watcherLoop), objectId: watcherLoop.id, kind: "run-queued", origin: "derived", entrance: "answer", actorId: queued.id, payload: { reason: "answered", scope: `task:${id}` }, ts: now.toISOString() });
       }
       if (queued) queuedAlready = q.outcome === "loop-busy";
     }
-    return { ok: true, value: { task: objectShape(updated.object), event: updated.event.id, run: queued ? { id: queued.id, state: queued.queueState, loopId: queued.loopId, scope: queued.scope, reason: queued.reason, entrance: queued.entrance, alreadyQueued: queuedAlready } : null } };
+    return { ok: true as const, value: { task: objectShape(updated.object), event: updated.event.id, run: queued ? { id: queued.id, state: runQueueState(queued), loopId: queued.loopId, scope: queued.scope, reason: queued.reason, entrance: queued.entrance, alreadyQueued: queuedAlready } : null } };
   });
+  await wakeQueuedResult(result);
+  return result;
 }
 
 /**
@@ -591,7 +604,7 @@ export async function verdict(id: string, answer: unknown, context: ApiContext, 
  *     has the floor and the wire for it, and the run this would queue could not
  *     clear the question anyway. Two open conversations on one task is precisely
  *     the ambiguity keeping the verbs distinct is meant to avoid.
- *  3. **It OBEYS the one-queued-run index, exactly as a verdict does.** A
+ *  3. **It OBEYS the transactional open-run join, exactly as a verdict does.** A
  *     directive on a loop that already has a run queued REPORTS that run rather
  *     than stacking a twin — the directive is on the task's timeline either way,
  *     so the queued run reads it when it claims.
@@ -621,7 +634,7 @@ export async function leaveDirective(id: string, directive: unknown, context: Ap
     if (task!.pendingQuestion?.trim()) {
       return { ok: false as const, error: refusal("OPEN_QUESTION", `${id} is already waiting on you for an answer`, [{ path: "pendingQuestion", message: "a question is open on this task", got: task!.pendingQuestion }], `answer it instead — \`loopany answer ${id} "…"\` records your reply AND wakes the watcher, and the answer is free text, so any instruction fits in it`) };
     }
-    const watcherLoop = task!.watcher ? await store.getObjectForUpdate(tx, task!.watcher) : undefined;
+    const watcherLoop = task!.watcher ? await resolveQueueLoopIn(tx, context.teamId, task!.watcher) : undefined;
 
     // The directive lands on the TASK's timeline: it is a fact about this task,
     // entered by a human, and it stays readable there whether or not a run was
@@ -634,26 +647,56 @@ export async function leaveDirective(id: string, directive: unknown, context: Ap
 
     let queued: Awaited<ReturnType<typeof queueKernelRun>>["run"] | undefined;
     let alreadyQueued = false;
-    if (watcherLoop?.kind === "loop" && watcherLoop.teamId === context.teamId) {
+    if (watcherLoop) {
       const q = await queueKernelRun(tx, { loop: watcherLoop, now: now.toISOString(), reason: "directive", scope: `task:${id}`, triggerEventId: event.id });
       queued = q.run;
       alreadyQueued = q.outcome === "loop-busy";
       if (queued && q.outcome === "queued") {
-        await store.appendEvent(tx, { id: derivedEventId({ runId: queued.id, kind: "run-queued" }), teamId: watcherLoop.teamId, objectId: watcherLoop.id, kind: "run-queued", origin: "derived", entrance: "human", actorId: queued.id, payload: { reason: "directive", scope: `task:${id}`, directive: event.id }, ts: now.toISOString() });
+        await appendDerivedEvent(tx, { id: derivedEventId({ runId: queued.id, kind: "run-queued" }), teamId: queueLoopTeamId(watcherLoop), objectId: watcherLoop.id, kind: "run-queued", origin: "derived", entrance: "human", actorId: queued.id, payload: { reason: "directive", scope: `task:${id}`, directive: event.id }, ts: now.toISOString() });
       }
     }
     return { ok: true as const, value: {
       task: objectShape(task!), event: event.id, directive: text,
-      run: queued ? { id: queued.id, state: queued.queueState, loopId: queued.loopId, scope: queued.scope, reason: queued.reason, entrance: queued.entrance, alreadyQueued } : null,
+      run: queued ? { id: queued.id, state: runQueueState(queued), loopId: queued.loopId, scope: queued.scope, reason: queued.reason, entrance: queued.entrance, alreadyQueued } : null,
       // Honest about the one case where a directive lands but nothing will act
       // on it. Retirement is terminal, so no machine ever claims that run.
-      ...(watcherLoop?.status === "retired" ? { notice: { code: "WATCHER_RETIRED", message: `${watcherLoop.id} is retired, so nothing will wake for this directive; it is on the record`, hint: `hand the task to a live loop with \`loopany task update ${id} --watcher <loop-id>\`` } } : {}),
+      ...((watcherLoop && "kind" in watcherLoop && watcherLoop.status === "retired") ? { notice: { code: "WATCHER_RETIRED", message: `${watcherLoop.id} is retired, so nothing will wake for this directive; it is on the record`, hint: `hand the task to a live loop with \`loopany task update ${id} --watcher <loop-id>\`` } } : {}),
     } };
   });
   // Wake a daemon parked on the claim long-poll rather than making the person
   // wait out the ~20s hold for a run they just asked for.
-  if (result.ok && (result.value as { run?: { alreadyQueued: boolean } | null }).run && !(result.value as { run: { alreadyQueued: boolean } }).run.alreadyQueued) notifyRunQueued();
+  await wakeQueuedResult(result);
   return result;
+}
+
+function runQueueState(run: { queueState: string | null; phase: string }): string {
+  return run.queueState ?? (run.phase === "pending" ? "queued" : run.phase);
+}
+
+function queueLoopShape(loop: QueueLoop): Record<string, unknown> {
+  if ("kind" in loop) return objectShape(loop);
+  return {
+    id: loop.id,
+    kind: "loop",
+    team: loop.teamId,
+    status: loop.completedAt ? "completed" : loop.enabled ? "active" : "paused",
+    title: loop.name,
+    cron: loop.cron,
+    enabled: loop.enabled,
+  };
+}
+
+/** Wake the correct claim transport only for a freshly queued row. The event
+ * transaction has committed by the time this runs, so a woken poll can always
+ * see the durable pending row. */
+async function wakeQueuedResult(result: ApiResult<Record<string, unknown>>): Promise<void> {
+  if (!result.ok || result.value.queued === false) return;
+  const runShape = result.value.run as { id?: unknown; alreadyQueued?: unknown } | null | undefined;
+  if (!runShape || runShape.alreadyQueued === true || typeof runShape.id !== "string") return;
+  const run = await store.getRunRow(undefined, runShape.id);
+  if (!run) return;
+  if (run.queueState === "queued") notifyRunQueued();
+  else await notifyProductionRunQueued(run);
 }
 
 export async function eventsAfter(teamId: string, after: number, limit = 200): Promise<KernelEvent[]> {

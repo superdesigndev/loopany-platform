@@ -372,9 +372,9 @@ export async function execFailureStreak(loopId: string): Promise<number> {
 
 /** Open runs (pending/running) — used by the timeout-reclaim sweep. */
 export async function openRuns(): Promise<Run[]> {
-  // Rewrite queue rows share the table additively but have their own lease
-  // state machine. The legacy sweep must never reclaim, notify, supersede, or
-  // auto-pause from them; queue_state NULL is the legacy ownership marker.
+  // Kernel queue rows share the table additively but have their own lease state
+  // machine. The shipping sweep owns queue_state NULL rows, including S2's
+  // prod-claimable task triggers; it must never touch kernel queue rows.
   return db
     .select()
     .from(runs)
@@ -389,6 +389,19 @@ export async function pendingRunsForMachine(machineId: string): Promise<Run[]> {
     .select()
     .from(runs)
     .where(and(eq(runs.machineId, machineId), eq(runs.phase, "pending"), isNull(runs.queueState)));
+}
+
+/** Claim-time overlap guard: a trigger may queue while another run is working,
+ * but it stays pending until that run finalizes. */
+export async function hasRunningRun(loopId: string): Promise<boolean> {
+  const row = (
+    await db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(eq(runs.loopId, loopId), eq(runs.phase, "running")))
+      .limit(1)
+  )[0];
+  return !!row;
 }
 
 /** Is a run for this loop still open (drives the "skip overlapping tick" guard)? */

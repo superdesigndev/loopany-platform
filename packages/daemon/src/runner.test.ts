@@ -343,6 +343,7 @@ function writeFakeClaude(): string {
       "#!/bin/sh",
       // args are: -p <task> --output-format stream-json ...
       'printf "%s" "$2" > captured-task.txt',
+      'printf "%s\\n%s" "$LOOPANY_RUN_ID" "$LOOPANY_RUN_TOKEN" > captured-run-env.txt',
       `echo '{"type":"result","is_error":false,"subtype":"success","result":"delivered","session_id":"sess-test"}'`,
       "exit 0",
       "",
@@ -396,6 +397,16 @@ function delivery(overrides: Partial<Delivery> = {}): Delivery {
 }
 
 describe("runDelivery — workflow failure falls back to the agent", () => {
+  test("the legacy prod spawn exports invisible run context beside its run token", async () => {
+    process.env.LOOPANY_CLAUDE_BIN = writeFakeClaude();
+    await runDelivery(
+      delivery({ loop: { ...delivery().loop, workflow: null } }),
+      "http://127.0.0.1:1/unused",
+      [],
+    );
+    expect(fs.readFileSync(path.join(workdir, "captured-run-env.txt"), "utf8")).toBe("run-1\ntok-1");
+  }, 20000);
+
   test("a failing tools.call routes to claude with the fallback task (not a failed run)", async () => {
     process.env.LOOPANY_CLAUDE_BIN = writeFakeClaude();
     process.env.LOOPANY_MCP_BRIDGE = writeFailingBridge();

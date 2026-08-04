@@ -426,7 +426,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       LOOPANY_SERVER_URL: serverUrl,
       ...(d.runsV2
         ? { LOOPANY_RUN_ID: d.runId, LOOPANY_TOKEN: d.runsV2.deviceToken }
-        : { LOOPANY_RUN_TOKEN: d.runToken }),
+        : { LOOPANY_RUN_ID: d.runId, LOOPANY_RUN_TOKEN: d.runToken }),
     };
     const task = workflowFailure
       ? buildWorkflowFallbackTask(d.task, workflowFailure, dateStamp(), d.loop.name, d.loop.id)

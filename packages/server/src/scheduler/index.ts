@@ -20,6 +20,7 @@ import { Cron } from "croner";
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
 import type { Loop, Run } from "../db/schema.js";
+import { queueProductionManualRun } from "../kernel/runQueue.js";
 
 const log = logger.child({ mod: "scheduler" });
 
@@ -126,10 +127,22 @@ export class Scheduler {
     this.unschedule(id);
   }
 
-  /** Make a loop due immediately (run-now), via the one-shot timer path. */
-  async runNow(id: string): Promise<void> {
-    const loop = await store.updateLoop(id, { nextRunAt: new Date().toISOString() });
-    if (loop) this.armNextRunAt(loop);
+  /** Queue one manual run immediately. Pause governs only the cadence: a
+   * disabled loop fires once and remains disabled, with no deferred one-shot to
+   * surprise the owner when it is later re-enabled. */
+  async runNow(id: string): Promise<{ queued: boolean; alreadyQueued: boolean; run: Run | null }> {
+    let loop = await store.getLoop(id);
+    if (!loop) return { queued: false, alreadyQueued: false, run: null };
+    // Retire the old deferred-fire-on-re-enable marker. Manual run-now consumes
+    // the one-shot immediately whether the cadence is on or off.
+    if (loop.nextRunAt) loop = (await store.updateLoop(id, { nextRunAt: null })) ?? loop;
+    const result = await queueProductionManualRun(loop);
+    if (result.outcome === "queued" && result.run) await this.dispatcher.dispatch(loop, result.run);
+    return {
+      queued: result.outcome === "queued",
+      alreadyQueued: result.outcome === "loop-busy",
+      run: result.run ?? null,
+    };
   }
 
   /** Manually schedule a dedicated evolution pass as the next tick. */

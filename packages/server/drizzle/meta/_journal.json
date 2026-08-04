@@ -57,6 +57,13 @@
       "when": 1785850505152,
       "tag": "0007_pretty_luminals",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785852073785,
+      "tag": "0008_tiresome_guardsmen",
+      "breakpoints": true
     }
   ]
 }

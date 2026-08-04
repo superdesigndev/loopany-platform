@@ -536,8 +536,9 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
   gap as a dropped event or derive a count from a delta. Pinned by the integration test.
 - **`runs.state` was already taken** (the per-run metrics jsonb), so spec §5.3's run
   lifecycle column ships as **`queue_state`**; every other queue/lease column keeps its
-  spec name. All are nullable and NULL on legacy rows, so `runs_one_queued_idx` (the
-  one-queued-run-per-loop partial unique index) is invisible to shipping history.
+  spec name. All are nullable and NULL on legacy rows. The temporary
+  `runs_one_queued_idx` retired in convergence S2; one-open-run discipline now comes
+  from the transactional lookup described in the S2 note below.
 - **`pnpm kernel:migrate-loops [--dry-run] [--team <id>]`** (`kernel/loopMigration.ts`)
   copies each loop into one `objects` row. Insert-only by design: it never UPDATES an
   already-migrated row, because that would overwrite whatever the kernel side has since
@@ -587,9 +588,10 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
   NB-1 asked for two; the third is free because the kernel guard is entrance-based.
   Note the file path is a clear in disguise — dropping `needs_human` from a whole-file
   replacement discards a live question, so it is refused too.
-- **A verdict JOINS an already-queued run, it never refuses the human.** One queued run
-  per loop is the queue discipline (`runs_one_queued_idx`), so R-answer reports the
-  existing run with `alreadyQueued: true` and the queued run pulls both answered tasks
+- **A verdict JOINS an already-open run, it never refuses the human.** One open run per
+  loop is the queue discipline (the transactional `queued|claimed` / `pending|running`
+  lookup), so R-answer reports the existing run with `alreadyQueued: true` and the run
+  pulls both answered tasks
   when it claims. Refusing here would fail a person's answer for a reason that is not
   about them. Deliberate reading of CLI spec §7.2 over API spec §4.2, whose
   `ON CONFLICT (id)` does not cover the one-queued-run index at all.
@@ -908,9 +910,9 @@ rather than forking a second execution stack.
   daemon is registered on — the unit-4 review's B1, one layer out. `HUMAN_COMMANDS` stays
   for the other direction (a human verb typed inside a run).
 - **`POST /api/loops/:id/run-now`** (`objectApi.runLoopNow`) is the manual fire, human
-  only like the lifecycle verbs. It reuses `queueKernelRun`'s `manual` reason and OBEYS
-  `runs_one_queued_idx` (a second call reports `alreadyQueued`), then `notifyRunQueued()`
-  so a parked claim wakes instead of waiting out its ~20s hold.
+  only like the lifecycle verbs. It reuses `queueKernelRun`'s `manual` reason and joins
+  the transactional open-run lookup (a second call reports `alreadyQueued`), then wakes
+  the matching claim transport so a parked poll does not wait out its ~20s hold.
 - **PAUSE GOVERNS THE CADENCE, NOT THE BUTTON** (captain ruling 2026-08-04, amending the
   original unit-10/11 behaviour). A PAUSED loop accepts `run-now` exactly like an active
   one: pause clears `next_fire` so the CLOCK can never select it, and a manual fire is an
@@ -1199,8 +1201,8 @@ watcher, scoped to it. Same wire as the answer path, opposite entrance.
 - **A pending question REFUSES it** (`OPEN_QUESTION`, pointing at `answer`): the
   person already has the floor, an answer is free text so any instruction fits in
   one, and the run this would queue could not clear the question anyway.
-- It obeys `runs_one_queued_idx` like the verdict does — reports the queued run
-  rather than stacking. Nothing is lost: the directive is on the task's timeline,
+- It obeys the transactional open-run lookup like the verdict does — reports the open
+  run rather than stacking. Nothing is lost: the directive is on the task's timeline,
   which that run reads when it claims.
 
 ### The UI drops direct close
@@ -1251,10 +1253,9 @@ fixture note already warns about.
 ## Convergence S1 — the watcher speaks prod (`kernel/loopRefs.ts` + `objects.parent_id`)
 
 Stage S1 of the convergence design (`data/rw-converge-s1/report.md` — read it, not a
-summary here) makes the SHIPPING product's `loops` row THE loop that a kernel object can
-point at. It repoints REFERENCES only; the trigger paths (S2), the loop roster/lifecycle
-(S3), the hierarchy UI/CLI (S4) and the cleanup (S5) are later stages and were deliberately
-not pulled forward.
+summary here) made the SHIPPING product's `loops` row THE loop that a kernel object can
+point at. It repointed REFERENCES only; S2 later repointed triggers, while the loop
+roster/lifecycle (S3), hierarchy UI/CLI (S4), and cleanup (S5) remain later stages.
 
 - **`kernel/loopRefs.ts` is the ONE dual-read resolver.** `objects.watcher` /
   `created_by_loop` may name a kernel loop object OR a production `loops` row, and every
@@ -1280,8 +1281,9 @@ not pulled forward.
   `loopsView` (the Loops PANE) is deliberately still kernel-only — that is S3. A prod loop's
   drawer replaces Run-now/lifecycle with one sentence: the kernel verbs resolve against
   `objects` and could only refuse there until S3 repoints them.
-- **`tickDueTasks` does not see a prod watcher, by design** — its comment carries the stage
-  boundary. A prod-watched follow-up queues nothing until S2.
+- **As of S2, `tickDueTasks` resolves a watcher kernel-first and then production.** It
+  queues enabled production watchers through the shared run seam while retaining the
+  original kernel behavior; disabled production watchers stay quiet.
 - **`objects.parent_id` + the write-time cycle guard landed here** (migration `0007`,
   task-only CHECK + partial index; `applyTransition.ts` `parentIssue` at both chokepoints,
   `PARENT_CYCLE`). Referencing by ID through one write chokepoint is what `feat/task-tree-v2`
@@ -1300,6 +1302,35 @@ not pulled forward.
   tasks off the shared `runs` table, the graph drawing the hand-off edge, a live
   `PARENT_CYCLE` refusal, kernel-watched tasks unchanged, zero console errors and no
   page-level horizontal scroll at 1440 or 760.
+
+## Convergence S2 — one run world
+
+Stage S2 repoints every trigger to the shared `queueKernelRun` mint seam without pulling
+the kernel roster, lifecycle, or claim transport removals from S3 forward. The durable
+contract is pinned end to end by `src/kernel/convergenceS2.integration.test.ts` and the
+legacy runner environment case in `packages/daemon/src/runner.test.ts`.
+
+- `queueKernelRun` accepts either loop representation. Production rows use the real
+  loop `userId`/`machineId`, `phase: pending`, `role: exec`, and NULL `queueState`; kernel
+  rows retain their old lifecycle. Due tasks, verdict answers, directives, and both
+  run-now paths reuse the frozen derived-id seeds verbatim. Organic events still enter
+  through `appendOrganicEvent`; derived events still pass the collision-checked append
+  seam.
+- Migration `0008` drops `runs_one_queued_idx`. Queueing locks the authoritative loop
+  row and transactionally joins any open run: kernel `queued|claimed`, production
+  `pending|running` with NULL `queueState`. The production poll also refuses to claim a
+  pending sibling while another run for that loop is running.
+- The shipping scheduler's run-now is immediate even for a disabled loop: it clears any
+  deferred `nextRunAt`, queues one production run, and leaves `enabled` false. A second
+  fire while that run is open returns `alreadyQueued`; the retired deferred-fire-on-enable
+  behavior must not return.
+- Delivery resolves scoped task/event context for production rows, includes the human's
+  directive or answer verbatim as untrusted trigger data, and exports `LOOPANY_RUN_ID` on
+  the legacy daemon path. Rewrite API run context can authorize either kernel leases or
+  durable production run leases during the dual-transport stage.
+- Each terminal shipping `report()` path appends the frozen derived `run-finished` event
+  before retiring the lease, keeping workspace SSE/timelines live. Trigger-created rows
+  carry provenance; ordinary production cron/edit/evolve history remains event-silent.
 
 ## Maintaining this file
 

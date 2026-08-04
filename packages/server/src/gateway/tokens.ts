@@ -214,6 +214,26 @@ export async function resolveLease(token: string, now: number = Date.now()): Pro
   return lease;
 }
 
+/** Resolve the shipping lease behind invisible `LOOPANY_RUN_ID` context. The
+ * device credential has already authenticated the machine; this lookup proves
+ * that machine still holds this exact run. */
+export async function resolveRunContextLease(
+  runId: string,
+  machineId: string,
+  now: number = Date.now(),
+): Promise<RunLease | undefined> {
+  const rows = await db
+    .select()
+    .from(runLeases)
+    .where(and(eq(runLeases.runId, runId), eq(runLeases.machineId, machineId)));
+  for (const row of rows) {
+    const lease = leaseFromRow(row);
+    if (now <= lease.expiresAt) return lease;
+    await db.delete(runLeases).where(eq(runLeases.tokenHash, row.tokenHash));
+  }
+  return undefined;
+}
+
 /** Terminalize the lease(s) for `runId`: flip `active` → `terminal-grace`, opening
  *  the reconcile grace window (`TERMINAL_GRACE_MS`). This is the ONE transition the
  *  sweep uses when it reclaims a stuck run as a false failure — the lease survives

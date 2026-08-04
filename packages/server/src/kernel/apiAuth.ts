@@ -24,9 +24,11 @@
 import { authEnabled, currentUser, requestScope } from "../auth.js";
 import type { KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
-import type { Machine, Run } from "../db/schema.js";
+import * as legacyStore from "../db/store.js";
+import type { Loop, Machine, Run } from "../db/schema.js";
 import { authenticateDevice } from "./runQueue.js";
 import { machineRouteLimit } from "../gateway/rateLimit.js";
+import { resolveRunContextLease } from "../gateway/tokens.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 import type { Actor } from "./types.js";
 
@@ -36,7 +38,7 @@ export interface ApiContext {
   mode: "agent" | "human";
   machine?: Machine;
   run?: Run;
-  loop?: KernelObject;
+  loop?: KernelObject | Loop;
 }
 
 export type ApiAuthResult = { ok: true; context: ApiContext } | { ok: false; error: ApiRefusal };
@@ -111,13 +113,26 @@ export async function resolveApiContext(
     if (!run || run.machineId !== machine.id) {
       return { ok: false, error: refusal("RUN_CONTEXT_UNKNOWN", `${runHeader} is not a run this machine is currently holding`, [{ path: "X-Loopany-Run", message: "unknown or not claimed by this machine", got: runHeader }], "the run may have finished or been reclaimed; stop and let the daemon claim a fresh one") };
     }
-    const terminalRead = !mutation && run.leaseState === "terminal-grace";
-    if (!terminalRead && (run.queueState !== "claimed" || run.leaseState !== "active" || Date.parse(run.leaseExpiresAt ?? "") <= Date.now())) {
+    if (run.queueState !== null) {
+      const terminalRead = !mutation && run.leaseState === "terminal-grace";
+      if (!terminalRead && (run.queueState !== "claimed" || run.leaseState !== "active" || Date.parse(run.leaseExpiresAt ?? "") <= Date.now())) {
+        return { ok: false, error: refusal("LEASE_LOST", `${run.id} no longer holds its lease`, [], "stop work on it — the lease is the authority") };
+      }
+      const loop = await store.getObject(undefined, run.loopId);
+      if (!loop || loop.kind !== "loop") return { ok: false, error: refusal("RUN_CONTEXT_UNKNOWN", `${runHeader} has no live loop context`) };
+      return { ok: true, context: { teamId: loop.teamId, actor: { entrance: "agent", actorId: run.id }, mode: "agent", machine, run, loop } };
+    }
+
+    // Production run: authority lives in durable `run_leases`, not in the
+    // rewrite queue columns. A terminal-grace lease serves reads only, matching
+    // the kernel path's wake-report semantics.
+    const lease = await resolveRunContextLease(run.id, machine.id);
+    if (!lease || (mutation && lease.state !== "active")) {
       return { ok: false, error: refusal("LEASE_LOST", `${run.id} no longer holds its lease`, [], "stop work on it — the lease is the authority") };
     }
-    const loop = await store.getObject(undefined, run.loopId);
-    if (!loop || loop.kind !== "loop") return { ok: false, error: refusal("RUN_CONTEXT_UNKNOWN", `${runHeader} has no live loop context`) };
-    return { ok: true, context: { teamId: loop.teamId, actor: { entrance: "agent", actorId: run.id }, mode: "agent", machine, run, loop } };
+    const loop = await legacyStore.getLoop(run.loopId);
+    if (!loop) return { ok: false, error: refusal("RUN_CONTEXT_UNKNOWN", `${runHeader} has no live loop context`) };
+    return { ok: true, context: { teamId: loop.teamId ?? machine.teamId ?? `team-${loop.userId}`, actor: { entrance: "agent", actorId: run.id }, mode: "agent", machine, run, loop } };
   }
 
   // ---- no run context ----

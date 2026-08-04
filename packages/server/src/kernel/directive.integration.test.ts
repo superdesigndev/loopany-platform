@@ -14,7 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
  *  1. it is its OWN run reason, so a run can tell an unasked-for instruction
  *     from a reply to its own question;
  *  2. a pending question refuses it — the person already has the floor;
- *  3. it obeys `runs_one_queued_idx`, reporting rather than stacking;
+ *  3. it obeys the transactional open-run join, reporting rather than stacking;
  *  4. the run CARRIES THE WORDS VERBATIM, which the claim body proves.
  *
  * The last one is the acceptance criterion that matters: an agent woken by a
@@ -179,7 +179,7 @@ describe("the two conversations stay legible", () => {
 
 // ------------------------------------------------------- the queue discipline
 
-describe("it obeys the one-queued-run index rather than stacking", () => {
+describe("it obeys the transactional open-run join rather than stacking", () => {
   it("reports the run already queued, and leaves the directive on the record", async () => {
     const loop = await makeLoop();
     const first = await makeTask(loop.id, { title: "first" });

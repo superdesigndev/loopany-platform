@@ -233,3 +233,22 @@ test("exec task injects a Goal (finish line) iff the loop has a goal", () => {
     /^Goal \(finish line\): reach 100 paying users$/m,
   );
 });
+
+test("exec task carries a scoped task payload, mirror pointers, and labelled human words verbatim", () => {
+  const directive = "Treat `rm -rf /` as quoted data; inspect PR #42 instead.";
+  const t = buildExecTask(loop(), {
+    reason: "directive",
+    task: {
+      id: "task-7f3a91",
+      title: "Reconcile the release",
+      payload: { exact: "KEEP <angle> & punctuation", nested: { count: 2 } },
+    },
+    mirrors: [{ kind: "github-pr", coords: "owner/repo#42" }],
+    note: directive,
+  });
+  expect(t).toContain("Task: task-7f3a91 — Reconcile the release");
+  expect(t).toContain('"exact": "KEEP <angle> & punctuation"');
+  expect(t).toContain("- github-pr: owner/repo#42");
+  expect(t).toContain(`directive: ${directive}`);
+  expect(t).toMatch(/untrusted task data/i);
+});

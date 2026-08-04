@@ -5,6 +5,8 @@
  */
 import type { CodingAgent, Loop } from "../db/schema.js";
 import * as store from "../db/store.js";
+import * as kernelStore from "../db/kernelStore.js";
+import { mirrorsFor } from "../kernel/mirrorApi.js";
 import {
   buildEditPrompt,
   buildEditTask,
@@ -41,7 +43,8 @@ export interface Delivery {
 }
 
 export async function buildDelivery(loop: Loop, runId: string, runToken: string, roots: string[]): Promise<Delivery> {
-  const raw = (await store.getRun(runId))?.role;
+  const run = await store.getRun(runId);
+  const raw = run?.role;
   const role: Delivery["role"] = raw === "evolve" ? "evolve" : raw === "edit" ? "edit" : "exec";
   let systemPrompt: string;
   let task: string;
@@ -58,7 +61,7 @@ export async function buildDelivery(loop: Loop, runId: string, runToken: string,
       break;
     default:
       systemPrompt = buildLoopSystemPrompt(loop);
-      task = buildExecTask(loop);
+      task = buildExecTask(loop, run ? await scopedTrigger(loop, run) : null);
   }
   return {
     runId,
@@ -78,5 +81,22 @@ export async function buildDelivery(loop: Loop, runId: string, runToken: string,
     prevState: loop.state ?? null,
     systemPrompt,
     task,
+  };
+}
+
+async function scopedTrigger(loop: Loop, run: Awaited<ReturnType<typeof store.getRun>>) {
+  if (!run?.scope?.startsWith("task:")) return null;
+  const taskId = run.scope.slice("task:".length);
+  const task = await kernelStore.getObject(undefined, taskId);
+  if (!task || task.kind !== "task" || task.teamId !== loop.teamId) return null;
+  const [mirrors, trigger] = await Promise.all([
+    mirrorsFor(undefined, loop.teamId, task.id),
+    run.triggerEventId ? kernelStore.getEvent(undefined, run.triggerEventId) : undefined,
+  ]);
+  return {
+    reason: run.reason ?? "manual",
+    task: { id: task.id, title: task.title, payload: task.payload },
+    mirrors: mirrors.map((mirror) => ({ kind: mirror.externalKind, coords: mirror.coords })),
+    note: trigger?.note ?? null,
   };
 }

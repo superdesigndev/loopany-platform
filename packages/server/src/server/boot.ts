@@ -22,7 +22,7 @@ import {
   dbWatchdogFailureThreshold,
 } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
-import { RunQueueScheduler, runsV2Enabled } from "../kernel/runQueue.js";
+import { RunQueueScheduler, runsV2Enabled, setProductionRunDispatcher } from "../kernel/runQueue.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
@@ -69,6 +69,7 @@ async function boot(): Promise<Booted> {
   // GC bytes the other half just wrote.
   const blobStore = createBlobStore();
   gateway = new MachineGateway(scheduler, blobStore);
+  setProductionRunDispatcher((loop) => gateway.dispatcher.dispatch(loop));
   const artifactSync = new ArtifactSync(blobStore);
   // CLI verb dispatch (unified /api/machine/cli + legacy /agent-api/loop) over
   // the same core gateway instance.

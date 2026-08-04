@@ -382,14 +382,11 @@ export async function transferWatcher(taskId: string, watcher: string): Promise<
  * Deliberately body-less — the loop already says what it does, so an
  * off-cadence run is a button, not a form (the route says the same). The
  * response is the queue's own answer: `queued` for a fresh run, or
- * `alreadyQueued` when this loop already had one waiting, since the kernel
- * allows exactly one queued run per loop (`runs_one_queued_idx`) and reports
- * the existing one rather than refusing.
+ * `alreadyQueued` when this loop already had one open, since the trigger seam
+ * transactionally joins the existing pending/running run rather than refusing.
  *
- * A paused or retired loop is refused by the SERVER with a teaching refusal,
- * and that is the whole point of not pre-hiding the button: the screen would
- * otherwise have to restate the lifecycle rule, and its copy would drift from
- * the kernel's.
+ * Pause governs cadence, not an explicit fire: a paused loop runs once and
+ * stays paused. A retired kernel loop is still refused by the server.
  */
 export interface RunNowResult {
   queued: boolean

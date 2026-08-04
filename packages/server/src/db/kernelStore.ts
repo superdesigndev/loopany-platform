@@ -20,7 +20,7 @@
  * `setObjectStatus`, which exists solely for `applyTransition` to call. A content
  * write cannot smuggle a state change.
  */
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "./index.js";
 import {
@@ -161,17 +161,18 @@ export type QueueRunOutcome =
    *  caller must fail loudly rather than report a stranger's run as this loop's
    *  own (`runQueue.ts` `queueKernelRun` branches on exactly that difference). */
   | "id-taken"
-  /** The loop already has a queued run (`runs_one_queued_idx`). §6.1 records a
-   *  `clock-skipped` event here rather than stacking a second run. */
+  /** The loop already has an open run. Trigger paths join it rather than
+   *  stacking a second run. */
   | "loop-busy";
 
 /**
- * Insert a QUEUED run, swallowing both conflicts and reporting which one fired.
+ * Insert a run, swallowing an id replay and reporting which condition fired.
  *
  * The distinction matters: a primary-key collision is a REPLAY (harmless, the
- * fire already landed), while the one-queued-run partial unique index firing is
- * the queue-discipline SKIP that must be recorded as its own visible fact —
- * "why did nothing happen at 07:00?" has to be answerable from the timeline.
+ * fire already landed), while an existing open run is the queue-discipline JOIN.
+ * `queueKernelRun` locks the owning loop row before calling this function, so
+ * the lookup and insert are one serialized transaction without relying on the
+ * retired `runs_one_queued_idx`.
  *
  * The legacy NOT NULL columns (`userId`/`machineId`/`phase`/`role`/`ts`) are
  * supplied by the caller: this unit adds the queue columns to the shipping runs
@@ -180,24 +181,49 @@ export type QueueRunOutcome =
  */
 export async function queueRun(
   x: KernelExec | undefined,
-  row: NewRun & { queueState: "queued" },
+  row: NewRun & { queueState: "queued" | null },
 ): Promise<{ run?: Run; outcome: QueueRunOutcome }> {
   const exec = X(x);
+  // Identity is the idempotency floor even after a run finishes: a derived fire
+  // replays forever, rather than being turned into a fresh run merely because no
+  // open row remains.
+  const byId = (await exec.select().from(runs).where(eq(runs.id, row.id!)))[0];
+  if (byId) return { run: byId, outcome: byId.loopId === row.loopId ? "replay" : "id-taken" };
+
+  const open = await openRunForLoop(exec, row.loopId, row.queueState === "queued" ? "kernel" : "prod");
+  if (open) return { run: open, outcome: "loop-busy" };
+
   const out = await exec.insert(runs).values(row).onConflictDoNothing().returning();
   if (out[0]) return { run: out[0], outcome: "queued" };
-  const byId = (await exec.select().from(runs).where(eq(runs.id, row.id!)))[0];
+  const racedById = (await exec.select().from(runs).where(eq(runs.id, row.id!)))[0];
   // A primary-key hit is a REPLAY only if the existing row is this loop's own
   // run. Run ids are short (derived ones are a truncated hash), so an id hit on
   // a different loop is an identity collision — reporting it as a replay would
   // silently skip this loop's scheduled fire and hand back the other loop's run.
-  if (byId) return { run: byId, outcome: byId.loopId === row.loopId ? "replay" : "id-taken" };
-  const queued = (
-    await exec
+  if (racedById) return { run: racedById, outcome: racedById.loopId === row.loopId ? "replay" : "id-taken" };
+  const racedOpen = await openRunForLoop(exec, row.loopId, row.queueState === "queued" ? "kernel" : "prod");
+  if (racedOpen) return { run: racedOpen, outcome: "loop-busy" };
+  throw new Error(`run insert was swallowed but neither id nor open-run holder exists: ${row.id}`);
+}
+
+/** The transactional `alreadyQueued` join rule. Kernel rows stay on their v2
+ * queue lifecycle through S2; production rows use the shipping phase lifecycle. */
+export async function openRunForLoop(
+  x: KernelExec | undefined,
+  loopId: string,
+  world: "kernel" | "prod",
+): Promise<Run | undefined> {
+  const condition = world === "kernel"
+    ? inArray(runs.queueState, ["queued", "claimed"])
+    : and(isNull(runs.queueState), inArray(runs.phase, ["pending", "running"]));
+  return (
+    await X(x)
       .select()
       .from(runs)
-      .where(and(eq(runs.loopId, row.loopId), eq(runs.queueState, "queued")))
+      .where(and(eq(runs.loopId, loopId), condition))
+      .orderBy(asc(runs.ts))
+      .limit(1)
   )[0];
-  return { run: queued, outcome: "loop-busy" };
 }
 
 export async function getRunRow(x: KernelExec | undefined, id: string): Promise<Run | undefined> {

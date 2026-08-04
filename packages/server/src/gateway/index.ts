@@ -60,6 +60,7 @@ import {
 } from "./toon.js";
 import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
 import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
+import { appendProductionRunFinished } from "../kernel/runQueue.js";
 
 const log = logger.child({ mod: "gateway" });
 
@@ -498,6 +499,10 @@ export class MachineGateway {
 
     const deliveries: Delivery[] = [];
     for (const run of await store.pendingRunsForMachine(machineId)) {
+      // Trigger rows are durable events, so they may be queued while this loop
+      // already has an agent working. Never claim the deferred row concurrently:
+      // leave it pending and a later poll claims it after the running run reports.
+      if (await store.hasRunningRun(run.loopId)) continue;
       const loop = await store.getLoop(run.loopId);
       if (!loop) {
         await store.updateRun(run.id, { phase: "error", outcome: "error", error: "loop removed", ts: nowIso() });
@@ -1300,6 +1305,7 @@ export class MachineGateway {
           taskFileSyncedAt: nowIso(),
         });
       }
+      await appendProductionRunFinished(run, "success", nowIso(), run.message);
       await retireLease(runToken);
       log.info({ runId: lease.runId }, "report: enriched a finished run (durationMs/sessionId)");
       return { status: 200, body: { ok: true } };
@@ -1362,6 +1368,7 @@ export class MachineGateway {
         ts: nowIso(),
       });
       // Single-shot: no second late report may re-flip this run.
+      await appendProductionRunFinished(finalized, ok ? "success" : "failure", nowIso(), finalized?.message);
       await retireLease(runToken);
       // Re-capture the end-state snapshot (best-effort), same as the normal path.
       try {
@@ -1449,6 +1456,7 @@ export class MachineGateway {
       progress: null, // live signal done — the full transcript supersedes it
       ts: nowIso(),
     });
+    await appendProductionRunFinished(finalized, ok ? "success" : "failure", nowIso(), finalized?.message);
     await retireLease(runToken);
 
     // Capture the loop's full file set as THIS run's snapshot (Phase 3 diff
