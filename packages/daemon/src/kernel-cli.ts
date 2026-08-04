@@ -589,6 +589,31 @@ function firstUnknownFlag(command: string, flags: Flags): string | undefined {
 function unknownFlagRefusal(command: string, flag: string): string {
   const allowed = flagNames(command);
   const near = nearest(`--${flag}`, allowed);
+  /**
+   * `mirror update --coords` is a NEAR MISS, not a typo, and the difference
+   * matters: "unknown flag, allowed: --note" is true and teaches nothing. The
+   * reason there is no such flag is a property of the system — coords are the
+   * external thing's identity, so a different PR is a different mirror — and
+   * the refusal has to say the property and name the two-step move, exactly as
+   * the server does when the same intent arrives over HTTP.
+   */
+  if (command === "mirror update" && ["coords", "kind", "external-kind", "state", "status"].includes(flag)) {
+    const cache = flag === "state" || flag === "status";
+    return errorEnvelope({
+      message: cache ? `a mirror has no --${flag}` : `a mirror's --${flag} cannot be changed`,
+      code: "VALIDATION_ERROR", wrote: `--${flag}`, expected: "--note", allowed,
+      help: cache
+        ? [
+            "A mirror tells you WHERE to look, never WHAT state it is in — there is no state field, and the schema has nowhere to put one",
+            "Record what you FOUND on the task that owns the work; the pointer stays a pointer, so the next run goes and looks rather than trusting a stale copy",
+          ]
+        : [
+            "Coords and kind are the external thing's IDENTITY: a different PR is a different mirror, not the same row repointed",
+            "Detach this one and attach a new one: `loopany mirror detach <mirror-id> --from <object-id>` then `loopany mirror attach <object-id> --kind <k> --coords <new>`",
+            "Repointing the row would silently rewrite every timeline that already cites it",
+          ],
+    });
+  }
   // `--mine` is exactly what an agent trained on any other task CLI reaches for,
   // and the fix is one substitution the refusal can pre-compute.
   const identityMagic = ["mine", "me", "self"].includes(flag);

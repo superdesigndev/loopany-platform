@@ -1125,6 +1125,120 @@ arm). Forbidding the absence DELETED the machinery. The reasoning lives in
   pool/orphan/unclaimed surface on any screen and every card named its watcher; zero
   console errors, no page-level horizontal scroll.
 
+## Intent, reality, state — landing unit 17 (mirrors, directives, no UI close)
+
+Captain-designed, 2026-08-04. Three changes over one principle: **the human
+expresses intent, agents reconcile reality, state follows.** Each is a rule that
+a later "helpful" commit breaks by softening it, so each is welded rather than
+documented.
+
+### `mirror` — the fourth object kind
+
+A pure POINTER to something outside the system, so a run reading a task can see
+which external items it must go and check. `kernel/mirrors.ts` owns the pure half
+(vocabulary, normalization, coords validation, the law); `kernel/mirrorApi.ts`
+owns the transactions. Read those headers, not a summary here.
+
+- **STATELESSNESS IS ENFORCED BY SCHEMA.** A mirror row has no `payload` (the
+  declared free zone) and no `body` — `objects_mirror_stateless` — so there is
+  physically nowhere for `state: merged` to land. The "cache the status just this
+  once" commit cannot be written, not merely discouraged. Welded at three
+  altitudes and all three are tested: the DDL CHECK (proven by raw SQL that
+  bypasses every application guard), `types.ts` `statelessIssues` (the teaching
+  refusal), and `patchMirror`'s by-name refusal of `state`/`status`/`merged`/… —
+  by NAME, because "unknown key" reads as a spelling problem and this is a
+  modelling one. The mirror's single status `current` is deliberately a
+  singleton for the same reason.
+- **One external thing is ONE mirror.** Id and key both derive from
+  `(team, kind, coords)` (`ids.mirrorObjectId`, `mirrors.mirrorKey`), so a second
+  attach resolves to the existing row through the kernel's ordinary
+  key-idempotency — there is no find-or-create branch. `attachedTo` is a jsonb
+  set on the MIRROR (`objects_mirror_attached_idx`, GIN); attach/detach are
+  ordinary `applyUpdateIn` writes of it, so their events land on the mirror's
+  timeline, and every `show` composes `mirrors[]` by reverse lookup
+  (`mirrorsFor`). A task carries no pointer column and is FOUND BY its mirrors.
+- **Coords are IDENTITY**, on `IMMUTABLE_FIELDS`, refused with the two-step
+  detach-and-attach teaching at the kernel, at `PATCH /api/mirrors/:id`, and
+  locally in the CLI's `unknownFlagRefusal` near-miss branch (a bare "unknown
+  flag --coords" would be true and teach nothing).
+- **A mirror is NOT authored as a file.** `types.ts` `ARTIFACT_KINDS` excludes it
+  and `KIND_KEYS` is keyed on `ArtifactKind`, which is also what keeps it from
+  growing a body. Its two creation doors are the flag one-liner and an inline
+  `mirrors:` block, which is a CONSTRUCTOR ARGUMENT and not a field:
+  create-only, refused by name on the replace path, and never emitted by
+  `serializeKindArtifact` — otherwise a whole-file update would silently detach
+  every mirror the file happened not to mention, and `show --file` would emit a
+  file its own re-upload duplicated.
+
+### Directive — the human speaks without a pending question
+
+`objectApi.leaveDirective` (`POST /api/tasks/:id/directive`, CLI `task tell`)
+writes a human `directive-left` event on the task and queues one run for its
+watcher, scoped to it. Same wire as the answer path, opposite entrance.
+
+- **Its OWN run reason (`directive`), not a subtype of `answered`.** An answer
+  replies to a question the agent framed; a directive arrives unframed and the
+  run's first job is to work out what it implies. A run that could not tell them
+  apart would read an order as a reply to a question it never asked.
+  `runs.reason` is a TS-only drizzle enum, so widening it needed no migration.
+- **`runs.trigger_event_id` is the new column, and it fixed the answered path
+  too.** Both reasons already DERIVED their run id from the human's event, so the
+  pointer existed but was unreadable; storing it lets `claimRun` read the note
+  back and put the person's words in the work order VERBATIM, labelled
+  `directive` or `answer` so an agent can never confuse the two. It is a
+  pointer, never a copy.
+- **A pending question REFUSES it** (`OPEN_QUESTION`, pointing at `answer`): the
+  person already has the floor, an answer is free text so any instruction fits in
+  one, and the run this would queue could not clear the question anyway.
+- It obeys `runs_one_queued_idx` like the verdict does — reports the queued run
+  rather than stacking. Nothing is lost: the directive is on the task's timeline,
+  which that run reads when it claims.
+
+### The UI drops direct close
+
+The close action left the task drawer entirely (`board.ts` has no `canClose`,
+`api.ts` has no `postClose`, and `board.test.ts` asserts both ABSENCES so a
+re-add has to defeat a named test). The reasoning, which the code comments carry
+in full: a human closing a task settles the kernel's record while the world it
+describes carries on unchanged — the PR still open, the branch still there, and
+the loop that would have cleaned them up now looking at a closed task it will
+never act on again.
+
+- What replaces it is `TellBox`, ONE composer in two modes (`board.ts`
+  `tellMode`): it ANSWERS while a question is pending and otherwise leaves a
+  DIRECTIVE. One affordance, because from the person's side it is one write —
+  free text that queues one run for the watcher. The mode lives in `board.ts` so
+  the rule is testable without a DOM.
+- The drawer's surfaces are now the verbatim execution block, **External items**
+  (the attached mirrors: kind, coords as a link when `href` resolves, note — and
+  NO status, because there is none), the timeline, and the composer. `.task-actions`
+  owns its own top margin because two different things can precede it now.
+- `loopany task close` remains, documented in the skill as the emergency hatch
+  for a broken watcher: "when the watcher cannot act, this is the manual exit;
+  expect to reconcile external items yourself."
+
+### Verified end to end on an isolated stack (own port 3177, own data dir/HOME)
+
+Mirror lifecycle through the real CLI: inline front-matter create (two mirrors,
+one transaction), one-liner attach mid-run, `GitHub PR` → `github-pr`
+normalization collapsing onto one row, a second object SHARING that row with the
+note-kept notice, an unknown kind accepted, a known kind's coords refused,
+coords immutability taught, detach + free-retry detach, the three list filters,
+and `mirror kinds`. Directive with a real daemon: the run was claimed, and the
+claim body carried `reason: directive` plus the words verbatim. Both composer
+modes drove from the browser, the answer flipping the composer to directive mode
+with the confirmation outliving the form; zero console errors and no page-level
+horizontal scroll at 1440 or 760.
+
+**Two hazards worth not repeating.** (1) A live daemon EXECUTES what you tell it:
+a directive naming a real PR had a real agent claim it within seconds. Use
+harmless coords for a live directive drill, or read the claim body directly
+(`POST /api/agent/runs/claim`) — that IS the agent-side context, and it proves
+the same thing without spawning anything. (2) pglite is single-writer, so a raw
+schema probe against a stack's data dir must wait until its dev server is
+stopped; opening a second PGlite on a live dir is the corruption the workspace
+fixture note already warns about.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

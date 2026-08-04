@@ -15,7 +15,7 @@ production](#never-production) before you run anything.
 
 ## What the kernel is
 
-Three object kinds, one record:
+Four object kinds, one record:
 
 - **loop** — a standing cadence plus a **charter** (its body: the prompt every run
   receives). A loop is `active`, `paused` or `retired`. It never "completes":
@@ -26,6 +26,10 @@ Three object kinds, one record:
   and a `needs_human` question (which puts it in the human inbox).
 - **doc** — a product, addressed by id and rewritten in place, so everything
   citing it follows the rewrite.
+- **mirror** — a **pointer** to something outside the system (a PR, an issue, a
+  URL), attached to the task/doc/loop that depends on it. **A mirror tells you
+  WHERE to look, never WHAT state it is in** — it has no state field, and the
+  schema has nowhere to put one, so a mirror can never be stale.
 
 Two properties follow from event-sourcing and drive most of the surface:
 
@@ -50,11 +54,12 @@ that header from the environment the daemon set — you can neither type it nor
 forge a different one.
 
 - **Human-only** (refused inside a run): `loop create`, `loop pause|resume|retire`,
-  `loop run-now`, `inbox`, `answer`. Creating a loop mints a standing cadence and
-  a new actor; pausing, retiring and firing off-cadence are operational calls the
-  owner keeps.
+  `loop run-now`, `inbox`, `answer`, `task tell`. Creating a loop mints a standing
+  cadence and a new actor; pausing, retiring and firing off-cadence are operational
+  calls the owner keeps; and `task tell` is a person instructing a loop, so a loop
+  instructing itself would be a loop with no cadence at all.
 - **Agent-only**: `loop evolve`, `loop update` — a run edits its OWN loop.
-- **Both**: `loop list`, `loop show`, and the whole `task` / `doc` family.
+- **Both**: `loop list`, `loop show`, and the whole `task` / `doc` / `mirror` family.
 
 A run that wants a human-only thing **proposes** it:
 
@@ -72,15 +77,16 @@ safe on a verb that writes. Use it; the tables below are a map, not the grammar.
 | loop | `create --file` · `list [--status]` · `show <id> [--file\|--full]` · `evolve <id> --file` · `update <id> --cron --approval` · `pause\|resume\|retire <id> [--note]` · `run-now <id>` |
 | task | `list [--open\|--closed] [--due] [--watcher] [--creator] [--since]` · `show <id>` · `create --file` · `update <id>` · `close <id> --note` |
 | doc | `show <id> [--file\|--full]` · `create --file` · `update <id> --file` |
-| human | `inbox` · `answer <task-id> "…"` |
+| mirror | `attach <object-id> --kind --coords [--note]` · `detach <mirror-id> --from` · `list [--attached-to\|--kind\|--coords-like]` · `kinds` · `show <id>` · `update <id> --note` |
+| human | `inbox` · `answer <task-id> "…"` · `task tell <task-id> "…"` |
 
 Depth lives in the two references beside this file:
 
 - **[references/loops.md](references/loops.md)** — the loop artifact format
   (front matter + charter), `workdir`, cadence, the governance gate, and
   **run-now + paused semantics**. Read it before creating or editing a loop.
-- **[references/work.md](references/work.md)** — tasks, docs, the inbox and
-  `answer`, and the run's own working rhythm.
+- **[references/work.md](references/work.md)** — tasks, docs, **mirrors**, the
+  inbox, `answer` and `task tell`, and the run's own working rhythm.
 
 Output is TOON on every verb: `ok:` / typed lists / `help[]` on success,
 `error:` + `code:` + `wrote:` / `expected:` + `help[]` on a refusal. **Read the

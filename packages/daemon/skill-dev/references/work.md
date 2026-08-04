@@ -80,6 +80,82 @@ loopany task close task-7f3a91 --note "error rate back to baseline; no action ne
 - **There is no release.** `--watcher null` is refused: a task always names the
   loop that acts next, so the only watcher write is a transfer to another loop.
 
+## Mirrors — what a task depends on outside the system
+
+A **mirror** is a pointer to an external thing: a PR, an issue, a URL, a Search
+Console property. It exists so that the next run reading a task can see which
+external items it must go and check.
+
+> **A mirror tells you WHERE to look, never WHAT state it is in.**
+
+That is not advice. A mirror row has no `payload` and no `body`, so there is
+physically nowhere to write `state: merged` — the DDL refuses it. A mirror
+therefore can never be stale, and there is nothing to "sync". Go and look at the
+external thing; record what you **found** on the task that owns the work.
+
+Fields: `kind` (what sort of external thing), `coords` (its immutable identity),
+a `note` (a human label), and the objects it is attached to.
+
+### Attaching one
+
+Two doors, and which one you use depends only on whether the reference already
+existed.
+
+**The ref is born from your own work** — the common case, so it is a one-liner
+with no file:
+
+```sh
+loopany mirror attach task-7f3a91 --kind github-pr \
+  --coords superdesigndev/loopany-platform#57 --note "seed article PR"
+```
+
+**The ref predates the object** — declare it in the front matter, and the object
+and its mirrors are created in ONE transaction:
+
+```md
+---
+title: Seed article bet
+watcher: loop-4c1d77
+mirrors:
+  - kind: github-pr
+    coords: superdesigndev/loopany-platform#57
+    note: seed article PR
+  - kind: url
+    coords: https://example.com/brief
+---
+```
+
+`mirrors:` is **create-only**. A mirror is its own object and the attachment
+lives on the mirror side, so a whole-file update cannot rewrite the set — a file
+that merely omitted one would silently detach it. `show --file` never emits the
+block, which is why the round trip stays clean.
+
+### Reading and moving them
+
+```sh
+loopany mirror list --attached-to task-7f3a91      # what this task depends on
+loopany mirror list --kind github-pr --coords-like superdesigndev/
+loopany mirror kinds                                # the vocabulary in use
+loopany mirror detach mirror-3f9a21c04b7e --from task-7f3a91
+```
+
+`task show` / `doc show` / `loop show` already print the mirrors attached to that
+object, so you rarely need `mirror list` inside a run.
+
+- **Kinds are free-form**, lowercased and kebabbed on write, so `GitHub PR`,
+  `github_pr` and `github-pr` are one kind. The canonical ones are **`github-pr`,
+  `github-issue`, `url`, `gsc-property`**; a KNOWN kind also has its coords shape
+  checked, and an unknown one is accepted as a plain string. Invent one when none
+  fits — `mirror kinds` shows the next reader what this team already uses.
+- **One external thing is ONE mirror.** Attaching the same coords from a second
+  object shares the row rather than minting a twin, so `--note` set by the first
+  attach is the label everyone sees (the response says so when yours differed).
+- **Coords are IDENTITY and are never changed.** A different PR is a different
+  mirror: detach this one and attach a new one. Only `--note` is editable.
+- `--from` on detach is required: a mirror can hang on several objects, and
+  guessing would remove somebody else's pointer. Detaching the last attachment is
+  fine — nothing here is ever deleted.
+
 ## Docs
 
 A doc is a product: created from a file, rewritten in place, keeping its id so
@@ -119,19 +195,67 @@ answer; the kernel parses nothing. A reason is what lets the loop converge next
 time — "no" alone teaches it nothing.
 
 Answering **wakes the watcher**: one run is queued for that loop with the task in
-scope, and it reads the answer with `task show`. If a run was already queued for
-that loop, the answer **joins** it — one run, not two, and it pulls both answered
-tasks when it claims. Every task names a watcher, so every answer reaches a loop.
+scope, and your reply rides in its work order **verbatim**. If a run was already
+queued for that loop, the answer **joins** it — one run, not two, and it pulls
+both answered tasks when it claims. Every task names a watcher, so every answer
+reaches a loop.
+
+## `task tell` — the other direction
+
+The inbox is the loop asking **you**. `task tell` is **you speaking first**: an
+instruction on any open task, without waiting to be asked.
+
+```sh
+loopany task tell task-7f3a91 "Drop this bet — close the PR, delete the branch, then close the task."
+```
+
+It writes a human event on the task and queues one run for its watcher, exactly
+like an answer does, with your words verbatim in the work order. Two things make
+it a different verb rather than a flag on `answer`:
+
+- **An answer replies to a question the loop framed; a directive arrives
+  unframed.** The run is told which it is (`reason: directive`), because its first
+  job is to work out what the instruction implies, not to slot a reply into a
+  decision it already set up.
+- **It is refused while a question is pending.** You already have the floor
+  there, and an answer is free text — any instruction fits inside one.
+
+**A directive is executed against REALITY first and this kernel's records last.**
+"Drop this bet" means close the PR, clean up the branch, and *then* close the
+task. Settling the record while the world it describes carries on unchanged is
+the one outcome that is always wrong.
+
+One queued run per loop still holds: a directive on a loop that already has a run
+queued reports that run instead of stacking a twin. Nothing is lost — the
+directive is on the task's timeline, which the queued run reads when it claims.
+
+### Who closes a task
+
+**Its watcher does.** That is the expected end of every task, either from the
+loop's own workflow logic or in response to a directive. The web UI has no close
+button for exactly this reason.
+
+`loopany task close <id> --note "…"` still exists and is the **emergency hatch
+for a broken watcher**: when the loop cannot act, this is the manual exit — and
+you should expect to reconcile the external items yourself, because nothing else
+will.
 
 ## The rhythm of a run
 
 1. Read your worklist: `task list --watcher <your-loop-id> --due`. A run woken by
-   a due task is told which one in its work order — start there.
-2. Do the work in the loop's bound `workdir`.
-3. Register products as they exist (`doc create`).
-4. Close what you verified, with a real note. Push out what is not ready
-   (`task update <id> --follow-up +3d`) — that date is what wakes you for it
-   again, so a task with no `follow_up` waits for your cadence instead.
+   a due task, an answer or a **directive** is told which one in its work order —
+   start there. If a human's words are in your work order, **do what they say,
+   against the outside world first**; the kernel's records are the last step.
+2. Do the work in the loop's bound `workdir`. `task show` lists the **external
+   items** the task depends on — go and check them; they are pointers, and none
+   of them tells you what state the external thing is in.
+3. Register products as they exist (`doc create`), and attach a mirror for
+   anything external you create or start depending on (`mirror attach`).
+4. Close what you verified, with a real note — **you are the one who closes your
+   tasks**, and closing means the external world is settled too, not just the
+   record. Push out what is not ready (`task update <id> --follow-up +3d`) — that
+   date is what wakes you for it again, so a task with no `follow_up` waits for
+   your cadence instead.
 5. Need a decision? `task update <id> --needs-human "…"` — then **stop on that
    task**. Your job on it is done until a human replies.
 6. Learned something the charter should carry? `loop evolve <your-loop-id>

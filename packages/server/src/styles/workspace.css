@@ -311,8 +311,13 @@
   .tasks-view-meta .doc-toggle { margin-left: 0; }
   .artifact-badges { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; }
 
-  /* The drawer's action row — the ONLY write surface on this screen. */
-  .task-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  /* The drawer's action row — the ONLY write surface on this screen.
+     The top margin is on the ROW rather than on what precedes it, because two
+     different things now can: the composer, and (after a send) the confirmation
+     line, which carries no bottom margin of its own. Adjacent block margins
+     collapse, so this reads as a uniform 12px boundary in both orderings
+     instead of a gap that disappears the moment somebody answers. */
+  .task-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
   .task-actions .field-select { min-height: 30px; padding: 3px 8px; font-size: .75rem; }
   .task-actions .verdict-button, .task-actions .attn-button { min-height: 30px; padding: 0 12px; font-size: .75rem; }
   .task-actions + .ws-note-line { margin-top: 8px; }
