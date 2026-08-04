@@ -2,10 +2,20 @@ import { safeParseArtifact, serializeArtifact, type ArtifactDocument } from "../
 import type { ObjectKind } from "./types.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 
+/**
+ * The closed top-level key set per kind.
+ *
+ * `key` is on the LOOP set even though API spec §1.16 writes the create key set
+ * as `title, cron, payload`: the same paragraph also promises "the same
+ * key-idempotency rule as tasks", and that rule is unreachable without a `key`
+ * to be idempotent on. Admitting it also makes `loop show --file` round-trip —
+ * `serializeKindArtifact` emits `key:` for every kind, so a keyed loop would
+ * otherwise serialize a file its own parser refuses.
+ */
 export const KIND_KEYS = {
   task: ["title", "key", "follow_up", "watcher", "needs_human", "payload"],
   doc: ["title", "key", "format", "payload"],
-  loop: ["title", "cron", "payload"],
+  loop: ["title", "key", "cron", "payload"],
 } as const satisfies Record<ObjectKind, readonly string[]>;
 
 /** The doc body formats the kernel serves (spec §1.9). Closed, two values. */

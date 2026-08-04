@@ -636,6 +636,55 @@ stylesheet (`styles/workspace.css`, loaded `?url`, every rule scoped under
   dedicated run history/detail screen and `/api/views/run(s)`. Runs surface as strips on
   the loop page (`recentRuns`) and the task page (runs that touched it).
 
+## Rewrite loop CRUD (`objectApi.listLoops`/`loopLifecycle` + 6 CLI verbs) — landing unit 6
+
+Loop CRUD retained on the rewrite surface, so the rewrite CLI is not create-blind. The
+CLI is now **18 verbs**; the added six are `loop create | list | show | pause | resume |
+retire`. Contracts: API spec §1.16 (which specifies all of them) — note **CLI spec §1/§10
+says "there is no `loop list`"**, an absence the captain has since overridden, so that
+row of §10 is stale rather than a rule this unit broke.
+
+- **The human/agent split is the whole design.** `loop create` and the three lifecycle
+  verbs are HUMAN-ONLY: creating a loop mints a standing cadence and a new actor, and
+  pausing/retiring is the operational call the owner keeps. Guarded at two altitudes —
+  the route's `resolveApiContext(request, "human")` and a `mode !== "human"` check inside
+  `createFromArtifact`/`loopLifecycle` — and the CLI belts-and-braces it by adding them to
+  `HUMAN_COMMANDS`, so the device token is never attached. `loop list`/`loop show` are
+  DUAL, like `task list`: a team-scoped read an agent legitimately needs to resolve the
+  loop id it is about to name as a `--watcher`.
+- **`loop create` binds no machine, and that is the design answering, not an omission.**
+  The kernel `objects` row has no machine column and `runQueue.claimOnce` selects queued
+  runs by `objects.teamId`, so any machine of the team claims. A loop with `cron:` is
+  armed at birth (`createObjectIn` sets `next_fire`); without one it never fires on its
+  own, and the create render says which of the two was born.
+- **`key` is on `KIND_KEYS.loop`** (`artifactSeam.ts`) even though API spec §1.16 writes
+  the loop key set as `title, cron, payload`: the same paragraph promises "the same
+  key-idempotency rule as tasks", which is unreachable without a key, and
+  `serializeKindArtifact` emits `key:` for every kind — so without it `loop show --file`
+  produced a file its own parser refused. The round trip is verified end to end.
+- **`retire` IS the D in CRUD, and the CLI says so.** No hard delete exists anywhere on
+  this surface (the kernel is event-sourced). `NEAR_MISS` in `kernel-cli.ts` turns
+  `loop delete|remove|rm|archive|close`, `task delete` and `doc delete` into a teaching
+  refusal that names the property, not just the spelling. Retirement is terminal:
+  `loopLifecycle` refuses a move out of `retired` by name (`RETIRED`, 409), and
+  `replaceFromArtifact`/`governLoop` already froze the charter.
+- **Repeating a lifecycle verb is a SUCCESS with `changed:false`**, the same ruling
+  `task close` carries — a retry after a dropped connection must be free. Only the
+  out-of-`retired` moves refuse.
+- **`--status` takes a VALUE, unlike `task list`'s boolean pair**: a loop has three
+  states, so no two-flag form spans them honestly. Absent ⇒ the whole roster, retired
+  included.
+- **`refusalResponse` now floors an unmapped code at 400.** Several call sites widen a
+  kernel result code into the refusal envelope with `refusal(result.code as never)`; a
+  code with no `REFUSAL_STATUS` row resolved to `undefined`, which `Response.json`
+  renders as **200** — a refusal reaching the CLI as a success at exit 0. Pure hardening
+  (no shipped code path reached it), but do not remove the floor.
+- **Still NOT built, deliberately** (out of unit 6's enumerated scope, both spec'd at API
+  spec §1.16 if a later unit wants them): `PATCH /api/loops/:id`, the human's whole-file
+  loop edit — so a person who typo'd a charter must fix it through a run's `loop evolve`
+  or the web UI, since evolve is agent-only; and `POST /api/loops/:id/run-now`, the manual
+  fire. Neither is a CLI verb today.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

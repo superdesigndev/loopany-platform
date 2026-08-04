@@ -275,6 +275,159 @@ describe("loop evolve is the free zone, bounded by ownership and by cadence", ()
   });
 });
 
+// ------------------------------------------------------------ loop CRUD (u6)
+
+describe("loop create is a human entrance, armed at birth", () => {
+  const file = (body: string, head = 'cron: "0 7 * * *"\nkey: housekeeper') => `---\ntitle: Housekeeper\n${head}\n---\n\n${body}\n`;
+
+  it("creates the loop through the kernel, armed, with human provenance on its event", async () => {
+    const created = ok(await api.createFromArtifact("loop", file("You are the Housekeeper."), human, T1));
+    expect(created.created).toBe(true);
+    const loop = created.loop as Record<string, unknown>;
+    expect(loop).toMatchObject({ kind: "loop", status: "active", cron: "0 7 * * *", key: "housekeeper" });
+    // Armed at birth: the cursor is what makes a cadence live, so a created loop
+    // with a cron must already carry one, strictly in the future.
+    expect(typeof loop.nextFire).toBe("string");
+    expect(Date.parse(loop.nextFire as string)).toBeGreaterThan(T1.getTime());
+    const history = await store.listObjectEvents(undefined, loop.id as string);
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ kind: "object-created", entrance: "human", actorId: "u-owner" });
+  });
+
+  it("creates an unarmed loop when the file carries no cadence", async () => {
+    const created = ok(await api.createFromArtifact("loop", file("On demand only.", "key: adhoc"), human, T1));
+    expect(created.loop).toMatchObject({ status: "active", cron: null, nextFire: null });
+  });
+
+  it("refuses a run — creating a loop is governance, and the refusal names the proposal path", async () => {
+    const mine = await makeLoop();
+    const refused = await api.createFromArtifact("loop", file("mine now", "key: sneaky"), agentIn(mine.id), T1);
+    expect(code(refused)).toBe("NOT_HUMAN");
+    expect(!refused.ok && refused.error.hint).toContain("--needs-human");
+    expect(ok(await api.listLoops(human, new URLSearchParams())).loops).toHaveLength(1);
+  });
+
+  it("refuses an unreadable cron with teaching, and writes nothing", async () => {
+    const refused = await api.createFromArtifact("loop", file("hourly-ish", 'cron: "every hour"\nkey: bad'), human, T1);
+    expect(code(refused)).toBe("BAD_CRON");
+    expect(!refused.ok && refused.error.issues[0]).toMatchObject({ path: "cron", got: "every hour" });
+    expect(ok(await api.listLoops(human, new URLSearchParams())).loops).toHaveLength(0);
+  });
+
+  it("is idempotent by key and never silently applies the differing file", async () => {
+    const first = ok(await api.createFromArtifact("loop", file("v1"), human, T1));
+    const again = ok(await api.createFromArtifact("loop", file("v2"), human, T1));
+    expect(again.created).toBe(false);
+    expect((again.loop as { id: string }).id).toBe((first.loop as { id: string }).id);
+    expect(again.contentDiffers).toBe(true);
+    expect(again.differingFields).toContain("body");
+  });
+});
+
+describe("loop list and loop show are the read half", () => {
+  it("returns the whole roster by default and filters by status", async () => {
+    const active = await makeLoop("Housekeeper");
+    const retired = await makeLoop("Reddit Outreach");
+    await kernel.applyTransition({ objectId: retired.id, transition: "retire", actor: human.actor, now: T1.toISOString() });
+    expect(ok(await api.listLoops(human, new URLSearchParams())).loops).toHaveLength(2);
+    const live = ok(await api.listLoops(human, new URLSearchParams("status=active"))).loops as { id: string }[];
+    expect(live.map((l) => l.id)).toEqual([active.id]);
+    const gone = ok(await api.listLoops(human, new URLSearchParams("status=retired"))).loops as { id: string }[];
+    expect(gone.map((l) => l.id)).toEqual([retired.id]);
+  });
+
+  it("refuses a status a loop cannot hold, and an unknown filter, by name", async () => {
+    const badStatus = await api.listLoops(human, new URLSearchParams("status=closed"));
+    expect(code(badStatus)).toBe("UNKNOWN_FILTER");
+    expect(!badStatus.ok && badStatus.error.issues[0]).toMatchObject({ got: "closed", expected: "active|paused|retired" });
+    expect(code(await api.listLoops(human, new URLSearchParams("watcher=loop-x")))).toBe("UNKNOWN_FILTER");
+  });
+
+  it("is a team-scoped read an agent may make", async () => {
+    const loop = await makeLoop();
+    const seen = ok(await api.listLoops(agentIn(loop.id), new URLSearchParams()));
+    expect((seen.loops as { id: string }[]).map((l) => l.id)).toEqual([loop.id]);
+    expect(seen.viewerLoop).toBe(loop.id);
+  });
+
+  it("shows the loop with its seq-ordered event timeline", async () => {
+    const loop = await makeLoop();
+    await api.loopLifecycle(loop.id, "pause", { note: "muted for the migration" }, human, T1);
+    const shown = ok(await api.showObject("loop", loop.id, human));
+    expect(shown.loop).toMatchObject({ id: loop.id, status: "paused", cron: "0 7 * * *" });
+    const timeline = shown.events as { seq: number; kind: string }[];
+    expect(timeline.map((e) => e.kind)).toEqual(["object-created", "loop-paused"]);
+    expect(timeline[1]!.seq).toBeGreaterThan(timeline[0]!.seq);
+  });
+});
+
+describe("the loop lifecycle is the owner's, idempotent, and terminal at retire", () => {
+  it("pauses by disarming the cursor, and a repeat is a success that changed nothing", async () => {
+    const loop = await makeLoop();
+    expect(loop.nextFire).not.toBeNull();
+    const paused = ok(await api.loopLifecycle(loop.id, "pause", { note: "muted" }, human, T1));
+    expect(paused.changed).toBe(true);
+    expect(paused.loop).toMatchObject({ status: "paused", nextFire: null });
+    expect(paused.diff).toMatchObject({ status: { old: "active", new: "paused" } });
+    const event = await store.getEvent(undefined, paused.event as string);
+    expect(event).toMatchObject({ kind: "loop-paused", transition: "pause", entrance: "human", note: "muted" });
+    const again = ok(await api.loopLifecycle(loop.id, "pause", undefined, human, T1));
+    expect(again.changed).toBe(false);
+    expect(again.event).toBeNull();
+  });
+
+  it("resumes by re-arming to the NEXT occurrence — a long pause owes one fire, not a backlog", async () => {
+    const loop = await makeLoop();
+    await api.loopLifecycle(loop.id, "pause", undefined, human, T1);
+    const late = new Date("2026-08-19T02:00:00.000Z");
+    const resumed = ok(await api.loopLifecycle(loop.id, "resume", undefined, human, late));
+    expect(resumed.loop).toMatchObject({ status: "active" });
+    const nextFire = (resumed.loop as { nextFire: string }).nextFire;
+    expect(Date.parse(nextFire)).toBeGreaterThan(late.getTime());
+    // One occurrence ahead, not sixteen days of catch-up.
+    expect(Date.parse(nextFire) - late.getTime()).toBeLessThan(25 * 3_600_000);
+  });
+
+  it("retires terminally: the charter freezes, cadence is refused, and there is no way back", async () => {
+    const loop = await makeLoop();
+    const retired = ok(await api.loopLifecycle(loop.id, "retire", { note: "the experiment is over" }, human, T1));
+    expect(retired.loop).toMatchObject({ status: "retired", nextFire: null });
+
+    const charter = `---\ntitle: Housekeeper\ncron: "0 7 * * *"\n---\n\nstill mine\n`;
+    expect(code(await api.replaceFromArtifact("loop", loop.id, charter, agentIn(loop.id), T1, "charter-evolved"))).toBe("RETIRED");
+    expect(code(await api.governLoop(loop.id, { cron: "0 * * * *", approval: "ev-x" }, agentIn(loop.id), T1))).toBe("RETIRED");
+    for (const verb of ["resume", "pause"] as const) {
+      const refused = await api.loopLifecycle(loop.id, verb, undefined, human, T1);
+      expect(code(refused), verb).toBe("RETIRED");
+      expect(!refused.ok && refused.error.hint).toContain("no un-retire");
+    }
+    // Retire IS the delete, so the record survives it: still listed, still readable.
+    expect(ok(await api.loopLifecycle(loop.id, "retire", undefined, human, T1)).changed).toBe(false);
+    expect(ok(await api.listLoops(human, new URLSearchParams("status=retired"))).loops).toHaveLength(1);
+    expect(ok(await api.showObject("loop", loop.id, human)).loop).toMatchObject({ id: loop.id, status: "retired" });
+  });
+
+  it("refuses a run — the lifecycle is not a loop's to drive, not even its own", async () => {
+    const loop = await makeLoop();
+    for (const verb of ["pause", "resume", "retire"] as const) {
+      const refused = await api.loopLifecycle(loop.id, verb, undefined, agentIn(loop.id), T1);
+      expect(code(refused), verb).toBe("NOT_HUMAN");
+      expect(!refused.ok && refused.error.hint).toContain("--needs-human");
+    }
+    expect((await store.getObject(undefined, loop.id))!.status).toBe("active");
+  });
+
+  it("guards the optional body: only a note, and it must be text", async () => {
+    const loop = await makeLoop();
+    expect(code(await api.loopLifecycle(loop.id, "pause", { reason: "x" }, human, T1))).toBe("UNKNOWN_KEY");
+    expect(code(await api.loopLifecycle(loop.id, "pause", { note: 7 }, human, T1))).toBe("SCHEMA_VIOLATION");
+    expect(code(await api.loopLifecycle(loop.id, "pause", "just do it", human, T1))).toBe("INVALID_BODY");
+    expect(code(await api.loopLifecycle("loop-000000", "pause", undefined, human, T1))).toBe("NOT_FOUND");
+    const task = await makeTask();
+    expect(code(await api.loopLifecycle(task.id, "pause", undefined, human, T1))).toBe("WRONG_KIND");
+  });
+});
+
 // ----------------------------------------------------------- governance zone
 
 describe("governance refuses before it authorizes", () => {

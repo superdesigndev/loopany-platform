@@ -11,7 +11,7 @@ import { queueKernelRun } from "./runQueue.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 import { nextOccurrenceAfter } from "./schedule.js";
 import type { ApiContext } from "./apiAuth.js";
-import type { EventDiff, ObjectKind } from "./types.js";
+import { LOOP_STATUSES, type EventDiff, type ObjectKind } from "./types.js";
 
 export type ApiResult<T> = { ok: true; status?: number; value: T } | { ok: false; error: ApiRefusal };
 
@@ -26,6 +26,22 @@ export async function createFromArtifact(kind: ObjectKind, raw: string, context:
   const parsed = parseKindArtifact(kind, raw, now);
   if (!parsed.ok) return { ok: false, error: parsed.error };
   const p = parsed.value;
+  if (kind === "loop") {
+    // Creating a loop is GOVERNANCE (design §4): it mints a standing cadence and
+    // a new actor in the system, so it is the owner's act. Double-covered with the
+    // route's own `human` requirement — either alone is sufficient, both together
+    // leave no seam, and the refusal names the proposal path rather than a wall.
+    if (context.mode !== "human") {
+      return { ok: false, error: notHuman(context, "creating a loop is governance and is the owner's act", "propose it: `loopany task create --file <path> --needs-human \"create a loop that …\" --watcher <your-loop-id>`") };
+    }
+    // `createObjectIn` arms `next_fire` by CALLING croner, which throws on an
+    // unreadable expression. Validated here so a typo is a teaching 400 rather
+    // than a 500 from inside the transaction.
+    if (p.cron) {
+      try { nextOccurrenceAfter(p.cron, null, now); }
+      catch { return { ok: false, error: refusal("BAD_CRON", `cron ${JSON.stringify(p.cron)} is not a cron expression this server can read`, [{ path: "cron", message: "unreadable cron expression", got: p.cron, expected: "0 7 * * *" }], "five fields: minute hour day-of-month month day-of-week; omit cron entirely for a loop that only ever runs on demand") }; }
+    }
+  }
   const result = await createObjectInTransaction({ kind, p, context, now });
   if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
   const differingFields = result.created ? [] : expressedDiffs(result.object, p, kind);
@@ -190,6 +206,103 @@ export async function governLoop(id: string, body: unknown, context: ApiContext,
   });
 }
 
+// ---------------------------------------------------------------- loop CRUD
+
+/**
+ * `GET /api/loops` — the loop roster.
+ *
+ * DUAL, like `task list`: a read, team-scoped, never ownership-checked. An agent
+ * legitimately needs it to resolve the loop id it is about to name as a
+ * `--watcher`, and `task list` already exposes those ids, so withholding the
+ * roster would buy nothing.
+ *
+ * ONE filter, `status`, and it takes a VALUE rather than the boolean pair
+ * `task list` uses: a loop has THREE states, so no two-flag form spans them
+ * honestly. Absent ⇒ the whole roster, retired included — a team's loop count is
+ * small by construction, so the useful default is "show me everything I own".
+ */
+export async function listLoops(context: ApiContext, query: URLSearchParams): Promise<ApiResult<Record<string, unknown>>> {
+  const allowed = new Set(["status", "limit", "cursor"]);
+  const unknown = [...query.keys()].find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, error: refusal("UNKNOWN_FILTER", `unknown loop filter "${unknown}"`, [{ path: unknown, message: "unknown filter", got: unknown }], `accepted filters: ${[...allowed].join(", ")}`) };
+  const status = query.get("status");
+  if (status && !(LOOP_STATUSES as readonly string[]).includes(status)) {
+    return { ok: false, error: refusal("UNKNOWN_FILTER", `"${status}" is not a loop status`, [{ path: "status", message: "unknown status", got: status, expected: LOOP_STATUSES.join("|") }], "a loop is active, paused or retired — loops never close, and retirement is the terminal state") };
+  }
+  const limit = Number(query.get("limit") ?? 50);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) return { ok: false, error: refusal("UNKNOWN_FILTER", "limit must be from 1 to 200") };
+  const conds = [eq(objects.teamId, context.teamId), eq(objects.kind, "loop")];
+  if (status) conds.push(eq(objects.status, status));
+  const cursor = query.get("cursor"); if (cursor) conds.push(gt(objects.id, cursor));
+  const rows = await db.select().from(objects).where(and(...conds)).orderBy(asc(objects.id)).limit(limit + 1);
+  const page = rows.slice(0, limit);
+  const truncated = rows.length > limit;
+  const total = truncated ? Number((await db.select({ n: count() }).from(objects).where(and(...conds)))[0]?.n ?? page.length) : page.length;
+  return { ok: true, value: { loops: page.map(loopListShape), total, nextCursor: truncated ? page.at(-1)?.id ?? null : null, truncated, viewerLoop: context.run?.loopId ?? null } };
+}
+
+/** The three operational verbs, as data: the CLI path segment → the kernel
+ *  transition name → the status it lands on (`kernel/types.ts` TRANSITIONS is
+ *  the authority for the from-states). `auto-pause` is deliberately absent: the
+ *  circuit breaker is the system's, never a person's, and keeping it off this
+ *  map is what makes the timeline's `pause` vs `auto-pause` distinction real. */
+export const LOOP_LIFECYCLE = { pause: "paused", resume: "active", retire: "retired" } as const;
+export type LoopLifecycleVerb = keyof typeof LOOP_LIFECYCLE;
+
+export function isLoopLifecycleVerb(value: string): value is LoopLifecycleVerb {
+  return Object.hasOwn(LOOP_LIFECYCLE, value);
+}
+
+/**
+ * `POST /api/loops/:id/{pause,resume,retire}` — the operational lifecycle
+ * (API spec §1.16, design §4 `active ⇄ paused → retired`).
+ *
+ * HUMAN ONLY. A run may evolve its own charter (the free zone) and may propose
+ * anything else, but it never pauses or retires itself: that is the operational
+ * decision the owner keeps.
+ *
+ * There is no hard delete anywhere in this surface, and that is not an omission:
+ * the kernel is event-sourced, so `retire` IS the D in CRUD — terminal, charter
+ * frozen (`replaceFromArtifact`/`governLoop` both refuse a retired loop), cadence
+ * disarmed by the transition itself, and the whole record still readable.
+ *
+ * Repeating a verb that already landed is a SUCCESS with `changed: false`, the
+ * same ruling `task close` carries: a retry after a dropped connection must be
+ * free. Only a move OUT of `retired` is refused, and it is refused by name
+ * (`RETIRED`) rather than as a bare illegal-from-state.
+ */
+export async function loopLifecycle(id: string, verb: LoopLifecycleVerb, body: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
+  if (context.mode !== "human") {
+    return { ok: false, error: notHuman(context, `a loop's lifecycle is the owner's — a run does not ${verb} a loop`, `propose it: \`loopany task create --file <path> --needs-human "${verb} this loop because …" --watcher ${context.run?.loopId ?? "<your-loop-id>"}\``) };
+  }
+  let note: string | null = null;
+  if (body !== undefined && body !== null) {
+    if (typeof body !== "object" || Array.isArray(body)) return { ok: false, error: refusal("INVALID_BODY", `loop ${verb} takes an optional JSON object`, [], 'the only field is note: `{"note": "…"}`, or send no body at all') };
+    const rec = body as Record<string, unknown>;
+    const unknown = Object.keys(rec).find((key) => key !== "note");
+    if (unknown) return { ok: false, error: unknownJsonKey(`loop ${verb}`, unknown, ["note"]) };
+    if (rec.note !== undefined && rec.note !== null) {
+      if (typeof rec.note !== "string" || !rec.note.trim()) return { ok: false, error: refusal("SCHEMA_VIOLATION", "note must be non-empty text or absent", [{ path: "note", message: "must be non-empty text or absent" }]) };
+      note = rec.note;
+    }
+  }
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as store.KernelExec;
+    const before = await store.getObjectForUpdate(tx, id);
+    const guard = scopedKindGuard(before, "loop", context.teamId); if (guard) return guard;
+    const target = LOOP_LIFECYCLE[verb];
+    if (before!.status === "retired" && target !== "retired") {
+      return { ok: false, error: refusal("RETIRED", `${id} is retired and cannot be ${verb}d`, [{ path: "status", message: "retirement is terminal", got: "retired", expected: "active|paused" }], "there is no un-retire: the charter is frozen and the cadence is gone for good — create a new loop, or read this one's record, which is kept") };
+    }
+    if (before!.status === target) {
+      return { ok: true, value: { changed: false, loop: objectShape(before!), event: null, diff: {} } };
+    }
+    const result = await applyTransitionIn(tx, { objectId: id, transition: verb, actor: context.actor, now: now.toISOString(), note });
+    if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
+    return { ok: true, value: { changed: true, loop: objectShape(result.object), event: result.event.id, diff: result.event.diff ?? {} } };
+  });
+}
+
 /** The orphan floor's age: open + unwatched + no follow-up + older than this
  *  reaches the inbox, so nothing can lie down silently forever (design §6). */
 export const ORPHAN_AGE_MS = 48 * 3_600_000;
@@ -305,6 +418,7 @@ function notHuman(context: ApiContext, message = "this question is waiting for a
 function notYourLoop(context: ApiContext, id: string): ApiRefusal { return refusal("NOT_YOUR_LOOP", `${context.run?.id ?? "this run"} belongs to ${context.run?.loopId ?? "another loop"} and may not write ${id}`, [{ path: "id", message: "must be the run's own loop", got: id, expected: context.run?.loopId ?? "" }], "a run evolves and governs only its own loop") }
 function mergePayload(before: Record<string, unknown> | null, patch: Record<string, unknown>) { const out = { ...(before ?? {}) }; for (const [key, value] of Object.entries(patch)) if (value === null) delete out[key]; else out[key] = value; return out; }
 export function taskListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, key: row.key, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
+export function loopListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire, key: row.key, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
 export function eventShape(row: KernelEvent) { return { id: row.id, seq: row.seq, objectId: row.objectId, kind: row.kind, entrance: row.entrance, actor: row.actorId, transition: row.transition, diff: row.diff, note: row.note, ts: row.ts }; }
 function lookbackDate(value: string, now: Date): string | undefined { const m = /^(\d+)(h|d)$/.exec(value); if (m) return new Date(now.getTime() - Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000)).toISOString(); return parseDate(value, now); }
 function reasonRank(reasons: string[]) { return reasons.includes("question") ? 0 : reasons.includes("due-unwatched") ? 1 : 2; }

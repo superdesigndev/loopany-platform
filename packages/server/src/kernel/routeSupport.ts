@@ -21,6 +21,17 @@ export async function jsonBody(request: Request): Promise<{ ok: true; value: unk
   catch { return { ok: false, response: refusalResponse(refusal("INVALID_BODY", "request body is not valid JSON")) }; }
 }
 
+/** `jsonBody` for an endpoint whose body is OPTIONAL (the loop lifecycle verbs
+ *  take `{note?}` or nothing at all). An empty body resolves to `undefined`,
+ *  which the handler reads as "no note" — never as malformed JSON. */
+export async function optionalJsonBody(request: Request): Promise<{ ok: true; value: unknown } | { ok: false; response: Response }> {
+  const text = await request.text();
+  if (!text.trim()) return { ok: true, value: undefined };
+  if (Buffer.byteLength(text, "utf8") > 512 * 1024) return { ok: false, response: refusalResponse(refusal("TOO_LARGE", "JSON body exceeds the 512 KB limit")) };
+  try { return { ok: true, value: JSON.parse(text) }; }
+  catch { return { ok: false, response: refusalResponse(refusal("INVALID_BODY", "request body is not valid JSON")) }; }
+}
+
 export function authFailure(error: ApiRefusal): Response {
   return refusalResponse(error, { status: REFUSAL_STATUS[error.code], ...(error.code === "RATE_LIMITED" ? { headers: { "Retry-After": "1" } } : {}) });
 }
