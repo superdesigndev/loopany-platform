@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { fetchInbox, postVerdict, ViewError, type InboxItem } from './api'
+import { isDeletedLoop, loopLabel } from './loopLabel'
 import { ExecutionBlock, Markdown } from './Render'
 import {
   ArtifactRow, BigState, CountStrip, Empty, Glyph, Loading, reasonLabel, reasonTone, Refusal, Section, Timeline, ViewHeader, When,
@@ -120,7 +121,7 @@ function InboxItemRow({
         title={item.task.title ?? item.task.id}
         source={
           <>
-            {item.creator ? (item.creator.title ?? item.creator.id) : 'you'}
+            {item.creator ? loopLabel(item.creator) : 'you'}
             {item.askedByRun ? ` · ${item.askedByRun}` : ''}
           </>
         }
@@ -153,22 +154,22 @@ function InboxItemRow({
         <p className="inbox-meta">
           <span>
             from{' '}
-            {item.creator ? (
+            {item.creator && !isDeletedLoop(item.creator) ? (
               <button type="button" className="ws-link" onClick={() => onOpenLoop(item.creator!.id)}>
-                {item.creator.title ?? item.creator.id}
+                {loopLabel(item.creator)}
               </button>
             ) : (
-              'you'
+              (item.creator ? loopLabel(item.creator) : 'you')
             )}
           </span>
           <span>
             next{' '}
-            {item.watcherLoop ? (
+            {item.watcherLoop && !isDeletedLoop(item.watcherLoop) ? (
               <button type="button" className="ws-link" onClick={() => onOpenLoop(item.watcherLoop!.id)}>
-                {item.watcherLoop.title ?? item.watcherLoop.id}
+                {loopLabel(item.watcherLoop)}
               </button>
             ) : (
-              (item.task.watcher ?? 'unresolved')
+              (item.watcherLoop ? loopLabel(item.watcherLoop) : (item.task.watcher ?? 'unresolved'))
             )}
           </span>
           {item.askedAt && <When iso={item.askedAt} prefix="asked" />}

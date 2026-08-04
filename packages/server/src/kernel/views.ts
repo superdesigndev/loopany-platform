@@ -29,6 +29,15 @@ import * as store from "../db/kernelStore.js";
 import { runs, type Run } from "../db/schema.js";
 import { cronText } from "../lib/format.js";
 import { eventShape, eventTail, inboxCounts, inboxUnion, objectShape, type ApiResult } from "./objectApi.js";
+import {
+  assignableLoops,
+  getProdLoop,
+  loadTeamLoopIndex,
+  loopRefOf,
+  prodLoopRecord,
+  type LoopIndex,
+  type LoopRefWire,
+} from "./loopRefs.js";
 import { mirrorsFor } from "./mirrorApi.js";
 import { refusal } from "./refusals.js";
 import { BOARD_COLUMNS, columnFor } from "./taskBoard.js";
@@ -48,9 +57,16 @@ const GRAPH_WINDOW_DEFAULT_DAYS = 14;
 
 // ---------------------------------------------------------------- primitives
 
-type LoopRef = { id: string; title: string | null } | null;
+/**
+ * A loop reference on a card, resolved DUAL-READ through `loopRefs.ts`: the id
+ * may name a kernel loop object or a production `loops` row, and an id that names
+ * neither resolves to a tombstone rather than to `null`. Every `creator` /
+ * `watcherLoop` key in this module goes through `loopRef`, so no screen has to
+ * know the reference spans two tables.
+ */
+type LoopRef = LoopRefWire | null;
 
-const loopRef = (row: KernelObject | undefined): LoopRef => (row ? { id: row.id, title: row.title } : null);
+const loopRef = (id: string | null | undefined, index: LoopIndex): LoopRef => loopRefOf(id, index);
 
 /** A run's lifecycle state for display. The rewrite's `queue_state` wins; a
  *  legacy row (queue_state NULL, migrated loops share their id with real run
@@ -77,6 +93,13 @@ function runShape(run: Run) {
   };
 }
 
+/**
+ * The KERNEL loop objects of a team. The ONE surviving caller is `loopsView` (the
+ * workspace's Loops pane), which is deliberately still kernel-only: convergence
+ * stage S1 repoints loop REFERENCES (a watcher, a creator, a graph node, a loop
+ * page), and stage S3 repoints the Loops pane itself at the production roster.
+ * Everything that resolves an id to a NAME goes through `loopRefs.ts` instead.
+ */
 async function teamLoops(teamId: string): Promise<KernelObject[]> {
   return db.select().from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "loop"))).orderBy(asc(objects.title));
 }
@@ -154,7 +177,7 @@ function humanOnly(context: ApiContext) {
 export async function inboxView(context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   const guard = humanOnly(context); if (guard) return guard;
   const { rows, stamp } = await inboxUnion(context.teamId, now);
-  const loops = new Map((await teamLoops(context.teamId)).map((loop) => [loop.id, loop]));
+  const loops = await loadTeamLoopIndex(context.teamId);
   const items = await Promise.all(rows.map(async ({ task, reasons, askedAt, askedByRun }) => {
     const tail = await store.listObjectEvents(undefined, task.id);
     return {
@@ -165,8 +188,8 @@ export async function inboxView(context: ApiContext, now = new Date()): Promise<
         createdAt: task.createdAt, updatedAt: task.updatedAt,
       },
       reasons, askedAt, askedByRun,
-      creator: loopRef(task.createdByLoop ? loops.get(task.createdByLoop) : undefined),
-      watcherLoop: loopRef(task.watcher ? loops.get(task.watcher) : undefined),
+      creator: loopRef(task.createdByLoop, loops),
+      watcherLoop: loopRef(task.watcher, loops),
       // Verbatim, by contract. Never re-keyed, never summarized.
       execution: task.payload ?? {},
       recentEvents: tail.slice(-INBOX_EVENT_CAP).reverse().map(eventShape),
@@ -206,6 +229,50 @@ export async function loopsView(context: ApiContext, now = new Date()): Promise<
   } };
 }
 
+/** The loop page's subject, from EITHER world (S1 dual-read). */
+interface LoopPageSource {
+  id: string; title: string | null; status: string; cron: string | null; timezone: string | null;
+  nextFire: string | null; workdir: string | null; body: string; payload: Record<string, unknown>;
+  createdAt: string; updatedAt: string; source: "kernel" | "prod";
+}
+
+/**
+ * Resolve the loop page's subject DUAL-READ.
+ *
+ * A kernel object with this id wins outright — including when it is a task or a
+ * doc, which stays the honest `WRONG_KIND` rather than falling through to the
+ * production table and pretending the id named a loop all along.
+ *
+ * The production row maps onto the same shape with two substitutions and no
+ * invention: the loop's standing brief is its task file's `## Spec`, mirrored
+ * server-side in `taskFileContent`, so THAT is the body the page renders where a
+ * kernel loop shows its charter (design report §1.3); and the cadence cursor is
+ * the one-shot override `nextRunAt`, the only "next fire" a prod row stores. The
+ * free zone (`payload`) is empty because a prod loop has none — an empty object
+ * rather than a fabricated one.
+ */
+async function loopPageSource(id: string, teamId: string): Promise<LoopPageSource | { wrongKind: string } | undefined> {
+  const kernelRow = await store.getObject(undefined, id);
+  if (kernelRow && kernelRow.teamId === teamId) {
+    if (kernelRow.kind !== "loop") return { wrongKind: kernelRow.kind };
+    return {
+      id: kernelRow.id, title: kernelRow.title, status: kernelRow.status, cron: kernelRow.cron,
+      timezone: kernelRow.timezone, nextFire: kernelRow.nextFire, workdir: kernelRow.workdir,
+      body: kernelRow.body ?? "", payload: kernelRow.payload ?? {},
+      createdAt: kernelRow.createdAt, updatedAt: kernelRow.updatedAt, source: "kernel",
+    };
+  }
+  const prodRow = await getProdLoop(teamId, id);
+  if (!prodRow) return undefined;
+  const record = prodLoopRecord(prodRow);
+  return {
+    id: prodRow.id, title: record.title, status: record.status, cron: prodRow.cron,
+    timezone: prodRow.timezone, nextFire: prodRow.nextRunAt, workdir: prodRow.workdir,
+    body: prodRow.taskFileContent ?? "", payload: {},
+    createdAt: prodRow.createdAt, updatedAt: prodRow.updatedAt, source: "prod",
+  };
+}
+
 /**
  * `GET /api/views/loop/:id` — charter, evolve diffs, its open tasks, health.
  *
@@ -217,9 +284,9 @@ export async function loopsView(context: ApiContext, now = new Date()): Promise<
  */
 export async function loopView(id: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   const guard = humanOnly(context); if (guard) return guard;
-  const loop = await store.getObject(undefined, id);
-  if (!loop || loop.teamId !== context.teamId) return { ok: false, error: notFound(id) };
-  if (loop.kind !== "loop") return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${loop.kind}, not a loop`) };
+  const loop = await loopPageSource(id, context.teamId);
+  if (!loop) return { ok: false, error: notFound(id) };
+  if ("wrongKind" in loop) return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${loop.wrongKind}, not a loop`) };
 
   const [tail, runRows, watching, created] = await Promise.all([
     store.listObjectEvents(undefined, id),
@@ -233,8 +300,13 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
   return { ok: true, value: {
     loop: {
       id: loop.id, title: loop.title, status: loop.status, cron: loop.cron, timezone: loop.timezone,
-      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextFire, workdir: loop.workdir, body: loop.body ?? "",
-      payload: loop.payload ?? {}, createdAt: loop.createdAt, updatedAt: loop.updatedAt,
+      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextFire, workdir: loop.workdir, body: loop.body,
+      payload: loop.payload, createdAt: loop.createdAt, updatedAt: loop.updatedAt,
+      // WHICH WORLD this loop lives in. The page renders the same shape either
+      // way; a client that wants to hide a kernel-only affordance (evolve, the
+      // charter history) on a production loop keys on this rather than guessing
+      // from the id's shape.
+      source: loop.source,
     },
     health: loopHealth(runRows, now),
     // The audit window design §4 names: charter diffs land in events and render
@@ -305,17 +377,16 @@ export async function tasksView(context: ApiContext, query: URLSearchParams, now
   // Two queries, not one: the open columns are the worklist and take the page
   // budget; the closed column is a record and takes a much smaller, separate
   // one. A single ORDER BY could otherwise fill the whole page with history.
-  const [openRows, closedRows, loopRows] = await Promise.all([
+  const [openRows, closedRows, loops] = await Promise.all([
     db.select().from(objects).where(and(...conds, eq(objects.status, "open"))).orderBy(desc(objects.createdAt)).limit(limit + 1),
     db.select().from(objects).where(and(...conds, eq(objects.status, "closed"))).orderBy(desc(objects.closedAt)).limit(CLOSED_COLUMN_CAP + 1),
-    teamLoops(context.teamId),
+    loadTeamLoopIndex(context.teamId),
   ]);
-  const loops = new Map(loopRows.map((loop) => [loop.id, loop]));
   const truncated = openRows.length > limit || closedRows.length > CLOSED_COLUMN_CAP;
   const cards = [...openRows.slice(0, limit), ...closedRows.slice(0, CLOSED_COLUMN_CAP)].map((t) => ({
     ...taskRow(t, stamp),
-    creator: loopRef(t.createdByLoop ? loops.get(t.createdByLoop) : undefined),
-    watcherLoop: loopRef(t.watcher ? loops.get(t.watcher) : undefined),
+    creator: loopRef(t.createdByLoop, loops),
+    watcherLoop: loopRef(t.watcher, loops),
     column: columnFor(t, stamp),
   }));
 
@@ -324,8 +395,11 @@ export async function tasksView(context: ApiContext, query: URLSearchParams, now
     columns: BOARD_COLUMNS.map((spec) => ({ ...spec, tasks: cards.filter((card) => card.column === spec.key) })),
     // The loops a card can be handed to. The board's claim control is a
     // `watcher` PATCH like any other, so it must name a real loop id — a picker,
-    // never a free-text field.
-    loops: loopRows.filter((loop) => loop.status !== "retired").map((loop) => ({ id: loop.id, title: loop.title })),
+    // never a free-text field. DUAL-READ (S1): the roster spans the kernel's own
+    // loop objects AND the production `loops` rows, because a watcher may name
+    // either. `assignable` (not `status`) is the filter, so the two worlds'
+    // different terminal states are decided in one place.
+    loops: assignableLoops(loops),
     counts: inboxCounts(inboxRows),
     truncated, now: stamp, cursorSeq: await eventTail(context.teamId),
   } };
@@ -350,14 +424,14 @@ export async function taskView(id: string, context: ApiContext, now = new Date()
     // carries no pointer column, so this is the only way it has them.
     mirrorsFor(undefined, context.teamId, id),
   ]);
-  const loops = new Map((await teamLoops(context.teamId)).map((loop) => [loop.id, loop]));
+  const loops = await loadTeamLoopIndex(context.teamId);
   return { ok: true, value: {
     task: objectShape(task),
     execution: task.payload ?? {},
     mirrors,
     due: Boolean(task.followUpAt && task.followUpAt <= now.toISOString()),
-    creator: loopRef(task.createdByLoop ? loops.get(task.createdByLoop) : undefined),
-    watcherLoop: loopRef(task.watcher ? loops.get(task.watcher) : undefined),
+    creator: loopRef(task.createdByLoop, loops),
+    watcherLoop: loopRef(task.watcher, loops),
     // Oldest first: a timeline is read forwards, and `seq` is the order (the
     // content id dedups, the seq orders).
     timeline: tail.slice(-TIMELINE_CAP).map(eventShape),
@@ -373,12 +447,12 @@ export async function taskView(id: string, context: ApiContext, now = new Date()
 export async function docsView(context: ApiContext): Promise<ApiResult<Record<string, unknown>>> {
   const guard = humanOnly(context); if (guard) return guard;
   const rows = await db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "doc"))).orderBy(desc(objects.createdAt)).limit(LIST_CAP);
-  const loops = new Map((await teamLoops(context.teamId)).map((loop) => [loop.id, loop]));
+  const loops = await loadTeamLoopIndex(context.teamId);
   return { ok: true, value: {
     docs: rows.map((doc) => ({
       id: doc.id, title: doc.title, format: doc.format ?? "markdown", key: doc.key,
       createdByLoop: doc.createdByLoop, createdByRun: doc.createdByRun,
-      creator: loopRef(doc.createdByLoop ? loops.get(doc.createdByLoop) : undefined),
+      creator: loopRef(doc.createdByLoop, loops),
       createdAt: doc.createdAt, updatedAt: doc.updatedAt, bytes: Buffer.byteLength(doc.body ?? "", "utf8"),
     })),
     cursorSeq: await eventTail(context.teamId),
@@ -399,10 +473,10 @@ export async function docView(id: string, context: ApiContext): Promise<ApiResul
   const doc = await store.getObject(undefined, id);
   if (!doc || doc.teamId !== context.teamId) return { ok: false, error: notFound(id) };
   if (doc.kind !== "doc") return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${doc.kind}, not a doc`) };
-  const loops = new Map((await teamLoops(context.teamId)).map((loop) => [loop.id, loop]));
+  const loops = await loadTeamLoopIndex(context.teamId);
   return { ok: true, value: {
     doc: { ...objectShape(doc), format: doc.format ?? "markdown" },
-    creator: loopRef(doc.createdByLoop ? loops.get(doc.createdByLoop) : undefined),
+    creator: loopRef(doc.createdByLoop, loops),
     mirrors: await mirrorsFor(undefined, context.teamId, id),
     timeline: (await store.listObjectEvents(undefined, id)).slice(-TIMELINE_CAP).map(eventShape),
     cursorSeq: await eventTail(context.teamId),
@@ -480,7 +554,11 @@ export async function systemGraphView(context: ApiContext, query: URLSearchParam
   const since = new Date(now.getTime() - days * 86_400_000).toISOString();
   const stamp = now.toISOString();
 
-  const loops = (await teamLoops(context.teamId)).filter((loop) => loop.status !== "retired");
+  // DUAL-READ (S1). The graph is a projection over `watcher` / `created_by_loop`,
+  // and those now name production loops too — so a prod-loop node has to EXIST or
+  // every edge into it is filtered out below and a real hand-off renders as
+  // nothing at all. `assignable` is the same live-actor filter the picker uses.
+  const loops = [...(await loadTeamLoopIndex(context.teamId)).values()].filter((loop) => loop.assignable);
   const [runRows, counts, windowTasks, questionCount] = await Promise.all([
     runsForLoops(loops.map((l) => l.id)),
     taskCountsByWatcher(context.teamId),

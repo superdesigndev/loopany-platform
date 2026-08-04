@@ -28,6 +28,7 @@ export const REFUSAL_CODES = [
   "UNKNOWN_KEY", "BAD_DATE", "UNSUPPORTED_FORMAT", "MISSING_FRONT_MATTER",
   "UNTERMINATED_FRONT_MATTER", "INVALID_YAML", "FRONT_MATTER_NOT_MAPPING",
   "SCHEMA_VIOLATION", "BAD_CRON", "INVALID_BODY", "UNKNOWN_FILTER", "WATCHER_REQUIRED",
+  "PARENT_CYCLE",
   "UNAUTHORIZED", "NOT_HUMAN", "NO_RUN_CONTEXT", "RUN_CONTEXT_UNKNOWN",
   "NOT_YOUR_LOOP", "NOT_YOUR_RUN", "APPROVAL_REQUIRED", "APPROVAL_UNKNOWN",
   "APPROVAL_NOT_HUMAN", "APPROVAL_FOREIGN", "NOT_FOUND", "OPEN_QUESTION",
@@ -45,7 +46,8 @@ export const REFUSAL_STATUS: Record<RefusalCode, number> = {
   UNKNOWN_KEY: 400, BAD_DATE: 400, UNSUPPORTED_FORMAT: 400,
   MISSING_FRONT_MATTER: 400, UNTERMINATED_FRONT_MATTER: 400, INVALID_YAML: 400,
   FRONT_MATTER_NOT_MAPPING: 400, SCHEMA_VIOLATION: 400, BAD_CRON: 400,
-  INVALID_BODY: 400, UNKNOWN_FILTER: 400, WATCHER_REQUIRED: 400, UNAUTHORIZED: 401,
+  INVALID_BODY: 400, UNKNOWN_FILTER: 400, WATCHER_REQUIRED: 400, PARENT_CYCLE: 409,
+  UNAUTHORIZED: 401,
   NOT_HUMAN: 403, NO_RUN_CONTEXT: 403, RUN_CONTEXT_UNKNOWN: 403,
   NOT_YOUR_LOOP: 403, NOT_YOUR_RUN: 403, APPROVAL_REQUIRED: 403,
   APPROVAL_UNKNOWN: 403, APPROVAL_NOT_HUMAN: 403, APPROVAL_FOREIGN: 403,
@@ -115,7 +117,11 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   },
   WATCHER_REQUIRED: {
     message: `%s would leave no loop watching it, and a task always names the loop that acts next`,
-    hint: "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loop list` prints the ids. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.",
+    hint: "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loop list` and `loopany loops` both print ids you can name — a watcher may be a kernel loop or one of this machine's production loops, and either id is used verbatim. A paused loop is still a legal watcher: it acts the next time it runs. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.",
+  },
+  PARENT_CYCLE: {
+    message: `%s would sit inside its own subtree`,
+    hint: "a task tree is a tree: pick a parent that is not this task and not underneath it, or clear the parent to make this task a root. Nothing was written.",
   },
   UNAUTHORIZED: {
     message: `%s carried no credential this server recognizes`,

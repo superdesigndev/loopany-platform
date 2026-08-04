@@ -79,9 +79,20 @@ export const objects = pgTable(
     /** Non-empty ⇒ a human is owed an answer. This is the attested-close guard
      *  and the inbox's first branch; it is not a status (design §3). */
     pendingQuestion: text("pending_question"),
-    /** A loop id naming who acts next; NULL = the unclaimed pool. Set by the
-     *  creator's charter template, never inferred (design §3). */
+    /** THE LOOP THAT ACTS NEXT, and never empty (`kernel/types.ts` WATCHER_HINT).
+     *  Since convergence stage S1 the id may name a PRODUCTION `loops` row as
+     *  well as a kernel loop object — deliberately with NO foreign key, because a
+     *  prod loop can be hard-deleted while tasks still name it and the ruling is
+     *  warn-never-block-never-cascade. `kernel/loopRefs.ts` is the one resolver;
+     *  an id that resolves to neither table renders as a tombstone. */
     watcher: text("watcher"),
+    /** THE PARENT TASK, by ID and never by slug (design report §3). Nullable and
+     *  TASK-ONLY (`objects_parent_task_only`); no foreign key, because a parent
+     *  may be closed and tasks are never hard-deleted, so a dangling value means
+     *  bad input and is refused at the write chokepoint instead. The write-time
+     *  cycle guard lives in `applyTransition.ts` at the same altitude as the
+     *  watcher rule; readers stay tolerant anyway. */
+    parentId: text("parent_id"),
 
     // ---- doc facets (CHECK: null on every other kind) ----
     /** `markdown` | `html`. HTML is a doc-only narrow door, always sandbox
@@ -126,6 +137,7 @@ export const objects = pgTable(
       "objects_task_facets_only",
       sql`${t.kind} = 'task' OR (${t.followUpAt} IS NULL AND ${t.pendingQuestion} IS NULL AND ${t.watcher} IS NULL)`,
     ),
+    check("objects_parent_task_only", sql`${t.kind} = 'task' OR ${t.parentId} IS NULL`),
     check("objects_format_doc_only", sql`${t.kind} = 'doc' OR ${t.format} IS NULL`),
     check(
       "objects_mirror_facets_only",
@@ -173,6 +185,9 @@ export const objects = pgTable(
       .where(sql`${t.kind} = 'task' AND ${t.status} = 'open' AND ${t.watcher} IS NULL AND ${t.followUpAt} IS NULL`),
     /** Watcher worklists (`task list --watcher <loop-id>`). */
     index("objects_watcher_idx").on(t.watcher, t.followUpAt).where(sql`${t.kind} = 'task' AND ${t.status} = 'open'`),
+    /** The children of a task — the tree assembly's descent, and the ancestor
+     *  walk the write-time cycle guard runs. Partial: only tasks have a parent. */
+    index("objects_parent_idx").on(t.parentId).where(sql`${t.kind} = 'task'`),
     /** The `--creator` filter, the loop page's "created" list, graph flow edges. */
     index("objects_creator_idx").on(t.createdByLoop, t.createdAt),
     /** `mirror list --kind <k>` and `mirror kinds` (the kinds-in-use tally). */

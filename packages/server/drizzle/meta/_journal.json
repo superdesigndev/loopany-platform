@@ -50,6 +50,13 @@
       "when": 1785840251800,
       "tag": "0006_ambiguous_doorman",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785850505152,
+      "tag": "0007_pretty_luminals",
+      "breakpoints": true
     }
   ]
 }

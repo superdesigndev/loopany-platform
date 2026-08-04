@@ -65,6 +65,7 @@ import {
   watcherRequired,
   MIRROR_COORDS_IMMUTABLE_HINT,
   MIRROR_STATELESS_HINT,
+  PARENT_CYCLE_HINT,
   type Actor,
   type EventDiff,
   type KernelRefusal,
@@ -94,6 +95,8 @@ export interface WritableFields {
   followUpAt?: string | null;
   pendingQuestion?: string | null;
   watcher?: string | null;
+  /** The parent TASK's id, or null for a root. Guarded by `parentIssue`. */
+  parentId?: string | null;
   // doc facet
   format?: string | null;
   // mirror facets
@@ -118,6 +121,7 @@ const WRITABLE_KEYS = [
   "followUpAt",
   "pendingQuestion",
   "watcher",
+  "parentId",
   "format",
   "mirrorKind",
   "mirrorCoords",
@@ -356,6 +360,84 @@ function assertedFields(fields: Record<string, unknown>): string[] {
   return Object.keys(fields).filter((k) => fields[k] !== null);
 }
 
+// ---- the parent guard (design report §3) ----
+
+/**
+ * How far the ancestor walk goes before it gives up. A real task tree is a
+ * handful of levels deep; a chain longer than this is either hostile input or a
+ * cycle the guard somehow admitted, and in BOTH cases the honest answer is the
+ * same refusal rather than an unbounded walk inside a transaction that holds a
+ * row lock.
+ */
+export const PARENT_MAX_HOPS = 64;
+
+/**
+ * THE WRITE-TIME CYCLE GUARD, at the same altitude as the watcher rule — the
+ * kernel's own chokepoints, so every caller inherits it.
+ *
+ * `feat/task-tree-v2` is the cautionary tale this exists to answer: its parent
+ * was a SLUG in hand-edited front matter, files were the writers, and so no
+ * write-time guard was possible at all — leaving a read-side guard as the only
+ * defense and slug collisions as a permanent ambiguity class. Referencing by ID
+ * through one write chokepoint deletes both problems, and the read side keeps its
+ * tolerance anyway (defense in depth: a reader must never hang on hostile data).
+ *
+ * Four things are checked, in the order a person would ask them: the parent is
+ * not the task itself, it exists, it is a TASK, and it belongs to this team.
+ * Then the ancestor chain is walked in-transaction; the task's own id appearing
+ * anywhere in it is the cycle.
+ *
+ * NOT checked, deliberately: whether the parent is CLOSED. A finished parent with
+ * unfinished children is an ordinary state of the world, and there is no roll-up
+ * (a parent is closed by its watcher, never by its last child) — so refusing here
+ * would invent a coupling the two-status discipline forbids.
+ */
+export async function parentIssue(
+  tx: KernelExec,
+  teamId: string,
+  childId: string,
+  parentId: string,
+): Promise<KernelRefusal | undefined> {
+  const cycle = (subject: string) =>
+    refuse(
+      "PARENT_CYCLE",
+      subject,
+      [{ path: "parentId", message: "the parent chain leads back to this task", got: parentId, expected: "a task outside this task's subtree" }],
+      PARENT_CYCLE_HINT,
+    );
+
+  if (parentId === childId) return cycle(`${childId} cannot be its own parent`);
+
+  const parent = await kernel.getObject(tx, parentId);
+  if (!parent || parent.teamId !== teamId) {
+    return refuse(
+      "NOT_FOUND",
+      `no task ${parentId} in this team to be the parent of ${childId}`,
+      [{ path: "parentId", message: "unknown task", got: parentId, expected: "task-<id>" }],
+      "there is no foreign key here on purpose, so a parent that does not exist is refused rather than stored — copy the id from `task list`",
+    );
+  }
+  if (parent.kind !== "task") {
+    return refuse(
+      "WRONG_KIND",
+      `${parentId} is a ${parent.kind}, and only a task can be a task's parent`,
+      [{ path: "parentId", message: "must name a task", got: parent.kind, expected: "task" }],
+      "hierarchy is a TASK relation: a loop is not a bigger task, and the loop that acts next is the watcher, not the parent",
+    );
+  }
+
+  let cursor: string | null = parent.parentId;
+  for (let hop = 0; cursor; hop++) {
+    if (cursor === childId) return cycle(`${childId} is already an ancestor of ${parentId}`);
+    if (hop >= PARENT_MAX_HOPS) {
+      return cycle(`the parent chain above ${parentId} is deeper than ${PARENT_MAX_HOPS} tasks, so it cannot be walked to a root`);
+    }
+    const next: KernelObject | undefined = await kernel.getObject(tx, cursor);
+    cursor = next?.parentId ?? null;
+  }
+  return undefined;
+}
+
 // ---- the organic mint ladder ----
 
 /**
@@ -452,6 +534,14 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     return fail(watcherRequired(input.key ? `the task keyed "${input.key}"` : "this task", "created"), where);
   }
 
+  // THE PARENT GUARD, at the same seam as the watcher rule. An explicit id is
+  // supplied on the derived-id path, so the ancestor walk can genuinely find this
+  // object already in the chain even on a create.
+  if (kind === "task" && input.parentId) {
+    const bad = await parentIssue(tx, teamId, input.id ?? "(new task)", input.parentId);
+    if (bad) return fail(bad, where);
+  }
+
   const status = input.status ?? INITIAL_STATUS[kind];
   if (!STATUSES_BY_KIND[kind].includes(status)) {
     return fail(
@@ -483,6 +573,7 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     followUpAt: input.followUpAt ?? null,
     pendingQuestion: input.pendingQuestion ?? null,
     watcher,
+    parentId: input.parentId ?? null,
     format: input.format ?? null,
     mirrorKind: input.mirrorKind ?? null,
     mirrorCoords: input.mirrorCoords ?? null,
@@ -711,6 +802,15 @@ export async function applyUpdateIn(tx: KernelExec, input: ApplyUpdateInput): Pr
   // without a `watcher:` line is asking to drop the one on record.
   if (before.kind === "task" && Object.hasOwn(fields, "watcher") && !fields.watcher) {
     return fail(watcherRequired(objectId, "updated"), where);
+  }
+
+  // THE PARENT GUARD on the update side. `parentId: null` is a legal MOVE TO ROOT
+  // (unlike `watcher: null`, which is the release gesture the watcher rule
+  // abolished) — a task genuinely can stop being a sub-task — so only an asserted
+  // value is walked.
+  if (before.kind === "task" && typeof fields.parentId === "string" && fields.parentId) {
+    const bad = await parentIssue(tx, before.teamId, objectId, fields.parentId);
+    if (bad) return fail(bad, where);
   }
 
   // A closed task is done. Reopening is not a v1 transition, so mutating one is a

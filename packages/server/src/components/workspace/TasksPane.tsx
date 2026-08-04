@@ -6,6 +6,7 @@ import {
 } from './api'
 import { cardActions, hasActions, tellMode, type TellMode } from './board'
 import { flattenColumns, groupTasks, readTasksView, writeTasksView, type TaskGroup, type TasksViewMode } from './taskList'
+import { isDeletedLoop, loopLabel } from './loopLabel'
 import { ExecutionBlock, Markdown } from './Render'
 import {
   ArtifactRow, BigState, CountStrip, Drawer, DrawerHead, DrawerSection, Empty, Glyph, Loading, Refusal, RunStrip, Section, Timeline, ViewHeader, When,
@@ -215,7 +216,7 @@ function TaskRowEntry({ task, selected, onOpen }: { task: TaskCard; selected: bo
       icon={asking ? 'question' : task.status === 'closed' ? 'close' : 'task'}
       iconTone={asking ? 'question' : 'task'}
       title={task.title ?? task.id}
-      source={<>{task.creator?.title ?? task.createdByLoop ?? 'opened by you'}</>}
+      source={<>{task.creator ? loopLabel(task.creator) : (task.createdByLoop ?? 'opened by you')}</>}
       badges={
         <>
           {asking && <span className="state-label state-human">question</span>}
@@ -277,7 +278,7 @@ function BoardCard({ card, selected, onOpen }: { card: TaskCard; selected: boole
         <span>{card.title ?? card.id}</span>
       </button>
       <div className="board-card-meta">
-        <span>{card.watcherLoop?.title ?? card.watcher}</span>
+        <span>{loopLabel(card.watcherLoop, card.watcher)}</span>
         {card.due && card.status === 'open' && <span className="state-label state-floor">overdue</span>}
         <When iso={card.status === 'closed' ? (card.closedAt ?? card.updatedAt) : (card.followUpAt ?? card.updatedAt)} />
       </div>
@@ -379,24 +380,25 @@ function TaskDetail({
         meta={[
           [
             'watcher',
-            data.watcherLoop ? (
+            data.watcherLoop && !isDeletedLoop(data.watcherLoop) ? (
               <button type="button" className="ws-link" onClick={() => onOpenLoop(data.watcherLoop!.id)}>
-                {data.watcherLoop.title ?? data.watcherLoop.id}
+                {loopLabel(data.watcherLoop)}
               </button>
             ) : (
-              // A watcher is never empty, so this reads as what it is: a loop id
-              // whose loop row could not be resolved, not a state.
-              (task.watcher ?? 'unresolved')
+              // A watcher is never empty, so this reads as what it is: the loop
+              // that acts next, named — and when that loop has been deleted out
+              // from under the task, a tombstone rather than a dead link.
+              (data.watcherLoop ? loopLabel(data.watcherLoop) : (task.watcher ?? 'unresolved'))
             ),
           ],
           [
             'creator',
-            data.creator ? (
+            data.creator && !isDeletedLoop(data.creator) ? (
               <button type="button" className="ws-link" onClick={() => onOpenLoop(data.creator!.id)}>
-                {data.creator.title ?? data.creator.id}
+                {loopLabel(data.creator)}
               </button>
             ) : (
-              'you'
+              (data.creator ? loopLabel(data.creator) : 'you')
             ),
           ],
           ['follow-up', <When iso={task.followUpAt} />],
@@ -478,7 +480,7 @@ function TaskActions({
       title="Actions"
       note="The only write surface on this screen — rows and cards just open the task. A task ends when its watcher closes it, so telling the watcher is how you end one."
     >
-      {canTell && <TellBox taskId={task.id} mode={mode} watcher={view.watcherLoop?.title ?? task.watcher} onSpoke={onSpoke} onQueued={setQueued} />}
+      {canTell && <TellBox taskId={task.id} mode={mode} watcher={loopLabel(view.watcherLoop, task.watcher)} onSpoke={onSpoke} onQueued={setQueued} />}
       {queued && <p className="inbox-queued">{queued}</p>}
       <div className="task-actions">
         {canTransfer && (

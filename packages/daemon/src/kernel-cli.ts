@@ -638,7 +638,7 @@ function loopIdRefusal(value: string, where: string): string | undefined {
       // `null` is the one wrong value worth naming: it was legal until the
       // watcher rule, so an agent carrying the old habit gets the reason rather
       // than a bare "not a loop id".
-      ...(value === "null" ? ["A task's watcher is never empty: it is HANDED to another loop, never released. `loopany loop list` prints the ids."] : []),
+      ...(value === "null" ? ["A task's watcher is never empty: it is HANDED to another loop, never released. `loopany loop list` and `loopany loops` both print ids you can name."] : []),
     ],
   });
 }

@@ -1248,6 +1248,59 @@ schema probe against a stack's data dir must wait until its dev server is
 stopped; opening a second PGlite on a live dir is the corruption the workspace
 fixture note already warns about.
 
+## Convergence S1 — the watcher speaks prod (`kernel/loopRefs.ts` + `objects.parent_id`)
+
+Stage S1 of the convergence design (`data/rw-converge-s1/report.md` — read it, not a
+summary here) makes the SHIPPING product's `loops` row THE loop that a kernel object can
+point at. It repoints REFERENCES only; the trigger paths (S2), the loop roster/lifecycle
+(S3), the hierarchy UI/CLI (S4) and the cleanup (S5) are later stages and were deliberately
+not pulled forward.
+
+- **`kernel/loopRefs.ts` is the ONE dual-read resolver.** `objects.watcher` /
+  `created_by_loop` may name a kernel loop object OR a production `loops` row, and every
+  surface that turns one into a NAME reads through here — so S3 narrows one module rather
+  than nine call sites. Its four rulings live in that file's header; the two that a later
+  change breaks by softening: **production ids are used AS-IS** (no alias table — both
+  worlds are opaque `loop-` prefixed text, so every existing prefix check already passes),
+  and **resolution is not validation** — there is no FK and no existence check at the write
+  seam, because a prod loop can be hard-deleted while tasks still name it and the ruling is
+  warn-never-block-never-cascade.
+- **A dangling reference resolves to a TOMBSTONE, never to `null`.** `null` means "no
+  watcher", a state the watcher rule abolished; `source: "missing"` means "the loop is
+  gone", which is a fact. `components/workspace/loopLabel.ts` is the one render
+  (`deleted loop loop-…`, and not clickable) and every screen reads through it.
+- **Kernel wins an id collision, and `assignable` (not `status`) is the hand-off filter.**
+  The stack migration creates prod rows KEEPING the kernel loop id verbatim, so one id will
+  name a row in both tables; preferring kernel keeps S1/S2 byte-identical for the captain's
+  stack. A prod loop resolves ENABLED OR NOT (the `enabled` gate belongs to the due scan,
+  not to reading) — only a kernel `retired` loop and a COMPLETED prod loop are un-assignable.
+- **`views.ts` repointed: card/grouping refs, the hand-off picker, the system-graph NODES
+  (an unknown node silently drops every edge into it), and the loop PAGE**, which now
+  resolves a prod loop and renders `taskFileContent` where a kernel loop shows its charter.
+  `loopsView` (the Loops PANE) is deliberately still kernel-only — that is S3. A prod loop's
+  drawer replaces Run-now/lifecycle with one sentence: the kernel verbs resolve against
+  `objects` and could only refuse there until S3 repoints them.
+- **`tickDueTasks` does not see a prod watcher, by design** — its comment carries the stage
+  boundary. A prod-watched follow-up queues nothing until S2.
+- **`objects.parent_id` + the write-time cycle guard landed here** (migration `0007`,
+  task-only CHECK + partial index; `applyTransition.ts` `parentIssue` at both chokepoints,
+  `PARENT_CYCLE`). Referencing by ID through one write chokepoint is what `feat/task-tree-v2`
+  could not have (its parent was a front-matter SLUG with files as the writers), so the guard
+  is possible at all and slug-collision ambiguity is gone. `parentId: null` is a legal move
+  to root — unlike `watcher: null`. A CLOSED parent is deliberately NOT refused: there is no
+  roll-up in either direction. The artifact key, the `--parent` flag and the tree rendering
+  are S4, so `parentId` is NOT on `CONTENT_KEYS`/`expressedDiffs` yet — add it to both
+  together.
+- Migrations mint as **0007+ on the rewrite chain**; 0003–0006 are applied on the captain's
+  pglite journal and are never renumbered (the cross-line renumber stays a chain-merge step).
+- Verified end to end on an isolated stack (own port/data dir/`LOOPANY_HOME`, seeded before
+  boot — pglite is single-writer): grouping headers reading prod loop names, a tombstone
+  group for a deleted watcher, the picker offering a DISABLED prod loop, a real watcher
+  transfer onto it through the drawer, the prod loop page serving cadence/health/watched
+  tasks off the shared `runs` table, the graph drawing the hand-off edge, a live
+  `PARENT_CYCLE` refusal, kernel-watched tasks unchanged, zero console errors and no
+  page-level horizontal scroll at 1440 or 760.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

@@ -61,6 +61,7 @@ beforeEach(async () => {
   await database.db.delete(schema.events);
   await database.db.delete(schema.objects);
   await database.db.delete(legacySchema.runs);
+  await database.db.delete(legacySchema.loops);
   await seed();
 });
 
@@ -183,8 +184,8 @@ describe("GET /api/views/inbox — the §6 union, exactly", () => {
     expect(typeof value.cursorSeq).toBe("number");
     const item = value.items.find((i) => (i.task as { title: string }).title === "Watch the error rate")!;
     expect(Object.keys(item).sort()).toEqual(["askedAt", "askedByRun", "creator", "execution", "reasons", "recentEvents", "task", "watcherLoop"]);
-    expect(item.creator).toEqual({ id: housekeeper, title: "Housekeeper" });
-    expect(item.watcherLoop).toEqual({ id: housekeeper, title: "Housekeeper" });
+    expect(item.creator).toEqual({ id: housekeeper, title: "Housekeeper", source: "kernel" });
+    expect(item.watcherLoop).toEqual({ id: housekeeper, title: "Housekeeper", source: "kernel" });
     // The question was attached by a run, so the screen can name the run.
     expect(item.askedByRun).toBe("run-triage");
     expect((item.recentEvents as unknown[]).length).toBeLessThanOrEqual(5);
@@ -312,8 +313,8 @@ describe("GET /api/views/tasks — the board, and /task/:id", () => {
   it("resolves creator and watcher titles so a card never shows a bare id", async () => {
     const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
     const row = value.columns.flatMap((c) => c.tasks).find((t) => t.title === "Observe the impact of PR #201")!;
-    expect(row.creator).toEqual({ id: housekeeper, title: "Housekeeper" });
-    expect(row.watcherLoop).toEqual({ id: steward, title: "FollowUp" });
+    expect(row.creator).toEqual({ id: housekeeper, title: "Housekeeper", source: "kernel" });
+    expect(row.watcherLoop).toEqual({ id: steward, title: "FollowUp", source: "kernel" });
     expect(row.due).toBe(false);
     expect(row.column).toBe("watched");
   });
@@ -412,5 +413,124 @@ describe("every view payload carries cursorSeq", () => {
       expect(payload.ok).toBe(true);
       if (payload.ok) expect(typeof payload.value.cursorSeq).toBe("number");
     }
+  });
+});
+
+// ------------------------------------------- convergence S1: prod loop refs
+
+/**
+ * CONVERGENCE STAGE S1 — a task's `watcher` may name the SHIPPING product's
+ * `loops` row, and every screen has to read it as a loop rather than as an
+ * unresolvable string.
+ *
+ * The production id is used AS-IS (there is no alias table and no rewrite), so
+ * these cases feed the real id shape a prod loop mints and assert the reference
+ * resolves through the ONE resolver (`kernel/loopRefs.ts`) on each surface the
+ * design report names: grouping/card labels, the hand-off picker, the system
+ * graph's nodes and edges, and the loop page.
+ *
+ * The fourth case is the one the design deliberately keeps LEGAL rather than
+ * refusing: a prod loop that was hard-deleted while a task still named it. There
+ * is no foreign key, nothing cascades, and the read renders a TOMBSTONE — which
+ * is a fact about the world, not a broken row.
+ */
+describe("convergence S1 — a watcher that names a production loop", () => {
+  const PROD_LOOP = "loop-mqkxn6lq-4c81d1b2";
+
+  async function insertProdLoop(over: Record<string, unknown> = {}) {
+    await database.db.insert(legacySchema.loops).values({
+      id: PROD_LOOP, userId: "u-owner", teamId: TEAM, machineId: "m-1", name: "React Doctor",
+      cron: "0 6 * * *", timezone: "Asia/Shanghai", enabled: true, notify: "auto",
+      taskFile: "/w/react-doctor/loopany-task.md", taskFileContent: "## Spec\n\nTriage react-doctor findings.\n",
+      createdAt: ago(300), updatedAt: ago(10), ...over,
+    } as never);
+  }
+
+  async function watchedByProd(fields: Record<string, unknown> = {}) {
+    return make({ kind: "task", title: "Prod-watched work", createdByLoop: housekeeper, watcher: PROD_LOOP, now: ago(6), ...fields });
+  }
+
+  it("resolves the card's watcher to the production loop's NAME, tagged as prod", async () => {
+    await insertProdLoop();
+    await watchedByProd();
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    const row = value.columns.flatMap((c) => c.tasks).find((t) => t.title === "Prod-watched work")!;
+    expect(row.watcherLoop).toEqual({ id: PROD_LOOP, title: "React Doctor", source: "prod" });
+    // The grouped list keys on `watcher` and labels from `watcherLoop`, so a
+    // resolved reference is exactly what makes a group heading read as a desk.
+    expect(row.watcher).toBe(PROD_LOOP);
+  });
+
+  it("offers it in the hand-off picker — enabled or not, since a paused loop still acts on resume", async () => {
+    await insertProdLoop({ enabled: false });
+    await watchedByProd();
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue & { loops: { id: string; title: string | null }[] };
+    expect(value.loops).toContainEqual({ id: PROD_LOOP, title: "React Doctor" });
+    // …but a COMPLETED loop has declared itself done; handing it work is how a
+    // task goes quiet forever, so it is not a target.
+    await database.db.delete(legacySchema.loops);
+    await insertProdLoop({ goal: "ship it", completedAt: ago(2) });
+    const after = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue & { loops: { id: string }[] };
+    expect(after.loops.some((l) => l.id === PROD_LOOP)).toBe(false);
+  });
+
+  it("gives the system graph a node for it, so the hand-off edge is drawn", async () => {
+    await insertProdLoop();
+    await watchedByProd();
+    const value = ok(await views.systemGraphView(human, new URLSearchParams(), NOW)) as {
+      nodes: { id: string; label: string | null; badges: Record<string, unknown> }[];
+      edges: { from: string; to: string; kind: string }[];
+    };
+    const node = value.nodes.find((n) => n.id === PROD_LOOP);
+    expect(node?.label).toBe("React Doctor");
+    expect(node?.badges).toMatchObject({ cadence: "daily 06:00", openTasks: 1 });
+    expect(value.edges).toContainEqual(expect.objectContaining({ from: housekeeper, to: PROD_LOOP, kind: "hands-off" }));
+  });
+
+  it("serves its loop PAGE from the production row — task file as the body, its own tasks", async () => {
+    await insertProdLoop();
+    await watchedByProd();
+    const value = ok(await views.loopView(PROD_LOOP, human, NOW)) as {
+      loop: Record<string, unknown>; openTasks: { watching: { title: string }[] }; health: { lastOutcome: string | null };
+    };
+    expect(value.loop).toMatchObject({
+      id: PROD_LOOP, title: "React Doctor", status: "active", cron: "0 6 * * *",
+      timezone: "Asia/Shanghai", source: "prod",
+    });
+    // The standing brief lives in the task file's `## Spec`, mirrored on the
+    // loop row — that is what a prod loop has where a kernel loop has a charter.
+    expect(value.loop.body).toContain("Triage react-doctor findings.");
+    expect(value.openTasks.watching.map((t) => t.title)).toEqual(["Prod-watched work"]);
+    // Runs are ONE table already, so health needs no bridging.
+    await database.db.insert(legacySchema.runs).values({
+      id: "run-prod", loopId: PROD_LOOP, userId: "u-owner", machineId: "m-1", phase: "done", role: "exec",
+      ts: ago(2), startedAt: ago(2), finishedAt: ago(2), costUsd: 0.3,
+    } as never);
+    const withRun = ok(await views.loopView(PROD_LOOP, human, NOW)) as { health: { lastOutcome: string | null } };
+    expect(withRun.health.lastOutcome).toBe("success");
+  });
+
+  it("keeps a kernel loop id winning, and never crosses a team", async () => {
+    await insertProdLoop({ id: housekeeper, name: "A prod twin of the kernel id" });
+    const value = ok(await views.loopView(housekeeper, human, NOW)) as { loop: { title: string; source: string } };
+    expect(value.loop).toMatchObject({ title: "Housekeeper", source: "kernel" });
+    await database.db.delete(legacySchema.loops);
+    await insertProdLoop({ teamId: OTHER_TEAM });
+    const foreign = await views.loopView(PROD_LOOP, human, NOW);
+    expect(foreign.ok).toBe(false);
+    if (!foreign.ok) expect(foreign.error.code).toBe("NOT_FOUND");
+  });
+
+  it("renders a TOMBSTONE when the watched loop was deleted, never a null watcher", async () => {
+    await insertProdLoop();
+    await watchedByProd();
+    await database.db.delete(legacySchema.loops);
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    const row = value.columns.flatMap((c) => c.tasks).find((t) => t.title === "Prod-watched work")!;
+    // `null` would read as "no watcher", a state the watcher rule abolished.
+    expect(row.watcherLoop).toEqual({ id: PROD_LOOP, title: null, source: "missing" });
+    expect(row.watcher).toBe(PROD_LOOP);
+    // Nothing cascaded: the task is untouched and still open.
+    expect(row.status).toBe("open");
   });
 });

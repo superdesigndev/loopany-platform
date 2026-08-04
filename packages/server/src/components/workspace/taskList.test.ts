@@ -26,6 +26,25 @@ const watched = (id: string, loop: string, title: string | null = `Loop ${loop}`
   card({ id, watcher: loop, watcherLoop: { id: loop, title }, column: 'watched' })
 
 describe('groupTasks — one group per loop, plus the record', () => {
+  /**
+   * Since convergence S1 a watcher may name a PRODUCTION loop, and its group
+   * heading must read as that loop's name rather than as a raw id — the whole
+   * value of grouping by loop is that the heading is a desk. A loop deleted out
+   * from under a task still watching it reads as a tombstone, for the same
+   * reason: the group is real work, so it may never be silently unlabelled.
+   */
+  it('labels a group from the resolved reference, prod loops and tombstones included', () => {
+    const groups = groupTasks([
+      card({ id: 't-1', watcher: 'loop-mqkxn6lq-4c81d1b2', watcherLoop: { id: 'loop-mqkxn6lq-4c81d1b2', title: 'React Doctor', source: 'prod' } }),
+      card({ id: 't-2', watcher: 'loop-gone', watcherLoop: { id: 'loop-gone', title: null, source: 'missing' } }),
+    ])
+    expect(groups.map((group) => [group.key, group.label])).toEqual([
+      ['loop-gone', 'deleted loop loop-gone'],
+      ['loop-mqkxn6lq-4c81d1b2', 'React Doctor'],
+    ])
+  })
+
+
   it('puts loops by title first, then closed — and there is no pool group', () => {
     const groups = groupTasks([
       watched('t-1', 'loop-z', 'Zebra watch'),

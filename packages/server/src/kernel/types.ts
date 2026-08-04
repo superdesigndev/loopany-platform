@@ -164,8 +164,10 @@ export function isTransitionName(v: string): v is TransitionName {
  *  (design §4 rule 2); `workdir` joined them under the 2026-08-04 captain ruling
  *  that a loop binds a directory the way the shipping product does. */
 export const LOOP_ONLY_FIELDS = ["cron", "timezone", "nextFire", "workdir"] as const;
-/** Question / resurface date / who-acts-next are task facets. */
-export const TASK_ONLY_FIELDS = ["followUpAt", "pendingQuestion", "watcher"] as const;
+/** Question / resurface date / who-acts-next / the parent task are task facets.
+ *  `parentId` is task-only because hierarchy is a TASK relation: a loop is not a
+ *  bigger task and a doc is not a sub-anything. */
+export const TASK_ONLY_FIELDS = ["followUpAt", "pendingQuestion", "watcher", "parentId"] as const;
 /** `format: html` is a doc narrow door (design §7). */
 export const DOC_ONLY_FIELDS = ["format"] as const;
 /** The external pointer, its immutable identity, and the objects it hangs on.
@@ -242,6 +244,11 @@ export type KernelErrorCode =
    *  because "who acts next" is the one task facet that may never be empty
    *  (captain ruling 2026-08-04) — see `WATCHER_RULE` below. */
   | "WATCHER_REQUIRED"
+  /** A `parent_id` write would put a task inside its own subtree. Its own code
+   *  because the offending value is perfectly well-formed and the parent really
+   *  exists — what is wrong is the SHAPE of the result, and only a walk of the
+   *  ancestor chain can say so. See `PARENT_CYCLE_HINT`. */
+  | "PARENT_CYCLE"
   /** An INVARIANT BREACH, not a user error: a short id resolved to a row that is
    *  not the identity the caller meant. Its own code because the only honest
    *  answer to a truncation collision is a loud, attributable failure — the
@@ -403,7 +410,12 @@ export function hasOpenQuestion(pendingQuestion: string | null | undefined): boo
  * circuit breaker's auto-pause question and the local fixture alike.
  */
 export const WATCHER_HINT =
-  "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loop list` prints the ids. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.";
+  "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loop list` and `loopany loops` both print ids you can name — a watcher may be a kernel loop or one of this machine's production loops, and either id is used verbatim. A paused loop is still a legal watcher: it acts the next time it runs. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.";
+
+/** The teaching a parent that would close a loop gets. Named here so the kernel,
+ *  the HTTP seam and the CLI all say the same sentence. */
+export const PARENT_CYCLE_HINT =
+  "a task tree is a tree: pick a parent that is not this task and not underneath it, or clear the parent to make this task a root. Nothing was written.";
 
 /** The refusal for a task with no loop on the hook. `subject` names the task
  *  when it exists (an update) and the attempted create when it does not. */

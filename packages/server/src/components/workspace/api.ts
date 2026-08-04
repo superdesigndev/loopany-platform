@@ -17,7 +17,14 @@ export interface ViewPayload {
   cursorSeq: number
 }
 
-export type LoopRef = { id: string; title: string | null } | null
+/**
+ * A watcher or creator, as the server resolved it (`kernel/loopRefs.ts`).
+ * `source` says which world answered: the kernel's own loop objects, the
+ * production `loops` table, or NEITHER — `missing` is the tombstone for a loop
+ * that was deleted out from under a task that still names it. Render it through
+ * `loopLabel.ts`, never by reaching for `title ?? id` inline.
+ */
+export type LoopRef = { id: string; title: string | null; source?: 'kernel' | 'prod' | 'missing' } | null
 
 export interface EventShape {
   id: string
@@ -208,6 +215,12 @@ export interface LoopView extends ViewPayload {
     payload: Record<string, unknown>
     createdAt: string
     updatedAt: string
+    /** Which world this loop lives in (convergence S1). `prod` is a SHIPPING
+     *  `loops` row reached through a watcher or creator reference: it renders
+     *  here, but the kernel's operational verbs do not act on it until stage S3
+     *  repoints them, so the drawer says where those controls live instead of
+     *  offering ones that could only refuse. */
+    source: 'kernel' | 'prod'
   }
   health: LoopHealth
   charterHistory: CharterDiff[]

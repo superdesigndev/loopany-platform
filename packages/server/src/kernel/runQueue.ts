@@ -310,6 +310,15 @@ async function queueOneFire(
  * A task with a question pending is deliberately NOT excluded: the question
  * blocks a CLOSE, not the loop's own work, and the run may well be able to make
  * progress while a human decides.
+ *
+ * CONVERGENCE STAGING. Since S1 a `watcher` may name a PRODUCTION `loops` row,
+ * and this join does not see one — so a prod-watched task's follow-up queues
+ * NOTHING today. That is the stage boundary, not an oversight: S1 repoints loop
+ * REFERENCES (`kernel/loopRefs.ts` resolves both worlds for every read), and S2
+ * repoints the TRIGGER paths, where a prod watcher queues an ordinary prod
+ * pending run on the loop's bound machine (`enabled = true` watchers only) while
+ * a kernel-loop watcher keeps this queue. Pulling that dispatch forward here
+ * would land half a run world.
  */
 export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> {
   const nowIso = now.toISOString();

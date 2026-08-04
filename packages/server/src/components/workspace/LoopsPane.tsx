@@ -168,9 +168,27 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
         ]}
       />
 
-      <RunNow id={loop.id} onQueued={refresh} />
+      {loop.source === 'prod' ? (
+        /**
+         * A PRODUCTION loop, reached through a watcher or creator reference
+         * (convergence S1). Everything above is real — it is the same loop row
+         * the shipping product schedules, and the runs are the same table — but
+         * the kernel's `run-now` and lifecycle verbs resolve against `objects`
+         * and would only ever refuse here. Offering a control that cannot work
+         * is worse than saying where the working one is; stage S3 repoints those
+         * verbs and this branch goes away with it.
+         */
+        <p className="inbox-floor">
+          This is one of the machine&apos;s production loops, shown here because a task names it. Its schedule, its
+          pause and its manual fire live on the shipping dashboard until the loop surfaces converge.
+        </p>
+      ) : (
+        <>
+          <RunNow id={loop.id} onQueued={refresh} />
 
-      <Lifecycle id={loop.id} watchingOpen={data.openTasks.watching.length} onChanged={refresh} />
+          <Lifecycle id={loop.id} watchingOpen={data.openTasks.watching.length} onChanged={refresh} />
+        </>
+      )}
 
       {health.consecutiveFailures > 0 && (
         <p className="inbox-floor">
@@ -178,7 +196,14 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
         </p>
       )}
 
-      <DrawerSection title="Charter" note="The loop's body IS its prompt. A run may rewrite it in the free zone; the cadence is the keyed zone.">
+      <DrawerSection
+        title="Charter"
+        note={
+          loop.source === 'prod'
+            ? "A production loop's standing brief is its task file — this is the `## Spec` the machine last synced."
+            : "The loop's body IS its prompt. A run may rewrite it in the free zone; the cadence is the keyed zone."
+        }
+      >
         <div className="charter-body">{loop.body.trim() ? <Markdown>{loop.body}</Markdown> : <Empty>No charter recorded.</Empty>}</div>
       </DrawerSection>
 

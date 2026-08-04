@@ -1,4 +1,5 @@
 import type { BoardColumn, TaskCard } from './api'
+import { loopLabel } from './loopLabel'
 
 /**
  * THE TASKS LIST — grouping, and the view the screen remembers. Pure, so both
@@ -81,9 +82,11 @@ export function groupTasks(tasks: TaskCard[]): TaskGroup[] {
     const watcher = task.watcher ?? task.id
     const existing = byLoop.get(watcher)
     if (existing) existing.tasks.push(task)
-    // The card carries the loop's title already; the id is the honest fallback
-    // when a loop was retired out from under a task it still watches.
-    else byLoop.set(watcher, { label: task.watcherLoop?.title ?? watcher, tasks: [task] })
+    // The card carries the loop's resolved reference already — `loopLabel` is
+    // the one place that turns it into words, so a group HEADING says the same
+    // thing the row does, including the tombstone for a loop deleted out from
+    // under a task that still watches it.
+    else byLoop.set(watcher, { label: loopLabel(task.watcherLoop, watcher), tasks: [task] })
   }
 
   const groups: TaskGroup[] = []
