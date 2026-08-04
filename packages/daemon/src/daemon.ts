@@ -125,6 +125,28 @@ export function buildPollBody(
   };
 }
 
+/**
+ * Rewrite claim body: machine identity (the claim is the ONLY call a v2 daemon
+ * makes, so the server enrols + stamps presence from it, exactly as the legacy
+ * poll does from `buildPollBody`) + the long-poll opt-in + this poll's
+ * ATTESTATION.
+ *
+ * `inFlight` — the runs we are still executing — is the only thing that renews a
+ * lease server-side. Sending it is what lets a run we LOST (crash, restart, a
+ * `runDelivery` that threw) expire and be reclaimed, instead of being kept alive
+ * forever by our own polls while nothing executes it. It is therefore sent
+ * ALWAYS, empty included: an empty attestation is a real statement ("I am
+ * running nothing"), not an absent one.
+ */
+export function buildClaimBody(
+  info: Record<string, unknown>,
+  agent: string,
+  inFlight: Iterable<string>,
+): Record<string, unknown> {
+  const running = [...inFlight];
+  return { ...info, agent, wait: running.length === 0, inFlight: running };
+}
+
 /** Elapsed-based cadence: a response that consumed the poll interval was a
  *  server-held long-poll — re-poll almost immediately (the hold WAS the wait).
  *  A fast response (work delivered, old server, short mode, or an error) keeps
@@ -225,10 +247,7 @@ export async function runDaemon(): Promise<number> {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(
           runsV2
-            // Identity rides the claim because it is the ONLY call a v2 daemon
-            // makes: the server enrols + stamps presence from it, exactly as the
-            // legacy poll does from `buildPollBody`.
-            ? { ...info, agent: `daemon-${daemonVersion()}-pid${process.pid}`, wait: inFlight.size === 0 }
+            ? buildClaimBody(info, `daemon-${daemonVersion()}-pid${process.pid}`, inFlight)
             : buildPollBody(info, progress, inFlight.size === 0, watchDigest),
         ),
       }, POLL_TIMEOUT_MS, ac.signal);

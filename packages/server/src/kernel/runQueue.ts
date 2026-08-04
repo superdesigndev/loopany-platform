@@ -300,6 +300,12 @@ export interface ClaimBody {
   machine?: string;
   agent?: string;
   wait?: boolean;
+  /**
+   * The run ids this daemon is STILL EXECUTING — its attestation, and the only
+   * thing that renews a lease (see `renewMachineLeasesIn`). Absent or empty
+   * attests to nothing.
+   */
+  inFlight?: string[];
   /** Machine identity, same shape the legacy poll reports. */
   host?: string;
   platform?: string;
@@ -307,9 +313,26 @@ export interface ClaimBody {
   version?: string;
 }
 
+/** How many run ids one claim may attest to. A machine runs a handful at a
+ * time; the cap keeps a hostile body from turning the renew into a huge IN. */
+const ATTESTATION_CAP = 64;
+
 /** The identity fields a claim body carries, in `enrollMachine`'s shape. */
 export function claimMachineInfo(body: ClaimBody): MachineInfo {
   return { host: body.host, platform: body.platform, arch: body.arch, version: body.version };
+}
+
+/** Wire-shaped attestation → a bounded, deduped id set. Anything else is nothing. */
+export function attestedRunIds(body: ClaimBody): string[] {
+  if (!Array.isArray(body.inFlight)) return [];
+  const ids = new Set<string>();
+  for (const id of body.inFlight) {
+    if (typeof id !== "string") continue;
+    const trimmed = id.trim();
+    if (trimmed) ids.add(trimmed);
+    if (ids.size >= ATTESTATION_CAP) break;
+  }
+  return [...ids];
 }
 
 export async function claimRun(machine: Machine, body: ClaimBody, now = new Date()): Promise<HttpResult> {
@@ -317,13 +340,14 @@ export async function claimRun(machine: Machine, body: ClaimBody, now = new Date
   if (!agent) return problem(400, "INVALID_BODY", "agent is required");
   if (body.machine && body.machine !== machine.id) return problem(400, "INVALID_BODY", "machine does not match the device credential");
 
-  let claimed = await claimOnce(machine, agent, now);
+  const attested = attestedRunIds(body);
+  let claimed = await claimOnce(machine, agent, now, attested);
   let waitedMs = 0;
   if (!claimed && body.wait) {
     const began = Date.now();
     await waitForClaim(CLAIM_HOLD_MS);
     waitedMs = Date.now() - began;
-    claimed = await claimOnce(machine, agent, new Date());
+    claimed = await claimOnce(machine, agent, new Date(), attested);
   }
   if (!claimed) return { status: 200, body: { run: null, waitedMs } };
   const { run, loop } = claimed;
@@ -354,12 +378,18 @@ export async function claimRun(machine: Machine, body: ClaimBody, now = new Date
   };
 }
 
-async function claimOnce(machine: Machine, agent: string, now: Date): Promise<{ run: Run; loop: KernelObject } | undefined> {
+async function claimOnce(
+  machine: Machine,
+  agent: string,
+  now: Date,
+  attested: string[] = [],
+): Promise<{ run: Run; loop: KernelObject } | undefined> {
   return db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec;
-    // A poll from the holding device is the liveness signal. Renew before the
-    // expiry sweep so healthy unlimited-duration agent runs cannot be reclaimed.
-    await renewMachineLeasesIn(tx, machine.id, now);
+    // The daemon's ATTESTATION is the liveness signal — the run ids it says it
+    // is still executing. Renew before the expiry sweep so healthy
+    // unlimited-duration agent runs cannot be reclaimed.
+    await renewMachineLeasesIn(tx, machine.id, now, attested);
     await reclaimExpiredIn(tx, now);
     const rows = await rawTx
       .select({ run: runs, loop: objects })
@@ -412,7 +442,26 @@ async function claimOnce(machine: Machine, agent: string, now: Date): Promise<{ 
   });
 }
 
-async function renewMachineLeasesIn(tx: store.KernelExec, machineId: string, now: Date): Promise<number> {
+/**
+ * Renew ONLY the leases the polling daemon ATTESTED to (review F1).
+ *
+ * The liveness question a lease answers is "is this RUN still being executed?",
+ * not "is this machine still up" — the legacy line keys its sweep on per-run
+ * progress freshness for exactly that reason. Renewing every lease of a live
+ * machine substitutes machine liveness for run liveness, and a daemon that
+ * crashes or restarts mid-run defeats the substitution: it comes back with an
+ * empty in-flight set, never reports the run it lost, and its own polls keep
+ * that orphan's lease alive forever. So an unattested lease is deliberately
+ * left to expire — `reclaimExpiredIn` (here) and the scheduler's reclaim tick
+ * then re-queue it for whichever machine polls next.
+ *
+ * A daemon too old to attest therefore renews nothing and has its runs
+ * reclaimed after the lease. That is the cure, not a regression: the lease is
+ * 20 minutes, reclaim re-queues rather than fails, and the alternative is the
+ * orphan living forever.
+ */
+async function renewMachineLeasesIn(tx: store.KernelExec, machineId: string, now: Date, attested: string[]): Promise<number> {
+  if (!attested.length) return 0;
   const rows = await tx
     .update(runs)
     .set({ leaseExpiresAt: new Date(now.getTime() + RUN_LEASE_MS).toISOString() })
@@ -421,6 +470,8 @@ async function renewMachineLeasesIn(tx: store.KernelExec, machineId: string, now
         eq(runs.queueState, "claimed"),
         eq(runs.leaseState, "active"),
         eq(runs.machineId, machineId),
+        // Scoped to the claimant: attesting to a stranger's run renews nothing.
+        inArray(runs.id, attested),
         gt(runs.leaseExpiresAt, now.toISOString()),
       ),
     )
@@ -779,10 +830,31 @@ export class RunQueueScheduler {
   private timer?: NodeJS.Timeout;
   async start(signal: AbortSignal): Promise<void> {
     await armUnarmedLoops();
-    await tickRunClock();
-    this.timer = setInterval(() => void tickRunClock().catch((err) => log.error({ err: String(err) }, "run clock tick failed")), RUN_TICK_MS);
+    await this.tick();
+    this.timer = setInterval(() => void this.tick(), RUN_TICK_MS);
     this.timer.unref?.();
     signal.addEventListener("abort", () => this.stop(), { once: true });
+  }
+  /**
+   * Fire due cadences, THEN reclaim dead leases (review F1). Reclaim must not
+   * depend on some daemon happening to poll: the machine holding an orphaned
+   * run may never come back, and until unit 10 the only caller of
+   * `reclaimExpired` was `claimOnce` — so a team whose single machine died left
+   * its run "running" indefinitely. `reclaimExpired` wakes parked claims when
+   * it re-queues anything, so a re-queued run is picked up immediately.
+   */
+  private async tick(): Promise<void> {
+    try {
+      await tickRunClock();
+    } catch (err) {
+      log.error({ err: String(err) }, "run clock tick failed");
+    }
+    try {
+      const reclaimed = await reclaimExpired();
+      if (reclaimed) log.warn({ reclaimed }, "reclaimed runs whose lease expired unattested");
+    } catch (err) {
+      log.error({ err: String(err) }, "run reclaim tick failed");
+    }
   }
   stop(): void {
     if (this.timer) clearInterval(this.timer);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deliveryFromRunsV2, runsV2Enabled } from "./daemon.js";
+import { buildClaimBody, deliveryFromRunsV2, runsV2Enabled } from "./daemon.js";
 
 describe("LOOPANY_RUNS_V2", () => {
   it("defaults off so the shipping poll/report behavior remains selected", () => {
@@ -51,5 +51,37 @@ describe("LOOPANY_RUNS_V2", () => {
     const delivery = deliveryFromRunsV2({ run: { id: "run-4", loopId: "loop-4", scope: "routine" } }, "dk_device");
     expect(delivery!.loop.workdir).toBeNull();
     expect(delivery!.requireWorkdir).toBe(false);
+  });
+});
+
+/**
+ * Review F1: the claim ATTESTS to what this daemon is still executing, and that
+ * attestation is the only thing that renews a lease. A daemon that crashed
+ * mid-run restarts with an empty set, so the run it lost stops being renewed and
+ * the server can reclaim it — instead of our own polls keeping the orphan alive.
+ */
+describe("the v2 claim body attests to what is actually running", () => {
+  const info = { host: "laptop", platform: "darwin", arch: "arm64", version: "0.13.0" };
+
+  it("names every in-flight run and does not long-poll while busy", () => {
+    const body = buildClaimBody(info, "daemon-test", new Set(["run-a", "run-b"]));
+    expect(body).toMatchObject({ ...info, agent: "daemon-test", wait: false });
+    expect(body.inFlight).toEqual(["run-a", "run-b"]);
+  });
+
+  it("sends an EMPTY attestation rather than omitting it — a restarted daemon runs nothing", () => {
+    // Absent and empty must not be confusable: the server renews only what it is
+    // told about, so "I am running nothing" has to be sayable.
+    const body = buildClaimBody(info, "daemon-test", new Set());
+    expect(body.inFlight).toEqual([]);
+    expect("inFlight" in body).toBe(true);
+    expect(body.wait).toBe(true);
+  });
+
+  it("snapshots the live set, so a run finishing mid-poll cannot mutate the body", () => {
+    const inFlight = new Set(["run-a"]);
+    const body = buildClaimBody(info, "daemon-test", inFlight);
+    inFlight.delete("run-a");
+    expect(body.inFlight).toEqual(["run-a"]);
   });
 });

@@ -161,13 +161,13 @@ describe("R-clock", () => {
 });
 
 describe("claim leases", () => {
-  it("B2: renews a live machine's lease on poll so the original expiry cannot reclaim it", async () => {
+  it("B2: renews an ATTESTED lease on poll so the original expiry cannot reclaim it", async () => {
     const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
     const m = await machine("m-a", "dk_machine_a");
     const runId = await queueAndClaim(l, m, NOW);
     const originalExpiry = Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!);
     const heartbeatAt = new Date(originalExpiry - 1_000);
-    const heartbeat = await queue.claimRun(m, { agent: "test-daemon", wait: false }, heartbeatAt);
+    const heartbeat = await queue.claimRun(m, { agent: "test-daemon", wait: false, inFlight: [runId] }, heartbeatAt);
     expect(heartbeat).toMatchObject({ status: 200, body: { run: null } });
     const renewedExpiry = Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!);
     expect(renewedExpiry).toBeGreaterThan(originalExpiry);
@@ -193,6 +193,108 @@ describe("claim leases", () => {
     const result = await queue.finishRun(m, runId, runId, { outcome: "success", summary: "late" }, late);
     expect(result.status).toBe(409);
     expect(result.body).toEqual({ code: "LEASE_LOST", message: expect.any(String), issues: [], hint: expect.any(String) });
+  });
+});
+
+/**
+ * Review F1: a lease answers "is this RUN still being executed?", not "is this
+ * machine up". A daemon that dies mid-run comes back with an empty in-flight
+ * set, so before attestation its own polls renewed the run it had LOST — the
+ * orphan showed "running" forever.
+ */
+describe("F1: only an ATTESTED run keeps its lease", () => {
+  it("reclaims a run the restarted daemon no longer attests to, and lets it be re-claimed", async () => {
+    const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
+    const m = await machine("m-a", "dk_machine_a");
+    const runId = await queueAndClaim(l, m, NOW);
+    const firstExpiry = Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!);
+
+    // The daemon dies here. It restarts with an empty in-flight set and keeps
+    // polling on its normal cadence — the exact shape that used to renew forever.
+    for (let elapsed = 60_000; elapsed < queue.RUN_LEASE_MS; elapsed += 60_000) {
+      const poll = await queue.claimRun(m, { agent: "test-daemon", wait: false, inFlight: [] }, new Date(NOW.getTime() + elapsed));
+      expect(poll).toMatchObject({ status: 200, body: { run: null } });
+    }
+    // Not renewed by any of those polls: the expiry is exactly where the claim left it.
+    expect(Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!)).toBe(firstExpiry);
+
+    // Past the lease, the orphan is reclaimed rather than kept alive.
+    const past = new Date(firstExpiry + 1);
+    expect(await queue.reclaimExpired(past)).toBe(1);
+    expect(await store.getRunRow(undefined, runId)).toMatchObject({ queueState: "queued", claimedBy: null, attempts: 2 });
+
+    // And the work is not lost: the next poll claims the same run again.
+    const reclaimed = await queue.claimRun(m, { agent: "test-daemon-restarted", wait: false, inFlight: [] }, past);
+    expect(reclaimed.status).toBe(200);
+    expect((reclaimed.body as any).run).toMatchObject({ id: runId, attempts: 3 });
+  });
+
+  it("never reclaims an attested run mid-execution, however long it takes", async () => {
+    const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
+    const m = await machine("m-a", "dk_machine_a");
+    const runId = await queueAndClaim(l, m, NOW);
+
+    // A claude run can outlast several lease windows. Each poll attests, so each
+    // poll pushes the expiry forward — and reclaim (which runs inside the same
+    // claim transaction) never touches it.
+    let previousExpiry = Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!);
+    for (let elapsed = queue.RUN_LEASE_MS / 2; elapsed < queue.RUN_LEASE_MS * 3; elapsed += queue.RUN_LEASE_MS / 2) {
+      const at = new Date(NOW.getTime() + elapsed);
+      await queue.claimRun(m, { agent: "test-daemon", wait: false, inFlight: [runId] }, at);
+      const row = (await store.getRunRow(undefined, runId))!;
+      expect(row).toMatchObject({ queueState: "claimed", phase: "running", attempts: 1 });
+      expect(Date.parse(row.leaseExpiresAt!)).toBeGreaterThan(previousExpiry);
+      previousExpiry = Date.parse(row.leaseExpiresAt!);
+    }
+    // A standalone reclaim at the far end agrees: the run is alive.
+    expect(await queue.reclaimExpired(new Date(NOW.getTime() + queue.RUN_LEASE_MS * 3))).toBe(0);
+    expect((await store.getRunRow(undefined, runId))!.queueState).toBe("claimed");
+  });
+
+  it("attesting to another machine's run renews nothing", async () => {
+    const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
+    const holder = await machine("m-a", "dk_machine_a");
+    const stranger = await machine("m-b", "dk_machine_b");
+    const runId = await queueAndClaim(l, holder, NOW);
+    const expiry = Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!);
+    await queue.claimRun(stranger, { agent: "other-daemon", wait: false, inFlight: [runId] }, new Date(expiry - 1_000));
+    expect(Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!)).toBe(expiry);
+  });
+
+  it("ignores a malformed attestation instead of trusting it", async () => {
+    const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
+    const m = await machine("m-a", "dk_machine_a");
+    const runId = await queueAndClaim(l, m, NOW);
+    const expiry = Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!);
+    for (const inFlight of [undefined, [], ["   "], [42 as never], "not-an-array" as never]) {
+      await queue.claimRun(m, { agent: "test-daemon", wait: false, inFlight }, new Date(expiry - 1_000));
+      expect(Date.parse((await store.getRunRow(undefined, runId))!.leaseExpiresAt!)).toBe(expiry);
+    }
+    // The attestation reader is bounded and deduped, so a hostile body cannot
+    // turn the renew into an unbounded IN list.
+    expect(queue.attestedRunIds({ inFlight: Array.from({ length: 500 }, (_, i) => `run-${i}`) })).toHaveLength(64);
+    expect(queue.attestedRunIds({ inFlight: [runId, runId, ` ${runId} `] })).toEqual([runId]);
+  });
+
+  it("the SCHEDULER reclaims a dead lease with no daemon polling at all", async () => {
+    // Before this, `reclaimExpired` had no production caller: reclaim only ran
+    // inside `claimOnce`, so a team whose only machine died never reclaimed
+    // anything. The scheduler's own tick now owns it.
+    const l = await loop({ nextFire: "2027-01-01T00:00:00.000Z" });
+    const m = await machine("m-a", "dk_machine_a");
+    // Claimed far enough in the past that the lease is expired against the real
+    // clock the scheduler ticks on.
+    const runId = await queueAndClaim(l, m, new Date(Date.now() - queue.RUN_LEASE_MS * 4));
+    expect((await store.getRunRow(undefined, runId))!.queueState).toBe("claimed");
+
+    const scheduler = new queue.RunQueueScheduler();
+    const ac = new AbortController();
+    try {
+      await scheduler.start(ac.signal);
+    } finally {
+      ac.abort();
+    }
+    expect(await store.getRunRow(undefined, runId)).toMatchObject({ queueState: "queued", claimedBy: null });
   });
 });
 

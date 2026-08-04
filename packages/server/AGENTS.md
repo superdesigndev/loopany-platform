@@ -910,6 +910,21 @@ rather than forking a second execution stack.
   only like the lifecycle verbs. It reuses `queueKernelRun`'s `manual` reason and OBEYS
   `runs_one_queued_idx` (a second call reports `alreadyQueued`), then `notifyRunQueued()`
   so a parked claim wakes instead of waiting out its ~20s hold.
+- **A RUN LEASE is renewed only by ATTESTATION, and reclaim is the SCHEDULER's job**
+  (review F1, fixed 2026-08-04). The claim body carries `inFlight` — the run ids the
+  daemon says it is still executing (`daemon.ts` `buildClaimBody`, sent always, empty
+  included, so "I am running nothing" is sayable) — and `renewMachineLeasesIn` renews
+  only those. Renewing every lease of a live MACHINE substituted machine liveness for
+  run liveness, and a daemon that crashed mid-run defeated the substitution: it restarted
+  with an empty in-flight set and its own polls kept the orphan "running" forever. The
+  legacy line keys its sweep on per-run progress freshness for exactly this reason.
+  A daemon too old to attest therefore renews nothing and its runs are reclaimed after
+  the lease — the cure, not a regression (reclaim RE-QUEUES; only exhausted attempts
+  fail). The other half: `RunQueueScheduler.tick` now runs `reclaimExpired` after
+  `tickRunClock`, so reclaim no longer depends on some daemon happening to poll — before
+  this, `reclaimExpired` had NO production caller and a team whose only machine died
+  reclaimed nothing, ever. Both halves are pinned by `runQueue.integration.test.ts`
+  ("F1: only an ATTESTED run keeps its lease"), which fails on the pre-fix code.
 
 ## `Run now` on the Loops screen — landing unit 11
 
@@ -957,6 +972,18 @@ source scripts/rewrite-local-run.env.sh
 - **`up --foreground` is the ONLY safe daemon launch here.** Plain `up` runs `ensure`,
   which writes the REAL `~/.local/bin` shim and `~/.claude/settings.json` hooks
   regardless of `LOOPANY_HOME`. `--foreground` classifies straight to `runDaemon`.
+- **`LOOPANY_ROOTS` must CONTAIN every workdir the stack's loops bind** (review F3). The
+  line above jails the daemon to `$LOOPANY_RW_BASE`, which covers the smoke loop and
+  nothing else — a loop bound to a real checkout (both twins are) fails every run with
+  `workdir <path> is outside this machine's allowed roots` until the checkout is named
+  too. The list is COMMA-separated (`daemon.ts` splits on `,`) and read once at daemon
+  start, so widening it means a restart. `scripts/rewrite-twins/README.md` carries the
+  release-time form; keep the jail narrow the rest of the time.
+- **A BOUND workdir is never created for you** — that is the whole point of
+  `requireWorkdir` — so the env script `mkdir -p`s the smoke loop's scratch dir
+  (`$LOOPANY_RW_SCRATCH`, review F4). `scripts/rewrite-smoke-loop.md` hard-codes the
+  DEFAULT base's path in its `workdir:`, so edit that key if you override
+  `LOOPANY_RW_BASE`.
 - **Registration is automatic and needs no separate step**: the first claim enrolls the
   machine from its `dk_`-shaped token (open mode ⇒ `team-shared`, which is also
   `requestScope`'s open-mode team, so the human CLI and the daemon share a scope).

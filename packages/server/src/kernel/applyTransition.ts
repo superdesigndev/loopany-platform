@@ -108,8 +108,26 @@ const WRITABLE_KEYS = [
   "format",
 ] as const;
 
-/** The fields a key-collision comparison reads (§4.1 `differs`). */
-const CONTENT_KEYS = ["title", "body", "payload", "followUpAt", "watcher", "pendingQuestion", "workdir"] as const;
+/**
+ * The fields a key-collision comparison reads (§4.1 `differs`).
+ *
+ * This is the UNION over every kind, and it must stay the same set
+ * `objectApi.expressedDiffs` compares — that function names the differing fields
+ * at the wire, and two comparison surfaces that disagree are exactly the drift
+ * this codebase refuses elsewhere. Kind-specific keys are safe in one list
+ * because `contentDiffers` skips any key the submitted file did not carry, and
+ * the kind firewall has already refused a foreign facet by the time it runs.
+ *
+ * Review F6 (2026-08-04): `cron` and `format` used to be absent while `workdir`
+ * — a loop facet under the SAME governance gate as cron — was present, which
+ * made the omission read as a rule about cadence. It was not one. This function
+ * is a pure READ that answers "was the submitted file applied?", and a replay
+ * differing only in its cadence was not applied either; whether a run may CHANGE
+ * that cadence is decided by `governLoop`/`loop evolve`, a different surface that
+ * this comparison does not feed. Reporting less than the truth here only hid the
+ * fact from a direct kernel caller.
+ */
+const CONTENT_KEYS = ["title", "body", "payload", "cron", "followUpAt", "watcher", "pendingQuestion", "workdir", "format"] as const;
 
 // ---- results ----
 

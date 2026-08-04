@@ -125,6 +125,28 @@ The daemon must be running for step 2 to be claimed (`up --foreground`, see the 
 `alreadyQueued` rather than stacking a second. `pause`/`resume` are idempotent —
 repeating one is a success with `changed: false`.
 
+**Widen `LOOPANY_ROOTS` before you release a twin, or every run fails the jail.** The
+recipe starts the daemon with `LOOPANY_ROOTS="$LOOPANY_RW_BASE"` — the isolated stack's
+own directory — but a twin binds the REAL checkout it mirrors, which is outside that
+jail. Following both documents verbatim gets you a resumed twin whose every run fails
+with `workdir <path> is outside this machine's allowed roots` (the jail doing its job,
+`packages/daemon/src/runner.ts` `resolveWorkdir`). The twin's workdir has to be inside
+the roots the daemon was launched with, so start it with the checkout named too — the
+list is COMMA-separated (`daemon.ts` splits on `,`, not the shell's `:`):
+
+```sh
+(cd packages/daemon && \
+   LOOPANY_ROOTS="$LOOPANY_RW_BASE,/Users/stonex/Workspace/loopany-platform" \
+   ./node_modules/.bin/tsx src/cli.ts up --foreground)
+```
+
+The jail is read once at daemon start, so widening it means restarting the daemon —
+do that BEFORE `resume`, not after the first run has already failed.
+
+Name only the twin you are actually releasing. The jail is the last line of defence
+between a bound workdir and an agent running with bypassed permissions, so widening it
+is part of the captain's release act — not something to leave permanently open.
+
 **Once resumed, a twin does everything in the inventory above, for real**: it pushes a
 branch and opens a PR on the named repository, and the superdesign twin may also close a
 PR and run `pnpm install` against the registry.

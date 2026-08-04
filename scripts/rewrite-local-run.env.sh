@@ -16,7 +16,13 @@ export LOOPANY_RW_BASE="${LOOPANY_RW_BASE:-$HOME/.loopany-rw10}"
 export LOOPANY_DATA_DIR="$LOOPANY_RW_BASE/data"   # server: pglite database dir
 export LOOPANY_HOME="$LOOPANY_RW_BASE/home"       # daemon: device token, pidfile, callback bin
 export LOOPANY_DB=pglite                          # embedded tier; no DATABASE_URL
-mkdir -p "$LOOPANY_DATA_DIR" "$LOOPANY_HOME"
+# The smoke loop (scripts/rewrite-smoke-loop.md) BINDS this directory, and a bound
+# workdir is never created by the daemon — a run whose directory is missing fails
+# loudly by design. Creating it here is what makes the recipe replayable from
+# scratch. NB the smoke artifact hard-codes the DEFAULT base's path, so edit its
+# `workdir:` to match if you overrode LOOPANY_RW_BASE.
+export LOOPANY_RW_SCRATCH="$LOOPANY_RW_BASE/scratch"
+mkdir -p "$LOOPANY_DATA_DIR" "$LOOPANY_HOME" "$LOOPANY_RW_SCRATCH"
 
 # --- the rewrite cutover flag, on BOTH sides ---
 # Server: arms the kernel clock + run queue. Daemon: claims via /api/agent/runs/claim
@@ -37,4 +43,4 @@ if [ ! -f "$LOOPANY_RW_BASE/device-token" ]; then
 fi
 export LOOPANY_TOKEN="$(cat "$LOOPANY_RW_BASE/device-token")"
 
-echo "rewrite local stack: $LOOPANY_SERVER_URL  data=$LOOPANY_DATA_DIR  home=$LOOPANY_HOME"
+echo "rewrite local stack: $LOOPANY_SERVER_URL  data=$LOOPANY_DATA_DIR  home=$LOOPANY_HOME  scratch=$LOOPANY_RW_SCRATCH"
