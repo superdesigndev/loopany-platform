@@ -399,7 +399,13 @@ async function claimOnce(
         and(
           eq(runs.queueState, "queued"),
           eq(objects.kind, "loop"),
-          eq(objects.status, "active"),
+          // A PAUSED loop's queued run is claimable (captain ruling 2026-08-04).
+          // Pause governs the cadence — `tickRunClock` selects `active` only, so
+          // a paused loop still never fires on its own — but a run a human
+          // queued by hand through `run-now` is an explicit act, and leaving it
+          // unclaimable would make it a row that waits forever. Retired stays
+          // excluded: it is terminal.
+          inArray(objects.status, ["active", "paused"]),
           eq(objects.teamId, machine.teamId ?? `team-${machine.userId}`),
         ),
       )

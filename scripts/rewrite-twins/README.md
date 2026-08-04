@@ -7,8 +7,10 @@ judgement.
 
 **Captain decision, 2026-08-04: create both, hold both paused.** They exist as real loops
 with their cadence and their bound workdir, and a paused loop has no `next_fire` at all —
-it cannot fire on its own, and `run-now` on it is refused (`PAUSED`, naming the resume
-route). Firing either one is the captain's act; see "Firing a twin" below.
+it cannot fire on its own. It CAN be fired by hand: `run-now` works on a paused loop
+(captain ruling 2026-08-04 — pause governs the cadence, a manual fire is a human act) and
+leaves it paused afterwards. So a twin runs only when the captain says so, once per
+press; see "Firing a twin" below.
 
 Each twin binds the SAME workdir as its production counterpart and keeps the same
 `0 7 * * *` cadence — that is the dual-run the captain asked for: production keeps
@@ -93,10 +95,10 @@ NOT adapted: the safety rules, the proof bar, the no-stacking gate, the protecte
 lists, the one-cleanup-per-day limit, the cadence, and the bound workdir. No behaviour
 was softened.
 
-## Firing a twin — the three commands, per twin
+## Firing a twin — ONE command
 
-A twin is inert until it is resumed. Resolve its id first (ids are per-stack; the unit-10
-stack's are recorded below):
+A twin never fires on its own; firing it is one `run-now`, and it stays paused after.
+Resolve its id first (ids are per-stack; the unit-10 stack's are recorded below):
 
 ```sh
 source scripts/rewrite-local-run.env.sh
@@ -109,26 +111,32 @@ B=$(curl -sS "$LOOPANY_SERVER_URL/api/loops" | python3 -c \
 Then, for whichever twin the captain releases (`$A` or `$B`):
 
 ```sh
-# 1. ARM it — restores next_fire, so the 07:00 cadence is live again
+# FIRE one run, now. The twin is paused and STAYS paused: one run, then quiet again.
+curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/run-now"
+```
+
+Resume only if you want the CADENCE back — that is a separate, bigger decision, since it
+arms the daily 07:00 fire with no further human act:
+
+```sh
+# ARM the cadence — restores next_fire, so 07:00 fires by itself every day
 curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/resume"
 
-# 2. FIRE one run off-cadence, now (optional — the cadence alone will fire it at 07:00)
-curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/run-now"
-
-# 3. PARK it again — clears next_fire; the loop and its history are kept
+# PARK it again — clears next_fire; the loop and its history are kept
 curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/pause" \
   -H 'content-type: application/json' -d '{"note":"why it was parked"}'
 ```
 
-The daemon must be running for step 2 to be claimed (`up --foreground`, see the recipe in
-`packages/server/AGENTS.md`). A second `run-now` while one run is still queued reports
+The daemon must be running for the fire to be claimed (`up --foreground`, see the recipe
+in `packages/server/AGENTS.md`). A second `run-now` while one run is still queued reports
 `alreadyQueued` rather than stacking a second. `pause`/`resume` are idempotent —
-repeating one is a success with `changed: false`.
+repeating one is a success with `changed: false`. A RETIRED loop refuses `run-now`
+outright; retirement is terminal.
 
-**Widen `LOOPANY_ROOTS` before you release a twin, or every run fails the jail.** The
+**Widen `LOOPANY_ROOTS` before you fire a twin, or every run fails the jail.** The
 recipe starts the daemon with `LOOPANY_ROOTS="$LOOPANY_RW_BASE"` — the isolated stack's
 own directory — but a twin binds the REAL checkout it mirrors, which is outside that
-jail. Following both documents verbatim gets you a resumed twin whose every run fails
+jail. Following both documents verbatim gets you a twin whose every run fails
 with `workdir <path> is outside this machine's allowed roots` (the jail doing its job,
 `packages/daemon/src/runner.ts` `resolveWorkdir`). The twin's workdir has to be inside
 the roots the daemon was launched with, so start it with the checkout named too — the
@@ -141,13 +149,13 @@ list is COMMA-separated (`daemon.ts` splits on `,`, not the shell's `:`):
 ```
 
 The jail is read once at daemon start, so widening it means restarting the daemon —
-do that BEFORE `resume`, not after the first run has already failed.
+do that BEFORE the first `run-now`, not after a run has already failed.
 
 Name only the twin you are actually releasing. The jail is the last line of defence
 between a bound workdir and an agent running with bypassed permissions, so widening it
 is part of the captain's release act — not something to leave permanently open.
 
-**Once resumed, a twin does everything in the inventory above, for real**: it pushes a
+**Once fired, a twin does everything in the inventory above, for real**: it pushes a
 branch and opens a PR on the named repository, and the superdesign twin may also close a
 PR and run `pnpm install` against the registry.
 

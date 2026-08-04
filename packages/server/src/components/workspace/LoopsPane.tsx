@@ -199,12 +199,15 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
  *
  * Three rules it keeps, in descending order of how easy they are to break:
  *
- * 1. **The button is never pre-hidden.** A paused or retired loop is refused by
- *    the kernel (`runLoopNow`), with a sentence and a hint naming the move that
- *    would work — `resume it first: POST /api/loops/<id>/resume`. Disabling the
- *    button on `status !== 'active'` would replace that teaching with silence,
- *    and would put a second copy of the lifecycle rule in the client where it
- *    could drift. The refusal renders verbatim, exactly as the CLI shows one.
+ * 1. **The button is never pre-hidden.** It fires a PAUSED loop directly
+ *    (captain ruling 2026-08-04): pause governs the cadence, and a manual fire
+ *    is a human act, not the clock — so one run happens and the loop is quiet
+ *    again, still paused, still with no `next_fire`. A RETIRED loop is refused
+ *    by the kernel (`runLoopNow`) with a sentence and a hint saying retirement
+ *    is terminal. Disabling the button on `status !== 'active'` would replace
+ *    that teaching with silence, and would put a second copy of the lifecycle
+ *    rule in the client where it could drift. The refusal renders verbatim,
+ *    exactly as the CLI shows one.
  * 2. **The queue's answer is reported, not smoothed over.** One queued run per
  *    loop is the discipline, so a second press reports the run already waiting
  *    rather than pretending to have made a new one.
@@ -240,6 +243,7 @@ function RunNow({ id, onQueued }: { id: string; onQueued: () => void }) {
         </button>
         <p className="ws-note-line">
           Fires this loop off its cadence. The run is queued here and starts when a machine of this team claims it.
+          A paused loop fires too — one run, and it stays paused.
         </p>
       </div>
       {result && (

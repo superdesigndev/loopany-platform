@@ -337,6 +337,47 @@ describe("the claim delivers the loop's BOUND directory, and is the v2 enrollmen
   });
 });
 
+/**
+ * PAUSE GOVERNS THE CADENCE, NOT THE CLAIM (captain ruling 2026-08-04).
+ *
+ * A manual fire is now accepted on a paused loop, so the queued row it leaves
+ * has to be genuinely executable — a claim filter keyed on `active` would turn
+ * the accepted fire into a row that waits forever, which is worse than the old
+ * honest refusal. The clock half of pause is unchanged and pinned here beside
+ * it: `tickRunClock` still selects `active` only, so a paused loop never fires
+ * on its own and the manual run does not restore its cadence.
+ */
+describe("a paused loop's manual run is claimable, and pause still stops the clock", () => {
+  it("claims and finishes a run queued on a paused loop, leaving it paused", async () => {
+    const l = await loop();
+    await kernel.applyTransition({ objectId: l.id, transition: "pause", actor: HUMAN, now: T0 });
+    const paused = (await store.getObject(undefined, l.id))!;
+    expect(paused).toMatchObject({ status: "paused", nextFire: null });
+
+    const m = await machine("m-a", "dk_machine_a");
+    const runId = await queueAndClaim(paused, m, NOW);
+    const finished = await queue.finishRun(m, runId, runId, { outcome: "success", summary: "one manual pass" }, NOW);
+    expect(finished.status).toBe(200);
+    expect(await store.getRunRow(undefined, runId)).toMatchObject({ queueState: "success" });
+
+    // One run, then quiet again: the cadence was never restored.
+    expect(await store.getObject(undefined, l.id)).toMatchObject({ status: "paused", nextFire: null });
+  });
+
+  it("never hands out a RETIRED loop's run, and the clock never selects a paused loop", async () => {
+    const retired = await loop();
+    await kernel.applyTransition({ objectId: retired.id, transition: "retire", actor: HUMAN, now: T0 });
+    await queue.queueKernelRun(database.db as never, { loop: retired, now: NOW.toISOString(), reason: "manual" });
+    const m = await machine("m-a", "dk_machine_a");
+    expect(((await queue.claimRun(m, { agent: "test-daemon" }, NOW)).body as any).run).toBeNull();
+
+    // The clock half: a paused loop is due on paper and still never fires.
+    const parked = await loop({ id: "loop-parked-clock" });
+    await kernel.applyTransition({ objectId: parked.id, transition: "pause", actor: HUMAN, now: T0 });
+    expect(await queue.tickRunClock(NOW)).toMatchObject({ scanned: 0, queued: 0 });
+  });
+});
+
 describe("finish", () => {
   it("a non-string report format falls back to plain Markdown and cannot wedge finish", async () => {
     const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });

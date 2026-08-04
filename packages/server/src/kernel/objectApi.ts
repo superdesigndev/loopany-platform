@@ -341,9 +341,18 @@ export async function loopLifecycle(id: string, verb: LoopLifecycleVerb, body: u
  *
  * `runs_one_queued_idx` (one queued run per loop) is the queue discipline, and a
  * manual fire OBEYS it rather than jumping it: an already-queued run is reported
- * back with `alreadyQueued: true`, the same ruling the verdict path takes. A
- * paused or retired loop refuses — time never un-pauses a loop, and neither does
- * a button.
+ * back with `alreadyQueued: true`, the same ruling the verdict path takes.
+ *
+ * **A PAUSED loop accepts a manual fire** (captain ruling 2026-08-04). Pause
+ * governs the CADENCE — it clears `next_fire` so the clock can never select the
+ * loop — and a manual fire is an explicit human act, not the clock. Refusing it
+ * conflated the two and made the only way to run a parked loop once a
+ * resume/fire/pause dance that leaves a real window in which the cadence is live.
+ * Firing does NOT resume: `next_fire` stays cleared, the status stays `paused`,
+ * and the loop is quiet again the moment the run finishes.
+ *
+ * RETIRED still refuses. It is terminal and different in kind — the charter is
+ * frozen and the loop has been ended, not parked.
  */
 export async function runLoopNow(id: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   if (context.mode !== "human") {
@@ -353,8 +362,8 @@ export async function runLoopNow(id: string, context: ApiContext, now = new Date
     const tx = rawTx as unknown as store.KernelExec;
     const loop = await store.getObjectForUpdate(tx, id);
     const guard = scopedKindGuard(loop, "loop", context.teamId); if (guard) return guard;
-    if (loop!.status !== "active") {
-      return { ok: false as const, error: refusal(loop!.status === "retired" ? "RETIRED" : "PAUSED", `${id} is ${loop!.status}, so it has no runs to fire`, [{ path: "status", message: "only an active loop runs", got: loop!.status, expected: "active" }], loop!.status === "paused" ? `resume it first: POST /api/loops/${id}/resume` : "retirement is terminal — create a new loop") };
+    if (loop!.status === "retired") {
+      return { ok: false as const, error: refusal("RETIRED", `${id} is retired, so it has no runs to fire`, [{ path: "status", message: "a retired loop is ended, not parked", got: loop!.status, expected: "active or paused" }], "retirement is terminal — create a new loop") };
     }
     const queued = await queueKernelRun(tx, { loop: loop!, now: now.toISOString(), reason: "manual" });
     if (queued.outcome === "queued") {

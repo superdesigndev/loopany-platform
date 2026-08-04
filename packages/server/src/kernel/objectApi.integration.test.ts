@@ -525,12 +525,47 @@ describe("run-now is the manual fire, and it obeys the queue discipline", () => 
     expect(code(await api.runLoopNow(loop.id, agentIn(loop.id), T1))).toBe("NOT_HUMAN");
   });
 
-  it("refuses a paused loop and names the resume route", async () => {
+  /**
+   * PAUSE GOVERNS THE CADENCE, NOT THE BUTTON (captain ruling 2026-08-04).
+   *
+   * A paused loop has no `next_fire`, so the clock can never select it — that is
+   * what pause means. A manual fire is an explicit human act rather than the
+   * clock, so it is accepted, and accepting it must not quietly restore the
+   * cadence: the loop is still `paused` with `nextFire` still null when the fire
+   * returns. Firing is one run, then quiet again.
+   */
+  it("fires a PAUSED loop, and firing does not resume it", async () => {
     const loop = await makeLoop();
     expect((await kernel.applyTransition({ objectId: loop.id, transition: "pause", actor: human.actor, now: T1.toISOString() })).ok).toBe(true);
+    const before = await store.getObject(undefined, loop.id);
+    expect(before).toMatchObject({ status: "paused", nextFire: null });
+
+    const fired = ok(await api.runLoopNow(loop.id, human, T1));
+    expect(fired).toMatchObject({ queued: true, alreadyQueued: false });
+    expect((fired.run as { reason: string }).reason).toBe("manual");
+
+    // The cadence stayed off: same status, still disarmed.
+    const after = await store.getObject(undefined, loop.id);
+    expect(after).toMatchObject({ status: "paused", nextFire: null });
+    // …and no lifecycle event rode along with the fire.
+    const history = await store.listObjectEvents(undefined, loop.id);
+    expect(history.map((e) => e.kind)).not.toContain("loop-resumed");
+    expect(history.at(-1)).toMatchObject({ kind: "run-queued", entrance: "human" });
+  });
+
+  it("still obeys the one-queued-run discipline on a paused loop", async () => {
+    const loop = await makeLoop();
+    await kernel.applyTransition({ objectId: loop.id, transition: "pause", actor: human.actor, now: T1.toISOString() });
+    ok(await api.runLoopNow(loop.id, human, T1));
+    expect(ok(await api.runLoopNow(loop.id, human, T1))).toMatchObject({ queued: false, alreadyQueued: true });
+  });
+
+  it("refuses a RETIRED loop — terminal is different in kind from parked", async () => {
+    const loop = await makeLoop();
+    expect((await kernel.applyTransition({ objectId: loop.id, transition: "retire", actor: human.actor, now: T1.toISOString() })).ok).toBe(true);
     const refused = await api.runLoopNow(loop.id, human, T1);
-    expect(code(refused)).toBe("PAUSED");
-    expect(!refused.ok && refused.error.hint).toContain(`POST /api/loops/${loop.id}/resume`);
+    expect(code(refused)).toBe("RETIRED");
+    expect(!refused.ok && refused.error.hint).toContain("retirement is terminal");
   });
 });
 

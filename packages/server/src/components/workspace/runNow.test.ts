@@ -14,14 +14,17 @@ import { LoopsPane } from './LoopsPane'
  * Two things are worth pinning and they are different in kind. The first is the
  * ACTION PATH: the button must reach `POST /api/loops/:id/run-now` and hand the
  * queue's own answer back, including the `alreadyQueued` case the one-queued-run
- * discipline produces. The second is the REFUSAL: a paused loop is refused by
+ * discipline produces. The second is the REFUSAL: a retired loop is refused by
  * the kernel, and the screen's whole contract is that it renders that refusal
  * verbatim — code, sentence and hint — instead of pre-hiding the button and
  * restating the lifecycle rule in client copy that could drift.
  *
- * The paused case is driven through the real component with a stubbed `fetch`,
- * not asserted against the source, because "the button is offered" and "the hint
- * reached the screen" are both rendering facts.
+ * The fixture loop is PAUSED on purpose (captain ruling 2026-08-04): pause
+ * governs the cadence, so the button fires a parked loop for real and the screen
+ * has nothing special to say about it. Both halves are driven through the real
+ * component with a stubbed `fetch` rather than asserted against the source,
+ * because "the button is offered" and "the hint reached the screen" are both
+ * rendering facts.
  *
  * NB the source-reading guard at the bottom keeps its path in a VARIABLE — Vite
  * statically rewrites the literal `new URL('./x', import.meta.url)` form into an
@@ -30,11 +33,11 @@ import { LoopsPane } from './LoopsPane'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const PAUSED_REFUSAL = {
+const RETIRED_REFUSAL = {
   error: {
-    code: 'PAUSED',
-    message: 'loop-7f3a91 is paused, so it has no runs to fire',
-    hint: 'resume it first: POST /api/loops/loop-7f3a91/resume',
+    code: 'RETIRED',
+    message: 'loop-7f3a91 is retired, so it has no runs to fire',
+    hint: 'retirement is terminal — create a new loop',
   },
 }
 
@@ -129,11 +132,11 @@ describe('the action path', () => {
   })
 
   it('surfaces a refusal as a ViewError carrying the code, sentence and hint', async () => {
-    stubFetch([{ status: 409, body: PAUSED_REFUSAL }, { status: 409, body: PAUSED_REFUSAL }])
+    stubFetch([{ status: 409, body: RETIRED_REFUSAL }, { status: 409, body: RETIRED_REFUSAL }])
     await expect(postRunNow('loop-7f3a91')).rejects.toMatchObject({
-      code: 'PAUSED',
-      message: PAUSED_REFUSAL.error.message,
-      hint: PAUSED_REFUSAL.error.hint,
+      code: 'RETIRED',
+      message: RETIRED_REFUSAL.error.message,
+      hint: RETIRED_REFUSAL.error.hint,
     })
     await expect(postRunNow('loop-7f3a91')).rejects.toBeInstanceOf(ViewError)
   })
@@ -162,7 +165,7 @@ describe('the drawer offers the fire and reports what the queue said', () => {
   })
 })
 
-describe('a paused loop is refused by the server, and the screen teaches', () => {
+describe('a paused loop fires directly — pause governs the cadence, not the button', () => {
   it('offers the button on a paused loop rather than pre-hiding it', async () => {
     stubFetch([])
     const el = await mountDrawer()
@@ -172,24 +175,38 @@ describe('a paused loop is refused by the server, and the screen teaches', () =>
     expect(button!.disabled).toBe(false)
   })
 
+  it('queues the run and reports it, with no refusal on screen', async () => {
+    stubFetch([{ status: 200, body: { queued: true, alreadyQueued: false, run: { id: 'run-5e77', state: 'queued', reason: 'manual' } } }])
+    const el = await mountDrawer()
+    await act(async () => runNowButton(el)!.click())
+
+    expect(el.querySelector('.ws-refusal')).toBeNull()
+    expect(el.textContent).toContain('Queued.')
+    expect(el.textContent).toContain('run-5e77')
+    // The loop is still paused, and the screen still says so — firing did not
+    // resume it and the drawer never claims it did.
+    expect(el.textContent).toContain('paused')
+  })
+})
+
+describe('a retired loop is refused by the server, and the screen teaches', () => {
   it('renders the refusal verbatim — code, sentence and hint', async () => {
-    stubFetch([{ status: 409, body: PAUSED_REFUSAL }])
+    stubFetch([{ status: 409, body: RETIRED_REFUSAL }])
     const el = await mountDrawer()
     await act(async () => runNowButton(el)!.click())
 
     const refusal = el.querySelector('.ws-refusal')
     expect(refusal).toBeTruthy()
-    expect(refusal!.textContent).toContain('PAUSED')
-    expect(refusal!.textContent).toContain(PAUSED_REFUSAL.error.message)
-    expect(refusal!.textContent).toContain(PAUSED_REFUSAL.error.hint)
-    // The refusal replaces nothing: the act stays available, so resuming
-    // elsewhere and pressing again is the obvious next move.
+    expect(refusal!.textContent).toContain('RETIRED')
+    expect(refusal!.textContent).toContain(RETIRED_REFUSAL.error.message)
+    expect(refusal!.textContent).toContain(RETIRED_REFUSAL.error.hint)
+    // The refusal replaces nothing: the act stays available.
     expect(runNowButton(el)!.disabled).toBe(false)
   })
 
   it('clears a stale refusal when the loop is fired again and accepted', async () => {
     stubFetch([
-      { status: 409, body: PAUSED_REFUSAL },
+      { status: 409, body: RETIRED_REFUSAL },
       { status: 200, body: { queued: true, alreadyQueued: false, run: { id: 'run-9d40', state: 'queued', reason: 'manual' } } },
     ])
     const el = await mountDrawer()

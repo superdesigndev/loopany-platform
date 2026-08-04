@@ -910,6 +910,20 @@ rather than forking a second execution stack.
   only like the lifecycle verbs. It reuses `queueKernelRun`'s `manual` reason and OBEYS
   `runs_one_queued_idx` (a second call reports `alreadyQueued`), then `notifyRunQueued()`
   so a parked claim wakes instead of waiting out its ~20s hold.
+- **PAUSE GOVERNS THE CADENCE, NOT THE BUTTON** (captain ruling 2026-08-04, amending the
+  original unit-10/11 behaviour). A PAUSED loop accepts `run-now` exactly like an active
+  one: pause clears `next_fire` so the CLOCK can never select it, and a manual fire is an
+  explicit human act, not the clock. The old refusal conflated the two and made a parked
+  loop runnable only through a resume/fire/pause dance that leaves a real window in which
+  the cadence is live. **Firing does not resume** — status stays `paused`, `next_fire`
+  stays null, no `loop-resumed` event — so it is one run, then quiet again. RETIRED still
+  refuses (`RETIRED`, terminal, charter frozen). The claim path had to move with it:
+  `claimOnce` selects `inArray(objects.status, ["active","paused"])`, because an accepted
+  fire that no machine may claim is worse than an honest refusal; `tickRunClock` and
+  `armUnarmedLoops` still select `active` only, which is the whole of what pause means.
+  Pinned by `objectApi.integration.test.ts` (fires paused, does not resume, retired
+  refused) + `runQueue.integration.test.ts` ("a paused loop's manual run is claimable")
+  + `runNow.test.ts` (the UI path).
 - **A RUN LEASE is renewed only by ATTESTATION, and reclaim is the SCHEDULER's job**
   (review F1, fixed 2026-08-04). The claim body carries `inFlight` — the run ids the
   daemon says it is still executing (`daemon.ts` `buildClaimBody`, sent always, empty
@@ -932,13 +946,13 @@ The workspace's Loops drawer gained the manual fire (`postRunNow` → the unit-1
 so the rewrite matches the shipping dashboard's one UI-triggered run. Three rules, each
 the kind a later change breaks by being helpful:
 
-- **The button is NEVER pre-hidden or disabled by status.** A paused or retired loop is
-  refused by `runLoopNow` with a sentence AND a hint naming the move that works
-  (`resume it first: POST /api/loops/<id>/resume`); gating the button client-side would
-  replace that teaching with silence and put a second copy of the lifecycle rule where
-  it can drift. The refusal renders through the shared `Refusal` exactly as the CLI
-  prints one. `runNow.test.ts` pins both halves — offered on a paused loop, and the
-  code/sentence/hint all on screen.
+- **The button is NEVER pre-hidden or disabled by status.** It fires a PAUSED loop for
+  real (the captain ruling above — one run, and the loop stays paused); a RETIRED loop is
+  refused by `runLoopNow` with a sentence AND a hint saying retirement is terminal.
+  Gating the button client-side would replace that teaching with silence and put a second
+  copy of the lifecycle rule where it can drift. The refusal renders through the shared
+  `Refusal` exactly as the CLI prints one. `runNow.test.ts` pins both halves — a paused
+  loop queues with no refusal on screen, and a retired one shows code/sentence/hint.
 - **It lives on the DRAWER, not the list row.** `ArtifactRow` IS a `<button>` (that is
   what makes the whole row one keyboard target), so a control in its action slot would
   be a button inside a button. Adding a row-level action means restructuring that shared
@@ -951,9 +965,10 @@ the kind a later change breaks by being helpful:
 Verified in a browser on an isolated seeded stack (own port + `LOOPANY_DATA_DIR`, no
 daemon — a queued run is the proof): a fresh fire renders `Queued. Run run-…` and the
 run appears in the strip; a second fire on a loop that already had one queued reports
-that run instead of minting a twin; an out-of-band `POST …/pause` moves the drawer to
-`PAUSED LOOP` over SSE with no user action; and firing it then renders the `PAUSED`
-refusal with its resume hint.
+that run instead of minting a twin; and an out-of-band `POST …/pause` moves the drawer to
+`PAUSED LOOP` over SSE with no user action. (The last leg of that walkthrough — firing a
+paused loop rendering a `PAUSED` refusal — is superseded by the captain ruling above:
+the fire now succeeds and the loop stays paused.)
 
 ### The recipe (replayable against any stack, including the demo on :3000)
 
@@ -1000,14 +1015,14 @@ source scripts/rewrite-local-run.env.sh
   runs of the production loops, binding the SAME workdirs and the same `0 7 * * *`
   cadence. Both carry outward effects (branch push + `gh pr create`; the superdesign one
   also closes PRs and installs from the registry), so by captain decision they are
-  **created but held PAUSED**: a paused loop has no `next_fire` and `run-now` on it is
-  refused, so releasing one is a deliberate `resume`. That README carries the full
-  side-effect inventory and the resume/fire/pause commands.
-- **A paused loop is genuinely inert, and that is what makes staging safe**: `pause`
-  clears `next_fire` (so the clock cannot select it) and `runLoopNow` refuses a
-  non-active loop before it queues anything. Stage a risky loop by creating it with the
-  daemon DOWN and pausing in the same breath — that leaves no window in which its
-  birth-armed cadence could be claimed.
+  **created but held PAUSED**: a paused loop has no `next_fire`, so it never fires on its
+  own and every run it ever does is one somebody asked for. That README carries the full
+  side-effect inventory and the fire/pause commands.
+- **A paused loop is AUTONOMOUSLY inert, which is what makes staging safe**: `pause`
+  clears `next_fire`, so the clock can never select it — nothing runs unless a human
+  presses `run-now`, and that fire leaves it paused (captain ruling above). Stage a risky
+  loop by creating it with the daemon DOWN and pausing in the same breath — that leaves
+  no window in which its birth-armed cadence could be claimed.
 
 ## Maintaining this file
 
