@@ -837,7 +837,9 @@ describe("the flag grammar is local, loud, and never ignored", () => {
     expect(stdout).toContain("flags:\n");
     expect(stdout).toContain("examples:\n");
     expect(stdout).toContain("only a human clears a pending question");
-    expect(stdout).toContain("see also:\n  task front matter: title, key, follow_up, watcher, needs_human, payload\n");
+    // `mirrors` is flagged create-only in the key set, because it is a
+    // constructor argument rather than a field an update can rewrite.
+    expect(stdout).toContain("see also:\n  task front matter: title, key, follow_up, watcher, needs_human, payload, mirrors (create-only)\n");
   });
 
   it("refuses an unknown command with the verb list", async () => {
@@ -845,5 +847,207 @@ describe("the flag grammar is local, loud, and never ignored", () => {
     expect(code).toBe(2);
     expect(stdout).toContain('error: "unknown command \\"task reopen task-7f3a91\\""');
     expect(stdout).toContain("task close");
+  });
+});
+
+// ------------------------------------------------------------------- mirrors
+
+/**
+ * THE MIRROR VERBS. The CLI's own job here is the flag grammar — an attach with
+ * no coords, a detach with no `--from`, a mirror id where an object id belongs —
+ * all refused LOCALLY at exit 2 before any side effect. What the server decides
+ * (whether the coords fit the kind, whether the object exists) is left to it.
+ */
+describe("mirror — the pointer verbs", () => {
+  const MIRROR = {
+    id: "mirror-3f9a21c04b7e", kind: "mirror", externalKind: "github-pr",
+    coords: "superdesigndev/loopany-platform#57", note: "seed article PR",
+    href: "https://github.com/superdesigndev/loopany-platform/pull/57",
+    attachedTo: ["task-7f3a91"], createdAt: "", updatedAt: "",
+  };
+
+  it("attaches with the flags, and posts the object id in the body", async () => {
+    const { code, stdout, request } = await run(
+      ["mirror", "attach", "task-7f3a91", "--kind", "github-pr", "--coords", "superdesigndev/loopany-platform#57", "--note", "seed article PR"],
+      { attached: true, created: true, mirror: MIRROR, object: "task-7f3a91", event: "ev-1" },
+      201,
+    );
+    expect(code).toBe(0);
+    expect(request!.method).toBe("POST");
+    expect(new URL(request!.url).pathname).toBe("/api/mirrors");
+    await expect(request!.json()).resolves.toEqual({ objectId: "task-7f3a91", kind: "github-pr", coords: "superdesigndev/loopany-platform#57", note: "seed article PR" });
+    expect(stdout).toContain("ok: attached mirror-3f9a21c04b7e to task-7f3a91");
+    expect(stdout).toContain("coords: superdesigndev/loopany-platform#57");
+    // THE LAW, on every mirror surface — not only when something goes wrong.
+    expect(stdout).toContain("A mirror tells you WHERE to look, never WHAT state it is in");
+  });
+
+  it("says when an EXISTING mirror was shared rather than a twin minted", async () => {
+    const { stdout } = await run(
+      ["mirror", "attach", "task-other", "--kind", "github-pr", "--coords", "o/r#57"],
+      { attached: true, created: false, changed: true, mirror: { ...MIRROR, attachedTo: ["task-7f3a91", "task-other"] }, object: "task-other", event: "ev-2" },
+    );
+    expect(stdout).toContain("(existing mirror, now shared)");
+    expect(stdout).toContain("One external thing is one mirror");
+  });
+
+  it("refuses an attach with no --kind or no --coords, locally, before any request", async () => {
+    for (const argv of [
+      ["mirror", "attach", "task-7f3a91", "--kind", "github-pr"],
+      ["mirror", "attach", "task-7f3a91", "--coords", "o/r#1"],
+      ["mirror", "attach", "--kind", "github-pr", "--coords", "o/r#1"],
+    ]) {
+      let called = false;
+      const { code } = await run(argv, {}, 200, { fetchImpl: async () => { called = true; return reply({}); } });
+      expect(code, argv.join(" ")).toBe(2);
+      expect(called, argv.join(" ")).toBe(false);
+    }
+  });
+
+  it("detaches by mirror id, and requires --from rather than guessing", async () => {
+    const { code, request, stdout } = await run(
+      ["mirror", "detach", "mirror-3f9a21c04b7e", "--from", "task-7f3a91"],
+      { detached: true, changed: true, mirror: { ...MIRROR, attachedTo: [] }, object: "task-7f3a91", event: "ev-3", orphaned: true },
+    );
+    expect(code).toBe(0);
+    expect(new URL(request!.url).pathname).toBe("/api/mirrors/mirror-3f9a21c04b7e/detach");
+    await expect(request!.json()).resolves.toEqual({ from: "task-7f3a91" });
+    expect(stdout).toContain("Nothing depends on");
+
+    const missing = await run(["mirror", "detach", "mirror-3f9a21c04b7e"], {});
+    expect(missing.code).toBe(2);
+    expect(missing.stdout).toContain("--from");
+  });
+
+  it("refuses an object id where a mirror id belongs, with the kind prefix as the teaching", async () => {
+    const { code, stdout } = await run(["mirror", "detach", "task-7f3a91", "--from", "task-7f3a91"], {});
+    expect(code).toBe(2);
+    expect(stdout).toContain("wrote:    task-7f3a91");
+    expect(stdout).toContain("expected: mirror-3f9a21c04b7e");
+  });
+
+  it("lists with the three filters, and echoes them when the result is empty", async () => {
+    const { request } = await run(["mirror", "list", "--attached-to", "task-7f3a91", "--kind", "github-pr", "--coords-like", "o/r"], { mirrors: [MIRROR], total: 1 });
+    const url = new URL(request!.url);
+    expect(url.pathname).toBe("/api/mirrors");
+    expect(url.searchParams.get("attached-to")).toBe("task-7f3a91");
+    expect(url.searchParams.get("kind")).toBe("github-pr");
+    expect(url.searchParams.get("coords-like")).toBe("o/r");
+
+    const empty = await run(["mirror", "list", "--kind", "github-pr"], { mirrors: [], total: 0 });
+    expect(empty.stdout).toContain("count: 0");
+    expect(empty.stdout).toContain("filter: \"--kind github-pr\"");
+  });
+
+  it("prints the kinds in use with counts, and the canonical ones alongside", async () => {
+    const { stdout } = await run(["mirror", "kinds"], {
+      kinds: [{ kind: "github-pr", count: 3, known: true }, { kind: "jira-ticket", count: 1, known: false }],
+      canonical: [{ kind: "github-pr", what: "a pull request", coords: "owner/repo#57" }],
+    });
+    expect(stdout).toContain("in_use[2]{kind,count,known}:");
+    expect(stdout).toContain("github-pr,3,yes");
+    expect(stdout).toContain("jira-ticket,1,no");
+    expect(stdout).toContain("this team's own vocabulary");
+  });
+
+  it("updates only the note, and refuses an update with none", async () => {
+    const { request } = await run(["mirror", "update", "mirror-3f9a21c04b7e", "--note", "the fix PR"], { changed: true, mirror: MIRROR, event: "ev-4", diff: {} });
+    expect(request!.method).toBe("PATCH");
+    await expect(request!.json()).resolves.toEqual({ note: "the fix PR" });
+
+    const bare = await run(["mirror", "update", "mirror-3f9a21c04b7e"], {});
+    expect(bare.code).toBe(2);
+    expect(bare.stdout).toContain("the external thing's identity");
+  });
+
+  /** The refusals an agent trained on any other CLI walks into, and each teaches
+   *  the PROPERTY rather than the spelling. */
+  it("teaches the model on `mirror create`, `mirror delete` and `mirror sync`", async () => {
+    const create = await run(["mirror", "create", "--kind", "github-pr"], {});
+    expect(create.code).toBe(2);
+    expect(create.stdout).toContain("expected: loopany mirror attach <object-id>");
+    expect(create.stdout).toContain("born attached");
+
+    const remove = await run(["mirror", "delete", "mirror-1"], {});
+    expect(remove.stdout).toContain("expected: loopany mirror detach <mirror-id> --from <object-id>");
+
+    // The most important one: there is nothing to sync, because a mirror never
+    // held external state and therefore can never be stale.
+    const sync = await run(["mirror", "sync", "mirror-1"], {});
+    expect(sync.code).toBe(2);
+    expect(sync.stdout).toContain("There is nothing to sync");
+  });
+
+  it("prints the mirrors attached to an object on `task show`", async () => {
+    const { stdout } = await run(["task", "show", "task-7f3a91"], {
+      task: { id: "task-7f3a91", kind: "task", title: "Watch the PR", status: "open" },
+      events: [],
+      mirrors: [MIRROR],
+    });
+    expect(stdout).toContain("mirrors[1]{id,kind,coords,note}:");
+    expect(stdout).toContain("mirror-3f9a21c04b7e,github-pr,superdesigndev/loopany-platform#57,\"seed article PR\"");
+  });
+
+  it("prints no mirrors block at all against a server that does not send one", async () => {
+    const { stdout } = await run(["task", "show", "task-7f3a91"], { task: { id: "task-7f3a91", kind: "task" }, events: [] });
+    expect(stdout).not.toContain("mirrors");
+  });
+});
+
+// ------------------------------------------------------------- task tell
+
+/**
+ * THE DIRECTIVE VERB. A distinct verb from `answer` on purpose: the inbox is the
+ * loop asking you, `tell` is you speaking first, and collapsing them would make
+ * the two conversations indistinguishable in a transcript.
+ */
+describe("task tell — the human speaking first", () => {
+  const RESPONSE = {
+    task: { id: "task-7f3a91", kind: "task", title: "Seed article bet", status: "open" },
+    event: "ev-9c22d1", directive: "Drop this bet — close the PR, then close the task.",
+    run: { id: "run-4c1d77", state: "queued", loopId: "loop-8e3311", scope: "task:task-7f3a91", reason: "directive", alreadyQueued: false },
+  };
+
+  it("posts the directive and reports the run it woke", async () => {
+    const { code, stdout, request } = await run(["task", "tell", "task-7f3a91", "Drop this bet — close the PR, then close the task."], RESPONSE);
+    expect(code).toBe(0);
+    expect(request!.method).toBe("POST");
+    expect(new URL(request!.url).pathname).toBe("/api/tasks/task-7f3a91/directive");
+    await expect(request!.json()).resolves.toEqual({ directive: "Drop this bet — close the PR, then close the task." });
+    expect(stdout).toContain("ok: told task-7f3a91");
+    expect(stdout).toContain("run: run-4c1d77");
+    // The ordering rule is the part a person cannot infer from a run id.
+    expect(stdout).toContain("acts on the INTENT against external reality first");
+  });
+
+  it("is a HUMAN verb, so the machine credential never rides along", async () => {
+    const { request } = await run(["task", "tell", "task-7f3a91", "Ship it."], RESPONSE);
+    expect(request!.headers.get("authorization")).toBeNull();
+  });
+
+  it("says the directive is not lost when the loop already had a run queued", async () => {
+    const { stdout } = await run(["task", "tell", "task-7f3a91", "Ship it."], { ...RESPONSE, run: { ...RESPONSE.run, alreadyQueued: true } });
+    expect(stdout).toContain("already queued");
+    expect(stdout).toContain("reads this task's timeline when it claims");
+  });
+
+  it("refuses a missing id or missing text locally, before any request", async () => {
+    for (const argv of [["task", "tell"], ["task", "tell", "task-7f3a91"], ["task", "tell", "task-7f3a91", "   "]]) {
+      let called = false;
+      const { code } = await run(argv, {}, 200, { fetchImpl: async () => { called = true; return reply({}); } });
+      expect(code, argv.join(" ")).toBe(2);
+      expect(called, argv.join(" ")).toBe(false);
+    }
+  });
+
+  it("renders the server's refusal verbatim when a question is already pending", async () => {
+    const { code, stdout } = await run(["task", "tell", "task-7f3a91", "Ship it."], {
+      code: "OPEN_QUESTION", message: "task-7f3a91 is already waiting on you for an answer",
+      issues: [{ path: "pendingQuestion", got: "Revert or wait?" }],
+      hint: 'answer it instead — `loopany answer task-7f3a91 "…"` records your reply AND wakes the watcher',
+    }, 409);
+    expect(code).toBe(2);
+    expect(stdout).toContain("code: CONFLICT");
+    expect(stdout).toContain("loopany answer task-7f3a91");
   });
 });

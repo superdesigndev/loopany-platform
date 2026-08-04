@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-import { cardActions, hasActions } from './board'
+import { cardActions, hasActions, tellMode } from './board'
 import type { TaskCard } from './api'
 
 /**
@@ -10,9 +10,15 @@ import type { TaskCard } from './api'
  *
  * The rule under test is not "which moves feel natural" — it is "which acts
  * correspond to a human entrance that already exists in the kernel". There are
- * exactly two (`close`, and the `watcher` PATCH — TRANSFER only, since the
- * watcher rule made a null watcher a refusal), each an explicit button; the
- * board offers no drag path, so a write can only happen through one of them.
+ * exactly two: TELL (the composer, which answers a pending question and
+ * otherwise leaves a directive) and the `watcher` PATCH — TRANSFER only, since
+ * the watcher rule made a null watcher a refusal. The board offers no drag path,
+ * so a write can only happen through one of them.
+ *
+ * CLOSE IS DELIBERATELY ABSENT (captain direction 2026-08-04) and its absence is
+ * asserted, not merely unexercised: a task ends when its WATCHER closes it, so a
+ * human close here would settle the record while the external world it describes
+ * carried on unchanged.
  *
  * NB the source-reading guard at the bottom keeps the path in a VARIABLE — Vite
  * statically rewrites the literal `new URL('./x', import.meta.url)` form into an
@@ -24,18 +30,43 @@ const card = (over: Partial<TaskCard> = {}): TaskCard => ({
   watcher: 'loop-a', createdByLoop: 'loop-b', createdAt: '', updatedAt: '', due: false, column: 'watched', ...over,
 })
 
-describe('close — the one task transition', () => {
-  it('is offered on any open card, watched or not', () => {
-    expect(cardActions(card({ column: 'watched' })).canClose).toBe(true)
-    expect(cardActions(card({ column: 'due', followUpAt: '2026-01-01T00:00:00.000Z', due: true })).canClose).toBe(true)
+describe('tell — one composer, two conversations', () => {
+  it('is offered on any open card, question or not', () => {
+    expect(cardActions(card({ column: 'watched' })).canTell).toBe(true)
+    expect(cardActions(card({ column: 'due', followUpAt: '2026-01-01T00:00:00.000Z', due: true })).canTell).toBe(true)
+    expect(cardActions(card({ column: 'waiting', pendingQuestion: 'revert or wait?' })).canTell).toBe(true)
   })
 
-  it('is withheld while a question is waiting — the kernel refuses it too (OPEN_QUESTION)', () => {
-    expect(cardActions(card({ column: 'waiting', pendingQuestion: 'revert or wait?' })).canClose).toBe(false)
+  it('is withheld on a closed card: there is no run to queue for a conversation about a record', () => {
+    expect(cardActions(card({ column: 'closed', status: 'closed' })).canTell).toBe(false)
   })
 
-  it('is withheld on a closed card: close is one-way and there is no reopen', () => {
-    expect(cardActions(card({ column: 'closed', status: 'closed' })).canClose).toBe(false)
+  // The two modes ride ONE affordance because they are one write from the
+  // person's side: free text that queues one run for the watcher.
+  it('answers while a question is pending, and otherwise leaves a directive', () => {
+    expect(tellMode(card({ pendingQuestion: 'revert or wait?' }))).toBe('answer')
+    expect(tellMode(card({ pendingQuestion: null }))).toBe('directive')
+    // Whitespace is not a question — the kernel reads it the same way
+    // (`hasOpenQuestion` trims), so the two surfaces cannot disagree.
+    expect(tellMode(card({ pendingQuestion: '   ' }))).toBe('directive')
+  })
+})
+
+describe('close is not an action this screen offers', () => {
+  // Structural, not incidental: the property is that the UI has no close path at
+  // all, so a later "helpful" re-add has to defeat a named assertion.
+  it('exposes no close affordance, under any name', () => {
+    const source = readFileSync(fileURLToPath(new URL('./board.ts', import.meta.url)), 'utf8')
+    expect(source).not.toMatch(/canClose/)
+    expect(Object.keys(cardActions(card()))).toEqual(['canTell', 'canTransfer'])
+  })
+
+  it('is not reachable from the data layer either — there is no postClose', () => {
+    const source = readFileSync(fileURLToPath(new URL('./api.ts', import.meta.url)), 'utf8')
+    expect(source).not.toMatch(/export async function postClose/)
+    expect(source).not.toMatch(/'POST', \{ note \}/)
+    // The directive endpoint replaces it: a task ends by the watcher closing it.
+    expect(source).toMatch(/export async function postDirective/)
   })
 })
 
@@ -54,7 +85,7 @@ describe('transfer — the watcher facet, one direction only', () => {
 
   it('offers nothing on a closed card — it is a record', () => {
     const closed = cardActions(card({ column: 'closed', status: 'closed', watcher: 'loop-a' }))
-    expect(closed).toEqual({ canClose: false, canTransfer: false })
+    expect(closed).toEqual({ canTell: false, canTransfer: false })
   })
 
   // RELEASE IS GONE, not merely unused: `watcher: null` is a kernel refusal
@@ -63,7 +94,6 @@ describe('transfer — the watcher facet, one direction only', () => {
   it('has no release affordance anywhere in the module', () => {
     const source = readFileSync(fileURLToPath(new URL('./board.ts', import.meta.url)), 'utf8')
     expect(source).not.toMatch(/canRelease|canClaim/)
-    expect(Object.keys(cardActions(card()))).toEqual(['canClose', 'canTransfer'])
   })
 })
 
@@ -89,7 +119,7 @@ describe('the screen invents no write path', () => {
     for (const endpoint of endpoints) {
       expect(endpoint.startsWith('/api/'), `${endpoint} must be an existing /api endpoint`).toBe(true)
     }
-    expect(source).toMatch(/\/api\/tasks\/\$\{encodeURIComponent\(taskId\)\}\/close/)
+    expect(source).toMatch(/\/api\/tasks\/\$\{encodeURIComponent\(taskId\)\}\/directive/)
   })
 
   it('performs no write from the pane except through those helpers', () => {
@@ -106,12 +136,25 @@ describe('the screen invents no write path', () => {
   it('offers no action on a row or a card — the write surface is the drawer', () => {
     const pane = read('./TasksPane.tsx')
     expect(pane).not.toMatch(/board-card-actions/)
-    const card = pane.slice(pane.indexOf('function BoardCard'), pane.indexOf('function CloseNote'))
-    expect(card).not.toMatch(/onTransfer|onAskClose|transferWatcher|postClose/)
+    const card = pane.slice(pane.indexOf('function BoardCard'), pane.indexOf('function ExternalItems'))
+    expect(card).not.toMatch(/onTransfer|transferWatcher|postDirective|postVerdict/)
     const row = pane.slice(pane.indexOf('function TaskRowEntry'), pane.indexOf('function Column'))
-    expect(row).not.toMatch(/onTransfer|onAskClose|transferWatcher|postClose/)
+    expect(row).not.toMatch(/onTransfer|transferWatcher|postDirective|postVerdict/)
     const actions = pane.slice(pane.indexOf('function TaskActions'))
-    for (const act of ['onTransfer', 'onAskClose']) expect(actions).toMatch(new RegExp(act))
+    for (const act of ['onTransfer', 'TellBox']) expect(actions).toMatch(new RegExp(act))
+  })
+
+  /**
+   * Captain direction (2026-08-04): the close action leaves the drawer
+   * entirely. Asserted on the SOURCE rather than only through a rendered pass,
+   * because the failure mode is somebody adding it back in one of several
+   * places — a button, a dialog, a helper — and any of them would match here.
+   */
+  it('has no close control, dialog or call anywhere in the pane', () => {
+    const pane = read('./TasksPane.tsx')
+    expect(pane).not.toMatch(/CloseNote|onAskClose|postClose|pendingClose/)
+    expect(pane).not.toMatch(/close…/)
+    expect(pane).not.toMatch(/ws-close-note/)
   })
 
   // The board is a read layout plus buttons, by product decision: no card is

@@ -21,6 +21,7 @@ import {
   autoPauseTaskId,
   clockRunId,
   derivedEventId,
+  directiveRunId,
   dueRunId,
   newRunId,
   reportDocId,
@@ -62,6 +63,10 @@ export interface QueueInput {
   scheduledFor?: string | null;
   /** Required for answered runs so a retried verdict derives the same row. */
   verdictEventId?: string;
+  /** Required for DIRECTIVE runs, so a retried `task tell` derives the same row.
+   *  It is also PERSISTED (`runs.trigger_event_id`), which is what lets the claim
+   *  carry the person's own words into the work order verbatim. */
+  triggerEventId?: string;
   /** Required for DUE runs: the task and the follow-up instant that came due,
    *  which together with the loop are the run's identity (`dueRunId`). */
   due?: { taskId: string; followUpAt: string };
@@ -73,6 +78,9 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
   if (reason === "answered" && !input.verdictEventId) {
     throw new Error("answered runs require verdictEventId for deterministic identity");
   }
+  if (reason === "directive" && !input.triggerEventId) {
+    throw new Error("directive runs require triggerEventId for deterministic identity");
+  }
   if (reason === "due" && !input.due) {
     throw new Error("due runs require the task and follow-up instant for deterministic identity");
   }
@@ -81,9 +89,11 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
       ? clockRunId(loop.id, input.scheduledFor)
       : reason === "answered" && input.verdictEventId
         ? answeredRunId(input.verdictEventId)
-        : reason === "due" && input.due
-          ? dueRunId(loop.id, input.due.taskId, input.due.followUpAt)
-          : undefined;
+        : reason === "directive" && input.triggerEventId
+          ? directiveRunId(input.triggerEventId)
+          : reason === "due" && input.due
+            ? dueRunId(loop.id, input.due.taskId, input.due.followUpAt)
+            : undefined;
   const row = {
     loopId: loop.id,
     // Additive reuse of the legacy table requires these columns. They are not
@@ -98,9 +108,14 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
     reason,
     // A DUE fire is the CLOCK's entrance, not a person's: nobody entered
     // anything at the moment it fired — a date that was set earlier simply
-    // arrived, which is exactly what `clock` means for a cadence.
+    // arrived, which is exactly what `clock` means for a cadence. A DIRECTIVE is
+    // `human` alongside `manual`: somebody typed it.
     entrance: reason === "clock" || reason === "due" ? "clock" : reason === "answered" ? "answer" : "human",
     scheduledFor: input.scheduledFor ?? null,
+    // The event whose words this run was queued to act on. Persisted rather than
+    // only hashed into the id, so `claimRun` can read the note back and put the
+    // person's instruction in the work order instead of making the agent hunt.
+    triggerEventId: input.triggerEventId ?? input.verdictEventId ?? null,
   } as const;
 
   if (derivedId) {
@@ -465,14 +480,23 @@ export async function claimRun(machine: Machine, body: ClaimBody, now = new Date
   const { run, loop } = claimed;
   const taskId = run.scope?.startsWith("task:") ? run.scope.slice(5) : undefined;
   const task = taskId ? await store.getObject(undefined, taskId) : undefined;
-  // A scoped run says WHY it is scoped, because the two reasons ask for
-  // different work: an answer is new information to act on, a due date is the
-  // loop's own earlier request to look again.
+  // THE HUMAN'S OWN WORDS, read back through the event that queued this run.
+  // A run woken by a person must be told WHAT they said, not merely that
+  // something changed — otherwise its first act is a hunt through a timeline it
+  // has to guess the shape of.
+  const trigger = run.triggerEventId ? await store.getEvent(undefined, run.triggerEventId) : undefined;
+  const spoken = trigger?.note?.trim() || null;
+  // A scoped run says WHY it is scoped, because the reasons ask for different
+  // work: an answer is a reply to something this loop asked, a directive is an
+  // instruction it did not ask for, and a due date is the loop's own earlier
+  // request to look again.
   const scopeNote = !taskId
     ? null
     : run.reason === "due"
       ? `A task you watch has reached its follow-up date and is waiting for you: ${taskId}.`
-      : `One task was answered by a human and is waiting for you: ${taskId}.`;
+      : run.reason === "directive"
+        ? `A human left you a DIRECTIVE on ${taskId}. Execute the INTENT against reality first — external systems, then this kernel's records — and report what you actually changed.`
+        : `One task was answered by a human and is waiting for you: ${taskId}.`;
   return {
     status: 200,
     body: {
@@ -489,6 +513,10 @@ export async function claimRun(machine: Machine, body: ClaimBody, now = new Date
       charter: loop.body ?? "",
       identityLine: `You are running for ${loop.id}${loop.title ? ` (\"${loop.title}\")` : ""}.`,
       scopeNote,
+      // VERBATIM, and separated by which conversation it belongs to, so the
+      // agent never has to infer whether it is reading a reply or an order.
+      ...(spoken && run.reason === "directive" ? { directive: spoken } : {}),
+      ...(spoken && run.reason === "answered" ? { answer: spoken } : {}),
       ...(task ? { task } : {}),
       execution: executionConfig(loop),
       roots: machine.roots ?? undefined,

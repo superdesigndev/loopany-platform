@@ -34,6 +34,7 @@ export const REFUSAL_CODES = [
   "NO_OPEN_QUESTION", "WRONG_KIND", "KEY_KIND_MISMATCH", "IMMUTABLE_KEY",
   "CLOSED", "PAUSED", "RETIRED", "QUEUED_ALREADY", "LEASE_LOST",
   "TOO_LARGE", "RATE_LIMITED", "ID_COLLISION",
+  "IMMUTABLE_COORDS", "MIRROR_STATELESS",
 ] as const;
 
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
@@ -52,6 +53,7 @@ export const REFUSAL_STATUS: Record<RefusalCode, number> = {
   KEY_KIND_MISMATCH: 409, IMMUTABLE_KEY: 409, CLOSED: 409, PAUSED: 409,
   RETIRED: 409, QUEUED_ALREADY: 409, LEASE_LOST: 409, TOO_LARGE: 413,
   RATE_LIMITED: 429, ID_COLLISION: 409,
+  IMMUTABLE_COORDS: 409, MIRROR_STATELESS: 400,
 };
 
 interface RefusalTemplate {
@@ -210,6 +212,14 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   ID_COLLISION: {
     message: `%s already names a different object than the one this call derived it for`,
     hint: "this is a server-side identity fault, not a mistake in your command: the work did NOT happen and retrying re-derives the same id. Report it to the loop's owner.",
+  },
+  IMMUTABLE_COORDS: {
+    message: `%s cannot be repointed — a mirror's coords are the external thing's identity`,
+    hint: "a different PR is a different mirror: detach this one and attach a new one. Repointing the row would silently rewrite every timeline that already cites it.",
+  },
+  MIRROR_STATELESS: {
+    message: `%s would give a mirror somewhere to record external state, and a mirror has nowhere by design`,
+    hint: "a mirror tells you WHERE to look, never WHAT state it is in — record what you found on the task that owns the work, and let the next run go and look.",
   },
 };
 

@@ -166,6 +166,19 @@
   .icon-html { background: var(--violet-soft); color: var(--violet); }
   .icon-question { background: #fff0c8; color: #86600d; }
   .icon-orphan { background: #f7e4e6; color: #9d4f56; }
+  /* A MIRROR points OUTSIDE the system, so it is the one row tint that is not
+     one of the temperature colours: those grade how much a thing wants from you
+     (amber owed, rose failed, blue settled), and an external pointer wants
+     nothing — it is a place to go and look. Violet, shared with the html doc,
+     reads as "not ours" without reading as a state. */
+  .icon-mirror { background: var(--violet-soft); color: var(--violet); }
+  /* Not a button: a mirror row has no drawer of its own here, so it keeps the
+     row grid and drops the hover affordance that would promise one. The coords
+     inside it ARE the link, and they go off-site. */
+  .mirror-row:hover { background: transparent; }
+  .mirror-row .artifact-main h3 { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: .8125rem; }
+  .mirror-row .artifact-main h3 a { color: var(--blue); text-decoration: none; }
+  .mirror-row .artifact-main h3 a:hover { text-decoration: underline; text-underline-offset: 2px; }
   .artifact-main { min-width: 0; }
   .artifact-main h3 { overflow: hidden; margin: 0; color: #35332f; font-size: .875rem; font-weight: 500; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
   .artifact-main p { overflow: hidden; margin: 4px 0 0; color: var(--faint); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }

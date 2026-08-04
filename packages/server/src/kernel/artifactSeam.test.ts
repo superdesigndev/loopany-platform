@@ -5,7 +5,10 @@ const NOW = new Date("2026-08-03T00:00:00.000Z");
 
 describe("kind artifact seam", () => {
   it("keeps closed top-level key sets at the server, with payload as a free zone", () => {
-    expect(KIND_KEYS.task).toEqual(["title", "key", "follow_up", "watcher", "needs_human", "payload"]);
+    // `mirrors` is the one key here that is not a FIELD of the task: it is a
+    // constructor argument, consumed at create and never stored on the row (see
+    // `artifactSeam.MIRRORS_KEY`), which is why `show --file` never emits it.
+    expect(KIND_KEYS.task).toEqual(["title", "key", "follow_up", "watcher", "needs_human", "payload", "mirrors"]);
     const result = parseKindArtifact("task", "---\ntitle: A\npayload:\n  anything:\n    goes: here\n---\nbody\n", NOW);
     expect(result.ok).toBe(true);
   });

@@ -208,7 +208,7 @@ describe("GET /api/views/inbox — the §6 union, exactly", () => {
 describe("GET /api/views/loop/:id", () => {
   it("composes the charter, health, the three task sections and the run strip", async () => {
     const value = ok(await views.loopView(housekeeper, human, NOW)) as Record<string, unknown>;
-    expect(Object.keys(value).sort()).toEqual(["charterHistory", "cursorSeq", "events", "health", "loop", "openTasks", "recentRuns"]);
+    expect(Object.keys(value).sort()).toEqual(["charterHistory", "cursorSeq", "events", "health", "loop", "mirrors", "openTasks", "recentRuns"]);
     const loop = value.loop as Record<string, unknown>;
     expect(loop.cronText).toBe("daily 07:00");
     expect(loop.body).toBe("You are the Housekeeper.\n");
@@ -322,7 +322,7 @@ describe("GET /api/views/tasks — the board, and /task/:id", () => {
     const board = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
     const id = (board.columns.find((c) => c.key === "waiting")!.tasks as { id: string; title: string }[]).find((t) => t.title === "Watch the error rate")!.id;
     const value = ok(await views.taskView(id, human, NOW)) as Record<string, unknown>;
-    expect(Object.keys(value).sort()).toEqual(["creator", "cursorSeq", "due", "execution", "runs", "task", "timeline", "watcherLoop"]);
+    expect(Object.keys(value).sort()).toEqual(["creator", "cursorSeq", "due", "execution", "mirrors", "runs", "task", "timeline", "watcherLoop"]);
     expect(value.due).toBe(true);
     const timeline = value.timeline as { seq: number; kind: string }[];
     expect(timeline.map((e) => e.kind)).toEqual(["object-created", "object-updated"]);

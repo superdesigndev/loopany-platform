@@ -12,9 +12,23 @@
 
 // ---- kinds and statuses ----
 
-/** Single-table inheritance: three kinds, one `objects` table (design §2). */
-export const OBJECT_KINDS = ["loop", "task", "doc"] as const;
+/** Single-table inheritance: four kinds, one `objects` table (design §2). */
+export const OBJECT_KINDS = ["loop", "task", "doc", "mirror"] as const;
 export type ObjectKind = (typeof OBJECT_KINDS)[number];
+
+/**
+ * The kinds that are AUTHORED AS A FILE — the ones `parseKindArtifact` accepts
+ * and `show --file` emits. A mirror is deliberately outside the set: it is three
+ * flag-sized fields (kind, coords, note), so a front-matter file for it would be
+ * ceremony around a one-liner, and having no file path is what keeps a mirror
+ * from growing a body somebody could cache external state in.
+ */
+export const ARTIFACT_KINDS = ["loop", "task", "doc"] as const;
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+
+export function isArtifactKind(kind: ObjectKind): kind is ArtifactKind {
+  return (ARTIFACT_KINDS as readonly string[]).includes(kind);
+}
 
 /** `open → closed`. Nothing else (design §3) — everything that feels like a
  *  state is a facet (`pending_question`, `follow_up_at`) or a run's lease. */
@@ -23,11 +37,21 @@ export const TASK_STATUSES = ["open", "closed"] as const;
 export const LOOP_STATUSES = ["active", "paused", "retired"] as const;
 /** A doc has one state; `doc update` rewrites it in place (design §8). */
 export const DOC_STATUSES = ["current"] as const;
+/**
+ * A mirror has ONE state, and the single value is load-bearing rather than a
+ * placeholder: `current` says "this row is the current record" and says NOTHING
+ * about the external thing. A second status here — `open`, `merged`, `stale` —
+ * would be exactly the cached external state the kind exists to forbid, so the
+ * set is closed at one and §10 principle 3 ("a state exists only if the kernel
+ * must enforce something about it") keeps it there.
+ */
+export const MIRROR_STATUSES = ["current"] as const;
 
 export const STATUSES_BY_KIND: Record<ObjectKind, readonly string[]> = {
   task: TASK_STATUSES,
   loop: LOOP_STATUSES,
   doc: DOC_STATUSES,
+  mirror: MIRROR_STATUSES,
 };
 
 /** The status a freshly created object of each kind carries. Creation is NOT a
@@ -36,6 +60,7 @@ export const INITIAL_STATUS: Record<ObjectKind, string> = {
   task: "open",
   loop: "active",
   doc: "current",
+  mirror: "current",
 };
 
 // ---- events ----
@@ -72,11 +97,23 @@ export type RunQueueState = (typeof RUN_QUEUE_STATES)[number];
  * Why this run exists (§5.3). `clock` = R-clock (the loop's own cadence),
  * `answered` = R-answer (a human answered a task this loop watches), `due` =
  * R-due (a task this loop watches reached its `follow_up`), `manual` = a person
- * pressed the button. `due` joined the set under the 2026-08-04 watcher ruling:
- * with every task watched, a follow-up date is a real alarm on a named loop, so
- * the same level-triggered clock that fires cadences fires it.
+ * pressed the button, `directive` = R-directive (a human told this loop
+ * something about a task it watches, without being asked). `due` joined the set
+ * under the 2026-08-04 watcher ruling: with every task watched, a follow-up date
+ * is a real alarm on a named loop, so the same level-triggered clock that fires
+ * cadences fires it.
+ *
+ * `directive` is its OWN reason rather than a flavour of `answered`, and the
+ * split is the point: the two are opposite conversations. `answered` means "you
+ * asked a person something and here is the reply" — the agent already framed the
+ * decision. `directive` means "a person is telling you something you did not
+ * ask about" — the agent has framed nothing, and the run's first job is to work
+ * out what the instruction implies against external reality. A run that could
+ * not tell them apart would read a directive as an answer to a question it never
+ * asked. `runs.reason` is a TS-only drizzle enum, so widening it needs no
+ * migration.
  */
-export const RUN_REASONS = ["clock", "answered", "due", "manual"] as const;
+export const RUN_REASONS = ["clock", "answered", "due", "manual", "directive"] as const;
 export type RunReason = (typeof RUN_REASONS)[number];
 
 /** `active` until the lease expires; `terminal-grace` admits exactly ONE late
@@ -131,19 +168,39 @@ export const LOOP_ONLY_FIELDS = ["cron", "timezone", "nextFire", "workdir"] as c
 export const TASK_ONLY_FIELDS = ["followUpAt", "pendingQuestion", "watcher"] as const;
 /** `format: html` is a doc narrow door (design §7). */
 export const DOC_ONLY_FIELDS = ["format"] as const;
+/** The external pointer, its immutable identity, and the objects it hangs on.
+ *  See `kernel/mirrors.ts` for why the set stops exactly there. */
+export const MIRROR_ONLY_FIELDS = ["mirrorKind", "mirrorCoords", "attachedTo"] as const;
 
 const FACET_OWNER: Record<string, ObjectKind> = {
   ...Object.fromEntries(LOOP_ONLY_FIELDS.map((f) => [f, "loop" as const])),
   ...Object.fromEntries(TASK_ONLY_FIELDS.map((f) => [f, "task" as const])),
   ...Object.fromEntries(DOC_ONLY_FIELDS.map((f) => [f, "doc" as const])),
+  ...Object.fromEntries(MIRROR_ONLY_FIELDS.map((f) => [f, "mirror" as const])),
 };
 
 /** Fields any kind may carry. Everything else is either a facet (above) or is
- *  not writable through the kernel at all (`id`, `kind`, `status`, `key`). */
+ *  not writable through the kernel at all (`id`, `kind`, `status`, `key`).
+ *  A MIRROR is the one exception and it is a subtraction, not an addition —
+ *  see `MIRROR_FORBIDDEN_FIELDS`. */
 export const COMMON_FIELDS = ["title", "body", "payload"] as const;
 
-/** Never writable after creation — identity and the guarded state column. */
-export const IMMUTABLE_FIELDS = ["id", "kind", "key", "status", "teamId", "createdAt"] as const;
+/**
+ * THE STATELESSNESS SUBTRACTION. A mirror carries neither of the two open
+ * fields every other kind has: `payload` is the declared free zone and `body` is
+ * free text, and either would be somewhere to write `state: merged`. Removing
+ * both is what turns "a mirror is never a cache" from a convention into a
+ * property — there is no column left that could hold external status.
+ *
+ * Welded twice, like the kind firewalls: here (the teaching altitude) and in the
+ * DDL as `objects_mirror_stateless` (the floor).
+ */
+export const MIRROR_FORBIDDEN_FIELDS = ["payload", "body"] as const;
+
+/** Never writable after creation — identity and the guarded state column.
+ *  `mirrorKind`/`mirrorCoords` are here because coords ARE the external thing's
+ *  identity: a different PR is a different mirror, never the same row repointed. */
+export const IMMUTABLE_FIELDS = ["id", "kind", "key", "status", "teamId", "createdAt", "mirrorKind", "mirrorCoords"] as const;
 
 // ---- the refusal envelope (server contract §3.1) ----
 
@@ -171,6 +228,16 @@ export type KernelErrorCode =
   | "NOT_HUMAN"
   | "KEY_KIND_MISMATCH"
   | "SCHEMA_VIOLATION"
+  /** A write tried to move a mirror's coords or kind. Its own code because the
+   *  legal move is not "supply the stored value" (what `IMMUTABLE_KEY` teaches)
+   *  but "detach this mirror and attach a new one" — a different external thing
+   *  is a different pointer. */
+  | "IMMUTABLE_COORDS"
+  /** A write tried to give a mirror a body or a payload. Its own code because
+   *  the refusal has to say WHY the field is missing rather than that it is
+   *  unknown: a mirror is a pointer and deliberately has nowhere to cache state
+   *  (`kernel/mirrors.ts` MIRROR_LAW). */
+  | "MIRROR_STATELESS"
   /** A task was created or updated with no loop watching it. Its own code
    *  because "who acts next" is the one task facet that may never be empty
    *  (captain ruling 2026-08-04) — see `WATCHER_RULE` below. */
@@ -222,7 +289,9 @@ export function firewallIssues(kind: ObjectKind, fields: Iterable<string>): Kern
           ? "a cadence belongs to a loop, not a " + kind
           : field === "workdir"
             ? "a bound working directory belongs to a loop, not a " + kind
-            : `${field} is a ${owner} facet, not a ${kind} one`,
+            : field === "mirrorKind" || field === "mirrorCoords" || field === "attachedTo"
+              ? `${field} belongs to a mirror, not a ${kind} — a pointer to an external thing is its own object`
+              : `${field} is a ${owner} facet, not a ${kind} one`,
       got: field,
     });
   }
@@ -235,8 +304,42 @@ export function firewallHint(kind: ObjectKind): string {
     return "tasks have no cadence. A standing schedule is a loop; a resurface date is follow_up:";
   }
   if (kind === "doc") return "docs carry title, key, format and payload; a schedule is a loop's";
+  if (kind === "mirror") return MIRROR_STATELESS_HINT;
   return "loops carry title, cron, workdir and payload (body = the charter); questions and follow-ups are a task's";
 }
+
+/**
+ * THE STATELESSNESS FIREWALL, teaching half. Given the fields a write carries,
+ * refuse the two a mirror may never hold. The DDL CHECK is the floor underneath;
+ * this is what makes the refusal say why.
+ *
+ * Only ASSERTED fields count — writing `payload: null` on a mirror is a no-op,
+ * not an attempt to give it a free zone, exactly as the kind firewall treats a
+ * cleared facet.
+ */
+export function statelessIssues(kind: ObjectKind, fields: Iterable<string>): KernelIssue[] {
+  if (kind !== "mirror") return [];
+  const banned = new Set<string>(MIRROR_FORBIDDEN_FIELDS);
+  const issues: KernelIssue[] = [];
+  for (const field of fields) {
+    if (!banned.has(field)) continue;
+    issues.push({
+      path: field,
+      message: `a mirror has no ${field} — ${MIRROR_LAW}`,
+      got: field,
+      expected: "(nothing: put the finding on the task, not on the pointer)",
+    });
+  }
+  return issues;
+}
+
+/** The sentence every mirror-shape refusal ends with. Duplicated from
+ *  `kernel/mirrors.ts` deliberately: this module has NO imports, which is what
+ *  keeps every rule in it unit-testable without a database. */
+export const MIRROR_LAW = "a mirror tells you WHERE to look, never WHAT state it is in";
+
+export const MIRROR_STATELESS_HINT =
+  `a mirror carries only its kind, its coords and a note — ${MIRROR_LAW}. Record what you FOUND on the task that owns the work; the mirror stays a pointer, so the next run goes and looks rather than trusting a stale copy.`;
 
 /** Immutable-field issues for a write that tried to move identity or status. */
 export function immutableIssues(fields: Iterable<string>): KernelIssue[] {
@@ -249,12 +352,19 @@ export function immutableIssues(fields: Iterable<string>): KernelIssue[] {
       message:
         field === "status"
           ? "status moves only through a transition, never through an update"
-          : `${field} is fixed at creation`,
+          : field === "mirrorCoords" || field === "mirrorKind"
+            ? "coords are the external thing's identity: a different PR is a different mirror"
+            : `${field} is fixed at creation`,
       got: field,
     });
   }
   return issues;
 }
+
+/** The teaching a coords/kind rewrite gets. Named here so the kernel, the HTTP
+ *  seam and the CLI all say the same sentence. */
+export const MIRROR_COORDS_IMMUTABLE_HINT =
+  "detach this mirror and attach a new one: `loopany mirror detach <mirror-id> --from <object-id>` then `loopany mirror attach <object-id> --kind <k> --coords <new>`. Repointing the row would silently rewrite every timeline that already cites it.";
 
 /** A question is "open" when it is present and not blank (§4.3 / §3.4). */
 export function hasOpenQuestion(pendingQuestion: string | null | undefined): boolean {

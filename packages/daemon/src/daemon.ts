@@ -47,6 +47,12 @@ interface RunsV2Claim {
   charter?: string;
   identityLine?: string;
   scopeNote?: string | null;
+  /** A human's INSTRUCTION on a task this loop watches, in their own words
+   *  (`task tell`). Present only on a `directive` run. */
+  directive?: string | null;
+  /** A human's REPLY to a question this loop asked, in their own words.
+   *  Present only on an `answered` run. */
+  answer?: string | null;
   task?: unknown;
   execution?: {
     agent?: "claude-code" | "codex" | "grok";
@@ -72,6 +78,12 @@ export function deliveryFromRunsV2(claim: RunsV2Claim, deviceToken: string): Del
     claim.charter ?? "",
     claim.identityLine ?? `You are running for ${claim.run.loopId}.`,
     claim.scopeNote ?? "",
+    // THE HUMAN'S OWN WORDS, VERBATIM and labelled by which conversation they
+    // belong to. Never summarized and never merged into the scope note: a run
+    // acting on an instruction has to be able to quote what it was told, and it
+    // must never mistake a reply-to-its-own-question for an unasked-for order.
+    claim.directive ? `A human left this DIRECTIVE, verbatim:\n\n${claim.directive}\n\nExecute the INTENT against reality first (external systems), then this kernel's records last.` : "",
+    claim.answer ? `A human answered, verbatim:\n\n${claim.answer}` : "",
     claim.task ? `Task in scope:\n${JSON.stringify(claim.task, null, 2)}` : "",
   ]
     .filter(Boolean)

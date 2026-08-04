@@ -1,10 +1,10 @@
 import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import {
-  fetchTask, fetchTasks, postClose, postVerdict, transferWatcher, ViewError,
-  type BoardColumn, type TaskCard, type TaskView, type TasksView,
+  fetchTask, fetchTasks, postDirective, postVerdict, transferWatcher, ViewError,
+  type BoardColumn, type MirrorRef, type TaskCard, type TaskView, type TasksView,
 } from './api'
-import { cardActions, hasActions } from './board'
+import { cardActions, hasActions, tellMode, type TellMode } from './board'
 import { flattenColumns, groupTasks, readTasksView, writeTasksView, type TaskGroup, type TasksViewMode } from './taskList'
 import { ExecutionBlock, Markdown } from './Render'
 import {
@@ -41,6 +41,22 @@ import { affectsObject, affectsTasks, useLiveView } from './useLiveView'
  * page and nothing about what is true. There is still no drag surface anywhere
  * (standing product decision) — and now there is no on-card control either, so
  * the only write path on this screen is the drawer.
+ *
+ * **THE DRAWER HAS NO CLOSE BUTTON** (captain direction 2026-08-04), and that is
+ * a fourth rule rather than a trimmed feature. The expected end of a task is
+ * that its WATCHER closes it, from its own workflow logic or in response to a
+ * directive left here. A person closing it from this screen settles the kernel's
+ * record while the world it describes carries on unchanged — the PR still open,
+ * the branch still there, and the loop that would have cleaned them up now
+ * looking at a closed task it will never act on again. What replaces it is the
+ * Tell-the-watcher composer: say what you want to happen, and the loop
+ * reconciles reality and then the record, in that order. `loopany task close`
+ * remains as the deep emergency hatch for a broken watcher, on the CLI, where
+ * the person running it can see they are taking the reconciliation on
+ * themselves.
+ *
+ * The drawer's surfaces are therefore: the verbatim execution block, the
+ * external items, the timeline, and the composer.
  */
 
 /** What a write needs to know about its subject: the id it acts on and the
@@ -51,7 +67,6 @@ type TaskTarget = { id: string; title: string | null }
 export function TasksPane({ selected, onSelect, onOpenLoop }: { selected: string | null; onSelect: (id: string | null) => void; onOpenLoop: (id: string) => void }) {
   const { data, error, loading, refresh } = useLiveView('tasks:board', () => fetchTasks(), affectsTasks)
   const [mode, setMode] = useState<TasksViewMode>(() => readTasksView(typeof window === 'undefined' ? undefined : window.localStorage))
-  const [pendingClose, setPendingClose] = useState<TaskTarget | null>(null)
   const [failure, setFailure] = useState<Error | undefined>(undefined)
   // The row that opened the drawer, so closing hands the keyboard back to where
   // it came from rather than dropping it on the document.
@@ -127,20 +142,8 @@ export function TasksPane({ selected, onSelect, onOpenLoop }: { selected: string
             loops={data?.loops ?? []}
             onOpenLoop={onOpenLoop}
             onTransfer={(target, loop) => run(() => transferWatcher(target.id, loop))}
-            onAskClose={setPendingClose}
           />
         </Drawer>
-      )}
-
-      {pendingClose && (
-        <CloseNote
-          card={pendingClose}
-          onCancel={() => setPendingClose(null)}
-          onConfirm={async (note) => {
-            setPendingClose(null)
-            await run(() => postClose(pendingClose.id, note))
-          }}
-        />
       )}
     </div>
   )
@@ -282,72 +285,65 @@ function BoardCard({ card, selected, onOpen }: { card: TaskCard; selected: boole
   )
 }
 
-/** The note the kernel requires to close. It is asked for BEFORE the write, so
- *  the person attests why the task is done rather than discovering a refusal. */
-function CloseNote({ card, onCancel, onConfirm }: { card: TaskTarget; onCancel: () => void; onConfirm: (note: string) => void }) {
-  const [note, setNote] = useState('')
-  const form = useRef<HTMLFormElement>(null)
-  // `aria-modal` is a promise to the user that the dialog owns the keyboard, so
-  // it also has to keep it: Escape cancels, and Tab cycles inside the form
-  // rather than wandering back into the screen behind it.
-  const onKeyDown = (event: ReactKeyboardEvent) => {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      onCancel()
-      return
-    }
-    if (event.key !== 'Tab' || !form.current) return
-    const focusable = [...form.current.querySelectorAll<HTMLElement>('textarea, button:not([disabled])')]
-    if (!focusable.length) return
-    const edge = event.shiftKey ? focusable[0]! : focusable[focusable.length - 1]!
-    if (document.activeElement !== edge) return
-    event.preventDefault()
-    ;(event.shiftKey ? focusable[focusable.length - 1]! : focusable[0]!).focus()
-  }
+/**
+ * EXTERNAL ITEMS — the mirrors attached to this task.
+ *
+ * A mirror is a pointer to something outside the system, and this section says
+ * exactly that much: which kind, its coords, and the label somebody gave it. It
+ * shows no status, because there is none to show — a mirror tells you WHERE to
+ * look, never WHAT state it is in, and the kernel's schema has nowhere to record
+ * one. A person reading this goes and looks; so does the loop.
+ *
+ * The coords are a LINK when they resolve to one, and the server decides that
+ * (`href`) rather than the client re-deriving external URLs per kind.
+ */
+function ExternalItems({ mirrors }: { mirrors: MirrorRef[] }) {
   return (
-    <div className="note-scrim" role="dialog" aria-modal="true" aria-label={`Close ${card.title ?? card.id}`} onKeyDown={onKeyDown}>
-      <form
-        ref={form}
-        className="note-dialog"
-        onSubmit={(event) => {
-          event.preventDefault()
-          if (note.trim()) onConfirm(note.trim())
-        }}
-      >
-        <h3>Close “{card.title ?? card.id}”</h3>
-        <p>Closing is one-way — there is no transition back to open. One sentence attesting why it is done is required, and it is recorded on the task-closed event.</p>
-        <label htmlFor="ws-close-note">Why is it done?</label>
-        <textarea
-          id="ws-close-note"
-          className="field-text"
-          name="note"
-          autoFocus
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-          rows={3}
-          placeholder="Merged as #197; nothing left to watch."
-        />
-        <div className="note-actions">
-          <button type="button" className="attn-button is-quiet" onClick={onCancel}>
-            cancel
-          </button>
-          <button type="submit" className="solid-button" disabled={!note.trim()}>
-            close the task
-          </button>
+    <DrawerSection
+      title="External items"
+      note="What this task depends on outside Loopany. A pointer, never a copy — the state lives over there, so go and look."
+    >
+      {mirrors.length === 0 ? (
+        <Empty>Nothing external is attached. A run attaches one with `loopany mirror attach`.</Empty>
+      ) : (
+        <div className="artifact-list">
+          {mirrors.map((mirror) => (
+            <div className="artifact-row mirror-row" key={mirror.id}>
+              <span className="artifact-icon icon-mirror">
+                <Glyph name="mirror" />
+              </span>
+              <span className="artifact-main">
+                <h3>
+                  {mirror.href ? (
+                    <a className="ws-link" href={mirror.href} target="_blank" rel="noreferrer noopener">
+                      {mirror.coords}
+                    </a>
+                  ) : (
+                    mirror.coords
+                  )}
+                </h3>
+                {mirror.note && <p>{mirror.note}</p>}
+              </span>
+              <span className="artifact-badges">
+                <span className="state-label">{mirror.externalKind}</span>
+              </span>
+              <When iso={mirror.updatedAt} />
+              <span />
+            </div>
+          ))}
         </div>
-      </form>
-    </div>
+      )}
+    </DrawerSection>
   )
 }
 
 function TaskDetail({
-  id, loops, onOpenLoop, onTransfer, onAskClose,
+  id, loops, onOpenLoop, onTransfer,
 }: {
   id: string
   loops: TasksView['loops']
   onOpenLoop: (id: string) => void
   onTransfer: (target: TaskTarget, loop: string) => void
-  onAskClose: (target: TaskTarget) => void
 }) {
   const { data, error, refresh } = useLiveView(`task:${id}`, () => fetchTask(id), affectsObject(id))
   if (error && !data) {
@@ -415,11 +411,13 @@ function TaskDetail({
         </p>
       )}
 
-      <TaskActions view={data} loops={loops} onTransfer={onTransfer} onAskClose={onAskClose} onAnswered={refresh} />
+      <TaskActions view={data} loops={loops} onTransfer={onTransfer} onSpoke={refresh} />
 
       <ExecutionBlock payload={data.execution} />
 
       {task.body?.trim() ? <Markdown>{task.body}</Markdown> : <Empty>No body.</Empty>}
+
+      <ExternalItems mirrors={data.mirrors ?? []} />
 
       <DrawerSection title="Runs that touched it">
         {data.runs.length ? <RunStrip runs={data.runs} /> : <Empty>No run has claimed or reported on this task.</Empty>}
@@ -437,45 +435,51 @@ function TaskDetail({
  *
  * `board.ts` still says which acts a task offers — the rule did not change when
  * the buttons moved, and it is still an AFFORDANCE layer: the kernel re-decides
- * each one and its refusal is rendered verbatim. The answer box is here for the
- * same reason: a task that is asking cannot be closed, so answering IS the move,
- * and a person should not have to leave for the Inbox to make it.
+ * each one and its refusal is rendered verbatim.
+ *
+ * There are TWO, and close is not one of them (see the module header). The
+ * composer is always available on an open task, because talking to the watcher
+ * is now the way every task ends: answer the question it asked, or tell it what
+ * you want to happen and let it reconcile reality and then the record.
  */
 function TaskActions({
-  view, loops, onTransfer, onAskClose, onAnswered,
+  view, loops, onTransfer, onSpoke,
 }: {
   view: TaskView
   loops: TasksView['loops']
   onTransfer: (target: TaskTarget, loop: string) => void
-  onAskClose: (target: TaskTarget) => void
-  onAnswered: () => void
+  onSpoke: () => void
 }) {
   const task = view.task
   // The drawer opens from a row, from the Inbox, or from a loop page, so it
-  // reads the three facts `board.ts` decides on off the task itself rather than
-  // being handed a card.
-  // Held HERE, not in the answer box: a successful answer clears the question,
-  // which unmounts the box — and with it the one line saying what the answer
-  // just did. The confirmation has to outlive the form that produced it.
+  // reads the facts `board.ts` decides on off the task itself rather than being
+  // handed a card.
+  // Held HERE, not in the composer: a successful ANSWER clears the question,
+  // which flips the composer to directive mode and re-mounts it — and with it
+  // would go the one line saying what the answer just did. The confirmation has
+  // to outlive the form that produced it.
   const [queued, setQueued] = useState<string | undefined>(undefined)
   const facts = { status: task.status, pendingQuestion: task.pendingQuestion }
   const target: TaskTarget = { id: task.id, title: task.title }
-  const { canClose, canTransfer } = cardActions(facts)
-  const asking = Boolean(task.pendingQuestion?.trim())
+  const { canTell, canTransfer } = cardActions(facts)
+  const mode = tellMode(facts)
 
-  if (!asking && !hasActions(facts)) {
+  if (!hasActions(facts)) {
     return (
       <DrawerSection title="Actions">
-        {queued && <p className="inbox-queued">answer recorded · {queued}</p>}
+        {queued && <p className="inbox-queued">{queued}</p>}
         <Empty>A closed task is a record: there is no reopen, and nothing here can change it.</Empty>
       </DrawerSection>
     )
   }
 
   return (
-    <DrawerSection title="Actions" note="The only write surface on this screen — rows and cards just open the task.">
-      {asking && <AnswerBox taskId={task.id} onAnswered={onAnswered} onQueued={setQueued} />}
-      {queued && <p className="inbox-queued">answer recorded · {queued}</p>}
+    <DrawerSection
+      title="Actions"
+      note="The only write surface on this screen — rows and cards just open the task. A task ends when its watcher closes it, so telling the watcher is how you end one."
+    >
+      {canTell && <TellBox taskId={task.id} mode={mode} watcher={view.watcherLoop?.title ?? task.watcher} onSpoke={onSpoke} onQueued={setQueued} />}
+      {queued && <p className="inbox-queued">{queued}</p>}
       <div className="task-actions">
         {canTransfer && (
           <label className="task-action-claim">
@@ -501,45 +505,60 @@ function TaskActions({
             </select>
           </label>
         )}
-        {canClose && (
-          <button type="button" className="verdict-button" onClick={() => onAskClose(target)}>
-            close…
-          </button>
-        )}
       </div>
-      {!canClose && asking && (
-        <p className="ws-note-line">Closing is withheld while a question is waiting — the kernel refuses it too. Answer first.</p>
-      )}
     </DrawerSection>
   )
 }
 
 /**
- * The verdict, in the drawer. Identical in substance to the Inbox's box, because
- * it is the same one write: free text, recorded as the answer, the question
- * cleared, and one express run queued if a loop is watching. The platform never
- * parses it — Approve and Reject only prefill.
+ * TELL THE WATCHER — one composer, two modes.
+ *
+ * When a question is pending it ANSWERS (the verdict); otherwise it leaves a
+ * DIRECTIVE. Both are free text, both queue exactly one run for the watching
+ * loop with this task in scope, and neither is parsed by the platform — so
+ * making them two controls would advertise a difference the person does not
+ * have to care about. `board.ts` `tellMode` decides which, so the rule is
+ * testable without a DOM.
+ *
+ * Approve and Reject only PREFILL, and only in answer mode: they are a shortcut
+ * for the two most common replies to a question, not a second structured API. A
+ * directive has no such pair, because there is no proposal on the table to
+ * approve.
+ *
+ * What the copy has to carry, and does: a directive is executed against REALITY
+ * first and the kernel's records last. "Drop this bet" means close the PR, clean
+ * up, then close the task — in that order.
  */
-function AnswerBox({ taskId, onAnswered, onQueued }: { taskId: string; onAnswered: () => void; onQueued: (line: string) => void }) {
-  const [answer, setAnswer] = useState('')
+function TellBox({
+  taskId, mode, watcher, onSpoke, onQueued,
+}: {
+  taskId: string
+  mode: TellMode
+  watcher: string | null
+  onSpoke: () => void
+  onQueued: (line: string) => void
+}) {
+  const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Error | undefined>(undefined)
+  const answering = mode === 'answer'
 
-  const send = async (text: string) => {
-    if (!text.trim() || busy) return
+  const send = async (value: string) => {
+    if (!value.trim() || busy) return
     setBusy(true)
     setFailure(undefined)
     try {
-      const result = await postVerdict(taskId, text.trim())
+      const result = answering ? await postVerdict(taskId, value.trim()) : await postDirective(taskId, value.trim())
+      const what = answering ? 'answer recorded' : 'directive left'
       onQueued(
         result.run
           ? result.run.alreadyQueued
-            ? `joined the run already queued (${result.run.id})`
-            : `queued ${result.run.id}`
-          : 'the answer is on the record; its watcher had no run to queue',
+            ? `${what} · joined the run already queued (${result.run.id})`
+            : `${what} · queued ${result.run.id}`
+          : `${what} · it is on the record, but its watcher had no run to queue`,
       )
-      setAnswer('')
-      onAnswered()
+      setText('')
+      onSpoke()
     } catch (cause) {
       setFailure(cause instanceof ViewError ? cause : new Error(String(cause)))
     } finally {
@@ -552,27 +571,40 @@ function AnswerBox({ taskId, onAnswered, onQueued }: { taskId: string; onAnswere
       className="answer-box"
       onSubmit={(event) => {
         event.preventDefault()
-        void send(answer)
+        void send(text)
       }}
     >
-      <label htmlFor={`drawer-answer-${taskId}`}>Your answer</label>
+      <label htmlFor={`drawer-tell-${taskId}`}>{answering ? 'Your answer' : `Tell ${watcher ?? 'the watcher'}`}</label>
       <textarea
-        id={`drawer-answer-${taskId}`}
+        id={`drawer-tell-${taskId}`}
         className="field-text"
-        value={answer}
+        value={text}
         rows={3}
-        placeholder="Free text. A reason is what lets the loop converge next time."
-        onChange={(event) => setAnswer(event.target.value)}
+        placeholder={
+          answering
+            ? 'Free text. A reason is what lets the loop converge next time.'
+            : 'Drop this bet — close the PR, clean up the branch, then close the task.'
+        }
+        onChange={(event) => setText(event.target.value)}
       />
+      <p className="ws-note-line">
+        {answering
+          ? 'One run is queued for the watching loop, carrying your reply verbatim.'
+          : 'One run is queued for the watching loop, carrying your words verbatim. It acts on the intent against the outside world first, and this record last.'}
+      </p>
       <div className="answer-actions">
-        <button type="button" className="verdict-button" disabled={busy} onClick={() => void send(answer.trim() || 'approve')}>
-          Approve
-        </button>
-        <button type="button" className="attn-button" disabled={busy} onClick={() => void send(answer.trim() ? `reject: ${answer.trim()}` : 'reject')}>
-          Reject
-        </button>
-        <button type="submit" className="solid-button" disabled={busy || !answer.trim()}>
-          {busy ? 'Sending…' : 'Send answer'}
+        {answering && (
+          <>
+            <button type="button" className="verdict-button" disabled={busy} onClick={() => void send(text.trim() || 'approve')}>
+              Approve
+            </button>
+            <button type="button" className="attn-button" disabled={busy} onClick={() => void send(text.trim() ? `reject: ${text.trim()}` : 'reject')}>
+              Reject
+            </button>
+          </>
+        )}
+        <button type="submit" className="solid-button" disabled={busy || !text.trim()}>
+          {busy ? 'Sending…' : answering ? 'Send answer' : 'Send directive'}
         </button>
       </div>
       {failure && <Refusal error={failure} />}

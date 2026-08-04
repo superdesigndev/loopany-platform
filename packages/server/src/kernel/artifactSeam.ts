@@ -1,5 +1,6 @@
 import { safeParseArtifact, serializeArtifact, type ArtifactDocument } from "../../../artifact-format/src/index.js";
-import type { ObjectKind } from "./types.js";
+import type { ArtifactKind } from "./types.js";
+import { MIRROR_KIND_HINT, normalizeMirror, type MirrorIssue, type NormalizedMirror } from "./mirrors.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 
 /**
@@ -11,12 +12,40 @@ import { refusal, type ApiRefusal } from "./refusals.js";
  * to be idempotent on. Admitting it also makes `loop show --file` round-trip —
  * `serializeKindArtifact` emits `key:` for every kind, so a keyed loop would
  * otherwise serialize a file its own parser refuses.
+ *
+ * `mirrors` is on ALL THREE sets and is the one key here that is not a field of
+ * the object: it is a CONSTRUCTOR argument, consumed at create and never stored
+ * on the row. See `MIRRORS_KEY` below for why it is create-only and why
+ * `show --file` never emits it.
+ *
+ * There is no `mirror` entry, and there cannot be: a mirror is not authored as a
+ * file (`types.ts` ARTIFACT_KINDS), which is also what keeps it from growing a
+ * body somebody could cache external state in.
  */
 export const KIND_KEYS = {
-  task: ["title", "key", "follow_up", "watcher", "needs_human", "payload"],
-  doc: ["title", "key", "format", "payload"],
-  loop: ["title", "key", "cron", "workdir", "payload"],
-} as const satisfies Record<ObjectKind, readonly string[]>;
+  task: ["title", "key", "follow_up", "watcher", "needs_human", "payload", "mirrors"],
+  doc: ["title", "key", "format", "payload", "mirrors"],
+  loop: ["title", "key", "cron", "workdir", "payload", "mirrors"],
+} as const satisfies Record<ArtifactKind, readonly string[]>;
+
+/**
+ * `mirrors:` — the INLINE creation path for the case where the external item
+ * PREDATES the object ("watch this PR I already opened").
+ *
+ * It is deliberately CREATE-ONLY. A mirror is its own object, and the
+ * association lives on the mirror side, so `mirrors:` is not a field of the task
+ * that a later file could rewrite — treating it as one would mean a whole-file
+ * update silently detaching every mirror the file happened not to mention.
+ * Consequently:
+ *
+ *   - `serializeKindArtifact` never emits it, so `show --file` → `create`
+ *     round-trips exactly (a mirror is read with `mirror list --attached-to`);
+ *   - the update/replace path REFUSES it by name, pointing at `mirror attach`.
+ */
+export const MIRRORS_KEY = "mirrors";
+
+export const MIRRORS_UPDATE_HINT =
+  "a mirror is its own object and the attachment lives on the mirror, so a file cannot rewrite the set — attach one with `loopany mirror attach <object-id> --kind <k> --coords <c>`, detach with `loopany mirror detach <mirror-id> --from <object-id>`";
 
 /** The doc body formats the kernel serves (spec §1.9). Closed, two values. */
 export const DOC_FORMATS = ["markdown", "html"] as const;
@@ -32,6 +61,9 @@ export interface ArtifactProjection {
   format?: "markdown" | "html";
   cron?: string | null;
   workdir?: string | null;
+  /** The `mirrors:` block, normalized. Never a column — the create path attaches
+   *  each one as its own object and then forgets this array. */
+  mirrors?: NormalizedMirror[];
 }
 
 export type ArtifactSeamResult = { ok: true; value: ArtifactProjection; document: ArtifactDocument } | { ok: false; error: ApiRefusal };
@@ -40,7 +72,7 @@ export function normalizeArtifactBytes(text: string): string {
   return (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text).replace(/\r\n?/g, "\n");
 }
 
-export function parseKindArtifact(kind: ObjectKind, raw: string, now: Date): ArtifactSeamResult {
+export function parseKindArtifact(kind: ArtifactKind, raw: string, now: Date): ArtifactSeamResult {
   const parsed = safeParseArtifact(normalizeArtifactBytes(raw));
   if (!parsed.ok) {
     const code = parsed.error.code === "DOCUMENT_TOO_LARGE" || parsed.error.code.startsWith("FRONT_MATTER_TOO_")
@@ -119,13 +151,68 @@ export function parseKindArtifact(kind: ObjectKind, raw: string, now: Date): Art
   if (head.format !== undefined && head.format !== null && !DOC_FORMATS.includes(head.format as never)) {
     return { ok: false, error: unsupportedFormat(kind, String(head.format)) };
   }
+  const mirrors = parseMirrorsBlock(head[MIRRORS_KEY]);
+  if (!mirrors.ok) return { ok: false, error: refusal("SCHEMA_VIOLATION", "the mirrors: block does not describe usable pointers", mirrors.issues, MIRROR_KIND_HINT) };
+
   if (issues.length) return { ok: false, error: refusal("SCHEMA_VIOLATION", "artifact front matter has invalid values", issues, "fix every listed field and retry") };
   return { ok: true, document: parsed.value, value: {
-    title: title ?? null, key, body: parsed.value.body, payload,
+    title: title ?? null, key, body: parsed.value.body, payload, mirrors: mirrors.value,
     ...(kind === "task" ? { followUpAt: followUpAt ?? null, watcher: watcher ?? null, pendingQuestion: question ?? null } : {}),
     ...(kind === "doc" ? { format: (head.format as "markdown" | "html" | undefined) ?? "markdown" } : {}),
     ...(kind === "loop" ? { cron: cron ?? null, workdir: workdir ?? null } : {}),
   } };
+}
+
+/** How many pointers one artifact may declare inline. A bound rather than a
+ *  policy: an object with fifty external dependencies is not describing work. */
+export const MIRRORS_INLINE_CAP = 20;
+
+/**
+ * The `mirrors:` block: a LIST of mappings, each `{kind, coords, note?}`.
+ *
+ * ```yaml
+ * mirrors:
+ *   - kind: github-pr
+ *     coords: superdesigndev/loopany-platform#57
+ *     note: seed article PR
+ * ```
+ *
+ * Every entry goes through the SAME `normalizeMirror` the one-liner uses, so a
+ * kind is kebab-cased and a known kind's coords are shape-checked identically
+ * whichever door it came in by.
+ */
+function parseMirrorsBlock(value: unknown): { ok: true; value: NormalizedMirror[] } | { ok: false; issues: MirrorIssue[] } {
+  if (value === undefined || value === null) return { ok: true, value: [] };
+  if (!Array.isArray(value)) {
+    return { ok: false, issues: [{ path: MIRRORS_KEY, message: "must be a list of {kind, coords, note?} mappings", got: typeof value, expected: "- kind: github-pr\n    coords: owner/repo#57" }] };
+  }
+  if (value.length > MIRRORS_INLINE_CAP) {
+    return { ok: false, issues: [{ path: MIRRORS_KEY, message: `at most ${MIRRORS_INLINE_CAP} inline mirrors`, got: String(value.length) }] };
+  }
+  const out: NormalizedMirror[] = [];
+  const issues: MirrorIssue[] = [];
+  const seen = new Set<string>();
+  value.forEach((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      issues.push({ path: `${MIRRORS_KEY}[${index}]`, message: "must be a mapping with kind and coords", got: JSON.stringify(entry) });
+      return;
+    }
+    const normalized = normalizeMirror(entry as Record<string, unknown>);
+    if (!normalized.ok) {
+      for (const issue of normalized.issues) issues.push({ ...issue, path: `${MIRRORS_KEY}[${index}].${issue.path}` });
+      return;
+    }
+    // One external thing is one mirror, so naming it twice in one file is a
+    // mistake worth pointing at rather than a silently deduplicated write.
+    const identity = `${normalized.value.kind} ${normalized.value.coords}`;
+    if (seen.has(identity)) {
+      issues.push({ path: `${MIRRORS_KEY}[${index}].coords`, message: "listed twice — one external thing is one mirror", got: normalized.value.coords });
+      return;
+    }
+    seen.add(identity);
+    out.push(normalized.value);
+  });
+  return issues.length ? { ok: false, issues } : { ok: true, value: out };
 }
 
 export function parseDate(value: string, now: Date): string | undefined {
@@ -136,7 +223,16 @@ export function parseDate(value: string, now: Date): string | undefined {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
 }
 
-export function serializeKindArtifact(kind: ObjectKind, object: ArtifactProjection): string {
+/**
+ * The canonical file for an object.
+ *
+ * NOTE `mirrors:` is never emitted, and that is the round-trip rule doing its
+ * job rather than an omission: a mirror is a separate object, so it is not part
+ * of this object's state, and a `show --file` that printed one would produce a
+ * file whose re-upload would try to create it again. Read them with
+ * `loopany mirror list --attached-to <id>`.
+ */
+export function serializeKindArtifact(kind: ArtifactKind, object: ArtifactProjection): string {
   const frontMatter: Record<string, unknown> = { title: object.title, key: object.key };
   if (kind === "task") Object.assign(frontMatter, { follow_up: object.followUpAt, watcher: object.watcher, needs_human: object.pendingQuestion });
   if (kind === "doc") frontMatter.format = object.format ?? "markdown";
@@ -151,7 +247,7 @@ export function serializeKindArtifact(kind: ObjectKind, object: ArtifactProjecti
   return serializeArtifact({ frontMatter, body: object.body }, { keyOrder: [...KIND_KEYS[kind]] });
 }
 
-function unsupportedFormat(kind: ObjectKind, got: string | undefined): ApiRefusal {
+function unsupportedFormat(kind: ArtifactKind, got: string | undefined): ApiRefusal {
   return refusal(
     "UNSUPPORTED_FORMAT",
     got ? `unsupported format ${JSON.stringify(got)}` : `format names a body format this kernel does not serve`,

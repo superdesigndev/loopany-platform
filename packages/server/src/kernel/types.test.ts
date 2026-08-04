@@ -33,7 +33,10 @@ describe("the state shape", () => {
   });
 
   it("starts each kind in a safe default", () => {
-    expect(INITIAL_STATUS).toEqual({ task: "open", loop: "active", doc: "current" });
+    // A MIRROR's single status is `current`, and the singleton is deliberate:
+    // a second value here — `open`, `merged`, `stale` — would be exactly the
+    // cached external state the kind exists to forbid (`kernel/mirrors.ts`).
+    expect(INITIAL_STATUS).toEqual({ task: "open", loop: "active", doc: "current", mirror: "current" });
     for (const kind of OBJECT_KINDS) expect(STATUSES_BY_KIND[kind]).toContain(INITIAL_STATUS[kind]);
   });
 

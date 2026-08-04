@@ -88,6 +88,20 @@ export const objects = pgTable(
      *  rendered — task and loop bodies stay Markdown (design §7). */
     format: text("format"),
 
+    // ---- mirror facets (CHECK: null on every other kind) ----
+    /** WHAT KIND of external thing this points at (`github-pr`, `url`, …).
+     *  Free-form, mechanically normalized to kebab-case on write; a KNOWN kind
+     *  also gets its coords shape checked (`kernel/mirrors.ts`). */
+    mirrorKind: text("mirror_kind"),
+    /** THE EXTERNAL THING'S IMMUTABLE IDENTITY (`owner/repo#57`, a URL). Never
+     *  updated — a different PR is a different mirror — which is why it is on
+     *  `IMMUTABLE_FIELDS` and why the mirror's key and id derive from it. */
+    mirrorCoords: text("mirror_coords"),
+    /** The object ids that DEPEND on this external thing (task/doc/loop). The
+     *  association lives on the MIRROR side, so one PR that two tasks depend on
+     *  is one row attached twice rather than two rows to keep in step. */
+    attachedTo: jsonb("attached_to").$type<string[]>(),
+
     /** CREATION-TIME idempotency only (design §8): same key ⇒ the existing object
      *  is returned, never a twin and never a 409. Unique per team, partial. */
     key: text("key"),
@@ -113,6 +127,25 @@ export const objects = pgTable(
       sql`${t.kind} = 'task' OR (${t.followUpAt} IS NULL AND ${t.pendingQuestion} IS NULL AND ${t.watcher} IS NULL)`,
     ),
     check("objects_format_doc_only", sql`${t.kind} = 'doc' OR ${t.format} IS NULL`),
+    check(
+      "objects_mirror_facets_only",
+      sql`${t.kind} = 'mirror' OR (${t.mirrorKind} IS NULL AND ${t.mirrorCoords} IS NULL AND ${t.attachedTo} IS NULL)`,
+    ),
+    /** A mirror without a kind, coords or an attachment set is not a pointer at
+     *  all. Non-EMPTY is a kernel rule rather than a CHECK (detaching the last
+     *  attachment must stay possible, and the row stays as a readable record). */
+    check(
+      "objects_mirror_pointer",
+      sql`${t.kind} <> 'mirror' OR (${t.mirrorKind} IS NOT NULL AND ${t.mirrorCoords} IS NOT NULL AND ${t.attachedTo} IS NOT NULL)`,
+    ),
+    /**
+     * THE STATELESSNESS WELD (`kernel/mirrors.ts` MIRROR_LAW). A mirror has no
+     * `payload` (the declared free zone) and no `body` (free text), so there is
+     * physically nowhere for `state: merged` to land — the "cache the status
+     * just this once" commit cannot be written, not merely discouraged. Every
+     * other column a mirror has is its own name: kind, coords, note, attachments.
+     */
+    check("objects_mirror_stateless", sql`${t.kind} <> 'mirror' OR (${t.payload} IS NULL AND ${t.body} IS NULL)`),
     // A closed task carries its stamp; an open one does not. Other kinds never close.
     check("objects_closed_pair", sql`${t.kind} <> 'task' OR ((${t.status} = 'closed') = (${t.closedAt} IS NOT NULL))`),
 
@@ -142,6 +175,14 @@ export const objects = pgTable(
     index("objects_watcher_idx").on(t.watcher, t.followUpAt).where(sql`${t.kind} = 'task' AND ${t.status} = 'open'`),
     /** The `--creator` filter, the loop page's "created" list, graph flow edges. */
     index("objects_creator_idx").on(t.createdByLoop, t.createdAt),
+    /** `mirror list --kind <k>` and `mirror kinds` (the kinds-in-use tally). */
+    index("objects_mirror_kind_idx").on(t.teamId, t.mirrorKind).where(sql`${t.kind} = 'mirror'`),
+    /** `mirror list --coords-like <pattern>` and the attach-time identity read. */
+    index("objects_mirror_coords_idx").on(t.teamId, t.mirrorCoords).where(sql`${t.kind} = 'mirror'`),
+    /** THE REVERSE LOOKUP — "which external items does this task depend on?" —
+     *  which is `attached_to @> '["task-…"]'`, a containment query, so GIN. It is
+     *  what `task show` / the task drawer compose `mirrors[]` from. */
+    index("objects_mirror_attached_idx").using("gin", t.attachedTo).where(sql`${t.kind} = 'mirror'`),
     /** Generic scoping. */
     index("objects_team_kind_status_idx").on(t.teamId, t.kind, t.status),
   ],

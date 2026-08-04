@@ -5,13 +5,14 @@ import { events, objects, type KernelEvent, type KernelObject } from "../db/kern
 import * as store from "../db/kernelStore.js";
 import { runs } from "../db/schema.js";
 import { appendOrganicEvent, applyTransitionIn, applyUpdateIn, buildFieldDiff, createObjectIn, sameValue, type WritableFields } from "./applyTransition.js";
-import { parseDate, parseKindArtifact, serializeKindArtifact, type ArtifactProjection } from "./artifactSeam.js";
-import { derivedEventId } from "./ids.js";
+import { MIRRORS_KEY, MIRRORS_UPDATE_HINT, parseDate, parseKindArtifact, serializeKindArtifact, type ArtifactProjection } from "./artifactSeam.js";
+import { derivedEventId, directiveRunId } from "./ids.js";
+import { attachMirrorIn, mirrorsFor } from "./mirrorApi.js";
 import { notifyRunQueued, queueKernelRun } from "./runQueue.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 import { nextOccurrenceAfter } from "./schedule.js";
 import type { ApiContext } from "./apiAuth.js";
-import { LOOP_STATUSES, type EventDiff, type ObjectKind } from "./types.js";
+import { LOOP_STATUSES, isArtifactKind, type ArtifactKind, type EventDiff, type ObjectKind } from "./types.js";
 
 export type ApiResult<T> = { ok: true; status?: number; value: T } | { ok: false; error: ApiRefusal };
 
@@ -19,10 +20,18 @@ export function objectShape(row: KernelObject): Record<string, unknown> {
   const common = { id: row.id, kind: row.kind, team: row.teamId, status: row.status, title: row.title, key: row.key, payload: row.payload ?? {}, body: row.body ?? "", createdByRun: row.createdByRun, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt };
   if (row.kind === "task") return { ...common, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, closedAt: row.closedAt };
   if (row.kind === "doc") return { ...common, format: row.format ?? "markdown" };
+  // A MIRROR drops `payload` and `body` from the common shape rather than
+  // echoing the empty defaults: the fields do not exist on the row (the DDL
+  // forbids them), so printing `payload: {}` would advertise a free zone this
+  // kind deliberately has not got.
+  if (row.kind === "mirror") {
+    const { payload: _p, body: _b, title, ...rest } = common;
+    return { ...rest, externalKind: row.mirrorKind, coords: row.mirrorCoords, note: title, attachedTo: row.attachedTo ?? [] };
+  }
   return { ...common, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire, workdir: row.workdir };
 }
 
-export async function createFromArtifact(kind: ObjectKind, raw: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
+export async function createFromArtifact(kind: ArtifactKind, raw: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   const parsed = parseKindArtifact(kind, raw, now);
   if (!parsed.ok) return { ok: false, error: parsed.error };
   const p = parsed.value;
@@ -51,6 +60,9 @@ export async function createFromArtifact(kind: ObjectKind, raw: string, context:
     // An idempotent hit writes nothing, so it reports no event — the caller must
     // be able to tell a fresh effect from a replay (spec §1.4).
     [name]: objectShape(result.object), event: result.created ? result.event?.id ?? null : null,
+    // The `mirrors:` block, resolved. Echoed even when empty so a caller can see
+    // that a block it wrote was read (and that a file with none has none).
+    mirrors: result.mirrors,
     ...(!result.created && differingFields.length ? { notice: { code: "KEY_EXISTS_CONTENT_DIFFERS", message: `key "${p.key}" already names ${result.object.id}; the submitted file differs from it and was not applied`, hint: applyDifferingHint(kind, result.object.id, name) } } : {}),
   } };
 }
@@ -68,21 +80,45 @@ function applyDifferingHint(kind: ObjectKind, id: string, name: string): string 
     : `to change it: PATCH /api/${name}s/${id} with the same file`;
 }
 
-async function createObjectInTransaction(input: { kind: ObjectKind; p: ReturnType<typeof projection>; context: ApiContext; now: Date }) {
+/**
+ * The object AND its inline `mirrors:` block, in ONE transaction.
+ *
+ * "The file IS the object" is the create contract, and a `mirrors:` block is
+ * part of the file, so a task that declares a PR is never briefly a task that
+ * does not: either both land or neither does. A REPLAY re-asserts the same
+ * attachments, which is a no-op by construction (attach is idempotent on the
+ * attachment set), so a retried create still converges.
+ */
+async function createObjectInTransaction(input: { kind: ArtifactKind; p: ReturnType<typeof projection>; context: ApiContext; now: Date }) {
   const { kind, p, context, now } = input;
-  return db.transaction((tx) => createObjectIn(tx as unknown as store.KernelExec, {
-    teamId: context.teamId, kind, actor: context.actor, now: now.toISOString(), key: p.key,
-    title: p.title, body: p.body, payload: p.payload,
-    ...(kind === "task" ? { followUpAt: p.followUpAt, pendingQuestion: p.pendingQuestion, watcher: p.watcher } : {}),
-    ...(kind === "doc" ? { format: p.format } : {}),
-    ...(kind === "loop" ? { cron: p.cron, workdir: p.workdir } : {}),
-    createdByRun: context.run?.id ?? null, createdByLoop: context.run?.loopId ?? null,
-  }));
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as store.KernelExec;
+    const created = await createObjectIn(tx, {
+      teamId: context.teamId, kind, actor: context.actor, now: now.toISOString(), key: p.key,
+      title: p.title, body: p.body, payload: p.payload,
+      ...(kind === "task" ? { followUpAt: p.followUpAt, pendingQuestion: p.pendingQuestion, watcher: p.watcher } : {}),
+      ...(kind === "doc" ? { format: p.format } : {}),
+      ...(kind === "loop" ? { cron: p.cron, workdir: p.workdir } : {}),
+      createdByRun: context.run?.id ?? null, createdByLoop: context.run?.loopId ?? null,
+    });
+    if (!created.ok) return created;
+    const mirrors: unknown[] = [];
+    for (const spec of p.mirrors ?? []) {
+      const attached = await attachMirrorIn(tx, spec, created.object, context, now);
+      // A bad pointer FAILS THE CREATE. The block is part of the file, and a
+      // half-applied file is exactly the ambiguity the one-transaction rule
+      // exists to prevent — the refusal is propagated verbatim so the author
+      // sees which entry was wrong, not a generic create failure.
+      if (!attached.ok) return { ok: false as const, code: attached.error.code, message: attached.error.message, issues: attached.error.issues, hint: attached.error.hint };
+      mirrors.push((attached.value as { mirror: unknown }).mirror);
+    }
+    return { ...created, mirrors };
+  });
 }
 
 function projection(p: ArtifactProjection) { return p; }
 
-function expressedDiffs(row: KernelObject, p: ArtifactProjection, kind: ObjectKind): string[] {
+function expressedDiffs(row: KernelObject, p: ArtifactProjection, kind: ArtifactKind): string[] {
   const pairs: [string, unknown, unknown][] = [["title", row.title, p.title], ["body", row.body ?? "", p.body], ["payload", row.payload ?? null, p.payload]];
   if (kind === "task") pairs.push(["followUpAt", row.followUpAt, p.followUpAt], ["watcher", row.watcher, p.watcher], ["pendingQuestion", row.pendingQuestion, p.pendingQuestion]);
   if (kind === "doc") pairs.push(["format", row.format ?? "markdown", p.format]);
@@ -128,7 +164,11 @@ export async function showObject(kind: ObjectKind, id: string, context: ApiConte
   const normalizedLimit = Math.max(0, Math.min(200, eventLimit));
   const allEvents = await store.listObjectEvents(undefined, id);
   const history = normalizedLimit === 0 ? [] : allEvents.slice(-normalizedLimit);
-  const value: Record<string, unknown> = { [kind]: objectShape(row), events: history.map(eventShape) };
+  // THE REVERSE LOOKUP. A task does not carry its mirrors — it is FOUND BY them
+  // — so every `show` composes the set here rather than reading a column. This
+  // is the read the whole kind exists for: "what outside this system does this
+  // depend on, and where do I go to check it?"
+  const value: Record<string, unknown> = { [kind]: objectShape(row), events: history.map(eventShape), mirrors: await mirrorsFor(undefined, context.teamId, id) };
   if (kind === "task") {
     value.runs = await db.select({ id: runs.id, state: runs.queueState, scope: runs.scope, reason: runs.reason, finishedAt: runs.finishedAt }).from(runs).where(or(eq(runs.scope, `task:${id}`), eq(runs.id, row.createdByRun ?? ""))).orderBy(desc(runs.ts));
   }
@@ -136,11 +176,19 @@ export async function showObject(kind: ObjectKind, id: string, context: ApiConte
 }
 
 export function objectArtifact(row: KernelObject): string {
+  if (!isArtifactKind(row.kind)) throw new Error(`${row.kind} is not authored as a file`);
   return serializeKindArtifact(row.kind, { title: row.title, key: row.key, body: row.body ?? "", payload: row.payload, followUpAt: row.followUpAt, watcher: row.watcher, pendingQuestion: row.pendingQuestion, format: (row.format ?? "markdown") as "markdown" | "html", cron: row.cron, workdir: row.workdir });
 }
 
-export async function replaceFromArtifact(kind: ObjectKind, id: string, raw: string, context: ApiContext, now = new Date(), eventKind?: string): Promise<ApiResult<Record<string, unknown>>> {
+export async function replaceFromArtifact(kind: ArtifactKind, id: string, raw: string, context: ApiContext, now = new Date(), eventKind?: string): Promise<ApiResult<Record<string, unknown>>> {
   const parsed = parseKindArtifact(kind, raw, now); if (!parsed.ok) return parsed;
+  // `mirrors:` IS CREATE-ONLY (artifactSeam `MIRRORS_KEY`). Accepting it here
+  // would make a whole-file update the authority on a set that lives on the
+  // mirror side — so a file that simply omitted one would silently detach it.
+  // Refused by name rather than ignored: silent discard is forbidden.
+  if (parsed.value.mirrors?.length) {
+    return { ok: false, error: refusal("UNKNOWN_KEY", `${MIRRORS_KEY}: is accepted only when the object is created`, [{ path: MIRRORS_KEY, message: "create-only", got: `${parsed.value.mirrors.length} entries` }], MIRRORS_UPDATE_HINT) };
+  }
   return db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec;
     const before = await store.getObjectForUpdate(tx, id);
@@ -521,6 +569,91 @@ export async function verdict(id: string, answer: unknown, context: ApiContext, 
     }
     return { ok: true, value: { task: objectShape(updated.object), event: updated.event.id, run: queued ? { id: queued.id, state: queued.queueState, loopId: queued.loopId, scope: queued.scope, reason: queued.reason, entrance: queued.entrance, alreadyQueued: queuedAlready } : null } };
   });
+}
+
+/**
+ * `POST /api/tasks/:id/directive` — THE HUMAN SPEAKS FIRST.
+ *
+ * The inbox is an AGENT-initiated conversation: a run asks, a person answers.
+ * This is the other direction — a person tells the watching loop something about
+ * a task it holds, without having been asked, and the loop wakes to act on it.
+ * Same wire as the answer path, opposite entrance.
+ *
+ * FOUR rulings are worth keeping:
+ *
+ *  1. **It is its own run reason (`directive`), not a flavour of `answered`.**
+ *     An answer replies to a question the agent framed; a directive arrives
+ *     unframed and the run's first job is to work out what it implies against
+ *     external reality. A run that could not tell them apart would read the
+ *     directive as an answer to a question it never asked. `types.ts`
+ *     RUN_REASONS carries the reasoning.
+ *  2. **A pending question REFUSES it.** With a question open the person already
+ *     has the floor and the wire for it, and the run this would queue could not
+ *     clear the question anyway. Two open conversations on one task is precisely
+ *     the ambiguity keeping the verbs distinct is meant to avoid.
+ *  3. **It OBEYS the one-queued-run index, exactly as a verdict does.** A
+ *     directive on a loop that already has a run queued REPORTS that run rather
+ *     than stacking a twin — the directive is on the task's timeline either way,
+ *     so the queued run reads it when it claims.
+ *  4. **The run carries the words VERBATIM.** `triggerEventId` points at the
+ *     directive event, and `claimRun` reads the note through it into the work
+ *     order — the agent is told what it was asked, not merely that something
+ *     changed.
+ */
+export async function leaveDirective(id: string, directive: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
+  // Human-only, on the same positive test for run context the verdict uses: a
+  // request naming a run is an agent's, and a loop instructing itself is a loop
+  // with no cadence at all.
+  if (context.mode !== "human") {
+    return { ok: false, error: notHuman(context, "a directive is a person telling a loop what to do, so it is entered by a person", "a run that wants another loop to act files a task for it: `loopany task create --file <path> --watcher <that-loop-id>`") };
+  }
+  if (typeof directive !== "string" || !directive.trim()) {
+    return { ok: false, error: refusal("INVALID_BODY", "a directive is non-empty text", [{ path: "directive", message: "required" }], "say what you want done and why — the run executes the INTENT against reality, so \"drop this bet\" means close the PR and clean up, not just close the task") };
+  }
+  const text = directive.trim();
+  const result = await db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as store.KernelExec;
+    const task = await store.getObjectForUpdate(tx, id);
+    const guard = scopedKindGuard(task, "task", context.teamId); if (guard) return guard;
+    if (task!.status !== "open") {
+      return { ok: false as const, error: refusal("CLOSED", `${id} is closed, and a closed task is a record`, [{ path: "status", message: "closed", got: task!.status }], "closed is terminal and there is no reopen — file a new task for the follow-on work, or fire the loop directly with `loopany loop run-now <loop-id>`") };
+    }
+    if (task!.pendingQuestion?.trim()) {
+      return { ok: false as const, error: refusal("OPEN_QUESTION", `${id} is already waiting on you for an answer`, [{ path: "pendingQuestion", message: "a question is open on this task", got: task!.pendingQuestion }], `answer it instead — \`loopany answer ${id} "…"\` records your reply AND wakes the watcher, and the answer is free text, so any instruction fits in it`) };
+    }
+    const watcherLoop = task!.watcher ? await store.getObjectForUpdate(tx, task!.watcher) : undefined;
+
+    // The directive lands on the TASK's timeline: it is a fact about this task,
+    // entered by a human, and it stays readable there whether or not a run was
+    // queued for it. Organic — two directives a week apart are two real facts.
+    const event = await appendOrganicEvent(tx, {
+      teamId: task!.teamId, objectId: task!.id, kind: "directive-left", origin: "organic",
+      entrance: "human", actorId: context.actor.actorId, note: text,
+      payload: { watcher: task!.watcher }, ts: now.toISOString(),
+    });
+
+    let queued: Awaited<ReturnType<typeof queueKernelRun>>["run"] | undefined;
+    let alreadyQueued = false;
+    if (watcherLoop?.kind === "loop" && watcherLoop.teamId === context.teamId) {
+      const q = await queueKernelRun(tx, { loop: watcherLoop, now: now.toISOString(), reason: "directive", scope: `task:${id}`, triggerEventId: event.id });
+      queued = q.run;
+      alreadyQueued = q.outcome === "loop-busy";
+      if (queued && q.outcome === "queued") {
+        await store.appendEvent(tx, { id: derivedEventId({ runId: queued.id, kind: "run-queued" }), teamId: watcherLoop.teamId, objectId: watcherLoop.id, kind: "run-queued", origin: "derived", entrance: "human", actorId: queued.id, payload: { reason: "directive", scope: `task:${id}`, directive: event.id }, ts: now.toISOString() });
+      }
+    }
+    return { ok: true as const, value: {
+      task: objectShape(task!), event: event.id, directive: text,
+      run: queued ? { id: queued.id, state: queued.queueState, loopId: queued.loopId, scope: queued.scope, reason: queued.reason, entrance: queued.entrance, alreadyQueued } : null,
+      // Honest about the one case where a directive lands but nothing will act
+      // on it. Retirement is terminal, so no machine ever claims that run.
+      ...(watcherLoop?.status === "retired" ? { notice: { code: "WATCHER_RETIRED", message: `${watcherLoop.id} is retired, so nothing will wake for this directive; it is on the record`, hint: `hand the task to a live loop with \`loopany task update ${id} --watcher <loop-id>\`` } } : {}),
+    } };
+  });
+  // Wake a daemon parked on the claim long-poll rather than making the person
+  // wait out the ~20s hold for a run they just asked for.
+  if (result.ok && (result.value as { run?: { alreadyQueued: boolean } | null }).run && !(result.value as { run: { alreadyQueued: boolean } }).run.alreadyQueued) notifyRunQueued();
+  return result;
 }
 
 export async function eventsAfter(teamId: string, after: number, limit = 200): Promise<KernelEvent[]> {

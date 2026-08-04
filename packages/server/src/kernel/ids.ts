@@ -190,6 +190,21 @@ export function autoPauseTaskId(loopId: string, runId: string): string {
   return derivedObjectId("task", { loopId, runId, seed: "autopause" });
 }
 
+/**
+ * A MIRROR's id — derived from `(team, kind, coords)`, because those three ARE
+ * the mirror (`kernel/mirrors.ts`): the external thing's identity plus the scope
+ * it is visible in. Two runs that both notice PR `owner/repo#57` therefore land
+ * on ONE row and attach to it, rather than minting a second pointer at the same
+ * thing that would then have to be kept in step.
+ *
+ * `teamId` is IN the seed even though the key index is already team-scoped. It
+ * costs nothing and it makes the cross-team truncation collision unreachable by
+ * construction rather than only caught by `createObjectIn`'s identity guard.
+ */
+export function mirrorObjectId(teamId: string, kind: string, coords: string): string {
+  return derivedObjectId("mirror", { teamId, kind, coords, seed: "mirror" });
+}
+
 // ---- event ids ----
 
 /**
@@ -238,6 +253,17 @@ export function clockRunId(loopId: string, scheduledFor: string): string {
  *  a retried verdict transaction queues one run, not two. */
 export function answeredRunId(verdictEventId: string): string {
   return `run-${derivedSuffix({ verdictEventId, seed: "answered" })}`;
+}
+
+/**
+ * An R-DIRECTIVE run's id — derived from the directive event that woke it, the
+ * exact shape `answeredRunId` uses, so a retried `task tell` transaction queues
+ * one run rather than two. The SEED differs (`directive`, not `answered`), which
+ * is what keeps the two families from ever truncating onto each other's ids even
+ * if an event id were somehow reused across them.
+ */
+export function directiveRunId(directiveEventId: string): string {
+  return `run-${derivedSuffix({ directiveEventId, seed: "directive" })}`;
 }
 
 /**

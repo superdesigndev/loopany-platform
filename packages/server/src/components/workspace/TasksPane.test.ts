@@ -10,11 +10,13 @@ import { TASKS_VIEW_STORAGE_KEY } from './taskList'
 /**
  * THE TASKS SCREEN, driven the way a person drives it.
  *
- * Three things are pinned here because all three are captain rulings rather than
+ * Four things are pinned here because all four are captain rulings rather than
  * implementation details: the list is what you land on and it is grouped by loop,
- * the layout choice survives a remount, and EVERY write happens from the drawer
- * (rows and cards only open it). The fourth is an accessibility promise — closing
- * the drawer hands the keyboard back to the row that opened it.
+ * the layout choice survives a remount, EVERY write happens from the drawer
+ * (rows and cards only open it), and there is NO CLOSE BUTTON anywhere — a task
+ * ends when its watcher closes it, so the composer that tells the watcher what
+ * to do is what replaced it. The fifth is an accessibility promise: closing the
+ * drawer hands the keyboard back to the row that opened it.
  *
  * The network is a stub router over the real endpoints, so the assertions are
  * about which request the UI makes, not about a mocked module's call count.
@@ -58,6 +60,14 @@ const TASKS: TasksView = {
   ],
 }
 
+/** One external item on the held task, so the drawer's External-items section
+ *  has something real to render — kind, coords, note, and no state. */
+const MIRROR = {
+  id: 'mirror-3f9a21c04b7e', externalKind: 'github-pr', coords: 'superdesigndev/loopany-platform#57',
+  note: 'seed article PR', href: 'https://github.com/superdesigndev/loopany-platform/pull/57',
+  attachedTo: ['task-held'], createdByLoop: 'loop-b', createdAt: '', updatedAt: '2026-08-04T08:00:00.000Z',
+}
+
 const taskView = (id: string): TaskView => {
   const card: TaskCard = TASKS.columns.flatMap((column) => column.tasks).find((task) => task.id === id)!
   return {
@@ -66,7 +76,8 @@ const taskView = (id: string): TaskView => {
       id: card.id, title: card.title, body: '', status: card.status, payload: {}, pendingQuestion: card.pendingQuestion,
       watcher: card.watcher, followUpAt: card.followUpAt, createdAt: '', updatedAt: '', closedAt: null,
     },
-    execution: {}, due: card.due, creator: card.creator ?? null, watcherLoop: card.watcherLoop ?? null, timeline: [], runs: [],
+    execution: {}, mirrors: id === 'task-held' ? [MIRROR] : [], due: card.due,
+    creator: card.creator ?? null, watcherLoop: card.watcherLoop ?? null, timeline: [], runs: [],
   }
 }
 
@@ -118,8 +129,8 @@ beforeEach(() => {
     calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined })
     if (url.startsWith('/api/views/tasks')) return json(TASKS)
     if (url.startsWith('/api/views/task/')) return json(taskView(decodeURIComponent(url.split('/').pop()!)))
-    if (url.endsWith('/close')) return json({ changed: true, event: 'ev-1' })
     if (url.endsWith('/verdict')) return json({ run: { id: 'run-1', alreadyQueued: false } })
+    if (url.endsWith('/directive')) return json({ run: { id: 'run-2', alreadyQueued: false } })
     return json({ changed: true })
   })
 })
@@ -206,7 +217,7 @@ describe('rows and cards are entrances — nothing else', () => {
   it('offers no write control on a row', async () => {
     await mount()
     expect(host!.querySelector('.artifact-row select')).toBeNull()
-    expect(buttons().some((button) => /close…|hand off/.test(button.textContent ?? ''))).toBe(false)
+    expect(buttons().some((button) => /hand off|Send/.test(button.textContent ?? ''))).toBe(false)
   })
 
   it('offers no write control on a card either', async () => {
@@ -252,25 +263,85 @@ describe('the drawer is the one write surface', () => {
     expect(calls.some((call) => call.method === 'PATCH')).toBe(false)
   })
 
-  it('closes only after the note the kernel requires', async () => {
-    await mount('task-held')
-    await click(byText('close…'))
-    await type(host!.querySelector<HTMLTextAreaElement>('#ws-close-note')!, 'Merged; nothing left to watch.')
-    await act(async () => {
-      host!.querySelector('.note-dialog')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-    })
-    expect(wrote('POST', /\/close$/)!.body).toEqual({ note: 'Merged; nothing left to watch.' })
+  /**
+   * THE CLOSE ACTION IS GONE (captain direction 2026-08-04). A task ends when
+   * its watcher closes it, so the drawer offers no way for a person to settle
+   * the record while the world it describes carries on unchanged.
+   */
+  it('offers no close control, and never posts to /close', async () => {
+    for (const id of ['task-held', 'task-ask']) {
+      await mount(id)
+      expect(byText('close…')).toBeUndefined()
+      expect(buttons().some((button) => /close/i.test(button.textContent ?? '') && !/Close$/.test(button.getAttribute('aria-label') ?? ''))).toBe(false)
+      expect(host!.querySelector('.note-scrim')).toBeNull()
+      act(() => root!.unmount())
+      host!.remove()
+    }
+    expect(calls.some((call) => /\/close$/.test(call.url))).toBe(false)
   })
 
-  // A task that is asking cannot be closed, so answering IS the move — and it
-  // is available without leaving for the Inbox.
-  it('answers a pending question, and withholds close while one waits', async () => {
+  // A task that is asking cannot be closed by anyone, so answering IS the move —
+  // and it is available without leaving for the Inbox.
+  it('answers a pending question through the composer', async () => {
     await mount('task-ask')
-    expect(byText('close…')).toBeUndefined()
     await type(host!.querySelector<HTMLTextAreaElement>('textarea')!, 'Revert it.')
     await click(byText('Send answer'))
     expect(wrote('POST', /\/verdict$/)!.body).toEqual({ answer: 'Revert it.' })
     expect(text()).toMatch(/answer recorded/)
+  })
+
+  /**
+   * THE OTHER MODE, and the one that replaces close: with no question pending
+   * the same composer leaves a DIRECTIVE, which queues a run for the watcher to
+   * act on. Same box, same free text, different endpoint — the person is told
+   * which conversation they are in by the label and the button, not by choosing
+   * a control.
+   */
+  it('leaves a directive when no question is pending, on the same composer', async () => {
+    await mount('task-held')
+    // The mode is legible without reading code: the composer names the watcher
+    // and the submit button says what it will do.
+    expect(text()).toMatch(/Tell Beta watch/)
+    expect(byText('Approve')).toBeUndefined()
+    await type(host!.querySelector<HTMLTextAreaElement>('textarea')!, 'Drop this bet — close the PR, then close the task.')
+    await click(byText('Send directive'))
+    expect(wrote('POST', /\/directive$/)!.body).toEqual({ directive: 'Drop this bet — close the PR, then close the task.' })
+    expect(text()).toMatch(/directive left/)
+    expect(text()).toMatch(/run-2/)
+  })
+})
+
+/**
+ * EXTERNAL ITEMS — the mirrors attached to the task, rendered as what they are:
+ * where to look. The assertion that matters most is the NEGATIVE one — no
+ * status is shown, because a mirror has none and the kernel has nowhere to keep
+ * one.
+ */
+describe('the drawer shows what the task depends on outside the system', () => {
+  it('renders each mirror as kind, coords and note, with the coords as the link', async () => {
+    await mount('task-held')
+    const section = [...host!.querySelectorAll('.preview-section')].find((s) => /External items/.test(s.textContent ?? ''))!
+    expect(section).toBeTruthy()
+    expect(section.textContent).toMatch(/superdesigndev\/loopany-platform#57/)
+    expect(section.textContent).toMatch(/seed article PR/)
+    expect(section.textContent).toMatch(/github-pr/)
+    const link = section.querySelector('a')!
+    expect(link.getAttribute('href')).toBe('https://github.com/superdesigndev/loopany-platform/pull/57')
+    // Off-site, so it opens away from the app and carries no referrer or opener.
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toMatch(/noopener/)
+  })
+
+  it('shows no external STATE, because a mirror is a pointer and never a cache', async () => {
+    await mount('task-held')
+    const section = [...host!.querySelectorAll('.preview-section')].find((s) => /External items/.test(s.textContent ?? ''))!
+    expect(section.textContent).not.toMatch(/open|merged|closed|draft|stale/i)
+  })
+
+  it('says so plainly when nothing external is attached', async () => {
+    await mount('task-ask')
+    const section = [...host!.querySelectorAll('.preview-section')].find((s) => /External items/.test(s.textContent ?? ''))!
+    expect(section.textContent).toMatch(/Nothing external is attached/)
   })
 })
 

@@ -294,7 +294,20 @@ export const runs = pgTable(
      *  reached its follow-up), or a manual fire. Drizzle's `enum` is TS-only —
      *  no DB CHECK — so widening it needs no migration. `kernel/types.ts`
      *  `RUN_REASONS` is the vocabulary this mirrors. */
-    reason: text("reason", { enum: ["clock", "answered", "due", "manual"] }),
+    reason: text("reason", { enum: ["clock", "answered", "due", "manual", "directive"] }),
+    /**
+     * THE EVENT THAT QUEUED THIS RUN — a human's verdict (`answered`) or a
+     * human's directive (`directive`). Null for a clock, due or manual fire,
+     * none of which is entered by anybody saying anything.
+     *
+     * It exists so the CLAIM can carry the person's own words VERBATIM into the
+     * run's first prompt (`runQueue.claimRun`). Both reasons already DERIVE
+     * their run id from that event, so the pointer was implicit in the id and
+     * merely unreadable; storing it turns "the agent must go find what changed"
+     * into "the instruction is in the work order". It is a POINTER, never a
+     * copy — the event stays the record and the note is read through it.
+     */
+    triggerEventId: text("trigger_event_id"),
     /** The entrance stamped onto this run's events (`clock|answer|human`). */
     entrance: text("entrance", { enum: ["clock", "answer", "human"] }),
     /** The cron OCCURRENCE this fire serves (clock runs only) — the id seed, so a

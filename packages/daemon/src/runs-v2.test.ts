@@ -85,3 +85,45 @@ describe("the v2 claim body attests to what is actually running", () => {
     expect(body.inFlight).toEqual(["run-a"]);
   });
 });
+
+/**
+ * A run woken by a PERSON must be told what they said, in their own words.
+ *
+ * The server reads the note back through `runs.trigger_event_id` and ships it as
+ * `directive` (or `answer`); this is the daemon half — that it reaches the
+ * agent's prompt VERBATIM, and labelled, so a run can never mistake an
+ * unasked-for instruction for a reply to a question it never asked.
+ */
+describe("a human's own words reach the prompt verbatim", () => {
+  const TOLD = "Drop this bet — close the PR, delete the branch, then close the task.";
+
+  it("carries a directive verbatim, with the reality-first ordering beside it", () => {
+    const delivery = deliveryFromRunsV2(
+      {
+        run: { id: "run-1", loopId: "loop-1", loopTitle: "Housekeeper", scope: "task:task-7f3a91" },
+        charter: "Sweep the repo.",
+        scopeNote: "A human left you a DIRECTIVE on task-7f3a91.",
+        directive: TOLD,
+      },
+      "dk_device",
+    );
+    expect(delivery!.task).toContain(TOLD);
+    expect(delivery!.task).toContain("DIRECTIVE, verbatim");
+    expect(delivery!.task).toContain("Execute the INTENT against reality first");
+  });
+
+  it("labels an ANSWER differently, so the two conversations never blur", () => {
+    const delivery = deliveryFromRunsV2(
+      { run: { id: "run-2", loopId: "loop-1", scope: "task:task-7f3a91" }, answer: "Wait one more day." },
+      "dk_device",
+    );
+    expect(delivery!.task).toContain("A human answered, verbatim:");
+    expect(delivery!.task).toContain("Wait one more day.");
+    expect(delivery!.task).not.toContain("DIRECTIVE");
+  });
+
+  it("says nothing at all when nobody spoke — a clock fire has no human in it", () => {
+    const delivery = deliveryFromRunsV2({ run: { id: "run-3", loopId: "loop-1", scope: "routine" }, charter: "Sweep." }, "dk_device");
+    expect(delivery!.task).not.toMatch(/verbatim/);
+  });
+});

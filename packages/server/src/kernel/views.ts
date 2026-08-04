@@ -29,6 +29,7 @@ import * as store from "../db/kernelStore.js";
 import { runs, type Run } from "../db/schema.js";
 import { cronText } from "../lib/format.js";
 import { eventShape, eventTail, inboxCounts, inboxUnion, objectShape, type ApiResult } from "./objectApi.js";
+import { mirrorsFor } from "./mirrorApi.js";
 import { refusal } from "./refusals.js";
 import { BOARD_COLUMNS, columnFor } from "./taskBoard.js";
 import type { ApiContext } from "./apiAuth.js";
@@ -249,6 +250,7 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
       questions: questions.map((t) => taskRow(t, stamp)),
     },
     recentRuns: runRows.slice(0, RECENT_RUNS_CAP).map(runShape),
+    mirrors: await mirrorsFor(undefined, context.teamId, id),
     events: tail.slice(-TIMELINE_CAP).reverse().map(eventShape),
     cursorSeq: await eventTail(context.teamId),
   } };
@@ -341,14 +343,18 @@ export async function taskView(id: string, context: ApiContext, now = new Date()
   // run that created it. The creating-run clause is omitted ENTIRELY when there
   // is none — a placeholder id would be a query for a row that cannot exist.
   const touchedBy = task.createdByRun ? or(eq(runs.scope, `task:${id}`), eq(runs.id, task.createdByRun))! : eq(runs.scope, `task:${id}`);
-  const [tail, touching] = await Promise.all([
+  const [tail, touching, mirrors] = await Promise.all([
     store.listObjectEvents(undefined, id),
     db.select().from(runs).where(touchedBy).orderBy(desc(runs.ts)).limit(RECENT_RUNS_CAP),
+    // The external items this task depends on, by reverse lookup — a task
+    // carries no pointer column, so this is the only way it has them.
+    mirrorsFor(undefined, context.teamId, id),
   ]);
   const loops = new Map((await teamLoops(context.teamId)).map((loop) => [loop.id, loop]));
   return { ok: true, value: {
     task: objectShape(task),
     execution: task.payload ?? {},
+    mirrors,
     due: Boolean(task.followUpAt && task.followUpAt <= now.toISOString()),
     creator: loopRef(task.createdByLoop ? loops.get(task.createdByLoop) : undefined),
     watcherLoop: loopRef(task.watcher ? loops.get(task.watcher) : undefined),
@@ -397,6 +403,7 @@ export async function docView(id: string, context: ApiContext): Promise<ApiResul
   return { ok: true, value: {
     doc: { ...objectShape(doc), format: doc.format ?? "markdown" },
     creator: loopRef(doc.createdByLoop ? loops.get(doc.createdByLoop) : undefined),
+    mirrors: await mirrorsFor(undefined, context.teamId, id),
     timeline: (await store.listObjectEvents(undefined, id)).slice(-TIMELINE_CAP).map(eventShape),
     cursorSeq: await eventTail(context.teamId),
   } };

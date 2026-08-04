@@ -120,10 +120,11 @@ function emit(out: Emit, text: string, exit: number): number { out(text); return
 // -------------------------------------------------------------------- the router
 
 const COMMANDS = new Set([
-  "task list", "task show", "task create", "task update", "task close",
+  "task list", "task show", "task create", "task update", "task close", "task tell",
   "doc show", "doc create", "doc update",
   "loop list", "loop show", "loop create", "loop evolve", "loop update",
   "loop pause", "loop resume", "loop retire", "loop run-now",
+  "mirror attach", "mirror detach", "mirror list", "mirror kinds", "mirror show", "mirror update",
   "inbox", "answer",
 ]);
 /**
@@ -138,7 +139,7 @@ const COMMANDS = new Set([
  * along when one is set, so a human who typed this inside a run is refused too —
  * correctly, since the actor stamped on the event would be wrong.
  */
-const HUMAN_COMMANDS = new Set(["inbox", "answer", "loop create", "loop pause", "loop resume", "loop retire", "loop run-now"]);
+const HUMAN_COMMANDS = new Set(["inbox", "answer", "task tell", "loop create", "loop pause", "loop resume", "loop retire", "loop run-now"]);
 
 /** The three loop statuses, as the `--status` grammar. Duplicated from the
  *  server's `LOOP_STATUSES` on purpose: the flag VALUE set is the CLI's own
@@ -149,6 +150,43 @@ function commandOf(argv: string[]): string {
   const [noun, verb] = argv;
   if (noun === "inbox" || noun === "answer") return noun;
   return [noun, verb].filter((part) => part && !part.startsWith("--")).join(" ");
+}
+
+/**
+ * An ATTACHABLE object id — a task, a doc or a loop.
+ *
+ * The kind prefix IS the type, so this catches two things at once: a mirror id
+ * where an object id belongs, and — because the positional scan cannot tell an
+ * argument from a flag's VALUE — an `attach` that omitted the object entirely
+ * and would otherwise have posted `--kind`'s value as the object.
+ */
+const ATTACHABLE_PREFIXES = ["task-", "doc-", "loop-"];
+
+function objectIdRefusal(value: string, where: string): string | undefined {
+  if (ATTACHABLE_PREFIXES.some((prefix) => value.startsWith(prefix))) return undefined;
+  return errorEnvelope({
+    message: `${where} takes the id of the task, doc or loop that depends on the external thing`,
+    code: "VALIDATION_ERROR", wrote: value, expected: "task-7f3a91", allowed: ATTACHABLE_PREFIXES.map((p) => `${p}<id>`),
+    help: [
+      "Ids are kind-prefixed, and the object id comes FIRST, before the flags",
+      "A mirror never attaches to another mirror: a pointer to a pointer is an alias, not a dependency",
+      `Run \`loopany ${where} --help\` for the full grammar`,
+    ],
+  });
+}
+
+/** A mirror id, wherever one is required. Same shape as `loopIdRefusal` — the
+ *  kind prefix IS the type, so a wrong-kind id is caught before a round trip. */
+function mirrorIdRefusal(value: string, where: string): string | undefined {
+  if (value.startsWith("mirror-")) return undefined;
+  return errorEnvelope({
+    message: `${where} takes a mirror id`, code: "VALIDATION_ERROR", wrote: value, expected: "mirror-3f9a21c04b7e",
+    help: [
+      "Mirror ids are kind-prefixed: they start with `mirror-`",
+      "Run `loopany mirror list --attached-to <object-id>` — every list row prints the id",
+      "The OBJECT id goes in `--from`; the mirror id is the positional argument",
+    ],
+  });
 }
 
 /**
@@ -185,6 +223,44 @@ const NEAR_MISS: Record<string, { expected: string; help: string[] }> = {
     expected: "loopany doc update <doc-id> --file <path>",
     help: ["A doc is rewritten in place and keeps its id, so everything citing it follows; there is no delete verb"],
   },
+};
+/**
+ * The mirror near-misses, and each one teaches the property rather than the
+ * spelling. `mirror create` is the one an agent reaches for first and it is the
+ * most important to answer: there is no create, because a mirror that points
+ * from nothing is a row nobody can ever find.
+ */
+NEAR_MISS["mirror create"] = {
+  expected: "loopany mirror attach <object-id> --kind github-pr --coords owner/repo#57",
+  help: [
+    "There is no `mirror create`: a mirror records that some object DEPENDS on an external thing, so it is born attached",
+    "One external thing is ONE mirror — attaching the same coords from a second object shares the row instead of making a twin",
+    "A mirror tells you WHERE to look, never WHAT state it is in: there is no state field, and the schema has nowhere to put one",
+  ],
+};
+NEAR_MISS["mirror delete"] = {
+  expected: "loopany mirror detach <mirror-id> --from <object-id>",
+  help: [
+    "Nothing is deleted anywhere in this kernel: detaching removes the dependency and leaves the record readable",
+    "Detaching the last attachment is legal — the mirror stays, attached to nothing",
+  ],
+};
+NEAR_MISS["mirror rm"] = NEAR_MISS["mirror delete"]!;
+NEAR_MISS["mirror remove"] = NEAR_MISS["mirror delete"]!;
+NEAR_MISS["mirror sync"] = {
+  expected: "loopany mirror show <mirror-id>",
+  help: [
+    "There is nothing to sync: a mirror is a POINTER, not a cache — it never held external state, so it can never be stale",
+    "Go and look at the external thing yourself (the coords say where), and record what you FOUND on the task that owns the work",
+  ],
+};
+NEAR_MISS["mirror refresh"] = NEAR_MISS["mirror sync"]!;
+NEAR_MISS["task directive"] = {
+  expected: 'loopany task tell <task-id> "…"',
+  help: [
+    "`tell` is you speaking to the loop that watches this task; `answer` is you replying to one that asked you something",
+    "Both queue one run for the watcher, scoped to the task, carrying your words verbatim",
+  ],
 };
 NEAR_MISS["loop remove"] = NEAR_MISS["loop delete"]!;
 NEAR_MISS["loop rm"] = NEAR_MISS["loop delete"]!;
@@ -226,6 +302,78 @@ function plan(command: string, positional: string[], flags: Flags, argv: string[
       if (!id) return emit(out, missingArgument("task close requires a task id", "loopany task close <id> --note \"…\"", ["Run `loopany task list --open` to find the id"]), 2);
       if (typeof flags.note !== "string" || !flags.note.trim()) return emit(out, missingArgument("task close requires --note", `loopany task close ${id} --note "…"`, ["The note lands on the closing event and is the only record of why this closed — one sentence is enough"]), 2);
       return { path: `/api/tasks/${encodeURIComponent(id)}/close`, method: "POST", headers: json(), body: JSON.stringify({ note: flags.note }), render: (body) => renderClose(body, now()) };
+    }
+    case "task tell": {
+      // The directive is a POSITIONAL, exactly like `answer`'s text: the two are
+      // the same conversation from opposite ends, and giving one a flag and the
+      // other a positional would make them look like different mechanisms.
+      const directive = argv[3];
+      if (!id) return emit(out, missingArgument("task tell requires a task id", 'loopany task tell <task-id> "…"', ["Run `loopany task list --open` to find it", "`tell` is you speaking to the watching loop; `answer` is you replying to one that asked"]), 2);
+      if (typeof directive !== "string" || !directive.trim() || argv.length !== 4) {
+        return emit(out, errorEnvelope({
+          message: "the directive text is required", code: "VALIDATION_ERROR", expected: `loopany task tell ${id} "drop this bet — close the PR, clean up, then close the task"`,
+          help: [
+            "Free text. The run executes the INTENT against reality first and the kernel's records last",
+            "Say what you want AND why — the reason is what lets the loop judge the cases you did not name",
+          ],
+        }), 2);
+      }
+      return { path: `/api/tasks/${encodeURIComponent(id)}/directive`, method: "POST", headers: json(), body: JSON.stringify({ directive }), render: (body) => renderDirective(body) };
+    }
+    case "mirror attach": {
+      if (!id) return emit(out, missingArgument("mirror attach requires the object that depends on the external thing", 'loopany mirror attach <object-id> --kind github-pr --coords owner/repo#57', ["A mirror points FROM a task, a doc or a loop — attaching it to nothing would make a pointer nobody can find"]), 2);
+      const notObject = objectIdRefusal(id, "mirror attach"); if (notObject) return emit(out, notObject, 2);
+      for (const key of ["kind", "coords"] as const) {
+        if (typeof flags[key] === "string" && flags[key].trim()) continue;
+        return emit(out, errorEnvelope({
+          message: `mirror attach requires --${key}`, code: "VALIDATION_ERROR",
+          expected: `loopany mirror attach ${id} --kind github-pr --coords owner/repo#57`,
+          help: [
+            "`--kind` is what kind of external thing it is; `--coords` is its immutable identity",
+            "Canonical kinds: github-pr, github-issue, url, gsc-property — anything else is accepted as a plain string",
+            "A mirror tells you WHERE to look, never WHAT state it is in, so there is no state to pass",
+          ],
+        }), 2);
+      }
+      return {
+        path: "/api/mirrors", method: "POST", headers: json(),
+        body: JSON.stringify({ objectId: id, kind: flags.kind, coords: flags.coords, ...(typeof flags.note === "string" ? { note: flags.note } : {}) }),
+        render: (body) => renderAttach(body),
+      };
+    }
+    case "mirror detach": {
+      if (!id) return emit(out, missingArgument("mirror detach requires a mirror id", "loopany mirror detach <mirror-id> --from <object-id>", ["Run `loopany mirror list --attached-to <object-id>` to find it"]), 2);
+      const bad = mirrorIdRefusal(id, "mirror detach"); if (bad) return emit(out, bad, 2);
+      if (typeof flags.from !== "string" || !flags.from.trim()) {
+        return emit(out, missingArgument("mirror detach requires --from", `loopany mirror detach ${id} --from <object-id>`, ["A mirror can hang on several objects, so the one being released is always named — guessing would remove somebody else's pointer"]), 2);
+      }
+      return { path: `/api/mirrors/${encodeURIComponent(id)}/detach`, method: "POST", headers: json(), body: JSON.stringify({ from: flags.from }), render: (body) => renderDetach(body) };
+    }
+    case "mirror list": {
+      const query = new URLSearchParams();
+      for (const key of ["attached-to", "kind", "coords-like"]) if (typeof flags[key] === "string") query.set(key, flags[key]);
+      const echo = ["attached-to", "kind", "coords-like"].filter((key) => typeof flags[key] === "string").map((key) => `--${key} ${flags[key]}`).join(" ");
+      return { path: `/api/mirrors${query.size ? `?${query}` : ""}`, render: (body) => renderMirrorList(body, echo) };
+    }
+    case "mirror kinds": return { path: "/api/mirrors/kinds", render: (body) => renderMirrorKinds(body) };
+    case "mirror show": {
+      if (!id) return emit(out, missingArgument("mirror show requires a mirror id", "loopany mirror show <mirror-id>", ["Run `loopany mirror list` — every row prints the id"]), 2);
+      const bad = mirrorIdRefusal(id, "mirror show"); if (bad) return emit(out, bad, 2);
+      return { path: `/api/mirrors/${encodeURIComponent(id)}`, render: (body) => renderMirrorShow(body) };
+    }
+    case "mirror update": {
+      if (!id) return emit(out, missingArgument("mirror update requires a mirror id", 'loopany mirror update <mirror-id> --note "…"', ["Run `loopany mirror list` — every row prints the id"]), 2);
+      const bad = mirrorIdRefusal(id, "mirror update"); if (bad) return emit(out, bad, 2);
+      if (flags.note === undefined) {
+        return emit(out, errorEnvelope({
+          message: "mirror update requires --note", code: "VALIDATION_ERROR", expected: `loopany mirror update ${id} --note "…"`,
+          help: [
+            "The note is the ONLY editable field a mirror has",
+            "Coords and kind are the external thing's identity: a different PR is a different mirror, so detach this one and attach a new one",
+          ],
+        }), 2);
+      }
+      return { path: `/api/mirrors/${encodeURIComponent(id)}`, method: "PATCH", headers: json(), body: JSON.stringify({ note: nullToken(flags.note) }), render: (body) => renderMirrorUpdate(body) };
     }
     case "doc update": {
       if (!id) return emit(out, missingArgument("doc update requires a doc id", "loopany doc update <id> --file <path>", ["Run `loopany doc show <id> --file > d.md` to get the current text, edit it, then update"]), 2);
@@ -604,6 +752,11 @@ function renderShow(kind: Kind, body: Body, full: boolean, now: number): string 
   let text = detailBlock(kind, kindRows(kind, row, now));
   text += payloadBlock(row);
   if (typeof row.body === "string") text += `${kind === "loop" ? "charter" : "body"}: ${cell(bodyValue(row.body, full))}\n`;
+  // EXTERNAL ITEMS, right under the object and above its history: the whole
+  // point of the kind is that a run reading this knows what to go and check, so
+  // burying it below the event tail would defeat it. `coords` is what you use;
+  // there is no state column here and there never will be.
+  text += mirrorsBlock(body);
   const events = (Array.isArray(body.events) ? body.events : []) as Body[];
   // `seq` leads: it is what totally orders the tail even when two events share a
   // timestamp, and it is the cursor the UI's stream resumes from. The content id
@@ -611,6 +764,15 @@ function renderShow(kind: Kind, body: Body, full: boolean, now: number): string 
   text += typedList("events", ["seq", "ts", "actor", "entrance", "change"], events.map((event) => [event.seq, event.ts, event.actor, event.entrance, changeSummary(event)]));
   const id = String(row.id ?? "<id>");
   return text + helpBlock(showHints(kind, id, row));
+}
+
+/** The mirrors attached to an object, on every `show`. Rendered only when the
+ *  server sent the key at all, so an older server degrades to silence rather
+ *  than to a false `mirrors: []`. */
+function mirrorsBlock(body: Body): string {
+  if (!Array.isArray(body.mirrors)) return "";
+  const mirrors = body.mirrors as Body[];
+  return typedList("mirrors", ["id", "kind", "coords", "note"], mirrors.map((m) => [m.id, m.externalKind, m.coords, m.note]));
 }
 
 function showHints(kind: Kind, id: string, row: Body): string[] {
@@ -908,6 +1070,139 @@ function renderInbox(body: Body, now: number): string {
   return text + helpBlock(items.length
     ? ['Run `loopany answer <task-id> "…"` to reply — free text; approve/reject plus instructions are all just the answer', "Run `loopany task show <task-id>` to read the full question, its payload and its history", "Answering queues one run for the watching loop — every task has one, so every answer reaches somebody"]
     : ["Nothing is waiting on you — the default mode is zero human involvement, by design", "Run `loopany task list --open` if you want to look at the open work anyway"]);
+}
+
+/**
+ * `task tell` — the human speaking first.
+ *
+ * It renders like `answer` on purpose: they are the same wire and the same
+ * consequence (one run for the watcher, the task in scope), and printing them
+ * differently would suggest two mechanisms. The one difference the output
+ * insists on is WHAT the run is being asked to do — execute the intent against
+ * reality, not merely record it — because that is the part a person cannot tell
+ * from a run id.
+ */
+function renderDirective(body: Body): string {
+  const row = object(body) ?? {};
+  const id = String(row.id ?? ABSENT);
+  const run = body.run as Body | undefined;
+  const notice = body.notice as Body | undefined;
+  let text = `ok: told ${id}\n`;
+  text += detailBlock("directive", [["task", row.id], ["title", row.title], ["said", body.directive]]);
+  text += eventLine(body.event);
+  if (run) {
+    text += detailBlock("wake", [["run", run.alreadyQueued ? raw(`${cell(run.id)} (already queued)`) : run.id], ["loop", run.loopId], ["scope", String(run.scope ?? "").replace(/^task:/, "")], ["reason", run.reason], ["state", run.state]]);
+  } else {
+    text += `wake: ${ABSENT} (the watching loop had no run to queue — the directive is on the record)\n`;
+  }
+  if (notice) text += `warning: ${cell(notice.message)}\n`;
+  const hints: string[] = [];
+  if (run?.alreadyQueued) hints.push(`${cell(run.loopId)} already had a run queued — it reads this task's timeline when it claims, so the directive is not lost; one run, not two`);
+  else if (run) hints.push(`One run is queued for ${cell(run.loopId)}, and your words ride in its work order verbatim`);
+  hints.push("It acts on the INTENT against external reality first and this kernel's records last — so \"drop this bet\" closes the PR before it closes the task");
+  if (notice && typeof notice.hint === "string") hints.unshift(notice.hint);
+  hints.push(`Run \`loopany task show ${id}\` to read what it did`);
+  return text + helpBlock(hints);
+}
+
+// ----------------------------------------------------------------- mirrors
+
+/** The teaching line every mirror render ends with. Authored once here because
+ *  it is the whole model in one sentence, and an agent should meet it on every
+ *  mirror surface rather than only when it gets something wrong. */
+const MIRROR_LAW_LINE = "A mirror tells you WHERE to look, never WHAT state it is in — go and check the coords, then record what you found on the task";
+
+function mirrorRows(m: Body): [string, unknown][] {
+  return [["id", m.id], ["kind", m.externalKind], ["coords", m.coords], ["note", m.note], ["href", m.href], ["attached_to", Array.isArray(m.attachedTo) ? (m.attachedTo as unknown[]).join(", ") : ABSENT]];
+}
+
+function renderAttach(body: Body): string {
+  const mirror = (body.mirror ?? {}) as Body;
+  const fresh = body.created === true;
+  const changed = body.changed !== false;
+  const notice = body.notice as Body | undefined;
+  let text = `ok: attached ${cell(mirror.id)} to ${cell(body.object)}${fresh ? "" : changed ? " (existing mirror, now shared)" : " (no change: already attached)"}\n`;
+  if (notice) text += `warning: ${cell(notice.message)}\n`;
+  text += detailBlock("mirror", mirrorRows(mirror));
+  text += eventLine(body.event);
+  const hints: string[] = [];
+  if (!fresh && changed) hints.push("One external thing is one mirror, so this attached the EXISTING row rather than minting a twin — everything it already hangs on still hangs on it");
+  if (notice && typeof notice.hint === "string") hints.push(notice.hint);
+  hints.push(MIRROR_LAW_LINE);
+  hints.push(`Run \`loopany mirror detach ${cell(mirror.id)} --from ${cell(body.object)}\` when this object no longer depends on it`);
+  return text + helpBlock(hints);
+}
+
+function renderDetach(body: Body): string {
+  const mirror = (body.mirror ?? {}) as Body;
+  const changed = body.changed !== false;
+  const notice = body.notice as Body | undefined;
+  let text = `ok: detached ${cell(mirror.id)} from ${cell(body.object)}${changed ? "" : " (no change: it was not attached)"}\n`;
+  text += detailBlock("mirror", mirrorRows(mirror));
+  text += eventLine(body.event);
+  const hints: string[] = [];
+  if (!changed && notice) hints.push("Detach is idempotent — a retry after a dropped connection costs nothing");
+  if (body.orphaned === true) hints.push(`Nothing depends on ${cell(mirror.coords)} any more. The mirror stays readable — nothing in this kernel is ever deleted — and attaching it again revives the same row`);
+  hints.push(`Run \`loopany mirror attach <object-id> --kind ${cell(mirror.externalKind)} --coords ${cell(mirror.coords)}\` to point something else at it`);
+  return text + helpBlock(hints);
+}
+
+function renderMirrorList(body: Body, echo: string): string {
+  const mirrors = (Array.isArray(body.mirrors) ? body.mirrors : []) as Body[];
+  const total = typeof body.total === "number" ? body.total : mirrors.length;
+  let text = countLine(mirrors.length, total);
+  text += typedList("mirrors", ["id", "kind", "coords", "note", "attached"], mirrors.map((m) => [m.id, m.externalKind, m.coords, m.note, Array.isArray(m.attachedTo) ? (m.attachedTo as unknown[]).length : 0]));
+  if (!mirrors.length) {
+    if (echo) text += `filter: ${cell(echo)}\n`;
+    return text + helpBlock([
+      echo ? "Run `loopany mirror list` with no filter to see everything this team points at" : "Nothing external is tracked yet — attach the first with `loopany mirror attach <object-id> --kind github-pr --coords owner/repo#57`",
+      "An empty list is a clean result, not an error",
+    ]);
+  }
+  const one = mirrors.length === 1 ? String(mirrors[0]!.id) : "<mirror-id>";
+  const hints = [`Run \`loopany mirror show ${one}\` to read one, with the objects that depend on it`, MIRROR_LAW_LINE];
+  if (body.truncated) hints.unshift(`Showing the first ${mirrors.length} of ${total} — narrow with --kind or --coords-like rather than paging`);
+  return text + helpBlock(hints);
+}
+
+function renderMirrorKinds(body: Body): string {
+  const kinds = (Array.isArray(body.kinds) ? body.kinds : []) as Body[];
+  const canonical = (Array.isArray(body.canonical) ? body.canonical : []) as Body[];
+  let text = countLine(kinds.length);
+  text += typedList("in_use", ["kind", "count", "known"], kinds.map((k) => [k.kind, k.count, k.known === true ? "yes" : "no"]));
+  text += typedList("canonical", ["kind", "what", "coords"], canonical.map((k) => [k.kind, k.what, k.coords]));
+  return text + helpBlock([
+    "Kinds are FREE-FORM and normalized to kebab-case on write, so `GitHub PR` and `github_pr` both become `github-pr`",
+    "A canonical kind also has its coords SHAPE checked; an unknown one is accepted as a plain string",
+    kinds.some((k) => k.known === false)
+      ? "The kinds marked known: no are this team's own vocabulary — that is the system working, not a mistake"
+      : "Invent a kind when none of these fits; it will appear here for the next reader",
+  ]);
+}
+
+function renderMirrorShow(body: Body): string {
+  const mirror = (body.mirror ?? {}) as Body;
+  const events = (Array.isArray(body.events) ? body.events : []) as Body[];
+  let text = detailBlock("mirror", mirrorRows(mirror));
+  text += typedList("events", ["seq", "ts", "actor", "entrance", "change"], events.map((event) => [event.seq, event.ts, event.actor, event.entrance, changeSummary(event)]));
+  return text + helpBlock([
+    MIRROR_LAW_LINE,
+    `Run \`loopany mirror update ${cell(mirror.id)} --note "…"\` to relabel it — the note is the only editable field`,
+    "Coords and kind are the external thing's identity: a different PR is a different mirror, so detach and attach a new one",
+  ]);
+}
+
+function renderMirrorUpdate(body: Body): string {
+  const mirror = (body.mirror ?? {}) as Body;
+  const changed = body.changed !== false;
+  let text = `ok: relabelled ${cell(mirror.id)}${changed ? "" : " (no change)"}\n`;
+  text += detailBlock("mirror", mirrorRows(mirror));
+  text += changedBlock(body.diff as never);
+  text += eventLine(body.event);
+  return text + helpBlock([
+    "The label is shared by everything this mirror is attached to — one external thing is one mirror",
+    MIRROR_LAW_LINE,
+  ]);
 }
 
 function renderAnswer(body: Body): string {

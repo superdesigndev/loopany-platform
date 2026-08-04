@@ -22,6 +22,8 @@ const GLYPHS: Record<string, string> = {
   inbox: '◍', tasks: '▤', loops: '↻', docs: '□', system: '⌘',
   question: '?', due: '◷', orphan: '⊘', chevron: '›', run: '↻', doc: '□',
   html: '◈', task: '▫', event: '·', close: '×', back: '‹',
+  // A mirror points OUT of the system — an arrow leaving, not a state badge.
+  mirror: '↗',
 }
 
 export function Glyph({ name }: { name: string }) {

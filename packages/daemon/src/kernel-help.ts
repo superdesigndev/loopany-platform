@@ -22,9 +22,11 @@ export interface VerbSpec {
   seeAlso?: string;
 }
 
-const TASK_KEYS = "task front matter: title, key, follow_up, watcher, needs_human, payload";
-const DOC_KEYS = "doc front matter: title, key, format, payload";
-const LOOP_KEYS = "loop front matter: title, key, cron, workdir, payload — body is the charter";
+const TASK_KEYS = "task front matter: title, key, follow_up, watcher, needs_human, payload, mirrors (create-only)";
+const DOC_KEYS = "doc front matter: title, key, format, payload, mirrors (create-only)";
+const LOOP_KEYS = "loop front matter: title, key, cron, workdir, payload, mirrors (create-only) — body is the charter";
+const MIRROR_LAW = "a mirror tells you WHERE to look, never WHAT state it is in";
+const MIRROR_KINDS = "canonical kinds: github-pr, github-issue, url, gsc-property — free-form, kebab-cased on write; a KNOWN kind also has its coords shape checked";
 
 export const VERBS: Record<string, VerbSpec> = {
   "task list": {
@@ -102,6 +104,21 @@ export const VERBS: Record<string, VerbSpec> = {
     notes: [
       "close is refused while a question is waiting for a human — attestation, not a status flip",
       "closing before follow_up is legal: the date is a resurface schedule, not an obligation",
+    ],
+  },
+  "task tell": {
+    usage: 'loopany task tell <task-id> "<directive>"',
+    flags: [],
+    examples: [
+      'loopany task tell task-7f3a91 "drop this bet — close the PR, clean up the branch, then close the task"',
+      'loopany task tell task-7f3a91 "ship it, but wait for CI to go green first"',
+    ],
+    notes: [
+      "a HUMAN verb, and the mirror image of `answer`: the inbox is the loop asking you, this is you telling the loop",
+      "it queues ONE run for the watching loop with the task in scope, carrying your words VERBATIM in its work order",
+      "the run executes the INTENT against reality first and the kernel's records last — \"drop this bet\" means close the PR, then the task",
+      "refused while a question is pending on the task: answer it instead, since an answer is free text and any instruction fits in one",
+      "one queued run per loop, so a directive on a busy loop reports that run rather than stacking a twin",
     ],
   },
   "doc show": {
@@ -229,6 +246,75 @@ export const VERBS: Record<string, VerbSpec> = {
       "step 3 of four: propose with `task create --needs-human`, a human answers, then this, then `task close`",
       "the kernel checks the key exists, is human, and hangs on your loop's task — not that it matches the change",
       "a `cron:`/`workdir:` that differs is exactly what `loop evolve` refuses (APPROVAL_REQUIRED) — this verb is where it lands",
+    ],
+  },
+  "mirror attach": {
+    usage: "loopany mirror attach <object-id> --kind <kind> --coords <coords> [--note <text>]",
+    flags: [
+      ["--kind <kind>", "what KIND of external thing (github-pr, url, …); free-form, kebab-cased on write"],
+      ["--coords <coords>", "the external thing's IMMUTABLE identity (owner/repo#57, a URL)"],
+      ["--note <text>", "a human label for it; optional, one short phrase"],
+    ],
+    examples: [
+      'loopany mirror attach task-7f3a91 --kind github-pr --coords superdesigndev/loopany-platform#57 --note "seed article PR"',
+      "loopany mirror attach loop-8e3311 --kind gsc-property --coords sc-domain:example.com",
+    ],
+    notes: [
+      MIRROR_LAW + " — there is no state field, and the schema has nowhere to put one",
+      "creates the mirror and attaches it in ONE transaction; no --file, because a pointer is three fields",
+      "ONE external thing is ONE mirror: attaching the same coords from a second object shares the row rather than making a twin",
+      "coords are IDENTITY and can never be changed — a different PR is a different mirror",
+      MIRROR_KINDS,
+    ],
+  },
+  "mirror detach": {
+    usage: "loopany mirror detach <mirror-id> --from <object-id>",
+    flags: [["--from <object-id>", "the object that no longer depends on the external thing; required"]],
+    examples: ["loopany mirror detach mirror-3f9a21c04b7e --from task-7f3a91"],
+    notes: [
+      "--from is required: a mirror can hang on several objects, and guessing wrong removes somebody else's pointer",
+      "detaching the last attachment is legal — the row stays as a readable record, like everything else in this kernel",
+      "detaching a mirror that was not attached is a success that changed nothing, so a retry is free",
+    ],
+  },
+  "mirror list": {
+    usage: "loopany mirror list [--attached-to <object-id>] [--kind <kind>] [--coords-like <pattern>]",
+    flags: [
+      ["--attached-to <object-id>", "the external items THAT object depends on"],
+      ["--kind <kind>", "one kind; normalized the same way a write is, so --kind \"GitHub PR\" finds github-pr"],
+      ["--coords-like <pattern>", "substring match on coords — `owner/repo#` for one repo's refs"],
+    ],
+    examples: [
+      "loopany mirror list --attached-to task-7f3a91",
+      "loopany mirror list --kind github-pr --coords-like superdesigndev/",
+    ],
+    notes: [
+      "predicates compose as AND; a mirror carries no state, so there is nothing to filter by state",
+      "`task show` / `doc show` / `loop show` already print the mirrors attached to that object",
+    ],
+  },
+  "mirror kinds": {
+    usage: "loopany mirror kinds",
+    flags: [],
+    examples: ["loopany mirror kinds"],
+    notes: [
+      "the vocabulary is free-form, so the honest answer is the kinds actually IN USE, with counts",
+      "the canonical spellings print alongside, flagged known — an unknown kind is accepted, it just gets no coords check",
+    ],
+  },
+  "mirror show": {
+    usage: "loopany mirror show <mirror-id>",
+    flags: [],
+    examples: ["loopany mirror show mirror-3f9a21c04b7e"],
+    notes: [MIRROR_LAW + ": this prints where to look and who depends on it, never whether it is open or merged"],
+  },
+  "mirror update": {
+    usage: 'loopany mirror update <mirror-id> --note "<text>"',
+    flags: [["--note <text>", "the human label; `null` clears it"]],
+    examples: ['loopany mirror update mirror-3f9a21c04b7e --note "the fix PR, not the seed one"'],
+    notes: [
+      "the note is the ONLY editable field: kind and coords are the external thing's identity and are refused by name",
+      "the label is shared by everything the mirror is attached to — one external thing is one mirror",
     ],
   },
   inbox: {

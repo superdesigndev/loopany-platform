@@ -124,9 +124,31 @@ export interface RunRow {
   attempts: number
 }
 
+/**
+ * A MIRROR — a pointer to something outside this system, composed onto an
+ * object's view by reverse lookup (the association lives on the mirror side).
+ *
+ * Note what is NOT here, and could not be: there is no state, no `merged`, no
+ * `lastChecked`. A mirror tells you WHERE to look, never WHAT state it is in,
+ * and the server's schema has nowhere to record one. `href` is resolved
+ * SERVER-side so no client re-derives an external URL.
+ */
+export interface MirrorRef {
+  id: string
+  externalKind: string
+  coords: string
+  note: string | null
+  href: string | null
+  attachedTo: string[]
+  createdByLoop: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export interface TaskView extends ViewPayload {
   task: Record<string, unknown> & { id: string; title: string | null; body: string; status: string; payload: Record<string, unknown>; pendingQuestion: string | null; watcher: string | null; followUpAt: string | null; createdAt: string; updatedAt: string; closedAt: string | null }
   execution: Record<string, unknown>
+  mirrors: MirrorRef[]
   due: boolean
   creator: LoopRef
   watcherLoop: LoopRef
@@ -191,6 +213,7 @@ export interface LoopView extends ViewPayload {
   charterHistory: CharterDiff[]
   openTasks: { watching: TaskRow[]; created: TaskRow[]; questions: TaskRow[] }
   recentRuns: RunRow[]
+  mirrors: MirrorRef[]
   events: EventShape[]
 }
 
@@ -214,6 +237,7 @@ export interface DocsView extends ViewPayload {
 export interface DocView extends ViewPayload {
   doc: { id: string; title: string | null; body: string; format: 'markdown' | 'html'; payload: Record<string, unknown>; createdByLoop: string | null; createdByRun: string | null; createdAt: string; updatedAt: string }
   creator: LoopRef
+  mirrors: MirrorRef[]
   timeline: EventShape[]
 }
 
@@ -293,19 +317,40 @@ export async function postVerdict(taskId: string, answer: string): Promise<{ run
 }
 
 /**
- * The board's two writes, and they are the ONLY ones it performs.
+ * THE DIRECTIVE — a person telling the watching loop what to do, unprompted.
  *
- * Both are existing kernel endpoints called exactly as the CLI calls them —
- * there is no board-specific write path, and there is deliberately no client
- * guess about legality: `board.ts` decides what may be DRAGGED, the kernel
- * decides what may HAPPEN, and a refusal from the second is rendered verbatim.
+ * The mirror image of the verdict: `postVerdict` REPLIES to a question the loop
+ * asked, this one SPEAKS FIRST. Both queue one run for the watcher with the task
+ * in scope; the difference is who opened the conversation, and that is why they
+ * are two endpoints rather than one with a mode flag.
+ *
+ * The platform never parses it. The run executes the INTENT against external
+ * reality first and the kernel's records last — "drop this bet" means close the
+ * PR, clean up, and only then close the task.
  */
-
-/** `close` — the one task transition (types.ts `TRANSITIONS`). The note is
- *  required by the kernel, so the board must collect it before it asks. */
-export async function postClose(taskId: string, note: string): Promise<{ changed: boolean; event: string | null }> {
-  return write<{ changed: boolean; event: string | null }>(`/api/tasks/${encodeURIComponent(taskId)}/close`, 'POST', { note }, 'the close was refused')
+export async function postDirective(taskId: string, directive: string): Promise<{ run: { id: string; alreadyQueued: boolean } | null; notice?: { message: string } }> {
+  return write<{ run: { id: string; alreadyQueued: boolean } | null; notice?: { message: string } }>(`/api/tasks/${encodeURIComponent(taskId)}/directive`, 'POST', { directive }, 'the directive was refused')
 }
+
+/**
+ * THERE IS NO `postClose`, and its absence is the point (captain direction
+ * 2026-08-04).
+ *
+ * The expected end of a task is that its WATCHER closes it — from its own
+ * workflow logic, or in response to a directive left here. A human closing a
+ * task from this screen settles the kernel's record while the external world it
+ * describes carries on unchanged: the PR is still open, the branch is still
+ * there, and the loop that would have cleaned them up is now looking at a closed
+ * task and will never act again. `loopany task close` remains as the deep
+ * emergency hatch for a broken watcher, documented as one, where the person
+ * running it can see they are taking on the reconciliation themselves.
+ *
+ * The board's remaining writes are `postVerdict`, `postDirective` and
+ * `transferWatcher` — all three existing kernel endpoints called exactly as the
+ * CLI calls them. There is no board-specific write path, and deliberately no
+ * client guess about legality: the kernel decides what may HAPPEN and a refusal
+ * is rendered verbatim.
+ */
 
 /**
  * TRANSFER — a `watcher` facet PATCH, not a transition, and the only shape it

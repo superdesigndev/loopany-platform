@@ -43,6 +43,13 @@
       "when": 1785826911066,
       "tag": "0005_freezing_whizzer",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785840251800,
+      "tag": "0006_ambiguous_doorman",
+      "breakpoints": true
     }
   ]
 }

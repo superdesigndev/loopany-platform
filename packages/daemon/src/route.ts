@@ -23,7 +23,7 @@ const DAEMON_FLAGS = new Set(["--server-url", "--api-key"]);
 // credential so its crafted run-only 403 reaches the agent, instead of a generic
 // "unknown command". A run report/finishes ITSELF; the owner edits via `edit`.
 const FORWARD_VERBS = new Set(["report", "finish", "complete"]);
-const KERNEL_VERBS = new Set(["task", "doc", "loop", "inbox", "answer"]);
+const KERNEL_VERBS = new Set(["task", "doc", "loop", "mirror", "inbox", "answer"]);
 // Every command word the router recognizes below (the daemon-flag re-exec is a leading
 // FLAG, not a verb, so it is deliberately absent). Any of these carrying `--help`/`-h`
 // short-circuits to that verb's usage BEFORE its handler runs — so a foot-gun like

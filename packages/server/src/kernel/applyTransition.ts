@@ -61,7 +61,10 @@ import {
   immutableIssues,
   isTransitionName,
   refuse,
+  statelessIssues,
   watcherRequired,
+  MIRROR_COORDS_IMMUTABLE_HINT,
+  MIRROR_STATELESS_HINT,
   type Actor,
   type EventDiff,
   type KernelRefusal,
@@ -93,6 +96,15 @@ export interface WritableFields {
   watcher?: string | null;
   // doc facet
   format?: string | null;
+  // mirror facets
+  /** The external kind. IMMUTABLE after creation — present here only so the
+   *  create path can set it through the one field surface. */
+  mirrorKind?: string | null;
+  /** The external identity. IMMUTABLE after creation, for the same reason. */
+  mirrorCoords?: string | null;
+  /** The objects that depend on the external thing. The ONE mutable mirror
+   *  facet: attach and detach are ordinary updates of this set. */
+  attachedTo?: string[] | null;
 }
 
 const WRITABLE_KEYS = [
@@ -107,6 +119,9 @@ const WRITABLE_KEYS = [
   "pendingQuestion",
   "watcher",
   "format",
+  "mirrorKind",
+  "mirrorCoords",
+  "attachedTo",
 ] as const;
 
 /**
@@ -119,6 +134,12 @@ const WRITABLE_KEYS = [
  * because `contentDiffers` skips any key the submitted file did not carry, and
  * the kind firewall has already refused a foreign facet by the time it runs.
  *
+ * `attachedTo` is DELIBERATELY absent: a mirror's attachment set is not content
+ * an idempotent create submitted and had discarded — a second `mirror attach`
+ * naming a NEW object is exactly how the set is meant to grow, and reporting it
+ * as "your file was not applied" would be false. The attach path adds the id
+ * itself, right after this comparison runs.
+ *
  * Review F6 (2026-08-04): `cron` and `format` used to be absent while `workdir`
  * — a loop facet under the SAME governance gate as cron — was present, which
  * made the omission read as a rule about cadence. It was not one. This function
@@ -128,7 +149,7 @@ const WRITABLE_KEYS = [
  * this comparison does not feed. Reporting less than the truth here only hid the
  * fact from a direct kernel caller.
  */
-const CONTENT_KEYS = ["title", "body", "payload", "cron", "followUpAt", "watcher", "pendingQuestion", "workdir", "format"] as const;
+const CONTENT_KEYS = ["title", "body", "payload", "cron", "followUpAt", "watcher", "pendingQuestion", "workdir", "format", "mirrorKind", "mirrorCoords"] as const;
 
 // ---- results ----
 
@@ -387,6 +408,39 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     );
   }
 
+  // THE STATELESSNESS RULE (types.ts `MIRROR_LAW`), at the one create seam. The
+  // DDL CHECK is the floor; this is where the refusal explains itself.
+  const stateless = statelessIssues(kind, assertedFields(fields));
+  if (stateless.length) {
+    return fail(
+      refuse("MIRROR_STATELESS", `a mirror cannot carry ${stateless.map((i) => i.path).join(", ")}`, stateless, MIRROR_STATELESS_HINT),
+      where,
+    );
+  }
+
+  // A mirror with no kind, no coords or nothing attached is not a pointer. The
+  // NON-EMPTY attachment set is a kernel rule rather than a CHECK on purpose:
+  // detaching the last object must stay possible, and the row then survives as a
+  // readable record (nothing in this kernel is ever deleted).
+  if (kind === "mirror") {
+    const attached = Array.isArray(input.attachedTo) ? input.attachedTo : [];
+    if (!input.mirrorKind || !input.mirrorCoords || !attached.length) {
+      return fail(
+        refuse(
+          "SCHEMA_VIOLATION",
+          "a mirror needs a kind, coords and at least one object attached to it",
+          [
+            ...(input.mirrorKind ? [] : [{ path: "kind", message: "required", expected: "github-pr" }]),
+            ...(input.mirrorCoords ? [] : [{ path: "coords", message: "required", expected: "owner/repo#57" }]),
+            ...(attached.length ? [] : [{ path: "attachedTo", message: "a mirror points FROM something", expected: "task-<id>" }]),
+          ],
+          "a mirror is created by attaching it: `loopany mirror attach <object-id> --kind <k> --coords <c>`",
+        ),
+        where,
+      );
+    }
+  }
+
   // THE WATCHER RULE (types.ts `WATCHER_HINT`), applied at the one create seam so
   // no caller can mint an unwatched task — not the HTTP verbs, not the circuit
   // breaker's auto-pause question, not the fixture seeder. A loop-created task
@@ -430,6 +484,9 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     pendingQuestion: input.pendingQuestion ?? null,
     watcher,
     format: input.format ?? null,
+    mirrorKind: input.mirrorKind ?? null,
+    mirrorCoords: input.mirrorCoords ?? null,
+    attachedTo: input.attachedTo ?? null,
     key: input.key ?? null,
     payload: input.payload ?? null,
     body: input.body ?? null,
@@ -602,14 +659,21 @@ export async function applyUpdateIn(tx: KernelExec, input: ApplyUpdateInput): Pr
   // state change (the failure class the single code exit exists to eliminate).
   const immutable = immutableIssues(Object.keys(input.fields));
   if (immutable.length) {
+    // COORDS ARE IDENTITY, and their refusal names a different legal move than
+    // every other immutable field's: not "restore the stored value" but "detach
+    // and attach a new mirror", because a different external thing is a
+    // different pointer. Its own code, so the CLI and the UI can say so too.
+    const coords = immutable.some((i) => i.path === "mirrorCoords" || i.path === "mirrorKind");
     return fail(
       refuse(
-        "IMMUTABLE_KEY",
+        coords ? "IMMUTABLE_COORDS" : "IMMUTABLE_KEY",
         `${immutable.map((i) => i.path).join(", ")} cannot be changed by an update`,
         immutable,
-        immutable.some((i) => i.path === "status")
-          ? "status moves through a transition: close a task, pause/resume/retire a loop"
-          : "create a new object instead",
+        coords
+          ? MIRROR_COORDS_IMMUTABLE_HINT
+          : immutable.some((i) => i.path === "status")
+            ? "status moves through a transition: close a task, pause/resume/retire a loop"
+            : "create a new object instead",
       ),
       where,
     );
@@ -625,6 +689,17 @@ export async function applyUpdateIn(tx: KernelExec, input: ApplyUpdateInput): Pr
         issues,
         firewallHint(before.kind),
       ),
+      where,
+    );
+  }
+
+  // The other half of the statelessness weld: no update may give a mirror the
+  // free zone its create was refused. Without this, "cache the status just this
+  // once" would simply move one function down.
+  const stateless = statelessIssues(before.kind, assertedFields(fields));
+  if (stateless.length) {
+    return fail(
+      refuse("MIRROR_STATELESS", `a mirror cannot carry ${stateless.map((i) => i.path).join(", ")}`, stateless, MIRROR_STATELESS_HINT),
       where,
     );
   }
