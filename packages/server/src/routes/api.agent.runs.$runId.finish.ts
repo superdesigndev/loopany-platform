@@ -4,6 +4,7 @@ import { MACHINE_BODY_CAP, readJsonBody } from "../gateway/http.js";
 import { machineRouteLimit } from "../gateway/rateLimit.js";
 import { authenticateDevice, finishRun, type FinishBody } from "../kernel/runQueue.js";
 import { refusal, refusalResponse } from "../kernel/refusals.js";
+import { ensureBooted } from "../kernel/routeSupport.js";
 
 /** Device credential + invisible run context closes exactly that run's lease. */
 export const Route = createFileRoute("/api/agent/runs/$runId/finish")({
@@ -14,6 +15,7 @@ export const Route = createFileRoute("/api/agent/runs/$runId/finish")({
         const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
         const limited = machineRouteLimit(request, token || undefined);
         if (limited) return limited;
+        await ensureBooted();
         const machine = await authenticateDevice(token);
         if (!machine) return refusalResponse(refusal("UNAUTHORIZED", "unknown device credential"));
         const runContext = request.headers.get("x-loopany-run")?.trim();

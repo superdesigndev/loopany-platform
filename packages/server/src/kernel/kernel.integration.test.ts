@@ -213,6 +213,26 @@ describe("kind firewalls (design §4 rule 2)", () => {
     );
   });
 
+  it("refuses a bound workdir on a task at BOTH altitudes", async () => {
+    // Only a loop has an execution site (captain ruling 2026-08-04), and the DDL
+    // is the floor: the verb guard could be refactored away, the CHECK cannot.
+    const viaVerb = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, title: "T", workdir: "/Users/me/repo" } as never);
+    expect(!viaVerb.ok && viaVerb.code).toBe("WRONG_KIND");
+    await expectCheckViolation(
+      () =>
+        db.db.insert(schema.objects).values({
+          id: "task-workdir-raw",
+          teamId: TEAM,
+          kind: "task",
+          status: "open",
+          workdir: "/Users/me/repo",
+          createdAt: T0,
+          updatedAt: T0,
+        }),
+      "objects_workdir_loop_only",
+    );
+  });
+
   it("refuses task facets on a loop, at both altitudes", async () => {
     const l = await loop();
     const viaVerb = await kernel.applyUpdate({ objectId: l.id, actor: AGENT, now: T1, fields: { watcher: "loop-x" } });

@@ -222,7 +222,7 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
   return { ok: true, value: {
     loop: {
       id: loop.id, title: loop.title, status: loop.status, cron: loop.cron, timezone: loop.timezone,
-      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextFire, body: loop.body ?? "",
+      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextFire, workdir: loop.workdir, body: loop.body ?? "",
       payload: loop.payload ?? {}, createdAt: loop.createdAt, updatedAt: loop.updatedAt,
     },
     health: loopHealth(runRows, now),

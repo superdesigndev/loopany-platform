@@ -10,6 +10,7 @@ import * as store from "../db/kernelStore.js";
 import * as legacyStore from "../db/store.js";
 import { runs, type Machine, type Run } from "../db/schema.js";
 import { machineIdFromToken, isDeviceTokenShape, sha256 } from "../gateway/tokens.js";
+import { enrollMachine, stampMachineContact, type MachineInfo } from "../gateway/enroll.js";
 import { clipText, type HttpResult } from "../gateway/http.js";
 import { logger } from "../logger.js";
 import { applyTransitionIn, createObjectIn } from "./applyTransition.js";
@@ -263,6 +264,12 @@ export async function armUnarmedLoops(now: Date = new Date()): Promise<number> {
   return armed;
 }
 
+/**
+ * STRICT authentication: resolve an ALREADY-enrolled machine, never create one.
+ * Every rewrite endpoint except the claim long-poll uses this — enrollment is a
+ * single named surface (`enrollDeviceForClaim`), exactly as it is on the legacy
+ * line where `poll` is the only self-register route.
+ */
 export async function authenticateDevice(token: string): Promise<Machine | undefined> {
   if (!isDeviceTokenShape(token)) return undefined;
   const machine = await legacyStore.getMachine(machineIdFromToken(token));
@@ -270,10 +277,39 @@ export async function authenticateDevice(token: string): Promise<Machine | undef
   return machine;
 }
 
+/**
+ * THE rewrite line's enrollment surface, and the mirror of legacy `poll`.
+ *
+ * A daemon running `LOOPANY_RUNS_V2=1` never calls `/api/machine/poll`, so
+ * without this a brand-new machine had no way onto the rewrite line at all: the
+ * claim 401'd forever and the machine never appeared online in the UI. It
+ * delegates to the SHARED `gateway/enroll.ts` gate, so the open-mode/gated
+ * policy and the token-hash re-verify cannot drift between the two transports.
+ */
+export async function enrollDeviceForClaim(token: string, info?: MachineInfo): Promise<Machine | undefined> {
+  const resolved = await enrollMachine(token, info);
+  if (!resolved.ok) return undefined;
+  // The claim IS this machine's heartbeat on the v2 path — nothing else stamps
+  // presence there, so the UI would show every v2 machine as permanently
+  // offline without it.
+  await stampMachineContact(resolved.machine, info);
+  return resolved.machine;
+}
+
 export interface ClaimBody {
   machine?: string;
   agent?: string;
   wait?: boolean;
+  /** Machine identity, same shape the legacy poll reports. */
+  host?: string;
+  platform?: string;
+  arch?: string;
+  version?: string;
+}
+
+/** The identity fields a claim body carries, in `enrollMachine`'s shape. */
+export function claimMachineInfo(body: ClaimBody): MachineInfo {
+  return { host: body.host, platform: body.platform, arch: body.arch, version: body.version };
 }
 
 export async function claimRun(machine: Machine, body: ClaimBody, now = new Date()): Promise<HttpResult> {
@@ -310,7 +346,7 @@ export async function claimRun(machine: Machine, body: ClaimBody, now = new Date
       identityLine: `You are running for ${loop.id}${loop.title ? ` (\"${loop.title}\")` : ""}.`,
       scopeNote: taskId ? `One task was answered by a human and is waiting for you: ${taskId}.` : null,
       ...(task ? { task } : {}),
-      execution: executionConfig(loop.payload),
+      execution: executionConfig(loop),
       roots: machine.roots ?? undefined,
       leaseExpiresAt: run.leaseExpiresAt,
       leaseMs: RUN_LEASE_MS,
@@ -679,12 +715,20 @@ function cleanCost(value: unknown): Record<string, unknown> | null {
   }
 }
 
-function executionConfig(payload: Record<string, unknown> | null): Record<string, unknown> {
-  const p = payload ?? {};
+/**
+ * The work order's execution envelope. `workdir` is the loop's OWN bound column
+ * (captain ruling 2026-08-04) — the free-zone payload no longer answers WHERE a
+ * run executes, so a charter cannot quietly relocate itself past the governance
+ * gate in `governLoop`. Everything else still reads the payload free zone.
+ */
+function executionConfig(loop: KernelObject): Record<string, unknown> {
+  const p = loop.payload ?? {};
   const agent = p.agent === "codex" || p.agent === "grok" || p.agent === "claude-code" ? p.agent : "claude-code";
   return {
     agent,
-    workdir: typeof p.workdir === "string" ? p.workdir : null,
+    workdir: loop.workdir,
+    /** The claiming machine must not silently invent a bound directory. */
+    requireWorkdir: loop.workdir != null,
     taskFile: typeof p.taskFile === "string" ? p.taskFile : null,
     workflow: typeof p.workflow === "string" ? p.workflow : null,
     model: typeof p.model === "string" ? p.model : null,

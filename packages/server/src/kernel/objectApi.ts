@@ -4,10 +4,10 @@ import { db } from "../db/index.js";
 import { events, objects, type KernelEvent, type KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
 import { runs } from "../db/schema.js";
-import { applyTransitionIn, applyUpdateIn, buildFieldDiff, createObjectIn, sameValue, type WritableFields } from "./applyTransition.js";
+import { appendOrganicEvent, applyTransitionIn, applyUpdateIn, buildFieldDiff, createObjectIn, sameValue, type WritableFields } from "./applyTransition.js";
 import { parseDate, parseKindArtifact, serializeKindArtifact, type ArtifactProjection } from "./artifactSeam.js";
 import { derivedEventId } from "./ids.js";
-import { queueKernelRun } from "./runQueue.js";
+import { notifyRunQueued, queueKernelRun } from "./runQueue.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 import { nextOccurrenceAfter } from "./schedule.js";
 import type { ApiContext } from "./apiAuth.js";
@@ -19,7 +19,7 @@ export function objectShape(row: KernelObject): Record<string, unknown> {
   const common = { id: row.id, kind: row.kind, team: row.teamId, status: row.status, title: row.title, key: row.key, payload: row.payload ?? {}, body: row.body ?? "", createdByRun: row.createdByRun, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt };
   if (row.kind === "task") return { ...common, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, closedAt: row.closedAt };
   if (row.kind === "doc") return { ...common, format: row.format ?? "markdown" };
-  return { ...common, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire };
+  return { ...common, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire, workdir: row.workdir };
 }
 
 export async function createFromArtifact(kind: ObjectKind, raw: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
@@ -64,7 +64,7 @@ export async function createFromArtifact(kind: ObjectKind, raw: string, context:
  */
 function applyDifferingHint(kind: ObjectKind, id: string, name: string): string {
   return kind === "loop"
-    ? `a loop charter has no human edit route yet: a run of this loop applies it with POST /api/loops/${id}/evolve (agent-only, and a differing cron: is refused APPROVAL_REQUIRED), or edit it on the loop page`
+    ? `a loop charter has no human edit route yet: a run of this loop applies it with POST /api/loops/${id}/evolve (agent-only, and a differing cron: or workdir: is refused APPROVAL_REQUIRED), or edit it on the loop page`
     : `to change it: PATCH /api/${name}s/${id} with the same file`;
 }
 
@@ -75,7 +75,7 @@ async function createObjectInTransaction(input: { kind: ObjectKind; p: ReturnTyp
     title: p.title, body: p.body, payload: p.payload,
     ...(kind === "task" ? { followUpAt: p.followUpAt, pendingQuestion: p.pendingQuestion, watcher: p.watcher } : {}),
     ...(kind === "doc" ? { format: p.format } : {}),
-    ...(kind === "loop" ? { cron: p.cron } : {}),
+    ...(kind === "loop" ? { cron: p.cron, workdir: p.workdir } : {}),
     createdByRun: context.run?.id ?? null, createdByLoop: context.run?.loopId ?? null,
   }));
 }
@@ -86,7 +86,7 @@ function expressedDiffs(row: KernelObject, p: ArtifactProjection, kind: ObjectKi
   const pairs: [string, unknown, unknown][] = [["title", row.title, p.title], ["body", row.body ?? "", p.body], ["payload", row.payload ?? null, p.payload]];
   if (kind === "task") pairs.push(["followUpAt", row.followUpAt, p.followUpAt], ["watcher", row.watcher, p.watcher], ["pendingQuestion", row.pendingQuestion, p.pendingQuestion]);
   if (kind === "doc") pairs.push(["format", row.format ?? "markdown", p.format]);
-  if (kind === "loop") pairs.push(["cron", row.cron, p.cron]);
+  if (kind === "loop") pairs.push(["cron", row.cron, p.cron], ["workdir", row.workdir, p.workdir]);
   return pairs.filter(([, a, b]) => !sameValue(a, b)).map(([key]) => key);
 }
 
@@ -134,7 +134,7 @@ export async function showObject(kind: ObjectKind, id: string, context: ApiConte
 }
 
 export function objectArtifact(row: KernelObject): string {
-  return serializeKindArtifact(row.kind, { title: row.title, key: row.key, body: row.body ?? "", payload: row.payload, followUpAt: row.followUpAt, watcher: row.watcher, pendingQuestion: row.pendingQuestion, format: (row.format ?? "markdown") as "markdown" | "html", cron: row.cron });
+  return serializeKindArtifact(row.kind, { title: row.title, key: row.key, body: row.body ?? "", payload: row.payload, followUpAt: row.followUpAt, watcher: row.watcher, pendingQuestion: row.pendingQuestion, format: (row.format ?? "markdown") as "markdown" | "html", cron: row.cron, workdir: row.workdir });
 }
 
 export async function replaceFromArtifact(kind: ObjectKind, id: string, raw: string, context: ApiContext, now = new Date(), eventKind?: string): Promise<ApiResult<Record<string, unknown>>> {
@@ -148,6 +148,10 @@ export async function replaceFromArtifact(kind: ObjectKind, id: string, raw: str
     if (kind === "loop" && context.run && context.run.loopId !== id) return { ok: false, error: notYourLoop(context, id) };
     if (kind === "loop" && before!.status === "retired") return { ok: false, error: refusal("RETIRED", `${id} is retired and its charter is frozen`) };
     if (kind === "loop" && parsed.value.cron !== before!.cron) return { ok: false, error: refusal("APPROVAL_REQUIRED", "changing this loop's cadence requires an approval key", [{ path: "cron", message: "changed on the free-zone endpoint" }], `use POST /api/loops/${id} with cron and a human answer event`) };
+    // WHERE a loop executes is governance exactly like WHEN it executes: moving
+    // the bound directory moves every future run's blast radius, so an evolve
+    // pass may not do it silently (captain ruling 2026-08-04).
+    if (kind === "loop" && parsed.value.workdir !== before!.workdir) return { ok: false, error: refusal("APPROVAL_REQUIRED", "changing this loop's bound working directory requires an approval key", [{ path: "workdir", message: "changed on the free-zone endpoint", got: parsed.value.workdir ?? "(none)", expected: before!.workdir ?? "(none)" }], `use POST /api/loops/${id} with workdir and a human answer event`) };
     const fields: WritableFields = { title: parsed.value.title, body: parsed.value.body, payload: parsed.value.payload };
     if (kind === "task") Object.assign(fields, { followUpAt: parsed.value.followUpAt, watcher: parsed.value.watcher, pendingQuestion: parsed.value.pendingQuestion });
     if (kind === "doc") fields.format = parsed.value.format;
@@ -196,11 +200,16 @@ export async function closeTask(id: string, note: unknown, context: ApiContext, 
 
 export async function governLoop(id: string, body: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   if (context.run?.loopId !== id) return { ok: false, error: notYourLoop(context, id) };
-  const allowed = ["cron", "approval"]; if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: refusal("INVALID_BODY", "loop update requires a JSON object") };
+  const allowed = ["cron", "workdir", "approval"]; if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: refusal("INVALID_BODY", "loop update requires a JSON object") };
   const rec = body as Record<string, unknown>; const unknown = Object.keys(rec).find((k) => !allowed.includes(k)); if (unknown) return { ok: false, error: unknownJsonKey("loop update", unknown, allowed) };
-  if (typeof rec.cron !== "string") return { ok: false, error: refusal("INVALID_BODY", "cron is required") };
-  const cron = rec.cron;
-  if (typeof rec.approval !== "string") return { ok: false, error: refusal("APPROVAL_REQUIRED", "changing this loop's cadence requires an approval key", [{ path: "approval", message: "is required", expected: "ev-<id> of a human answer" }]) };
+  // The two governed execution facets: WHEN a loop runs and WHERE it runs. Each
+  // is optional, one of them is required, and both ride the same approval gate.
+  if (rec.cron !== undefined && typeof rec.cron !== "string") return { ok: false, error: refusal("INVALID_BODY", "cron must be a cron expression string") };
+  if (rec.workdir !== undefined && rec.workdir !== null && typeof rec.workdir !== "string") return { ok: false, error: refusal("INVALID_BODY", "workdir must be an absolute path string or null") };
+  if (rec.cron === undefined && rec.workdir === undefined) return { ok: false, error: refusal("INVALID_BODY", "cron or workdir is required", [], "governance moves a loop's cadence, its bound directory, or both") };
+  const workdir = rec.workdir === undefined ? undefined : (rec.workdir as string | null);
+  if (typeof workdir === "string" && !workdir.startsWith("/")) return { ok: false, error: refusal("SCHEMA_VIOLATION", "workdir must be an absolute path", [{ path: "workdir", message: "must be an absolute path", got: workdir, expected: "/Users/you/Workspace/your-repo" }]) };
+  if (typeof rec.approval !== "string") return { ok: false, error: refusal("APPROVAL_REQUIRED", "changing this loop's cadence or bound directory requires an approval key", [{ path: "approval", message: "is required", expected: "ev-<id> of a human answer" }]) };
   return db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec; const loop = await store.getObjectForUpdate(tx, id);
     const guard = scopedKindGuard(loop, "loop", context.teamId); if (guard) return guard;
@@ -210,12 +219,17 @@ export async function governLoop(id: string, body: unknown, context: ApiContext,
     if (approval.entrance !== "human") return { ok: false, error: refusal("APPROVAL_NOT_HUMAN", `${approval.id} was not entered by a human`, [{ path: "approval", message: "entrance must be human", got: approval.entrance, expected: "human" }]) };
     const task = approval.objectId ? await store.getObject(tx, approval.objectId) : undefined;
     if (!task || task.teamId !== loop!.teamId || task.kind !== "task" || task.createdByLoop !== id) return { ok: false, error: refusal("APPROVAL_FOREIGN", `${approval.id} hangs on a task this loop did not create`, [{ path: "approval", message: "the approving task must have been created by this loop", got: task?.createdByLoop ?? "none", expected: id }]) };
-    let computedNextFire: string; try { computedNextFire = nextOccurrenceAfter(cron, loop!.timezone, now); } catch { return { ok: false, error: refusal("BAD_CRON", `cron "${cron}" is not valid in this loop's timezone`) }; }
-    const nextFire = loop!.status === "active" ? computedNextFire : null;
+    const fields: WritableFields = {};
+    if (rec.cron !== undefined) {
+      const cron = rec.cron as string;
+      let computedNextFire: string; try { computedNextFire = nextOccurrenceAfter(cron, loop!.timezone, now); } catch { return { ok: false, error: refusal("BAD_CRON", `cron "${cron}" is not valid in this loop's timezone`) }; }
+      Object.assign(fields, { cron, nextFire: loop!.status === "active" ? computedNextFire : null });
+    }
+    if (workdir !== undefined) fields.workdir = workdir;
     const approvalBlock = { event: approval.id, entrance: approval.entrance, actor: approval.actorId, task: task.id, ts: approval.ts };
-    const result = await applyUpdateIn(tx, { objectId: id, actor: context.actor, now: now.toISOString(), fields: { cron, nextFire }, eventKind: "loop-updated", eventPayload: { approval: approvalBlock } });
+    const result = await applyUpdateIn(tx, { objectId: id, actor: context.actor, now: now.toISOString(), fields, eventKind: "loop-updated", eventPayload: { approval: approvalBlock } });
     if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
-    return { ok: true, value: { changed: result.changed, loop: objectShape(result.object), event: result.event?.id ?? null, diff: result.event?.diff ?? {}, approval: approvalBlock, ...(loop!.status === "paused" ? { notice: { code: "LOOP_STILL_PAUSED", message: "the cadence changed but the loop remains paused", hint: "time never un-pauses a loop — a human resumes it" } } : {}) } };
+    return { ok: true, value: { changed: result.changed, loop: objectShape(result.object), event: result.event?.id ?? null, diff: result.event?.diff ?? {}, approval: approvalBlock, ...(loop!.status === "paused" ? { notice: { code: "LOOP_STILL_PAUSED", message: "the loop's governed settings changed but the loop remains paused", hint: "time never un-pauses a loop — a human resumes it" } } : {}) } };
   });
 }
 
@@ -314,6 +328,53 @@ export async function loopLifecycle(id: string, verb: LoopLifecycleVerb, body: u
     if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
     return { ok: true, value: { changed: true, loop: objectShape(result.object), event: result.event.id, diff: result.event.diff ?? {} } };
   });
+}
+
+/**
+ * `POST /api/loops/:id/run-now` — the MANUAL fire (API spec §1.16).
+ *
+ * HUMAN-ONLY, like the lifecycle verbs: firing a loop off-cadence is an
+ * operational act the owner keeps, and a run that could wake itself would be a
+ * loop with no cadence at all. It reuses `queueKernelRun`'s `manual` reason, so
+ * a manual run is claimed, leased, reported and retried by exactly the machinery
+ * a clock fire uses — the only difference is the entrance recorded on the event.
+ *
+ * `runs_one_queued_idx` (one queued run per loop) is the queue discipline, and a
+ * manual fire OBEYS it rather than jumping it: an already-queued run is reported
+ * back with `alreadyQueued: true`, the same ruling the verdict path takes. A
+ * paused or retired loop refuses — time never un-pauses a loop, and neither does
+ * a button.
+ */
+export async function runLoopNow(id: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
+  if (context.mode !== "human") {
+    return { ok: false, error: notHuman(context, "firing a loop off its cadence is the owner's act", `propose it: \`loopany task create --file <path> --needs-human "run this loop now because …" --watcher ${context.run?.loopId ?? "<your-loop-id>"}\``) };
+  }
+  const result = await db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as store.KernelExec;
+    const loop = await store.getObjectForUpdate(tx, id);
+    const guard = scopedKindGuard(loop, "loop", context.teamId); if (guard) return guard;
+    if (loop!.status !== "active") {
+      return { ok: false as const, error: refusal(loop!.status === "retired" ? "RETIRED" : "PAUSED", `${id} is ${loop!.status}, so it has no runs to fire`, [{ path: "status", message: "only an active loop runs", got: loop!.status, expected: "active" }], loop!.status === "paused" ? `resume it first: POST /api/loops/${id}/resume` : "retirement is terminal — create a new loop") };
+    }
+    const queued = await queueKernelRun(tx, { loop: loop!, now: now.toISOString(), reason: "manual" });
+    if (queued.outcome === "queued") {
+      await appendOrganicEvent(tx, {
+        teamId: loop!.teamId,
+        objectId: loop!.id,
+        kind: "run-queued",
+        origin: "organic",
+        entrance: "human",
+        actorId: context.actor.actorId,
+        payload: { runId: queued.run!.id, reason: "manual" },
+        ts: now.toISOString(),
+      });
+    }
+    return { ok: true as const, value: { queued: queued.outcome === "queued", alreadyQueued: queued.outcome === "loop-busy", run: queued.run ? { id: queued.run.id, state: queued.run.queueState, reason: queued.run.reason } : null, loop: objectShape(loop!) } };
+  });
+  // Wake any daemon parked on the claim long-poll: without this the manual fire
+  // waits out the hold (~20s) for no reason.
+  if (result.ok && result.value.queued) notifyRunQueued();
+  return result;
 }
 
 /** The orphan floor's age: open + unwatched + no follow-up + older than this
@@ -431,7 +492,7 @@ function notHuman(context: ApiContext, message = "this question is waiting for a
 function notYourLoop(context: ApiContext, id: string): ApiRefusal { return refusal("NOT_YOUR_LOOP", `${context.run?.id ?? "this run"} belongs to ${context.run?.loopId ?? "another loop"} and may not write ${id}`, [{ path: "id", message: "must be the run's own loop", got: id, expected: context.run?.loopId ?? "" }], "a run evolves and governs only its own loop") }
 function mergePayload(before: Record<string, unknown> | null, patch: Record<string, unknown>) { const out = { ...(before ?? {}) }; for (const [key, value] of Object.entries(patch)) if (value === null) delete out[key]; else out[key] = value; return out; }
 export function taskListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, key: row.key, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
-export function loopListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire, key: row.key, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
+export function loopListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire, workdir: row.workdir, key: row.key, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
 export function eventShape(row: KernelEvent) { return { id: row.id, seq: row.seq, objectId: row.objectId, kind: row.kind, entrance: row.entrance, actor: row.actorId, transition: row.transition, diff: row.diff, note: row.note, ts: row.ts }; }
 function lookbackDate(value: string, now: Date): string | undefined { const m = /^(\d+)(h|d)$/.exec(value); if (m) return new Date(now.getTime() - Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000)).toISOString(); return parseDate(value, now); }
 function reasonRank(reasons: string[]) { return reasons.includes("question") ? 0 : reasons.includes("due-unwatched") ? 1 : 2; }

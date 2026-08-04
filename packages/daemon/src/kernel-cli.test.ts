@@ -51,6 +51,22 @@ describe("routing and the invisible run context", () => {
     expect(request!.headers.get("authorization")).toBe("Bearer dk_test");
   });
 
+  it("never sends the machine's credential OUTSIDE a run, on any verb", async () => {
+    // The credential travels with the run context. Outside a run the caller is
+    // the person at the keyboard, and a device token there is answered
+    // `NO_RUN_CONTEXT` on every DUAL read (§2.6) — which refused `loop show`,
+    // `loop list` and `task list` for exactly the owner they serve.
+    for (const argv of [["task", "list"], ["loop", "list"], ["loop", "show", "loop-8e3311"], ["doc", "show", "doc-1"]]) {
+      let request: Request | undefined;
+      await runKernelCli(argv, {
+        server: "https://example.test", token: "dk_test", env: {}, out: () => {},
+        fetchImpl: async (input, init) => { request = new Request(input, init); return reply({ tasks: [], loops: [], total: 0, loop: { id: "loop-8e3311" }, doc: { id: "doc-1", kind: "doc" }, events: [] }); },
+      });
+      expect(request!.headers.get("authorization"), argv.join(" ")).toBeNull();
+      expect(request!.headers.get("x-loopany-run"), argv.join(" ")).toBeNull();
+    }
+  });
+
   it("carries the human session cookie when one is set", async () => {
     let request: Request | undefined;
     await runKernelCli(["inbox"], {
@@ -449,7 +465,18 @@ describe("loop create, list and show", () => {
     expect(await request!.text()).toBe(CHARTER);
     expect(stdout).toContain("ok: created loop-8e3311\n");
     expect(stdout).toContain('  next_fire: "2026-08-04T07:00:00.000Z"\n');
-    expect(stdout).toContain("claimed by any machine of this team — there is no machine to bind");
+    expect(stdout).toContain("claimed by any machine of this team — no MACHINE is bound");
+    // A loop with no `workdir:` still binds no directory, and the hint says which
+    // of the two homes its runs get rather than staying silent about it.
+    expect(stdout).toContain("the daemon's own per-loop scratch dir");
+  });
+
+  it("names the BOUND directory a loop carries, and what a machine without it does", async () => {
+    // Captain ruling 2026-08-04: a loop binds a workdir; no machine is bound, so
+    // a claimant that lacks the directory must fail loudly, not run elsewhere.
+    const { stdout } = await run(["loop", "create", "--file", "-"], { created: true, loop: { ...LOOP, workdir: "/Users/me/Workspace/repo" }, event: "ev-1" }, 201, { readStdin: () => CHARTER });
+    expect(stdout).toContain("Bound to /Users/me/Workspace/repo");
+    expect(stdout).toContain("fails the run instead of running elsewhere");
   });
 
   it("says plainly that a loop born without a cadence will never fire on its own", async () => {

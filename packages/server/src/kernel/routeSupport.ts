@@ -1,6 +1,26 @@
 import { REFUSAL_STATUS, refusal, refusalResponse, type ApiRefusal } from "./refusals.js";
 import type { ApiResult } from "./objectApi.js";
 
+/**
+ * THE REWRITE LINE'S BOOT ENTRANCE — call it first in every rewrite route.
+ *
+ * `ensureServer()` applies migrations and starts the schedulers (including the
+ * `RunQueueScheduler` that fires this line's cadences), and it used to be reachable
+ * ONLY from a legacy server fn. So on a rewrite-only stack nothing ever booted: a
+ * fresh pglite dir 500'd with `relation "teams" does not exist`, and even against a
+ * migrated database no loop ever fired, because the clock was never started. It is
+ * idempotent and promise-cached on `globalThis`, so the cost after the first call is
+ * one already-resolved await.
+ *
+ * The dynamic import keeps `boot.ts` (and the whole legacy gateway it pulls in) out
+ * of the module graph of the kernel unit tests that import this file for its
+ * response helpers.
+ */
+export async function ensureBooted(): Promise<void> {
+  const { ensureServer } = await import("../server/boot.js");
+  await ensureServer();
+}
+
 export function apiResponse(result: ApiResult<Record<string, unknown>>): Response {
   if (!result.ok) return refusalResponse(result.error);
   return Response.json(result.value, { status: result.status ?? 200 });

@@ -84,6 +84,8 @@ export interface WritableFields {
   cron?: string | null;
   timezone?: string | null;
   nextFire?: string | null;
+  /** The bound directory a run executes in (absolute path, machine-local). */
+  workdir?: string | null;
   // task facets
   followUpAt?: string | null;
   pendingQuestion?: string | null;
@@ -99,6 +101,7 @@ const WRITABLE_KEYS = [
   "cron",
   "timezone",
   "nextFire",
+  "workdir",
   "followUpAt",
   "pendingQuestion",
   "watcher",
@@ -106,7 +109,7 @@ const WRITABLE_KEYS = [
 ] as const;
 
 /** The fields a key-collision comparison reads (§4.1 `differs`). */
-const CONTENT_KEYS = ["title", "body", "payload", "followUpAt", "watcher", "pendingQuestion"] as const;
+const CONTENT_KEYS = ["title", "body", "payload", "followUpAt", "watcher", "pendingQuestion", "workdir"] as const;
 
 // ---- results ----
 
@@ -325,8 +328,13 @@ function assertedFields(fields: Record<string, unknown>): string[] {
  * `organicEventId` widens after a run of misses, so a saturated space degrades
  * instead of failing; exhausting the ladder throws rather than returning a
  * stranger's event.
+ *
+ * EXPORTED so every organic append in the kernel goes through the one ladder:
+ * `objectApi.runLoopNow`'s manual `run-queued` fact is an organic event written
+ * outside this module, and minting it inline would silently opt that one fact
+ * out of the retry (a taken id would be swallowed and the event lost).
  */
-async function appendOrganicEvent(tx: KernelExec, row: Omit<NewKernelEvent, "id">): Promise<KernelEvent> {
+export async function appendOrganicEvent(tx: KernelExec, row: Omit<NewKernelEvent, "id">): Promise<KernelEvent> {
   for (let attempt = 0; attempt < ORGANIC_MINT_ATTEMPTS; attempt++) {
     const { event, inserted } = await kernel.appendEvent(tx, { ...row, id: organicEventId(attempt) });
     if (inserted) return event;
@@ -381,6 +389,7 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     title: input.title ?? null,
     cron: input.cron ?? null,
     timezone: input.timezone ?? null,
+    workdir: input.workdir ?? null,
     nextFire:
       input.nextFire !== undefined
         ? input.nextFire

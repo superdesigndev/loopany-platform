@@ -267,6 +267,17 @@ describe("loop evolve is the free zone, bounded by ownership and by cadence", ()
     expect(code(await api.replaceFromArtifact("loop", loop.id, charter("new body", "0 * * * *"), agentIn(loop.id), T1, "charter-evolved"))).toBe("APPROVAL_REQUIRED");
   });
 
+  it("refuses a changed workdir as governance, exactly like a changed cron", async () => {
+    // WHERE a loop executes is as consequential as WHEN: moving the bound
+    // directory moves every future run's blast radius (captain ruling 2026-08-04).
+    const loop = await makeLoop();
+    const bound = (dir: string) => `---\ntitle: Housekeeper\ncron: "0 7 * * *"\nworkdir: ${dir}\n---\n\ncharter\n`;
+    const refused = await api.replaceFromArtifact("loop", loop.id, bound("/Users/me/elsewhere"), agentIn(loop.id), T1, "charter-evolved");
+    expect(code(refused)).toBe("APPROVAL_REQUIRED");
+    expect(!refused.ok && refused.error.issues[0]).toMatchObject({ path: "workdir" });
+    expect(!refused.ok && refused.error.hint).toContain(`POST /api/loops/${loop.id}`);
+  });
+
   it("freezes a retired loop's charter", async () => {
     const loop = await makeLoop();
     const retired = await kernel.applyTransition({ objectId: loop.id, transition: "retire", actor: human.actor, now: T1.toISOString() });
@@ -292,6 +303,17 @@ describe("loop create is a human entrance, armed at birth", () => {
     const history = await store.listObjectEvents(undefined, loop.id as string);
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({ kind: "object-created", entrance: "human", actorId: "u-owner" });
+  });
+
+  it("binds the loop to a workdir the claim then hands the machine", async () => {
+    const created = ok(await api.createFromArtifact("loop", `---\ntitle: Housekeeper (local)\ncron: "0 7 * * *"\nkey: hk-local\nworkdir: /Users/me/Workspace/repo\n---\n\ncharter\n`, human, T1));
+    expect(created.loop).toMatchObject({ workdir: "/Users/me/Workspace/repo" });
+    // Re-creating the SAME file is an idempotent replay, not a spurious diff.
+    const replay = ok(await api.createFromArtifact("loop", `---\ntitle: Housekeeper (local)\ncron: "0 7 * * *"\nkey: hk-local\nworkdir: /Users/me/Workspace/repo\n---\n\ncharter\n`, human, T1));
+    expect(replay).toMatchObject({ created: false, contentDiffers: false });
+    // A DIFFERENT binding under the same key is reported, never silently applied.
+    const moved = ok(await api.createFromArtifact("loop", `---\ntitle: Housekeeper (local)\ncron: "0 7 * * *"\nkey: hk-local\nworkdir: /Users/me/Workspace/other\n---\n\ncharter\n`, human, T1));
+    expect(moved.differingFields).toContain("workdir");
   });
 
   it("creates an unarmed loop when the file carries no cadence", async () => {
@@ -464,6 +486,51 @@ describe("governance refuses before it authorizes", () => {
     const task = await makeTask({}, loop.id);
     const approval = await store.appendEvent(undefined, { id: ids.organicEventId(), teamId: TEAM, objectId: task.id, kind: "question-answered", origin: "organic", entrance: "human", actorId: "u-owner", note: "yes", ts: T1.toISOString() });
     expect(code(await api.governLoop(loop.id, { cron: "every hour", approval: approval.event.id }, agentIn(loop.id), T1))).toBe("BAD_CRON");
+  });
+});
+
+describe("governance moves the bound directory under the same approval gate", () => {
+  it("applies an approved workdir change and refuses a relative one", async () => {
+    const loop = await makeLoop();
+    const task = await makeTask({}, loop.id);
+    const approval = await store.appendEvent(undefined, { id: ids.organicEventId(), teamId: TEAM, objectId: task.id, kind: "question-answered", origin: "organic", entrance: "human", actorId: "u-owner", note: "yes", ts: T1.toISOString() });
+    expect(code(await api.governLoop(loop.id, { workdir: "repo", approval: approval.event.id }, agentIn(loop.id), T1))).toBe("SCHEMA_VIOLATION");
+    const moved = ok(await api.governLoop(loop.id, { workdir: "/Users/me/Workspace/repo", approval: approval.event.id }, agentIn(loop.id), T1));
+    expect(moved.loop).toMatchObject({ workdir: "/Users/me/Workspace/repo", cron: "0 7 * * *" });
+    // The cadence is untouched when only the directory moves.
+    expect((moved.diff as Record<string, unknown>).cron).toBeUndefined();
+  });
+
+  it("still needs one of the two governed facets", async () => {
+    const loop = await makeLoop();
+    expect(code(await api.governLoop(loop.id, { approval: "ev-x" }, agentIn(loop.id), T1))).toBe("INVALID_BODY");
+  });
+});
+
+describe("run-now is the manual fire, and it obeys the queue discipline", () => {
+  it("queues one run for an active loop and reports the second as already queued", async () => {
+    const loop = await makeLoop();
+    const first = ok(await api.runLoopNow(loop.id, human, T1));
+    expect(first).toMatchObject({ queued: true, alreadyQueued: false });
+    expect((first.run as { state: string }).state).toBe("queued");
+    const second = ok(await api.runLoopNow(loop.id, human, T1));
+    expect(second).toMatchObject({ queued: false, alreadyQueued: true });
+    const history = await store.listObjectEvents(undefined, loop.id);
+    expect(history.filter((e) => e.kind === "run-queued")).toHaveLength(1);
+    expect(history.at(-1)).toMatchObject({ kind: "run-queued", entrance: "human", actorId: "u-owner" });
+  });
+
+  it("is the owner's act — a run proposes it instead", async () => {
+    const loop = await makeLoop();
+    expect(code(await api.runLoopNow(loop.id, agentIn(loop.id), T1))).toBe("NOT_HUMAN");
+  });
+
+  it("refuses a paused loop and names the resume route", async () => {
+    const loop = await makeLoop();
+    expect((await kernel.applyTransition({ objectId: loop.id, transition: "pause", actor: human.actor, now: T1.toISOString() })).ok).toBe(true);
+    const refused = await api.runLoopNow(loop.id, human, T1);
+    expect(code(refused)).toBe("PAUSED");
+    expect(!refused.ok && refused.error.hint).toContain(`POST /api/loops/${loop.id}/resume`);
   });
 });
 

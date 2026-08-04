@@ -1,0 +1,2 @@
+ALTER TABLE "objects" ADD COLUMN "workdir" text;--> statement-breakpoint
+ALTER TABLE "objects" ADD CONSTRAINT "objects_workdir_loop_only" CHECK ("objects"."kind" = 'loop' OR "objects"."workdir" IS NULL);
