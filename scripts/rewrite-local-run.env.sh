@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# ============================================================================
+# PLATFORM DEVELOPMENT ONLY — DO NOT SOURCE THIS TO *USE* A DEV STACK.
+#
+# This stands up a SEPARATE, ISOLATED stack (its own port, its own data dir, its
+# own LOOPANY_HOME) for working on the Loopany platform itself — the server, the
+# daemon, the CLI.
+#
+# If you are an agent USING a dev stack — creating loops, tasks or docs — this
+# script is NOT for you. Your stack is MANAGED and already running: invoke the
+# on-PATH `loopany-dev` command and nothing else. Sourcing this instead points
+# you at a fresh stack whose data directory the real environment NEVER reads, so
+# every object you create there is invisible and lost. If the managed stack is
+# down, that is an operator matter: retry once after ~30s, then tell the human.
+# Do not stand one up yourself.
+# ============================================================================
+#
 # Local REAL-EXECUTION environment for the rewrite (kernel) line — landing unit 10.
 #
 # Source this, never run it: `source scripts/rewrite-local-run.env.sh`.

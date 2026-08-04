@@ -1055,10 +1055,19 @@ without importing the daemon):
   both. The separation is the front-matter `name`, which is what the `skills` CLI keys on
   — a different name means a different directory, so one install can never touch the
   other. Prove the mechanism with `--project` into a throwaway dir, never user scope.
-- **`scripts/loopany-dev`** is the command that skill teaches: this repo's CLI, the local
-  stack env, `LOOPANY_RUNS_V2=1`, and a REFUSAL of any non-loopback `LOOPANY_SERVER_URL`.
-  Plain `loopany` on a dev machine is the PRODUCTION binary (PATH shim + `~/.loopany`), so
-  the guard is structural, not a convention.
+- **`scripts/loopany-dev`** runs this repo's CLI with the local stack env,
+  `LOOPANY_RUNS_V2=1`, and a REFUSAL of any non-loopback `LOOPANY_SERVER_URL`. Plain
+  `loopany` on a dev machine is the PRODUCTION binary (PATH shim + `~/.loopany`), so the
+  guard is structural, not a convention.
+- **The dev stack an agent SESSION talks to is MANAGED**, and the skill says so first
+  (`skill-dev/SKILL.md` "The stack is MANAGED"): invoke the ON-PATH `loopany-dev` only;
+  never source `scripts/rewrite-local-run.env.sh`, never start a server/daemon, never
+  seed, never invent a port; a down stack ⇒ retry once after ~30s, then tell the human.
+  This is a real incident class (2026-08-04, twice): a session that self-hosts a second
+  stack creates objects in a data dir the real environment never reads. Both scripts and
+  the kernel-home degraded/not-connected hints carry the same contract — if you add a
+  teaching surface that mentions the stack, do NOT teach starting one
+  (`skill-dev.test.ts` pins this).
 - Two CLI gaps closed while making the help honest: **`loop run-now <id>`** (human-only;
   fires a PAUSED loop and leaves it paused, refuses a RETIRED one, reports an
   already-queued run rather than minting a twin) and **`loop update --workdir`** (the API

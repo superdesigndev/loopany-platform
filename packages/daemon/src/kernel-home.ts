@@ -162,7 +162,11 @@ function notConnectedHome(bin: string | null): string {
     "loops: []\n" +
     `inbox: ${ABSENT} (no server)\n` +
     helpBlock([
-      "Set LOOPANY_SERVER_URL to your dev stack (e.g. http://127.0.0.1:3137), or connect this machine with `loopany up --server-url <url> --api-key <dk_…>`",
+      // Deliberately no example port and no `loopany up`: the dev stack is
+      // MANAGED. Guessing an address or connecting a daemon here is how a
+      // session ends up creating objects nobody can see (2026-08-04).
+      "Invoke the on-PATH `loopany-dev` command — it already carries this stack's address; do not set LOOPANY_SERVER_URL or start a server yourself",
+      "If `loopany-dev` also reports no stack, STOP and tell the human — a missing stack is an operator matter",
       "Run `loopany --help` to see every command",
     ])
   );
@@ -175,8 +179,11 @@ function degradedHome(bin: string | null, server: string, reason: string): strin
     header(bin, `runs-v2 · ${server} — unreachable right now (${reason})`) +
     `loops: ${ABSENT} (the stack did not answer)\n` +
     helpBlock([
-      "Start the dev server for this stack, then run `loopany` again",
-      "Run `loopany loop list` once it is reachable to read the roster",
+      // NEVER tell the reader to start a server: the dev stack is MANAGED, and
+      // two 2026-08-04 sessions read that hint as license to self-host, landing
+      // their objects in a data dir the real environment never reads.
+      "Wait ~30s and run `loopany` again; if it is still unreachable, STOP and tell the human — a down stack is an operator matter, not yours to start",
+      "Do not start a server or daemon, and do not point this CLI at another port — objects created on another stack are invisible here",
     ])
   );
 }

@@ -126,6 +126,39 @@ describe("the shipped artifact", () => {
     expect(skill).toContain("LOOPANY_RUNS_V2=1");
   });
 
+  // Two 2026-08-04 sessions each self-hosted a stack — one from a wrapper hint,
+  // one from the env script it found in the checkout — and created objects in a
+  // data dir the real environment never reads. The contract is a teaching
+  // surface, so it is pinned like one.
+  test("the skill states the MANAGED-STACK contract, early and unmissably", () => {
+    const skill = fs.readFileSync(path.join(devSkillRoot, "SKILL.md"), "utf8");
+    const contract = skill.slice(0, skill.indexOf("## What the kernel is"));
+    expect(contract).toContain("MANAGED");
+    expect(contract).toContain("rewrite-local-run.env.sh"); // named as a NEVER
+    expect(contract).toMatch(/never start a server|Never start a server/);
+    expect(contract).toMatch(/seed/);
+    expect(contract).toMatch(/30s/); // retry once, then stop
+    expect(contract).toMatch(/tell the human/i);
+  });
+
+  test("the env script warns that it is for platform development, not for USING a stack", () => {
+    const env = fs.readFileSync(path.join(packageRoot, "..", "..", "scripts", "rewrite-local-run.env.sh"), "utf8");
+    const header = env.slice(0, env.indexOf("# --- where this stack's state lives"));
+    expect(header).toContain("PLATFORM DEVELOPMENT ONLY");
+    expect(header).toMatch(/NEVER reads|never reads/);
+    expect(header).toContain("loopany-dev");
+  });
+
+  test("no teaching surface tells a session to start the dev stack", () => {
+    const wrapper = fs.readFileSync(path.join(packageRoot, "..", "..", "scripts", "loopany-dev"), "utf8");
+    const home = fs.readFileSync(path.join(packageRoot, "src", "kernel-home.ts"), "utf8");
+    const skill = fs.readFileSync(path.join(devSkillRoot, "SKILL.md"), "utf8");
+    for (const source of [wrapper, home, skill]) {
+      expect(source).not.toMatch(/Start the dev server/);
+      expect(source).not.toMatch(/start one with/);
+    }
+  });
+
   test("it NEVER ships in the npm tarball — it teaches a dev stack, not a user's machine", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")) as { files: string[] };
     expect(pkg.files).toContain("skill");

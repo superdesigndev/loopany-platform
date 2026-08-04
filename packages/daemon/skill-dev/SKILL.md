@@ -13,6 +13,42 @@ verbs and a different artifact format.
 **It targets a LOCAL dev stack, never production.** Read [Never
 production](#never-production) before you run anything.
 
+## The stack is MANAGED — read this first
+
+The dev stack your session talks to is **operated for you**. It is already
+running, on a port and a data directory an operator chose. Your entire surface on
+it is the `loopany-dev` command that is on your PATH.
+
+**Always:**
+
+- Invoke the on-PATH `loopany-dev` command, and nothing else. It already carries
+  the stack's server URL, home and data directory. Start with a bare
+  `loopany-dev` to see where you are.
+
+**Never:**
+
+- Never `source scripts/rewrite-local-run.env.sh` (or any other env script). It
+  stands up a *different*, isolated stack; objects you create there land in a data
+  directory the real environment never reads — they are invisible and lost.
+- Never start a server, a daemon, or a dev process. Not `pnpm dev`, not
+  `loopany up`, not a background node.
+- Never run a seed, migration or fixture script against the stack.
+- Never invent, guess or override a port, `LOOPANY_SERVER_URL`, `LOOPANY_HOME`,
+  `LOOPANY_DATA_DIR` or `LOOPANY_RW_BASE`. If the CLI does not tell you the port,
+  you do not need it.
+
+**Creating an object on any port or stack other than the one the CLI is already
+configured for is always wrong**, however plausible the reason looked.
+
+Examples in this skill and its references are written as `loopany <verb>` for
+readability; **you type `loopany-dev <verb>`**. Bare `loopany` is the production
+binary and never reads your dev stack.
+
+**If the CLI reports the server is down or unreachable:** wait ~30s and retry
+**once**. If it is still down, **STOP and tell the human**. A down stack is an
+operator matter, not something to fix by standing one up — there is no
+self-service recovery here, and every attempt at one has produced orphaned data.
+
 ## What the kernel is
 
 Four object kinds, one record:
@@ -101,29 +137,26 @@ same id).
 shim points at the installed daemon and `~/.loopany` holds a credential for the
 live server. Running kernel verbs there does not read your dev stack.
 
-**Use `scripts/loopany-dev` from the platform repo.** It runs the repo's CLI with
-the local dev stack's environment, sets `LOOPANY_RUNS_V2=1`, and **refuses** any
-`LOOPANY_SERVER_URL` that is not loopback:
+**Use the on-PATH `loopany-dev` command — never bare `loopany`.** It runs the
+rewrite CLI against your managed dev stack, sets `LOOPANY_RUNS_V2=1`, and
+**refuses** any `LOOPANY_SERVER_URL` that is not loopback:
 
 ```sh
-scripts/loopany-dev                      # the kernel home: roster, inbox floor, recent runs
-scripts/loopany-dev loop list
-scripts/loopany-dev loop show loop-4c1d77
+loopany-dev                      # the kernel home: roster, inbox floor, recent runs
+loopany-dev loop list
+loopany-dev loop show loop-4c1d77
 ```
 
-If you invoke `loopany` directly instead, every one of these must hold, and you
-are responsible for checking them:
+That is the whole contract. Do not set `LOOPANY_SERVER_URL`, `LOOPANY_HOME`,
+`LOOPANY_DATA_DIR` or a port yourself to "point it at" a stack — the command is
+already configured, and a stack you point it at yourself is a stack nobody reads.
 
-- `LOOPANY_SERVER_URL` points at `http://127.0.0.1:<your port>` — **never** the
-  production server, and **never** port 3000 if that is someone else's demo stack;
-- `LOOPANY_RUNS_V2=1` (the server must have it too — the two sides must agree);
-- `LOOPANY_HOME` and `LOOPANY_DATA_DIR` are this stack's own directories, so
-  nothing here can touch the production `~/.loopany`.
+(`scripts/loopany-dev` and `scripts/rewrite-local-run.env.sh` in the platform repo
+exist for **developing the platform itself** — standing up a throwaway stack to
+test the server or the CLI. If you are USING a stack rather than working on the
+platform, they are not for you; see the header of each script and
+`packages/server/AGENTS.md`, "Real local execution on the rewrite line".)
 
-`scripts/rewrite-local-run.env.sh` in the platform repo defines exactly such a
-stack; the full recipe (daemon start, workdir roots, the smoke loop) is in
-`packages/server/AGENTS.md`, "Real local execution on the rewrite line".
-
-**Bare `loopany` with no arguments is a read**, and on a runs-v2 stack it prints
-the kernel home — the loop roster, the inbox count and the newest runs. It is the
-cheapest way to see where you are before doing anything.
+**Bare `loopany-dev` with no arguments is a read**, and on a runs-v2 stack it
+prints the kernel home — the loop roster, the inbox count and the newest runs. It
+is the cheapest way to see where you are before doing anything.

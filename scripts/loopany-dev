@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 # `loopany-dev` — the REWRITE (kernel) CLI, pinned to a LOCAL dev stack.
 #
+# ============================================================================
+# PLATFORM DEVELOPMENT ONLY, IN THIS FORM.
+#
+# This in-repo copy runs the repo's CLI and, when LOOPANY_SERVER_URL is unset,
+# SOURCES scripts/rewrite-local-run.env.sh — which stands up a separate isolated
+# stack. That is right when you are working on the platform itself.
+#
+# An agent USING a dev stack must invoke the ON-PATH `loopany-dev` command
+# instead: that stack is MANAGED and already running. Never source the env
+# script, never start a server or daemon, never run a seed, never invent a port.
+# Objects created on any stack other than the managed one land in a data dir the
+# real environment never reads. If the managed stack is down: retry once after
+# ~30s, then STOP and tell the human — a down stack is an operator matter.
+# ============================================================================
+#
 # WHY THIS EXISTS. On a developer's machine plain `loopany` is the PRODUCTION
 # binary: the PATH shim points at the installed daemon and `~/.loopany` holds a
 # device credential for loopany.ai. Typing `loopany loop list` there does not read
@@ -33,7 +48,8 @@ case "${LOOPANY_SERVER_URL:-}" in
   http://127.0.0.1:*|http://localhost:*|http://[::1]:*|http://127.0.0.1|http://localhost) ;;
   *)
     echo "loopany-dev: refusing to run against '${LOOPANY_SERVER_URL:-<unset>}' — this CLI is for a LOCAL dev stack only." >&2
-    echo "loopany-dev: start one with scripts/rewrite-local-run.env.sh (see packages/server/AGENTS.md), or unset LOOPANY_SERVER_URL to use the default." >&2
+    echo "loopany-dev: unset LOOPANY_SERVER_URL to use this command's own configured stack." >&2
+    echo "loopany-dev: do NOT stand up a stack to work around this — if your managed stack is unreachable, retry once after ~30s, then tell the human. (Working ON the platform itself? See scripts/rewrite-local-run.env.sh and packages/server/AGENTS.md.)" >&2
     exit 2
     ;;
 esac
