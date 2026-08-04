@@ -285,9 +285,25 @@
   .board-card-title .artifact-icon { flex: none; width: 22px; height: 22px; font-size: .75rem; }
   .board-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; padding-left: 30px; color: var(--faint); font-size: .6875rem; }
   .board-card-meta time { color: var(--faint); font-variant-numeric: tabular-nums; }
-  .board-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #eceae5; }
-  .board-card-actions .field-select { min-height: 26px; padding: 2px 6px; font-size: .6875rem; }
-  .board-card-actions .verdict-button, .board-card-actions .attn-button { min-height: 26px; padding: 0 9px; font-size: .6875rem; }
+  /* ---- TASKS LIST: the default view, grouped by loop ----
+   *
+   * Rows are the shared `.artifact-row` grammar, in the same tinted `Section`
+   * cards every document screen uses — the group header IS a section heading, so
+   * a loop's desk reads exactly like a library group. No horizontal scroll here:
+   * the list is the shape that fits a narrow window, which is half of why it is
+   * the default. */
+
+  .tasks-list { display: flex; flex-direction: column; gap: 18px; margin-top: 24px; }
+  .tasks-view-meta { display: inline-flex; align-items: center; gap: 12px; }
+  .tasks-view-meta .doc-toggle { margin-left: 0; }
+  .artifact-badges { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; }
+
+  /* The drawer's action row — the ONLY write surface on this screen. */
+  .task-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .task-actions .field-select { min-height: 30px; padding: 3px 8px; font-size: .75rem; }
+  .task-actions .verdict-button, .task-actions .attn-button { min-height: 30px; padding: 0 12px; font-size: .75rem; }
+  .task-actions + .ws-note-line { margin-top: 8px; }
+  .preview-section .answer-box { margin-bottom: 12px; }
 
   /* ---- the drawer: the reference's slide-in preview ---- */
 
@@ -501,7 +517,10 @@
   .loopany-workspace .needs-section, .loopany-workspace .attention-section, .loopany-workspace .effects-section { padding-inline: 12px; }
   .loopany-workspace .section-heading p { display: none; }
   .loopany-workspace .board-column .section-heading p { display: block; }
-  .loopany-workspace .artifact-row .state-label { display: none; }
+  /* Both pill cells drop out together, so the row keeps exactly three tracks
+     (a cell left in flow would wrap onto a second line). The icon still says
+     whether a task is asking. */
+  .loopany-workspace .artifact-row .state-label, .loopany-workspace .artifact-row .artifact-badges { display: none; }
   .loopany-workspace .artifact-row { grid-template-columns: 32px minmax(0, 1fr) auto; }
   .loopany-workspace .inbox-body { padding-left: 8px; }
   .loopany-workspace .board-view, .loopany-workspace .system-view { padding: 0 12px 14px; }

@@ -77,7 +77,7 @@ describe('hasActions — a card shows no empty action bar', () => {
   })
 })
 
-describe('the board invents no write path', () => {
+describe('the screen invents no write path', () => {
   const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 
   it('reaches the kernel only through the endpoints the CLI already uses', () => {
@@ -96,11 +96,28 @@ describe('the board invents no write path', () => {
     expect(pane).not.toMatch(/fetch\(/)
   })
 
+  /**
+   * Captain direction (2026-08-04): every write moved into the drawer, so a row
+   * and a card are pure entrances. The guard is structural — the on-card action
+   * bar and its class are gone, and the three writes are reachable only from the
+   * drawer's `TaskActions`.
+   */
+  it('offers no action on a row or a card — the write surface is the drawer', () => {
+    const pane = read('./TasksPane.tsx')
+    expect(pane).not.toMatch(/board-card-actions/)
+    const card = pane.slice(pane.indexOf('function BoardCard'), pane.indexOf('function CloseNote'))
+    expect(card).not.toMatch(/onClaim|onRelease|onAskClose|patchWatcher|postClose/)
+    const row = pane.slice(pane.indexOf('function TaskRowEntry'), pane.indexOf('function Column'))
+    expect(row).not.toMatch(/onClaim|onRelease|onAskClose|patchWatcher|postClose/)
+    const actions = pane.slice(pane.indexOf('function TaskActions'))
+    for (const act of ['onClaim', 'onRelease', 'onAskClose']) expect(actions).toMatch(new RegExp(act))
+  })
+
   // The board is a read layout plus buttons, by product decision: no card is
   // draggable, no column is a drop target, and nothing may quietly reintroduce
   // one — a drop carries no note, no loop id and no date, so every write here
   // needs a labelled control anyway.
-  it('has no drag-and-drop surface at all', () => {
+  it('has no drag-and-drop surface at all — in either view', () => {
     const pane = read('./TasksPane.tsx')
     expect(pane).not.toMatch(/draggable|onDrag[A-Z]|onDrop|dataTransfer/)
   })

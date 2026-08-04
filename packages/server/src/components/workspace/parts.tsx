@@ -155,7 +155,7 @@ export function Section({ tone = 'plain', title, count, note, children }: { tone
  * keyboard-reachable target rather than a div with a click handler.
  */
 export function ArtifactRow({
-  icon, iconTone, title, source, state, stateTone, when, action, selected, onOpen, ariaLabel,
+  icon, iconTone, title, source, state, stateTone, badges, when, action, selected, onOpen, ariaLabel,
 }: {
   icon: string
   iconTone?: string
@@ -163,10 +163,18 @@ export function ArtifactRow({
   source?: ReactNode
   state?: string
   stateTone?: 'human' | 'floor' | 'ok' | 'live' | 'html'
+  /**
+   * More than one fact worth a pill — a task can be both asking and overdue, and
+   * dropping either would hide the reason a person should look. Takes the state
+   * cell whole, so a row never grows a sixth track.
+   */
+  badges?: ReactNode
   when?: string | null
   action?: ReactNode
   selected?: boolean
-  onOpen?: () => void
+  /** Receives the click, so a caller that must restore focus later can keep the
+   *  row element itself rather than guessing at `document.activeElement`. */
+  onOpen?: (event: React.MouseEvent<HTMLButtonElement>) => void
   ariaLabel?: string
 }) {
   const className = ['artifact-row', onOpen ? 'is-previewable' : '', selected ? 'is-selected' : ''].filter(Boolean).join(' ')
@@ -179,7 +187,13 @@ export function ArtifactRow({
         <h3>{title}</h3>
         {source !== undefined && <p>{source}</p>}
       </span>
-      {state ? <span className={`state-label ${stateTone ? `state-${stateTone}` : ''}`}>{state}</span> : <span />}
+      {badges !== undefined ? (
+        <span className="artifact-badges">{badges}</span>
+      ) : state ? (
+        <span className={`state-label ${stateTone ? `state-${stateTone}` : ''}`}>{state}</span>
+      ) : (
+        <span />
+      )}
       {when !== undefined ? <When iso={when} /> : <span />}
       {action !== undefined ? action : <span />}
     </>

@@ -754,13 +754,15 @@ row of §10 is stale rather than a rule this unit broke.
   or the web UI, since evolve is agent-only. `POST /api/loops/:id/run-now` WAS in this
   list; unit 10 built it (route only, still not a CLI verb).
 
-## The Tasks screen is a KANBAN BOARD (`kernel/taskBoard.ts` + `workspace/board.ts`)
+## The Tasks screen: a grouped LIST by default, the kanban as an alternate view
 
-The five filters the Tasks list used to offer (Open / Due / Questions / Unclaimed /
-Closed) became five COLUMNS — the same state predicates, turned from a chooser into a
-layout. `/api/views/tasks` composes them; there is no separate board endpoint, because
-the board IS the Tasks screen and a second one would be exactly the drift the BFF rule
-forbids. The raw `/api/tasks` (`objectApi.listTasks`, the human CLI) is untouched.
+Captain direction (2026-08-04) settled the shape on three points: **rows and cards carry
+NO action** (every write moved into the task drawer), the **row list grouped by loop is
+the DEFAULT** with the kanban behind a remembered toggle, and both views show the same
+safety-floor counters. `/api/views/tasks` composes ONE payload for both — there is no
+list endpoint beside the board one, because a second shape for the same screen is exactly
+the drift the BFF rule forbids. The raw `/api/tasks` (`objectApi.listTasks`, the human
+CLI) is untouched.
 
 - **`kernel/taskBoard.ts` is the ONE column mapping** — pure, clock-free, no imports:
   `BOARD_COLUMNS` (key + label + the one sentence that explains the column, which ships
@@ -773,24 +775,41 @@ forbids. The raw `/api/tasks` (`objectApi.listTasks`, the human CLI) is untouche
   Deliberate: due-AND-unwatched lands in `unclaimed` (a date on a task no loop watches is
   nobody's alarm); the card still carries its overdue badge and the §6 safety-floor
   counters ride the board payload (`counts`, single-sourced from `inboxCounts`).
-- **`components/workspace/board.ts` says which ACTIONS a card offers** — pure, tested
-  without a DOM. **There is NO drag-and-drop, by product decision**: a column renders a
-  fact, not a control, and a task changes only through a human entrance the kernel
-  actually has — `close` (the one transition, note collected BEFORE the write since the
-  kernel requires it) and the `watcher` PATCH in both directions (`claim…` is a picker,
-  because a loop must be named; `release` clears it). Each is a labelled button on the
-  card, so the board is keyboard-usable and no write can be made by an accidental
-  gesture. `cardActions`/`hasActions` are an AFFORDANCE layer, never authority: the
-  kernel re-decides every write and its refusal is rendered verbatim. `release` is
-  offered on a WAITING card too — consequential (the eventual answer then wakes no loop)
-  but a deliberate, named act rather than a spatial one; that combination was exactly the
-  misleading green-lit drop the drag surface used to allow. `board.test.ts` pins the
-  absence of any drag wiring in the pane.
+- **`components/workspace/taskList.ts` is the ONE list mapping** — pure, no DOM:
+  `groupTasks` puts every task in exactly one group (`unclaimed` pool first — the §6
+  floor; then one group per WATCHING loop, ordered by title; then `closed` last), and
+  closedness is read FIRST so a closed task never sits on the desk of the loop that used
+  to watch it. `taskList.test.ts` asserts totality + disjointness over the whole fact
+  table, for the same reason `taskBoard.test.ts` does. The module also owns the remembered
+  view (`readTasksView`/`writeTasksView`, localStorage `loopany-workspace-tasks-view-v1`,
+  storage passed IN so it stays pure and SSR-safe — same pattern as the System canvas's
+  manual pins). Grouping by loop is deliberate: the board answers "what is true about this
+  task", the list answers "whose work is this". Question + overdue stay as row BADGES;
+  turning them into groups would just be the board again.
+- **`components/workspace/board.ts` says which ACTIONS a task offers** — pure, tested
+  without a DOM, and unchanged by the move: it always answered *which* acts exist, never
+  *where* they render. **There is NO drag-and-drop, by product decision**, and now no
+  on-row/on-card control either — a row or card is one button that opens the drawer, and
+  `TasksPane`'s `TaskActions` (inside the drawer) is the only write surface: `close…`
+  (note collected BEFORE the write, since the kernel requires it), the `watcher` PATCH in
+  both directions (`claim…` is a picker, because a loop must be named; `release` clears
+  it), and the verdict box for a task that is asking — answering IS the move there, since
+  the kernel refuses a close while a question is pending, and a person should not have to
+  leave for the Inbox to make it. `cardActions`/`hasActions` stay an AFFORDANCE layer,
+  never authority: the kernel re-decides every write and its refusal renders verbatim.
+  Two details worth keeping: the drawer restores focus to the ROW that opened it (the
+  opener element is captured from the click, not guessed from `document.activeElement`),
+  and the answer confirmation lives in `TaskActions`, NOT in the answer box — a successful
+  answer clears the question, which unmounts the box, and the line saying what the answer
+  did has to outlive it. `board.test.ts` pins the absence of any drag wiring AND of any
+  action on a row or card; `TasksPane.test.ts` drives the screen in jsdom (default view,
+  grouping, toggle persistence across a remount, each drawer write, focus restore).
 - Verified against the seeded pglite stack (`workspace:seed` then `LOOPANY_PORT=… pnpm
-  dev` on the same `LOOPANY_DATA_DIR`): no card is draggable and no column takes a drop;
-  `close…` collects the note and lands a `task-closed` event with `entrance: human`;
-  `claim…`/`release` move a card between columns; and an out-of-band `PATCH` moves one
-  over SSE with no user action.
+  dev` on the same `LOOPANY_DATA_DIR`, own port + own data dir): both views, no card
+  draggable and no column a drop target, claim / release / close-with-note / answer all
+  driven FROM THE DRAWER only, the toggle surviving a reload, an out-of-band `PATCH`
+  moving a card over SSE with no user action, zero console errors, and no page-level
+  horizontal scroll at 760px or 700px (the board still scrolls inside its own pane).
 
 ## The workspace wears the GRAPH line's design language — landing unit 8
 

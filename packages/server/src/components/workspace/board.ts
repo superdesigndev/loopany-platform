@@ -1,15 +1,20 @@
 import type { TaskCard } from './api'
 
 /**
- * WHICH ACTIONS A CARD OFFERS — pure, so the rule is testable without a DOM.
+ * WHICH ACTIONS A TASK OFFERS — pure, so the rule is testable without a DOM.
  *
- * The board is a READ LAYOUT plus explicit per-card actions. There is no
- * drag-and-drop: a column is a rendering of a fact, not a control, and moving a
- * card by dropping it was never how a task changes — it changes because a person
- * closes it, hands it to a loop, or takes it back. Those are the three entrances
- * the kernel actually has for a human, and each is a button (product decision;
- * a drop also carries no note, no loop id and no date, so every interesting move
- * needed a form anyway).
+ * Both Tasks views are READ LAYOUTS. There is no drag-and-drop: a column (or a
+ * loop section) is a rendering of a fact, not a control, and moving a card by
+ * dropping it was never how a task changes — it changes because a person closes
+ * it, hands it to a loop, or takes it back. Those are the three entrances the
+ * kernel actually has for a human, and each is a button (product decision; a drop
+ * also carries no note, no loop id and no date, so every interesting move needed
+ * a form anyway).
+ *
+ * Captain direction (2026-08-04) moved those buttons OFF the row and the card and
+ * into the task DRAWER — this module is unchanged by that, because it always
+ * answered "which acts does this task offer", never "where do they render". A row
+ * is now a pure entrance; `TasksPane`'s `TaskActions` is the one consumer.
  *
  *   - **close** — the one task transition (`kernel/types.ts` TRANSITIONS), via
  *     `POST /api/tasks/:id/close`. The kernel requires a note, so the button
@@ -49,8 +54,8 @@ export function cardActions(card: Pick<TaskCard, 'status' | 'pendingQuestion' | 
   }
 }
 
-/** Does this card offer anything at all? A closed card is a record: it offers
- *  nothing, and its row shows no empty action bar. */
+/** Does this task offer anything at all? A closed task is a record: it offers
+ *  nothing, and its drawer shows no empty action bar. */
 export function hasActions(card: Pick<TaskCard, 'status' | 'pendingQuestion' | 'watcher'>): boolean {
   const actions = cardActions(card)
   return actions.canClose || actions.canClaim || actions.canRelease
