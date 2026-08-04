@@ -648,7 +648,8 @@ stylesheet (`styles/workspace.css`, loaded `?url`, every rule scoped under
 - **The §6 inbox union is single-sourced**: `objectApi.inboxUnion`/`inboxCounts` back BOTH
   the raw `/api/inbox` (human CLI) and `/api/views/inbox` (the screen). Changing the
   safety floor in one place changes it everywhere; `views.integration.test.ts` pins the
-  three branches AND the near misses (watched-and-due, fresh-and-unwatched, closed).
+  surviving branch AND the near misses the two retired arms used to catch (a due task,
+  an old one with no follow-up, a closed one) — see the watcher-rule section below.
 - **Freshness** (`components/workspace/live.ts`): ONE team-scoped `EventSource`, explicit
   resume at `?since=<highest seq seen>`, `event: reset` → full refetch, two errors inside
   60 s → 30 s polling while the stream keeps retrying. Every external is an injected seam
@@ -667,12 +668,10 @@ stylesheet (`styles/workspace.css`, loaded `?url`, every rule scoped under
   `execution` key precisely so that contract is visible at the wire and testable.
 - **The system graph is a projection** — `deriveGraphEdges` is pure (one branch per API
   spec §8.3 row) and `components/workspace/systemLayout.ts` is deterministic banded Dagre
-  (you / loops / pool), ported from `data/graph-demo-r1/`. Same input ⇒ same coordinates,
+  (you / loops), ported from `data/graph-demo-r1/`. Same input ⇒ same coordinates,
   so a refetch never reshuffles the canvas; manual pins live in localStorage.
-  **DEVIATION**: spec §8.3 detects adoption from the `object-created` diff showing
-  `watcher` absent — unimplementable, since that event's diff carries only
-  `pendingQuestion`, so every watched task would read as adopted. We use the positive fact
-  instead: an event moving `watcher` null → a loop id.
+  (The spec §8.3 "adoption detection" deviation this section used to carry is GONE with
+  the pool it described — see "A task's WATCHER is never empty" below.)
 - **Local fixture**: `pnpm --filter @loopany/server workspace:seed` writes a full fixture
   THROUGH the kernel (real events, diffs, provenance). pglite is single-writer, so seed
   BEFORE starting `pnpm dev` on the same `LOOPANY_DATA_DIR`. Violating that order does
@@ -769,15 +768,16 @@ CLI) is untouched.
   in the payload so the client never restates the lifecycle) and `columnFor(facts,
   stamp)`. A column is not a new state: the kernel has two (`open → closed`) plus three
   facets (`pendingQuestion`, `watcher`, `followUpAt`), and a column names one cell of
-  that fact table. Precedence is `closed → waiting → unclaimed → due → watched`, so the
+  that fact table. Precedence is `closed → waiting → due → watched`, so the
   mapping is TOTAL and DISJOINT by construction — `taskBoard.test.ts` asserts both over
   the whole fact-table cross product, because a board that drops a card hides work.
-  Deliberate: due-AND-unwatched lands in `unclaimed` (a date on a task no loop watches is
-  nobody's alarm); the card still carries its overdue badge and the §6 safety-floor
-  counters ride the board payload (`counts`, single-sourced from `inboxCounts`).
+  The §6 safety-floor counters ride the board payload (`counts`, single-sourced from
+  `inboxCounts`). NB the fifth column `unclaimed` and the facet `watcher` both left this
+  mapping with the watcher rule — see "A task's WATCHER is never empty" below.
 - **`components/workspace/taskList.ts` is the ONE list mapping** — pure, no DOM:
-  `groupTasks` puts every task in exactly one group (`unclaimed` pool first — the §6
-  floor; then one group per WATCHING loop, ordered by title; then `closed` last), and
+  `groupTasks` puts every task in exactly one group (one group per WATCHING loop,
+  ordered by title, then `closed` last — the `unclaimed` pool group left with the
+  watcher rule, below), and
   closedness is read FIRST so a closed task never sits on the desk of the loop that used
   to watch it. `taskList.test.ts` asserts totality + disjointness over the whole fact
   table, for the same reason `taskBoard.test.ts` does. The module also owns the remembered
@@ -791,11 +791,11 @@ CLI) is untouched.
   *where* they render. **There is NO drag-and-drop, by product decision**, and now no
   on-row/on-card control either — a row or card is one button that opens the drawer, and
   `TasksPane`'s `TaskActions` (inside the drawer) is the only write surface: `close…`
-  (note collected BEFORE the write, since the kernel requires it), the `watcher` PATCH in
-  both directions (`claim…` is a picker, because a loop must be named; `release` clears
-  it), and the verdict box for a task that is asking — answering IS the move there, since
-  the kernel refuses a close while a question is pending, and a person should not have to
-  leave for the Inbox to make it. `cardActions`/`hasActions` stay an AFFORDANCE layer,
+  (note collected BEFORE the write, since the kernel requires it), the `watcher` PATCH
+  (TRANSFER only, a picker because a loop must be named; `release` went with the
+  unclaimed state), and the verdict box for a task that is asking. Answering IS the move
+  there, since the kernel refuses a close while a question is pending, and a person
+  should not have to leave for the Inbox to make it. `cardActions`/`hasActions` stay an AFFORDANCE layer,
   never authority: the kernel re-decides every write and its refusal renders verbatim.
   Two details worth keeping: the drawer restores focus to the ROW that opened it (the
   opener element is captured from the click, not guessed from `document.activeElement`),
@@ -806,7 +806,7 @@ CLI) is untouched.
   grouping, toggle persistence across a remount, each drawer write, focus restore).
 - Verified against the seeded pglite stack (`workspace:seed` then `LOOPANY_PORT=… pnpm
   dev` on the same `LOOPANY_DATA_DIR`, own port + own data dir): both views, no card
-  draggable and no column a drop target, claim / release / close-with-note / answer all
+  draggable and no column a drop target, hand-off / close-with-note / answer all
   driven FROM THE DRAWER only, the toggle surviving a reload, an out-of-band `PATCH`
   moving a card over SSE with no user action, zero console errors, and no page-level
   horizontal scroll at 760px or 700px (the board still scrolls inside its own pane).
@@ -833,8 +833,9 @@ existing button → `/api/*` paths.
   diffing the two sheets, expect them to agree down to the hex values.
 - **TEMPERATURE IS A RULE, not a palette.** Amber = a decision you owe; rose = a
   consequence that did not happen; blue = a decision already made, on its way out. The
-  rewrite's three inbox reasons map onto it: `question` is amber, and `due-unwatched` +
-  `orphan` are rose, because both are work nobody picked up. `parts.tsx` `reasonTone` is
+  rewrite's inbox reason maps onto it: `question` is amber (the other two, `due-unwatched`
+  and `orphan`, retired with the unclaimed state — see below; anything that is not a
+  decision you owe stays rose). `parts.tsx` `reasonTone` is
   the single place that mapping lives — do not re-decide it per screen.
 - **One shell, one detail surface.** Every screen is now a centered `.document-view` with
   a `ViewHeader` (breadcrumb → large tight title → sentence → right-aligned meta), and
@@ -858,7 +859,7 @@ existing button → `/api/*` paths.
   between a forward and a reverse edge, which is the bug that made the first fix a no-op.
 - Verified in a browser on a seeded pglite stack at its own port: all five screens, the
   inbox answer (lands a `question-answered` human event, counters drop across all three
-  homes), claim / release / close-with-note, the html doc's in-frame self-probe still
+  homes), hand-off / close-with-note, the html doc's in-frame self-probe still
   printing `origin: null · app cookies: threw: SecurityError · parent.location: blocked`,
   the System canvas, zero console errors, and no page-level horizontal scroll at 760px
   (the board still scrolls inside its own pane). NB the deployed graph reference is
@@ -1067,6 +1068,62 @@ without importing the daemon):
   pre-rendered value bare because `key: value` has no separator to break; a typed-list
   cell does, so it quotes instead — before this, any `raw()` value in a typed list emitted
   a literal NUL byte.
+
+## A task's WATCHER is never empty, and a due task WAKES it
+
+Captain rulings, 2026-08-04. `watcher` named the loop that acts next but was allowed to
+be absent, and the system carried a pile of machinery whose only job was to notice that
+absence (an unclaimed pool, claim-from-pool, a 48h orphan floor, a due-unwatched inbox
+arm). Forbidding the absence DELETED the machinery. The reasoning lives in
+`kernel/types.ts` `WATCHER_HINT` — read that, not a summary here.
+
+- **The rule is enforced at the KERNEL's two chokepoints**, `createObjectIn` and
+  `applyUpdateIn`, so every caller inherits it: the HTTP verbs, the whole-file replace,
+  the circuit breaker's auto-pause question and `workspace:seed` alike. A loop-created
+  task DEFAULTS to `createdByLoop`; a create with no creating loop is refused
+  (`WATCHER_REQUIRED`, 400). Deliberately NOT a DDL CHECK: the rule has a defaulting
+  half a constraint cannot express, and the migration would break any stack holding
+  pre-rule rows. The teaching altitude is the floor here.
+- **Transfer stays, release is gone.** `watcher: null` is refused everywhere — API,
+  CLI (locally, before the round trip, `loopIdRefusal`), and the UI cannot even express
+  it (`transferWatcher` takes a plain `string`). The drawer's picker also excludes the
+  loop already watching, since that write changes nothing.
+- **R-DUE is the other half** (`runQueue.tickDueTasks`, run reason `due`, `ids.dueRunId`):
+  a watched task whose `follow_up` arrives wakes its watcher, scoped `task:<id>`. Same
+  level-triggered clock as the cadence, so nothing is consumed and the fire is idempotent
+  per (loop, task, THAT follow-up instant) — one due instant queues exactly one run
+  however many passes see it, and a re-armed `follow_up` queues a fresh one. **ACTIVE
+  watchers only**, the same selection `tickRunClock` makes: a paused loop's due task
+  fires on the first tick after `resume` (level trigger, nothing lost), and a RETIRED
+  one is the stranding ruling 3 warns about. `runs.reason` is a TS-only drizzle enum, so
+  widening it needed no migration.
+- **Retire WARNS, never blocks.** `loopLifecycle` counts the open tasks the loop still
+  watches and returns a `warning` (`retirementWarning`); the CLI prints it as its own
+  `warning:` line above the detail block (a fact about what happened, not a hint about
+  what to do next — the repair goes in `help[]`), and the loop drawer confirms BEFORE
+  with the count it can see and renders the server's warning verbatim AFTER. Blocking,
+  force-transferring and cascading were all explicitly declined.
+- **What retired with the state, and why it is ABSENT rather than empty**: the
+  `unclaimed` board column and list group, the `pool` graph node and its
+  `produces`/`adopts` edges (which retired the old §8.3 adoption-detection deviation
+  with them), the `orphan`/`due-unwatched` inbox arms and counters, and
+  `task list --unwatched` / `watcher=none`. A permanently-zero counter or column is not
+  a reassuring fact — it teaches a distinction the kernel stopped making, and invites
+  someone to "fix" the emptiness by reintroducing the state. `inboxCounts` is now
+  `{question, total}`; the union SHAPE (`reasons[]`, `reasonRank`) is kept because the
+  inbox is where a future human-attention branch lands.
+- The loop drawer gained the operational lifecycle (pause/resume/retire) so the warning
+  has a UI home. Nothing there is pre-hidden or disabled by status — the same discipline
+  `Run now` keeps, pinned by `runNow.test.ts`: repeating a landed verb is a success with
+  `changed:false`, and a move out of `retired` is refused BY NAME, so a client-side gate
+  would only replace that teaching with silence.
+- Verified end to end on an isolated stack (own port/data dir/`LOOPANY_HOME`) with a real
+  daemon: a due task queued exactly one run, held at one across ~6 further ticks, was
+  claimed and EXECUTED to `success`, and a re-armed `follow_up` queued a second; paused
+  and retired watchers queued none, and the paused one fired after `resume`; retire warned
+  with the count and proceeded, leaving its tasks untouched; the workspace showed no
+  pool/orphan/unclaimed surface on any screen and every card named its watcher; zero
+  console errors, no page-level horizontal scroll.
 
 ## Maintaining this file
 
