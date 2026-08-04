@@ -1,9 +1,14 @@
-# Housekeeper twins — STAGED, not created
+# Housekeeper twins — created PAUSED, held for the captain
 
 Two local twins of the production Housekeeper loops, prepared for the rewrite line as
-part of landing unit 10. **Neither has been created.** Both carry outward side effects
-(git pushes and GitHub PR writes), so under the unit's arming policy they wait for the
-captain's decision; only an inward-only loop is armed without one.
+part of landing unit 10. Both carry outward side effects (git pushes and GitHub PR
+writes), so under the unit's arming policy neither could be armed on the worker's
+judgement.
+
+**Captain decision, 2026-08-04: create both, hold both paused.** They exist as real loops
+with their cadence and their bound workdir, and a paused loop has no `next_fire` at all —
+it cannot fire on its own, and `run-now` on it is refused (`PAUSED`, naming the resume
+route). Firing either one is the captain's act; see "Firing a twin" below.
 
 Each twin binds the SAME workdir as its production counterpart and keeps the same
 `0 7 * * *` cadence — that is the dual-run the captain asked for: production keeps
@@ -43,9 +48,10 @@ Read from the production charters (`<repo>/loopany/housekeeper/README.md`) on
 | 9 | Notifications | OUTWARD in prod, **inert here** | Same as A |
 
 **Verdict: neither twin is inward-only.** Both push branches and open PRs, and B also
-closes PRs and installs from the registry. Both are staged.
+closes PRs and installs from the registry. That is why both are held paused rather than
+armed.
 
-## The dual-run collision, which is the real decision
+## The dual-run collision, which was the real decision
 
 Both twins bind the SAME checkout their production counterpart binds, so once armed each
 repo has two Housekeepers. Three concrete collisions, and how each twin's charter handles
@@ -87,6 +93,53 @@ NOT adapted: the safety rules, the proof bar, the no-stacking gate, the protecte
 lists, the one-cleanup-per-day limit, the cadence, and the bound workdir. No behaviour
 was softened.
 
+## Firing a twin — the three commands, per twin
+
+A twin is inert until it is resumed. Resolve its id first (ids are per-stack; the unit-10
+stack's are recorded below):
+
+```sh
+source scripts/rewrite-local-run.env.sh
+A=$(curl -sS "$LOOPANY_SERVER_URL/api/loops" | python3 -c \
+  'import json,sys;print(next(l["id"] for l in json.load(sys.stdin)["loops"] if l["title"].startswith("Housekeeper — loopany-platform")))')
+B=$(curl -sS "$LOOPANY_SERVER_URL/api/loops" | python3 -c \
+  'import json,sys;print(next(l["id"] for l in json.load(sys.stdin)["loops"] if l["title"].startswith("Housekeeper — superdesign-platform")))')
+```
+
+Then, for whichever twin the captain releases (`$A` or `$B`):
+
+```sh
+# 1. ARM it — restores next_fire, so the 07:00 cadence is live again
+curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/resume"
+
+# 2. FIRE one run off-cadence, now (optional — the cadence alone will fire it at 07:00)
+curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/run-now"
+
+# 3. PARK it again — clears next_fire; the loop and its history are kept
+curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/pause" \
+  -H 'content-type: application/json' -d '{"note":"why it was parked"}'
+```
+
+The daemon must be running for step 2 to be claimed (`up --foreground`, see the recipe in
+`packages/server/AGENTS.md`). A second `run-now` while one run is still queued reports
+`alreadyQueued` rather than stacking a second. `pause`/`resume` are idempotent —
+repeating one is a success with `changed: false`.
+
+**Once resumed, a twin does everything in the inventory above, for real**: it pushes a
+branch and opens a PR on the named repository, and the superdesign twin may also close a
+PR and run `pnpm install` against the registry.
+
+## Loops as created in the unit-10 stack
+
+| Twin | Loop id | Status | Cadence | Bound workdir |
+|---|---|---|---|---|
+| A — loopany-platform | `loop-01KZ5V898A95BNEKZK5H2BK0BM` | paused, 0 runs | `0 7 * * *` (daily 07:00) | `/Users/stonex/Workspace/loopany-platform` |
+| B — superdesign-platform | `loop-01KZ5V89ATG08JEJB3XP0C9YAZ` | paused, 0 runs | `0 7 * * *` (daily 07:00) | `/Users/stonex/Workspace/superdesign/superdesign-platform` |
+
+Both were created with the daemon DOWN and paused before it came back up, so neither has
+ever had a claimable run. Verified: `recentRuns` is empty and the event log is exactly
+`object-created` then `loop-paused` on each.
+
 ## Exact create commands
 
 Run them from a shell that has sourced the isolated stack (see
@@ -114,6 +167,7 @@ Equivalently through the rewrite CLI, from `packages/daemon`:
 ```
 
 Both carry a `key:`, so a repeated create is an idempotent replay, never a twin of a twin.
-Each is created ARMED (it has a `cron:`); to stage one without arming it, create it and
-immediately `POST /api/loops/<id>/pause`, then `resume` when the captain says go.
-`POST /api/loops/<id>/run-now` fires one off-cadence without waiting for 07:00.
+Each is created ARMED (it has a `cron:`), which is why the staging recipe is create-then-
+pause in one breath, with the daemon down — that leaves no window in which a cadence could
+be claimed. Re-running these commands against a stack that already has the twins is a
+safe no-op replay; it does NOT un-pause them.

@@ -874,8 +874,18 @@ source scripts/rewrite-local-run.env.sh
   dirs), and each loop's bound workdir. Stop with `pkill -f "up --foreground"` then the
   dev server; a restart re-uses the same token, so the machine identity is stable.
 - `scripts/rewrite-smoke-loop.md` is the harmless read-only smoke loop that proves the
-  path end to end; `scripts/rewrite-twins/` holds the two staged Housekeeper twins and
-  their side-effect inventory.
+  path end to end. `scripts/rewrite-twins/` holds the two Housekeeper twins — local dual
+  runs of the production loops, binding the SAME workdirs and the same `0 7 * * *`
+  cadence. Both carry outward effects (branch push + `gh pr create`; the superdesign one
+  also closes PRs and installs from the registry), so by captain decision they are
+  **created but held PAUSED**: a paused loop has no `next_fire` and `run-now` on it is
+  refused, so releasing one is a deliberate `resume`. That README carries the full
+  side-effect inventory and the resume/fire/pause commands.
+- **A paused loop is genuinely inert, and that is what makes staging safe**: `pause`
+  clears `next_fire` (so the clock cannot select it) and `runLoopNow` refuses a
+  non-active loop before it queues anything. Stage a risky loop by creating it with the
+  daemon DOWN and pausing in the same breath — that leaves no window in which its
+  birth-armed cadence could be claimed.
 
 ## Maintaining this file
 
