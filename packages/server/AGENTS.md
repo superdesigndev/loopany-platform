@@ -1335,6 +1335,38 @@ while retaining kernel loop objects and dormant queue code until S5.
   and daemon `dev-entry`/`kernel-cli`/`skill-dev` tests. S4 hierarchy and S5 deletion of
   kernel loop objects, queue/claim code and flag symbols are deliberately not part of S3.
 
+## Convergence S3.1 — the cutover boundary closes by construction
+
+S3 retired every producer, claimer and reclaimer of a kernel-lifecycle run row but did
+not dispose of the rows the retired mechanism still owned, so design §9.3's "at no stage
+is there a window where neither guard covers a claimed run" failed at exactly the cutover
+instant (cv-s3-review F1). S3.1 makes it hold by code rather than by runbook.
+
+- **`kernel/cutover.ts` `terminalizeStrandedQueueRows()` runs at BOOT, before the
+  scheduler starts** (`server/boot.ts`, best-effort try/catch — a wedged loop is bad, a
+  server that will not come up is worse). Boot is the chokepoint, not the converge
+  script: every S3+ stack boots on every start, whether or not an operator ever ran
+  `kernel:converge-loops`. Read that module's header for the full failure chain; the
+  short form is that `openRuns`/`pendingRunsForMachine` fence on `queue_state IS NULL`
+  while `hasRunningRun`/`openRunsForLoop` do NOT, so a row left `queue_state='claimed'`
+  keeps its converged twin permanently "running" — poll guard holds, sweep stands down,
+  scheduler ticks early-out, silently.
+- **It closes ONLY open kernel queue states** (`queued`/`claimed` → `queue_state='failure',
+  phase='error', outcome='error', lease_state=NULL` + `STRANDED_RUN_ERROR`), never a
+  `queue_state IS NULL` production row, and keeps the row's historical `ts` (a disposal,
+  not a fresh event). Idempotent by construction. Event discrimination reuses the S2 F4
+  hook `appendProductionRunFinished` verbatim: a provenance-carrying row closes its kernel
+  timeline, a provenance-free one stays event-silent like ordinary cron/edit/evolve history.
+- **`convergeKernelLoops` verifies the TWIN before counting an id converged** (F3): a
+  same-id production row whose `teamId`/`machineId` differ from the plan is a loud refusal,
+  never `existing += 1` — absorbing it would leave the kernel loop unconverged while its
+  watchers resolved against a stranger's team scoping, and report a clean pass.
+- Regression anchor: `convergenceS31.integration.test.ts` (the inversion of the review's
+  scratch suite — stranded claimed/queued rows terminalized, the converged loop then
+  claiming and reporting normally, provenance discrimination, boot ordering, and the F3
+  refusal). Verified on an isolated stack: a stranded `claimed` row planted pre-boot, the
+  loud terminalization at boot, then a real daemon claiming and completing fresh runs.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

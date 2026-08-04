@@ -188,8 +188,23 @@ export async function convergeKernelLoops(options: ConvergeOptions = {}): Promis
       report.planned.push(planned.plan);
       if (dryRun) continue;
 
-      const existing = (await db.select({ id: loops.id }).from(loops).where(eq(loops.id, kernelLoop.id)))[0];
+      // An already-converged id is a no-op — but only if the row IS the twin
+      // this plan would create. A same-id FOREIGN row counted as "existing"
+      // would leave the kernel loop unconverged while its watchers silently
+      // resolved against a stranger's team scoping, reported as a clean pass.
+      // Id shapes make a natural collision essentially impossible, so a hit
+      // here is a real anomaly and must be REFUSED, never absorbed.
+      const existing = (
+        await db.select({ id: loops.id, teamId: loops.teamId, machineId: loops.machineId }).from(loops).where(eq(loops.id, kernelLoop.id))
+      )[0];
       if (existing) {
+        if (existing.teamId !== planned.plan.teamId || existing.machineId !== planned.plan.machineId) {
+          throw new Error(
+            `${kernelLoop.id} already exists as a production loop bound to team ${existing.teamId}/machine ${existing.machineId}, ` +
+              `but this plan targets team ${planned.plan.teamId}/machine ${planned.plan.machineId}; ` +
+              `refusing to count a foreign row as converged`,
+          );
+        }
         report.existing += 1;
         continue;
       }

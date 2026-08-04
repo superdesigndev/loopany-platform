@@ -23,6 +23,7 @@ import {
 } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
 import { DueTaskScheduler, setProductionRunDispatcher } from "../kernel/runQueue.js";
+import { terminalizeStrandedQueueRows } from "../kernel/cutover.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
@@ -54,6 +55,18 @@ export function ensureServer(): Promise<Booted> {
 
 async function boot(): Promise<Booted> {
   await runMigrations();
+
+  // Convergence S3.1: dispose of any kernel run-queue row left open at the
+  // cutover BEFORE the scheduler and sweep start. Neither guard covers such a
+  // row and a stranded `claimed` one wedges its converged loop forever — see
+  // kernel/cutover.ts. Best-effort: a failure here must never block boot (the
+  // wedge it prevents is worse than a retry on the next start, but a server
+  // that refuses to come up is worse than both).
+  try {
+    await terminalizeStrandedQueueRows();
+  } catch (err) {
+    logger.error({ err: String(err) }, "S3 cutover: stranded kernel run terminalization failed — continuing boot");
+  }
 
   const abort = new AbortController();
   // Drain the runtime postgres pool on clean shutdown (main.ts aborts on
