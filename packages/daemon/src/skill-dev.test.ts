@@ -95,35 +95,35 @@ describe("the shipped artifact", () => {
     expect(skill).toMatch(/^description: .+/m);
   });
 
-  test("it teaches the kernel model, the artifact format and the run-now ruling", () => {
+  test("it teaches the converged model, production loop surface and run-now ruling", () => {
     const skill = fs.readFileSync(path.join(devSkillRoot, "SKILL.md"), "utf8");
     const loops = fs.readFileSync(path.join(devSkillRoot, "references", "loops.md"), "utf8");
     const work = fs.readFileSync(path.join(devSkillRoot, "references", "work.md"), "utf8");
-    // event-sourced kernel objects
+    // Event-sourced work attaches to production loop ids.
     expect(skill).toMatch(/event-sourced/i);
-    expect(skill).toContain("loop retire");
-    // the loop artifact format
-    for (const key of ["title", "key", "cron", "workdir", "charter"]) expect(loops).toContain(key);
-    expect(loops).toMatch(/Omitted ⇒ the loop has no cadence/);
-    expect(loops).toMatch(/ABSOLUTE path that must already exist/);
+    expect(skill).toContain("production loop ids");
+    expect(skill).toMatch(/Every\s+`loop \*` kernel command/);
+    // The loop brief is the production task file.
+    expect(loops).toContain("## Spec");
+    expect(loops).toContain("production `loops` row");
     expect(loops).toContain("LOOPANY_ROOTS");
-    // the grammar
-    for (const verb of ["loop create", "loop list", "loop show", "loop evolve", "loop update", "loop run-now"]) {
+    for (const verb of ["loopany loops", "loopany show", "loopany new", "loopany edit"]) {
       expect(loops + skill).toContain(verb);
     }
     for (const verb of ["task create", "task update", "task close", "doc create", "doc update", "loopany inbox", "loopany answer"]) {
       expect(work).toContain(verb);
     }
     // run-now + paused, post-rw14
-    expect(loops).toContain("A PAUSED loop DOES fire, and stays paused");
-    expect(loops).toMatch(/RETIRED loop is refused/);
+    expect(loops).toContain("A PAUSED loop does fire once and stays paused");
+    expect(loops).toContain("production run-token pipeline");
   });
 
   test("it says, unmissably, that this CLI is for a local dev stack and never production", () => {
     const skill = fs.readFileSync(path.join(devSkillRoot, "SKILL.md"), "utf8");
     expect(skill).toContain("Never production");
     expect(skill).toContain("scripts/loopany-dev");
-    expect(skill).toContain("LOOPANY_RUNS_V2=1");
+    expect(skill).toContain("Never use bare `loopany`");
+    expect(skill).not.toContain("LOOPANY_RUNS_V2=1");
   });
 
   // Two 2026-08-04 sessions each self-hosted a stack — one from a wrapper hint,
@@ -132,7 +132,7 @@ describe("the shipped artifact", () => {
   // surface, so it is pinned like one.
   test("the skill states the MANAGED-STACK contract, early and unmissably", () => {
     const skill = fs.readFileSync(path.join(devSkillRoot, "SKILL.md"), "utf8");
-    const contract = skill.slice(0, skill.indexOf("## What the kernel is"));
+    const contract = skill.slice(0, skill.indexOf("## The converged model"));
     expect(contract).toContain("MANAGED");
     expect(contract).toContain("rewrite-local-run.env.sh"); // named as a NEVER
     expect(contract).toMatch(/never start a server|Never start a server/);
@@ -169,7 +169,8 @@ describe("the shipped artifact", () => {
     const wrapper = fs.readFileSync(path.join(packageRoot, "..", "..", "scripts", "loopany-dev"), "utf8");
     expect(wrapper).toContain("refusing to run against");
     expect(wrapper).toContain("http://127.0.0.1:*");
-    expect(wrapper).toContain("export LOOPANY_RUNS_V2=1");
+    expect(wrapper).toContain("export LOOPANY_DEV_HOME=1");
+    expect(wrapper).not.toContain("export LOOPANY_RUNS_V2=1");
     // The env script prints a banner; it must go to stderr or it corrupts the
     // CLI's machine-readable TOON on stdout.
     expect(wrapper).toContain("rewrite-local-run.env.sh\" 1>&2");

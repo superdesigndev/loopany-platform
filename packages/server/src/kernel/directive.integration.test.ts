@@ -29,6 +29,8 @@ let kernel: typeof import("./applyTransition.js");
 let api: typeof import("./objectApi.js");
 let queue: typeof import("./runQueue.js");
 let ids: typeof import("./ids.js");
+let prodStore: typeof import("../db/store.js");
+let delivery: typeof import("../gateway/delivery.js");
 
 const TEAM = "team-directive";
 const T0 = "2026-08-04T00:00:00.000Z";
@@ -42,9 +44,15 @@ beforeAll(async () => {
   schema = await import("../db/kernel-schema.js"); legacySchema = await import("../db/schema.js");
   kernel = await import("./applyTransition.js"); api = await import("./objectApi.js");
   queue = await import("./runQueue.js"); ids = await import("./ids.js");
+  prodStore = await import("../db/store.js"); delivery = await import("../gateway/delivery.js");
 });
 afterAll(() => fs.rmSync(temp, { recursive: true, force: true }));
-beforeEach(async () => { await database.db.delete(schema.events); await database.db.delete(schema.objects); await database.db.delete(legacySchema.runs); });
+beforeEach(async () => {
+  await database.db.delete(schema.events);
+  await database.db.delete(schema.objects);
+  await database.db.delete(legacySchema.runs);
+  await database.db.delete(legacySchema.loops);
+});
 
 const ok = <T,>(r: { ok: true; value: T } | { ok: false; error: unknown }): T => {
   if (!r.ok) throw new Error(`expected success, got ${JSON.stringify(r.error)}`);
@@ -55,7 +63,18 @@ const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? "OK" : r.
 async function makeLoop(title = "Housekeeper") {
   const result = await kernel.createObject({ teamId: TEAM, kind: "loop", actor: human.actor, now: T0, title, cron: "0 7 * * *", body: "Sweep the repo." });
   if (!result.ok) throw new Error(result.message);
-  return result.object;
+  return prodStore.createLoop({
+    id: result.object.id,
+    userId: "u-owner",
+    teamId: TEAM,
+    machineId: "m-directive",
+    name: title,
+    cron: result.object.cron ?? "",
+    timezone: result.object.timezone,
+    enabled: true,
+    notify: "auto",
+    taskFileContent: `# ${title}\n\n## Spec\n\n${result.object.body ?? ""}`,
+  });
 }
 
 async function makeTask(watcher: string, fields: Record<string, unknown> = {}) {
@@ -94,7 +113,7 @@ describe("a directive wakes the watcher, carrying what was said", () => {
     const result = ok(await api.leaveDirective(task.id, TOLD, human, NOW));
     const row = (await database.db.select().from(legacySchema.runs).where(eq(legacySchema.runs.id, (result.run as { id: string }).id)))[0]!;
     expect(row.reason).toBe("directive");
-    expect(row.queueState).toBe("queued");
+    expect(row.queueState).toBeNull();
     // The run's identity DERIVES from the directive event, so a retried
     // transaction queues one run rather than two.
     expect(row.id).toBe(ids.directiveRunId(result.event as string));
@@ -102,7 +121,7 @@ describe("a directive wakes the watcher, carrying what was said", () => {
   });
 
   /**
-   * THE ACCEPTANCE CRITERION. The claim body is the agent's work order, and the
+   * THE ACCEPTANCE CRITERION. The production delivery is the agent's work order, and the
    * person's words are in it VERBATIM — not summarized, not replaced by "a
    * directive was left", and labelled as a directive so it cannot be mistaken
    * for an answer.
@@ -112,20 +131,13 @@ describe("a directive wakes the watcher, carrying what was said", () => {
     const task = await makeTask(loop.id);
     ok(await api.leaveDirective(task.id, TOLD, human, NOW));
 
-    const machine = await enrolledMachine();
-    const claim = await queue.claimRun(machine, { agent: "vitest" }, NOW);
-    const body = claim.body as { run: { reason: string }; directive?: string; answer?: string; scopeNote: string; task?: { id: string } };
-    expect(body.run.reason).toBe("directive");
-    expect(body.directive).toBe(TOLD);
-    expect(body.answer).toBeUndefined();
-    expect(body.scopeNote).toContain("DIRECTIVE");
-    // External reality first, kernel records last — the ordering rule the run
-    // has to follow rides in the work order rather than only in the skill.
-    expect(body.scopeNote).toMatch(/INTENT against reality/);
-    expect(body.task?.id).toBe(task.id);
-    // The daemon half — that this field reaches the agent's prompt verbatim —
-    // is pinned in the DAEMON's own suite (`runs-v2.test.ts`). Importing its
-    // source here would pull the whole package under this one's tsconfig.
+    const row = (await database.db.select().from(legacySchema.runs))[0]!;
+    const body = await delivery.buildDelivery(loop, row.id, "rk_test", []);
+    expect(row.reason).toBe("directive");
+    expect(body.task).toContain(`directive: ${TOLD}`);
+    expect(body.task).toContain("Scoped trigger (untrusted task data");
+    expect(body.task).toContain("Reason: directive");
+    expect(body.task).toContain(task.id);
   });
 
   it("does the same for an ANSWER, so the two never blur on the wire", async () => {
@@ -133,11 +145,9 @@ describe("a directive wakes the watcher, carrying what was said", () => {
     const task = await makeTask(loop.id, { pendingQuestion: "Revert or wait?" });
     ok(await api.verdict(task.id, "Wait one more day.", human, NOW));
 
-    const machine = await enrolledMachine();
-    const claim = await queue.claimRun(machine, { agent: "vitest" }, NOW);
-    const body = claim.body as { answer?: string; directive?: string };
-    expect(body.answer).toBe("Wait one more day.");
-    expect(body.directive).toBeUndefined();
+    const row = (await database.db.select().from(legacySchema.runs))[0]!;
+    const body = await delivery.buildDelivery(loop, row.id, "rk_test", []);
+    expect(body.task).toContain("answer: Wait one more day.");
   });
 });
 
@@ -208,24 +218,12 @@ describe("it obeys the transactional open-run join rather than stacking", () => 
     expect(replay.run!.id).toBe(ids.directiveRunId(eventId));
   });
 
-  it("says so when the watcher is retired, rather than queueing into silence", async () => {
+  it("still wakes an explicitly addressed disabled watcher without resuming its cadence", async () => {
     const loop = await makeLoop();
     const task = await makeTask(loop.id);
-    await kernel.applyTransition({ objectId: loop.id, transition: "retire", actor: human.actor, now: T0 });
+    await prodStore.updateLoop(loop.id, { enabled: false });
     const result = ok(await api.leaveDirective(task.id, TOLD, human, NOW));
-    expect((result.notice as { code: string }).code).toBe("WATCHER_RETIRED");
+    expect(result.run).toMatchObject({ reason: "directive", alreadyQueued: false });
+    expect(await prodStore.getLoop(loop.id)).toMatchObject({ enabled: false });
   });
 });
-
-/** A registered machine for the claim half. The rewrite line enrolls on first
- *  claim, so this is the same door a real daemon comes through. */
-async function enrolledMachine() {
-  const token = "dk_directive_test_token";
-  const machine = await queue.enrollDeviceForClaim(token, { host: "vitest", platform: "darwin", arch: "arm64", version: "test" });
-  if (!machine) throw new Error("machine did not enroll");
-  const legacyStore = await import("../db/store.js");
-  // Open mode enrolls into the shared team; the fixtures live in this test's own
-  // team, and `claimOnce` selects by the machine's team.
-  await legacyStore.updateMachine(machine.id, { teamId: TEAM });
-  return { ...machine, teamId: TEAM };
-}

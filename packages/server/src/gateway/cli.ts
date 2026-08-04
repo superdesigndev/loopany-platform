@@ -325,7 +325,7 @@ export class CliGateway {
         const message = str("message")?.slice(0, MESSAGE_CAP);
         const reason = str("reason")?.slice(0, MESSAGE_CAP) ?? null;
         const r = await this.gateway.finishLoop(lease, { message, reason, state });
-        return r.ok ? { code: 200, text: await renderFinishedText(lease.loopId) } : derr(400, r.detail ?? "rejected", r.code);
+        return r.ok ? { code: 200, text: await renderFinishedText(lease.loopId, r.warning?.message) } : derr(400, r.detail ?? "rejected", r.code);
       }
       case "set-ui": {
         if (!lease.canSetUi) return derr(403, "only the evolution or edit pass may set the UI", "FORBIDDEN");
@@ -693,13 +693,14 @@ function renderReportedText(status: string | undefined, state: Record<string, nu
 }
 
 /** `loopany finish` — the goal-met confirmation, read back off the completed loop. */
-async function renderFinishedText(loopId: string): Promise<string> {
+async function renderFinishedText(loopId: string, warning?: string): Promise<string> {
   const loop = await store.getLoop(loopId);
   if (!loop) return "finished: goal met";
   return doc(
     `finished: ${scalar(loop.name ?? loop.id)} (${loop.id}) — goal met`,
     loop.completedAt ? kvLine("completedAt", fmtTime(loop.completedAt)) : null,
     loop.completionReason ? kvLine("completionReason", loop.completionReason) : null,
+    warning ? kvLine("warning", warning) : null,
   );
 }
 

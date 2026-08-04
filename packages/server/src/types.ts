@@ -297,6 +297,10 @@ export interface JobDetail {
    *  the loop header show which team owns the loop and, when a member opens it from
    *  outside their active team, offer a "switch to this team" affordance. */
   team?: { id: string; name: string; isActive: boolean } | null
+  /** Open kernel tasks that name this loop as their watcher. The DELETE confirm
+   *  has to name the count BEFORE the person chooses (design §5), which a
+   *  post-write warning cannot do; 0 on a stack with no kernel tasks. */
+  watchedTasks: number
   runs: RunSummary[]
 }
 
@@ -402,10 +406,24 @@ export interface JobPayload {
   owner?: OwnerRef
 }
 
+/** A consequence a SUCCESSFUL loop-lifecycle move left behind. Today's only
+ *  subject is the open kernel tasks that still name the loop as their watcher
+ *  (convergence S3, design §5): pause / finish / delete warn with the count,
+ *  never block and never cascade. Authored by `kernel/watchedTasks.ts`. */
+export interface WatchedTasksWarning {
+  code: 'TASKS_STILL_WATCHED'
+  openTasks: number
+  message: string
+  hint: string
+}
+
 export interface MutationResult {
   ok?: boolean
   id?: string
   error?: string
+  /** Set when the write succeeded AND left a consequence worth naming. Never a
+   *  rejection — a caller must not treat it as one. */
+  warning?: WatchedTasksWarning
 }
 
 /**

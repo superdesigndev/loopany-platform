@@ -54,7 +54,9 @@ case "${LOOPANY_SERVER_URL:-}" in
     ;;
 esac
 
-# The rewrite cutover flag must be on for the kernel verbs and the kernel home.
-export LOOPANY_RUNS_V2=1
+# Presentation only: bare `loopany-dev` renders the converged workspace home.
+# Execution is the ordinary production poll path; LOOPANY_RUNS_V2 is deliberately
+# absent after convergence S3.
+export LOOPANY_DEV_HOME=1
 
 exec "$repo_root/packages/daemon/node_modules/.bin/tsx" "$repo_root/packages/daemon/src/cli.ts" "$@"

@@ -10,7 +10,6 @@ import { readFileSync } from "node:fs";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printTextOrTooOld } from "./cli-client.js";
-import { runsV2Enabled } from "./flags.js";
 
 type Flags = Record<string, string | boolean>;
 
@@ -23,25 +22,6 @@ export interface InteractiveDeps {
   env?: NodeJS.ProcessEnv;
   out?: (s: string) => void;
   err?: (s: string) => void;
-}
-
-/**
- * `loops` is the LEGACY roster, and on a runs-v2 stack the legacy tables are
- * empty by construction — the loops the user is working with are kernel objects.
- * An empty list is a truthful answer to the wrong question, and it reads as "you
- * have no loops", so say which verb asks the right one. ONE line, appended after
- * the server's own render, and only when BOTH facts hold: the flag is on and the
- * list really came back empty (a non-empty legacy roster on a v2 stack is real
- * history, and pointing away from it would be the mirror-image lie).
- *
- * The emptiness is read from the RETAINED `loops` data channel, not by matching
- * the server's rendered prose — that channel exists precisely so the daemon can
- * make decisions about the payload without parsing text.
- */
-export function kernelRosterHint(body: Record<string, unknown>, env: NodeJS.ProcessEnv): string {
-  if (!runsV2Enabled(env)) return "";
-  if (!Array.isArray(body.loops) || body.loops.length > 0) return "";
-  return "note: this stack runs the rewrite kernel — `loopany loops` reads the LEGACY roster. Run `loopany loop list` for the kernel one.\n";
 }
 
 /** `--k v` / `--k=v` pairs, bare `--flag` → true; everything else is positional. */
@@ -188,7 +168,6 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     // the empty/error states; we just print `text`. A too-old server (no `text`) → a
     // definitive SERVER_TOO_OLD error, never blank output.
     const code = printTextOrTooOld(r.body, r.status, out);
-    out(kernelRosterHint(r.body, injected.env ?? process.env));
     return code;
   }
 

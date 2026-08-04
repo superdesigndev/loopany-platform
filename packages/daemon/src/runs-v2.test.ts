@@ -1,11 +1,20 @@
+import fs from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { buildClaimBody, deliveryFromRunsV2, runsV2Enabled } from "./daemon.js";
 
-describe("LOOPANY_RUNS_V2", () => {
-  it("defaults off so the shipping poll/report behavior remains selected", () => {
+describe("dormant LOOPANY_RUNS_V2 compatibility helpers", () => {
+  it("defaults off while S3 runtime ignores it", () => {
     expect(runsV2Enabled({})).toBe(false);
     expect(runsV2Enabled({ LOOPANY_RUNS_V2: "0" })).toBe(false);
+  });
+
+  it("the daemon runtime always selects the production poll endpoint", () => {
+    const sourceName = "./daemon.ts";
+    const source = fs.readFileSync(new URL(sourceName, import.meta.url), "utf8");
+    expect(source).toContain("`${server}/api/machine/poll`");
+    expect(source).not.toContain("runsV2 ? \"/api/agent/runs/claim\"");
   });
 
   it("adapts a v2 claim into the existing runner with charter + loop identity", () => {

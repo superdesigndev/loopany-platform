@@ -35,6 +35,7 @@ import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
+import { watchedTasksWarningFor } from '../kernel/watchedTasks.js'
 import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
 import {
@@ -371,16 +372,27 @@ export const patchJob = createServerFn({ method: 'POST' })
     })
     if (!loop) return { error: 'not found' }
     scheduler.addLoop(loop)
-    return { ok: true }
+    // Pausing is a watcher standing down (design §5): say what it left behind,
+    // never refuse it. Only on the transition — re-asserting a pause is silent.
+    const paused = p.enabled === false && owned.loop.enabled
+    const warning = paused ? await watchedTasksWarningFor(loop.teamId, loop.id, 'pause') : undefined
+    return { ok: true, ...(warning ? { warning } : {}) }
   })
 
 export const deleteJob = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
     const { scheduler } = await backend()
-    if (!(await ownedLoop(id))) return { error: 'not found' }
+    const owned = await ownedLoop(id)
+    if (!owned) return { error: 'not found' }
     scheduler.removeLoop(id)
-    return { ok: await store.deleteLoop(id) }
+    // Counted BEFORE the delete, because the delete leaves the tasks exactly as
+    // they are: `store.deleteLoop` must NEVER grow an `objects` cascade (pinned
+    // by a test). A dangling watcher is legal — `loopRefs.ts` renders it as a
+    // tombstone and the repair is a transfer.
+    const warning = await watchedTasksWarningFor(owned.loop.teamId, id, 'delete')
+    const ok = await store.deleteLoop(id)
+    return { ok, ...(ok && warning ? { warning } : {}) }
   })
 
 export const runJob = createServerFn({ method: 'POST' })

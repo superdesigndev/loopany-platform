@@ -28,6 +28,31 @@ const LOOP_KEYS = "loop front matter: title, key, cron, workdir, payload, mirror
 const MIRROR_LAW = "a mirror tells you WHERE to look, never WHAT state it is in";
 const MIRROR_KINDS = "canonical kinds: github-pr, github-issue, url, gsc-property — free-form, kebab-cased on write; a KNOWN kind also has its coords shape checked";
 
+/** S3 retires the kernel loop-authoring vocabulary without deleting its parser
+ * yet. Every old command answers with the production equivalent instead of
+ * mutating the history-only kernel twin. */
+export function loopSurfacePointer(command: string, id?: string): string {
+  const loopId = id ?? "<loop-id>";
+  const help: Record<string, string[]> = {
+    "loop list": ["Run `loopany loops` — production loops are now the only roster."],
+    "loop show": [`Run \`loopany show ${loopId}\` for the production loop's full editable envelope and recent runs.`],
+    "loop create": ["Create through the production flow: run `loopany new --json '<config>'`, or use the installed loopany skill for guided setup."],
+    "loop evolve": [`Edit the production loop with \`loopany edit ${loopId} --json '<patch>'\`; its standing brief lives in the task file's \`## Spec\`.`],
+    "loop update": [`Edit the production loop with \`loopany edit ${loopId} --json '<patch>'\`; owner edits are the schedule/config authority.`],
+    "loop pause": [`Pause it with \`loopany edit ${loopId} --json '{"enabled":false}'\`.`],
+    "loop resume": [`Resume it with \`loopany edit ${loopId} --json '{"enabled":true}'\`.`],
+    "loop run-now": ["Use Run now on the production loop/dashboard. A paused loop fires once and stays paused."],
+    "loop retire": ["Production loops pause, finish a declared goal, or are deleted by the owner; the kernel's terminal retire state no longer governs a live loop."],
+  };
+  const hints = help[command] ?? ["Run `loopany loops` to find the production loop surface."];
+  return (
+    "error: kernel loop commands moved to the production loop surface\n" +
+    "code: SURFACE_MOVED\n" +
+    `command: ${command}\n` +
+    `help[${hints.length}]:\n${hints.map((hint) => `  ${hint}`).join("\n")}\n`
+  );
+}
+
 export const VERBS: Record<string, VerbSpec> = {
   "task list": {
     usage: "loopany task list [flags]",
@@ -341,6 +366,7 @@ export function flagNames(command: string): string[] {
 }
 
 export function verbHelp(command: string): string {
+  if (command.startsWith("loop ")) return loopSurfacePointer(command);
   const spec = VERBS[command];
   if (!spec) {
     const names = Object.keys(VERBS);

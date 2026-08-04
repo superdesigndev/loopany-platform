@@ -10,6 +10,7 @@ import type { ArtifactFileWithMeta } from "../db/store.js";
 import type { Loop, Run } from "../db/schema.js";
 import type { ArtifactSummary, JobDetail, JobFull, JobSummary, RunSummary } from "../types.js";
 import { machinePresence } from "../lib/machinePresence.js";
+import { countOpenWatchedTasks } from "../kernel/watchedTasks.js";
 
 const SUMMARY_RUNS = 18;
 
@@ -127,6 +128,9 @@ export async function toJobDetail(loop: Loop): Promise<JobDetail> {
     // `online` gates run/evolve (only a live daemon can execute); `presence`
     // drives the calm asleep-vs-offline dashboard copy.
     machine: { id: loop.machineId, name: m?.name || "", online: presence === "online", presence, lastSeen: m?.lastSeen ?? null },
+    // One indexed count (`objects_watcher_idx` is exactly this predicate) so the
+    // delete confirm can name the consequence before it happens (design §5).
+    watchedTasks: await countOpenWatchedTasks(loop.teamId, loop.id),
     runs: fullRuns,
   };
 }

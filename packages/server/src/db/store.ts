@@ -207,6 +207,19 @@ export async function claimPendingRun(id: string): Promise<Run | undefined> {
   )[0];
 }
 
+/** Stamp the first moment a pending run is eligible for the production poll.
+ * Conditional + write-once: concurrent poll/sweep passes agree on one floor and
+ * no later observation can make an old row look younger. */
+export async function markRunClaimable(id: string, at: string): Promise<Run | undefined> {
+  return (
+    await db
+      .update(runs)
+      .set({ claimableAt: at })
+      .where(and(eq(runs.id, id), eq(runs.phase, "pending"), isNull(runs.claimableAt)))
+      .returning()
+  )[0];
+}
+
 /** Newest-last run history for a loop (chronological), capped. */
 export async function listRuns(loopId: string, limit = 30): Promise<Run[]> {
   const rows = await db

@@ -14,7 +14,6 @@
  */
 import os from "node:os";
 
-import { runsV2Enabled } from "./flags.js";
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { runDelivery, type Delivery } from "./runner.js";
@@ -37,10 +36,9 @@ const REPOLL_MS = 250;
  *  abort SIGTERMs their claude children; KILL_GRACE is 5s, so 10s covers it). */
 const DRAIN_MS = 10_000;
 
-// The flag itself lives in the leaf `flags.ts` so the pure router can read it
-// without importing this module; re-exported here because every existing caller
-// (and its test) knows it by this name.
-export { runsV2Enabled };
+// Retained until S5 removes the old protocol modules. S3's runtime no longer
+// consults it: every daemon polls the production machine endpoint.
+export { runsV2Enabled } from "./flags.js";
 
 interface RunsV2Claim {
   run: null | { id: string; loopId: string; loopTitle?: string | null; scope: string };
@@ -202,8 +200,6 @@ export async function runDaemon(): Promise<number> {
   // `version` is this daemon's own package version, so the web can flag an
   // outdated daemon and show the exact update command.
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
-  const runsV2 = runsV2Enabled();
-
   // Refuse to boot when a live, VERIFIED daemon already owns the pidfile — a
   // second daemon (e.g. a bare `loopany` in a terminal) would overwrite it, and
   // its exit would delete the file while daemon #1 still runs: invisible to
@@ -256,14 +252,10 @@ export async function runDaemon(): Promise<number> {
       // not the transcript) so the dashboard shows "what's it doing" without WS.
       const progress = snapshotProgress();
       // ac.signal rides along so SIGTERM/`down` aborts an in-flight poll too.
-      const res = await boundedFetch(`${server}${runsV2 ? "/api/agent/runs/claim" : "/api/machine/poll"}`, {
+      const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(
-          runsV2
-            ? buildClaimBody(info, `daemon-${daemonVersion()}-pid${process.pid}`, inFlight)
-            : buildPollBody(info, progress, inFlight.size === 0, watchDigest),
-        ),
+        body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest)),
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
         const raw = await res.json();
@@ -273,8 +265,7 @@ export async function runDaemon(): Promise<number> {
         // server omits it only after a matching echo) — never an empty set.
         if (Array.isArray(data.watch)) watchManager.reconcile(data.watch);
         if (typeof data.watchDigest === "string") watchDigest = data.watchDigest;
-        const v2Delivery = runsV2 ? deliveryFromRunsV2(raw as RunsV2Claim, token) : undefined;
-        for (const d of v2Delivery ? [v2Delivery] : data.deliveries ?? []) {
+        for (const d of data.deliveries ?? []) {
           if (inFlight.has(d.runId)) continue;
           inFlight.add(d.runId);
           logger.info({ runId: d.runId, role: d.role }, "delivery claimed — running");

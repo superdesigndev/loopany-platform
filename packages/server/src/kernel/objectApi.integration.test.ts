@@ -13,6 +13,7 @@ let store: typeof import("../db/kernelStore.js");
 let api: typeof import("./objectApi.js");
 let ids: typeof import("./ids.js");
 let queue: typeof import("./runQueue.js");
+let prodStore: typeof import("../db/store.js");
 
 const TEAM = "team-api";
 const T0 = "2026-08-03T00:00:00.000Z";
@@ -24,14 +25,37 @@ beforeAll(async () => {
   process.env.LOOPANY_DATA_DIR = temp; process.env.LOOPANY_LOG_LEVEL = "silent";
   database = await import("../db/index.js"); await database.runMigrations();
   schema = await import("../db/kernel-schema.js"); legacySchema = await import("../db/schema.js");
-  kernel = await import("./applyTransition.js"); store = await import("../db/kernelStore.js"); api = await import("./objectApi.js"); ids = await import("./ids.js"); queue = await import("./runQueue.js");
+  kernel = await import("./applyTransition.js"); store = await import("../db/kernelStore.js"); api = await import("./objectApi.js"); ids = await import("./ids.js"); queue = await import("./runQueue.js"); prodStore = await import("../db/store.js");
 });
 afterAll(() => fs.rmSync(temp, { recursive: true, force: true }));
-beforeEach(async () => { await database.db.delete(schema.events); await database.db.delete(schema.objects); await database.db.delete(legacySchema.runs); });
+beforeEach(async () => {
+  await database.db.delete(schema.events);
+  await database.db.delete(schema.objects);
+  await database.db.delete(legacySchema.runs);
+  await database.db.delete(legacySchema.loops);
+});
 
 async function makeLoop(title = "Housekeeper") {
   const result = await kernel.createObject({ teamId: TEAM, kind: "loop", actor: human.actor, now: T0, title, cron: "0 7 * * *", body: "charter" });
   if (!result.ok) throw new Error(result.message); return result.object;
+}
+
+/** S3 keeps the kernel row as history, while live trigger paths resolve the
+ * same-id production row exclusively. */
+async function makeConvergedLoop(title = "Housekeeper", enabled = true) {
+  const historical = await makeLoop(title);
+  return prodStore.createLoop({
+    id: historical.id,
+    userId: "u-owner",
+    teamId: TEAM,
+    machineId: "m-object-api",
+    name: title,
+    cron: historical.cron ?? "",
+    timezone: historical.timezone,
+    enabled,
+    notify: "auto",
+    taskFileContent: `# ${title}\n\n## Spec\n\n${historical.body ?? ""}`,
+  });
 }
 
 /** An agent context: a device credential PLUS run context, which is what makes a
@@ -211,9 +235,9 @@ describe("the human-only question guard is covered at both altitudes", () => {
 
 describe("verdict joins the queue rather than stacking or refusing", () => {
   it("reports the run already queued for the watcher, and still records the answer", async () => {
-    const loop = await makeLoop();
-    // A clock fire already queued a routine run for this loop.
-    const preexisting = await database.db.transaction(async (tx) => queue.queueKernelRun(tx as never, { loop, now: T0, reason: "clock", scheduledFor: T0 }));
+    const loop = await makeConvergedLoop();
+    // A production run is already pending for this loop.
+    const preexisting = await database.db.transaction(async (tx) => queue.queueKernelRun(tx as never, { loop, now: T0, reason: "manual" }));
     const task = await makeTask({ pendingQuestion: "Post this reply?", watcher: loop.id }, loop.id);
     const result = ok(await api.verdict(task.id, "approved — post it", human, T1));
     expect((result.run as { id: string; alreadyQueued: boolean })).toMatchObject({ id: preexisting.run!.id, alreadyQueued: true });
@@ -633,7 +657,7 @@ describe("governance moves the bound directory under the same approval gate", ()
 
 describe("run-now is the manual fire, and it obeys the queue discipline", () => {
   it("queues one run for an active loop and reports the second as already queued", async () => {
-    const loop = await makeLoop();
+    const loop = await makeConvergedLoop();
     const first = ok(await api.runLoopNow(loop.id, human, T1));
     expect(first).toMatchObject({ queued: true, alreadyQueued: false });
     expect((first.run as { state: string }).state).toBe("queued");
@@ -645,32 +669,29 @@ describe("run-now is the manual fire, and it obeys the queue discipline", () => 
   });
 
   it("is the owner's act — a run proposes it instead", async () => {
-    const loop = await makeLoop();
+    const loop = await makeConvergedLoop();
     expect(code(await api.runLoopNow(loop.id, agentIn(loop.id), T1))).toBe("NOT_HUMAN");
   });
 
   /**
    * PAUSE GOVERNS THE CADENCE, NOT THE BUTTON (captain ruling 2026-08-04).
    *
-   * A paused loop has no `next_fire`, so the clock can never select it — that is
-   * what pause means. A manual fire is an explicit human act rather than the
-   * clock, so it is accepted, and accepting it must not quietly restore the
-   * cadence: the loop is still `paused` with `nextFire` still null when the fire
-   * returns. Firing is one run, then quiet again.
+   * A paused production loop has `enabled=false`, so the clock cannot select it.
+   * A manual fire is an explicit human act rather than the clock, and accepting
+   * it must not quietly restore the cadence. Firing is one run, then quiet again.
    */
   it("fires a PAUSED loop, and firing does not resume it", async () => {
-    const loop = await makeLoop();
-    expect((await kernel.applyTransition({ objectId: loop.id, transition: "pause", actor: human.actor, now: T1.toISOString() })).ok).toBe(true);
-    const before = await store.getObject(undefined, loop.id);
-    expect(before).toMatchObject({ status: "paused", nextFire: null });
+    const loop = await makeConvergedLoop("Housekeeper", false);
+    const before = await prodStore.getLoop(loop.id);
+    expect(before).toMatchObject({ enabled: false, nextRunAt: null });
 
     const fired = ok(await api.runLoopNow(loop.id, human, T1));
     expect(fired).toMatchObject({ queued: true, alreadyQueued: false });
     expect((fired.run as { reason: string }).reason).toBe("manual");
 
     // The cadence stayed off: same status, still disarmed.
-    const after = await store.getObject(undefined, loop.id);
-    expect(after).toMatchObject({ status: "paused", nextFire: null });
+    const after = await prodStore.getLoop(loop.id);
+    expect(after).toMatchObject({ enabled: false, nextRunAt: null });
     // …and no lifecycle event rode along with the fire.
     const history = await store.listObjectEvents(undefined, loop.id);
     expect(history.map((e) => e.kind)).not.toContain("loop-resumed");
@@ -678,18 +699,17 @@ describe("run-now is the manual fire, and it obeys the queue discipline", () => 
   });
 
   it("still obeys the one-queued-run discipline on a paused loop", async () => {
-    const loop = await makeLoop();
-    await kernel.applyTransition({ objectId: loop.id, transition: "pause", actor: human.actor, now: T1.toISOString() });
+    const loop = await makeConvergedLoop("Housekeeper", false);
     ok(await api.runLoopNow(loop.id, human, T1));
     expect(ok(await api.runLoopNow(loop.id, human, T1))).toMatchObject({ queued: false, alreadyQueued: true });
   });
 
-  it("refuses a RETIRED loop — terminal is different in kind from parked", async () => {
+  it("refuses a kernel-only historical loop, so S3 has no kernel-queue producer", async () => {
     const loop = await makeLoop();
     expect((await kernel.applyTransition({ objectId: loop.id, transition: "retire", actor: human.actor, now: T1.toISOString() })).ok).toBe(true);
     const refused = await api.runLoopNow(loop.id, human, T1);
-    expect(code(refused)).toBe("RETIRED");
-    expect(!refused.ok && refused.error.hint).toContain("retirement is terminal");
+    expect(code(refused)).toBe("NOT_FOUND");
+    expect(await database.db.select().from(legacySchema.runs)).toHaveLength(0);
   });
 });
 
@@ -774,14 +794,14 @@ describe("task list", () => {
 
 describe("verdict transaction", () => {
   it("double-submit records one answer and queues exactly one express run", async () => {
-    const loop = await makeLoop();
+    const loop = await makeConvergedLoop();
     const created = await kernel.createObject({ teamId: TEAM, kind: "task", actor: { entrance: "agent", actorId: "run-proposer" }, now: T0, title: "Proposal", pendingQuestion: "Ship it?", watcher: loop.id, createdByLoop: loop.id });
     if (!created.ok) throw new Error(created.message);
     const first = await api.verdict(created.object.id, "yes", human, T1);
     const second = await api.verdict(created.object.id, "yes", human, T1);
     expect(first.ok).toBe(true); expect(!second.ok && second.error.code).toBe("NO_OPEN_QUESTION");
     const runRows = await database.db.select().from(legacySchema.runs);
-    expect(runRows).toHaveLength(1); expect(runRows[0]).toMatchObject({ loopId: loop.id, queueState: "queued", scope: `task:${created.object.id}`, reason: "answered" });
+    expect(runRows).toHaveLength(1); expect(runRows[0]).toMatchObject({ loopId: loop.id, queueState: null, scope: `task:${created.object.id}`, reason: "answered" });
     const answerEvents = (await store.listObjectEvents(undefined, created.object.id)).filter((event) => event.kind === "question-answered");
     expect(answerEvents).toHaveLength(1); expect(answerEvents[0]!.note).toBe("yes");
   });

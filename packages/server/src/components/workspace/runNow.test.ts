@@ -14,10 +14,8 @@ import { LoopsPane } from './LoopsPane'
  * Two things are worth pinning and they are different in kind. The first is the
  * ACTION PATH: the button must reach `POST /api/loops/:id/run-now` and hand the
  * queue's own answer back, including the `alreadyQueued` case the one-queued-run
- * discipline produces. The second is the REFUSAL: a retired loop is refused by
- * the kernel, and the screen's whole contract is that it renders that refusal
- * verbatim — code, sentence and hint — instead of pre-hiding the button and
- * restating the lifecycle rule in client copy that could drift.
+ * discipline produces. Generic server refusals remain rendered verbatim — code,
+ * sentence and hint — instead of being restated in client copy that could drift.
  *
  * The fixture loop is PAUSED on purpose (captain ruling 2026-08-04): pause
  * governs the cadence, so the button fires a parked loop for real and the screen
@@ -33,11 +31,11 @@ import { LoopsPane } from './LoopsPane'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const RETIRED_REFUSAL = {
+const SERVER_REFUSAL = {
   error: {
-    code: 'RETIRED',
-    message: 'loop-7f3a91 is retired, so it has no runs to fire',
-    hint: 'retirement is terminal — create a new loop',
+    code: 'NOT_FOUND',
+    message: 'loop-7f3a91 is no longer in this production team',
+    hint: 'refresh the production loop roster',
   },
 }
 
@@ -132,11 +130,11 @@ describe('the action path', () => {
   })
 
   it('surfaces a refusal as a ViewError carrying the code, sentence and hint', async () => {
-    stubFetch([{ status: 409, body: RETIRED_REFUSAL }, { status: 409, body: RETIRED_REFUSAL }])
+    stubFetch([{ status: 404, body: SERVER_REFUSAL }, { status: 404, body: SERVER_REFUSAL }])
     await expect(postRunNow('loop-7f3a91')).rejects.toMatchObject({
-      code: 'RETIRED',
-      message: RETIRED_REFUSAL.error.message,
-      hint: RETIRED_REFUSAL.error.hint,
+      code: 'NOT_FOUND',
+      message: SERVER_REFUSAL.error.message,
+      hint: SERVER_REFUSAL.error.hint,
     })
     await expect(postRunNow('loop-7f3a91')).rejects.toBeInstanceOf(ViewError)
   })
@@ -189,24 +187,24 @@ describe('a paused loop fires directly — pause governs the cadence, not the bu
   })
 })
 
-describe('a retired loop is refused by the server, and the screen teaches', () => {
+describe('a server refusal stays visible and the action remains retryable', () => {
   it('renders the refusal verbatim — code, sentence and hint', async () => {
-    stubFetch([{ status: 409, body: RETIRED_REFUSAL }])
+    stubFetch([{ status: 404, body: SERVER_REFUSAL }])
     const el = await mountDrawer()
     await act(async () => runNowButton(el)!.click())
 
     const refusal = el.querySelector('.ws-refusal')
     expect(refusal).toBeTruthy()
-    expect(refusal!.textContent).toContain('RETIRED')
-    expect(refusal!.textContent).toContain(RETIRED_REFUSAL.error.message)
-    expect(refusal!.textContent).toContain(RETIRED_REFUSAL.error.hint)
+    expect(refusal!.textContent).toContain('NOT_FOUND')
+    expect(refusal!.textContent).toContain(SERVER_REFUSAL.error.message)
+    expect(refusal!.textContent).toContain(SERVER_REFUSAL.error.hint)
     // The refusal replaces nothing: the act stays available.
     expect(runNowButton(el)!.disabled).toBe(false)
   })
 
   it('clears a stale refusal when the loop is fired again and accepted', async () => {
     stubFetch([
-      { status: 409, body: RETIRED_REFUSAL },
+      { status: 404, body: SERVER_REFUSAL },
       { status: 200, body: { queued: true, alreadyQueued: false, run: { id: 'run-9d40', state: 'queued', reason: 'manual' } } },
     ])
     const el = await mountDrawer()
@@ -219,7 +217,7 @@ describe('a retired loop is refused by the server, and the screen teaches', () =
   })
 })
 
-describe('the lifecycle rule lives on the server, not in this client', () => {
+describe('the production lifecycle rule is not duplicated in this client', () => {
   const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
   /** Bounded to each function: the file holds several, and a slice running to
    *  EOF would sweep in whatever was appended after it. */
@@ -234,16 +232,10 @@ describe('the lifecycle rule lives on the server, not in this client', () => {
     expect(fn(read('./LoopsPane.tsx'), 'RunNow')).not.toMatch(/status\s*[!=]==?\s*['"](active|paused|retired)['"]/)
   })
 
-  /**
-   * The same discipline on the lifecycle verbs, and for the same reason: a
-   * client that hid `resume` on an active loop would hold a second copy of the
-   * lifecycle rule, and would replace the kernel's RETIRED teaching with
-   * silence. Repeating a verb that already landed is a success that changed
-   * nothing, so offering all three always costs nothing either.
-   */
-  it('never hides or disables a lifecycle verb on a status the client read', () => {
-    const lifecycle = fn(read('./LoopsPane.tsx'), 'Lifecycle')
-    expect(lifecycle).toMatch(/retire/)
-    expect(lifecycle).not.toMatch(/status\s*[!=]==?\s*['"](active|paused|retired)['"]/)
+  it('does not expose the retired kernel lifecycle controls after S3', () => {
+    const pane = read('./LoopsPane.tsx')
+    expect(pane).not.toMatch(/function Lifecycle\(/)
+    expect(pane).not.toContain('postLifecycle')
+    expect(pane).toContain('shipping loop surface')
   })
 })

@@ -40,11 +40,6 @@ export LOOPANY_DB=pglite                          # embedded tier; no DATABASE_U
 export LOOPANY_RW_SCRATCH="$LOOPANY_RW_BASE/scratch"
 mkdir -p "$LOOPANY_DATA_DIR" "$LOOPANY_HOME" "$LOOPANY_RW_SCRATCH"
 
-# --- the rewrite cutover flag, on BOTH sides ---
-# Server: arms the kernel clock + run queue. Daemon: claims via /api/agent/runs/claim
-# instead of the legacy /api/machine/poll. They must agree.
-export LOOPANY_RUNS_V2=1
-
 # --- addresses ---
 export LOOPANY_PORT="${LOOPANY_PORT:-3137}"       # NOT 3000: that is the demo stack
 export LOOPANY_SERVER_URL="http://127.0.0.1:$LOOPANY_PORT"

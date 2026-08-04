@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "claimable_at" text;

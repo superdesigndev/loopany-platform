@@ -14,12 +14,14 @@ let store: typeof import("../db/kernelStore.js");
 let legacyStore: typeof import("../db/store.js");
 let tokens: typeof import("../gateway/tokens.js");
 let ids: typeof import("./ids.js");
+let gateway: typeof import("../gateway/index.js");
 
 const TEAM = "team-runs";
 const T0 = "2026-08-03T00:00:00.000Z";
 const DUE = "2026-08-03T07:00:00.000Z";
 const NOW = new Date("2026-08-03T10:00:00.000Z");
 const HUMAN = { entrance: "human", actorId: "u-owner" } as const;
+const PROD_TOKEN = "dk_" + "d".repeat(48);
 
 beforeAll(async () => {
   temp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-runs-v2-"));
@@ -36,6 +38,7 @@ beforeAll(async () => {
   legacyStore = await import("../db/store.js");
   tokens = await import("../gateway/tokens.js");
   ids = await import("./ids.js");
+  gateway = await import("../gateway/index.js");
 });
 
 afterAll(() => fs.rmSync(temp, { recursive: true, force: true }));
@@ -44,6 +47,7 @@ beforeEach(async () => {
   await database.db.delete(schema.events);
   await database.db.delete(schema.objects);
   await database.db.delete(legacySchema.runs);
+  await database.db.delete(legacySchema.loops);
   await database.db.delete(legacySchema.machines);
 });
 
@@ -60,7 +64,35 @@ async function loop(over: Record<string, unknown> = {}) {
     ...over,
   });
   if (!result.ok) throw new Error(result.message);
+  const machineId = tokens.machineIdFromToken(PROD_TOKEN);
+  if (!(await legacyStore.getMachine(machineId))) await machine(machineId, PROD_TOKEN);
+  await legacyStore.createLoop({
+    id: result.object.id,
+    userId: "u-owner",
+    teamId: TEAM,
+    machineId,
+    name: result.object.title ?? "Untitled loop",
+    cron: result.object.cron ?? "",
+    timezone: result.object.timezone,
+    enabled: result.object.status === "active",
+    notify: "auto",
+    workdir: result.object.workdir,
+    taskFile: result.object.workdir ? path.join(result.object.workdir, "loopany-task.md") : null,
+    taskFileContent: `# ${result.object.title ?? "Loop"}\n\n## Spec\n\n${result.object.body ?? ""}`,
+  });
   return result.object;
+}
+
+async function productionLoop(id: string) {
+  const value = await legacyStore.getLoop(id);
+  if (!value) throw new Error(`missing production twin ${id}`);
+  return value;
+}
+
+function productionGateway() {
+  return new gateway.MachineGateway({
+    scheduleLoop() {}, removeLoop() {}, rearmLoop() {}, async tick() {}, async start() {},
+  } as never);
 }
 
 async function machine(id: string, token: string) {
@@ -116,7 +148,7 @@ describe("R-due", () => {
     const runs = await runsFor(l.id);
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
-      loopId: l.id, queueState: "queued", reason: "due", scope: `task:${task.id}`,
+      loopId: l.id, queueState: null, phase: "pending", reason: "due", scope: `task:${task.id}`,
       // A date arriving is the CLOCK's entrance, not a person's: nobody entered
       // anything at the moment it fired.
       entrance: "clock", scheduledFor: DUE,
@@ -192,6 +224,7 @@ describe("R-due", () => {
     await dueTask(retired.id, { title: "stranded" });
     for (const [id, transition] of [[paused.id, "pause"], [retired.id, "retire"]] as const) {
       expect((await kernel.applyTransition({ objectId: id, transition, actor: HUMAN, now: T0 })).ok).toBe(true);
+      await legacyStore.updateLoop(id, { enabled: false });
     }
 
     expect(await queue.tickDueTasks(NOW)).toMatchObject({ scanned: 0, queued: 0 });
@@ -199,6 +232,7 @@ describe("R-due", () => {
     expect(await runsFor(retired.id)).toHaveLength(0);
 
     expect((await kernel.applyTransition({ objectId: paused.id, transition: "resume", actor: HUMAN, now: NOW.toISOString() })).ok).toBe(true);
+    await legacyStore.updateLoop(paused.id, { enabled: true });
     expect(await queue.tickDueTasks(NOW)).toMatchObject({ queued: 1 });
     expect(await runsFor(paused.id)).toHaveLength(1);
     // The retired one stays stranded — the accepted consequence of ruling 3.
@@ -209,7 +243,7 @@ describe("R-due", () => {
     const l = await loop({ nextFire: null });
     await dueTask(l.id);
     // A cadence fire got there first; the loop is busy.
-    await queue.queueKernelRun(database.db as never, { loop: l, now: T0, reason: "manual" });
+    await queue.queueKernelRun(database.db as never, { loop: await productionLoop(l.id), now: T0, reason: "manual" });
 
     expect(await queue.tickDueTasks(NOW)).toMatchObject({ scanned: 1, queued: 0, skipped: 1 });
     expect(await runsFor(l.id)).toHaveLength(1);
@@ -223,17 +257,16 @@ describe("R-due", () => {
   it("hands the claiming daemon the task that woke it, and says WHY", async () => {
     const l = await loop({ nextFire: null });
     const task = await dueTask(l.id);
-    const m = await machine("m-due", "dk_machine_due");
     await queue.tickDueTasks(NOW);
 
-    const response = await queue.claimRun(m, { agent: "test-daemon" }, NOW);
+    const response = await productionGateway().poll(PROD_TOKEN, { host: "test-daemon" });
     expect(response.status).toBe(200);
     const body = response.body as any;
-    expect(body.run).toMatchObject({ loopId: l.id, reason: "due", scope: `task:${task.id}` });
-    expect(body.task.id).toBe(task.id);
-    // An answer and a due date ask for different work, so the note distinguishes.
-    expect(body.scopeNote).toContain("follow-up date");
-    expect(body.scopeNote).toContain(task.id);
+    expect(body.deliveries).toHaveLength(1);
+    expect(body.deliveries[0]).toMatchObject({ loop: { id: l.id }, runId: expect.any(String) });
+    // The production prompt preserves the trigger kind and exact task identity.
+    expect(body.deliveries[0].task).toContain("Reason: due");
+    expect(body.deliveries[0].task).toContain(task.id);
   });
 
   it("isolates one task's failure — the others still fire, and it stays due", async () => {

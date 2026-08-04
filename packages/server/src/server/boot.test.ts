@@ -28,8 +28,8 @@ test("ensureServer migrates + boots the scheduler, idempotently", async () => {
   const b = await boot.ensureServer();
   expect(a).toBe(b); // single instance
   expect(a.scheduler).toBeDefined();
-  // Rewrite scheduler is an explicit cutover, never a migration/restart side effect.
-  expect(a.runQueueScheduler).toBeUndefined();
+  // Follow-up scanning survives the RUNS_V2 cutover and is always armed.
+  expect(a.dueTaskScheduler).toBeDefined();
   // Migrations ran: the tables exist and are queryable.
   expect(await store.listLoops()).toEqual([]);
   expect(await store.listMachines()).toEqual([]);

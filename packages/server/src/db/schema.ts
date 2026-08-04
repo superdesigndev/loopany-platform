@@ -270,6 +270,13 @@ export const runs = pgTable(
      *  by older daemons lack it). TS-only shape; no migration. */
     progress: jsonb("progress").$type<{ step: number; label: string; at?: string }>(),
 
+    /** First instant this pending run was actually eligible for the production
+     * poll. Trigger rows may wait behind a running sibling for much longer than
+     * RUN_TIMEOUT_MS; aging from creation would let the sweep reclaim one in
+     * the few-second sibling-finished → next-poll window. Null means it has not
+     * had a claimable moment yet. */
+    claimableAt: text("claimable_at"),
+
     // ---- REWRITE QUEUE COLUMNS (additive; spec §5.3 / design §5) ----
     //
     // The rewrite's run lifecycle is `queued → claimed → success | failure`, and

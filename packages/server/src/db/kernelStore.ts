@@ -221,6 +221,7 @@ export async function queueRun(
           artifacts: null,
           transcript: null,
           progress: null,
+          claimableAt: row.claimableAt,
           claimedBy: null,
           claimedAt: null,
           leaseExpiresAt: null,

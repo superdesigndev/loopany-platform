@@ -19,6 +19,7 @@ import {
 } from "./runQueue.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 import { nextOccurrenceAfter } from "./schedule.js";
+import { countOpenWatchedTasks, watchedTasksWarning } from "./watchedTasks.js";
 import type { ApiContext } from "./apiAuth.js";
 import { LOOP_STATUSES, isArtifactKind, type ArtifactKind, type EventDiff, type ObjectKind } from "./types.js";
 
@@ -398,7 +399,7 @@ export async function loopLifecycle(id: string, verb: LoopLifecycleVerb, body: u
     }
     // Counted BEFORE the transition, because retiring changes nothing about the
     // tasks — that is precisely what the warning is for.
-    const stranded = verb === "retire" ? await countOpenWatchedBy(tx, context.teamId, id) : 0;
+    const stranded = verb === "retire" ? await countOpenWatchedTasks(context.teamId, id, tx) : 0;
     const result = await applyTransitionIn(tx, { objectId: id, transition: verb, actor: context.actor, now: now.toISOString(), note });
     if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
     return { ok: true, value: {
@@ -408,22 +409,12 @@ export async function loopLifecycle(id: string, verb: LoopLifecycleVerb, body: u
   });
 }
 
-/** Open tasks this loop is on the hook for — the retire warning's subject. */
-async function countOpenWatchedBy(tx: store.KernelExec, teamId: string, loopId: string): Promise<number> {
-  const rows = await tx.select({ n: count() }).from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "task"), eq(objects.status, "open"), eq(objects.watcher, loopId)));
-  return Number(rows[0]?.n ?? 0);
-}
-
-/** The warning shape both the CLI and the loop drawer render. A `warning`, not a
- *  `notice`: the retirement DID happen and the consequence is permanent. */
+/** The retire warning is ONE case of the shared watched-task consequence
+ *  (`kernel/watchedTasks.ts`); convergence S3 gave production pause/finish/delete
+ *  the other three, and a second copy of the count or the voice here would be the
+ *  drift that module exists to prevent. */
 export function retirementWarning(loopId: string, openTasks: number) {
-  const plural = openTasks === 1 ? "" : "s";
-  return {
-    code: "TASKS_STILL_WATCHED",
-    openTasks,
-    message: `${loopId} was retired while still watching ${openTasks} open task${plural}; retirement is terminal, so nothing will wake ${openTasks === 1 ? "it" : "them"} again`,
-    hint: `hand each one to a live loop with \`loopany task update <task-id> --watcher <loop-id>\`, or close it — \`loopany task list --watcher ${loopId}\` lists them`,
-  };
+  return watchedTasksWarning(loopId, openTasks, "retire");
 }
 
 /**
@@ -440,16 +431,13 @@ export function retirementWarning(loopId: string, openTasks: number) {
  * is immutable, so a later manual fire queues behind it and the claim guard
  * prevents overlap.
  *
- * **A PAUSED loop accepts a manual fire** (captain ruling 2026-08-04). Pause
- * governs the CADENCE — it clears `next_fire` so the clock can never select the
- * loop — and a manual fire is an explicit human act, not the clock. Refusing it
+ * **A PAUSED production loop accepts a manual fire** (captain ruling
+ * 2026-08-04). Pause governs the CADENCE (`enabled=false`), and a manual fire
+ * is an explicit human act, not the clock. Refusing it
  * conflated the two and made the only way to run a parked loop once a
  * resume/fire/pause dance that leaves a real window in which the cadence is live.
- * Firing does NOT resume: `next_fire` stays cleared, the status stays `paused`,
+ * Firing does NOT resume: `enabled` stays false, the status stays `paused`,
  * and the loop is quiet again the moment the run finishes.
- *
- * RETIRED still refuses. It is terminal and different in kind — the charter is
- * frozen and the loop has been ended, not parked.
  */
 export async function runLoopNow(id: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   if (context.mode !== "human") {
@@ -459,10 +447,7 @@ export async function runLoopNow(id: string, context: ApiContext, now = new Date
     const tx = rawTx as unknown as store.KernelExec;
     const loop = await resolveQueueLoopIn(tx, context.teamId, id);
     if (!loop) return { ok: false as const, error: refusal("NOT_FOUND", "object was not found") };
-    if ("kind" in loop && loop.status === "retired") {
-      return { ok: false as const, error: refusal("RETIRED", `${id} is retired, so it has no runs to fire`, [{ path: "status", message: "a retired loop is ended, not parked", got: loop.status, expected: "active or paused" }], "retirement is terminal — create a new loop") };
-    }
-    if (!("kind" in loop) && loop.nextRunAt) {
+    if (loop.nextRunAt) {
       await tx.update(productionLoops).set({ nextRunAt: null }).where(eq(productionLoops.id, loop.id));
     }
     const queued = await queueKernelRun(tx, { loop, now: now.toISOString(), reason: "manual" });
@@ -659,9 +644,6 @@ export async function leaveDirective(id: string, directive: unknown, context: Ap
     return { ok: true as const, value: {
       task: objectShape(task!), event: event.id, directive: text,
       run: queued ? { id: queued.id, state: runQueueState(queued), loopId: queued.loopId, scope: queued.scope, reason: queued.reason, entrance: queued.entrance, alreadyQueued } : null,
-      // Honest about the one case where a directive lands but nothing will act
-      // on it. Retirement is terminal, so no machine ever claims that run.
-      ...((watcherLoop && "kind" in watcherLoop && watcherLoop.status === "retired") ? { notice: { code: "WATCHER_RETIRED", message: `${watcherLoop.id} is retired, so nothing will wake for this directive; it is on the record`, hint: `hand the task to a live loop with \`loopany task update ${id} --watcher <loop-id>\`` } } : {}),
     } };
   });
   // Wake a daemon parked on the claim long-poll rather than making the person

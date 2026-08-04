@@ -5,8 +5,8 @@
  *   loopany                    → the content-first HOME (P8): a live machine
  *                                dashboard on the device credential (in a run, the
  *                                run's own-loop context). NO LONGER the poll loop.
- *                                On a runs-v2 stack it is the KERNEL home instead
- *                                (roster + inbox floor + recent runs).
+ *                                The local loopany-dev wrapper selects the converged
+ *                                workspace home (prod roster + inbox + recent runs).
  *   loopany up [--foreground]  → setup mode: ensure a daemon is running for this
  *                                machine (idempotent; installs the session hook + PATH
  *                                shim). `--foreground` runs the poll loop attached in

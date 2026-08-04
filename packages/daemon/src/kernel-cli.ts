@@ -21,7 +21,7 @@
 import fs from "node:fs";
 
 import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
-import { flagNames, verbHelp } from "./kernel-help.js";
+import { flagNames, loopSurfacePointer, verbHelp } from "./kernel-help.js";
 import {
   ABSENT, bodyValue, cell, changedBlock, countLine, detailBlock, dueAnnotation,
   errorEnvelope, eventLine, exitForStatus, helpBlock, inlineArray, label,
@@ -64,6 +64,15 @@ export async function runKernelCli(argv: string[], deps: KernelCliDeps = {}): Pr
   // §5.7: --help is answered locally, before any side effect. This is the
   // no-round-trip guarantee that makes `--help` safe on a verb that writes.
   if (argv.includes("--help") || argv.includes("-h")) { out(verbHelp(command)); return 0; }
+
+  // Convergence S3 leaves kernel loop objects in place for history only. Never
+  // let an old `loop *` command mutate that twin or produce a kernel-queue row;
+  // teach the production owner surface locally, before auth/network/I/O.
+  if (command.startsWith("loop ")) {
+    const positionalId = argv[2] && !argv[2]!.startsWith("--") ? argv[2] : undefined;
+    out(loopSurfacePointer(command, positionalId));
+    return 2;
+  }
 
   const positional = argv.slice(command.includes(" ") ? 2 : 1).filter((a) => !a.startsWith("--"));
   const flags = parseFlags(argv);

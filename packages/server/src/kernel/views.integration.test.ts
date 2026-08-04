@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 /**
@@ -87,6 +88,22 @@ async function insertRun(over: Record<string, unknown>) {
 async function seed() {
   housekeeper = (await make({ kind: "loop", title: "Housekeeper", cron: "0 7 * * *", body: "You are the Housekeeper.\n" })).id;
   steward = (await make({ kind: "loop", title: "FollowUp", cron: "30 8 * * *", body: "You sweep the pool.\n" })).id;
+  // S3 keeps the kernel loop objects for history, but every workspace read is
+  // authoritative on the production twin minted by converge-loops.
+  await database.db.insert(legacySchema.loops).values([
+    {
+      id: housekeeper, userId: "u-owner", teamId: TEAM, machineId: "m-1", name: "Housekeeper",
+      cron: "0 7 * * *", timezone: "UTC", enabled: true, notify: "auto",
+      taskFile: "/w/housekeeper/loopany-task.md", taskFileContent: "# Housekeeper\n\n## Spec\n\nYou are the Housekeeper.\n",
+      createdAt: ago(200), updatedAt: ago(10),
+    },
+    {
+      id: steward, userId: "u-owner", teamId: TEAM, machineId: "m-1", name: "FollowUp",
+      cron: "30 8 * * *", timezone: "UTC", enabled: true, notify: "auto",
+      taskFile: "/w/follow-up/loopany-task.md", taskFileContent: "# FollowUp\n\n## Spec\n\nYou sweep the pool.\n",
+      createdAt: ago(200), updatedAt: ago(10),
+    },
+  ] as never);
 
   // Life 1 — fully automatic: watched, due later, never asks. Not in the inbox.
   await make({ kind: "task", title: "Observe the impact of PR #201", createdByLoop: housekeeper, watcher: steward, followUpAt: ahead(24) });
@@ -184,8 +201,8 @@ describe("GET /api/views/inbox — the §6 union, exactly", () => {
     expect(typeof value.cursorSeq).toBe("number");
     const item = value.items.find((i) => (i.task as { title: string }).title === "Watch the error rate")!;
     expect(Object.keys(item).sort()).toEqual(["askedAt", "askedByRun", "creator", "execution", "reasons", "recentEvents", "task", "watcherLoop"]);
-    expect(item.creator).toEqual({ id: housekeeper, title: "Housekeeper", source: "kernel" });
-    expect(item.watcherLoop).toEqual({ id: housekeeper, title: "Housekeeper", source: "kernel" });
+    expect(item.creator).toEqual({ id: housekeeper, title: "Housekeeper", source: "prod" });
+    expect(item.watcherLoop).toEqual({ id: housekeeper, title: "Housekeeper", source: "prod" });
     // The question was attached by a run, so the screen can name the run.
     expect(item.askedByRun).toBe("run-triage");
     expect((item.recentEvents as unknown[]).length).toBeLessThanOrEqual(5);
@@ -212,7 +229,7 @@ describe("GET /api/views/loop/:id", () => {
     expect(Object.keys(value).sort()).toEqual(["charterHistory", "cursorSeq", "events", "health", "loop", "mirrors", "openTasks", "recentRuns"]);
     const loop = value.loop as Record<string, unknown>;
     expect(loop.cronText).toBe("daily 07:00");
-    expect(loop.body).toBe("You are the Housekeeper.\n");
+    expect(loop.body).toBe("# Housekeeper\n\n## Spec\n\nYou are the Housekeeper.\n");
     expect(value.health).toMatchObject({ lastOutcome: "success", consecutiveFailures: 0, runs7d: { success: 1, failure: 1 } });
     const open = value.openTasks as { watching: { title: string }[]; created: { title: string }[]; questions: { title: string }[] };
     // Everything it filed and did not hand on — the default put them here.
@@ -313,8 +330,8 @@ describe("GET /api/views/tasks — the board, and /task/:id", () => {
   it("resolves creator and watcher titles so a card never shows a bare id", async () => {
     const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
     const row = value.columns.flatMap((c) => c.tasks).find((t) => t.title === "Observe the impact of PR #201")!;
-    expect(row.creator).toEqual({ id: housekeeper, title: "Housekeeper", source: "kernel" });
-    expect(row.watcherLoop).toEqual({ id: steward, title: "FollowUp", source: "kernel" });
+    expect(row.creator).toEqual({ id: housekeeper, title: "Housekeeper", source: "prod" });
+    expect(row.watcherLoop).toEqual({ id: steward, title: "FollowUp", source: "prod" });
     expect(row.due).toBe(false);
     expect(row.column).toBe("watched");
   });
@@ -394,8 +411,8 @@ describe("GET /api/views/system-graph — a projection, never configuration", ()
     if (!refused.ok) expect(refused.error.code).toBe("UNKNOWN_FILTER");
   });
 
-  it("drops a retired loop's node — and its shape stays stable at zero work", async () => {
-    await kernel.applyTransition({ objectId: steward, transition: "retire", actor: human.actor, now: ago(1) } as never);
+  it("drops a completed production loop's node — and its shape stays stable at zero work", async () => {
+    await database.db.update(legacySchema.loops).set({ goal: "done", completedAt: ago(1), enabled: false }).where(eq(legacySchema.loops.id, steward));
     const value = ok(await views.systemGraphView(human, new URLSearchParams(), NOW)) as { nodes: { id: string }[]; edges: { to: string }[] };
     expect(value.nodes.map((n) => n.id)).not.toContain(steward);
     expect(value.edges.every((e) => e.to !== steward)).toBe(true);
@@ -510,10 +527,10 @@ describe("convergence S1 — a watcher that names a production loop", () => {
     expect(withRun.health.lastOutcome).toBe("success");
   });
 
-  it("keeps a kernel loop id winning, and never crosses a team", async () => {
-    await insertProdLoop({ id: housekeeper, name: "A prod twin of the kernel id" });
+  it("keeps the production twin authoritative, and never crosses a team", async () => {
+    await database.db.update(legacySchema.loops).set({ name: "A prod twin of the kernel id" }).where(eq(legacySchema.loops.id, housekeeper));
     const value = ok(await views.loopView(housekeeper, human, NOW)) as { loop: { title: string; source: string } };
-    expect(value.loop).toMatchObject({ title: "Housekeeper", source: "kernel" });
+    expect(value.loop).toMatchObject({ title: "A prod twin of the kernel id", source: "prod" });
     await database.db.delete(legacySchema.loops);
     await insertProdLoop({ teamId: OTHER_TEAM });
     const foreign = await views.loopView(PROD_LOOP, human, NOW);

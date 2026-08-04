@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
-import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../types'
+import type { ChannelSummary, CodingAgent, JobDetail, RunSummary, WatchedTasksWarning } from '../types'
 import { buildEditPrompt, loopDir } from '../lib/editPrompt'
 import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, money, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
@@ -54,6 +54,10 @@ export function LoopDetailView({ id }: { id: string }) {
   const [channels, setChannels] = useState<ChannelSummary[]>([]) // team push channels for the inline picker
   const [err, setErr] = useState<string | null>(null) // fatal load error - replaces the whole view
   const [actionErr, setActionErr] = useState<string | null>(null) // inline action error - never nukes the view
+  // A CONSEQUENCE of a write that SUCCEEDED (open tasks still watching a paused
+  // loop). Deliberately not an error and never a blocker — it outlives the flash
+  // because the repair (transfer or close) happens elsewhere. See design §5.
+  const [actionWarning, setActionWarning] = useState<WatchedTasksWarning | null>(null)
   const [editing, setEditing] = useState(false) // manual field form (LoopForm) - the demoted fallback
   const [editVia, setEditVia] = useState(false) // primary: the inline hand-to-your-coding-agent composer
   const [editInstruction, setEditInstruction] = useState('')
@@ -174,8 +178,10 @@ export function LoopDetailView({ id }: { id: string }) {
   async function onToggle(enabled: boolean) {
     setPending('toggle')
     try {
-      await patchJob({ data: { id, patch: { enabled } } })
+      const r = await patchJob({ data: { id, patch: { enabled } } })
       await refreshAll()
+      // Resuming clears the pause consequence; pausing may report a new one.
+      setActionWarning(r.warning ?? null)
       setFlash({ label: enabled ? 'Enabled' : 'Paused', undo: () => void onToggle(!enabled) })
     } finally {
       setPending(null)
@@ -309,7 +315,19 @@ export function LoopDetailView({ id }: { id: string }) {
       cta: 'Evolve',
       danger: false,
     },
-    delete: { q: 'Delete this loop?', note: 'Removes the loop and its schedule. This cannot be undone.', cta: 'Delete', danger: true },
+    // The delete confirm NAMES the watched-task count it can see, because that
+    // consequence has to be visible BEFORE the choice, not after (design §5).
+    // It warns and never blocks: the tasks are left exactly as they are, each
+    // keeping a watcher id that now points at nothing until someone transfers it.
+    delete: {
+      q: 'Delete this loop?',
+      note:
+        detail.watchedTasks > 0
+          ? `Removes the loop and its schedule. This cannot be undone. ${detail.watchedTasks} open ${detail.watchedTasks === 1 ? 'task' : 'tasks'} still name it as watcher; they are kept, but nothing will wake them until you hand each to another loop.`
+          : 'Removes the loop and its schedule. This cannot be undone.',
+      cta: 'Delete',
+      danger: true,
+    },
   } as const
 
   const flashLine = flash && (
@@ -533,7 +551,20 @@ export function LoopDetailView({ id }: { id: string }) {
     </>
   )
 
-  const actionErrEl = actionErr && <ErrorBanner message={actionErr} onDismiss={() => setActionErr(null)} className="mb-2.5" />
+  const actionErrEl = (
+    <>
+      {actionErr && <ErrorBanner message={actionErr} onDismiss={() => setActionErr(null)} className="mb-2.5" />}
+      {actionWarning && (
+        <div className="mb-2.5 rounded-md border border-wire bg-raised px-3.5 py-2.5 text-meta text-secondary">
+          <p className="text-primary">{actionWarning.message}</p>
+          <p className="mt-1">Open the workspace Tasks screen to hand each one to another loop, or close it.</p>
+          <button type="button" className="mt-1.5 cursor-pointer underline underline-offset-2" onClick={() => setActionWarning(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
+    </>
+  )
 
   // A member can open a loop in a team that isn't their active team (the loop page
   // authorizes by membership, not the active-team cookie). We render it in the

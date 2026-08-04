@@ -317,13 +317,15 @@ export class Scheduler {
         return;
       }
 
+      const stamp = new Date().toISOString();
       const run = await store.addRun({
         loopId: loop.id,
         userId: loop.userId,
         machineId: loop.machineId,
         phase: "pending",
         role,
-        ts: new Date().toISOString(),
+        ts: stamp,
+        claimableAt: stamp,
       });
 
       try {

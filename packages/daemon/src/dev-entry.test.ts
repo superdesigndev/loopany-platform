@@ -1,45 +1,40 @@
 /**
- * THE DEV ENTRY SURFACE — the three places a rewrite stack used to be answered in
- * the OLD product's voice:
+ * THE DEV ENTRY SURFACE — the local converged workspace home and help.
  *
  *   1. bare `loopany` routed to the LEGACY home, which queries the legacy tables
  *      and renders an empty machine dashboard beside a live kernel;
  *   2. `loopany --help` never named the kernel verb family at all, so the whole
  *      surface was undiscoverable from the one screen a user looks at;
- *   3. `loopany loops` returned an empty LEGACY roster with no hint that the real
- *      one is `loop list`.
- *
- * Everything here is driven through injected seams — no network, no ~/.loopany, no
- * subprocess — and every legacy assertion is paired with its v2 twin, because the
- * load-bearing property is that the flag being OFF changes nothing.
+ * Everything here is driven through injected seams — no network, no ~/.loopany,
+ * no subprocess. LOOPANY_RUNS_V2 no longer selects runtime behavior in S3.
  */
 import { describe, expect, test } from "vitest";
 
 import { printHelp } from "./help.js";
-import { kernelRosterHint } from "./interactive.js";
 import { renderKernelHome, runKernelHome } from "./kernel-home.js";
 import { classify } from "./route.js";
 
 // ------------------------------------------------------------------ 1. the route
 
-describe("bare `loopany` picks its home from the runs-v2 flag", () => {
-  test("flag OFF → the legacy home, byte-identical to before", () => {
+describe("bare `loopany` picks the local workspace home only from its presentation marker", () => {
+  test("the production command keeps the production home, flag or no flag", () => {
     expect(classify([], {})).toEqual({ kind: "home" });
     expect(classify([], { LOOPANY_RUNS_V2: "0" })).toEqual({ kind: "home" });
+    expect(classify([], { LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "home" });
   });
 
-  test("flag ON → the KERNEL home", () => {
-    expect(classify([], { LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "kernel-home" });
+  test("the loopany-dev presentation marker selects the converged workspace home", () => {
+    expect(classify([], { LOOPANY_DEV_HOME: "1" })).toEqual({ kind: "kernel-home" });
   });
 
-  test("the flag never hijacks a verb — only the bare command changed meaning", () => {
-    expect(classify(["loops"], { LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "interactive", argv: ["loops"] });
-    expect(classify(["loop", "list"], { LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "kernel", argv: ["loop", "list"] });
-    expect(classify(["--help"], { LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "help" });
+  test("the marker never hijacks a verb — only the bare command changes presentation", () => {
+    expect(classify(["loops"], { LOOPANY_DEV_HOME: "1" })).toEqual({ kind: "interactive", argv: ["loops"] });
+    expect(classify(["loop", "list"], { LOOPANY_DEV_HOME: "1" })).toEqual({ kind: "kernel", argv: ["loop", "list"] });
+    expect(classify(["--help"], { LOOPANY_DEV_HOME: "1" })).toEqual({ kind: "help" });
   });
 
-  test("in a RUN the callback still wins, flag or no flag", () => {
-    expect(classify([], { LOOPANY_RUNS_V2: "1", LOOPANY_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: ["home"] });
+  test("in a RUN the callback still wins", () => {
+    expect(classify([], { LOOPANY_DEV_HOME: "1", LOOPANY_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: ["home"] });
   });
 });
 
@@ -68,7 +63,7 @@ describe("the kernel home render", () => {
       inbox: inboxOk({ question: 2, total: 2 }),
     });
     expect(text).toContain("bin: /usr/local/bin/loopany");
-    expect(text).toContain("stack: runs-v2 · http://127.0.0.1:3155");
+    expect(text).toContain("stack: prod-poll · http://127.0.0.1:3155");
     expect(text).toContain("loops[3]{id,title,status,next_fire}:");
     expect(text).toContain('loop-4c1d77,Housekeeper,active,"2026-08-05T07:00:00+08:00"');
     expect(text).toContain("inbox: 2 waiting — 2 questions");
@@ -84,11 +79,11 @@ describe("the kernel home render", () => {
     expect(text).not.toContain(String.fromCharCode(0));
   });
 
-  test("an empty stack teaches how to make the first loop, and names the workdir rule", () => {
+  test("an empty stack teaches the production creation flow and task-file rule", () => {
     const text = renderKernelHome({ bin: null, server: "http://127.0.0.1:3155", loops: { loops: [], recentRuns: [] }, inbox: inboxOk({ total: 0 }) });
     expect(text).toContain("loops: []");
-    expect(text).toContain("loopany loop create --file");
-    expect(text).toContain("ABSOLUTE `workdir:`");
+    expect(text).toContain("loopany new --json");
+    expect(text).toContain("task file's `## Spec`");
   });
 
   test("a failed inbox read is SAID, never rendered as a reassuring zero", () => {
@@ -145,7 +140,7 @@ describe("runKernelHome — the reads and the degraded paths", () => {
     const code = await runKernelHome({ ...h.deps, server: "", env: {} });
     expect(code).toBe(0);
     expect(h.seen).toHaveLength(0);
-    expect(h.out()).toContain("stack: runs-v2 · not connected");
+    expect(h.out()).toContain("stack: prod-poll · not connected");
     expect(h.out()).toContain("LOOPANY_SERVER_URL");
   });
 
@@ -172,21 +167,20 @@ describe("runKernelHome — the reads and the degraded paths", () => {
 
 // ------------------------------------------------------------------- 2. the help
 
-describe("`loopany --help` names the kernel verb family", () => {
+describe("`loopany --help` names the converged workspace family", () => {
   const screen = () => {
     let out = "";
     printHelp((s) => void (out += s), "9.9.9");
     return out;
   };
 
-  test("carries a delimited rewrite section listing every kernel verb family", () => {
+  test("carries a delimited workspace section and production loop pointers", () => {
     const out = screen();
-    expect(out).toContain("Rewrite (kernel) verbs");
+    expect(out).toContain("Converged workspace verbs");
     for (const verb of [
-      "loop create", "loop list", "loop show", "loop evolve", "loop update",
-      "loop pause|resume", "loop run-now", "loop retire",
+      "`loops` / `show` / `new` / `edit`",
       "task list", "task show", "task create", "task update", "task close",
-      "doc show|create|update", "inbox", "answer <task-id>",
+      "doc show|create|update", "mirror attach|detach", "inbox", "answer <task-id>",
     ]) {
       expect(out, `the help screen must name \`${verb}\``).toContain(verb);
     }
@@ -196,10 +190,10 @@ describe("`loopany --help` names the kernel verb family", () => {
     expect(screen()).toContain("loopany <verb> --help");
   });
 
-  test("states the run-now/paused ruling, which is the one counter-intuitive bit", () => {
+  test("states that retired kernel loop commands are teaching-only", () => {
     const out = screen();
-    expect(out).toContain("Works on a PAUSED loop and does");
-    expect(out).toContain("NOT resume it");
+    expect(out).toContain("Retired `loop *` kernel commands");
+    expect(out).toContain("write nothing");
   });
 
   test("still carries the whole legacy surface (this is an addition, not a replacement)", () => {
@@ -210,23 +204,20 @@ describe("`loopany --help` names the kernel verb family", () => {
   });
 });
 
-// ------------------------------------------------- 2. the empty-legacy-roster hint
-
-describe("an empty LEGACY roster on a v2 stack points at the kernel one", () => {
-  test("flag ON + empty list → one teaching line", () => {
-    expect(kernelRosterHint({ loops: [] }, { LOOPANY_RUNS_V2: "1" })).toContain("loopany loop list");
+describe("the retired runtime flag cannot redirect production commands", () => {
+  test("flag one leaves bare loopany on the production home", () => {
+    expect(classify([], { LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "home" });
   });
 
-  test("flag OFF → silence, whatever the list holds (legacy output is byte-identical)", () => {
-    expect(kernelRosterHint({ loops: [] }, {})).toBe("");
-    expect(kernelRosterHint({ loops: [] }, { LOOPANY_RUNS_V2: "0" })).toBe("");
+  test("flag zero leaves bare loopany on the production home", () => {
+    expect(classify([], { LOOPANY_RUNS_V2: "0" })).toEqual({ kind: "home" });
   });
 
-  test("a NON-empty legacy roster is real history — never point away from it", () => {
-    expect(kernelRosterHint({ loops: [{ id: "l1" }] }, { LOOPANY_RUNS_V2: "1" })).toBe("");
+  test("the loopany-dev marker is presentation-only", () => {
+    expect(classify(["loops"], { LOOPANY_DEV_HOME: "1", LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "interactive", argv: ["loops"] });
   });
 
-  test("no `loops` channel at all (an error body) → no hint invented", () => {
-    expect(kernelRosterHint({ error: "boom" }, { LOOPANY_RUNS_V2: "1" })).toBe("");
+  test("kernel loop commands remain teaching routes under the local marker", () => {
+    expect(classify(["loop", "retire", "loop-x"], { LOOPANY_DEV_HOME: "1" })).toEqual({ kind: "kernel", argv: ["loop", "retire", "loop-x"] });
   });
 });

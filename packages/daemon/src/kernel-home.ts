@@ -1,13 +1,13 @@
 /**
- * Bare `loopany` on a REWRITE (runs-v2) stack — the kernel HOME view.
+ * Bare `loopany-dev` on a converged local stack — the workspace HOME view.
  *
  * The legacy home (`home.ts`) posts `home` to the unified `/api/machine/cli` and
  * prints whatever the SERVER renders from the LEGACY tables (`loops`/`runs` +
  * machine presence). On a kernel stack those tables hold nothing the user is
  * working with, so the same command rendered an empty machine dashboard beside a
- * live kernel — the entry surface wearing the old product's skin. When
- * `LOOPANY_RUNS_V2=1` this module answers instead, and the legacy path is left
- * byte-identical for every stack that has not flipped the flag.
+ * live kernel — the entry surface wearing the old product's skin. The local
+ * `loopany-dev` wrapper selects this presentation after S3. Its loop
+ * roster comes from production rows; tasks/docs/mirrors/events remain kernel.
  *
  * COMPOSED, never a new endpoint: it reads the two kernel surfaces that already
  * exist — `GET /api/views/loops` (the roster, plus the cross-loop `recentRuns`
@@ -42,7 +42,7 @@ const LOOPS_CAP = 12;
 const RUNS_CAP = 5;
 
 const DESCRIPTION =
-  "Loopany rewrite (kernel): event-sourced loops, tasks and docs. This CLI targets your LOCAL dev stack.";
+  "Loopany converged workspace: production loops with event-sourced tasks, docs and mirrors. This CLI targets your LOCAL dev stack.";
 
 export interface KernelHomeDeps {
   fetchImpl?: typeof fetch;
@@ -109,7 +109,7 @@ export function renderKernelHome(input: { bin: string | null; server: string; lo
   const shownLoops = loops.slice(0, LOOPS_CAP);
   const shownRuns = runs.slice(0, RUNS_CAP);
 
-  let text = header(input.bin, `runs-v2 · ${input.server}`);
+  let text = header(input.bin, `prod-poll · ${input.server}`);
   text += typedList("loops", ["id", "title", "status", "next_fire"], shownLoops.map((loop) => [loop.id, loop.title, loop.status, nextFireCell(loop)]));
   text += `inbox: ${inboxLine(input.inbox)}\n`;
   text += typedList("runs", ["at", "loop", "state", "summary"], shownRuns.map((run) => [run.finishedAt ?? run.startedAt, run.loopId, run.state, run.summary]));
@@ -139,15 +139,15 @@ function inboxLine(inbox: Fetched | { error: string }): string {
 function homeHints(loops: Row[], shownLoops: number, runCount: number, shownRuns: number): string[] {
   if (!loops.length) {
     return [
-      "No loops on this stack yet — run `loopany loop create --file <path>`; the file IS the loop, and its body is the charter",
-      "A loop artifact needs `title:` and an ABSOLUTE `workdir:` that exists here; omit `cron:` for an on-demand loop",
-      "Run `loopany --help` for every command, `loopany loop create --help` for this one's grammar",
+      "No production loops on this stack yet — run `loopany new --json '<config>'`, or use the installed loopany skill for guided setup",
+      "A loop's standing brief lives in its task file's `## Spec`; the production daemon watches that directory",
+      "Run `loopany --help` for every command",
     ];
   }
   const hints: string[] = [];
-  if (loops.length > shownLoops) hints.push(`Showing ${shownLoops} of ${loops.length} loops — run \`loopany loop list\` for the whole roster`);
-  if (runCount > shownRuns) hints.push(`Showing the ${shownRuns} newest of ${runCount} recent runs — run \`loopany loop show <loop-id>\` for one loop's history`);
-  hints.push("Run `loopany loop show <loop-id>` to read a charter, `loopany loop list --status active` for the live roster");
+  if (loops.length > shownLoops) hints.push(`Showing ${shownLoops} of ${loops.length} loops — run \`loopany loops\` for the whole roster`);
+  if (runCount > shownRuns) hints.push(`Showing the ${shownRuns} newest of ${runCount} recent runs — run \`loopany show <loop-id>\` for one loop's history`);
+  hints.push("Run `loopany show <loop-id>` for one loop, `loopany loops` for the production roster");
   hints.push('Run `loopany inbox` to see what is waiting on you, `loopany answer <task-id> "…"` to reply');
   hints.push("Run `loopany --help` for every command, `loopany <verb> --help` for one verb's grammar");
   return hints;
@@ -158,7 +158,7 @@ function homeHints(loops: Row[], shownLoops: number, runCount: number, shownRuns
 /** No server on this machine: the definitive local state, no round trip possible. */
 function notConnectedHome(bin: string | null): string {
   return (
-    header(bin, "runs-v2 · not connected") +
+    header(bin, "prod-poll · not connected") +
     "loops: []\n" +
     `inbox: ${ABSENT} (no server)\n` +
     helpBlock([
@@ -176,7 +176,7 @@ function notConnectedHome(bin: string | null): string {
  *  timeout on the SessionStart hot path). Never hangs, never empty, exit 0. */
 function degradedHome(bin: string | null, server: string, reason: string): string {
   return (
-    header(bin, `runs-v2 · ${server} — unreachable right now (${reason})`) +
+    header(bin, `prod-poll · ${server} — unreachable right now (${reason})`) +
     `loops: ${ABSENT} (the stack did not answer)\n` +
     helpBlock([
       // NEVER tell the reader to start a server: the dev stack is MANAGED, and
@@ -194,7 +194,7 @@ function refusedHome(bin: string | null, server: string, read: Fetched): string 
   const message = typeof read.body.message === "string" ? read.body.message : `the kernel refused this read (${read.status})`;
   const hint = typeof read.body.hint === "string" && read.body.hint ? read.body.hint : undefined;
   return (
-    header(bin, `runs-v2 · ${server}`) +
+    header(bin, `prod-poll · ${server}`) +
     `loops: ${ABSENT} (the kernel refused this read)\n` +
     `error: ${cell(message)}\n` +
     `code: ${typeof read.body.code === "string" ? read.body.code : "ERROR"}\n` +

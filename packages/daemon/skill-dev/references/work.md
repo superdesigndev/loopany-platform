@@ -258,9 +258,9 @@ will.
    your cadence instead.
 5. Need a decision? `task update <id> --needs-human "…"` — then **stop on that
    task**. Your job on it is done until a human replies.
-6. Learned something the charter should carry? `loop evolve <your-loop-id>
-   --file charter.md`. Cadence, workdir, lifecycle and creating other loops are
-   NOT yours — propose them.
+6. Learned something the standing brief should carry? Update the task file's
+   `## Spec`. Production loop cadence, workdir, lifecycle and creating other
+   loops remain owner configuration — propose those changes.
 
 **Nothing found is a clean result.** An empty list is an answer; never
 manufacture work to have something to report.

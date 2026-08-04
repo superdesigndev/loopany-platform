@@ -119,8 +119,8 @@ export const TERMINAL_GRACE_MS = envPositive("LOOPANY_TERMINAL_GRACE_MS", 24 * 6
 export const FAILURE_AUTOPAUSE_STREAK = envNonNegative("LOOPANY_FAILURE_AUTOPAUSE_STREAK", 10);
 export const RUN_TICK_MS = envPositive("LOOPANY_RUN_TICK_MS", 5_000);
 
-/** Server-side mirror of the daemon cutover flag. Lazy for tests and boot
- * orchestration: flag off means no arming, tick, claim-state interference. */
+/** Dormant compatibility symbol retained until S5 deletes the old protocol.
+ * S3 runtime code must not branch on it. */
 export function runsV2Enabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.LOOPANY_RUNS_V2 === "1";
 }
@@ -186,8 +186,8 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
   const row = {
     loopId: loop.id,
     // Convergence S2 fixes the old kernel team-as-user shim and makes a prod
-    // watcher's row immediately claimable by the shipping poll path. Kernel
-    // watchers stay on their queue lifecycle until S3.
+    // watcher's row immediately claimable by the shipping poll path. The kernel
+    // shape remains only for dormant pre-S3 queue tests until S5 cleanup.
     userId: kernelLoop ? loop.teamId : loop.userId,
     machineId: kernelLoop ? "" : loop.machineId,
     phase: "pending",
@@ -206,12 +206,24 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
     // only hashed into the id, so `claimRun` can read the note back and put the
     // person's instruction in the work order instead of making the agent hunt.
     triggerEventId: input.triggerEventId ?? input.verdictEventId ?? null,
+    // A trigger born behind an executing sibling has not had a claimable moment
+    // yet. The production poll/sweep stamps it after the sibling clears; aging
+    // from creation is the F2 sweep/claim race this field exists to prevent.
+    claimableAt: kernelLoop
+      ? null
+      : (await tx
+          .select({ id: runs.id })
+          .from(runs)
+          .where(and(eq(runs.loopId, loop.id), eq(runs.phase, "running")))
+          .limit(1))[0]
+        ? null
+        : now,
   } as const;
 
   // The unique one-queued index retired in S2. Serialize every trigger for this
   // loop on its authoritative row, then let `queueRun` transactionally join an
-  // existing not-yet-executing run. Kernel wins an id collision during the
-  // dual-read stage.
+  // existing not-yet-executing run. Runtime callers pass production loops in S3;
+  // the kernel branch stays dormant until S5 cleanup.
   if (kernelLoop) {
     await store.getObjectForUpdate(tx, loop.id);
   } else {
@@ -400,25 +412,17 @@ async function queueOneFire(
  *    loop asks to be woken again.
  *  - **SCOPED to the task** (`task:<id>`, the shape R-answer already uses), so
  *    the claim hands the run the task that woke it.
- *  - **ACTIVE watchers only**, the same selection `tickRunClock` makes. Pause
- *    governs the clock (that is the whole of what pause means here), and a due
- *    task is not lost by it: the trigger is level, so the moment the loop
- *    resumes, a still-due task fires on the next tick. RETIRED is excluded by
- *    the same predicate and is the case that really does strand work — which is
- *    why retiring a loop that still watches open tasks WARNS (`loopLifecycle`).
+ *  - **ENABLED production watchers only.** Pause governs the cadence, and a due
+ *    task is not lost by it: the trigger is level, so the moment the loop is
+ *    re-enabled, a still-due task fires on the next scan. A deleted watcher is
+ *    a legal tombstone and is skipped without changing the task.
  *
  * A task with a question pending is deliberately NOT excluded: the question
  * blocks a CLOSE, not the loop's own work, and the run may well be able to make
  * progress while a human decides.
  *
- * CONVERGENCE STAGING. Since S1 a `watcher` may name a PRODUCTION `loops` row,
- * and this join does not see one — so a prod-watched task's follow-up queues
- * NOTHING today. That is the stage boundary, not an oversight: S1 repoints loop
- * REFERENCES (`kernel/loopRefs.ts` resolves both worlds for every read), and S2
- * repoints the TRIGGER paths, where a prod watcher queues an ordinary prod
- * pending run on the loop's bound machine (`enabled = true` watchers only) while
- * a kernel-loop watcher keeps this queue. Pulling that dispatch forward here
- * would land half a run world.
+ * CONVERGENCE S3. Watchers resolve only against production loops. Kernel loop
+ * objects remain as same-id history anchors but may never produce queue rows.
  */
 export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> {
   const nowIso = now.toISOString();
@@ -447,9 +451,9 @@ export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> 
           log.info({ taskId: task.id, watcher: task.watcher }, "due task skipped: watcher loop was deleted");
           return null;
         }
-        // Due is the only trigger governed by enablement. Kernel pause and prod
-        // disable both stand down; the level trigger fires after re-enable.
-        if (("kind" in loop && loop.status !== "active") || (!("kind" in loop) && !loop.enabled)) return null;
+        // Due is the only trigger governed by enablement. A disabled production
+        // watcher stands down; the level trigger fires after re-enable.
+        if (!loop.enabled) return null;
         const queued = await queueKernelRun(tx, {
           loop, now: nowIso, reason: "due", scope: `task:${task.id}`,
           scheduledFor: followUpAt, due: { taskId: task.id, followUpAt },
@@ -488,18 +492,15 @@ export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> 
   return result;
 }
 
-/** Resolve a trigger target kernel-first, matching `loopRefs.ts`'s S1 collision
- * rule. The caller is already in the mutation transaction; queueKernelRun takes
- * the authoritative row lock before the open-run lookup. */
+/** Resolve a trigger target from THE production roster (convergence S3). Kernel
+ * loop objects remain through S5 only as history holders; allowing one to win
+ * the id-verbatim twin collision would create a kernel-queue producer after the
+ * daemon has returned to the production poll path. */
 export async function resolveQueueLoopIn(
   tx: store.KernelExec,
   teamId: string,
   loopId: string,
-): Promise<QueueLoop | undefined> {
-  const kernel = (
-    await tx.select().from(objects).where(and(eq(objects.id, loopId), eq(objects.teamId, teamId), eq(objects.kind, "loop")))
-  )[0];
-  if (kernel) return kernel;
+): Promise<Loop | undefined> {
   return (
     await tx.select().from(loops).where(and(eq(loops.id, loopId), eq(loops.teamId, teamId)))
   )[0];
@@ -537,13 +538,9 @@ export async function authenticateDevice(token: string): Promise<Machine | undef
 }
 
 /**
- * THE rewrite line's enrollment surface, and the mirror of legacy `poll`.
- *
- * A daemon running `LOOPANY_RUNS_V2=1` never calls `/api/machine/poll`, so
- * without this a brand-new machine had no way onto the rewrite line at all: the
- * claim 401'd forever and the machine never appeared online in the UI. It
- * delegates to the SHARED `gateway/enroll.ts` gate, so the open-mode/gated
- * policy and the token-hash re-verify cannot drift between the two transports.
+ * The dormant rewrite enrollment surface, retained until S5 removes the old
+ * claim transport. It delegates to the shared production enrollment gate so
+ * frozen ids and credential policy remain byte-identical during rollback.
  */
 export async function enrollDeviceForClaim(token: string, info?: MachineInfo): Promise<Machine | undefined> {
   const resolved = await enrollMachine(token, info);
@@ -1142,14 +1139,6 @@ export class RunQueueScheduler {
     } catch (err) {
       log.error({ err: String(err) }, "run clock tick failed");
     }
-    // R-due rides the SAME tick as the cadence, and in its own try: a due task
-    // is a clock fire on a task's date rather than a loop's cron, so it must not
-    // be able to starve — or be starved by — the cadence pass.
-    try {
-      await tickDueTasks();
-    } catch (err) {
-      log.error({ err: String(err) }, "due task tick failed");
-    }
     try {
       const reclaimed = await reclaimExpired();
       if (reclaimed) log.warn({ reclaimed }, "reclaimed runs whose lease expired unattested");
@@ -1157,6 +1146,34 @@ export class RunQueueScheduler {
       log.error({ err: String(err) }, "run reclaim tick failed");
     }
   }
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+  }
+}
+
+/** S3's surviving kernel timer. The kernel cadence/claim/reclaim scheduler is
+ * dormant once every watcher is a production loop, but task follow-up is still
+ * a kernel fact. It therefore gets its own always-on tick, independent of the
+ * retired RUNS_V2 runtime switch. */
+export class DueTaskScheduler {
+  private timer?: NodeJS.Timeout;
+
+  async start(signal: AbortSignal): Promise<void> {
+    await this.tick();
+    this.timer = setInterval(() => void this.tick(), RUN_TICK_MS);
+    this.timer.unref?.();
+    signal.addEventListener("abort", () => this.stop(), { once: true });
+  }
+
+  private async tick(): Promise<void> {
+    try {
+      await tickDueTasks();
+    } catch (err) {
+      log.error({ err: String(err) }, "due task tick failed");
+    }
+  }
+
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;

@@ -64,6 +64,13 @@
       "when": 1785852073785,
       "tag": "0008_tiresome_guardsmen",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785858472664,
+      "tag": "0009_rapid_warhawk",
+      "breakpoints": true
     }
   ]
 }

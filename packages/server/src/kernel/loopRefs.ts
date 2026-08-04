@@ -7,7 +7,8 @@
  * name a production `loops` row OR (still, until the loop kind retires in S3) a
  * kernel `objects` row of kind `loop`. Every surface that turns one of those ids
  * into a NAME reads through here, so there is exactly one place that knows the
- * reference spans two tables and exactly one place S3 has to narrow.
+ * reference used to span two tables. S3 narrows live resolution to production;
+ * the kernel row remains only as same-id history until S5.
  *
  * Four rulings are welded in, and each is the kind a later "helpful" change
  * breaks by softening it:
@@ -26,11 +27,9 @@
  *     it resolves to a TOMBSTONE ref (`source: "missing"`) that read surfaces
  *     render as `deleted loop loop-…`, never to `null` (which reads as "no
  *     watcher", a state the watcher rule abolished) and never to a refusal.
- *  3. **KERNEL WINS AN ID COLLISION.** The stack migration (report §7.1) creates
- *     prod rows KEEPING the kernel loop id verbatim, so after it runs one id names
- *     a row in both tables. Preferring the kernel row keeps S1/S2 byte-identical
- *     to today for the captain's stack; S3 flips the preference when the workspace
- *     repoints at `loops` wholesale.
+ *  3. **PRODUCTION WINS AN ID COLLISION.** The stack migration creates a prod row
+ *     with the kernel id verbatim. The kernel twin is retained for history, but
+ *     every live watcher and view resolves to the production actor in S3.
  *  4. **ENABLED OR NOT.** A paused/disabled/completed prod loop still resolves and
  *     still renders its name — the `enabled` gate belongs to the DUE SCAN (report
  *     §1.2.5), not to reading. What enablement does change is `assignable`: a loop
@@ -116,23 +115,17 @@ export function missingLoopRecord(id: string): LoopRecord {
   return { id, title: null, source: "missing", status: "missing", cron: null, assignable: false };
 }
 
-/** One query per table, merged kernel-first (ruling 3). */
+/** The production roster is authoritative after S3. */
 export async function loadTeamLoopIndex(teamId: string): Promise<LoopIndex> {
-  const [kernelRows, prodRows] = await Promise.all([
-    db.select().from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "loop"))),
-    db.select().from(loops).where(eq(loops.teamId, teamId)),
-  ]);
+  const prodRows = await db.select().from(loops).where(eq(loops.teamId, teamId));
   const index: LoopIndex = new Map();
   for (const row of prodRows) index.set(row.id, prodLoopRecord(row));
-  for (const row of kernelRows) index.set(row.id, kernelLoopRecord(row));
   return index;
 }
 
 /** One id, without loading the team. Used by the loop PAGE, which is handed an
  *  id and has to decide which world it lives in before it can compose anything. */
 export async function resolveLoopRecord(teamId: string, id: string): Promise<LoopRecord | undefined> {
-  const kernelRow = (await db.select().from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "loop"), eq(objects.id, id))))[0];
-  if (kernelRow) return kernelLoopRecord(kernelRow);
   const prodRow = await getProdLoop(teamId, id);
   return prodRow ? prodLoopRecord(prodRow) : undefined;
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { fetchLoop, fetchLoops, postLifecycle, postRunNow, type CharterDiff, type LifecycleResult, type LoopListRow, type RunNowResult, type TaskRow } from './api'
+import { fetchLoop, fetchLoops, postRunNow, type CharterDiff, type LoopListRow, type RunNowResult, type TaskRow } from './api'
 import { Markdown } from './Render'
 import {
   ArtifactRow, BigState, Drawer, DrawerHead, DrawerSection, Empty, Loading, Refusal, RunStrip, Section, StateChip, Timeline, ViewHeader, When,
@@ -10,15 +10,10 @@ import { affectsLoop, useLiveView } from './useLiveView'
 /**
  * LOOPS — the structure layer.
  *
- * A loop is an object whose BODY IS ITS CHARTER: an artifact whose content is
- * instructions. Its natural question is "is it healthy, when does it run next?",
- * never "is it done yet?" — its lifecycle is operational (active ⇄ paused →
- * retired) and it never closes by finishing work, which is why this page shows
- * health and cadence where a task page shows a finish line.
- *
- * The charter history is the audit window design §4 names: `loop evolve` is a
- * FREE zone (a run rewrites its own charter, ownership-checked), so the diffs
- * landing in events are what makes self-evolution reviewable after the fact.
+ * S3 reads THE production loop roster. A loop's standing brief comes from its
+ * task file, health comes from production runs, and cadence comes from the
+ * production schedule. Same-id kernel loop rows remain only as history anchors
+ * until S5, so this pane never exposes their lifecycle controls.
  *
  * UNIT 8: the split list/detail became a document column plus the shared drawer,
  * matching every other screen. A loop that is holding a question is grouped into
@@ -35,12 +30,8 @@ import { affectsLoop, useLiveView } from './useLiveView'
  * and the act itself is one click deeper, next to the cadence and health it
  * overrides.
  *
- * The WATCHER REWORK (2026-08-04) added the operational lifecycle beside it —
- * pause, resume, retire — because retire acquired something a person has to see
- * BEFORE they choose it and AFTER it lands: retiring a loop that still watches
- * open tasks proceeds, and those tasks keep naming a loop that will never wake
- * again. The confirm names the count it can see from this payload; the warning
- * the server returns is the authoritative one and is rendered verbatim.
+ * Schedule and pause edits point to the production owner surface. Run now stays
+ * here because D1 deliberately ports the paused-loop one-shot behavior.
  */
 export function LoopsPane({ selected, onSelect, onOpenTask }: { selected: string | null; onSelect: (id: string | null) => void; onOpenTask: (id: string) => void }) {
   const { data, error, loading } = useLiveView('loops', fetchLoops)
@@ -168,26 +159,13 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
         ]}
       />
 
-      {loop.source === 'prod' ? (
-        /**
-         * A PRODUCTION loop, reached through a watcher or creator reference
-         * (convergence S1). Everything above is real — it is the same loop row
-         * the shipping product schedules, and the runs are the same table — but
-         * the kernel's `run-now` and lifecycle verbs resolve against `objects`
-         * and would only ever refuse here. Offering a control that cannot work
-         * is worse than saying where the working one is; stage S3 repoints those
-         * verbs and this branch goes away with it.
-         */
-        <p className="inbox-floor">
-          This is one of the machine&apos;s production loops, shown here because a task names it. Its schedule, its
-          pause and its manual fire live on the shipping dashboard until the loop surfaces converge.
-        </p>
-      ) : (
-        <>
-          <RunNow id={loop.id} onQueued={refresh} />
+      <RunNow id={loop.id} onQueued={refresh} />
 
-          <Lifecycle id={loop.id} watchingOpen={data.openTasks.watching.length} onChanged={refresh} />
-        </>
+      {loop.source === 'prod' && (
+        <p className="inbox-floor">
+          This is the machine&apos;s production loop. Its schedule and pause state are edited on the shipping loop surface;
+          this workspace keeps the task, mirror and event history attached to the same id.
+        </p>
       )}
 
       {health.consecutiveFailures > 0 && (
@@ -236,12 +214,9 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
  * 1. **The button is never pre-hidden.** It fires a PAUSED loop directly
  *    (captain ruling 2026-08-04): pause governs the cadence, and a manual fire
  *    is a human act, not the clock — so one run happens and the loop is quiet
- *    again, still paused, still with no `next_fire`. A RETIRED loop is refused
- *    by the kernel (`runLoopNow`) with a sentence and a hint saying retirement
- *    is terminal. Disabling the button on `status !== 'active'` would replace
- *    that teaching with silence, and would put a second copy of the lifecycle
- *    rule in the client where it could drift. The refusal renders verbatim,
- *    exactly as the CLI shows one.
+ *    again, still paused, still with no deferred next-run marker. Disabling the
+ *    button on `status !== 'active'` would put a second copy of the production
+ *    lifecycle rule in the client where it could drift.
  * 2. **The queue's answer is reported, not smoothed over.** One queued run per
  *    loop is the discipline, so a second press reports the run already waiting
  *    rather than pretending to have made a new one.
@@ -287,107 +262,6 @@ function RunNow({ id, onQueued }: { id: string; onQueued: () => void }) {
             : 'Queued.'}
           {result.run && <> Run <code className="ws-id">{result.run.id}</code>.</>}
         </p>
-      )}
-      {failure && <Refusal error={failure} />}
-    </div>
-  )
-}
-
-/**
- * THE OPERATIONAL LIFECYCLE — pause ⇄ resume, and retire as the terminal one.
- *
- * Two rules, and the second is the reason this component exists at all:
- *
- * 1. **Nothing here is pre-hidden or disabled by status**, the same discipline
- *    `Run now` keeps. All three verbs are always offered: repeating one that
- *    already landed is a success with `changed: false` (which the result line
- *    says), and a move out of `retired` is refused BY NAME with the reason.
- *    Hiding `resume` on an active loop would look tidier and would put a second
- *    copy of the lifecycle rule in the client, where it can drift from the
- *    kernel's — and it would replace the retired-loop teaching with silence.
- * 2. **RETIRE WARNS, IT NEVER BLOCKS** (captain ruling 2026-08-04). It is
- *    terminal AND it leaves a consequence — the open tasks this loop watches
- *    keep naming it, and nothing will wake them again — so it asks first, and
- *    the confirm NAMES THE COUNT rather than warning in the abstract. The count
- *    it shows comes from the loop payload already on screen; the count that
- *    matters is the server's, which comes back in `warning` after the write and
- *    is rendered verbatim underneath. Blocking, force-transferring or cascading
- *    were all considered and declined: retirement is the owner's operational
- *    call, and the honest response to a consequence they chose is to say it.
- */
-function Lifecycle({ id, watchingOpen, onChanged }: { id: string; watchingOpen: number; onChanged: () => void }) {
-  const [busy, setBusy] = useState<string | null>(null)
-  const [result, setResult] = useState<LifecycleResult | null>(null)
-  const [failure, setFailure] = useState<Error | undefined>(undefined)
-  const [confirmRetire, setConfirmRetire] = useState(false)
-
-  const send = async (verb: 'pause' | 'resume' | 'retire') => {
-    setBusy(verb)
-    setFailure(undefined)
-    setResult(null)
-    try {
-      setResult(await postLifecycle(id, verb))
-      onChanged()
-    } catch (cause) {
-      setFailure(cause instanceof Error ? cause : new Error(String(cause)))
-    } finally {
-      setBusy(null)
-      setConfirmRetire(false)
-    }
-  }
-
-  return (
-    <div className="preview-actions">
-      <div className="preview-actions-row">
-        <button type="button" className="attn-button is-quiet" disabled={busy !== null} onClick={() => void send('pause')}>
-          pause
-        </button>
-        <button type="button" className="attn-button is-quiet" disabled={busy !== null} onClick={() => void send('resume')}>
-          resume
-        </button>
-        <button type="button" className="attn-button" disabled={busy !== null} onClick={() => setConfirmRetire(true)}>
-          retire…
-        </button>
-        <p className="ws-note-line">
-          Pause clears the next fire and nothing else; resume re-arms to the NEXT occurrence. Retire is terminal — the charter freezes
-          and the record stays readable.
-        </p>
-      </div>
-
-      {confirmRetire && (
-        <div className="ws-confirm" role="alertdialog" aria-label={`Retire ${id}`}>
-          <p>
-            <b>Retire {id}?</b> There is no un-retire: the cadence is gone for good and the charter freezes.
-          </p>
-          {watchingOpen > 0 && (
-            <p className="inbox-floor">
-              It still watches <b>{watchingOpen}</b> open task{watchingOpen === 1 ? '' : 's'}. Retiring proceeds anyway — those tasks keep
-              naming this loop, and nothing will wake them again. Hand each one to a live loop from its drawer, or close it.
-            </p>
-          )}
-          <div className="note-actions">
-            <button type="button" className="attn-button is-quiet" onClick={() => setConfirmRetire(false)}>
-              cancel
-            </button>
-            <button type="button" className="solid-button" disabled={busy !== null} onClick={() => void send('retire')}>
-              {busy === 'retire' ? 'retiring…' : 'retire it'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {result && (
-        <p className="ws-queued" role="status">
-          {result.changed ? `Now ${result.loop.status}.` : `Already ${result.loop.status} — nothing changed.`}
-        </p>
-      )}
-      {/* The server's own warning, verbatim: it counted the tasks, not the screen. */}
-      {result?.warning && (
-        <div className="ws-refusal" role="alert">
-          <b>{result.warning.code}</b>
-          <p>{result.warning.message}</p>
-          <small>{result.warning.hint}</small>
-        </div>
       )}
       {failure && <Refusal error={failure} />}
     </div>

@@ -129,6 +129,7 @@ export interface RunRow {
   summary: string | null
   costUsd: number | null
   attempts: number
+  progress: { step: number; label: string; at?: string } | null
 }
 
 /**
@@ -215,11 +216,8 @@ export interface LoopView extends ViewPayload {
     payload: Record<string, unknown>
     createdAt: string
     updatedAt: string
-    /** Which world this loop lives in (convergence S1). `prod` is a SHIPPING
-     *  `loops` row reached through a watcher or creator reference: it renders
-     *  here, but the kernel's operational verbs do not act on it until stage S3
-     *  repoints them, so the drawer says where those controls live instead of
-     *  offering ones that could only refuse. */
+    /** S3 resolves every live loop from the production roster. `kernel` remains
+     *  in the transitional wire union only until the S5 cleanup. */
     source: 'kernel' | 'prod'
   }
   health: LoopHealth

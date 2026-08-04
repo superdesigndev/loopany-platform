@@ -61,6 +61,7 @@ import {
 import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
 import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 import { appendProductionRunFinished } from "../kernel/runQueue.js";
+import { watchedTasksWarningFor, type WatchedTasksWarning } from "../kernel/watchedTasks.js";
 
 const log = logger.child({ mod: "gateway" });
 
@@ -369,8 +370,15 @@ export class MachineGateway {
           // A trigger queued behind a healthy executing sibling has not yet had
           // a claimable moment. The poll guard deliberately holds it pending;
           // never misclassify that protected state as "never claimed".
-          if (age > RUN_TIMEOUT_MS && !(await store.hasRunningRun(run.loopId))) {
-            await this.reclaimRun(run, "run never claimed");
+          if (!(await store.hasRunningRun(run.loopId))) {
+            if (!run.claimableAt) {
+              // This can be the first sweep after a long sibling completed. Give
+              // the now-eligible row its full claim window; creation age is not
+              // evidence of a wedged delivery while the overlap guard held it.
+              await store.markRunClaimable(run.id, nowIso());
+            } else if (now - Date.parse(run.claimableAt) > RUN_TIMEOUT_MS) {
+              await this.reclaimRun(run, "run never claimed");
+            }
           }
         } else if (age > DEFERRED_MAX_MS) {
           // The machine never came back inside the catch-up horizon — retire
@@ -513,6 +521,7 @@ export class MachineGateway {
       // already has an agent working. Never claim the deferred row concurrently:
       // leave it pending and a later poll claims it after the running run reports.
       if (await store.hasRunningRun(run.loopId)) continue;
+      if (!run.claimableAt) await store.markRunClaimable(run.id, nowIso());
       const loop = await store.getLoop(run.loopId);
       if (!loop) {
         const stamp = nowIso();
@@ -1057,6 +1066,15 @@ export class MachineGateway {
     }
 
     const { update, changes, rejections } = await this.buildEditUpdate(loop, p);
+    // A PAUSE is one of the three production ways a watcher stops acting, so it
+    // carries the u16 consequence (convergence S3, design §5): the open tasks
+    // still naming this loop keep naming it and wait. Warn with the count, never
+    // block — and only on the TRANSITION, so re-asserting `enabled:false` on an
+    // already-paused loop stays silent. The dry-run previews it for the same
+    // reason it previews the completion stamps: the owner should see the whole
+    // consequence before choosing it.
+    const pausing = loop.enabled && update.enabled === false;
+    const pauseWarning = pausing ? await watchedTasksWarningFor(loop.teamId, loop.id, "pause") : undefined;
 
     if (dryRun) {
       const allRejections = [
@@ -1085,7 +1103,8 @@ export class MachineGateway {
           // tables), but a rejected key means the proposed patch is invalid — signal
           // that to the CLI as exit 1 (§4.4), not the misleading exit 0 of a clean run.
           exitCode: allRejections.length ? 1 : 0,
-          text: renderEditDryRunText(loop.id, loop.name ?? loop.id, changes, allRejections),
+          ...(pauseWarning ? { warning: pauseWarning } : {}),
+          text: renderEditDryRunText(loop.id, loop.name ?? loop.id, changes, allRejections, pauseWarning?.message),
         },
       };
     }
@@ -1125,7 +1144,8 @@ export class MachineGateway {
         id: updated.id,
         name: updated.name ?? updated.id,
         applied,
-        text: renderEditAppliedText(updated.id, updated.name ?? updated.id, applied),
+        ...(pauseWarning ? { warning: pauseWarning } : {}),
+        text: renderEditAppliedText(updated.id, updated.name ?? updated.id, applied, pauseWarning?.message),
       },
     };
   }
@@ -1592,7 +1612,10 @@ export class MachineGateway {
       this.pushNotify(loop, completionMessage(reason, message));
     }
     log.info({ runId: lease.runId, loopId: lease.loopId }, "finish: loop completed");
-    return { ok: true, detail: "loop finished — goal met, loop completed" };
+    // Completion disables the loop, so it is a watcher standing down (design §5):
+    // warn with the open watched-task count, never block a goal that was met.
+    const warning = await watchedTasksWarningFor(current.teamId, lease.loopId, "finish");
+    return { ok: true, detail: "loop finished — goal met, loop completed", ...(warning ? { warning } : {}) };
   }
 }
 
@@ -1607,6 +1630,10 @@ export interface Applied {
    *  HTTP status). Used to mark a second-`finish` as CONFLICT rather than a generic
    *  VALIDATION_ERROR. */
   code?: string;
+  /** A consequence the move left behind — it SUCCEEDED, and this says what it
+   *  cost. Today the only producer is `finishLoop` standing a watcher down while
+   *  it still watches open tasks (design §5); the render is a `warning:` line. */
+  warning?: WatchedTasksWarning;
 }
 
 /** Flatten a run's slimmed transcript steps into plain text for `loopany log`,
@@ -1875,11 +1902,14 @@ function renderCreateDryRunText(
   );
 }
 
-/** `loopany edit` (real apply) — the updated-loop confirmation. */
-function renderEditAppliedText(loopId: string, name: string, applied: string[]): string {
+/** `loopany edit` (real apply) — the updated-loop confirmation. A `warning:` line
+ *  (pausing a loop that still watches open tasks) sits ABOVE the help block: it is
+ *  a fact about what just happened, not advice about what to do next. */
+function renderEditAppliedText(loopId: string, name: string, applied: string[], warning?: string): string {
   return doc(
     `updated: ${scalar(name)} (${loopId})`,
     inlineArray("applied", applied),
+    warning ? kvLine("warning", warning) : null,
     helpBlock([`Run \`loopany show ${loopId}\` to confirm the new config`]),
   );
 }
@@ -1901,6 +1931,7 @@ function renderEditDryRunText(
   name: string,
   changes: Array<{ key: string; from: unknown; to: unknown }>,
   rejections: Array<{ key: string; reason: string }>,
+  warning?: string,
 ): string {
   const header = rejections.length
     ? `dry-run: ${scalar(name)} — ${changes.length} change${changes.length === 1 ? "" : "s"} valid, ${rejections.length} rejected`
@@ -1913,6 +1944,7 @@ function renderEditDryRunText(
     rejections.length
       ? listBlock("rejections", ["key", "reason"], rejections.map((r) => [r.key, r.reason]))
       : "rejections: none",
+    warning ? kvLine("warning", warning) : null,
     helpBlock([`Run \`loopany edit ${loopId} --json '{...}'\` (drop --dry-run) to apply`]),
   );
 }

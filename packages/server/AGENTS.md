@@ -892,11 +892,10 @@ rather than forking a second execution stack.
   teaching failure naming the path, the host and "nothing was created". The legacy path
   is byte-for-byte unchanged; the daemon's own scratch dir (no bound workdir at all) is
   still created on demand.
-- **`gateway/enroll.ts` is the ONE machine-enrollment gate**, shared by legacy
-  `poll` and the rewrite claim (`enrollDeviceForClaim`). A `LOOPANY_RUNS_V2=1` daemon
-  never calls `/api/machine/poll`, so before this the rewrite line had no self-register
-  surface at all: first contact 401'd forever. The claim is also the v2 machine's only
-  heartbeat, so it stamps presence too.
+- **`gateway/enroll.ts` is the ONE machine-enrollment gate**, shared by production
+  `poll` and the dormant rewrite claim (`enrollDeviceForClaim`). The latter fixed the
+  S2 dual-transport stage; S3 daemons use production poll exclusively, while the old
+  claim symbol remains until S5 cleanup. The frozen machine-id derivation is shared.
 - **`routeSupport.ensureBooted()` is the rewrite line's boot entrance**, called first in
   every rewrite route. `ensureServer()` used to be reachable only from a legacy server
   fn, so a rewrite-only stack never migrated (a fresh pglite dir 500'd with `relation
@@ -971,15 +970,14 @@ that run instead of minting a twin; and an out-of-band `POST …/pause` moves th
 paused loop rendering a `PAUSED` refusal — is superseded by the captain ruling above:
 the fire now succeeds and the loop stays paused.)
 
-### The recipe (replayable against any stack, including the demo on :3000)
+### The isolated-stack recipe
 
-`scripts/rewrite-local-run.env.sh` defines an isolated stack (own port, own
-`LOOPANY_DATA_DIR`, own `LOOPANY_HOME`, own device token). Source it, never run it. To
-drive the captain's demo instead, keep its `LOOPANY_PORT`/`LOOPANY_DATA_DIR`/`LOOPANY_HOME`
-and set `LOOPANY_RUNS_V2=1` on BOTH sides — server and daemon must agree.
+Use a fresh non-3000 port, data directory and `LOOPANY_HOME`; set them explicitly for
+the shell you control. Never point convergence work at the captain's demo stack and do
+not source `scripts/rewrite-local-run.env.sh`. S3 needs no runtime flag: server and
+daemon use the production poll path.
 
 ```sh
-source scripts/rewrite-local-run.env.sh
 (cd packages/server && LOOPANY_PORT=$LOOPANY_PORT pnpm dev)          # terminal 1
 (cd packages/daemon && LOOPANY_ROOTS="$LOOPANY_RW_BASE" \
    ./node_modules/.bin/tsx src/cli.ts up --foreground)               # terminal 2
@@ -1000,13 +998,12 @@ source scripts/rewrite-local-run.env.sh
   (`$LOOPANY_RW_SCRATCH`, review F4). `scripts/rewrite-smoke-loop.md` hard-codes the
   DEFAULT base's path in its `workdir:`, so edit that key if you override
   `LOOPANY_RW_BASE`.
-- **Registration is automatic and needs no separate step**: the first claim enrolls the
+- **Registration is automatic and needs no separate step**: the first production poll enrolls the
   machine from its `dk_`-shaped token (open mode ⇒ `team-shared`, which is also
   `requestScope`'s open-mode team, so the human CLI and the daemon share a scope).
-- Create a loop with `loop create --file <artifact>` (`workdir:` binds the directory),
-  fire it with `POST /api/loops/<id>/run-now`, and read the result three ways: the
-  events on `GET /api/loops/<id>`, `loopany loop show <id>`, and the loop drawer at
-  `/dev/workspace` (which names the bound `workdir` beside the cadence).
+- Create a loop through production `loopany new --json`, or converge a seeded kernel
+  loop with `kernel:converge-loops`; fire it through the workspace Run-now action and
+  read the result through production `loopany show` plus the loop drawer/event timeline.
 - State lives in exactly three places: the server's pglite dir (`LOOPANY_DATA_DIR`), the
   daemon's `LOOPANY_HOME` (device token, server URL, pidfile, callback bin, scratch
   dirs), and each loop's bound workdir. Stop with `pkill -f "up --foreground"` then the
@@ -1016,7 +1013,7 @@ source scripts/rewrite-local-run.env.sh
   runs of the production loops, binding the SAME workdirs and the same `0 7 * * *`
   cadence. Both carry outward effects (branch push + `gh pr create`; the superdesign one
   also closes PRs and installs from the registry), so by captain decision they are
-  **created but held PAUSED**: a paused loop has no `next_fire`, so it never fires on its
+  **created but held PAUSED**: a paused production loop has `enabled=false`, so it never fires on its
   own and every run it ever does is one somebody asked for. That README carries the full
   side-effect inventory and the fire/pause commands.
 - **A paused loop is AUTONOMOUSLY inert, which is what makes staging safe**: `pause`
@@ -1025,58 +1022,21 @@ source scripts/rewrite-local-run.env.sh
   loop by creating it with the daemon DOWN and pausing in the same breath — that leaves
   no window in which its birth-armed cadence could be claimed.
 
-## The DEV entry surface — bare `loopany`, `--help`, and the `loopany-dev` skill
+## The DEV entry surface — converged local workspace
 
-The CLI entry points used to answer a rewrite stack in the SHIPPING product's voice.
-Three fixes, all keyed on the one flag both sides already agree on
-(`daemon/src/flags.ts` `runsV2Enabled` — a LEAF module so the pure router can read it
-without importing the daemon):
-
-- **Bare `loopany` on a runs-v2 stack renders the KERNEL home** (`daemon/src/kernel-home.ts`,
-  route kind `kernel-home`); flag off keeps `home.ts` byte-identical (pinned by
-  `dev-entry.test.ts` and by diffing the real output against the pre-change binary). It
-  is COMPOSED from two existing reads in parallel — `GET /api/views/loops` and
-  `GET /api/inbox` — and rendered locally with `kernel-render.ts`, unlike the legacy home
-  which the SERVER renders. `loopsView` gained `recentRuns` (the team's newest runs, each
-  with its `loopId`) built from the rows `loopHealth` already loaded, so the home is ONE
-  round trip; there is still no runs ENDPOINT. It is a HUMAN surface: the device token is
-  deliberately NOT attached (same rule as `kernel-cli.ts` `HUMAN_COMMANDS`), a
-  `LOOPANY_SESSION` cookie rides along, and every failure degrades to a definitive home at
-  exit 0 (it runs on the SessionStart hot path).
-- **`loopany --help` carries a delimited "Rewrite (kernel) verbs" section** — a SIGNPOST
-  only; the grammar stays single-sourced in `kernel-help.ts` and prints on
-  `loopany <verb> --help`. `loopany loops` (the LEGACY roster) appends one teaching line
-  pointing at `loop list` when the flag is on AND the retained `loops` channel came back
-  empty (`interactive.ts` `kernelRosterHint`) — never when it holds real history.
-- **`loopany-dev` is a SECOND skill distribution** (`packages/daemon/skill-dev/`, authored
-  in-repo, NOT generated and deliberately NOT in package.json `files` so it never ships in
-  the npm tarball). `skill-install.ts` `SkillPackage` (`PROD_SKILL`/`DEV_SKILL`)
-  parameterizes the installer; `loopany skill install --dev` and `skill status` report
-  both. The separation is the front-matter `name`, which is what the `skills` CLI keys on
-  — a different name means a different directory, so one install can never touch the
-  other. Prove the mechanism with `--project` into a throwaway dir, never user scope.
-- **`scripts/loopany-dev`** runs this repo's CLI with the local stack env,
-  `LOOPANY_RUNS_V2=1`, and a REFUSAL of any non-loopback `LOOPANY_SERVER_URL`. Plain
-  `loopany` on a dev machine is the PRODUCTION binary (PATH shim + `~/.loopany`), so the
-  guard is structural, not a convention.
-- **The dev stack an agent SESSION talks to is MANAGED**, and the skill says so first
-  (`skill-dev/SKILL.md` "The stack is MANAGED"): invoke the ON-PATH `loopany-dev` only;
-  never source `scripts/rewrite-local-run.env.sh`, never start a server/daemon, never
-  seed, never invent a port; a down stack ⇒ retry once after ~30s, then tell the human.
-  This is a real incident class (2026-08-04, twice): a session that self-hosts a second
-  stack creates objects in a data dir the real environment never reads. Both scripts and
-  the kernel-home degraded/not-connected hints carry the same contract — if you add a
-  teaching surface that mentions the stack, do NOT teach starting one
-  (`skill-dev.test.ts` pins this).
-- Two CLI gaps closed while making the help honest: **`loop run-now <id>`** (human-only;
-  fires a PAUSED loop and leaves it paused, refuses a RETIRED one, reports an
-  already-queued run rather than minting a twin) and **`loop update --workdir`** (the API
-  always took it, so the `APPROVAL_REQUIRED` refusal `loop evolve` raises on a differing
-  `workdir:` now names a CLI route that exists).
-- `kernel-render.ts` `cell()` now strips the `raw()` NUL sentinel. `detailBlock` prints a
-  pre-rendered value bare because `key: value` has no separator to break; a typed-list
-  cell does, so it quotes instead — before this, any `raw()` value in a typed list emitted
-  a literal NUL byte.
+- `scripts/loopany-dev` selects `kernel-home.ts` with presentation-only
+  `LOOPANY_DEV_HOME=1` and refuses non-loopback servers. `LOOPANY_RUNS_V2` no longer
+  selects any runtime path. Bare production `loopany` keeps the production home.
+- The local home composes `/api/views/loops` (now the production roster + shared run
+  strip) and `/api/inbox`; it stays a human/no-device-token surface and degrades to a
+  definitive exit-0 view. `dev-entry.test.ts` pins the boundary.
+- Global help signposts production `loops`/`show`/`new`/`edit` for loop ownership and
+  the event-sourced task/doc/mirror verbs for workspace work. Old kernel `loop *`
+  commands return local `SURFACE_MOVED` teaching and perform no request.
+- `packages/daemon/skill-dev/` remains a separate, non-npm skill distribution. It
+  teaches this converged surface and the managed-stack contract: on-PATH
+  `loopany-dev` only; never bare `loopany`, never source the platform env script,
+  never operate the stack lifecycle; retry one unreachable read after ~30s, then stop.
 
 ## A task's WATCHER is never empty, and a due task WAKES it
 
@@ -1101,11 +1061,11 @@ arm). Forbidding the absence DELETED the machinery. The reasoning lives in
   a watched task whose `follow_up` arrives wakes its watcher, scoped `task:<id>`. Same
   level-triggered clock as the cadence, so nothing is consumed and the fire is idempotent
   per (loop, task, THAT follow-up instant) — one due instant queues exactly one run
-  however many passes see it, and a re-armed `follow_up` queues a fresh one. **ACTIVE
-  watchers only**, the same selection `tickRunClock` makes: a paused loop's due task
-  fires on the first tick after `resume` (level trigger, nothing lost), and a RETIRED
-  one is the stranding ruling 3 warns about. `runs.reason` is a TS-only drizzle enum, so
-  widening it needed no migration.
+  however many passes see it, and a re-armed `follow_up` queues a fresh one. **Enabled
+  production watchers only** after S3: a paused loop's due task fires on the first scan
+  after re-enable (level trigger, nothing lost), while a deleted/dangling watcher is
+  logged and skipped without mutating the task. `runs.reason` is a TS-only drizzle enum,
+  so widening it needed no migration.
 - **Retire WARNS, never blocks.** `loopLifecycle` counts the open tasks the loop still
   watches and returns a `warning` (`retirementWarning`); the CLI prints it as its own
   `warning:` line above the detail block (a fact about what happened, not a hint about
@@ -1252,13 +1212,12 @@ fixture note already warns about.
 
 Stage S1 of the convergence design (`data/rw-converge-s1/report.md` — read it, not a
 summary here) made the SHIPPING product's `loops` row THE loop that a kernel object can
-point at. It repointed REFERENCES only; S2 later repointed triggers, while the loop
-roster/lifecycle (S3), hierarchy UI/CLI (S4), and cleanup (S5) remain later stages.
+point at. It repointed references first; S2 repointed triggers and S3 made production
+loops authoritative. Hierarchy UI/CLI (S4) and cleanup (S5) remain later stages.
 
-- **`kernel/loopRefs.ts` is the ONE dual-read resolver.** `objects.watcher` /
-  `created_by_loop` may name a kernel loop object OR a production `loops` row, and every
-  surface that turns one into a NAME reads through here — so S3 narrows one module rather
-  than nine call sites. Its four rulings live in that file's header; the two that a later
+- **`kernel/loopRefs.ts` is the ONE loop-reference resolver.** `objects.watcher` /
+  `created_by_loop` name production `loops` rows after S3, and every surface that turns
+  one into a NAME reads through here. Its four rulings live in that file's header; the two that a later
   change breaks by softening: **production ids are used AS-IS** (no alias table — both
   worlds are opaque `loop-` prefixed text, so every existing prefix check already passes),
   and **resolution is not validation** — there is no FK and no existence check at the write
@@ -1268,20 +1227,17 @@ roster/lifecycle (S3), hierarchy UI/CLI (S4), and cleanup (S5) remain later stag
   watcher", a state the watcher rule abolished; `source: "missing"` means "the loop is
   gone", which is a fact. `components/workspace/loopLabel.ts` is the one render
   (`deleted loop loop-…`, and not clickable) and every screen reads through it.
-- **Kernel wins an id collision, and `assignable` (not `status`) is the hand-off filter.**
-  The stack migration creates prod rows KEEPING the kernel loop id verbatim, so one id will
-  name a row in both tables; preferring kernel keeps S1/S2 byte-identical for the captain's
-  stack. A prod loop resolves ENABLED OR NOT (the `enabled` gate belongs to the due scan,
+- **Production wins an id collision, and `assignable` (not `status`) is the hand-off filter.**
+  The stack migration creates prod rows KEEPING the kernel loop id verbatim, so one id
+  names a row in both tables through S5; the kernel twin is history-only after S3.
+  A prod loop resolves ENABLED OR NOT (the `enabled` gate belongs to the due scan,
   not to reading) — only a kernel `retired` loop and a COMPLETED prod loop are un-assignable.
-- **`views.ts` repointed: card/grouping refs, the hand-off picker, the system-graph NODES
-  (an unknown node silently drops every edge into it), and the loop PAGE**, which now
-  resolves a prod loop and renders `taskFileContent` where a kernel loop shows its charter.
-  `loopsView` (the Loops PANE) is deliberately still kernel-only — that is S3. A prod loop's
-  drawer replaces Run-now/lifecycle with one sentence: the kernel verbs resolve against
-  `objects` and could only refuse there until S3 repoints them.
-- **As of S2, `tickDueTasks` resolves a watcher kernel-first and then production.** It
-  queues enabled production watchers through the shared run seam while retaining the
-  original kernel behavior; disabled production watchers stay quiet.
+- **`views.ts` is production-authoritative after S3:** card/grouping refs, the hand-off
+  picker, system-graph nodes, Loops pane and loop page all read `loops`; the page renders
+  `taskFileContent`, while same-id kernel events remain its history.
+- **`tickDueTasks` resolves production watchers only.** It queues enabled watchers through
+  the shared run seam; disabled production watchers stay quiet and the level trigger fires
+  after re-enable.
 - **`objects.parent_id` + the write-time cycle guard landed here** (migration `0007`,
   task-only CHECK + partial index; `applyTransition.ts` `parentIssue` at both chokepoints,
   `PARENT_CYCLE`). Referencing by ID through one write chokepoint is what `feat/task-tree-v2`
@@ -1303,8 +1259,8 @@ roster/lifecycle (S3), hierarchy UI/CLI (S4), and cleanup (S5) remain later stag
 
 ## Convergence S2 — one run world
 
-Stage S2 repoints every trigger to the shared `queueKernelRun` mint seam without pulling
-the kernel roster, lifecycle, or claim transport removals from S3 forward. The durable
+Stage S2 repointed every trigger to the shared `queueKernelRun` mint seam before S3 moved
+the roster and claim transport. The durable
 contract is pinned end to end by `src/kernel/convergenceS2.integration.test.ts` and the
 legacy runner environment case in `packages/daemon/src/runner.test.ts`.
 
@@ -1336,6 +1292,48 @@ legacy runner environment case in `packages/daemon/src/runner.test.ts`.
   keeping workspace SSE/timelines live. Event append is best-effort-with-log and can
   never block lease retirement. Ordinary production cron/edit/evolve history remains
   event-silent.
+
+## Convergence S3 — the loops converge
+
+Stage S3 makes production loops and the production poll/report pipeline authoritative,
+while retaining kernel loop objects and dormant queue code until S5.
+
+- `kernel:converge-loops` (`kernel/convergeLoops.ts`) is the insert-only operator. It
+  requires exactly one stack machine, creates same-id production twins, maps title,
+  cadence/timezone, enablement and machine/team ownership, and exclusively materializes
+  `<workdir>/loopany-task.md` with the charter under `## Spec`. It never overwrites
+  different bytes. Tasks/docs/mirrors and existing events stay untouched; provenance is
+  appended only through `appendOrganicEvent`'s attempt rung. Dry-run first.
+- The daemon always polls `/api/machine/poll`; `LOOPANY_RUNS_V2` remains only as dormant
+  compatibility code until S5 and no longer selects runtime behavior. The local wrapper
+  uses `LOOPANY_DEV_HOME=1` only to select the converged home presentation.
+- Boot always starts `DueTaskScheduler`, independent of the retired flag. Kernel cadence,
+  claim and attestation/reclaim have no runtime producer after S3; prod scheduler +
+  progress-freshness sweep cover the live run world.
+- Trigger rows carry `runs.claimable_at` (migration `0009`): rows held behind a running
+  sibling begin their never-claimed timeout at the first eligible poll/sweep, not creation.
+  This closes the sibling-finished-to-next-poll reclaim race.
+- `kernel/views.ts`, `loopRefs.ts`, the workspace Loops pane and kernel home read production
+  loops. Every old kernel `loop *` CLI command is a local `SURFACE_MOVED` teaching pointer
+  to `loops`/`show`/`new`/`edit`; it performs no network call or mutation. The separate
+  `loopany-dev` skill teaches the same converged surface.
+- **The u16 watched-task warning moved to the PRODUCTION lifecycle**, since the kernel
+  loop's terminal `retired` state retires with the loop kind. `kernel/watchedTasks.ts` is
+  the ONE author of both the count and the voice — `objectApi`'s `retirementWarning` is now
+  a call into it — and the four verbs (`retire`, `pause`, `finish`, `delete`) each phrase
+  their own consequence over the shared repair hint. It **warns, never blocks, never
+  cascades**: `editLoop` warns on the enabled true→false TRANSITION only (silent on a
+  re-asserted pause or a resume; previewed by `--dry-run`), `finishLoop` warns on the
+  completion that disables the loop, and DELETE warns BEFORE the choice — `JobDetail.
+  watchedTasks` carries the count so the confirm dialog can name it, which a post-write
+  warning cannot. **`store.deleteLoop` must never grow an `objects` cascade** (pinned by
+  `watchedTasks.integration.test.ts`): a dangling watcher is legal, resolved as a tombstone
+  by `loopRefs.ts`, skipped by the due scan, and repaired by a transfer.
+- Regression anchors: `convergeLoops.integration.test.ts`, the shipped 17-case
+  `convergenceS2.verify.test.ts`, `watchedTasks.integration.test.ts`,
+  `runQueue.integration.test.ts`, `views.integration.test.ts`
+  and daemon `dev-entry`/`kernel-cli`/`skill-dev` tests. S4 hierarchy and S5 deletion of
+  kernel loop objects, queue/claim code and flag symbols are deliberately not part of S3.
 
 ## Maintaining this file
 

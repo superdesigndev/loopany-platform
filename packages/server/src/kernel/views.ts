@@ -26,7 +26,7 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, ne, or, sql } from "drizzl
 import { db } from "../db/index.js";
 import { objects, type KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
-import { runs, type Run } from "../db/schema.js";
+import { loops as productionLoops, runs, type Loop, type Run } from "../db/schema.js";
 import { cronText } from "../lib/format.js";
 import { eventShape, eventTail, inboxCounts, inboxUnion, objectShape, type ApiResult } from "./objectApi.js";
 import {
@@ -90,18 +90,18 @@ function runShape(run: Run) {
     startedAt: run.startedAt ?? run.ts, finishedAt: run.finishedAt ?? null,
     reportDoc: run.reportDocId ?? null, summary: run.outcomeSummary ?? run.message ?? null,
     costUsd: runCostUsd(run) || null, attempts: run.attempts,
+    // S3's workspace is reading production runs, so keep their live heartbeat
+    // visible instead of flattening a running row to the word "running" only.
+    progress: run.progress ?? null,
   };
 }
 
 /**
- * The KERNEL loop objects of a team. The ONE surviving caller is `loopsView` (the
- * workspace's Loops pane), which is deliberately still kernel-only: convergence
- * stage S1 repoints loop REFERENCES (a watcher, a creator, a graph node, a loop
- * page), and stage S3 repoints the Loops pane itself at the production roster.
- * Everything that resolves an id to a NAME goes through `loopRefs.ts` instead.
+ * THE production loops of a team. Kernel loop objects remain in `objects` only
+ * so their event history stays addressable by the same verbatim id until S5.
  */
-async function teamLoops(teamId: string): Promise<KernelObject[]> {
-  return db.select().from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "loop"))).orderBy(asc(objects.title));
+async function teamLoops(teamId: string): Promise<Loop[]> {
+  return db.select().from(productionLoops).where(eq(productionLoops.teamId, teamId)).orderBy(asc(productionLoops.name));
 }
 
 /** Every run row for a set of loops, newest first. One query, so a list screen
@@ -217,8 +217,8 @@ export async function loopsView(context: ApiContext, now = new Date()): Promise<
   const counts = await taskCountsByWatcher(context.teamId);
   return { ok: true, value: {
     loops: loops.map((loop) => ({
-      id: loop.id, title: loop.title, status: loop.status, cron: loop.cron, timezone: loop.timezone,
-      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextFire,
+      id: loop.id, title: loop.name, status: prodLoopRecord(loop).status, cron: loop.cron, timezone: loop.timezone,
+      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextRunAt,
       createdAt: loop.createdAt, updatedAt: loop.updatedAt,
       health: loopHealth(runRows.filter((r) => r.loopId === loop.id), now),
       openTasks: counts.open.get(loop.id) ?? 0,
@@ -237,11 +237,8 @@ interface LoopPageSource {
 }
 
 /**
- * Resolve the loop page's subject DUAL-READ.
- *
- * A kernel object with this id wins outright — including when it is a task or a
- * doc, which stays the honest `WRONG_KIND` rather than falling through to the
- * production table and pretending the id named a loop all along.
+ * Resolve the loop page from THE production roster. The same-id kernel object
+ * remains the event-history holder and is read below through `events.objectId`.
  *
  * The production row maps onto the same shape with two substitutions and no
  * invention: the loop's standing brief is its task file's `## Spec`, mirrored
@@ -252,18 +249,12 @@ interface LoopPageSource {
  * rather than a fabricated one.
  */
 async function loopPageSource(id: string, teamId: string): Promise<LoopPageSource | { wrongKind: string } | undefined> {
-  const kernelRow = await store.getObject(undefined, id);
-  if (kernelRow && kernelRow.teamId === teamId) {
-    if (kernelRow.kind !== "loop") return { wrongKind: kernelRow.kind };
-    return {
-      id: kernelRow.id, title: kernelRow.title, status: kernelRow.status, cron: kernelRow.cron,
-      timezone: kernelRow.timezone, nextFire: kernelRow.nextFire, workdir: kernelRow.workdir,
-      body: kernelRow.body ?? "", payload: kernelRow.payload ?? {},
-      createdAt: kernelRow.createdAt, updatedAt: kernelRow.updatedAt, source: "kernel",
-    };
-  }
   const prodRow = await getProdLoop(teamId, id);
-  if (!prodRow) return undefined;
+  if (!prodRow) {
+    const kernelRow = await store.getObject(undefined, id);
+    if (kernelRow && kernelRow.teamId === teamId && kernelRow.kind !== "loop") return { wrongKind: kernelRow.kind };
+    return undefined;
+  }
   const record = prodLoopRecord(prodRow);
   return {
     id: prodRow.id, title: record.title, status: record.status, cron: prodRow.cron,

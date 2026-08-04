@@ -22,12 +22,12 @@ import {
   dbWatchdogFailureThreshold,
 } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
-import { RunQueueScheduler, runsV2Enabled, setProductionRunDispatcher } from "../kernel/runQueue.js";
+import { DueTaskScheduler, setProductionRunDispatcher } from "../kernel/runQueue.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
   scheduler: Scheduler;
-  runQueueScheduler?: RunQueueScheduler;
+  dueTaskScheduler: DueTaskScheduler;
   gateway: MachineGateway;
   artifactSync: ArtifactSync;
   cliGateway: CliGateway;
@@ -76,10 +76,11 @@ async function boot(): Promise<Booted> {
   const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);
-  // Explicit cutover only. Migration leaves kernel loops unarmed; a normal
-  // production restart with the flag off must be byte-for-byte legacy behavior.
-  const runQueueScheduler = runsV2Enabled() ? new RunQueueScheduler() : undefined;
-  if (runQueueScheduler) await runQueueScheduler.start(abort.signal);
+  // Task follow-ups remain kernel facts after loop convergence, so their scan
+  // is always live. It must never be gated by LOOPANY_RUNS_V2: S3 turns that
+  // switch off when the daemon returns to the production poll path.
+  const dueTaskScheduler = new DueTaskScheduler();
+  await dueTaskScheduler.start(abort.signal);
 
   // sweep() is async now: a rejected promise off a bare timer callback is an
   // unhandled rejection (Node can terminate). Catch it so a transient sweep error
@@ -124,7 +125,7 @@ async function boot(): Promise<Booted> {
   }
 
   logger.info("loopany server booted");
-  return { scheduler, runQueueScheduler, gateway, artifactSync, cliGateway, abort };
+  return { scheduler, dueTaskScheduler, gateway, artifactSync, cliGateway, abort };
 }
 
 export async function getGateway(): Promise<MachineGateway> {
