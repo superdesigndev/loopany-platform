@@ -44,11 +44,11 @@ export function SandboxedHtml({ html, title }: { html: string; title: string }) 
   // access, so this is belt-and-braces around navigation, not the boundary.
   const srcDoc = useMemo(() => `<!doctype html><meta charset="utf-8"><base target="_blank">${html}`, [html])
   return (
-    <div className="ws-sandbox">
-      <div className="ws-sandbox-bar">
-        <span className="ws-badge ws-badge-html">format: html</span>
-        <span className="ws-sandbox-note">sandboxed · opaque origin · no access to your session</span>
-        <div className="ws-toggle">
+    <div className="doc-sandbox">
+      <div className="doc-sandbox-bar">
+        <span className="state-label state-html">format: html</span>
+        <span className="doc-sandbox-note">sandboxed · opaque origin · no access to your session</span>
+        <div className="doc-toggle">
           <button type="button" aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>
             Preview
           </button>
@@ -58,7 +58,7 @@ export function SandboxedHtml({ html, title }: { html: string; title: string }) 
         </div>
       </div>
       {mode === 'preview' ? (
-        <iframe className="ws-sandbox-frame" title={`${title} (sandboxed)`} sandbox={DOC_SANDBOX} srcDoc={srcDoc} />
+        <iframe className="doc-sandbox-frame" title={`${title} (sandboxed)`} sandbox={DOC_SANDBOX} srcDoc={srcDoc} />
       ) : (
         <pre className="ws-source">{html}</pre>
       )}
@@ -78,11 +78,17 @@ export function SandboxedHtml({ html, title }: { html: string; title: string }) 
  * Rich review surfaces compose instead — a doc (possibly HTML) as exhibit, and a
  * task whose body links it. Approval lands on the task; the doc is never the
  * contract.
+ *
+ * The unit-8 restyle changes the FRAME only. Keys stay monospaced, values stay
+ * in a `<pre>` fed by `scalar`, and the entry list is still `Object.entries` of
+ * the payload in its own order: nothing here re-keys, groups, formats or
+ * summarizes what the kernel stored. A design language may decorate this block;
+ * it may never render its contents.
  */
 export function ExecutionBlock({ payload }: { payload: Record<string, unknown> }) {
   const entries = Object.entries(payload ?? {})
   return (
-    <section className="ws-execution" aria-label="Execution payload">
+    <section className="execution-block" aria-label="Execution payload">
       <header>
         <b>Execution payload</b>
         <span>rendered verbatim — this is what gets executed</span>
@@ -92,7 +98,7 @@ export function ExecutionBlock({ payload }: { payload: Record<string, unknown> }
       ) : (
         <dl>
           {entries.map(([key, value]) => (
-            <div key={key} className="ws-execution-row">
+            <div key={key} className="execution-row">
               <dt>{key}</dt>
               <dd>
                 <pre>{scalar(value)}</pre>

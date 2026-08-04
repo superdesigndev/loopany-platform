@@ -674,6 +674,60 @@ forbids. The raw `/api/tasks` (`objectApi.listTasks`, the human CLI) is untouche
   `claim…`/`release` move a card between columns; and an out-of-band `PATCH` moves one
   over SSE with no user action.
 
+## The workspace wears the GRAPH line's design language — landing unit 8
+
+Captain direction: the rewrite workspace should look and feel like the graph workspace
+(branch `fm/graph-testing-deploy-t2`, deployed at `/dev/workspace` on loopany-testing).
+This is an adoption of that design system, not a recolor — the shell, the layout grid,
+the type scale, the tokens, the row/card/section shapes and the drawer all come across.
+Functional contracts were untouched: execution renders verbatim, the doc sandbox stays
+opaque-origin, SSE still drives every screen, and every write still goes through the
+existing button → `/api/*` paths.
+
+- **COPIED, never imported.** Both lines own a `components/workspace/` directory AND a
+  `styles/workspace.css`, so they already conflict at the chain merge; sharing a module
+  would only deepen it. Lifted into the rewrite's own tree: the whole token block + the
+  Instrument Sans `@import` (the rewrite named the face but never loaded it, which is why
+  it used to render in a system font), `.sidebar`/`.loop-mark`/`.sidebar-status`,
+  `.document-view` + `.view-header`, the tinted section cards, the `.artifact-row` grid,
+  `.state-label`, the three button weights (`.verdict-button` / `.attn-button` /
+  `.attn-button.is-quiet`), the `.preview-scrim` drawer, `.system-view` + `.graph-panel` +
+  `.canvas-key` + `.system-node`, and the reduced-motion + breakpoint blocks. If you are
+  diffing the two sheets, expect them to agree down to the hex values.
+- **TEMPERATURE IS A RULE, not a palette.** Amber = a decision you owe; rose = a
+  consequence that did not happen; blue = a decision already made, on its way out. The
+  rewrite's three inbox reasons map onto it: `question` is amber, and `due-unwatched` +
+  `orphan` are rose, because both are work nobody picked up. `parts.tsx` `reasonTone` is
+  the single place that mapping lives — do not re-decide it per screen.
+- **One shell, one detail surface.** Every screen is now a centered `.document-view` with
+  a `ViewHeader` (breadcrumb → large tight title → sentence → right-aligned meta), and
+  ALL detail — task, loop, doc — opens in the shared slide-in `Drawer` (`parts.tsx`).
+  The old `ws-split` two-track layouts on Loops and Docs are gone; a drawer keeps the list
+  full-width whether or not something is open, and it owns the keyboard while up.
+- **The counters have three homes and one source.** `CountStrip` on Inbox and Tasks, the
+  rail's Inbox badge, and the rail's bottom status line all read `counts` from the view
+  payloads (`inboxCounts`), so they cannot disagree. The rail fetches `/api/views/inbox`
+  itself on the same live bus — that is what makes the safety floor legible from the
+  System tab, not just from the Inbox.
+- **`ExecutionBlock` was reframed, never re-rendered.** Keys stay monospaced, values stay
+  in a `<pre>` fed by `scalar`, entries stay `Object.entries` in payload order. A design
+  language may decorate that block; it may never render its contents. Checked at the wire
+  in the browser: rendered keys/values are byte-identical to the view's `execution`.
+- **Parallel graph edges fan and their labels slide** (`SystemGraph.tsx` `routeEdges` +
+  `CountEdge`). A pair of loops routinely has more than one relation (asks AND answers),
+  and drawn on one axis their two counts printed through each other. The lane is assigned
+  per unordered source→target BUNDLE and both the bow and the label offset are computed in
+  the bundle's CANONICAL direction — measured from each edge's own source they cancel out
+  between a forward and a reverse edge, which is the bug that made the first fix a no-op.
+- Verified in a browser on a seeded pglite stack at its own port: all five screens, the
+  inbox answer (lands a `question-answered` human event, counters drop across all three
+  homes), claim / release / close-with-note, the html doc's in-frame self-probe still
+  printing `origin: null · app cookies: threw: SecurityError · parent.location: blocked`,
+  the System canvas, zero console errors, and no page-level horizontal scroll at 760px
+  (the board still scrolls inside its own pane). NB the deployed graph reference is
+  allowlist-gated, so signed out it renders `SignIn` — to compare against it, render the
+  branch's own `styles/workspace.css` with its `WorkspaceView.tsx` markup instead.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

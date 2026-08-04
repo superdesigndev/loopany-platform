@@ -1,6 +1,8 @@
 import { fetchLoop, fetchLoops, type CharterDiff, type LoopListRow, type TaskRow } from './api'
 import { Markdown } from './Render'
-import { Empty, Loading, Refusal, RunStrip, StateChip, Timeline, When } from './parts'
+import {
+  ArtifactRow, BigState, Drawer, DrawerHead, DrawerSection, Empty, Loading, Refusal, RunStrip, Section, StateChip, Timeline, ViewHeader, When,
+} from './parts'
 import { affectsLoop, useLiveView } from './useLiveView'
 
 /**
@@ -15,189 +17,215 @@ import { affectsLoop, useLiveView } from './useLiveView'
  * The charter history is the audit window design §4 names: `loop evolve` is a
  * FREE zone (a run rewrites its own charter, ownership-checked), so the diffs
  * landing in events are what makes self-evolution reviewable after the fact.
+ *
+ * UNIT 8: the split list/detail became a document column plus the shared drawer,
+ * matching every other screen. A loop that is holding a question is grouped into
+ * its own amber section above the rest — the reference's "Needs you" idea applied
+ * to structure, and the reason a paused-and-asking loop cannot hide in a long
+ * list.
  */
 export function LoopsPane({ selected, onSelect, onOpenTask }: { selected: string | null; onSelect: (id: string | null) => void; onOpenTask: (id: string) => void }) {
   const { data, error, loading } = useLiveView('loops', fetchLoops)
+
+  if (error && !data) return <BigState title="Loops are not answering">{error.message}</BigState>
+  if (!data && !error) return <Loading what="loops" />
+
+  const loops = data?.loops ?? []
+  const asking = loops.filter((loop) => loop.questionsWaiting > 0)
+  const quiet = loops.filter((loop) => loop.questionsWaiting === 0)
+
   return (
-    <div className="ws-split">
-      <div className="ws-pane ws-list-pane">
-        <header className="ws-pane-head">
-          <div>
-            <h1>Loops</h1>
-            <p>Standing automation. Health comes from runs; cadence comes from cron; neither is a state anyone types.</p>
-          </div>
-        </header>
-        {error && !data ? <Refusal error={error} /> : null}
-        {!data && !error ? <Loading what="loops" /> : null}
-        {data && data.loops.length === 0 && <Empty>No loops in this team yet.</Empty>}
-        {data && (
-          <ul className="ws-rows">
-            {data.loops.map((loop) => (
-              <LoopListItem key={loop.id} loop={loop} selected={loop.id === selected} onSelect={onSelect} />
+    <div className="document-view">
+      <ViewHeader
+        eyebrow="Loops"
+        title="Loops"
+        description="Standing automation. Health comes from runs; cadence comes from cron; neither is a state anyone types."
+        meta={`${loops.length} loop${loops.length === 1 ? '' : 's'}`}
+      />
+
+      {loops.length === 0 && <Empty>No loops in this team yet.</Empty>}
+
+      {asking.length > 0 && (
+        <Section tone="needs" title="Blocked on you" count={asking.length} note="These loops are holding a question">
+          <div className="artifact-list attention-list">
+            {asking.map((loop) => (
+              <LoopRow key={loop.id} loop={loop} selected={loop.id === selected} onSelect={onSelect} />
             ))}
-          </ul>
-        )}
-        {loading && data && <p className="ws-refreshing">refreshing…</p>}
-      </div>
-      <div className="ws-pane ws-detail-pane">
-        {selected ? <LoopDetail id={selected} onOpenTask={onOpenTask} /> : <Empty>Select a loop to read its charter, its evolve diffs and the work it is on the hook for.</Empty>}
-      </div>
+          </div>
+        </Section>
+      )}
+
+      {quiet.length > 0 && (
+        <Section title="Running" count={quiet.length}>
+          <div className="artifact-list">
+            {quiet.map((loop) => (
+              <LoopRow key={loop.id} loop={loop} selected={loop.id === selected} onSelect={onSelect} />
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {loading && data && <p className="ws-refreshing">refreshing…</p>}
+
+      {selected && (
+        <Drawer kicker="Loop" onClose={() => onSelect(null)}>
+          <LoopDetail id={selected} onOpenTask={onOpenTask} />
+        </Drawer>
+      )}
     </div>
   )
 }
 
-function LoopListItem({ loop, selected, onSelect }: { loop: LoopListRow; selected: boolean; onSelect: (id: string) => void }) {
+function LoopRow({ loop, selected, onSelect }: { loop: LoopListRow; selected: boolean; onSelect: (id: string) => void }) {
   return (
-    <li>
-      <button type="button" className={`ws-row ${selected ? 'is-selected' : ''}`} onClick={() => onSelect(loop.id)}>
-        <span className="ws-row-title">{loop.title ?? loop.id}</span>
-        <span className="ws-row-meta">
-          <StateChip state={loop.health.lastOutcome} />
-          {loop.status !== 'active' && <span className="ws-chip ws-chip-paused">{loop.status}</span>}
-          <span className="ws-cadence">{loop.cronText ?? 'no cadence'}</span>
-          {loop.questionsWaiting > 0 && <span className="ws-chip ws-chip-question">{loop.questionsWaiting} waiting</span>}
-          <span className="ws-row-watcher">{loop.openTasks} open</span>
-          <When iso={loop.health.lastRunAt} />
-        </span>
-      </button>
-    </li>
+    <ArtifactRow
+      icon="loops"
+      iconTone="loop"
+      title={loop.title ?? loop.id}
+      source={
+        <>
+          {loop.cronText ?? 'no cadence'} · {loop.openTasks} open
+          {loop.status !== 'active' ? ` · ${loop.status}` : ''}
+        </>
+      }
+      state={loop.questionsWaiting > 0 ? `${loop.questionsWaiting} waiting` : (loop.health.lastOutcome ?? 'no runs yet')}
+      stateTone={
+        loop.questionsWaiting > 0
+          ? 'human'
+          : loop.health.lastOutcome === 'ok'
+            ? 'ok'
+            : loop.health.lastOutcome === 'failure'
+              ? 'floor'
+              : undefined
+      }
+      when={loop.health.lastRunAt}
+      action={<span className="artifact-action">open ›</span>}
+      selected={selected}
+      onOpen={() => onSelect(loop.id)}
+      ariaLabel={`Open ${loop.title ?? loop.id}`}
+    />
   )
 }
 
 function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) => void }) {
   const { data, error } = useLiveView(`loop:${id}`, () => fetchLoop(id), affectsLoop(id))
-  if (error && !data) return <Refusal error={error} />
-  if (!data) return <Loading what="the loop" />
+  if (error && !data) {
+    return (
+      <div className="preview-document">
+        <Refusal error={error} />
+      </div>
+    )
+  }
+  if (!data) {
+    return (
+      <div className="preview-document">
+        <Loading what="the loop" />
+      </div>
+    )
+  }
   const { loop, health } = data
 
   return (
-    <article className="ws-detail">
-      <header className="ws-detail-head">
-        <h2>{loop.title ?? loop.id}</h2>
-        <code className="ws-id">{loop.id}</code>
-        <div className="ws-detail-facets">
-          <span className={`ws-chip ws-chip-${loop.status === 'active' ? 'open' : 'paused'}`}>{loop.status}</span>
-          <span className="ws-facet">cadence: {loop.cronText ?? '—'}</span>
-          {loop.cron && <code className="ws-id">{loop.cron}</code>}
-          <When iso={loop.nextFire} prefix="next fire" />
-        </div>
-      </header>
+    <article className="preview-document">
+      <DrawerHead
+        kicker={loop.status === 'active' ? 'Active loop' : `${loop.status} loop`}
+        title={loop.title ?? loop.id}
+        facets={
+          <>
+            <span className={`state-label ${loop.status === 'active' ? 'state-ok' : ''}`}>{loop.status}</span>
+            <StateChip state={health.lastOutcome} />
+            <code className="ws-id">{loop.id}</code>
+          </>
+        }
+        meta={[
+          ['cadence', loop.cronText ?? '—'],
+          ['next fire', <When iso={loop.nextFire} />],
+          ['last run', <When iso={health.lastRunAt} />],
+          ['7d ok / fail', `${health.runs7d.success} / ${health.runs7d.failure}`],
+          ['7d cost', `$${health.costs7d.usd.toFixed(2)}`],
+          ['failure streak', String(health.consecutiveFailures)],
+        ]}
+      />
 
-      <section className="ws-health">
-        <h3>Health</h3>
-        <dl className="ws-counts">
-          <div>
-            <dt>last outcome</dt>
-            <dd>
-              <StateChip state={health.lastOutcome} />
-            </dd>
-          </div>
-          <div>
-            <dt>last run</dt>
-            <dd>
-              <When iso={health.lastRunAt} />
-            </dd>
-          </div>
-          <div>
-            <dt>7d success / failure</dt>
-            <dd>
-              {health.runs7d.success} / {health.runs7d.failure}
-            </dd>
-          </div>
-          <div>
-            <dt>7d cost</dt>
-            <dd>${health.costs7d.usd.toFixed(2)}</dd>
-          </div>
-          <div>
-            <dt>failure streak</dt>
-            <dd>{health.consecutiveFailures}</dd>
-          </div>
-        </dl>
-        {health.consecutiveFailures > 0 && (
-          <p className="ws-section-note">
-            Consecutive failures auto-pause a loop and raise a question here. Time never un-pauses a loop — a human does.
-          </p>
-        )}
-      </section>
+      {health.consecutiveFailures > 0 && (
+        <p className="inbox-floor">
+          Consecutive failures auto-pause a loop and raise a question here. Time never un-pauses a loop — a human does.
+        </p>
+      )}
 
-      <section>
-        <h3>Charter</h3>
-        <p className="ws-section-note">The loop's body IS its prompt. A run may rewrite it in the free zone; the cadence is the keyed zone.</p>
-        <div className="ws-charter">{loop.body.trim() ? <Markdown>{loop.body}</Markdown> : <Empty>No charter recorded.</Empty>}</div>
-      </section>
+      <DrawerSection title="Charter" note="The loop's body IS its prompt. A run may rewrite it in the free zone; the cadence is the keyed zone.">
+        <div className="charter-body">{loop.body.trim() ? <Markdown>{loop.body}</Markdown> : <Empty>No charter recorded.</Empty>}</div>
+      </DrawerSection>
 
-      <section>
-        <h3>Charter history</h3>
+      <DrawerSection title="Charter history">
         {data.charterHistory.length ? <CharterHistory entries={data.charterHistory} /> : <Empty>This charter has not been evolved yet.</Empty>}
-      </section>
+      </DrawerSection>
 
-      <section>
-        <h3>Open work</h3>
+      <DrawerSection title="Open work" note="A task can appear in more than one section — these are sections, not a partition.">
         <TaskGroup title="Watching" note="what this loop is on the hook for" rows={data.openTasks.watching} onOpenTask={onOpenTask} />
         <TaskGroup title="Created" note="what it has put into the world" rows={data.openTasks.created} onOpenTask={onOpenTask} />
         <TaskGroup title="Questions" note="what it is blocked on" rows={data.openTasks.questions} onOpenTask={onOpenTask} />
-        <p className="ws-section-note">A task can appear in more than one section — these are sections, not a partition.</p>
-      </section>
+      </DrawerSection>
 
-      <section>
-        <h3>Recent runs</h3>
+      <DrawerSection title="Recent runs">
         <RunStrip runs={data.recentRuns} />
-      </section>
+      </DrawerSection>
 
-      <section>
-        <h3>Timeline</h3>
+      <DrawerSection title="Timeline">
         <Timeline events={data.events} emptyNote="No events on this loop yet." />
-      </section>
+      </DrawerSection>
     </article>
   )
 }
 
 function TaskGroup({ title, note, rows, onOpenTask }: { title: string; note: string; rows: TaskRow[]; onOpenTask: (id: string) => void }) {
   return (
-    <div className="ws-task-group">
-      <h4>
+    <>
+      <h3>
         {title} <small>{note}</small>
-      </h4>
+      </h3>
       {rows.length === 0 ? (
         <Empty>None.</Empty>
       ) : (
-        <ul className="ws-rows">
+        <div className="artifact-list">
           {rows.map((task) => (
-            <li key={task.id}>
-              <button type="button" className="ws-row" onClick={() => onOpenTask(task.id)}>
-                <span className="ws-row-title">{task.title ?? task.id}</span>
-                <span className="ws-row-meta">
-                  {task.pendingQuestion?.trim() && <span className="ws-chip ws-chip-question">question</span>}
-                  {task.due && <span className="ws-chip ws-chip-due">due</span>}
-                  <When iso={task.followUpAt ?? task.updatedAt} />
-                </span>
-              </button>
-            </li>
+            <ArtifactRow
+              key={task.id}
+              icon={task.pendingQuestion?.trim() ? 'question' : 'task'}
+              iconTone={task.pendingQuestion?.trim() ? 'question' : 'task'}
+              title={task.title ?? task.id}
+              state={task.pendingQuestion?.trim() ? 'question' : task.due ? 'due' : undefined}
+              stateTone={task.pendingQuestion?.trim() ? 'human' : 'floor'}
+              when={task.followUpAt ?? task.updatedAt}
+              action={<span className="artifact-action">open ›</span>}
+              onOpen={() => onOpenTask(task.id)}
+              ariaLabel={`Open ${task.title ?? task.id}`}
+            />
           ))}
-        </ul>
+        </div>
       )}
-    </div>
+    </>
   )
 }
 
 function CharterHistory({ entries }: { entries: CharterDiff[] }) {
   return (
-    <ol className="ws-timeline">
+    <ol className="event-list">
       {entries.map((entry) => {
         const body = entry.diff.body as { old?: unknown; new?: unknown } | undefined
         return (
-          <li key={entry.event} className={`ws-event ws-entrance-${entry.entrance}`}>
-            <div className="ws-event-head">
+          <li key={entry.event} className={`event-item entrance-${entry.entrance}`}>
+            <div className="event-head">
               <b>charter evolved</b>
-              <span className="ws-entrance">{entry.entrance}</span>
-              <code>{entry.actor}</code>
+              <span className="event-entrance">{entry.entrance}</span>
+              <code className="ws-id">{entry.actor}</code>
               <When iso={entry.ts} />
-              <small className="ws-seq">seq {entry.seq}</small>
+              <span className="event-seq">seq {entry.seq}</span>
             </div>
             {body && (
-              <div className="ws-charter-diff">
-                <pre className="ws-old">{String(body.old ?? '')}</pre>
-                <pre className="ws-new">{String(body.new ?? '')}</pre>
+              <div className="charter-diff">
+                <pre className="is-old">{String(body.old ?? '')}</pre>
+                <pre className="is-new">{String(body.new ?? '')}</pre>
               </div>
             )}
           </li>
