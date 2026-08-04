@@ -342,9 +342,6 @@ function planTaskList(flags: Flags, out: Emit, now: () => number): Plan | number
   if (flags.open && flags.closed) {
     return emit(out, errorEnvelope({ message: "--open and --closed are mutually exclusive", code: "VALIDATION_ERROR", wrote: "--open --closed", expected: "--open", help: ["A task is `open` or `closed` — there is no third state, so no query spans both", "Run `loopany task list --open` for live work, `--closed --since 14d` for recent history"] }), 2);
   }
-  if (flags.unwatched && flags.watcher) {
-    return emit(out, errorEnvelope({ message: "--unwatched and --watcher are mutually exclusive", code: "VALIDATION_ERROR", wrote: "--unwatched --watcher", expected: "--unwatched", help: ["`--unwatched` IS the empty-watcher predicate; naming a loop as well asks for two different sets"] }), 2);
-  }
   for (const key of ["watcher", "creator"] as const) {
     if (typeof flags[key] === "string") { const bad = loopIdRefusal(flags[key], `--${key}`); if (bad) return emit(out, bad, 2); }
   }
@@ -357,7 +354,6 @@ function planTaskList(flags: Flags, out: Emit, now: () => number): Plan | number
   const query = new URLSearchParams();
   query.set("status", flags.closed ? "closed" : "open");
   if (flags.due) query.set("due", "true");
-  if (flags.unwatched) query.set("watcher", "none");
   for (const key of ["watcher", "creator", "since"]) if (typeof flags[key] === "string") query.set(key, flags[key]);
   const echo = flagNames("task list").filter((flag) => flags[flag.slice(2)] !== undefined).map((flag) => (typeof flags[flag.slice(2)] === "string" ? `${flag} ${flags[flag.slice(2)]}` : flag)).join(" ");
   return { path: `/api/tasks?${query}`, render: (body) => renderTaskList(body, echo, now()) };
@@ -385,7 +381,10 @@ function planTaskUpdate(id: string | undefined, flags: Flags, deps: KernelCliDep
   if (!flags.file && !fieldFlags.length) {
     return emit(out, errorEnvelope({ message: "task update requires at least one field", code: "VALIDATION_ERROR", expected: `loopany task update ${id} --follow-up +3d`, allowed: flagNames("task update"), help: [`Run \`loopany task show ${id}\` if you only wanted to read it`] }), 2);
   }
-  if (typeof flags.watcher === "string") { const bad = loopIdRefusal(flags.watcher, "--watcher", true); if (bad) return emit(out, bad, 2); }
+  // TRANSFER ONLY: `--watcher null` used to release a task to the unclaimed
+  // pool, and the pool is gone (`kernel/types.ts` WATCHER_HINT). Refused HERE,
+  // client-side, so the release habit is corrected before a round trip.
+  if (typeof flags.watcher === "string") { const bad = loopIdRefusal(flags.watcher, "--watcher"); if (bad) return emit(out, bad, 2); }
 
   if (typeof flags.file === "string") {
     if (flags["payload-merge"] !== undefined) {
@@ -398,7 +397,7 @@ function planTaskUpdate(id: string | undefined, flags: Flags, deps: KernelCliDep
 
   const patch: Body = {};
   if (flags["follow-up"] !== undefined) patch.followUp = nullToken(flags["follow-up"]);
-  if (flags.watcher !== undefined) patch.watcher = nullToken(flags.watcher);
+  if (flags.watcher !== undefined) patch.watcher = flags.watcher;
   if (flags["needs-human"] !== undefined) patch.needsHuman = nullToken(flags["needs-human"]);
   let merged: string[] = []; let deleted: string[] = [];
   if (flags["payload-merge"] !== undefined) {
@@ -435,7 +434,7 @@ function parseFlags(argv: string[]): Flags {
 }
 
 function firstUnknownFlag(command: string, flags: Flags): string | undefined {
-  const allowed = new Set([...flagNames(command).map((flag) => flag.slice(2)), ...(command === "task list" ? ["open", "closed", "due", "unwatched"] : [])]);
+  const allowed = new Set([...flagNames(command).map((flag) => flag.slice(2)), ...(command === "task list" ? ["open", "closed", "due"] : [])]);
   return Object.keys(flags).find((key) => !allowed.has(key) && key !== "help");
 }
 
@@ -456,12 +455,18 @@ function unknownFlagRefusal(command: string, flag: string): string {
 
 /** §5.4: there is no `self`. A loop id is kind-prefixed, and the refusal says
  *  where the caller's real one comes from rather than only that this one is wrong. */
-function loopIdRefusal(value: string, where: string, allowNull = false): string | undefined {
+function loopIdRefusal(value: string, where: string): string | undefined {
   if (value.startsWith("loop-")) return undefined;
-  if (allowNull && value === "null") return undefined;
   return errorEnvelope({
     message: `${where} takes a loop id`, code: "VALIDATION_ERROR", wrote: value, expected: "loop-4c1d77",
-    help: ["There is no `self` keyword — your work order names your loop id on its first line", "Loop ids are kind-prefixed: they start with `loop-`"],
+    help: [
+      "There is no `self` keyword — your work order names your loop id on its first line",
+      "Loop ids are kind-prefixed: they start with `loop-`",
+      // `null` is the one wrong value worth naming: it was legal until the
+      // watcher rule, so an agent carrying the old habit gets the reason rather
+      // than a bare "not a loop id".
+      ...(value === "null" ? ["A task's watcher is never empty: it is HANDED to another loop, never released. `loopany loop list` prints the ids."] : []),
+    ],
   });
 }
 
@@ -556,7 +561,7 @@ function taskRows(row: Body, now: number): [string, unknown][] {
   // The raw instant plus the derived answer, so the agent never has to do a
   // clock comparison it is unreliable at.
   rows.push(["follow_up", row.followUpAt ? raw(`${String(row.followUpAt)}${dueAnnotation(row.followUpAt as string, now)}`) : ABSENT]);
-  rows.push(["watcher", row.watcher ? row.watcher : raw(`${ABSENT} (unclaimed pool)`)]);
+  rows.push(["watcher", row.watcher ?? ABSENT]);
   rows.push(["question", row.pendingQuestion], ["key", row.key]);
   for (const field of ["createdByRun", "createdByLoop", "createdAt", "updatedAt", "closedAt"]) {
     if (row[field] !== undefined) rows.push([label(field), row[field]]);
@@ -639,10 +644,10 @@ function renderTaskList(body: Body, echo: string, now: number): string {
     // The filter echo lets an agent seeing zero distinguish "my predicate was
     // narrow" from "the system is empty" without a second call.
     if (echo) text += `filter: ${cell(echo)}\n`;
-    return text + helpBlock(["Run `loopany task list --open --unwatched` to see the unclaimed pool", "Nothing due is a clean result — do not manufacture work"]);
+    return text + helpBlock([`Run \`loopany task list --watcher ${own}\` for everything this loop is on the hook for, due or not`, "Nothing due is a clean result — do not manufacture work"]);
   }
   const one = tasks.length === 1 ? String(tasks[0]!.id) : "<id>";
-  const hints = [`Run \`loopany task show ${one}\` to read one, with its payload and event tail`, `Run \`loopany task update ${one} --watcher ${own} --follow-up +3d\` to adopt one`];
+  const hints = [`Run \`loopany task show ${one}\` to read one, with its payload and event tail`, `Run \`loopany task update ${one} --follow-up +3d\` to change when its watcher is woken for it`];
   if (body.truncated) hints.unshift(`Showing the first ${tasks.length} of ${total} — narrow the query rather than paging`);
   else hints.push(`Run \`loopany task list --watcher ${own} --due\` for the work you already own`);
   return text + helpBlock(hints);
@@ -670,19 +675,33 @@ function renderLoopList(body: Body, echo: string): string {
   return text + helpBlock(hints);
 }
 
-/** pause / resume / retire. The lifecycle is the one place where "nothing
- *  changed" is the COMMON answer (a retry after a dropped connection), so the
- *  no-change case is stated in the ok: line rather than left to the empty diff. */
+/**
+ * pause / resume / retire. The lifecycle is the one place where "nothing
+ * changed" is the COMMON answer (a retry after a dropped connection), so the
+ * no-change case is stated in the ok: line rather than left to the empty diff.
+ *
+ * RETIRE WARNS, IT NEVER BLOCKS (captain ruling 2026-08-04): retiring a loop
+ * that still watches open tasks succeeds, and the server returns a `warning`
+ * naming the count. It prints on its OWN line above the detail block — not
+ * folded into the help — because a hint is advice about what to do next, and
+ * this is a fact about what just happened. `ok:` still leads: the retirement
+ * did land, and a warning that read as a failure would be a lie.
+ */
 function renderLifecycle(verb: string, body: Body): string {
   const row = object(body) ?? {};
   const id = String(row.id ?? ABSENT);
   const changed = body.changed !== false;
   const past = verb === "retire" ? "retired" : `${verb}d`;
+  const warning = body.warning as Body | undefined;
   let text = `ok: ${past} ${id}${changed ? "" : ` (no change: already ${row.status ?? past})`}\n`;
+  if (warning) text += `warning: ${cell(warning.message)}\n`;
   text += detailBlock("loop", [["id", row.id], ["title", row.title], ["status", row.status], ["cron", row.cron], ["next_fire", nextFireCell(row)]]);
   text += changedBlock(body.diff as never);
   text += eventLine(body.event);
-  return text + helpBlock(changed ? lifecycleHints(verb, id) : [`Already ${row.status ?? past} — the lifecycle verbs are idempotent, so a retry after a dropped connection costs nothing`]);
+  if (!changed) return text + helpBlock([`Already ${row.status ?? past} — the lifecycle verbs are idempotent, so a retry after a dropped connection costs nothing`]);
+  const hints = lifecycleHints(verb, id);
+  if (warning && typeof warning.hint === "string") hints.unshift(warning.hint);
+  return text + helpBlock(hints);
 }
 
 /**
@@ -728,6 +747,7 @@ function lifecycleHints(verb: string, id: string): string[] {
   }
   return [
     "Retire is the delete: the kernel is event-sourced, so nothing is erased and there is no un-retire",
+    "Any task it still watches keeps naming it, and a retired loop is never woken again — this is warned about, never blocked",
     "The charter is frozen from here — `loop evolve` and `loop update` are refused for this loop for good",
     "Run `loopany loop list --status retired` to read the retired roster; every run and product it made is kept",
   ];
@@ -780,10 +800,15 @@ function renderCreate(kind: Kind, body: Body, now: number): string {
     if (kind === "task") {
       if (row.pendingQuestion) {
         hints.push("This task is in the human inbox now; `loopany task close` is refused until it is answered", `On answer, one run is queued for ${cell(row.watcher)} with scope ${id} — read the answer with \`loopany task show ${id}\``);
-      } else if (!row.watcher && !row.followUpAt) {
+      } else if (!row.followUpAt) {
         // Every safe default has a CONSEQUENCE; printing it at creation is how
-        // the agent learns what omitting a field actually did.
-        hints.push(`Run \`loopany task update ${id} --watcher ${cell(row.createdByLoop)} --follow-up +3d\` to adopt it yourself`, "Unwatched with no follow_up: the inbox orphan floor surfaces it to a human after 48h");
+        // the agent learns what omitting a field actually did. Here: the watcher
+        // DEFAULTED to this run's own loop, and with no follow_up nothing wakes
+        // it for this task.
+        hints.push(
+          `${cell(row.watcher)} is watching it${row.watcher === row.createdByLoop ? " — the default: a task you file is yours unless you name another loop" : ""}`,
+          `Run \`loopany task update ${id} --follow-up +3d\` to have that loop woken for it; with no follow_up it waits for the loop's own cadence`,
+        );
       } else {
         hints.push(`Run \`loopany task update ${id} --follow-up +3d\` to change when it resurfaces`);
       }
@@ -810,7 +835,7 @@ function renderUpdate(kind: "task" | "doc", verb: string, body: Body, now: numbe
   text += eventLine(body.event);
   const hints = changed
     ? (kind === "task"
-      ? [`Run \`loopany task list --watcher ${cell(row.watcher)} --due\` on your next fire to pick this up again`, `Run \`loopany task close ${id} --note "…"\` when it is verified`]
+      ? [`${cell(row.watcher)} is woken automatically when the follow_up arrives — you do not have to poll for it`, `Run \`loopany task close ${id} --note "…"\` when it is verified`]
       : [`Every task and charter citing ${id} now sees the new version — the id did not change`, `Run \`loopany doc show ${id} --file > d.md\` to start the next edit from the current text`])
     : ["Round-tripped without change — the file is the canonical form of the object"];
   if (changed && kind === "task" && row.pendingQuestion) {
@@ -875,14 +900,14 @@ function renderInbox(body: Body, now: number): string {
   text += typedList("inbox", ["id", "title", "reason", "waiting", "watcher"], items.map((item) => {
     const task = item.task ?? {};
     const reasons = item.reasons ?? [];
-    // On a question row the QUESTION is the thing to read; the other two arms
-    // have nothing but the title.
-    const title = reasons.includes("question") && task.pendingQuestion ? task.pendingQuestion : task.title;
+    // The QUESTION is the thing to read on an inbox row — it is what the
+    // person is being asked, and the title only names the work it hangs on.
+    const title = task.pendingQuestion ?? task.title;
     return [task.id, title, reasons.join("+"), waiting(item.askedAt ?? (task.createdAt as string), now), task.watcher];
   }));
   return text + helpBlock(items.length
-    ? ['Run `loopany answer <task-id> "…"` to reply — free text; approve/reject plus instructions are all just the answer', "Run `loopany task show <task-id>` to read the full question, its payload and its history", "Rows with a watcher queue one run for that loop the moment you answer; rows without one just record the answer"]
-    : ["Nothing is waiting on you — the default mode is zero human involvement, by design", "Run `loopany task list --open --unwatched` if you want to look at the unclaimed pool anyway"]);
+    ? ['Run `loopany answer <task-id> "…"` to reply — free text; approve/reject plus instructions are all just the answer', "Run `loopany task show <task-id>` to read the full question, its payload and its history", "Answering queues one run for the watching loop — every task has one, so every answer reaches somebody"]
+    : ["Nothing is waiting on you — the default mode is zero human involvement, by design", "Run `loopany task list --open` if you want to look at the open work anyway"]);
 }
 
 function renderAnswer(body: Body): string {
@@ -897,11 +922,13 @@ function renderAnswer(body: Body): string {
     // and the answer is a concrete run id they can follow.
     text += detailBlock("wake", [["run", run.alreadyQueued ? raw(`${cell(run.id)} (already queued)`) : run.id], ["loop", run.loopId], ["scope", String(run.scope ?? "").replace(/^task:/, "")], ["reason", run.reason], ["state", run.state]]);
   } else {
-    text += `wake: ${ABSENT} (no watcher — the answer sits on the record)\n`;
+    // Every task names a watcher, so this is the queue declining rather than
+    // an absent one: the loop is retired, or is not this team's.
+    text += `wake: ${ABSENT} (the watching loop had no run to queue — the answer is on the record)\n`;
   }
   return text + helpBlock(run
     ? (run.alreadyQueued
       ? [`${cell(run.loopId)} already had a run queued — it will pull both answered tasks when it claims; one run, not two`, "Run `loopany inbox` to see what is still waiting"]
       : [`One run is queued for ${cell(run.loopId)} — it will read your answer and act; nothing else is needed from you`, `Event ${cell(body.event)} is the approval key for this task, if the answer approved a governance change`, "Run `loopany inbox` to see what is still waiting"])
-    : ["Nothing is queued: no loop was named as the watcher, so your answer waits to be claimed", "The task is still open — a steward loop may pick it up, or close it yourself in the web UI"]);
+    : ["Nothing is queued: the watching loop could not take a run — most likely it is retired, which is terminal", "Run `loopany task update <task-id> --watcher <loop-id>` to hand it to a live loop, or close it yourself in the web UI"]);
 }

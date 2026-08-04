@@ -92,8 +92,11 @@ beforeEach(async () => {
   await db.db.delete(runsTable);
 });
 
+/** Watched by default — the kernel refuses a task with no loop on the hook
+ *  (`types.ts` WATCHER_HINT), and this file's subject is id minting, not that. */
+const WATCHER = "loop-fixture";
 async function task(over: Record<string, unknown> = {}) {
-  const r = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, title: "t", ...over });
+  const r = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, title: "t", watcher: WATCHER, ...over });
   if (!r.ok) throw new Error(`fixture create failed: ${r.code} ${r.message}`);
   return r;
 }
@@ -220,7 +223,7 @@ describe("a derived id", () => {
   it("survives a scripted organic mint entirely — the explicit id wins", async () => {
     const id = ids.autoPauseTaskId("loop-4c1d77", "run-4a19c2");
     scripted.objects.push("task-ffffff");
-    const created = await kernel.createObject({ id, teamId: TEAM, kind: "task", actor: AGENT, now: T0, title: "paused" });
+    const created = await kernel.createObject({ id, teamId: TEAM, kind: "task", actor: AGENT, now: T0, title: "paused", watcher: WATCHER });
     expect(created.ok && created.object.id).toBe(id);
   });
 
@@ -360,7 +363,7 @@ describe("a derived-id truncation collision between two DIFFERENT seeds", () => 
     const id = "doc-eeeeeeeeeeee";
     await kernel.createObject({ id, teamId: TEAM, kind: "doc", actor: AGENT, now: T0, title: "a report" });
 
-    const clash = await kernel.createObject({ id, teamId: TEAM, kind: "task", actor: AGENT, now: T1, title: "a task" });
+    const clash = await kernel.createObject({ id, teamId: TEAM, kind: "task", actor: AGENT, now: T1, title: "a task", watcher: WATCHER });
 
     expect(clash.ok).toBe(false);
     expect(!clash.ok && clash.code).toBe("KEY_KIND_MISMATCH");
@@ -369,7 +372,7 @@ describe("a derived-id truncation collision between two DIFFERENT seeds", () => 
     expect(!clash.ok && clash.issues[0]).toMatchObject({ path: "id", got: id });
     // A real key still reads as a key.
     await kernel.createObject({ teamId: TEAM, kind: "doc", actor: AGENT, now: T0, key: "weekly", title: "d" });
-    const keyed = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "weekly", title: "t" });
+    const keyed = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "weekly", title: "t", watcher: WATCHER });
     expect(!keyed.ok && keyed.message).toBe('key "weekly" already names a doc in this team');
   });
 

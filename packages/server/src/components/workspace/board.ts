@@ -20,8 +20,12 @@ import type { TaskCard } from './api'
  *     `POST /api/tasks/:id/close`. The kernel requires a note, so the button
  *     opens a dialog rather than writing; and the kernel refuses a close while a
  *     question is pending, so the button is not offered at all there.
- *   - **claim / release** — the `watcher` facet, via `PATCH /api/tasks/:id` with
- *     a loop id or `null`. Claim names a loop, so it is a picker.
+ *   - **transfer** — the `watcher` facet, via `PATCH /api/tasks/:id` with a loop
+ *     id. It names a loop, so it is a picker. It USED to be a pair, claim and
+ *     release, because a task could have no watcher; under the watcher rule
+ *     (`kernel/types.ts` WATCHER_HINT) one always does, so the only question left
+ *     is WHICH loop — and `release` is gone rather than disabled, because the
+ *     kernel refuses a null watcher outright.
  *
  * Everything else a board might suggest has no human entrance behind it: there
  * is no reopen (close is one-way), a person does not ask themself a question,
@@ -34,29 +38,26 @@ import type { TaskCard } from './api'
 export type CardActions = {
   /** The one transition. Refused by the kernel while a question is pending. */
   canClose: boolean
-  /** Hand the task to a loop — a picker, because a loop must be named. */
-  canClaim: boolean
   /**
-   * Return the task to the unclaimed pool. Offered on a card with a question
-   * pending too: it is consequential there (the eventual answer wakes the
-   * watcher loop and there would be none), but it is an explicit, labelled act
-   * on that one card — not a spatial gesture that could be made by accident.
+   * Hand the task to a DIFFERENT loop — a picker, because a loop must be named.
+   * Offered on a task with a question pending too: it is consequential there
+   * (the eventual answer wakes whichever loop is watching when it lands), but it
+   * is an explicit, labelled act on that one task, not a gesture.
    */
-  canRelease: boolean
+  canTransfer: boolean
 }
 
-export function cardActions(card: Pick<TaskCard, 'status' | 'pendingQuestion' | 'watcher'>): CardActions {
+export function cardActions(card: Pick<TaskCard, 'status' | 'pendingQuestion'>): CardActions {
   const open = card.status !== 'closed'
   return {
     canClose: open && !card.pendingQuestion?.trim(),
-    canClaim: open && !card.watcher,
-    canRelease: open && Boolean(card.watcher),
+    canTransfer: open,
   }
 }
 
 /** Does this task offer anything at all? A closed task is a record: it offers
  *  nothing, and its drawer shows no empty action bar. */
-export function hasActions(card: Pick<TaskCard, 'status' | 'pendingQuestion' | 'watcher'>): boolean {
+export function hasActions(card: Pick<TaskCard, 'status' | 'pendingQuestion'>): boolean {
   const actions = cardActions(card)
-  return actions.canClose || actions.canClaim || actions.canRelease
+  return actions.canClose || actions.canTransfer
 }

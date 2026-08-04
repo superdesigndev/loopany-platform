@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { fetchLoop, fetchLoops, postRunNow, type CharterDiff, type LoopListRow, type RunNowResult, type TaskRow } from './api'
+import { fetchLoop, fetchLoops, postLifecycle, postRunNow, type CharterDiff, type LifecycleResult, type LoopListRow, type RunNowResult, type TaskRow } from './api'
 import { Markdown } from './Render'
 import {
   ArtifactRow, BigState, Drawer, DrawerHead, DrawerSection, Empty, Loading, Refusal, RunStrip, Section, StateChip, Timeline, ViewHeader, When,
@@ -34,6 +34,13 @@ import { affectsLoop, useLiveView } from './useLiveView'
  * genuinely ambiguous click target. The row keeps its quiet `open ›` affordance
  * and the act itself is one click deeper, next to the cadence and health it
  * overrides.
+ *
+ * The WATCHER REWORK (2026-08-04) added the operational lifecycle beside it —
+ * pause, resume, retire — because retire acquired something a person has to see
+ * BEFORE they choose it and AFTER it lands: retiring a loop that still watches
+ * open tasks proceeds, and those tasks keep naming a loop that will never wake
+ * again. The confirm names the count it can see from this payload; the warning
+ * the server returns is the authoritative one and is rendered verbatim.
  */
 export function LoopsPane({ selected, onSelect, onOpenTask }: { selected: string | null; onSelect: (id: string | null) => void; onOpenTask: (id: string) => void }) {
   const { data, error, loading } = useLiveView('loops', fetchLoops)
@@ -163,6 +170,8 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
 
       <RunNow id={loop.id} onQueued={refresh} />
 
+      <Lifecycle id={loop.id} watchingOpen={data.openTasks.watching.length} onChanged={refresh} />
+
       {health.consecutiveFailures > 0 && (
         <p className="inbox-floor">
           Consecutive failures auto-pause a loop and raise a question here. Time never un-pauses a loop — a human does.
@@ -253,6 +262,107 @@ function RunNow({ id, onQueued }: { id: string; onQueued: () => void }) {
             : 'Queued.'}
           {result.run && <> Run <code className="ws-id">{result.run.id}</code>.</>}
         </p>
+      )}
+      {failure && <Refusal error={failure} />}
+    </div>
+  )
+}
+
+/**
+ * THE OPERATIONAL LIFECYCLE — pause ⇄ resume, and retire as the terminal one.
+ *
+ * Two rules, and the second is the reason this component exists at all:
+ *
+ * 1. **Nothing here is pre-hidden or disabled by status**, the same discipline
+ *    `Run now` keeps. All three verbs are always offered: repeating one that
+ *    already landed is a success with `changed: false` (which the result line
+ *    says), and a move out of `retired` is refused BY NAME with the reason.
+ *    Hiding `resume` on an active loop would look tidier and would put a second
+ *    copy of the lifecycle rule in the client, where it can drift from the
+ *    kernel's — and it would replace the retired-loop teaching with silence.
+ * 2. **RETIRE WARNS, IT NEVER BLOCKS** (captain ruling 2026-08-04). It is
+ *    terminal AND it leaves a consequence — the open tasks this loop watches
+ *    keep naming it, and nothing will wake them again — so it asks first, and
+ *    the confirm NAMES THE COUNT rather than warning in the abstract. The count
+ *    it shows comes from the loop payload already on screen; the count that
+ *    matters is the server's, which comes back in `warning` after the write and
+ *    is rendered verbatim underneath. Blocking, force-transferring or cascading
+ *    were all considered and declined: retirement is the owner's operational
+ *    call, and the honest response to a consequence they chose is to say it.
+ */
+function Lifecycle({ id, watchingOpen, onChanged }: { id: string; watchingOpen: number; onChanged: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null)
+  const [result, setResult] = useState<LifecycleResult | null>(null)
+  const [failure, setFailure] = useState<Error | undefined>(undefined)
+  const [confirmRetire, setConfirmRetire] = useState(false)
+
+  const send = async (verb: 'pause' | 'resume' | 'retire') => {
+    setBusy(verb)
+    setFailure(undefined)
+    setResult(null)
+    try {
+      setResult(await postLifecycle(id, verb))
+      onChanged()
+    } catch (cause) {
+      setFailure(cause instanceof Error ? cause : new Error(String(cause)))
+    } finally {
+      setBusy(null)
+      setConfirmRetire(false)
+    }
+  }
+
+  return (
+    <div className="preview-actions">
+      <div className="preview-actions-row">
+        <button type="button" className="attn-button is-quiet" disabled={busy !== null} onClick={() => void send('pause')}>
+          pause
+        </button>
+        <button type="button" className="attn-button is-quiet" disabled={busy !== null} onClick={() => void send('resume')}>
+          resume
+        </button>
+        <button type="button" className="attn-button" disabled={busy !== null} onClick={() => setConfirmRetire(true)}>
+          retire…
+        </button>
+        <p className="ws-note-line">
+          Pause clears the next fire and nothing else; resume re-arms to the NEXT occurrence. Retire is terminal — the charter freezes
+          and the record stays readable.
+        </p>
+      </div>
+
+      {confirmRetire && (
+        <div className="ws-confirm" role="alertdialog" aria-label={`Retire ${id}`}>
+          <p>
+            <b>Retire {id}?</b> There is no un-retire: the cadence is gone for good and the charter freezes.
+          </p>
+          {watchingOpen > 0 && (
+            <p className="inbox-floor">
+              It still watches <b>{watchingOpen}</b> open task{watchingOpen === 1 ? '' : 's'}. Retiring proceeds anyway — those tasks keep
+              naming this loop, and nothing will wake them again. Hand each one to a live loop from its drawer, or close it.
+            </p>
+          )}
+          <div className="note-actions">
+            <button type="button" className="attn-button is-quiet" onClick={() => setConfirmRetire(false)}>
+              cancel
+            </button>
+            <button type="button" className="solid-button" disabled={busy !== null} onClick={() => void send('retire')}>
+              {busy === 'retire' ? 'retiring…' : 'retire it'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <p className="ws-queued" role="status">
+          {result.changed ? `Now ${result.loop.status}.` : `Already ${result.loop.status} — nothing changed.`}
+        </p>
+      )}
+      {/* The server's own warning, verbatim: it counted the tasks, not the screen. */}
+      {result?.warning && (
+        <div className="ws-refusal" role="alert">
+          <b>{result.warning.code}</b>
+          <p>{result.warning.message}</p>
+          <small>{result.warning.hint}</small>
+        </div>
       )}
       {failure && <Refusal error={failure} />}
     </div>

@@ -18,37 +18,36 @@ const past = "2026-08-07T12:00:00.000Z";
 const future = "2026-08-09T12:00:00.000Z";
 
 const task = (over: Partial<BoardTaskFacts> = {}): BoardTaskFacts => ({
-  status: "open", pendingQuestion: null, watcher: null, followUpAt: null, ...over,
+  status: "open", pendingQuestion: null, followUpAt: null, ...over,
 });
 
 describe("columnFor — one cell of the kernel's fact table per column", () => {
   it("a closed task is a record, whatever its facets still say", () => {
     expect(columnFor(task({ status: "closed" }), NOW)).toBe("closed");
-    expect(columnFor(task({ status: "closed", watcher: "loop-a", followUpAt: past }), NOW)).toBe("closed");
+    expect(columnFor(task({ status: "closed", followUpAt: past }), NOW)).toBe("closed");
   });
 
   it("a pending question outranks every other open fact — nothing else can move it", () => {
     expect(columnFor(task({ pendingQuestion: "revert or wait?" }), NOW)).toBe("waiting");
-    expect(columnFor(task({ pendingQuestion: "revert or wait?", watcher: "loop-a", followUpAt: past }), NOW)).toBe("waiting");
+    expect(columnFor(task({ pendingQuestion: "revert or wait?", followUpAt: past }), NOW)).toBe("waiting");
   });
 
   it("blank question text is not a question", () => {
-    expect(columnFor(task({ pendingQuestion: "   ", watcher: "loop-a" }), NOW)).toBe("watched");
+    expect(columnFor(task({ pendingQuestion: "   " }), NOW)).toBe("watched");
   });
 
-  it("no watcher is the unclaimed pool, due or not", () => {
-    expect(columnFor(task({ watcher: null }), NOW)).toBe("unclaimed");
-    // Due AND unwatched stays in the pool: a date on a task no loop watches is
-    // nobody's alarm. The safety-floor counter above the board is what keeps
-    // that combination visible.
-    expect(columnFor(task({ watcher: null, followUpAt: past }), NOW)).toBe("unclaimed");
+  it("splits open work on the follow-up date, and the boundary is inclusive", () => {
+    expect(columnFor(task({ followUpAt: past }), NOW)).toBe("due");
+    expect(columnFor(task({ followUpAt: NOW }), NOW)).toBe("due");
+    expect(columnFor(task({ followUpAt: future }), NOW)).toBe("watched");
+    expect(columnFor(task({ followUpAt: null }), NOW)).toBe("watched");
   });
 
-  it("watched splits on the follow-up date, and the boundary is inclusive", () => {
-    expect(columnFor(task({ watcher: "loop-a", followUpAt: past }), NOW)).toBe("due");
-    expect(columnFor(task({ watcher: "loop-a", followUpAt: NOW }), NOW)).toBe("due");
-    expect(columnFor(task({ watcher: "loop-a", followUpAt: future }), NOW)).toBe("watched");
-    expect(columnFor(task({ watcher: "loop-a", followUpAt: null }), NOW)).toBe("watched");
+  it("does not read a watcher at all — every task has one, so it separates nothing", () => {
+    // The retired `unclaimed` column was the ONLY consumer of that fact here.
+    // Passing one in is a type error; this pins the behavioural half, that two
+    // tasks differing only in watcher land in the same column.
+    expect(Object.keys(task())).toEqual(["status", "pendingQuestion", "followUpAt"]);
   });
 });
 
@@ -57,11 +56,9 @@ describe("the mapping is total and disjoint", () => {
     const keys = new Set<string>(BOARD_COLUMN_KEYS);
     for (const status of TASK_STATUSES) {
       for (const pendingQuestion of [null, "", "  ", "ask?"]) {
-        for (const watcher of [null, "loop-a"]) {
-          for (const followUpAt of [null, past, NOW, future]) {
-            const column = columnFor({ status, pendingQuestion, watcher, followUpAt }, NOW);
-            expect(keys.has(column), `${status}/${pendingQuestion}/${watcher}/${followUpAt} → ${column}`).toBe(true);
-          }
+        for (const followUpAt of [null, past, NOW, future]) {
+          const column = columnFor({ status, pendingQuestion, followUpAt }, NOW);
+          expect(keys.has(column), `${status}/${pendingQuestion}/${followUpAt} → ${column}`).toBe(true);
         }
       }
     }
@@ -76,9 +73,13 @@ describe("the mapping is total and disjoint", () => {
     }
   });
 
-  it("covers the five filters the list screen used to offer", () => {
-    // Open / Due / Questions / Unclaimed / Closed, turned from a chooser into a
-    // layout — the same predicates, all visible at once.
-    expect(new Set(BOARD_COLUMN_KEYS)).toEqual(new Set(["watched", "due", "waiting", "unclaimed", "closed"]));
+  it("covers the four filters the list screen offers, and has no unclaimed column", () => {
+    // Open / Due / Questions / Closed, turned from a chooser into a layout — the
+    // same predicates, all visible at once. `unclaimed` is ABSENT, not empty:
+    // the watcher rule removed the state, so a column for it would be a
+    // permanently-zero heading claiming the system can still produce unowned work.
+    expect(new Set(BOARD_COLUMN_KEYS)).toEqual(new Set(["watched", "due", "waiting", "closed"]));
+    expect(BOARD_COLUMNS.some((c) => c.key === ("unclaimed" as never))).toBe(false);
+    for (const column of BOARD_COLUMNS) expect(column.rule.toLowerCase()).not.toContain("unclaimed");
   });
 });

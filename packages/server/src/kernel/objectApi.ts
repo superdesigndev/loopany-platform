@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gt, isNotNull, isNull, lte, ne, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, isNotNull, lte, ne, or } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { events, objects, type KernelEvent, type KernelObject } from "../db/kernel-schema.js";
@@ -101,8 +101,10 @@ export async function listTasks(context: ApiContext, query: URLSearchParams, now
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) return { ok: false, error: refusal("UNKNOWN_FILTER", "limit must be from 1 to 200") };
   const conds = [eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.status, status)];
   if (query.get("due") === "true") conds.push(lte(objects.followUpAt, now.toISOString()));
+  // `watcher=none` (the CLI's `--unwatched`) retired with the pool it queried:
+  // every task names a watcher now, so the predicate could only ever be empty.
   const watcher = query.get("watcher");
-  if (watcher === "none") conds.push(isNull(objects.watcher)); else if (watcher) { if (!watcher.startsWith("loop-")) return { ok: false, error: refusal("SCHEMA_VIOLATION", "watcher must be an explicit loop id", [{ path: "watcher", message: "must start with loop-", got: watcher, expected: "loop-<id>" }], "there is no self keyword; use the loop id from the work order") }; conds.push(eq(objects.watcher, watcher)); }
+  if (watcher) { if (!watcher.startsWith("loop-")) return { ok: false, error: refusal("SCHEMA_VIOLATION", "watcher must be an explicit loop id", [{ path: "watcher", message: "must start with loop-", got: watcher, expected: "loop-<id>" }], "there is no self keyword and no unwatched pool; use the loop id from the work order") }; conds.push(eq(objects.watcher, watcher)); }
   const creator = query.get("creator"); if (creator) { if (!creator.startsWith("loop-")) return { ok: false, error: refusal("SCHEMA_VIOLATION", "creator must be an explicit loop id", [{ path: "creator", message: "must start with loop-", got: creator, expected: "loop-<id>" }]) }; conds.push(eq(objects.createdByLoop, creator)); }
   const since = query.get("since");
   if (since) { const date = lookbackDate(since, now); if (!date) return { ok: false, error: refusal("BAD_DATE", "since must be a bare lookback such as 14d or an RFC3339 timestamp") }; conds.push(gt(objects.updatedAt, date)); }
@@ -170,7 +172,11 @@ export async function patchTask(id: string, body: unknown, context: ApiContext, 
     const guard = scopedKindGuard(before, "task", context.teamId); if (guard) return guard;
     const fields: WritableFields = {};
     if (Object.hasOwn(rec, "followUp")) { if (rec.followUp === null) fields.followUpAt = null; else if (typeof rec.followUp === "string") { const d = parseDate(rec.followUp, now); if (!d) return { ok: false, error: refusal("BAD_DATE", "followUp is not a date this server accepts") }; fields.followUpAt = d; } else return { ok: false, error: refusal("SCHEMA_VIOLATION", "followUp must be a string or null") }; }
-    if (Object.hasOwn(rec, "watcher")) { if (rec.watcher !== null && (typeof rec.watcher !== "string" || !rec.watcher.startsWith("loop-"))) return { ok: false, error: refusal("SCHEMA_VIOLATION", "watcher must be a loop id or null") }; fields.watcher = rec.watcher as string | null; }
+    // TRANSFER ONLY. `watcher: null` used to release a task back to the
+    // unclaimed pool; there is no pool any more, so a null here is the release
+    // gesture arriving at a surface that no longer has one — refused by name
+    // rather than silently coerced (captain ruling 2026-08-04, types.ts).
+    if (Object.hasOwn(rec, "watcher")) { if (typeof rec.watcher !== "string" || !rec.watcher.startsWith("loop-")) return { ok: false, error: refusal("WATCHER_REQUIRED", "watcher must name the loop that acts next", [{ path: "watcher", message: "must be a loop id", got: rec.watcher === null ? "null" : JSON.stringify(rec.watcher), expected: "loop-<id>" }], "a watcher is TRANSFERRED to another loop, never cleared — `loopany loop list` prints the ids") }; fields.watcher = rec.watcher; }
     if (Object.hasOwn(rec, "needsHuman")) { if (rec.needsHuman !== null && (typeof rec.needsHuman !== "string" || !rec.needsHuman.trim())) return { ok: false, error: refusal("SCHEMA_VIOLATION", "needsHuman must be non-empty text or null") }; if (context.mode === "agent" && before!.pendingQuestion && rec.needsHuman !== before!.pendingQuestion) return { ok: false, error: refusal("NOT_HUMAN", "a run cannot clear or replace a pending question", [], "a human answers it in the inbox") }; fields.pendingQuestion = rec.needsHuman as string | null; }
     if (Object.hasOwn(rec, "title")) { if (typeof rec.title !== "string") return { ok: false, error: refusal("SCHEMA_VIOLATION", "title must be text") }; fields.title = rec.title; }
     if (Object.hasOwn(rec, "body")) { if (typeof rec.body !== "string") return { ok: false, error: refusal("SCHEMA_VIOLATION", "body must be text") }; fields.body = rec.body; }
@@ -297,6 +303,16 @@ export function isLoopLifecycleVerb(value: string): value is LoopLifecycleVerb {
  * same ruling `task close` carries: a retry after a dropped connection must be
  * free. Only a move OUT of `retired` is refused, and it is refused by name
  * (`RETIRED`) rather than as a bare illegal-from-state.
+ *
+ * **RETIRE WARNS, IT NEVER BLOCKS** (captain ruling 2026-08-04). A loop that
+ * still watches open tasks may be retired, and the response carries a `warning`
+ * naming the count. The three alternatives were all rejected: refusing makes the
+ * owner's operational decision conditional on housekeeping they may not want to
+ * do; force-transferring picks a new responsible loop on their behalf; and
+ * cascading would close work that is genuinely unfinished. Retirement is
+ * terminal, so those tasks keep a watcher that will never wake again — that is a
+ * real consequence, and the honest response to a real consequence the owner
+ * chose is to say it out loud, once, at the moment they choose it.
  */
 export async function loopLifecycle(id: string, verb: LoopLifecycleVerb, body: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   if (context.mode !== "human") {
@@ -324,10 +340,34 @@ export async function loopLifecycle(id: string, verb: LoopLifecycleVerb, body: u
     if (before!.status === target) {
       return { ok: true, value: { changed: false, loop: objectShape(before!), event: null, diff: {} } };
     }
+    // Counted BEFORE the transition, because retiring changes nothing about the
+    // tasks — that is precisely what the warning is for.
+    const stranded = verb === "retire" ? await countOpenWatchedBy(tx, context.teamId, id) : 0;
     const result = await applyTransitionIn(tx, { objectId: id, transition: verb, actor: context.actor, now: now.toISOString(), note });
     if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
-    return { ok: true, value: { changed: true, loop: objectShape(result.object), event: result.event.id, diff: result.event.diff ?? {} } };
+    return { ok: true, value: {
+      changed: true, loop: objectShape(result.object), event: result.event.id, diff: result.event.diff ?? {},
+      ...(stranded ? { warning: retirementWarning(id, stranded) } : {}),
+    } };
   });
+}
+
+/** Open tasks this loop is on the hook for — the retire warning's subject. */
+async function countOpenWatchedBy(tx: store.KernelExec, teamId: string, loopId: string): Promise<number> {
+  const rows = await tx.select({ n: count() }).from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "task"), eq(objects.status, "open"), eq(objects.watcher, loopId)));
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** The warning shape both the CLI and the loop drawer render. A `warning`, not a
+ *  `notice`: the retirement DID happen and the consequence is permanent. */
+export function retirementWarning(loopId: string, openTasks: number) {
+  const plural = openTasks === 1 ? "" : "s";
+  return {
+    code: "TASKS_STILL_WATCHED",
+    openTasks,
+    message: `${loopId} was retired while still watching ${openTasks} open task${plural}; retirement is terminal, so nothing will wake ${openTasks === 1 ? "it" : "them"} again`,
+    hint: `hand each one to a live loop with \`loopany task update <task-id> --watcher <loop-id>\`, or close it — \`loopany task list --watcher ${loopId}\` lists them`,
+  };
 }
 
 /**
@@ -386,10 +426,6 @@ export async function runLoopNow(id: string, context: ApiContext, now = new Date
   return result;
 }
 
-/** The orphan floor's age: open + unwatched + no follow-up + older than this
- *  reaches the inbox, so nothing can lie down silently forever (design §6). */
-export const ORPHAN_AGE_MS = 48 * 3_600_000;
-
 /** One inbox row before it is shaped for a consumer: the task row, why it is
  *  here, and when the question was asked (plus by whom). */
 export interface InboxUnionRow {
@@ -400,40 +436,51 @@ export interface InboxUnionRow {
 }
 
 /**
- * THE §6 UNION, single-sourced. Both the raw `GET /api/inbox` (the human CLI's
- * surface) and the composed `GET /api/views/inbox` (the screen's) read it, so
- * the safety floor cannot mean two different things depending on which one you
- * are looking at. It returns ROWS, not a payload shape — each caller shapes.
+ * THE §6 SAFETY FLOOR, single-sourced. Both the raw `GET /api/inbox` (the human
+ * CLI's surface) and the composed `GET /api/views/inbox` (the screen's) read it,
+ * so the floor cannot mean two different things depending on which one you are
+ * looking at. It returns ROWS, not a payload shape — each caller shapes.
+ *
+ * IT IS NOW ONE BRANCH: an open task with a question waiting for a human.
+ *
+ * It used to be three. The other two — a due task nobody watched, and the
+ * 48-hour orphan floor for a task with neither watcher nor follow-up — were both
+ * predicated on `watcher IS NULL`, and the watcher rule (types.ts `WATCHER_HINT`)
+ * removed that state from the system. They are not "disabled": their queries can
+ * no longer match a row, and keeping them would be two permanently-zero counters
+ * teaching a distinction the kernel no longer draws. What they used to catch is
+ * now caught earlier and better — a task always has a loop on the hook, and a
+ * due one WAKES that loop (`tickDueTasks`) instead of waiting to be noticed.
+ *
+ * The union shape (`reasons` as an array, `reasonRank`) is deliberately kept:
+ * it costs nothing, and the inbox is exactly where a future human-attention
+ * branch would land.
  */
 export async function inboxUnion(teamId: string, now: Date): Promise<{ rows: InboxUnionRow[]; stamp: string }> {
   const stamp = now.toISOString();
-  const orphanBefore = new Date(now.getTime() - ORPHAN_AGE_MS).toISOString();
-  const rows = await db.select().from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "task"), eq(objects.status, "open"), or(and(isNotNull(objects.pendingQuestion), ne(objects.pendingQuestion, "")), and(lte(objects.followUpAt, stamp), isNull(objects.watcher)), and(isNull(objects.watcher), isNull(objects.followUpAt), lte(objects.createdAt, orphanBefore))))).orderBy(asc(objects.createdAt));
+  const rows = await db.select().from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "task"), eq(objects.status, "open"), isNotNull(objects.pendingQuestion), ne(objects.pendingQuestion, ""))).orderBy(asc(objects.createdAt));
   const withReasons = await Promise.all(rows.map(async (task): Promise<InboxUnionRow> => {
-    const reasons: string[] = []; if (task.pendingQuestion?.trim()) reasons.push("question"); if (!task.watcher && task.followUpAt && task.followUpAt <= stamp) reasons.push("due-unwatched"); if (!task.watcher && !task.followUpAt && task.createdAt < orphanBefore) reasons.push("orphan");
-    let askedAt: string | null = null; let askedByRun: string | null = null;
-    if (reasons.includes("question")) {
-      const hs = await store.listObjectEvents(undefined, task.id);
-      const asked = [...hs].reverse().find((e) => e.diff?.pendingQuestion?.new === task.pendingQuestion);
-      askedAt = asked?.ts ?? task.updatedAt;
-      askedByRun = asked?.entrance === "agent" ? asked.actorId : null;
-    }
-    return { task, reasons, askedAt, askedByRun };
+    const hs = await store.listObjectEvents(undefined, task.id);
+    const asked = [...hs].reverse().find((e) => e.diff?.pendingQuestion?.new === task.pendingQuestion);
+    return { task, reasons: ["question"], askedAt: asked?.ts ?? task.updatedAt, askedByRun: asked?.entrance === "agent" ? asked.actorId : null };
   }));
   withReasons.sort((a, b) => reasonRank(a.reasons) - reasonRank(b.reasons) || a.task.createdAt.localeCompare(b.task.createdAt));
   return { rows: withReasons, stamp };
 }
 
-/** The three branch counts plus the total — the badge every inbox surface shows. */
+/** The floor's branch count plus the total — the badge every inbox surface
+ *  shows. One branch today, so the two agree; both are kept because every
+ *  consumer renders "N waiting" beside "why", and a future branch adds a key
+ *  here rather than a second shape. */
 export function inboxCounts(rows: InboxUnionRow[]) {
   const n = (r: string) => rows.filter((i) => i.reasons.includes(r)).length;
-  return { question: n("question"), dueUnwatched: n("due-unwatched"), orphan: n("orphan"), total: rows.length };
+  return { question: n("question"), total: rows.length };
 }
 
 export async function inbox(context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   // The inbox routes HUMAN attention. An agent learns nothing here that
   // `task list` does not already give it (spec §1.14).
-  if (context.mode !== "human") return { ok: false, error: notHuman(context, "the inbox is a human surface", "a run's worklist is `task list --watcher <your-loop-id> --due`, or `--unwatched` for the pool") };
+  if (context.mode !== "human") return { ok: false, error: notHuman(context, "the inbox is a human surface", "a run's worklist is `task list --watcher <your-loop-id> --due`") };
   const { rows, stamp } = await inboxUnion(context.teamId, now);
   const items = rows.map(({ task, reasons, askedAt }) => ({ task: taskListShape(task), reasons, askedAt }));
   return { ok: true, value: { items, counts: inboxCounts(rows), now: stamp } };
@@ -504,4 +551,4 @@ export function taskListShape(row: KernelObject): Record<string, unknown> { retu
 export function loopListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire, workdir: row.workdir, key: row.key, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
 export function eventShape(row: KernelEvent) { return { id: row.id, seq: row.seq, objectId: row.objectId, kind: row.kind, entrance: row.entrance, actor: row.actorId, transition: row.transition, diff: row.diff, note: row.note, ts: row.ts }; }
 function lookbackDate(value: string, now: Date): string | undefined { const m = /^(\d+)(h|d)$/.exec(value); if (m) return new Date(now.getTime() - Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000)).toISOString(); return parseDate(value, now); }
-function reasonRank(reasons: string[]) { return reasons.includes("question") ? 0 : reasons.includes("due-unwatched") ? 1 : 2; }
+function reasonRank(reasons: string[]) { return reasons.includes("question") ? 0 : 1; }

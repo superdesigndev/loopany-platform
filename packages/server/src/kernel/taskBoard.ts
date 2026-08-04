@@ -16,12 +16,18 @@
  *     ships in the view payload, and the board renders it under the column
  *     heading. If a column ever needs two sentences it is really two columns.
  *
- * The five columns are the five filters the list screen used to offer
- * (Open / Due / Questions / Unclaimed / Closed), turned from a chooser into a
- * layout: the same predicates, all visible at once.
+ * The four columns are the four filters the list screen used to offer
+ * (Questions / Due / Open / Closed), turned from a chooser into a layout: the
+ * same predicates, all visible at once.
+ *
+ * THERE USED TO BE A FIFTH, `unclaimed`, and it is gone rather than empty: the
+ * watcher rule (`types.ts` WATCHER_HINT) removed the state it named, so its
+ * predicate (`!watcher`) can no longer match a row. A permanently-empty column
+ * is worse than no column — it teaches a distinction the kernel stopped making,
+ * and it invites someone to "fix" the emptiness by reintroducing the state.
  */
 
-export const BOARD_COLUMN_KEYS = ["waiting", "unclaimed", "due", "watched", "closed"] as const;
+export const BOARD_COLUMN_KEYS = ["waiting", "due", "watched", "closed"] as const;
 export type BoardColumnKey = (typeof BOARD_COLUMN_KEYS)[number];
 
 export interface BoardColumnSpec {
@@ -38,19 +44,14 @@ export const BOARD_COLUMNS: readonly BoardColumnSpec[] = [
     rule: "Open with a question pending — nothing but a human answer moves it.",
   },
   {
-    key: "unclaimed",
-    label: "Unclaimed",
-    rule: "Open with no watcher — nobody has taken responsibility for it yet.",
-  },
-  {
     key: "due",
     label: "Due",
-    rule: "Open, watched, and its follow-up date has arrived — its loop is on the hook now.",
+    rule: "Open and its follow-up date has arrived — the watching loop has been woken for it.",
   },
   {
     key: "watched",
     label: "Watched",
-    rule: "Open and watched with nothing due — a loop will resurface it on its own.",
+    rule: "Open with nothing due — its loop will be woken when the follow-up arrives.",
   },
   {
     key: "closed",
@@ -60,11 +61,12 @@ export const BOARD_COLUMNS: readonly BoardColumnSpec[] = [
 ] as const;
 
 /** The facts a column decision needs. Deliberately the kernel's own field names
- *  so a caller cannot pass a re-derived or prettified value by accident. */
+ *  so a caller cannot pass a re-derived or prettified value by accident.
+ *  `watcher` is no longer among them: it is never empty, so it can no longer
+ *  distinguish one column from another. */
 export interface BoardTaskFacts {
   status: string;
   pendingQuestion: string | null;
-  watcher: string | null;
   followUpAt: string | null;
 }
 
@@ -77,17 +79,12 @@ export interface BoardTaskFacts {
  *      facets can be acted on any more.
  *   2. `waiting` next, because a pending question BLOCKS every other move —
  *      `close` is refused outright while one is open (applyTransition §OPEN_QUESTION).
- *   3. `unclaimed` next, because "nobody owns this" outranks "it is due": a due
- *      date on a task no loop watches is nobody's alarm. The card still carries
- *      its overdue badge, and the due-unwatched counter above the board is what
- *      keeps that combination visible.
- *   4. `due` before `watched`, because both are watched and the date is what
- *      separates "acting now" from "will resurface later".
+ *   3. `due` before `watched`, because the date is what separates "its loop has
+ *      been woken for this" from "its loop will be woken later".
  */
 export function columnFor(task: BoardTaskFacts, stamp: string): BoardColumnKey {
   if (task.status === "closed") return "closed";
   if (task.pendingQuestion?.trim()) return "waiting";
-  if (!task.watcher) return "unclaimed";
   if (task.followUpAt && task.followUpAt <= stamp) return "due";
   return "watched";
 }

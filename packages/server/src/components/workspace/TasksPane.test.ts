@@ -26,7 +26,7 @@ const TASKS: TasksView = {
   cursorSeq: 12,
   now: '2026-08-04T09:00:00.000Z',
   truncated: false,
-  counts: { question: 1, dueUnwatched: 1, orphan: 0, total: 2 },
+  counts: { question: 1, total: 1 },
   loops: [{ id: 'loop-a', title: 'Alpha watch' }, { id: 'loop-b', title: 'Beta watch' }],
   columns: [
     {
@@ -38,11 +38,12 @@ const TASKS: TasksView = {
       }],
     },
     {
-      key: 'unclaimed', label: 'Unclaimed', rule: 'Nobody is watching.',
+      key: 'due', label: 'Due', rule: 'The follow-up date has arrived.',
       tasks: [{
-        id: 'task-free', title: 'Nightly backup check', status: 'open', followUpAt: '2026-08-01T09:00:00.000Z',
-        pendingQuestion: null, watcher: null, watcherLoop: null, createdByLoop: null, creator: null,
-        createdAt: '', updatedAt: '', due: true, column: 'unclaimed',
+        id: 'task-due', title: 'Nightly backup check', status: 'open', followUpAt: '2026-08-01T09:00:00.000Z',
+        pendingQuestion: null, watcher: 'loop-a', watcherLoop: { id: 'loop-a', title: 'Alpha watch' },
+        createdByLoop: 'loop-a', creator: { id: 'loop-a', title: 'Alpha watch' },
+        createdAt: '', updatedAt: '', due: true, column: 'due',
       }],
     },
     {
@@ -53,7 +54,6 @@ const TASKS: TasksView = {
         creator: { id: 'loop-b', title: 'Beta watch' }, createdAt: '', updatedAt: '', due: false, column: 'watched',
       }],
     },
-    { key: 'due', label: 'Due', rule: 'The follow-up date has arrived.', tasks: [] },
     { key: 'closed', label: 'Closed', rule: 'Closed is one-way.', tasks: [] },
   ],
 }
@@ -142,12 +142,23 @@ async function mount(selected: string | null = null, onSelect: (id: string | nul
 }
 
 describe('the default view is a list, grouped by loop', () => {
-  it('lands on the list with a section per loop, plus the pool', async () => {
+  it('lands on the list with a section per loop, and no pool section', async () => {
     await mount()
     const headings = [...host!.querySelectorAll('h2')].map((h) => h.textContent)
-    expect(headings).toEqual(['Unclaimed pool', 'Alpha watch', 'Beta watch'])
+    expect(headings).toEqual(['Alpha watch', 'Beta watch'])
     expect(host!.querySelector('.board')).toBeNull()
     expect(byText('List')!.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  /** Every task shows the loop on the hook for it — in both views. */
+  it('names a watcher on every card, and never the word unclaimed', async () => {
+    await mount()
+    expect(text()).not.toMatch(/unclaimed/i)
+    await click(byText('Board'))
+    const meta = [...host!.querySelectorAll('.board-card-meta')].map((cell) => cell.textContent ?? '')
+    expect(meta.length).toBe(3)
+    for (const cell of meta) expect(cell).toMatch(/Alpha watch|Beta watch/)
+    expect(text()).not.toMatch(/unclaimed/i)
   })
 
   it('keeps the question and overdue badges on the rows', async () => {
@@ -157,11 +168,14 @@ describe('the default view is a list, grouped by loop', () => {
     expect(badges).toContain('overdue')
   })
 
-  it('shows the safety-floor counters in BOTH views', async () => {
+  it('shows the safety-floor counter in BOTH views, and only the surviving branch', async () => {
     await mount()
-    expect(host!.querySelector('.count-strip')!.textContent).toMatch(/orphan floor/)
-    await click(byText('Board'))
-    expect(host!.querySelector('.count-strip')!.textContent).toMatch(/orphan floor/)
+    for (const view of ['List', 'Board']) {
+      await click(byText(view))
+      const strip = host!.querySelector('.count-strip')!.textContent ?? ''
+      expect(strip).toMatch(/questions waiting on you/)
+      expect(strip).not.toMatch(/orphan|unwatched/i)
+    }
   })
 })
 
@@ -192,7 +206,7 @@ describe('rows and cards are entrances — nothing else', () => {
   it('offers no write control on a row', async () => {
     await mount()
     expect(host!.querySelector('.artifact-row select')).toBeNull()
-    expect(buttons().some((button) => /release|close…|claim/.test(button.textContent ?? ''))).toBe(false)
+    expect(buttons().some((button) => /close…|hand off/.test(button.textContent ?? ''))).toBe(false)
   })
 
   it('offers no write control on a card either', async () => {
@@ -206,7 +220,7 @@ describe('rows and cards are entrances — nothing else', () => {
     const onSelect = vi.fn()
     await mount(null, onSelect)
     await click(host!.querySelector('.artifact-row'))
-    expect(onSelect).toHaveBeenCalledWith('task-free')
+    expect(onSelect).toHaveBeenCalledWith('task-ask')
 
     onSelect.mockClear()
     await click(byText('Board'))
@@ -218,21 +232,24 @@ describe('rows and cards are entrances — nothing else', () => {
 describe('the drawer is the one write surface', () => {
   const wrote = (method: string, match: RegExp) => calls.find((call) => call.method === method && match.test(call.url))
 
-  it('claims an unwatched task through the picker', async () => {
-    await mount('task-free')
+  it('hands a task to another loop through the picker — never back to nothing', async () => {
+    await mount('task-held')
     const select = host!.querySelector<HTMLSelectElement>('.task-actions select')!
-    expect([...select.options].map((option) => option.value)).toEqual(['', 'loop-a', 'loop-b'])
+    // The loop already watching it is not offered: that write changes nothing.
+    expect([...select.options].map((option) => option.value)).toEqual(['', 'loop-a'])
     await act(async () => {
-      select.value = 'loop-b'
+      select.value = 'loop-a'
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })
-    expect(wrote('PATCH', /\/api\/tasks\/task-free$/)!.body).toEqual({ watcher: 'loop-b' })
+    expect(wrote('PATCH', /\/api\/tasks\/task-held$/)!.body).toEqual({ watcher: 'loop-a' })
   })
 
-  it('releases a watched task back to the pool', async () => {
+  // RELEASE IS GONE. `watcher: null` is a kernel refusal, so an affordance for
+  // it would advertise a write that cannot succeed.
+  it('offers no release, and sends no null watcher', async () => {
     await mount('task-held')
-    await click(byText('release'))
-    expect(wrote('PATCH', /\/api\/tasks\/task-held$/)!.body).toEqual({ watcher: null })
+    expect(byText('release')).toBeUndefined()
+    expect(calls.some((call) => call.method === 'PATCH')).toBe(false)
   })
 
   it('closes only after the note the kernel requires', async () => {

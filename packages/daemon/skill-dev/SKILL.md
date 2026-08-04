@@ -21,7 +21,8 @@ Three object kinds, one record:
   receives). A loop is `active`, `paused` or `retired`. It never "completes":
   it is a standing thing, not a unit of work.
 - **task** — a unit of work with a lifecycle `open → closed`, plus three facets: a
-  `watcher` (the loop that acts next), a `follow_up` date (when it resurfaces),
+  `watcher` (the loop that acts next — never empty; yours by default),
+  a `follow_up` date (whose arrival WAKES that watcher),
   and a `needs_human` question (which puts it in the human inbox).
 - **doc** — a product, addressed by id and rewritten in place, so everything
   citing it follows the rewrite.
@@ -69,7 +70,7 @@ safe on a verb that writes. Use it; the tables below are a map, not the grammar.
 | Family | Verbs |
 | --- | --- |
 | loop | `create --file` · `list [--status]` · `show <id> [--file\|--full]` · `evolve <id> --file` · `update <id> --cron --approval` · `pause\|resume\|retire <id> [--note]` · `run-now <id>` |
-| task | `list [--open\|--closed] [--due] [--unwatched] [--watcher] [--creator] [--since]` · `show <id>` · `create --file` · `update <id>` · `close <id> --note` |
+| task | `list [--open\|--closed] [--due] [--watcher] [--creator] [--since]` · `show <id>` · `create --file` · `update <id>` · `close <id> --note` |
 | doc | `show <id> [--file\|--full]` · `create --file` · `update <id> --file` |
 | human | `inbox` · `answer <task-id> "…"` |
 

@@ -97,24 +97,32 @@ describe("routing and the invisible run context", () => {
 
 describe("task list", () => {
   it("renders the five default columns above a self-guiding tail", async () => {
-    const { code, stdout } = await run(["task", "list", "--open", "--unwatched"], {
+    const { code, stdout } = await run(["task", "list", "--open"], {
       total: 2, viewerLoop: "loop-4c1d77",
       tasks: [
-        { id: "task-52ff10", title: "Observe the impact of PR #201", followUpAt: null, watcher: null, pendingQuestion: null },
-        { id: "task-9a1c03", title: "Verify the docs sweep landed", followUpAt: "2026-08-06T09:00:00.000Z", watcher: null, pendingQuestion: null },
+        { id: "task-52ff10", title: "Observe the impact of PR #201", followUpAt: null, watcher: "loop-4c1d77", pendingQuestion: null },
+        { id: "task-9a1c03", title: "Verify the docs sweep landed", followUpAt: "2026-08-06T09:00:00.000Z", watcher: "loop-8e3311", pendingQuestion: null },
       ],
     });
     expect(code).toBe(0);
     expect(stdout).toBe(
       "count: 2\n" +
       "tasks[2]{id,title,follow_up,watcher,question}:\n" +
-      '  task-52ff10,"Observe the impact of PR #201",—,—,—\n' +
-      '  task-9a1c03,"Verify the docs sweep landed","2026-08-06T09:00:00.000Z",—,—\n' +
+      '  task-52ff10,"Observe the impact of PR #201",—,loop-4c1d77,—\n' +
+      '  task-9a1c03,"Verify the docs sweep landed","2026-08-06T09:00:00.000Z",loop-8e3311,—\n' +
       "help[3]:\n" +
       "  Run `loopany task show <id>` to read one, with its payload and event tail\n" +
-      "  Run `loopany task update <id> --watcher loop-4c1d77 --follow-up +3d` to adopt one\n" +
+      "  Run `loopany task update <id> --follow-up +3d` to change when its watcher is woken for it\n" +
       "  Run `loopany task list --watcher loop-4c1d77 --due` for the work you already own\n",
     );
+  });
+
+  /** `--unwatched` retired with the pool it queried: an unknown flag, exit 2. */
+  it("refuses --unwatched — there is no unwatched set to ask for", async () => {
+    const { code, stdout } = await run(["task", "list", "--open", "--unwatched"], { tasks: [], total: 0 });
+    expect(code).toBe(2);
+    expect(stdout).toContain('error: "unknown flag --unwatched"');
+    expect(stdout).toContain("allowed[6]: --open, --closed, --due, --watcher, --creator, --since");
   });
 
   it("inlines the real id when the list has exactly one row", async () => {
@@ -130,7 +138,7 @@ describe("task list", () => {
       "tasks: []\n" +
       'filter: "--due --watcher loop-4c1d77"\n' +
       "help[2]:\n" +
-      "  Run `loopany task list --open --unwatched` to see the unclaimed pool\n" +
+      "  Run `loopany task list --watcher loop-4c1d77` for everything this loop is on the hook for, due or not\n" +
       "  Nothing due is a clean result — do not manufacture work\n",
     );
   });
@@ -199,16 +207,22 @@ describe("task show", () => {
 });
 
 describe("task create", () => {
+  /**
+   * The watcher DEFAULTED to the creating loop and no `follow_up` was set, so
+   * the render names both consequences: who is on the hook (and that it was the
+   * default), and that nothing will wake them for it.
+   */
   it("prints the handle first and the consequence of every default it took", async () => {
     const { code, stdout, request } = await run(["task", "create", "--file", "-"], {
       created: true, event: "ev-1",
-      task: { id: "task-7f3a91", kind: "task", title: "Observe the impact of PR #201", status: "open", followUpAt: null, watcher: null, pendingQuestion: null, key: "pr-201-impact", createdByLoop: "loop-2d7e55", payload: {} },
+      task: { id: "task-7f3a91", kind: "task", title: "Observe the impact of PR #201", status: "open", followUpAt: null, watcher: "loop-2d7e55", pendingQuestion: null, key: "pr-201-impact", createdByLoop: "loop-2d7e55", payload: {} },
     }, 201, { readStdin: () => "---\ntitle: Observe the impact of PR #201\nkey: pr-201-impact\n---\n\nbody\n" });
     expect(code).toBe(0);
     expect(request!.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
     expect(stdout.startsWith("ok: created task-7f3a91\n")).toBe(true);
-    expect(stdout).toContain("  watcher: — (unclaimed pool)\n");
-    expect(stdout).toContain("Unwatched with no follow_up: the inbox orphan floor surfaces it to a human after 48h");
+    expect(stdout).toContain("  watcher: loop-2d7e55\n");
+    expect(stdout).toContain("loop-2d7e55 is watching it — the default: a task you file is yours unless you name another loop");
+    expect(stdout).toContain("with no follow_up it waits for the loop's own cadence");
   });
 
   it("makes the R-answer contract visible on a gated create", async () => {
@@ -288,13 +302,40 @@ describe("task update", () => {
   it("echoes the field-level diff the events table stores", async () => {
     const { code, stdout } = await run(["task", "update", "task-52ff10", "--watcher", "loop-4c1d77", "--follow-up", "+3d"], {
       changed: true, event: "ev-6b30a8",
-      diff: { watcher: { old: null, new: "loop-4c1d77" }, followUpAt: { old: null, new: "2026-08-06T09:00:00.000Z" } },
+      // A watcher move is loop → loop: a HAND-OFF, never a claim out of nothing.
+      diff: { watcher: { old: "loop-8e3311", new: "loop-4c1d77" }, followUpAt: { old: null, new: "2026-08-06T09:00:00.000Z" } },
       task: { id: "task-52ff10", kind: "task", title: "Observe", status: "open", followUpAt: "2026-08-06T09:00:00.000Z", watcher: "loop-4c1d77", pendingQuestion: null, key: null, payload: {} },
     });
     expect(code).toBe(0);
     expect(stdout).toContain("ok: updated task-52ff10\n");
-    expect(stdout).toContain("changed[2]:\n  watcher: — → loop-4c1d77\n");
+    expect(stdout).toContain("changed[2]:\n  watcher: loop-8e3311 → loop-4c1d77\n");
     expect(stdout).toContain("event: ev-6b30a8\n");
+  });
+
+  /**
+   * TRANSFER ONLY. `--watcher null` released a task to the unclaimed pool until
+   * the watcher rule; the pool is gone, so the CLI refuses it LOCALLY — before a
+   * round trip — and names the reason rather than printing a bare "not a loop
+   * id", because an agent carrying the old habit needs the rule, not the regex.
+   */
+  it("refuses --watcher null locally, and teaches the hand-off in its place", async () => {
+    const { code, stdout, request } = await run(["task", "update", "task-52ff10", "--watcher", "null"], {});
+    expect(code).toBe(2);
+    // Local refusal: the helper records every call through `fetchImpl`, so an
+    // undefined request is proof no round trip happened.
+    expect(request).toBeUndefined();
+    expect(stdout).toContain('error: "--watcher takes a loop id"');
+    expect(stdout).toContain("wrote:    null\n");
+    expect(stdout).toContain("never released");
+    expect(stdout).toContain("loopany loop list");
+  });
+
+  it("still lets --follow-up be cleared with null — a date is not a watcher", async () => {
+    const { code, request } = await run(["task", "update", "task-52ff10", "--follow-up", "null"], {
+      changed: true, event: "ev-1", diff: {}, task: { id: "task-52ff10", kind: "task", payload: {} },
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(await request!.text())).toEqual({ followUp: null });
   });
 
   it("states plainly that a no-op wrote no event", async () => {
@@ -596,6 +637,38 @@ describe("the loop lifecycle: pause, resume and retire — there is no delete", 
     expect(stdout).toContain("`loop evolve` and `loop update` are refused for this loop for good");
   });
 
+  /**
+   * RETIRE WARNS, IT NEVER BLOCKS (captain ruling 2026-08-04). The line is
+   * `warning:`, not a refusal and not a help hint: `ok:` still leads because the
+   * retirement DID land, and the count is a fact about what just happened rather
+   * than advice about what to do next — which is why the repair goes in help[]
+   * and the consequence goes above the detail block.
+   */
+  it("warns with the count when the retired loop still watches open tasks", async () => {
+    const { code, stdout } = await run(["loop", "retire", "loop-8e3311"], {
+      changed: true, event: "ev-77a3", diff: { status: { old: "active", new: "retired" } },
+      loop: { ...LOOP, status: "retired", nextFire: null },
+      warning: {
+        code: "TASKS_STILL_WATCHED", openTasks: 3,
+        message: "loop-8e3311 was retired while still watching 3 open tasks; retirement is terminal, so nothing will wake them again",
+        hint: "hand each one to a live loop with `loopany task update <task-id> --watcher <loop-id>`, or close it",
+      },
+    });
+    // A warning is NOT a failure: the retirement landed, so exit stays 0.
+    expect(code).toBe(0);
+    expect(stdout).toContain("ok: retired loop-8e3311\n");
+    expect(stdout).toContain('warning: "loop-8e3311 was retired while still watching 3 open tasks; retirement is terminal, so nothing will wake them again"\n');
+    expect(stdout.indexOf("warning:")).toBeLessThan(stdout.indexOf("loop:"));
+    expect(stdout).toContain("hand each one to a live loop");
+  });
+
+  it("prints no warning line when the retired loop was watching nothing", async () => {
+    const { stdout } = await run(["loop", "retire", "loop-8e3311"], {
+      changed: true, event: "ev-77a3", diff: {}, loop: { ...LOOP, status: "retired", nextFire: null },
+    });
+    expect(stdout).not.toContain("warning:");
+  });
+
   it("reads a repeated verb as the free retry it is", async () => {
     const { code, stdout } = await run(["loop", "pause", "loop-8e3311"], { changed: false, event: null, diff: {}, loop: { ...LOOP, status: "paused", nextFire: null } });
     expect(code).toBe(0);
@@ -653,10 +726,10 @@ describe("the loop lifecycle: pause, resume and retire — there is no delete", 
 describe("the human commands", () => {
   it("renders the inbox with the question as the title on a question row", async () => {
     const { code, stdout } = await run(["inbox"], {
-      counts: { question: 1, dueUnwatched: 0, orphan: 1, total: 2 }, now: "2026-08-03T09:00:00.000Z",
+      counts: { question: 2, total: 2 }, now: "2026-08-03T09:00:00.000Z",
       items: [
         { task: { id: "task-7f3a91", title: "Observe the impact of PR #201", pendingQuestion: "revert or wait?", watcher: "loop-4c1d77", createdAt: "2026-08-01T00:00:00.000Z" }, reasons: ["question"], askedAt: "2026-08-02T14:00:00.000Z" },
-        { task: { id: "task-52ff10", title: "Draft the pricing FAQ", pendingQuestion: null, watcher: null, createdAt: "2026-07-30T09:00:00.000Z" }, reasons: ["orphan"], askedAt: null },
+        { task: { id: "task-52ff10", title: "Draft the pricing FAQ", pendingQuestion: "ship it or shelve it?", watcher: "loop-8e3311", createdAt: "2026-07-30T09:00:00.000Z" }, reasons: ["question"], askedAt: null },
       ],
     });
     expect(code).toBe(0);
@@ -664,11 +737,11 @@ describe("the human commands", () => {
       "count: 2\n" +
       "inbox[2]{id,title,reason,waiting,watcher}:\n" +
       '  task-7f3a91,"revert or wait?",question,19h,loop-4c1d77\n' +
-      '  task-52ff10,"Draft the pricing FAQ",orphan,4d,—\n' +
+      '  task-52ff10,"ship it or shelve it?",question,4d,loop-8e3311\n' +
       "help[3]:\n" +
       '  Run `loopany answer <task-id> "…"` to reply — free text; approve/reject plus instructions are all just the answer\n' +
       "  Run `loopany task show <task-id>` to read the full question, its payload and its history\n" +
-      "  Rows with a watcher queue one run for that loop the moment you answer; rows without one just record the answer\n",
+      "  Answering queues one run for the watching loop — every task has one, so every answer reaches somebody\n",
     );
   });
 
@@ -695,10 +768,14 @@ describe("the human commands", () => {
     expect(stdout).toContain("Event ev-3a77f2 is the approval key for this task");
   });
 
-  it("says plainly that a watcher-less answer wakes nothing", async () => {
+  // Every task names a watcher, so a null run means the QUEUE declined — the
+  // watching loop is retired, or is not this team's. The render says which, and
+  // names the repair, rather than claiming there was no watcher.
+  it("says plainly when the watching loop could not take a run", async () => {
     const { stdout } = await run(["answer", "task-52ff10", "drop it"], { event: "ev-1", task: { id: "task-52ff10", kind: "task", status: "open" }, run: null });
-    expect(stdout).toContain("wake: — (no watcher — the answer sits on the record)\n");
-    expect(stdout).toContain("Nothing is queued");
+    expect(stdout).toContain("wake: — (the watching loop had no run to queue — the answer is on the record)\n");
+    expect(stdout).toContain("most likely it is retired, which is terminal");
+    expect(stdout).toContain("--watcher <loop-id>");
   });
 
   it("explains that a second answer joins the queued run rather than stacking", async () => {
@@ -726,7 +803,7 @@ describe("the flag grammar is local, loud, and never ignored", () => {
     expect(code).toBe(2);
     expect(stdout).toContain('error: "unknown flag --mine"');
     expect(stdout).toContain("expected: --watcher <loop-id>");
-    expect(stdout).toContain("allowed[7]: --open, --closed, --due, --unwatched, --watcher, --creator, --since");
+    expect(stdout).toContain("allowed[6]: --open, --closed, --due, --watcher, --creator, --since");
     expect(stdout).toContain("There is no `--mine` and no `self`");
   });
 

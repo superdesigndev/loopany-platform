@@ -33,19 +33,18 @@ export const VERBS: Record<string, VerbSpec> = {
       ["--open", "status = open (the default when no status flag is given)"],
       ["--closed", "status = closed"],
       ["--due", "follow_up_at <= now — a query-time predicate, self-healing"],
-      ["--unwatched", "watcher is empty — the unclaimed pool"],
       ["--watcher <loop-id>", "tasks that loop owes; an explicit id, there is no `self`"],
       ["--creator <loop-id>", "tasks that loop made — the created_by_loop provenance stamp"],
       ["--since <duration>", "bare, unsigned lookback (14d); meaningful with --closed"],
     ],
     examples: [
-      "loopany task list --open --unwatched",
       "loopany task list --watcher loop-4c1d77 --due",
       "loopany task list --creator loop-8e3311 --closed --since 14d",
     ],
     notes: [
       "predicates compose as AND; loops are excluded structurally and no flag brings them back",
       "reads are not ownership-checked — --watcher and --creator may name any loop in the team",
+      "there is no unwatched set to query: every task names the loop that acts next",
     ],
     seeAlso: TASK_KEYS,
   },
@@ -61,8 +60,8 @@ export const VERBS: Record<string, VerbSpec> = {
     flags: [
       ["--file <path>", "the artifact file IS the object; `-` reads stdin"],
       ["--needs-human <text>", "attach a question; the task enters the human inbox"],
-      ["--watcher <loop-id>", "the loop that acts next, and the loop a human answer wakes"],
-      ["--follow-up <date>", "RFC 3339 with offset, or relative (+3d, +12h)"],
+      ["--watcher <loop-id>", "the loop that acts next; DEFAULTS to your own loop, so pass it only to hand the task on"],
+      ["--follow-up <date>", "RFC 3339 with offset, or relative (+3d, +12h); its arrival WAKES the watcher"],
     ],
     examples: [
       "loopany task create --file observe-pr-201.md",
@@ -71,6 +70,7 @@ export const VERBS: Record<string, VerbSpec> = {
     notes: [
       "a flag and a front-matter key supplying the same field is refused, never overridden",
       "title, key and payload have no flags — they belong in the file so a retry replays byte-identically",
+      "a task ALWAYS has a watcher: yours by default from a run, and required outright when a human creates one",
     ],
     seeAlso: TASK_KEYS,
   },
@@ -78,7 +78,7 @@ export const VERBS: Record<string, VerbSpec> = {
     usage: "loopany task update <id> [flags]",
     flags: [
       ["--follow-up <date>", "RFC 3339 with offset, or relative (+3d, +12h); `null` clears"],
-      ["--watcher <loop-id>", "the loop that acts next (e.g. loop-4c1d77); `null` releases to the pool"],
+      ["--watcher <loop-id>", "HAND the task to another loop (e.g. loop-4c1d77); there is no release — `null` is refused"],
       ["--needs-human <text>", "attach a question; the task enters the human inbox"],
       ["--payload-merge <json>", "one JSON object, shallow top-level merge; a `null` value deletes a key"],
       ["--file <path>", "replace front matter + body from an artifact file; `-` reads stdin"],
@@ -91,6 +91,7 @@ export const VERBS: Record<string, VerbSpec> = {
     notes: [
       "a flag and a front-matter key supplying the same field is refused, never overridden",
       "only a human clears a pending question — a run may attach one, never empty or replace one",
+      "a watcher is transferred, never cleared: the loop that acts next is always named",
     ],
     seeAlso: TASK_KEYS,
   },
@@ -196,6 +197,7 @@ export const VERBS: Record<string, VerbSpec> = {
     notes: [
       "retire IS the delete: the kernel is event-sourced, so nothing is ever erased and there is no `loop delete`",
       "terminal — the charter freezes, the cadence is gone, and there is no un-retire",
+      "open tasks it still watches do NOT block it: retire warns with the count and proceeds, since nothing will wake them again",
       "the loop, its runs and everything it created stay readable: `loop list --status retired`, `loop show <id>`",
     ],
   },
@@ -241,7 +243,7 @@ export const VERBS: Record<string, VerbSpec> = {
     examples: ['loopany answer task-7f3a91 "(b) give it one more day, check tomorrow night"'],
     notes: [
       "free text — approve, reject and instructions are all just the answer; the kernel parses nothing",
-      "answering wakes the watcher loop; a task with no watcher just records the answer",
+      "answering wakes the watcher loop — every task names one, so every answer reaches a loop",
     ],
   },
 };

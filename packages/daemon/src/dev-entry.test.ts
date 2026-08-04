@@ -65,13 +65,13 @@ describe("the kernel home render", () => {
       bin: "/usr/local/bin/loopany",
       server: "http://127.0.0.1:3155",
       loops: LOOPS_BODY,
-      inbox: inboxOk({ question: 1, dueUnwatched: 1, orphan: 0, total: 2 }),
+      inbox: inboxOk({ question: 2, total: 2 }),
     });
     expect(text).toContain("bin: /usr/local/bin/loopany");
     expect(text).toContain("stack: runs-v2 · http://127.0.0.1:3155");
     expect(text).toContain("loops[3]{id,title,status,next_fire}:");
     expect(text).toContain('loop-4c1d77,Housekeeper,active,"2026-08-05T07:00:00+08:00"');
-    expect(text).toContain("inbox: 2 waiting — questions 1, due+unwatched 1, orphans 0");
+    expect(text).toContain("inbox: 2 waiting — 2 questions");
     expect(text).toContain("runs[2]{at,loop,state,summary}:");
     expect(text).toContain('"2026-08-04T07:04:00Z",loop-4c1d77,success,"swept 3 chores"');
   });

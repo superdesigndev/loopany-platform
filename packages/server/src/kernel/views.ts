@@ -21,10 +21,10 @@
  * aggregates. There is no topology table and no way to wire two loops, because
  * loops never wire to loops — they meet at the instance layer (design §10.6).
  */
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { events, objects, type KernelEvent, type KernelObject } from "../db/kernel-schema.js";
+import { objects, type KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
 import { runs, type Run } from "../db/schema.js";
 import { cronText } from "../lib/format.js";
@@ -295,9 +295,9 @@ export async function tasksView(context: ApiContext, query: URLSearchParams, now
   const stamp = now.toISOString();
 
   const conds = [eq(objects.teamId, context.teamId), eq(objects.kind, "task")];
+  // `watcher=none` retired with the unclaimed pool: every task names a watcher.
   const watcher = query.get("watcher");
-  if (watcher === "none") conds.push(isNull(objects.watcher));
-  else if (watcher) conds.push(eq(objects.watcher, watcher));
+  if (watcher) conds.push(eq(objects.watcher, watcher));
   const creator = query.get("creator"); if (creator) conds.push(eq(objects.createdByLoop, creator));
 
   // Two queries, not one: the open columns are the worklist and take the page
@@ -420,23 +420,26 @@ async function taskCountsByWatcher(teamId: string): Promise<{ open: Map<string, 
   };
 }
 
-export type GraphEdgeKind = "produces" | "adopts" | "hands-off" | "asks" | "answers";
+export type GraphEdgeKind = "hands-off" | "asks" | "answers";
 export interface GraphTask {
-  id: string; createdByLoop: string | null; watcher: string | null; pendingQuestion: string | null; adopted: boolean;
+  id: string; createdByLoop: string | null; watcher: string | null; pendingQuestion: string | null;
 }
 
 /**
  * The edge derivation, PURE — one row of spec §8.3's table per branch, so the
  * rules are unit-testable against fixtures without a database.
  *
- * DELIBERATE DEVIATION, spec §8.3 "adoption detection". The spec says to detect
- * adoption from the earliest `object-created` event's diff showing `watcher`
- * absent or null. That is not implementable as written: `createObjectIn` writes
- * a creation diff carrying only `pendingQuestion`, so `watcher` is ALWAYS absent
- * from it and every watched task would read as adopted. The honest equivalent —
- * and what the caller passes in — is the positive fact: an `object-updated`
- * event whose diff moves `watcher` from null to a loop id. That IS "created
- * unwatched, watcher set later".
+ * THREE KINDS, down from five. `produces` (a loop filing into the unclaimed
+ * pool) and `adopts` (a loop taking one back out) both described flows THROUGH
+ * the pool, and the watcher rule removed the pool: a task is watched from the
+ * moment it exists, so it is never in transit between nobody and somebody. The
+ * `pool` node went with them — see `systemGraphView`. What survives is the flow
+ * that was always the real one: `hands-off`, a loop filing a task another loop
+ * watches, which is now the ONLY way one loop's work reaches another.
+ *
+ * This also retires the spec §8.3 "adoption detection" deviation this function
+ * used to carry: with no pool there is no adoption to detect, so the `adopted`
+ * fact (and the event scan that computed it) is gone rather than reinterpreted.
  */
 export function deriveGraphEdges(tasks: GraphTask[]): { from: string; to: string; kind: GraphEdgeKind; count: number }[] {
   const tally = new Map<string, { from: string; to: string; kind: GraphEdgeKind; count: number }>();
@@ -453,10 +456,10 @@ export function deriveGraphEdges(tasks: GraphTask[]): { from: string; to: string
       if (task.watcher) add("you", task.watcher, "answers");
       continue;
     }
-    if (task.adopted && task.watcher) { add(creator, "pool", "produces"); add("pool", task.watcher, "adopts"); continue; }
-    if (!task.watcher) { add(creator, "pool", "produces"); continue; }
-    // A task a loop watches for ITSELF is not a flow between nodes.
-    if (task.watcher !== creator) add(creator, task.watcher, "hands-off");
+    // A task a loop watches for ITSELF is not a flow between nodes — and under
+    // the watcher rule's default it is now the COMMON case, which is exactly
+    // what makes a remaining edge worth drawing.
+    if (task.watcher && task.watcher !== creator) add(creator, task.watcher, "hands-off");
   }
   return [...tally.values()];
 }
@@ -471,28 +474,18 @@ export async function systemGraphView(context: ApiContext, query: URLSearchParam
   const stamp = now.toISOString();
 
   const loops = (await teamLoops(context.teamId)).filter((loop) => loop.status !== "retired");
-  const [runRows, counts, windowTasks, poolRows, questionCount] = await Promise.all([
+  const [runRows, counts, windowTasks, questionCount] = await Promise.all([
     runsForLoops(loops.map((l) => l.id)),
     taskCountsByWatcher(context.teamId),
     db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), gte(objects.createdAt, since))),
-    db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.status, "open"), isNull(objects.watcher))).orderBy(asc(objects.createdAt)),
     db.select({ n: sql<number>`count(*)` }).from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.status, "open"), isNotNull(objects.pendingQuestion), ne(objects.pendingQuestion, ""))),
   ]);
 
-  // Adoption is a positive fact in the log: watcher moved null → a loop id.
-  const watched = windowTasks.filter((t) => t.watcher);
-  const adoptions = watched.length
-    ? await db.select({ objectId: events.objectId, diff: events.diff }).from(events)
-        .where(and(eq(events.teamId, context.teamId), inArray(events.objectId, watched.map((t) => t.id))))
-    : [];
-  const adopted = new Set(adoptions.filter((e) => e.diff?.watcher && (e.diff.watcher.old ?? null) === null && e.diff.watcher.new).map((e) => e.objectId!));
-
-  const nodeIds = new Set<string>([...loops.map((l) => l.id), "pool", "you"]);
+  const nodeIds = new Set<string>([...loops.map((l) => l.id), "you"]);
   const edges = deriveGraphEdges(windowTasks.map((t) => ({
-    id: t.id, createdByLoop: t.createdByLoop, watcher: t.watcher, pendingQuestion: t.pendingQuestion, adopted: adopted.has(t.id),
+    id: t.id, createdByLoop: t.createdByLoop, watcher: t.watcher, pendingQuestion: t.pendingQuestion,
   }))).filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to));
 
-  const oldest = poolRows[0];
   const nodes = [
     ...loops.map((loop) => ({
       id: loop.id, type: "loop" as const, label: loop.title, status: loop.status,
@@ -503,9 +496,10 @@ export async function systemGraphView(context: ApiContext, query: URLSearchParam
         questionsWaiting: counts.questions.get(loop.id) ?? 0,
       },
     })),
-    // The synthetic pair ALWAYS exists, even at count zero, so the graph's shape
-    // does not change as work moves through it (spec §8.3).
-    { id: "pool", type: "pool" as const, label: "Unclaimed", status: "active", badges: { openTasks: poolRows.length, oldestAgeHours: oldest ? Math.floor((now.getTime() - Date.parse(oldest.createdAt)) / 3_600_000) : 0 } },
+    // `you` ALWAYS exists, even at count zero, so the graph's shape does not
+    // change as work moves through it (spec §8.3). Its twin `pool` node is gone:
+    // it stood for the unclaimed state, which no longer exists, so it could only
+    // ever render 0 unclaimed / oldest 0h beside edges nothing can produce.
     { id: "you", type: "you" as const, label: "You", status: "active", badges: { questionsWaiting: Number(questionCount[0]?.n ?? 0) } },
   ];
 

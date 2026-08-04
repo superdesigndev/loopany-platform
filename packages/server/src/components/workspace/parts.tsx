@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 
-import type { EventShape, RunRow } from './api'
+import type { EventShape, InboxCounts, RunRow } from './api'
 import { ViewError } from './api'
 
 /**
@@ -85,17 +85,17 @@ export function ViewHeader({ eyebrow, title, description, meta }: { eyebrow: str
 /**
  * The §6 safety-floor counters, at a glance on every screen that has them.
  *
- * Three separate figures rather than one summary sentence: each is a distinct
- * route into the inbox, and collapsing them would hide which floor is holding
- * the work. Zero renders quiet rather than absent — "no orphans" is a fact worth
+ * ONE figure now. It was three, and the other two — due-unwatched and the
+ * orphan floor — counted rows that can no longer exist: both were predicated on
+ * a task with no watcher, and the watcher rule (`kernel/types.ts` WATCHER_HINT)
+ * removed that state. A counter permanently pinned at zero is not a reassuring
+ * fact, it is a claim that the system still has a floor there.
+ *
+ * Zero renders quiet rather than absent — "nothing is waiting on you" is worth
  * seeing, and a disappearing row would make the strip jump.
  */
-export function CountStrip({ counts }: { counts: { question: number; dueUnwatched: number; orphan: number } }) {
-  const cells: [string, number][] = [
-    ['questions', counts.question],
-    ['due · unwatched', counts.dueUnwatched],
-    ['orphan floor', counts.orphan],
-  ]
+export function CountStrip({ counts }: { counts: InboxCounts }) {
+  const cells: [string, number][] = [['questions waiting on you', counts.question]]
   return (
     <dl className="count-strip">
       {cells.map(([label, value]) => (
@@ -303,11 +303,13 @@ export function StateChip({ state }: { state: string | null }) {
 }
 
 /**
- * The three routes into the inbox, in the surface's temperature grammar: a
- * pending question is a DECISION YOU OWE (amber); due-unwatched and the orphan
- * floor are CONSEQUENCES THAT DID NOT HAPPEN — work nobody picked up (rose).
+ * The routes into the inbox, in the surface's temperature grammar. There is one
+ * today — a pending question, a DECISION YOU OWE (amber) — and the mapping is
+ * kept rather than inlined because the inbox is exactly where a future branch
+ * lands, and it would arrive with its own temperature: anything that is not a
+ * decision you owe is a CONSEQUENCE THAT DID NOT HAPPEN (rose).
  */
-const REASON_LABEL: Record<string, string> = { question: 'question', 'due-unwatched': 'due · unwatched', orphan: 'orphan floor' }
+const REASON_LABEL: Record<string, string> = { question: 'question' }
 export const reasonTone = (reason: string): 'human' | 'floor' => (reason === 'question' ? 'human' : 'floor')
 export const reasonLabel = (reason: string): string => REASON_LABEL[reason] ?? reason
 

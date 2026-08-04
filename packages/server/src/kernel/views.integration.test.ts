@@ -11,10 +11,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
  *  1. **Shapes** — a view is a screen's contract, so the keys the screen reads
  *     are asserted explicitly. A missing `execution`, `cursorSeq` or
  *     `watcherLoop` is a broken screen, not a cosmetic diff.
- *  2. **Inbox union correctness** — the §6 safety floor. The fixture below
- *     deliberately contains one task for every branch AND one task for every
- *     NEAR MISS (watched-and-due, fresh-and-unwatched), because the floor's
- *     value is entirely in what it does and does not surface.
+ *  2. **Inbox union correctness** — the §6 safety floor, which is now ONE branch
+ *     (a question waiting for a human). The fixture deliberately contains the
+ *     NEAR MISSES the retired arms used to catch — a task that is due, and an
+ *     old one with no follow-up — because the floor's value is entirely in what
+ *     it does and does not surface, and those two must now stay out.
+ *
+ * EVERY TASK HERE NAMES A WATCHER, because every task does (`types.ts`
+ * WATCHER_HINT). Most of them get it by DEFAULT: `make` passes `createdByLoop`,
+ * and a loop-created task falls back to its creator — so a fixture line with no
+ * `watcher:` is exercising the default, not skipping the field.
  */
 
 let temp: string;
@@ -89,22 +95,23 @@ async function seed() {
   const anomaly = await make({ kind: "task", title: "Watch the error rate", createdByLoop: housekeeper, watcher: housekeeper, followUpAt: ago(1) });
   await kernel.applyUpdate({ objectId: anomaly.id, actor: { entrance: "agent", actorId: "run-triage" }, now: ago(2), fields: { pendingQuestion: "error rate doubled — (a) revert (b) one more day" } } as never);
 
-  // The floor's other two branches.
-  await make({ kind: "task", title: "Draft the pricing FAQ", createdByLoop: housekeeper, followUpAt: ago(3) }); // due + unwatched
-  await make({ kind: "task", title: "Nobody asked for this", createdByLoop: housekeeper, now: ago(72) }); // orphan
-
-  // NEAR MISSES — each must stay OUT of the inbox.
+  // NEAR MISSES — what the two RETIRED inbox arms used to catch. Both are now
+  // ordinary watched work: the due one wakes its loop, the old one waits for
+  // that loop's cadence. Neither may reach a person.
+  await make({ kind: "task", title: "Draft the pricing FAQ", createdByLoop: housekeeper, followUpAt: ago(3) }); // was due+unwatched
+  await make({ kind: "task", title: "Filed and quiet", createdByLoop: housekeeper, now: ago(72) }); // was the orphan floor
   await make({ kind: "task", title: "Watched and due", createdByLoop: housekeeper, watcher: steward, followUpAt: ago(3) });
-  await make({ kind: "task", title: "Fresh and unwatched", createdByLoop: housekeeper, now: ago(1) });
+  await make({ kind: "task", title: "Freshly filed", createdByLoop: housekeeper, now: ago(1) });
   const closed = await make({ kind: "task", title: "Already closed", createdByLoop: housekeeper, now: ago(96) });
   await kernel.applyTransition({ objectId: closed.id, transition: "close", actor: human.actor, now: ago(90), note: "done" } as never);
 
-  // Adoption: created unwatched, watcher set later — the pool → watcher edge.
-  const adopted = await make({ kind: "task", title: "Adopted from the pool", createdByLoop: housekeeper, now: ago(30) });
-  await kernel.applyUpdate({ objectId: adopted.id, actor: { entrance: "agent", actorId: "run-sweep" }, now: ago(20), fields: { watcher: steward } } as never);
+  // A HAND-OFF: filed by the Housekeeper (so it defaulted onto its own desk),
+  // transferred to the steward later. The one flow edge between two loops.
+  const handed = await make({ kind: "task", title: "Handed to FollowUp", createdByLoop: housekeeper, now: ago(30) });
+  await kernel.applyUpdate({ objectId: handed.id, actor: { entrance: "agent", actorId: "run-sweep" }, now: ago(20), fields: { watcher: steward } } as never);
 
   // Another team's task must never appear in this team's screens.
-  const foreign = await kernel.createObject({ teamId: OTHER_TEAM, kind: "task", actor: { entrance: "human", actorId: "u-other" }, now: ago(96), title: "Not yours", pendingQuestion: "?" } as never);
+  const foreign = await kernel.createObject({ teamId: OTHER_TEAM, kind: "task", actor: { entrance: "human", actorId: "u-other" }, now: ago(96), title: "Not yours", pendingQuestion: "?", watcher: "loop-elsewhere" } as never);
   if (!foreign.ok) throw new Error(foreign.message);
 
   await make({ kind: "doc", title: "Housekeeper 2026-08-08", format: "markdown", body: "# Report\n\nAdopted 2, closed 3.\n", createdByLoop: housekeeper });
@@ -123,21 +130,26 @@ const ok = <T,>(result: { ok: true; value: T } | { ok: false; error: { code: str
 // --------------------------------------------------------------------- inbox
 
 describe("GET /api/views/inbox — the §6 union, exactly", () => {
-  it("surfaces every branch and nothing else", async () => {
+  it("surfaces the questions and nothing else", async () => {
     const value = ok(await views.inboxView(human, NOW)) as { items: { task: { title: string }; reasons: string[] }[]; counts: Record<string, number> };
     expect(value.items.map((i) => i.task.title).sort()).toEqual([
-      "Draft the pricing FAQ", "Nobody asked for this", "Reddit reply to r/selfhosted", "Watch the error rate",
+      "Reddit reply to r/selfhosted", "Watch the error rate",
     ]);
-    expect(value.counts).toEqual({ question: 2, dueUnwatched: 1, orphan: 1, total: 4 });
+    expect(value.counts).toEqual({ question: 2, total: 2 });
   });
 
-  it("keeps the near misses out — a watched due task and a fresh orphan-to-be", async () => {
+  /**
+   * The two RETIRED arms, pinned as near misses. A due task and an old
+   * follow-up-less one both used to reach a person; now the first wakes its
+   * watcher and the second waits for that loop's cadence. If either reappears
+   * here, the watcher rule has been half-undone.
+   */
+  it("keeps out what the retired due-unwatched and orphan arms used to catch", async () => {
     const value = ok(await views.inboxView(human, NOW)) as { items: { task: { title: string } }[] };
     const titles = value.items.map((i) => i.task.title);
-    expect(titles).not.toContain("Watched and due");
-    expect(titles).not.toContain("Fresh and unwatched");
-    expect(titles).not.toContain("Already closed");
-    expect(titles).not.toContain("Observe the impact of PR #201");
+    for (const quiet of ["Draft the pricing FAQ", "Filed and quiet", "Watched and due", "Freshly filed", "Already closed", "Observe the impact of PR #201"]) {
+      expect(titles).not.toContain(quiet);
+    }
   });
 
   it("is team-scoped: another team's question is invisible", async () => {
@@ -145,15 +157,17 @@ describe("GET /api/views/inbox — the §6 union, exactly", () => {
     expect(value.items.map((i) => i.task.title)).not.toContain("Not yours");
   });
 
-  it("orders decisions before the floor branches", async () => {
+  it("gives every row the one reason there is", async () => {
     const value = ok(await views.inboxView(human, NOW)) as { items: { reasons: string[] }[] };
-    expect(value.items[0]!.reasons).toContain("question");
-    expect(value.items.at(-1)!.reasons).not.toContain("question");
+    expect(value.items.length).toBeGreaterThan(0);
+    for (const item of value.items) expect(item.reasons).toEqual(["question"]);
   });
 
-  it("crosses the 48h orphan floor only after 48h", async () => {
-    const early = ok(await views.inboxView(human, new Date(Date.parse(ago(72)) + 47 * 3_600_000))) as { items: { task: { title: string } }[] };
-    expect(early.items.map((i) => i.task.title)).not.toContain("Nobody asked for this");
+  // Age used to be a route in (the 48h orphan floor). It is not one any more:
+  // an old task is somebody's work, not an escalation waiting to happen.
+  it("never surfaces a task on AGE alone, however old it gets", async () => {
+    const later = ok(await views.inboxView(human, new Date(NOW.getTime() + 400 * 3_600_000))) as { items: { task: { title: string } }[] };
+    expect(later.items.map((i) => i.task.title).sort()).toEqual(["Reddit reply to r/selfhosted", "Watch the error rate"]);
   });
 
   it("echoes the payload verbatim under `execution`, next to the answer box", async () => {
@@ -200,7 +214,10 @@ describe("GET /api/views/loop/:id", () => {
     expect(loop.body).toBe("You are the Housekeeper.\n");
     expect(value.health).toMatchObject({ lastOutcome: "success", consecutiveFailures: 0, runs7d: { success: 1, failure: 1 } });
     const open = value.openTasks as { watching: { title: string }[]; created: { title: string }[]; questions: { title: string }[] };
-    expect(open.watching.map((t) => t.title)).toEqual(["Watch the error rate", "Reddit reply to r/selfhosted"]);
+    // Everything it filed and did not hand on — the default put them here.
+    expect(open.watching.map((t) => t.title).sort()).toEqual([
+      "Draft the pricing FAQ", "Filed and quiet", "Freshly filed", "Reddit reply to r/selfhosted", "Watch the error rate",
+    ]);
     expect(open.created.length).toBeGreaterThan(4);
     expect(open.questions.map((t) => t.title).sort()).toEqual(["Reddit reply to r/selfhosted", "Watch the error rate"]);
     expect((value.recentRuns as { id: string }[]).map((r) => r.id)).toEqual(["run-seed", "run-old"]);
@@ -231,7 +248,7 @@ describe("GET /api/views/loop/:id", () => {
     const value = ok(await views.loopsView(human, NOW)) as { loops: Record<string, unknown>[] };
     const row = value.loops.find((l) => l.id === housekeeper)!;
     expect(row).toMatchObject({ title: "Housekeeper", status: "active", cronText: "daily 07:00", questionsWaiting: 2 });
-    expect(row.openTasks).toBe(2);
+    expect(row.openTasks).toBe(5);
   });
 });
 
@@ -250,12 +267,11 @@ describe("GET /api/views/tasks — the board, and /task/:id", () => {
   it("puts every task in exactly one column, derived from the kernel's own facts", async () => {
     const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
     expect(titlesByColumn(value)).toEqual({
-      // A question blocks every other move, so it outranks watcher and date.
+      // A question blocks every other move, so it outranks the date.
       waiting: ["Reddit reply to r/selfhosted", "Watch the error rate"],
-      // Due-and-unwatched stays in the pool: nobody owns it, so nobody is late.
-      unclaimed: ["Draft the pricing FAQ", "Fresh and unwatched", "Nobody asked for this"],
-      due: ["Watched and due"],
-      watched: ["Adopted from the pool", "Observe the impact of PR #201"],
+      // What was the unclaimed pool is now split by the only fact left: the date.
+      due: ["Draft the pricing FAQ", "Watched and due"],
+      watched: ["Filed and quiet", "Freshly filed", "Handed to FollowUp", "Observe the impact of PR #201"],
       closed: ["Already closed"],
     });
     const all = value.columns.flatMap((c) => c.tasks.map((t) => t.id));
@@ -265,7 +281,7 @@ describe("GET /api/views/tasks — the board, and /task/:id", () => {
 
   it("carries the one-sentence rule per column, so the screen never restates the lifecycle", async () => {
     const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
-    expect(value.columns.map((c) => c.key)).toEqual(["waiting", "unclaimed", "due", "watched", "closed"]);
+    expect(value.columns.map((c) => c.key)).toEqual(["waiting", "due", "watched", "closed"]);
     for (const column of value.columns) expect(column.rule.length).toBeGreaterThan(20);
   });
 
@@ -275,15 +291,16 @@ describe("GET /api/views/tasks — the board, and /task/:id", () => {
     expect(value.counts).toEqual(inbox.counts);
   });
 
-  it("offers the loops a card can be claimed for — claim names a loop, never free text", async () => {
+  it("offers the loops a task can be handed to — a hand-off names a loop, never free text", async () => {
     const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
     expect(value.loops.map((l) => l.id).sort()).toEqual([housekeeper, steward].sort());
   });
 
   it("narrows on state predicates only, and refuses a filter the board owns as a column", async () => {
-    const pool = ok(await views.tasksView(human, new URLSearchParams({ watcher: "none" }), NOW)) as BoardValue;
-    expect(titlesByColumn(pool).unclaimed).toEqual(["Draft the pricing FAQ", "Fresh and unwatched", "Nobody asked for this"]);
-    expect(titlesByColumn(pool).watched).toEqual([]);
+    const stewards = ok(await views.tasksView(human, new URLSearchParams({ watcher: steward }), NOW)) as BoardValue;
+    expect(titlesByColumn(stewards)).toEqual({
+      waiting: [], due: ["Watched and due"], watched: ["Handed to FollowUp", "Observe the impact of PR #201"], closed: [],
+    });
 
     for (const filter of [["since", "14d"], ["status", "open"], ["question", "true"]] as [string, string][]) {
       const refused = await views.tasksView(human, new URLSearchParams([filter]), NOW);
@@ -343,26 +360,27 @@ describe("GET /api/views/docs and /doc/:id", () => {
 // -------------------------------------------------------------- system graph
 
 describe("GET /api/views/system-graph — a projection, never configuration", () => {
-  it("always carries the synthetic pool and you nodes, plus one per live loop", async () => {
+  it("always carries the synthetic you node, plus one per live loop — and no pool", async () => {
     const value = ok(await views.systemGraphView(human, new URLSearchParams(), NOW)) as { nodes: { id: string; type: string; badges: Record<string, unknown> }[] };
-    expect(value.nodes.map((n) => n.type).sort()).toEqual(["loop", "loop", "pool", "you"]);
+    expect(value.nodes.map((n) => n.type).sort()).toEqual(["loop", "loop", "you"]);
     const you = value.nodes.find((n) => n.type === "you")!;
     expect(you.badges.questionsWaiting).toBe(2);
-    const pool = value.nodes.find((n) => n.type === "pool")!;
-    expect(pool.badges.openTasks).toBe(3);
-    expect(typeof pool.badges.oldestAgeHours).toBe("number");
+    // The pool node stood for the unclaimed state and retired with it.
+    expect(value.nodes.some((n) => n.id === "pool")).toBe(false);
     const loop = value.nodes.find((n) => n.id === housekeeper)!;
-    expect(loop.badges).toMatchObject({ cadence: "daily 07:00", lastOutcome: "success", openTasks: 2, questionsWaiting: 2 });
+    expect(loop.badges).toMatchObject({ cadence: "daily 07:00", lastOutcome: "success", openTasks: 5, questionsWaiting: 2 });
   });
 
-  it("derives the flow edges from live rows, including the adoption pair", async () => {
+  it("derives the flow edges from live rows — hand-offs and questions, nothing through a pool", async () => {
     const value = ok(await views.systemGraphView(human, new URLSearchParams(), NOW)) as { edges: { from: string; to: string; kind: string; count: number }[] };
     const kinds = value.edges.map((e) => `${e.from === housekeeper ? "hk" : e.from === steward ? "st" : e.from}→${e.to === steward ? "st" : e.to === housekeeper ? "hk" : e.to}:${e.kind}`);
     expect(kinds).toContain("hk→you:asks");
     expect(kinds).toContain("you→hk:answers");
     expect(kinds).toContain("hk→st:hands-off");
-    expect(kinds).toContain("hk→pool:produces");
-    expect(kinds).toContain("pool→st:adopts");
+    // `produces` and `adopts` described flows THROUGH the pool; both are gone.
+    expect(value.edges.every((e) => e.from !== "pool" && e.to !== "pool")).toBe(true);
+    expect(value.edges.map((e) => e.kind)).not.toContain("produces");
+    expect(value.edges.map((e) => e.kind)).not.toContain("adopts");
   });
 
   it("windows the counts, and refuses a window outside 1–90 days", async () => {
@@ -380,7 +398,7 @@ describe("GET /api/views/system-graph — a projection, never configuration", ()
     const value = ok(await views.systemGraphView(human, new URLSearchParams(), NOW)) as { nodes: { id: string }[]; edges: { to: string }[] };
     expect(value.nodes.map((n) => n.id)).not.toContain(steward);
     expect(value.edges.every((e) => e.to !== steward)).toBe(true);
-    expect(value.nodes.filter((n) => ["pool", "you"].includes(n.id))).toHaveLength(2);
+    expect(value.nodes.filter((n) => n.id === "you")).toHaveLength(1);
   });
 });
 

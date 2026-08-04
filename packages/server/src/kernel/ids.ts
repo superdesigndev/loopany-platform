@@ -240,6 +240,23 @@ export function answeredRunId(verdictEventId: string): string {
   return `run-${derivedSuffix({ verdictEventId, seed: "answered" })}`;
 }
 
+/**
+ * An R-DUE run's id — a watched task whose `follow_up` arrived woke its watcher.
+ *
+ * The seed is `{loopId, taskId, followUpAt}`, and every part of it is
+ * load-bearing. `followUpAt` is the FOLLOW-UP INSTANT, never "now" at fire time,
+ * for the same reason `clockRunId` uses the cron occurrence: the due condition is
+ * LEVEL-triggered, so the same task is still due on every tick until a run lands.
+ * Including the instant makes those ticks re-derive ONE id (the second is a
+ * replay, swallowed) while a RE-ARMED follow-up — the ordinary way a loop says
+ * "look at this again in three days" — is a different instant and therefore a
+ * genuinely fresh run. `taskId` is in the seed because one loop can have several
+ * tasks come due at the same moment and each is its own scoped run.
+ */
+export function dueRunId(loopId: string, taskId: string, followUpAt: string): string {
+  return `run-${derivedSuffix({ loopId, taskId, followUpAt, seed: "due" })}`;
+}
+
 /** A manually fired run — an organic occurrence (a person pressed the button
  *  twice on purpose is two real facts; the one-queued-run index bounds it). */
 export function newRunId(attempt = 0, random?: (n: number) => Uint8Array): string {

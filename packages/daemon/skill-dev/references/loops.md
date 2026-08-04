@@ -98,14 +98,19 @@ loopany loop retire loop-4c1d77 --note "the experiment is over"
 ```
 
 - **`pause` disarms the CADENCE**: `next_fire` is cleared, so the clock can never
-  select this loop. Time never un-pauses it — `resume` is the only exit
-  (including from a failure auto-pause). Everything it created stays open and
-  readable; pausing a loop does not close its tasks.
+  select this loop — including for a task of its own that comes due, which simply
+  stays due and fires on the next tick after `resume`. Time never un-pauses it —
+  `resume` is the only exit (including from a failure auto-pause). Everything it
+  created stays open and readable; pausing a loop does not close its tasks.
 - **`resume` re-arms to the NEXT occurrence.** A week paused owes exactly one
   fire, not a week of them.
 - **`retire` is terminal.** The charter freezes, `evolve` and `update` are
   refused for good, `run-now` is refused, and there is no un-retire. Retired
   loops stay listed on purpose.
+- **Retire WARNS, it never blocks.** Retiring a loop that still watches open
+  tasks succeeds, and the response names the count: those tasks keep pointing at
+  a loop that will never be woken again. Hand each to a live loop
+  (`task update <id> --watcher <loop-id>`) or close it.
 - Repeating any of them is a **success that changed nothing** (`changed: false`),
   so a retry after a dropped connection costs nothing. Only a move OUT of
   `retired` refuses.

@@ -127,7 +127,13 @@ function inboxLine(inbox: Fetched | { error: string }): string {
   const counts = (inbox.body.counts ?? {}) as Record<string, unknown>;
   const total = Number(counts.total ?? 0);
   if (!total) return "0 waiting — nothing needs you";
-  return `${total} waiting — questions ${Number(counts.question ?? 0)}, due+unwatched ${Number(counts.dueUnwatched ?? 0)}, orphans ${Number(counts.orphan ?? 0)}`;
+  // ONE branch since the watcher rule (`kernel/types.ts` WATCHER_HINT) retired
+  // the two that counted watcher-less tasks. `total` and `question` therefore
+  // agree today; both are read so a future branch shows up here as a gap
+  // rather than a silently under-reported total.
+  const question = Number(counts.question ?? 0);
+  const other = total - question;
+  return `${total} waiting — ${question} question${question === 1 ? "" : "s"}${other > 0 ? ` and ${other} other` : ""}`;
 }
 
 function homeHints(loops: Row[], shownLoops: number, runCount: number, shownRuns: number): string[] {

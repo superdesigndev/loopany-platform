@@ -12,10 +12,15 @@
  * pglite is single-writer, so run this BEFORE starting the dev server against
  * the same `LOOPANY_DATA_DIR`.
  *
- * Content covers: two loops, a task in each of the three archetypal lives, the
- * two other inbox branches (due-unwatched, orphan floor), the near misses that
- * must stay OUT of the inbox, an adopted task (the pool → watcher edge), one
- * markdown doc and one html doc, and a run history.
+ * Content covers: two loops, a task in each of the three archetypal lives, a
+ * task HANDED OFF between the two loops (the one remaining graph edge), tasks
+ * that are due and not-yet-due, the near misses that must stay OUT of the inbox
+ * (which is now the question branch alone), one markdown doc and one html doc,
+ * and a run history.
+ *
+ * EVERY TASK IT WRITES NAMES A WATCHER, because every task in the system does
+ * (`kernel/types.ts` WATCHER_HINT). The kernel would refuse an unwatched one, so
+ * this is not a convention the fixture keeps by hand — it could not break it.
  */
 import { db, runMigrations } from "../db/index.js";
 import { runs } from "../db/schema.js";
@@ -46,7 +51,7 @@ async function main() {
   });
   const steward = await object({
     kind: "loop", key: "fixture-followup", title: "FollowUp", cron: "30 8 * * *",
-    body: "You sweep the unclaimed pool.\n\nList open unclaimed tasks, adopt the ones in your scope, verify the due ones, close what is done.\n",
+    body: "You are FollowUp — the loop other loops hand verification work to.\n\nWork the tasks you watch: verify the ones that have come due, close what is done, and ask when you cannot tell.\n",
   });
 
   // The charter history the loop page renders: one evolve pass, by a run.
@@ -83,9 +88,10 @@ async function main() {
     fields: { pendingQuestion: "error rate doubled since #198 landed — (a) revert (b) give it one more day" },
   } as never);
 
-  // The floor's other two branches.
+  // Watcher DEFAULTED to the creating loop: neither of these names one, so the
+  // kernel put the Housekeeper on the hook for its own work.
   await object({ kind: "task", key: "fixture-faq", title: "Draft the pricing FAQ", createdByLoop: housekeeper, followUpAt: ago(4), now: ago(30), body: "Three support threads asked the same question about seat pricing.\n" });
-  await object({ kind: "task", key: "fixture-orphan", title: "Reply to the packaging thread", createdByLoop: housekeeper, now: ago(80), body: "Nobody claimed this and it has no follow-up date. The orphan floor is the only reason you are seeing it.\n" });
+  await object({ kind: "task", key: "fixture-nodate", title: "Reply to the packaging thread", createdByLoop: housekeeper, now: ago(80), body: "Watched, but with no follow-up date: nothing wakes its loop for this one, so it waits for the loop's own cadence to pick it up.\n" });
 
   // Near misses — visible in the task list, never in the inbox.
   await object({ kind: "task", key: "fixture-watched-due", title: "Verify the nightly backup", createdByLoop: housekeeper, watcher: steward, followUpAt: ago(5), now: ago(40) });
@@ -94,17 +100,19 @@ async function main() {
   const closed = await object({ kind: "task", key: "fixture-closed", title: "Ship the docs typo fix", createdByLoop: housekeeper, now: ago(120), body: "One-line fix, merged.\n" });
   await applyTransition({ objectId: closed, transition: "close", actor: agent("run-hk-0729"), now: ago(100), note: "Merged as #197; nothing left to watch." } as never);
 
-  // Adoption: created unwatched, adopted by the steward later.
-  const adopted = await object({ kind: "task", key: "fixture-adopted", title: "Chase the flaky machine-poll test", createdByLoop: housekeeper, now: ago(34) });
-  await applyUpdate({ objectId: adopted, actor: agent("run-fu-0803"), now: ago(24), fields: { watcher: steward, followUpAt: ahead(48) } } as never);
+  // A HAND-OFF: the Housekeeper filed it (so it started on its own desk) and a
+  // later run transferred it to FollowUp. Transfer is the surviving watcher
+  // write — release is gone — and it is what draws the graph's `hands-off` edge.
+  const handed = await object({ kind: "task", key: "fixture-handed-off", title: "Chase the flaky machine-poll test", createdByLoop: housekeeper, now: ago(34) });
+  await applyUpdate({ objectId: handed, actor: agent("run-fu-0803"), now: ago(24), fields: { watcher: steward, followUpAt: ahead(48) } } as never);
 
   await object({
     kind: "doc", key: "fixture-report", title: "Housekeeper — daily report", format: "markdown", createdByLoop: housekeeper, createdByRun: "run-hk-0803", now: ago(3),
-    body: "# Housekeeper — 07:00\n\nAdopted **2**, closed **3**, asked **1**.\n\n| what | count |\n| --- | --- |\n| PRs opened | 1 |\n| tasks closed | 3 |\n\n> The error rate on #198 doubled overnight; a question is waiting in the inbox.\n\n<script>alert('this raw HTML must not render')</script>\n",
+    body: "# Housekeeper — 07:00\n\nHanded off **2**, closed **3**, asked **1**.\n\n| what | count |\n| --- | --- |\n| PRs opened | 1 |\n| tasks closed | 3 |\n\n> The error rate on #198 doubled overnight; a question is waiting in the inbox.\n\n<script>alert('this raw HTML must not render')</script>\n",
   });
   await object({
     kind: "doc", key: "fixture-board", title: "Weekly board (html)", format: "html", createdByLoop: steward, now: ago(6),
-    body: `<!doctype html><style>body{font:14px/1.5 system-ui;margin:0;padding:18px;background:#fff}h1{font-size:16px;margin:0 0 12px}.card{border:1px solid #ddd;border-radius:8px;padding:10px 12px;margin-bottom:8px}#probe{margin-top:14px;padding:8px 10px;border-radius:6px;background:#f6f6f6;font:12px ui-monospace,monospace}</style><h1>Weekly board</h1><div class="card">Adopted 2 · closed 3 · asked 1</div><div class="card">Oldest unclaimed: 80h</div><div id="probe">containment probe running…</div><script>
+    body: `<!doctype html><style>body{font:14px/1.5 system-ui;margin:0;padding:18px;background:#fff}h1{font-size:16px;margin:0 0 12px}.card{border:1px solid #ddd;border-radius:8px;padding:10px 12px;margin-bottom:8px}#probe{margin-top:14px;padding:8px 10px;border-radius:6px;background:#f6f6f6;font:12px ui-monospace,monospace}</style><h1>Weekly board</h1><div class="card">Handed off 2 · closed 3 · asked 1</div><div class="card">Oldest open task: 80h</div><div id="probe">containment probe running…</div><script>
       // A doc's script runs — in an OPAQUE origin. Both of these must fail.
       var cookie = 'unreadable';
       try { cookie = document.cookie === '' ? 'empty (opaque origin)' : 'READABLE — CONTAINMENT BROKEN'; } catch (e) { cookie = 'threw: ' + e.name; }
@@ -115,10 +123,10 @@ async function main() {
   });
 
   const history = [
-    { id: "run-hk-0803", loopId: housekeeper, at: 3, state: "success" as const, summary: "Adopted 2, closed 3, asked 1.", cost: 0.62 },
+    { id: "run-hk-0803", loopId: housekeeper, at: 3, state: "success" as const, summary: "Handed off 2, closed 3, asked 1.", cost: 0.62 },
     { id: "run-hk-0802", loopId: housekeeper, at: 27, state: "failure" as const, summary: "gh auth expired mid-sweep", cost: 0.08 },
     { id: "run-hk-0801", loopId: housekeeper, at: 51, state: "success" as const, summary: "Opened PR #201.", cost: 0.71 },
-    { id: "run-fu-0803", loopId: steward, at: 24, state: "success" as const, summary: "Adopted 1 from the pool.", cost: 0.19 },
+    { id: "run-fu-0803", loopId: steward, at: 24, state: "success" as const, summary: "Verified 1 hand-off, closed it.", cost: 0.19 },
   ];
   for (const run of history) {
     await db.insert(runs).values({

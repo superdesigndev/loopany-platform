@@ -2,7 +2,8 @@
 // Source import keeps a fresh checkout typecheckable before the workspace codec
 // has been built to dist; the package remains the dependency/runtime owner.
 import { safeParseArtifact } from "../../../artifact-format/src/index.js";
-import { and, asc, desc, eq, gt, inArray, isNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "../db/index.js";
 import { objects, type KernelObject } from "../db/kernel-schema.js";
@@ -20,11 +21,13 @@ import {
   autoPauseTaskId,
   clockRunId,
   derivedEventId,
+  dueRunId,
   newRunId,
   reportDocId,
 } from "./ids.js";
 import { nextOccurrenceAfter } from "./schedule.js";
 import { REFUSAL_STATUS, refusal, type RefusalCode } from "./refusals.js";
+import type { RunReason } from "./types.js";
 
 const log = logger.child({ mod: "run-queue" });
 
@@ -54,11 +57,14 @@ function envNonNegative(name: string, fallback: number): number {
 export interface QueueInput {
   loop: KernelObject;
   now: string;
-  reason: "clock" | "answered" | "manual";
+  reason: RunReason;
   scope?: string;
   scheduledFor?: string | null;
   /** Required for answered runs so a retried verdict derives the same row. */
   verdictEventId?: string;
+  /** Required for DUE runs: the task and the follow-up instant that came due,
+   *  which together with the loop are the run's identity (`dueRunId`). */
+  due?: { taskId: string; followUpAt: string };
 }
 
 /** Callable insertion seam for unit 4's R-answer transaction. */
@@ -67,12 +73,17 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
   if (reason === "answered" && !input.verdictEventId) {
     throw new Error("answered runs require verdictEventId for deterministic identity");
   }
+  if (reason === "due" && !input.due) {
+    throw new Error("due runs require the task and follow-up instant for deterministic identity");
+  }
   const derivedId =
     reason === "clock" && input.scheduledFor
       ? clockRunId(loop.id, input.scheduledFor)
       : reason === "answered" && input.verdictEventId
         ? answeredRunId(input.verdictEventId)
-        : undefined;
+        : reason === "due" && input.due
+          ? dueRunId(loop.id, input.due.taskId, input.due.followUpAt)
+          : undefined;
   const row = {
     loopId: loop.id,
     // Additive reuse of the legacy table requires these columns. They are not
@@ -85,7 +96,10 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
     queueState: "queued",
     scope: input.scope ?? "routine",
     reason,
-    entrance: reason === "clock" ? "clock" : reason === "answered" ? "answer" : "human",
+    // A DUE fire is the CLOCK's entrance, not a person's: nobody entered
+    // anything at the moment it fired — a date that was set earlier simply
+    // arrived, which is exactly what `clock` means for a cadence.
+    entrance: reason === "clock" || reason === "due" ? "clock" : reason === "answered" ? "answer" : "human",
     scheduledFor: input.scheduledFor ?? null,
   } as const;
 
@@ -246,6 +260,104 @@ async function queueOneFire(
   }
 }
 
+/**
+ * ONE LEVEL-TRIGGERED PASS OVER DUE TASKS — R-due (captain ruling 2026-08-04).
+ *
+ * A watched task whose `follow_up` has arrived WAKES ITS WATCHER. This is the
+ * other half of the watcher rule: once every task names the loop that acts next,
+ * a follow-up date stops being a note in a list and becomes a real alarm on a
+ * named actor — so the scheduler treats it exactly like a cadence. Before this,
+ * a due task waited for its watcher's next cron fire (or forever, on a loop with
+ * no cron), and the compensating machinery was the inbox's `due-unwatched`
+ * branch, which only ever saw the tasks nobody watched at all.
+ *
+ * The properties that make it safe to run every tick:
+ *
+ *  - **LEVEL-TRIGGERED, like the cadence tick.** Nothing is consumed and no
+ *    cursor advances: a task is due until its `follow_up` moves or it closes. A
+ *    tick that cannot queue (the loop is busy, the transaction failed) simply
+ *    leaves it due for the next one.
+ *  - **DERIVED-ID IDEMPOTENT per (loop, task, that follow-up instant)**
+ *    (`dueRunId`). That is what makes the level trigger safe: the second tick
+ *    re-derives the first tick's run id and the insert is swallowed as a replay,
+ *    so one due instant queues exactly ONE run no matter how many passes see it.
+ *    Re-arming `follow_up` is a new instant, hence a new run — which is how a
+ *    loop asks to be woken again.
+ *  - **SCOPED to the task** (`task:<id>`, the shape R-answer already uses), so
+ *    the claim hands the run the task that woke it.
+ *  - **ACTIVE watchers only**, the same selection `tickRunClock` makes. Pause
+ *    governs the clock (that is the whole of what pause means here), and a due
+ *    task is not lost by it: the trigger is level, so the moment the loop
+ *    resumes, a still-due task fires on the next tick. RETIRED is excluded by
+ *    the same predicate and is the case that really does strand work — which is
+ *    why retiring a loop that still watches open tasks WARNS (`loopLifecycle`).
+ *
+ * A task with a question pending is deliberately NOT excluded: the question
+ * blocks a CLOSE, not the loop's own work, and the run may well be able to make
+ * progress while a human decides.
+ */
+export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> {
+  const nowIso = now.toISOString();
+  const due = await db
+    .select({ task: objects, loop: LOOPS })
+    .from(objects)
+    .innerJoin(LOOPS, eq(LOOPS.id, objects.watcher))
+    .where(
+      and(
+        eq(objects.kind, "task"),
+        eq(objects.status, "open"),
+        isNotNull(objects.followUpAt),
+        lte(objects.followUpAt, nowIso),
+        eq(LOOPS.kind, "loop"),
+        eq(LOOPS.status, "active"),
+      ),
+    )
+    .orderBy(asc(objects.followUpAt))
+    .limit(50);
+  const result: TickResult = { scanned: due.length, queued: 0, skipped: 0, replayed: 0, failed: 0 };
+
+  for (const { task, loop } of due) {
+    const followUpAt = task.followUpAt!;
+    try {
+      const outcome = await db.transaction(async (rawTx) => {
+        const tx = rawTx as unknown as store.KernelExec;
+        const queued = await queueKernelRun(tx, {
+          loop, now: nowIso, reason: "due", scope: `task:${task.id}`,
+          scheduledFor: followUpAt, due: { taskId: task.id, followUpAt },
+        });
+        if (queued.outcome === "queued") {
+          await appendDerivedEvent(tx, {
+            id: derivedEventId({ loopId: loop.id, taskId: task.id, kind: "run-queued", followUpAt }),
+            teamId: loop.teamId,
+            objectId: loop.id,
+            kind: "run-queued",
+            origin: "derived",
+            entrance: "clock",
+            actorId: loop.id,
+            payload: { runId: queued.run!.id, reason: "due", scope: `task:${task.id}`, followUpAt },
+            ts: nowIso,
+          });
+        }
+        return queued.outcome;
+      });
+      if (outcome === "queued") result.queued += 1;
+      else if (outcome === "loop-busy") result.skipped += 1;
+      else result.replayed += 1;
+    } catch (err) {
+      // Same isolation as the cadence tick: one task's identity fault must not
+      // starve the rest, and nothing was consumed, so it is still due next pass.
+      log.error({ err: String(err), loopId: loop.id, taskId: task.id, followUpAt }, "due task could not wake its watcher");
+      result.failed += 1;
+    }
+  }
+  if (result.queued) wakeClaims();
+  return result;
+}
+
+/** The watcher side of the due join. `objects` appears twice in one query (the
+ *  task and the loop watching it), so the loop side needs its own alias. */
+const LOOPS = alias(objects, "watcher_loop");
+
 /** Cutover repair for migrated active loops plus the create/resume arming seam. */
 export async function armUnarmedLoops(now: Date = new Date()): Promise<number> {
   const rows = await db
@@ -353,6 +465,14 @@ export async function claimRun(machine: Machine, body: ClaimBody, now = new Date
   const { run, loop } = claimed;
   const taskId = run.scope?.startsWith("task:") ? run.scope.slice(5) : undefined;
   const task = taskId ? await store.getObject(undefined, taskId) : undefined;
+  // A scoped run says WHY it is scoped, because the two reasons ask for
+  // different work: an answer is new information to act on, a due date is the
+  // loop's own earlier request to look again.
+  const scopeNote = !taskId
+    ? null
+    : run.reason === "due"
+      ? `A task you watch has reached its follow-up date and is waiting for you: ${taskId}.`
+      : `One task was answered by a human and is waiting for you: ${taskId}.`;
   return {
     status: 200,
     body: {
@@ -368,7 +488,7 @@ export async function claimRun(machine: Machine, body: ClaimBody, now = new Date
       },
       charter: loop.body ?? "",
       identityLine: `You are running for ${loop.id}${loop.title ? ` (\"${loop.title}\")` : ""}.`,
-      scopeNote: taskId ? `One task was answered by a human and is waiting for you: ${taskId}.` : null,
+      scopeNote,
       ...(task ? { task } : {}),
       execution: executionConfig(loop),
       roots: machine.roots ?? undefined,
@@ -708,7 +828,14 @@ async function maybeAutoPause(tx: store.KernelExec, loop: KernelObject, runId: s
     now: stamp,
     title: `${loop.title ?? loop.id} paused after repeated failures`,
     pendingQuestion: `Loop ${loop.title ?? loop.id} (${loop.id}) failed ${streak} consecutive runs, most recently ${runId}. Fix the cause and resume it?`,
-    watcher: null,
+    // The auto-pause question is WATCHED BY THE LOOP IT IS ABOUT, per the
+    // watcher rule's default (a loop-created task falls back to its creator).
+    // It also happens to be the right answer on the merits: the question is
+    // "fix the cause and resume it?", so a human's answer should reach the loop
+    // it is about. Queueing that R-answer run on a paused loop is deliberate —
+    // a paused loop's queued run IS claimable (pause governs the cadence, not an
+    // explicit act), and answering this question is as explicit as it gets.
+    watcher: loop.id,
     createdByRun: runId,
     createdByLoop: loop.id,
   });
@@ -854,6 +981,14 @@ export class RunQueueScheduler {
       await tickRunClock();
     } catch (err) {
       log.error({ err: String(err) }, "run clock tick failed");
+    }
+    // R-due rides the SAME tick as the cadence, and in its own try: a due task
+    // is a clock fire on a task's date rather than a loop's cron, so it must not
+    // be able to starve — or be starved by — the cadence pass.
+    try {
+      await tickDueTasks();
+    } catch (err) {
+      log.error({ err: String(err) }, "due task tick failed");
     }
     try {
       const reclaimed = await reclaimExpired();

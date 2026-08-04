@@ -11,14 +11,10 @@ import type { Run } from "../db/schema.js";
  */
 
 const task = (over: Partial<GraphTask>): GraphTask => ({
-  id: "task-1", createdByLoop: "loop-a", watcher: null, pendingQuestion: null, adopted: false, ...over,
+  id: "task-1", createdByLoop: "loop-a", watcher: "loop-a", pendingQuestion: null, ...over,
 });
 
 describe("deriveGraphEdges — one branch per spec §8.3 row", () => {
-  it("an unwatched product flows to the pool", () => {
-    expect(deriveGraphEdges([task({ watcher: null })])).toEqual([{ from: "loop-a", to: "pool", kind: "produces", count: 1 }]);
-  });
-
   it("a watcher that is not the creator is a hand-off", () => {
     expect(deriveGraphEdges([task({ watcher: "loop-b" })])).toEqual([{ from: "loop-a", to: "loop-b", kind: "hands-off", count: 1 }]);
   });
@@ -34,16 +30,26 @@ describe("deriveGraphEdges — one branch per spec §8.3 row", () => {
     ]);
   });
 
+  /**
+   * THE POOL IS GONE, and with it the two edge kinds that only ever ran through
+   * it (`produces`, `adopts`). Under the watcher rule a task always names a
+   * watcher, so the `!watcher` branch is unreachable from real data; feeding it
+   * anyway must draw NOTHING rather than resurrect a node the graph no longer
+   * has, which would render as a dangling edge to a missing node.
+   */
+  it("draws no pool edge, even fed a watcher-less task", () => {
+    expect(deriveGraphEdges([task({ watcher: null })])).toEqual([]);
+    const kinds = new Set(deriveGraphEdges([
+      task({ id: "t1", watcher: null }),
+      task({ id: "t2", watcher: "loop-b" }),
+      task({ id: "t3", watcher: "loop-a", pendingQuestion: "which one?" }),
+    ]).map((edge) => edge.kind));
+    expect(kinds).toEqual(new Set(["hands-off", "asks", "answers"]));
+  });
+
   it("a question with no watcher asks, and nothing answers", () => {
     expect(deriveGraphEdges([task({ watcher: null, pendingQuestion: "which one?" })])).toEqual([
       { from: "loop-a", to: "you", kind: "asks", count: 1 },
-    ]);
-  });
-
-  it("an adopted task keeps its original produces edge AND gains the adoption", () => {
-    expect(deriveGraphEdges([task({ watcher: "loop-b", adopted: true })])).toEqual([
-      { from: "loop-a", to: "pool", kind: "produces", count: 1 },
-      { from: "pool", to: "loop-b", kind: "adopts", count: 1 },
     ]);
   });
 
@@ -55,13 +61,13 @@ describe("deriveGraphEdges — one branch per spec §8.3 row", () => {
 
   it("groups by (from, to, kind) and counts the tasks in the window", () => {
     const edges = deriveGraphEdges([
-      task({ id: "t1", watcher: null }),
-      task({ id: "t2", watcher: null }),
-      task({ id: "t3", watcher: "loop-b" }),
+      task({ id: "t1", watcher: "loop-b" }),
+      task({ id: "t2", watcher: "loop-b" }),
+      task({ id: "t3", watcher: "loop-c" }),
     ]);
     expect(edges).toEqual([
-      { from: "loop-a", to: "pool", kind: "produces", count: 2 },
-      { from: "loop-a", to: "loop-b", kind: "hands-off", count: 1 },
+      { from: "loop-a", to: "loop-b", kind: "hands-off", count: 2 },
+      { from: "loop-a", to: "loop-c", kind: "hands-off", count: 1 },
     ]);
   });
 });

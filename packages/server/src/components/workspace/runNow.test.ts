@@ -220,10 +220,30 @@ describe('a retired loop is refused by the server, and the screen teaches', () =
 })
 
 describe('the lifecycle rule lives on the server, not in this client', () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+  /** Bounded to each function: the file holds several, and a slice running to
+   *  EOF would sweep in whatever was appended after it. */
+  const fn = (source: string, name: string) => {
+    const start = source.indexOf(`function ${name}(`)
+    expect(start, `${name} must exist`).toBeGreaterThan(-1)
+    const next = source.indexOf('\nfunction ', start + 1)
+    return source.slice(start, next === -1 ? undefined : next)
+  }
+
   it('never gates the fire on a status the client read', () => {
-    const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
-    const source = read('./LoopsPane.tsx')
-    const runNow = source.slice(source.indexOf('function RunNow('))
-    expect(runNow).not.toMatch(/status\s*[!=]==?\s*['"](active|paused|retired)['"]/)
+    expect(fn(read('./LoopsPane.tsx'), 'RunNow')).not.toMatch(/status\s*[!=]==?\s*['"](active|paused|retired)['"]/)
+  })
+
+  /**
+   * The same discipline on the lifecycle verbs, and for the same reason: a
+   * client that hid `resume` on an active loop would hold a second copy of the
+   * lifecycle rule, and would replace the kernel's RETIRED teaching with
+   * silence. Repeating a verb that already landed is a success that changed
+   * nothing, so offering all three always costs nothing either.
+   */
+  it('never hides or disables a lifecycle verb on a status the client read', () => {
+    const lifecycle = fn(read('./LoopsPane.tsx'), 'Lifecycle')
+    expect(lifecycle).toMatch(/retire/)
+    expect(lifecycle).not.toMatch(/status\s*[!=]==?\s*['"](active|paused|retired)['"]/)
   })
 })

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import type { BoardColumn, TaskCard } from './api'
@@ -16,26 +18,40 @@ import {
 
 const card = (over: Partial<TaskCard> = {}): TaskCard => ({
   id: 'task-1', title: 'Verify the nightly backup', status: 'open', followUpAt: null, pendingQuestion: null,
-  watcher: null, createdByLoop: 'loop-b', createdAt: '', updatedAt: '', due: false, column: 'unclaimed', ...over,
+  watcher: 'loop-b', watcherLoop: { id: 'loop-b', title: 'Loop loop-b' },
+  createdByLoop: 'loop-b', createdAt: '', updatedAt: '', due: false, column: 'watched', ...over,
 })
 
 const watched = (id: string, loop: string, title: string | null = `Loop ${loop}`): TaskCard =>
   card({ id, watcher: loop, watcherLoop: { id: loop, title }, column: 'watched' })
 
-describe('groupTasks — one group per loop, plus the pool and the record', () => {
-  it('puts unclaimed open work first, then loops by title, then closed', () => {
+describe('groupTasks — one group per loop, plus the record', () => {
+  it('puts loops by title first, then closed — and there is no pool group', () => {
     const groups = groupTasks([
       watched('t-1', 'loop-z', 'Zebra watch'),
-      card({ id: 't-2' }),
       card({ id: 't-3', status: 'closed', closedAt: '2026-01-01T00:00:00.000Z', column: 'closed' }),
       watched('t-4', 'loop-a', 'Alpha watch'),
     ])
     expect(groups.map((group) => [group.kind, group.label])).toEqual([
-      ['unclaimed', 'Unclaimed pool'],
       ['loop', 'Alpha watch'],
       ['loop', 'Zebra watch'],
       ['closed', 'Closed'],
     ])
+  })
+
+  /**
+   * The pool group is GONE, not empty. Its predicate was `!watcher`, and the
+   * watcher rule removed that state — so the guard is that no code path can
+   * produce the group even if a row somehow arrived without one: such a task is
+   * grouped (visibly, under its own id) rather than piled into a heading that
+   * says nobody picked it up.
+   */
+  it('has no unclaimed group at all, even fed a task with no watcher', () => {
+    const groups = groupTasks([card({ id: 't-1', watcher: null, watcherLoop: null })])
+    expect(groups.map((group) => group.kind)).toEqual(['loop'])
+    expect(groups.map((group) => group.label)).toEqual(['t-1'])
+    const source = readFileSync(fileURLToPath(new URL('./taskList.ts', import.meta.url)), 'utf8')
+    expect(source).not.toMatch(/'unclaimed'/)
   })
 
   it('collects every task a loop watches under that loop, in server order', () => {
@@ -58,7 +74,7 @@ describe('groupTasks — one group per loop, plus the pool and the record', () =
     expect(group!.label).toBe('loop-a')
   })
 
-  it('names no empty group — a pool with nothing in it is not a heading', () => {
+  it('names no empty group', () => {
     expect(groupTasks([watched('t-1', 'loop-a')]).map((group) => group.kind)).toEqual(['loop'])
     expect(groupTasks([])).toEqual([])
   })

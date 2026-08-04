@@ -59,8 +59,16 @@ export interface InboxItem {
 
 export interface InboxView extends ViewPayload {
   items: InboxItem[]
-  counts: { question: number; dueUnwatched: number; orphan: number; total: number }
+  counts: InboxCounts
   now: string
+}
+
+/** The §6 safety floor's counters. ONE branch today — a question waiting for a
+ *  human — since the watcher rule retired the two that were predicated on an
+ *  absent watcher (due-unwatched, the orphan floor). */
+export interface InboxCounts {
+  question: number
+  total: number
 }
 
 export interface TaskRow {
@@ -79,7 +87,7 @@ export interface TaskRow {
   watcherLoop?: LoopRef
 }
 
-export type BoardColumnKey = 'waiting' | 'unclaimed' | 'due' | 'watched' | 'closed'
+export type BoardColumnKey = 'waiting' | 'due' | 'watched' | 'closed'
 
 /** A board card: a task row plus the column the SERVER put it in. The client
  *  never re-derives the column — `kernel/taskBoard.ts` is the one mapping. */
@@ -98,7 +106,7 @@ export interface BoardColumn {
 export interface TasksView extends ViewPayload {
   columns: BoardColumn[]
   loops: { id: string; title: string | null }[]
-  counts: { question: number; dueUnwatched: number; orphan: number; total: number }
+  counts: InboxCounts
   truncated: boolean
   now: string
 }
@@ -211,7 +219,9 @@ export interface DocView extends ViewPayload {
 
 export interface GraphNode {
   id: string
-  type: 'loop' | 'pool' | 'you'
+  /** `pool` is gone with the unclaimed state it stood for — see
+   *  `kernel/views.ts` `systemGraphView`. */
+  type: 'loop' | 'you'
   label: string | null
   status: string
   badges: {
@@ -220,14 +230,13 @@ export interface GraphNode {
     lastRunAt?: string | null
     openTasks?: number
     questionsWaiting?: number
-    oldestAgeHours?: number
   }
 }
 
 export interface GraphEdge {
   from: string
   to: string
-  kind: 'produces' | 'adopts' | 'hands-off' | 'asks' | 'answers'
+  kind: 'hands-off' | 'asks' | 'answers'
   count: number
 }
 
@@ -298,9 +307,14 @@ export async function postClose(taskId: string, note: string): Promise<{ changed
   return write<{ changed: boolean; event: string | null }>(`/api/tasks/${encodeURIComponent(taskId)}/close`, 'POST', { note }, 'the close was refused')
 }
 
-/** Claim / release — a `watcher` facet PATCH, not a transition. `null` returns
- *  the task to the unclaimed pool; a loop id hands it to that loop. */
-export async function patchWatcher(taskId: string, watcher: string | null): Promise<{ changed: boolean }> {
+/**
+ * TRANSFER — a `watcher` facet PATCH, not a transition, and the only shape it
+ * has: a loop id. `null` used to release a task to the unclaimed pool, and both
+ * the pool and the call signature that reached it are gone (the kernel refuses
+ * a null with `WATCHER_REQUIRED`). A task always names the loop that acts next;
+ * the question this write answers is only ever "which one".
+ */
+export async function transferWatcher(taskId: string, watcher: string): Promise<{ changed: boolean }> {
   return write<{ changed: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}`, 'PATCH', { watcher }, 'the watcher change was refused')
 }
 
@@ -327,6 +341,35 @@ export interface RunNowResult {
 
 export async function postRunNow(loopId: string): Promise<RunNowResult> {
   return write<RunNowResult>(`/api/loops/${encodeURIComponent(loopId)}/run-now`, 'POST', {}, 'the run was refused')
+}
+
+/** The consequence a retire leaves behind: the open tasks that keep naming a
+ *  loop which will never wake again. Present ONLY when there were any. */
+export interface LifecycleWarning {
+  code: string
+  openTasks: number
+  message: string
+  hint: string
+}
+
+export interface LifecycleResult {
+  changed: boolean
+  loop: { id: string; status: string }
+  warning?: LifecycleWarning
+}
+
+/**
+ * `pause` / `resume` / `retire` — the operational lifecycle, human-only, and the
+ * loop page's other writes.
+ *
+ * RETIRE WARNS, IT NEVER BLOCKS (captain ruling 2026-08-04). The server retires
+ * the loop and reports what that cost; the screen's job is to confirm BEFORE —
+ * because retirement is terminal — and then to show the warning it got back,
+ * not to pre-empt it with a rule of its own. Repeating a verb that already
+ * landed is a success with `changed: false`, so a retry costs nothing.
+ */
+export async function postLifecycle(loopId: string, verb: 'pause' | 'resume' | 'retire'): Promise<LifecycleResult> {
+  return write<LifecycleResult>(`/api/loops/${encodeURIComponent(loopId)}/${verb}`, 'POST', {}, `the ${verb} was refused`)
 }
 
 async function write<T>(path: string, method: string, body: unknown, fallback: string): Promise<T> {

@@ -5,9 +5,13 @@
 A task is a unit of work. Its lifecycle is `open → closed` — two states, no
 third, no reopen — plus three facets that decide when and by whom it is seen:
 
-- **`watcher`** — the loop that acts next. Empty ⇒ it sits in the unclaimed pool.
-- **`follow_up`** — when it should resurface. A **schedule, not an obligation**:
-  closing before it is legal.
+- **`watcher`** — the loop that acts next. **Never empty.** A task you file is
+  watched by YOUR loop unless you name another one; a task a human files must
+  name one outright. It is handed on, never released.
+- **`follow_up`** — when it should resurface. Its arrival **wakes the watcher**:
+  the scheduler queues one run for that loop, scoped to this task, on the same
+  clock that fires cadences. Still a **schedule, not an obligation** — closing
+  before it is legal.
 - **`needs_human`** — a question. Attaching one puts the task in the human inbox
   and **blocks `task close` until it is answered**.
 
@@ -31,9 +35,13 @@ day. If it is still elevated, ask for a decision rather than reverting.
 ```
 
 ```sh
-loopany task create --file watch-err-rate.md
+loopany task create --file watch-err-rate.md                    # you watch it
 loopany task create --file reply.md --needs-human "Post this reply?" --watcher loop-8e3311
 ```
+
+**`--watcher` is a HAND-OFF, not a requirement.** Omit it and the task is yours,
+which is right for anything you intend to follow up. Name another loop only when
+that loop is genuinely the one that should act next.
 
 `title`, `key` and `payload` have **no flags** — they belong in the file, so a
 retry replays byte-identically. The three facet flags exist because a run often
@@ -48,11 +56,11 @@ put anything that will actually be executed or posted there, not in prose.
 ### Reading and moving them
 
 ```sh
-loopany task list --open --unwatched                      # the unclaimed pool
 loopany task list --watcher loop-4c1d77 --due             # what you owe, now
+loopany task list --watcher loop-4c1d77                   # everything you owe
 loopany task list --creator loop-4c1d77 --closed --since 14d
 loopany task show task-7f3a91
-loopany task update task-7f3a91 --watcher loop-4c1d77 --follow-up +3d   # adopt one
+loopany task update task-7f3a91 --watcher loop-4c1d77     # hand it to another loop
 loopany task update task-7f3a91 --payload-merge '{"merged_at":"2026-08-04T11:31:00+08:00"}'
 loopany task close task-7f3a91 --note "error rate back to baseline; no action needed"
 ```
@@ -69,6 +77,8 @@ loopany task close task-7f3a91 --note "error rate back to baseline; no action ne
   only record of why this closed. One sentence is enough.
 - There is **no `--mine`, no `self`**. `--watcher <id>` is what you owe;
   `--creator <id>` is what you made.
+- **There is no release.** `--watcher null` is refused: a task always names the
+  loop that acts next, so the only watcher write is a transfer to another loop.
 
 ## Docs
 
@@ -88,12 +98,13 @@ under `payload:` and naming the id in the body.
 ## The inbox and `answer`
 
 The inbox is the **safety floor**: it has no filters, because a filter could hide
-an arm of it. Three arms, and a task appears for any of them:
+an arm of it. One arm today — an open task carrying `needs_human`.
 
-- **question** — a task carrying `needs_human`;
-- **due+unwatched** — past its `follow_up` with no watcher;
-- **orphan** — open, unwatched, no `follow_up`, and older than 48h, so nothing
-  can lie down silently forever.
+It used to have three. The other two caught work with no loop on the hook
+(a due task nobody watched; an unwatched task older than 48h). Neither can happen
+now: every task names a watcher, and a due one **wakes that watcher** instead of
+being escalated to a person. Bringing a question to a human is the only thing
+left that genuinely needs one.
 
 ```sh
 loopany inbox
@@ -110,16 +121,17 @@ time — "no" alone teaches it nothing.
 Answering **wakes the watcher**: one run is queued for that loop with the task in
 scope, and it reads the answer with `task show`. If a run was already queued for
 that loop, the answer **joins** it — one run, not two, and it pulls both answered
-tasks when it claims. A task with no watcher just records the answer.
+tasks when it claims. Every task names a watcher, so every answer reaches a loop.
 
 ## The rhythm of a run
 
-1. Read your worklist: `task list --watcher <your-loop-id> --due`, and the pool
-   with `--open --unwatched` if you have room.
+1. Read your worklist: `task list --watcher <your-loop-id> --due`. A run woken by
+   a due task is told which one in its work order — start there.
 2. Do the work in the loop's bound `workdir`.
 3. Register products as they exist (`doc create`).
 4. Close what you verified, with a real note. Push out what is not ready
-   (`task update <id> --follow-up +3d`).
+   (`task update <id> --follow-up +3d`) — that date is what wakes you for it
+   again, so a task with no `follow_up` waits for your cadence instead.
 5. Need a decision? `task update <id> --needs-human "…"` — then **stop on that
    task**. Your job on it is done until a human replies.
 6. Learned something the charter should carry? `loop evolve <your-loop-id>

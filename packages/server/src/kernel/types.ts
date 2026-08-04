@@ -68,8 +68,15 @@ export interface Actor {
 export const RUN_QUEUE_STATES = ["queued", "claimed", "success", "failure"] as const;
 export type RunQueueState = (typeof RUN_QUEUE_STATES)[number];
 
-/** Why this run exists (§5.3). `clock` = R-clock, `answered` = R-answer. */
-export const RUN_REASONS = ["clock", "answered", "manual"] as const;
+/**
+ * Why this run exists (§5.3). `clock` = R-clock (the loop's own cadence),
+ * `answered` = R-answer (a human answered a task this loop watches), `due` =
+ * R-due (a task this loop watches reached its `follow_up`), `manual` = a person
+ * pressed the button. `due` joined the set under the 2026-08-04 watcher ruling:
+ * with every task watched, a follow-up date is a real alarm on a named loop, so
+ * the same level-triggered clock that fires cadences fires it.
+ */
+export const RUN_REASONS = ["clock", "answered", "due", "manual"] as const;
 export type RunReason = (typeof RUN_REASONS)[number];
 
 /** `active` until the lease expires; `terminal-grace` admits exactly ONE late
@@ -164,6 +171,10 @@ export type KernelErrorCode =
   | "NOT_HUMAN"
   | "KEY_KIND_MISMATCH"
   | "SCHEMA_VIOLATION"
+  /** A task was created or updated with no loop watching it. Its own code
+   *  because "who acts next" is the one task facet that may never be empty
+   *  (captain ruling 2026-08-04) — see `WATCHER_RULE` below. */
+  | "WATCHER_REQUIRED"
   /** An INVARIANT BREACH, not a user error: a short id resolved to a row that is
    *  not the identity the caller meant. Its own code because the only honest
    *  answer to a truncation collision is a loud, attributable failure — the
@@ -248,4 +259,49 @@ export function immutableIssues(fields: Iterable<string>): KernelIssue[] {
 /** A question is "open" when it is present and not blank (§4.3 / §3.4). */
 export function hasOpenQuestion(pendingQuestion: string | null | undefined): boolean {
   return typeof pendingQuestion === "string" && pendingQuestion.trim() !== "";
+}
+
+// ---- the watcher rule (captain ruling 2026-08-04) ----
+
+/**
+ * **A TASK'S WATCHER IS NEVER EMPTY.**
+ *
+ * `watcher` names the loop that acts next, and the whole rewrite hangs work off
+ * it: a human answer wakes the watcher (R-answer), a follow-up date coming due
+ * wakes the watcher (R-due), and the Tasks screen groups by it. An unwatched
+ * task was therefore never a state — it was work with nobody on the hook, and
+ * the system's answer to it was a pile of compensating machinery (an unclaimed
+ * pool, a claim-from-pool gesture, an orphan-age floor, a due-unwatched inbox
+ * reason). All of that existed to notice the absence. Forbidding the absence
+ * deletes the machinery instead of maintaining it.
+ *
+ * Two halves, and the split is the point:
+ *
+ *   1. **A loop-created task DEFAULTS to its creator.** A run that files a task
+ *      is on the hook for it unless it explicitly hands it to another loop, so
+ *      the common case needs no ceremony and cannot be forgotten.
+ *   2. **A human/API-created task REQUIRES an explicit watcher.** There is no
+ *      creator loop to fall back to, and picking one for the person would be the
+ *      platform guessing who is responsible. It refuses and teaches instead.
+ *
+ * TRANSFER stays (`watcher: <another loop>`); RELEASE — setting it back to
+ * nothing — is gone from every surface, because there is no longer a state to
+ * release into.
+ *
+ * Enforced at the kernel's own chokepoints (`createObjectIn`, `applyUpdateIn`)
+ * so every caller inherits it: the HTTP verbs, the whole-file replace, the
+ * circuit breaker's auto-pause question and the local fixture alike.
+ */
+export const WATCHER_HINT =
+  "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loop list` prints the ids. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.";
+
+/** The refusal for a task with no loop on the hook. `subject` names the task
+ *  when it exists (an update) and the attempted create when it does not. */
+export function watcherRequired(subject: string, verb: "created" | "updated"): KernelRefusal {
+  return refuse(
+    "WATCHER_REQUIRED",
+    `${subject} would leave no loop watching it, and a task always names the loop that acts next`,
+    [{ path: "watcher", message: `a task cannot be ${verb} without a watcher`, got: "(none)", expected: "loop-<id>" }],
+    WATCHER_HINT,
+  );
 }

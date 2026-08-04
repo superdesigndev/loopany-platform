@@ -76,9 +76,12 @@ beforeEach(async () => {
   await db.db.delete(runsTable);
 });
 
-/** A plain open task. */
+/** A plain open task. Watched by default, because every task is: the kernel
+ *  refuses one with no loop on the hook (`types.ts` WATCHER_HINT), and a
+ *  fixture that could not produce a legal row would test nothing. */
+const WATCHER = "loop-fixture";
 async function task(over: Record<string, unknown> = {}) {
-  const r = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, title: "t", ...over });
+  const r = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, title: "t", watcher: WATCHER, ...over });
   if (!r.ok) throw new Error(`fixture create failed: ${r.code} ${r.message}`);
   return r.object;
 }
@@ -141,8 +144,8 @@ describe("createObject", () => {
 
 describe("key idempotency (spec §4.1)", () => {
   it("returns the EXISTING object on a repeated key — 200, never a conflict", async () => {
-    const a = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, key: "pr-201", title: "x" });
-    const b = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "pr-201", title: "x" });
+    const a = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, key: "pr-201", title: "x", watcher: WATCHER });
+    const b = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "pr-201", title: "x", watcher: WATCHER });
     expect(a.ok && a.created).toBe(true);
     expect(b.ok && b.created).toBe(false);
     expect(b.ok && b.object.id).toBe(a.ok ? a.object.id : "");
@@ -150,30 +153,30 @@ describe("key idempotency (spec §4.1)", () => {
   });
 
   it("writes exactly ONE row and ONE event for a replayed key", async () => {
-    await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, key: "k", title: "x" });
-    await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "k", title: "x" });
+    await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, key: "k", title: "x", watcher: WATCHER });
+    await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "k", title: "x", watcher: WATCHER });
     expect(await db.db.select().from(schema.objects)).toHaveLength(1);
     expect(await db.db.select().from(schema.events)).toHaveLength(1);
   });
 
   it("REPORTS a content difference and applies nothing — replay is free, silent discard forbidden", async () => {
-    const a = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, key: "k", title: "first" });
-    const b = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "k", title: "second" });
+    const a = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, key: "k", title: "first", watcher: WATCHER });
+    const b = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "k", title: "second", watcher: WATCHER });
     expect(b.ok && b.contentDiffers).toBe(true);
     expect(b.ok && b.object.title).toBe("first");
     expect(a.ok && (await kernelStore.getObject(undefined, a.object.id))!.title).toBe("first");
   });
 
   it("scopes the key PER TEAM — the same key in another team is a different object", async () => {
-    const a = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, key: "k", title: "x" });
-    const b = await kernel.createObject({ teamId: "team-beta", kind: "task", actor: AGENT, now: T0, key: "k", title: "y" });
+    const a = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, key: "k", title: "x", watcher: WATCHER });
+    const b = await kernel.createObject({ teamId: "team-beta", kind: "task", actor: AGENT, now: T0, key: "k", title: "y", watcher: WATCHER });
     expect(b.ok && b.created).toBe(true);
     expect(a.ok && b.ok && a.object.id).not.toBe(b.ok ? b.object.id : "");
   });
 
   it("refuses only a KIND mismatch — returning a doc from a task create would be worse", async () => {
     await kernel.createObject({ teamId: TEAM, kind: "doc", actor: AGENT, now: T0, key: "k" });
-    const clash = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "k" });
+    const clash = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T1, key: "k", watcher: WATCHER });
     expect(clash.ok).toBe(false);
     expect(!clash.ok && clash.code).toBe("KEY_KIND_MISMATCH");
     expect(!clash.ok && clash.hint).toContain("doc-");
@@ -553,8 +556,10 @@ describe("applyUpdate", () => {
       fields: { watcher: "loop-steward", followUpAt: "2026-08-06T00:00:00.000Z" },
     });
     expect(r.ok && r.changed).toBe(true);
+    // A watcher move is always loop → loop: it is a HAND-OFF, never a claim out
+    // of nothing, because there is no nothing to claim out of.
     expect(r.ok && r.event!.diff).toEqual({
-      watcher: { old: null, new: "loop-steward" },
+      watcher: { old: WATCHER, new: "loop-steward" },
       followUpAt: { old: null, new: "2026-08-06T00:00:00.000Z" },
     });
   });

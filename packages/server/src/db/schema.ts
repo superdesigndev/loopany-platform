@@ -289,8 +289,12 @@ export const runs = pgTable(
     /** `routine` (the loop's own cadence) or `task:<object id>` (an express run
      *  born from an answer). Runs belong to LOOPS, never to tasks (design §5). */
     scope: text("scope"),
-    /** Which birth rule produced this run: R-clock, R-answer, or a manual fire. */
-    reason: text("reason", { enum: ["clock", "answered", "manual"] }),
+    /** Which birth rule produced this run: R-clock (the loop's cadence),
+     *  R-answer (a human answered a task it watches), R-due (a task it watches
+     *  reached its follow-up), or a manual fire. Drizzle's `enum` is TS-only —
+     *  no DB CHECK — so widening it needs no migration. `kernel/types.ts`
+     *  `RUN_REASONS` is the vocabulary this mirrors. */
+    reason: text("reason", { enum: ["clock", "answered", "due", "manual"] }),
     /** The entrance stamped onto this run's events (`clock|answer|human`). */
     entrance: text("entrance", { enum: ["clock", "answer", "human"] }),
     /** The cron OCCURRENCE this fire serves (clock runs only) — the id seed, so a

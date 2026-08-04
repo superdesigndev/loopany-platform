@@ -40,12 +40,14 @@ import { useLiveView } from './useLiveView'
  * UNIT 8: the canvas takes the reference's `.system-view` furniture — the header
  * over a `.system-note` line, a bordered `.graph-panel`, the floating
  * `.canvas-key` legend and a `Fit view` control — and the node card is the
- * reference's `.system-node`: a loop is the green sensing hue, the unclaimed pool
- * a dashed tray, and YOU the one dark card, because the human is the one node on
- * the canvas that is not a machine.
+ * reference's `.system-node`: a loop is the green sensing hue and YOU the one
+ * dark card, because the human is the one node on the canvas that is not a
+ * machine. The third node type, the dashed `pool` tray, retired with the
+ * unclaimed state it stood for (`kernel/views.ts` `systemGraphView`) — and with
+ * it the `produces`/`adopts` edges that only ever ran through it.
  */
 
-const KIND_GLYPH: Record<GraphNode['type'], string> = { loop: '↻', pool: '◇', you: '●' }
+const KIND_GLYPH: Record<GraphNode['type'], string> = { loop: '↻', you: '●' }
 
 type NodeData = GraphNode & { pinned?: boolean; [key: string]: unknown }
 
@@ -74,7 +76,6 @@ function SystemNodeCard({ data, selected }: NodeProps) {
 }
 
 function subtitle(node: GraphNode): string {
-  if (node.type === 'pool') return `${node.badges.openTasks ?? 0} unclaimed · oldest ${node.badges.oldestAgeHours ?? 0}h`
   if (node.type === 'you') return `${node.badges.questionsWaiting ?? 0} question(s) waiting`
   const parts = [node.badges.cadence ?? 'no cadence', node.badges.lastOutcome ?? 'no runs', `${node.badges.openTasks ?? 0} open`]
   return parts.join(' · ')
@@ -85,7 +86,7 @@ function subtitle(node: GraphNode): string {
  *
  * `lane` offsets both the PATH and its label perpendicular to the line. Two
  * loops routinely have more than one relation between them — a pair that asks
- * and answers, or produces and hands off — and drawn on the same axis their
+ * and answers, or hands off in both directions — and drawn on the same axis their
  * labels landed exactly on top of each other, which made the one number the edge
  * exists to carry unreadable. `routeEdges` assigns the lane per source→target
  * pair, so a single edge is still dead straight and only a genuine bundle fans.
@@ -218,12 +219,6 @@ function Canvas({ nodes: raw, edges: rawEdges }: { nodes: GraphNode[]; edges: Gr
     <div className="graph-panel">
       <div className="canvas-key">
         <span>
-          <i className="edge-produces" /> produces
-        </span>
-        <span>
-          <i className="edge-adopts" /> adopts
-        </span>
-        <span>
           <i className="edge-hands-off" /> hands-off
         </span>
         <span>
@@ -275,7 +270,7 @@ export default function SystemGraph() {
       <ViewHeader
         eyebrow="System"
         title="System"
-        description="A projection of live data — creator → watcher flows, questions routed through you, unwatched products flowing to the pool. Nothing here is configured."
+        description="A projection of live data — hand-offs from the loop that filed a task to the loop that watches it, and questions routed through you. Nothing here is configured."
         meta={`${data.nodes.length} node${data.nodes.length === 1 ? '' : 's'} · ${data.edges.length} edge${data.edges.length === 1 ? '' : 's'}`}
       />
       <div className="system-note">

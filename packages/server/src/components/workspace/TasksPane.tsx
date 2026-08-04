@@ -1,7 +1,7 @@
 import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import {
-  fetchTask, fetchTasks, patchWatcher, postClose, postVerdict, ViewError,
+  fetchTask, fetchTasks, postClose, postVerdict, transferWatcher, ViewError,
   type BoardColumn, type TaskCard, type TaskView, type TasksView,
 } from './api'
 import { cardActions, hasActions } from './board'
@@ -19,8 +19,8 @@ import { affectsObject, affectsTasks, useLiveView } from './useLiveView'
  * Captain direction (2026-08-04) reshaped this screen on three points, and each
  * one is a rule rather than a preference:
  *
- *  1. **A card carries no action.** Every write — claim, release, close — moved
- *     into the drawer. A list is for reading; acting on a task means opening it,
+ *  1. **A card carries no action.** Every write — transfer, close, answer —
+ *     moved into the drawer. A list is for reading; acting on a task means opening it,
  *     which is also where the payload, the timeline and the runs that touched it
  *     are, so a person decides with the whole record in front of them instead of
  *     from a two-line summary. Rows and cards are therefore pure entrances: one
@@ -30,9 +30,11 @@ import { affectsObject, affectsTasks, useLiveView } from './useLiveView'
  *     alternate view for the state question ("what is waiting on whom"), behind
  *     a toggle that is REMEMBERED (`taskList.ts`, localStorage, like the System
  *     canvas's pins).
- *  3. **The list groups by loop.** `groupTasks` is the one mapping — unclaimed
- *     pool first (the §6 floor), then a section per watching loop, then closed.
- *     Pure and total, for the same reason the board's column mapping is.
+ *  3. **The list groups by loop.** `groupTasks` is the one mapping — a section
+ *     per watching loop, then closed. Every open task is under a loop, because
+ *     every task names one (`kernel/types.ts` WATCHER_HINT), so the grouping is
+ *     a complete partition of the desks rather than a partition plus a leftover
+ *     pile. Pure and total, for the same reason the board's column mapping is.
  *
  * Both views render the SAME `/api/views/tasks` payload, ride the same SSE bus,
  * and show the same safety-floor counters, so switching changes the shape of the
@@ -124,8 +126,7 @@ export function TasksPane({ selected, onSelect, onOpenLoop }: { selected: string
             id={selected}
             loops={data?.loops ?? []}
             onOpenLoop={onOpenLoop}
-            onClaim={(target, loop) => run(() => patchWatcher(target.id, loop))}
-            onRelease={(target) => run(() => patchWatcher(target.id, null))}
+            onTransfer={(target, loop) => run(() => transferWatcher(target.id, loop))}
             onAskClose={setPendingClose}
           />
         </Drawer>
@@ -182,9 +183,9 @@ function TaskList({ columns, selected, onOpen }: { columns: BoardColumn[]; selec
 function TaskGroupSection({ group, selected, onOpen }: { group: TaskGroup; selected: string | null; onOpen: (id: string, from?: HTMLElement | null) => void }) {
   return (
     <Section
-      // A pool with work in it is the safety floor showing; a loop's desk and the
-      // closed record are plain content.
-      tone={group.kind === 'unclaimed' ? 'attention' : 'plain'}
+      // A loop's desk and the closed record are both plain content — there is no
+      // group here whose mere existence is a problem to flag.
+      tone="plain"
       title={group.label}
       count={group.tasks.length}
       note={group.note}
@@ -273,7 +274,7 @@ function BoardCard({ card, selected, onOpen }: { card: TaskCard; selected: boole
         <span>{card.title ?? card.id}</span>
       </button>
       <div className="board-card-meta">
-        <span>{card.watcherLoop?.title ?? (card.watcher ? card.watcher : 'unclaimed')}</span>
+        <span>{card.watcherLoop?.title ?? card.watcher}</span>
         {card.due && card.status === 'open' && <span className="state-label state-floor">overdue</span>}
         <When iso={card.status === 'closed' ? (card.closedAt ?? card.updatedAt) : (card.followUpAt ?? card.updatedAt)} />
       </div>
@@ -340,13 +341,12 @@ function CloseNote({ card, onCancel, onConfirm }: { card: TaskTarget; onCancel: 
 }
 
 function TaskDetail({
-  id, loops, onOpenLoop, onClaim, onRelease, onAskClose,
+  id, loops, onOpenLoop, onTransfer, onAskClose,
 }: {
   id: string
   loops: TasksView['loops']
   onOpenLoop: (id: string) => void
-  onClaim: (target: TaskTarget, loop: string) => void
-  onRelease: (target: TaskTarget) => void
+  onTransfer: (target: TaskTarget, loop: string) => void
   onAskClose: (target: TaskTarget) => void
 }) {
   const { data, error, refresh } = useLiveView(`task:${id}`, () => fetchTask(id), affectsObject(id))
@@ -388,7 +388,9 @@ function TaskDetail({
                 {data.watcherLoop.title ?? data.watcherLoop.id}
               </button>
             ) : (
-              'unclaimed pool'
+              // A watcher is never empty, so this reads as what it is: a loop id
+              // whose loop row could not be resolved, not a state.
+              (task.watcher ?? 'unresolved')
             ),
           ],
           [
@@ -413,7 +415,7 @@ function TaskDetail({
         </p>
       )}
 
-      <TaskActions view={data} loops={loops} onClaim={onClaim} onRelease={onRelease} onAskClose={onAskClose} onAnswered={refresh} />
+      <TaskActions view={data} loops={loops} onTransfer={onTransfer} onAskClose={onAskClose} onAnswered={refresh} />
 
       <ExecutionBlock payload={data.execution} />
 
@@ -440,12 +442,11 @@ function TaskDetail({
  * and a person should not have to leave for the Inbox to make it.
  */
 function TaskActions({
-  view, loops, onClaim, onRelease, onAskClose, onAnswered,
+  view, loops, onTransfer, onAskClose, onAnswered,
 }: {
   view: TaskView
   loops: TasksView['loops']
-  onClaim: (target: TaskTarget, loop: string) => void
-  onRelease: (target: TaskTarget) => void
+  onTransfer: (target: TaskTarget, loop: string) => void
   onAskClose: (target: TaskTarget) => void
   onAnswered: () => void
 }) {
@@ -457,9 +458,9 @@ function TaskActions({
   // which unmounts the box — and with it the one line saying what the answer
   // just did. The confirmation has to outlive the form that produced it.
   const [queued, setQueued] = useState<string | undefined>(undefined)
-  const facts = { status: task.status, pendingQuestion: task.pendingQuestion, watcher: task.watcher }
+  const facts = { status: task.status, pendingQuestion: task.pendingQuestion }
   const target: TaskTarget = { id: task.id, title: task.title }
-  const { canClose, canClaim, canRelease } = cardActions(facts)
+  const { canClose, canTransfer } = cardActions(facts)
   const asking = Boolean(task.pendingQuestion?.trim())
 
   if (!asking && !hasActions(facts)) {
@@ -476,30 +477,29 @@ function TaskActions({
       {asking && <AnswerBox taskId={task.id} onAnswered={onAnswered} onQueued={setQueued} />}
       {queued && <p className="inbox-queued">answer recorded · {queued}</p>}
       <div className="task-actions">
-        {canClaim && (
+        {canTransfer && (
           <label className="task-action-claim">
-            <span className="ws-sr">claim for a loop</span>
+            <span className="ws-sr">hand this task to a loop</span>
             <select
               className="field-select"
-              name={`claim-${task.id}`}
+              name={`transfer-${task.id}`}
               defaultValue=""
               onChange={(event) => {
-                if (event.target.value) onClaim(target, event.target.value)
+                if (event.target.value) onTransfer(target, event.target.value)
               }}
             >
-              <option value="">claim…</option>
-              {loops.map((loop) => (
-                <option key={loop.id} value={loop.id}>
-                  {loop.title ?? loop.id}
-                </option>
-              ))}
+              <option value="">hand off to…</option>
+              {loops
+                // The loop already watching it is not a hand-off; offering it
+                // would be a write that changes nothing.
+                .filter((loop) => loop.id !== task.watcher)
+                .map((loop) => (
+                  <option key={loop.id} value={loop.id}>
+                    {loop.title ?? loop.id}
+                  </option>
+                ))}
             </select>
           </label>
-        )}
-        {canRelease && (
-          <button type="button" className="attn-button is-quiet" onClick={() => onRelease(target)}>
-            release
-          </button>
         )}
         {canClose && (
           <button type="button" className="verdict-button" onClick={() => onAskClose(target)}>
@@ -536,7 +536,7 @@ function AnswerBox({ taskId, onAnswered, onQueued }: { taskId: string; onAnswere
           ? result.run.alreadyQueued
             ? `joined the run already queued (${result.run.id})`
             : `queued ${result.run.id}`
-          : 'no watcher — the answer sits on the record',
+          : 'the answer is on the record; its watcher had no run to queue',
       )
       setAnswer('')
       onAnswered()

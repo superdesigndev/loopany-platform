@@ -40,10 +40,14 @@ function agentIn(loopId: string, runId = "run-exec"): never {
   return { teamId: TEAM, actor: { entrance: "agent", actorId: runId }, mode: "agent", run: { id: runId, loopId } } as never;
 }
 
+/** Every task names a watcher (`types.ts` WATCHER_HINT). A loop-created one
+ *  falls back to its creator, so only the human-created fixtures name one. */
+const WATCHER = "loop-fixture";
 async function makeTask(fields: Record<string, unknown> = {}, loopId?: string) {
   const result = await kernel.createObject({
     teamId: TEAM, kind: "task", actor: loopId ? { entrance: "agent", actorId: "run-proposer" } : human.actor, now: T0,
-    title: "Observe the impact of PR #201", ...(loopId ? { createdByLoop: loopId } : {}), ...fields,
+    title: "Observe the impact of PR #201", watcher: loopId ?? WATCHER,
+    ...(loopId ? { createdByLoop: loopId } : {}), ...fields,
   } as never);
   if (!result.ok) throw new Error(result.message); return result.object;
 }
@@ -57,7 +61,7 @@ const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? "OK" : r.
 // ------------------------------------------------------------------ creation
 
 describe("create is idempotent by key, and never silently discards", () => {
-  const file = (title: string, body: string) => `---\ntitle: ${title}\nkey: pr-201-impact\n---\n\n${body}\n`;
+  const file = (title: string, body: string) => `---\ntitle: ${title}\nkey: pr-201-impact\nwatcher: ${WATCHER}\n---\n\n${body}\n`;
 
   it("replays byte-identical content with no second write and no notice", async () => {
     const first = ok(await api.createFromArtifact("task", file("Observe", "watch the error rate"), human, T1));
@@ -81,13 +85,84 @@ describe("create is idempotent by key, and never silently discards", () => {
 
   it("refuses a key that already names a different kind, rather than returning the wrong object", async () => {
     await api.createFromArtifact("doc", "---\ntitle: A doc\nkey: shared-key\n---\n\nbody\n", human, T1);
-    expect(code(await api.createFromArtifact("task", "---\ntitle: A task\nkey: shared-key\n---\n\nbody\n", human, T1))).toBe("KEY_KIND_MISMATCH");
+    expect(code(await api.createFromArtifact("task", `---\ntitle: A task\nkey: shared-key\nwatcher: ${WATCHER}\n---\n\nbody\n`, human, T1))).toBe("KEY_KIND_MISMATCH");
   });
 
   it("stamps provenance from the invisible run context, never from the wire", async () => {
     const loop = await makeLoop();
     const created = ok(await api.createFromArtifact("task", "---\ntitle: From a run\n---\n\nbody\n", agentIn(loop.id), T1));
-    expect(created.task).toMatchObject({ createdByRun: "run-exec", createdByLoop: loop.id, watcher: null, status: "open" });
+    expect(created.task).toMatchObject({ createdByRun: "run-exec", createdByLoop: loop.id, status: "open" });
+  });
+});
+
+/**
+ * THE WATCHER RULE at the create seam (captain ruling 2026-08-04). The two
+ * halves are asymmetric on purpose: a run has a loop to fall back to and a
+ * person does not, so one defaults and the other is taught.
+ */
+describe("a task is never created without a loop watching it", () => {
+  it("DEFAULTS a run's task to the run's own loop", async () => {
+    const loop = await makeLoop();
+    const created = ok(await api.createFromArtifact("task", "---\ntitle: I will follow this up myself\n---\n\nbody\n", agentIn(loop.id), T1));
+    expect(created.task).toMatchObject({ watcher: loop.id, createdByLoop: loop.id });
+  });
+
+  it("keeps an explicitly named watcher — the default is a fallback, not an override", async () => {
+    const loop = await makeLoop();
+    const other = await makeLoop("FollowUp");
+    const created = ok(await api.createFromArtifact("task", `---\ntitle: Over to you\nwatcher: ${other.id}\n---\n\nbody\n`, agentIn(loop.id), T1));
+    expect(created.task).toMatchObject({ watcher: other.id, createdByLoop: loop.id });
+  });
+
+  it("REFUSES a human create with no watcher, and teaches the flag and the roster", async () => {
+    const result = await api.createFromArtifact("task", "---\ntitle: Somebody should do this\n---\n\nbody\n", human, T1);
+    expect(code(result)).toBe("WATCHER_REQUIRED");
+    const error = (result as { error: { issues: { path: string }[]; hint: string } }).error;
+    expect(error.issues[0]!.path).toBe("watcher");
+    expect(error.hint).toContain("--watcher <loop-id>");
+    expect(error.hint).toContain("loopany loop list");
+    // Nothing was written: a refused create leaves no half-made task behind.
+    expect(await database.db.select().from(schema.objects).where(eq(schema.objects.kind, "task"))).toHaveLength(0);
+  });
+
+  it("accepts the same human create once it names one", async () => {
+    const loop = await makeLoop();
+    const created = ok(await api.createFromArtifact("task", `---\ntitle: Somebody should do this\nwatcher: ${loop.id}\n---\n\nbody\n`, human, T1));
+    expect(created.task).toMatchObject({ watcher: loop.id, createdByLoop: null });
+  });
+});
+
+/** TRANSFER stays; RELEASE is gone. The `watcher` write has one legal shape. */
+describe("a task's watcher is handed on, never cleared", () => {
+  it("transfers to another loop through the field patch", async () => {
+    const loop = await makeLoop();
+    const task = await makeTask({}, loop.id);
+    expect(ok(await api.patchTask(task.id, { watcher: "loop-steward" }, human, T1)).task).toMatchObject({ watcher: "loop-steward" });
+  });
+
+  it("refuses `watcher: null` on the field patch, by name", async () => {
+    const task = await makeTask();
+    const result = await api.patchTask(task.id, { watcher: null }, human, T1);
+    expect(code(result)).toBe("WATCHER_REQUIRED");
+    expect((result as { error: { hint: string } }).error.hint).toContain("never cleared");
+    expect((await store.getObject(undefined, task.id))!.watcher).toBe(WATCHER);
+  });
+
+  // A whole-file replace that omits `watcher:` is a clear in disguise: the file
+  // is the object, so an absent key would drop the watcher on record.
+  it("refuses a whole-file replace that drops the watcher line", async () => {
+    const task = await makeTask();
+    expect(code(await api.replaceFromArtifact("task", task.id, "---\ntitle: Observe the impact of PR #201\n---\n\nbody\n", human, T1))).toBe("WATCHER_REQUIRED");
+    expect((await store.getObject(undefined, task.id))!.watcher).toBe(WATCHER);
+  });
+
+  it("accepts the same replace when the file keeps it", async () => {
+    const task = await makeTask();
+    expect(ok(await api.replaceFromArtifact("task", task.id, `---\ntitle: Observe harder\nwatcher: ${WATCHER}\n---\n\nbody\n`, human, T1)).changed).toBe(true);
+  });
+
+  it("has no unwatched list filter left to ask for", async () => {
+    expect(code(await api.listTasks(human, new URLSearchParams({ watcher: "none" }), T1))).toBe("SCHEMA_VIOLATION");
   });
 });
 
@@ -227,8 +302,8 @@ describe("update guards", () => {
 
   it("refuses a key change on the file path and accepts an identical one", async () => {
     const task = await makeTask({ key: "pr-201-impact" });
-    expect(code(await api.replaceFromArtifact("task", task.id, "---\nkey: pr-202-impact\n---\n\nbody\n", human, T1))).toBe("IMMUTABLE_KEY");
-    expect(ok(await api.replaceFromArtifact("task", task.id, "---\nkey: pr-201-impact\ntitle: Observe the impact of PR #201\n---\n\nbody\n", human, T1)).changed).toBe(true);
+    expect(code(await api.replaceFromArtifact("task", task.id, `---\nkey: pr-202-impact\nwatcher: ${WATCHER}\n---\n\nbody\n`, human, T1))).toBe("IMMUTABLE_KEY");
+    expect(ok(await api.replaceFromArtifact("task", task.id, `---\nkey: pr-201-impact\ntitle: Observe the impact of PR #201\nwatcher: ${WATCHER}\n---\n\nbody\n`, human, T1)).changed).toBe(true);
   });
 
   it("writes no event for an empty diff — a no-op is not a fact", async () => {
@@ -455,6 +530,55 @@ describe("the loop lifecycle is the owner's, idempotent, and terminal at retire"
     expect(ok(await api.showObject("loop", loop.id, human)).loop).toMatchObject({ id: loop.id, status: "retired" });
   });
 
+  /**
+   * RETIRE WARNS, IT NEVER BLOCKS (captain ruling 2026-08-04). Refusing would
+   * make the owner's operational decision conditional on housekeeping; forcing
+   * a transfer would pick a new responsible loop for them; cascading would close
+   * unfinished work. So it proceeds and says what it cost, once, exactly when
+   * they choose it.
+   */
+  it("retires a loop that still watches open tasks — and WARNS with the count", async () => {
+    const loop = await makeLoop();
+    await makeTask({ title: "still watching this" }, loop.id);
+    await makeTask({ title: "and this" }, loop.id);
+    // Neither of these is the loop's problem: one is closed, one is elsewhere.
+    const closed = await makeTask({ title: "done" }, loop.id);
+    await api.closeTask(closed.id, "verified", human, T1);
+    await makeTask({ title: "somebody else's" });
+
+    const retired = ok(await api.loopLifecycle(loop.id, "retire", undefined, human, T1));
+    expect(retired.changed).toBe(true);
+    expect(retired.loop).toMatchObject({ status: "retired" });
+    const warning = retired.warning as { code: string; openTasks: number; message: string; hint: string };
+    expect(warning.code).toBe("TASKS_STILL_WATCHED");
+    expect(warning.openTasks).toBe(2);
+    expect(warning.message).toContain("2 open tasks");
+    expect(warning.hint).toContain("--watcher <loop-id>");
+
+    // It PROCEEDED: the retirement landed and the tasks are untouched, still
+    // naming a loop that will never be woken again.
+    expect((await store.getObject(undefined, loop.id))!.status).toBe("retired");
+    const still = ok(await api.listTasks(human, new URLSearchParams({ watcher: loop.id }), T1)).tasks as { id: string }[];
+    expect(still).toHaveLength(2);
+  });
+
+  it("carries NO warning when nothing is left watching, and none on pause", async () => {
+    const loop = await makeLoop();
+    expect(ok(await api.loopLifecycle(loop.id, "retire", undefined, human, T1)).warning).toBeUndefined();
+
+    const busy = await makeLoop("Busy");
+    await makeTask({ title: "open work" }, busy.id);
+    expect(ok(await api.loopLifecycle(busy.id, "pause", undefined, human, T1)).warning).toBeUndefined();
+  });
+
+  it("singularizes the count, because a warning that reads wrong reads as boilerplate", async () => {
+    const loop = await makeLoop();
+    await makeTask({ title: "the only one" }, loop.id);
+    const warning = ok(await api.loopLifecycle(loop.id, "retire", undefined, human, T1)).warning as { message: string };
+    expect(warning.message).toContain("1 open task;");
+    expect(warning.message).toContain("wake it again");
+  });
+
   it("refuses a run — the lifecycle is not a loop's to drive, not even its own", async () => {
     const loop = await makeLoop();
     for (const verb of ["pause", "resume", "retire"] as const) {
@@ -572,26 +696,35 @@ describe("run-now is the manual fire, and it obeys the queue discipline", () => 
 // --------------------------------------------------------------------- inbox
 
 describe("the inbox union is the safety floor", () => {
-  it("returns each task once with every matching reason, questions first", async () => {
+  /**
+   * ONE BRANCH. The floor used to have three; the other two were both
+   * `watcher IS NULL` predicates, and the watcher rule removed that state — so
+   * the near misses to pin are the tasks those arms USED to catch: an old task
+   * with no follow-up (the former orphan floor) and a due one (the former
+   * due-unwatched arm). Both are now somebody's work, and neither reaches a
+   * person.
+   */
+  it("returns the questions, and nothing a retired arm used to catch", async () => {
     const loop = await makeLoop();
     const question = await makeTask({ pendingQuestion: "revert or wait?", watcher: loop.id, createdAt: T0 }, loop.id);
-    const dueUnwatched = await makeTask({ followUpAt: "2026-08-03T00:30:00.000Z" });
-    const orphan = await makeTask({});
-    await database.db.update(schema.objects).set({ createdAt: "2026-07-30T00:00:00.000Z" }).where(eq(schema.objects.id, orphan.id));
-    // Fresh, watched, not due: below every arm of the floor.
+    const due = await makeTask({ followUpAt: "2026-08-03T00:30:00.000Z" }, loop.id);
+    const old = await makeTask({}, loop.id);
+    await database.db.update(schema.objects).set({ createdAt: "2026-07-30T00:00:00.000Z" }).where(eq(schema.objects.id, old.id));
     const quiet = await makeTask({ watcher: loop.id }, loop.id);
 
     const result = ok(await api.inbox(human, T1));
     const items = result.items as { task: { id: string }; reasons: string[]; askedAt: string | null }[];
     const ids_ = items.map((i) => i.task.id);
-    expect(ids_).toContain(question.id); expect(ids_).toContain(dueUnwatched.id); expect(ids_).toContain(orphan.id);
-    expect(ids_).not.toContain(quiet.id);
+    expect(ids_).toEqual([question.id]);
+    for (const below of [due, old, quiet]) expect(ids_).not.toContain(below.id);
     expect(items[0]!.reasons).toEqual(["question"]);
     expect(items[0]!.askedAt).not.toBeNull();
-    expect(items.find((i) => i.task.id === dueUnwatched.id)!.reasons).toEqual(["due-unwatched"]);
-    expect(items.find((i) => i.task.id === orphan.id)!.reasons).toEqual(["orphan"]);
-    expect(result.counts).toMatchObject({ question: 1, dueUnwatched: 1, orphan: 1, total: 3 });
+    expect(result.counts).toEqual({ question: 1, total: 1 });
     expect(result.now).toBe(T1.toISOString());
+  });
+
+  it("counts no retired branch — the two watcher-less arms are gone, not zeroed", () => {
+    expect(Object.keys(api.inboxCounts([]))).toEqual(["question", "total"]);
   });
 
   it("drops a task out of the floor the moment it is closed", async () => {

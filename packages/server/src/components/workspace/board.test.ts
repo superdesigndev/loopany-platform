@@ -10,9 +10,9 @@ import type { TaskCard } from './api'
  *
  * The rule under test is not "which moves feel natural" — it is "which acts
  * correspond to a human entrance that already exists in the kernel". There are
- * exactly three (`close`, and the `watcher` PATCH in both directions), each an
- * explicit button; the board offers no drag path, so a write can only happen
- * through one of them.
+ * exactly two (`close`, and the `watcher` PATCH — TRANSFER only, since the
+ * watcher rule made a null watcher a refusal), each an explicit button; the
+ * board offers no drag path, so a write can only happen through one of them.
  *
  * NB the source-reading guard at the bottom keeps the path in a VARIABLE — Vite
  * statically rewrites the literal `new URL('./x', import.meta.url)` form into an
@@ -27,7 +27,6 @@ const card = (over: Partial<TaskCard> = {}): TaskCard => ({
 describe('close — the one task transition', () => {
   it('is offered on any open card, watched or not', () => {
     expect(cardActions(card({ column: 'watched' })).canClose).toBe(true)
-    expect(cardActions(card({ column: 'unclaimed', watcher: null })).canClose).toBe(true)
     expect(cardActions(card({ column: 'due', followUpAt: '2026-01-01T00:00:00.000Z', due: true })).canClose).toBe(true)
   })
 
@@ -40,40 +39,42 @@ describe('close — the one task transition', () => {
   })
 })
 
-describe('claim and release — the watcher facet, both directions', () => {
-  it('offers claim exactly when nobody watches it', () => {
-    expect(cardActions(card({ column: 'unclaimed', watcher: null })).canClaim).toBe(true)
-    expect(cardActions(card({ column: 'watched', watcher: 'loop-a' })).canClaim).toBe(false)
+describe('transfer — the watcher facet, one direction only', () => {
+  it('is offered on any open task, because every task already has a watcher', () => {
+    expect(cardActions(card({ column: 'watched', watcher: 'loop-a' })).canTransfer).toBe(true)
+    expect(cardActions(card({ column: 'due', watcher: 'loop-a' })).canTransfer).toBe(true)
   })
 
-  it('offers release exactly when somebody does', () => {
-    expect(cardActions(card({ column: 'watched', watcher: 'loop-a' })).canRelease).toBe(true)
-    expect(cardActions(card({ column: 'due', watcher: 'loop-a' })).canRelease).toBe(true)
-    expect(cardActions(card({ column: 'unclaimed', watcher: null })).canRelease).toBe(false)
+  // Consequential (the eventual answer wakes whichever loop is watching when it
+  // lands) but deliberate: a labelled picker on one named task, not a gesture
+  // that can be made by accident. There is no drag surface to green-light it.
+  it('is offered on a waiting task too — an explicit act, not a spatial one', () => {
+    expect(cardActions(card({ column: 'waiting', watcher: 'loop-a', pendingQuestion: 'revert or wait?' })).canTransfer).toBe(true)
   })
 
-  // Consequential (the eventual answer would wake no loop) but deliberate: a
-  // labelled button on one named card, not a gesture that can be made by
-  // accident. There is no drag surface that could green-light it silently.
-  it('still offers release on a waiting card — an explicit act, not a spatial one', () => {
-    expect(cardActions(card({ column: 'waiting', watcher: 'loop-a', pendingQuestion: 'revert or wait?' })).canRelease).toBe(true)
-  })
-
-  it('offers neither on a closed card — it is a record', () => {
+  it('offers nothing on a closed card — it is a record', () => {
     const closed = cardActions(card({ column: 'closed', status: 'closed', watcher: 'loop-a' }))
-    expect(closed).toEqual({ canClose: false, canClaim: false, canRelease: false })
+    expect(closed).toEqual({ canClose: false, canTransfer: false })
+  })
+
+  // RELEASE IS GONE, not merely unused: `watcher: null` is a kernel refusal
+  // (WATCHER_REQUIRED), so an affordance for it would advertise a write that
+  // cannot succeed.
+  it('has no release affordance anywhere in the module', () => {
+    const source = readFileSync(fileURLToPath(new URL('./board.ts', import.meta.url)), 'utf8')
+    expect(source).not.toMatch(/canRelease|canClaim/)
+    expect(Object.keys(cardActions(card()))).toEqual(['canClose', 'canTransfer'])
   })
 })
 
 describe('hasActions — a card shows no empty action bar', () => {
   it('is true for any open card', () => {
     expect(hasActions(card({ column: 'watched', watcher: 'loop-a' }))).toBe(true)
-    expect(hasActions(card({ column: 'unclaimed', watcher: null }))).toBe(true)
-    expect(hasActions(card({ column: 'waiting', watcher: null, pendingQuestion: 'ask?' }))).toBe(true)
+    expect(hasActions(card({ column: 'waiting', pendingQuestion: 'ask?' }))).toBe(true)
   })
 
   it('is false for a closed card', () => {
-    expect(hasActions(card({ column: 'closed', status: 'closed', watcher: null }))).toBe(false)
+    expect(hasActions(card({ column: 'closed', status: 'closed' }))).toBe(false)
   })
 })
 
@@ -106,11 +107,11 @@ describe('the screen invents no write path', () => {
     const pane = read('./TasksPane.tsx')
     expect(pane).not.toMatch(/board-card-actions/)
     const card = pane.slice(pane.indexOf('function BoardCard'), pane.indexOf('function CloseNote'))
-    expect(card).not.toMatch(/onClaim|onRelease|onAskClose|patchWatcher|postClose/)
+    expect(card).not.toMatch(/onTransfer|onAskClose|transferWatcher|postClose/)
     const row = pane.slice(pane.indexOf('function TaskRowEntry'), pane.indexOf('function Column'))
-    expect(row).not.toMatch(/onClaim|onRelease|onAskClose|patchWatcher|postClose/)
+    expect(row).not.toMatch(/onTransfer|onAskClose|transferWatcher|postClose/)
     const actions = pane.slice(pane.indexOf('function TaskActions'))
-    for (const act of ['onClaim', 'onRelease', 'onAskClose']) expect(actions).toMatch(new RegExp(act))
+    for (const act of ['onTransfer', 'onAskClose']) expect(actions).toMatch(new RegExp(act))
   })
 
   // The board is a read layout plus buttons, by product decision: no card is
@@ -120,5 +121,18 @@ describe('the screen invents no write path', () => {
   it('has no drag-and-drop surface at all — in either view', () => {
     const pane = read('./TasksPane.tsx')
     expect(pane).not.toMatch(/draggable|onDrag[A-Z]|onDrop|dataTransfer/)
+  })
+
+  /**
+   * The watcher rule at the wire: the data layer can no longer EXPRESS a
+   * release. `transferWatcher` takes a plain `string`, so a null watcher is a
+   * type error at every call site rather than a request the kernel refuses.
+   */
+  it('cannot send a null watcher — transfer is the only shape the client has', () => {
+    const source = read('./api.ts')
+    expect(source).toMatch(/export async function transferWatcher\(taskId: string, watcher: string\)/)
+    expect(source).not.toMatch(/patchWatcher/)
+    const pane = read('./TasksPane.tsx')
+    expect(pane).not.toMatch(/transferWatcher\([^)]*null/)
   })
 })

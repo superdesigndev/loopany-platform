@@ -1,6 +1,6 @@
 import { Suspense, lazy, useState } from 'react'
 
-import { fetchInbox } from './api'
+import { fetchInbox, type InboxCounts } from './api'
 import { DocsPane } from './DocsPane'
 import { InboxPane } from './InboxPane'
 import { LoopsPane } from './LoopsPane'
@@ -136,7 +136,7 @@ function Rail({ view, setView }: { view: ViewName; setView: (next: ViewName) => 
  * unavailable and no state is unreachable. The second line is the workspace's own
  * vital sign, on the same footing: what the floor is currently holding.
  */
-function Freshness({ counts }: { counts?: { question: number; dueUnwatched: number; orphan: number; total: number } }) {
+function Freshness({ counts }: { counts?: InboxCounts }) {
   const status = useLiveStatus()
   const copy: Record<string, string> = {
     connecting: 'connecting to the event stream…',
@@ -153,7 +153,7 @@ function Freshness({ counts }: { counts?: { question: number; dueUnwatched: numb
           <small>
             {counts.total === 0
               ? 'nothing waiting on you'
-              : `${counts.question} question${counts.question === 1 ? '' : 's'} · ${counts.dueUnwatched} due · ${counts.orphan} orphan`}
+              : `${counts.question} question${counts.question === 1 ? '' : 's'} waiting on you`}
           </small>
         )}
       </div>

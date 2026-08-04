@@ -61,6 +61,7 @@ import {
   immutableIssues,
   isTransitionName,
   refuse,
+  watcherRequired,
   type Actor,
   type EventDiff,
   type KernelRefusal,
@@ -386,6 +387,17 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     );
   }
 
+  // THE WATCHER RULE (types.ts `WATCHER_HINT`), applied at the one create seam so
+  // no caller can mint an unwatched task — not the HTTP verbs, not the circuit
+  // breaker's auto-pause question, not the fixture seeder. A loop-created task
+  // falls back to its CREATOR (the run that filed it is on the hook unless it
+  // hands the task on); with no creating loop there is nobody to fall back to,
+  // so it refuses rather than guessing who is responsible.
+  const watcher = kind === "task" ? (input.watcher ?? input.createdByLoop ?? null) : (input.watcher ?? null);
+  if (kind === "task" && !watcher) {
+    return fail(watcherRequired(input.key ? `the task keyed "${input.key}"` : "this task", "created"), where);
+  }
+
   const status = input.status ?? INITIAL_STATUS[kind];
   if (!STATUSES_BY_KIND[kind].includes(status)) {
     return fail(
@@ -416,7 +428,7 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
           : null,
     followUpAt: input.followUpAt ?? null,
     pendingQuestion: input.pendingQuestion ?? null,
-    watcher: input.watcher ?? null,
+    watcher,
     format: input.format ?? null,
     key: input.key ?? null,
     payload: input.payload ?? null,
@@ -615,6 +627,15 @@ export async function applyUpdateIn(tx: KernelExec, input: ApplyUpdateInput): Pr
       ),
       where,
     );
+  }
+
+  // THE WATCHER RULE on the update side: a task's watcher may be TRANSFERRED to
+  // another loop but never cleared, so `watcher: null` is a refusal rather than
+  // a release. It is checked on the ASSERTED value (an absent key writes
+  // nothing), and it covers the whole-file replace too — a task file submitted
+  // without a `watcher:` line is asking to drop the one on record.
+  if (before.kind === "task" && Object.hasOwn(fields, "watcher") && !fields.watcher) {
+    return fail(watcherRequired(objectId, "updated"), where);
   }
 
   // A closed task is done. Reopening is not a v1 transition, so mutating one is a

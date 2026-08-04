@@ -11,17 +11,20 @@ import { affectsTasks, useLiveView } from './useLiveView'
  * THE INBOX — the product's front door, and the only screen a human is required
  * to visit.
  *
- * It shows the §6 union: questions waiting, due tasks nobody is watching, and
- * the orphan floor (open + unwatched + no follow-up + older than 48 h). All
- * three are QUERIES, not pushes — the badge is a query result, so nothing can
- * lie down silently forever and nothing needs an armed alarm to resurface.
+ * It shows the §6 floor: open tasks with a question waiting for a person. That
+ * is a QUERY, not a push — the badge is a query result, so nothing can lie down
+ * silently forever and nothing needs an armed alarm to resurface.
  *
- * The whole union lives inside ONE amber section card, because the reference's
+ * It used to show three routes. The other two — a due task nobody watched, and
+ * the 48-hour orphan floor — both existed to catch work with no loop on the
+ * hook, and the watcher rule (`kernel/types.ts` WATCHER_HINT) means there is no
+ * such work: every task names a watcher, and a due one now WAKES that watcher
+ * (`tickDueTasks`) instead of being escalated to a person. The inbox got
+ * smaller because the system got safer, not because a floor was lowered.
+ *
+ * The floor lives inside ONE amber section card, because the reference's
  * temperature rule says what amber means: a queue of ordinary decisions, and
- * looking at it should feel like work rather than alarm. The per-item pill then
- * says WHICH route brought it here — a question keeps the amber (a decision you
- * owe), while the two safety-floor routes take the rose, since both are work
- * nobody picked up rather than a decision anyone made.
+ * looking at it should feel like work rather than alarm.
  *
  * Answering is deliberately plain. **The verdict is pure**: it records the
  * answer, clears the question, writes the event, and — if the task has a watcher
@@ -56,10 +59,10 @@ export function InboxPane({ onOpenTask, onOpenLoop }: { onOpenTask: (id: string)
 
       {data.items.length === 0 ? (
         <Section tone="plain" title="Needs you" count={0} note="Open obligations">
-          <Empty>Nothing is waiting on you. Loops are running; tasks are being adopted, verified and closed without you.</Empty>
+          <Empty>Nothing is waiting on you. Loops are running; tasks are being handed off, verified and closed without you.</Empty>
         </Section>
       ) : (
-        <Section tone="needs" title="Needs you" count={data.items.length} note="Questions, due-unwatched work and the orphan floor">
+        <Section tone="needs" title="Needs you" count={data.items.length} note="Open tasks whose loop asked you a question">
           <ul className="inbox-list">
             {data.items.map((item) => (
               <InboxItemRow key={item.task.id} item={item} onAnswered={refresh} onOpenTask={onOpenTask} onOpenLoop={onOpenLoop} />
@@ -89,7 +92,7 @@ function InboxItemRow({
   const [failure, setFailure] = useState<Error | undefined>(undefined)
   const [queued, setQueued] = useState<string | undefined>(undefined)
   const asking = Boolean(item.task.pendingQuestion?.trim())
-  const primary = item.reasons[0] ?? 'orphan'
+  const primary = item.reasons[0] ?? 'question'
 
   const send = async (text: string) => {
     if (!text.trim() || busy) return
@@ -99,7 +102,7 @@ function InboxItemRow({
       const result = await postVerdict(item.task.id, text.trim())
       // R-answer: the answer wakes the watcher. It JOINS an already-queued run
       // rather than stacking a twin, so say which happened.
-      setQueued(result.run ? (result.run.alreadyQueued ? `joined the run already queued (${result.run.id})` : `queued ${result.run.id}`) : 'no watcher — the answer sits on the record')
+      setQueued(result.run ? (result.run.alreadyQueued ? `joined the run already queued (${result.run.id})` : `queued ${result.run.id}`) : 'the answer is on the record; its watcher had no run to queue')
       setAnswer('')
       onAnswered()
     } catch (cause) {
@@ -112,8 +115,8 @@ function InboxItemRow({
   return (
     <li className="inbox-item">
       <ArtifactRow
-        icon={asking ? 'question' : 'orphan'}
-        iconTone={asking ? 'question' : 'orphan'}
+        icon="question"
+        iconTone="question"
         title={item.task.title ?? item.task.id}
         source={
           <>
@@ -143,7 +146,7 @@ function InboxItemRow({
           </p>
         ) : (
           <p className="inbox-floor">
-            No question here. This task reached you through the safety floor: nobody is watching it, so it would otherwise sit unseen.
+            The question on this task was answered or withdrawn while you were reading. Refresh to drop it from the list.
           </p>
         )}
 
@@ -165,7 +168,7 @@ function InboxItemRow({
                 {item.watcherLoop.title ?? item.watcherLoop.id}
               </button>
             ) : (
-              'unclaimed pool'
+              (item.task.watcher ?? 'unresolved')
             )}
           </span>
           {item.askedAt && <When iso={item.askedAt} prefix="asked" />}

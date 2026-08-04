@@ -13,11 +13,11 @@ import type { GraphEdge, GraphNode } from './api'
  *     force simulation, no clock, no randomness — so a refetch that changes
  *     nothing does not reshuffle the picture under the reader's cursor, and this
  *     module is unit-testable as a pure function.
- *  2. **Banded.** `you` on top, loops in the middle, the unclaimed pool below.
- *     The bands encode the design's own claim: loops never wire to loops — they
- *     meet at the instance layer, so the interesting traffic is VERTICAL
- *     (a loop asks you; you answer a watcher; a loop produces into the pool; a
- *     steward adopts out of it).
+ *  2. **Banded.** `you` on top, loops below. The bands encode the design's own
+ *     claim: loops never wire to loops — they meet at the instance layer, so the
+ *     interesting traffic is VERTICAL (a loop asks you; you answer a watcher).
+ *     There was a third band, the unclaimed pool, and it retired with that state
+ *     — `BAND_ORDER` is the projection's node types, so it shrinks with them.
  *
  * Within the loop band, connected components are laid out left-to-right with
  * Dagre and packed into rows, so an isolated loop never drags a lane open.
@@ -31,7 +31,7 @@ const ROW_GAP = 34
 const BAND_GAP = 90
 const MARGIN = 44
 
-export const BAND_ORDER: GraphNode['type'][] = ['you', 'loop', 'pool']
+export const BAND_ORDER: GraphNode['type'][] = ['you', 'loop']
 
 export type Point = { x: number; y: number }
 

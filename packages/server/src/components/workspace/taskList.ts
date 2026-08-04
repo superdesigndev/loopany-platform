@@ -16,13 +16,19 @@ import type { BoardColumn, TaskCard } from './api'
  * do not become groups; they stay as badges on the row, exactly as they are on a
  * card. Turning them into groups again would be the board, spelled differently.
  *
- * Three group KINDS, and every task lands in exactly one by construction:
+ * Two group KINDS, and every task lands in exactly one by construction:
  *
- *   1. `unclaimed` — open, no watcher. FIRST, because it is the §6 safety floor:
- *      work nobody picked up is the one group whose emptiness is the good state.
- *   2. `loop` — open, watched, one group per watching loop, ordered by title.
- *   3. `closed` — closed, whatever it was watched by. LAST, because it is a
+ *   1. `loop` — open, one group per watching loop, ordered by title. EVERY open
+ *      task is in one of these, because every task names a watcher
+ *      (`kernel/types.ts` WATCHER_HINT).
+ *   2. `closed` — closed, whatever it was watched by. LAST, because it is a
  *      record rather than work; a closed task's watcher is history.
+ *
+ * There USED to be a third, `unclaimed`, pinned first as the §6 safety floor.
+ * It is gone rather than empty: the watcher rule removed the state it grouped,
+ * so it could only ever render as a heading with nothing under it — and a
+ * permanently-empty "nobody picked this up" section teaches that unowned work is
+ * still a thing the system can produce. It cannot.
  *
  * Closedness is read FIRST, so a closed task never appears under the loop that
  * used to watch it — that would double-count a desk with work that is done.
@@ -31,10 +37,10 @@ import type { BoardColumn, TaskCard } from './api'
  * drops a task hides work.
  */
 
-export type TaskGroupKind = 'unclaimed' | 'loop' | 'closed'
+export type TaskGroupKind = 'loop' | 'closed'
 
 export interface TaskGroup {
-  /** Stable within one render: `unclaimed` / `closed` / the loop's own id. */
+  /** Stable within one render: `closed`, or the watching loop's own id. */
   key: string
   kind: TaskGroupKind
   label: string
@@ -43,7 +49,6 @@ export interface TaskGroup {
   tasks: TaskCard[]
 }
 
-const UNCLAIMED_NOTE = 'Open, and no loop is watching. Nobody will act on these until one is named.'
 const CLOSED_NOTE = 'Closed is one-way — these are the record, not the worklist.'
 const loopNote = (count: number) => `Open work this loop is watching · ${count} task${count === 1 ? '' : 's'}`
 
@@ -61,7 +66,6 @@ export function flattenColumns(columns: BoardColumn[]): TaskCard[] {
 }
 
 export function groupTasks(tasks: TaskCard[]): TaskGroup[] {
-  const unclaimed: TaskCard[] = []
   const closed: TaskCard[] = []
   const byLoop = new Map<string, { label: string; tasks: TaskCard[] }>()
 
@@ -70,11 +74,11 @@ export function groupTasks(tasks: TaskCard[]): TaskGroup[] {
       closed.push(task)
       continue
     }
-    const watcher = task.watcher
-    if (!watcher) {
-      unclaimed.push(task)
-      continue
-    }
+    // Defensive, not a branch the kernel can produce: an open task always names
+    // a watcher. Grouping under the id keeps a row VISIBLE if one ever arrived
+    // without one — dropping it silently is the one thing this function must
+    // never do, and the totality test is what says so.
+    const watcher = task.watcher ?? task.id
     const existing = byLoop.get(watcher)
     if (existing) existing.tasks.push(task)
     // The card carries the loop's title already; the id is the honest fallback
@@ -83,7 +87,6 @@ export function groupTasks(tasks: TaskCard[]): TaskGroup[] {
   }
 
   const groups: TaskGroup[] = []
-  if (unclaimed.length) groups.push({ key: 'unclaimed', kind: 'unclaimed', label: 'Unclaimed pool', note: UNCLAIMED_NOTE, tasks: unclaimed })
   for (const [id, entry] of [...byLoop.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label) || a[0].localeCompare(b[0]))) {
     groups.push({ key: id, kind: 'loop', label: entry.label, note: loopNote(entry.tasks.length), tasks: entry.tasks })
   }

@@ -303,6 +303,14 @@
   .task-actions .field-select { min-height: 30px; padding: 3px 8px; font-size: .75rem; }
   .task-actions .verdict-button, .task-actions .attn-button { min-height: 30px; padding: 0 12px; font-size: .75rem; }
   .task-actions + .ws-note-line { margin-top: 8px; }
+  /* The Actions section is the ONE `.preview-section` in the task drawer followed
+     by something that is not another section, so the 38px section rhythm never
+     applied and the action row butted straight into the execution block. The
+     boundary belongs to the section that ends, not to `.task-actions` itself:
+     put it there and it collapses with the note line's own 8px top margin,
+     loosening the deliberate coupling between the buttons and the sentence
+     explaining them. */
+  .preview-section + .execution-block { margin-top: 28px; }
   .preview-section .answer-box { margin-bottom: 12px; }
 
   /* ---- the drawer: the reference's slide-in preview ---- */
@@ -333,6 +341,13 @@
   .preview-actions-row .ws-note-line { flex: 1 1 24ch; margin: 0; }
   .ws-queued { margin: 12px 0 0; padding: 9px 12px; border: 1px solid #dbe0d4; border-radius: 8px; background: #f4f6f0; color: #4d4a45; font-size: .8125rem; line-height: 1.55; }
   .preview-actions .ws-refusal { margin: 12px 0 0; }
+  /* Retire's confirm. INLINE rather than a scrim dialog: it sits under the
+     button that opened it, so the count it names stays next to the loop's own
+     open-work section instead of covering it. */
+  .ws-confirm { margin: 12px 0 0; padding: 12px 14px; border: 1px solid #e6d9c4; border-radius: 10px; background: #fbf7ef; }
+  .ws-confirm > p { margin: 0; color: #4d4a45; font-size: .8125rem; line-height: 1.55; }
+  .ws-confirm > p + p { margin-top: 8px; }
+  .ws-confirm .note-actions { margin-top: 12px; }
 
   .preview-section { margin-top: 38px; }
   .preview-section > h2 { margin: 0 0 4px; color: var(--muted); font-size: .6875rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
@@ -435,8 +450,6 @@
   .canvas-key span { display: flex; align-items: center; gap: 5px; }
   .canvas-key i { width: 18px; border-top: 1.5px solid currentColor; }
   .canvas-key em { margin-left: auto; font-style: normal; }
-  .edge-produces { color: #b6b2aa; }
-  .edge-adopts { color: var(--green); }
   .edge-hands-off { color: var(--blue); }
   .edge-asks { color: var(--red); }
   .edge-answers { color: var(--violet); }
@@ -460,8 +473,6 @@
      because the human is the one node that is not a machine. */
   .node-loop { border-color: #bcd9c8; background: #f7fcf8; }
   .node-loop .node-icon { color: var(--green); }
-  .node-pool { border-style: dashed; border-color: #c9c5bd; background: #faf9f6; }
-  .node-pool .node-icon { color: #aaa69e; }
   .node-you { width: 156px; border-color: #3e3c38; background: #3e3c38; }
   .node-you .node-name { color: #fffdf9; }
   .node-you .node-copy small { color: #bbb7af; }
@@ -474,8 +485,6 @@
   .ws-handle { width: 5px; height: 5px; border: 1px solid #fff; background: #aaa69e; opacity: 0; }
   .ws-edge-label { fill: #9a9892; font-size: 9px; }
   .react-flow__edge-path { stroke: #ccc8c0; stroke-width: 1.15; }
-  .ws-edge-produces .react-flow__edge-path { stroke: #ccc8c0; stroke-dasharray: 5 4; }
-  .ws-edge-adopts .react-flow__edge-path { stroke: #7fae93; }
   .ws-edge-hands-off .react-flow__edge-path { stroke: #6088b6; }
   .ws-edge-asks .react-flow__edge-path { stroke: #cc8f94; }
   .ws-edge-answers .react-flow__edge-path { stroke: #9a8ec9; }
