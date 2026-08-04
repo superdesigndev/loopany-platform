@@ -1,4 +1,4 @@
-import type { BoardColumn, TaskCard } from './api'
+import type { BoardColumn, TaskCard, TaskRef } from './api'
 import { loopLabel } from './loopLabel'
 
 /**
@@ -95,6 +95,103 @@ export function groupTasks(tasks: TaskCard[]): TaskGroup[] {
   }
   if (closed.length) groups.push({ key: 'closed', kind: 'closed', label: 'Closed', note: CLOSED_NOTE, tasks: closed })
   return groups
+}
+
+// ---- the tree, inside a group ----
+
+/**
+ * THE TREE — parent/child indentation WITHIN one group (convergence S4).
+ *
+ * Hierarchy is ORTHOGONAL to the watcher (design §3): every task keeps its own
+ * watcher, its own follow-up and its own end, and there is NO ROLL-UP in either
+ * direction. So the grouping does not change — a child whose watcher differs
+ * stays in ITS watcher's group and is never re-parented visually. Inside a
+ * group, a child whose parent is there too indents under it; a child whose
+ * parent is elsewhere renders at the root of its own group and says where it
+ * belongs with a chip (`detached`).
+ *
+ * READ-SIDE TOLERANCE IS DEFENCE IN DEPTH, ported from `feat/task-tree-v2`'s
+ * `taskTree.ts` (the prior art the design studied). The kernel's write-time
+ * cycle guard means hostile data should be impossible — but a reader must never
+ * hang on it and must never silently drop a row, because a layout that loses a
+ * task hides work. Hence: a self-parent is a root, an unknown parent is a root,
+ * and EVERY member of a cycle is a root (the ancestor walk carries a visited
+ * set and is depth-bounded), so nothing can disappear into one.
+ */
+export interface TaskTreeRow {
+  task: TaskCard
+  /** 0 for a root; the render clamps how far it indents, the number is true. */
+  depth: number
+  /** It names a parent, but that parent is not an ancestor row in this group —
+   *  so the relationship is carried by a chip instead of by the indent. */
+  detached: boolean
+}
+
+/** The same bound the kernel's guard uses, for the same reason: a walk over
+ *  hostile data must terminate. Deeper than this reads as a root. */
+export const TREE_MAX_DEPTH = 24
+
+export function treeRows(tasks: TaskCard[]): TaskTreeRow[] {
+  const index = new Map(tasks.map((task) => [task.id, task]))
+  // A parent EDGE inside this group. A self-parent has no edge — it is the
+  // shortest cycle there is, and treating it as one costs a walk.
+  const parentOf = (task: TaskCard): TaskCard | undefined =>
+    task.parentId && task.parentId !== task.id ? index.get(task.parentId) : undefined
+
+  const isRoot = (task: TaskCard): boolean => {
+    let cursor = parentOf(task)
+    if (!cursor) return true
+    const seen = new Set([task.id])
+    for (let hop = 0; hop <= TREE_MAX_DEPTH; hop++) {
+      if (seen.has(cursor.id)) return true // a cycle: surface it rather than lose it
+      seen.add(cursor.id)
+      const next = parentOf(cursor)
+      if (!next) return false
+      cursor = next
+    }
+    return true
+  }
+
+  const roots: TaskCard[] = []
+  const children = new Map<string, TaskCard[]>()
+  for (const task of tasks) {
+    if (isRoot(task)) {
+      roots.push(task)
+      continue
+    }
+    // Only a NON-root is filed as somebody's child, which is what keeps a task
+    // from being emitted twice (once as a rescued cycle root, once under the
+    // parent it also names).
+    const siblings = children.get(task.parentId!)
+    if (siblings) siblings.push(task)
+    else children.set(task.parentId!, [task])
+  }
+
+  const rows: TaskTreeRow[] = []
+  const emitted = new Set<string>()
+  const walk = (task: TaskCard, depth: number, detached: boolean) => {
+    if (emitted.has(task.id) || depth > TREE_MAX_DEPTH) return
+    emitted.add(task.id)
+    rows.push({ task, depth, detached })
+    for (const child of children.get(task.id) ?? []) walk(child, depth + 1, false)
+  }
+  // A rescued root still NAMES a parent, so it keeps the chip: the fact survives
+  // even when the indent cannot express it.
+  for (const root of roots) walk(root, 0, Boolean(root.parentId))
+  return rows
+}
+
+/**
+ * The parent a card should NAME, resolved title-first.
+ *
+ * The server resolves the reference (`views.ts` `taskRefOf`), so the title is
+ * normally there; this only decides what to do when it is not. An id alone is
+ * still a true reference — printing nothing because the title is missing would
+ * hide the relationship rather than degrade it.
+ */
+export function parentRef(task: Pick<TaskCard, 'parent' | 'parentId'>): TaskRef {
+  if (task.parent) return task.parent
+  return task.parentId ? { id: task.parentId, title: null, status: null } : null
 }
 
 // ---- the remembered view ----

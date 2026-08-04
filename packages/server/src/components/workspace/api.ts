@@ -78,6 +78,15 @@ export interface InboxCounts {
   total: number
 }
 
+/**
+ * A TASK reference — the parent pointer, resolved server-side.
+ *
+ * `missing: true` is the tombstone, exactly as `LoopRef`'s `source: 'missing'`
+ * is: a parent that can no longer be read is a FACT, and rendering it as `null`
+ * would say "this task has no parent", which is a different claim.
+ */
+export type TaskRef = { id: string; title: string | null; status: string | null; missing?: true } | null
+
 export interface TaskRow {
   id: string
   title: string | null
@@ -85,6 +94,10 @@ export interface TaskRow {
   followUpAt: string | null
   pendingQuestion: string | null
   watcher: string | null
+  /** The parent TASK's id, or null for a root (`objects.parent_id`). Hierarchy
+   *  is ORTHOGONAL to the watcher: a child keeps its own watcher, its own
+   *  follow-up and its own end. */
+  parentId?: string | null
   createdByLoop: string | null
   createdAt: string
   updatedAt: string
@@ -100,6 +113,9 @@ export type BoardColumnKey = 'waiting' | 'due' | 'watched' | 'closed'
  *  never re-derives the column — `kernel/taskBoard.ts` is the one mapping. */
 export interface TaskCard extends TaskRow {
   column: BoardColumnKey
+  /** The parent, resolved (title included) so a chip never prints a bare id.
+   *  Absent on an older payload; null on a root. */
+  parent?: TaskRef
 }
 
 export interface BoardColumn {
@@ -160,6 +176,11 @@ export interface TaskView extends ViewPayload {
   due: boolean
   creator: LoopRef
   watcherLoop: LoopRef
+  /** Both directions of the hierarchy, as NAVIGABLE references. There is no
+   *  roll-up in either: a parent is closed by its watcher, never by its last
+   *  child, so these point at other work rather than deriving this task's state. */
+  parent?: TaskRef
+  children?: TaskRow[]
   timeline: EventShape[]
   runs: RunRow[]
 }

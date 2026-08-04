@@ -301,6 +301,79 @@ describe("task create", () => {
   });
 });
 
+/**
+ * `--parent` — the hierarchy flag (convergence S4), on both write verbs.
+ *
+ * The CLI validates the SHAPE and nothing else: whether the parent exists, is a
+ * task, is in this team and is outside this task's subtree are facts only the
+ * kernel's transaction knows, and its `PARENT_CYCLE` / `NOT_FOUND` refusals are
+ * printed verbatim (`renderRefusal`).
+ */
+describe("--parent, on create and on update", () => {
+  it("folds --parent into the uploaded front matter on create", async () => {
+    const { request } = await run(["task", "create", "--file", "-", "--parent", "task-7f3a91"], { created: true, task: { id: "t", kind: "task", payload: {} } }, 201, { readStdin: () => "---\ntitle: step 1\n---\n\nbody\n" });
+    expect(await request!.text()).toContain('parent: "task-7f3a91"');
+  });
+
+  it("sends `parent` on the field patch, and `null` to move a task back to a root", async () => {
+    const patched = await run(["task", "update", "task-52ff10", "--parent", "task-7f3a91"], { changed: true, event: "ev-1", diff: {}, task: { id: "task-52ff10", kind: "task", payload: {} } });
+    expect(JSON.parse(await patched.request!.text())).toEqual({ parent: "task-7f3a91" });
+    // The asymmetry with --watcher is the point: a task may stop being a
+    // sub-task, but it may never stop having a watcher.
+    const rooted = await run(["task", "update", "task-52ff10", "--parent", "null"], { changed: true, event: "ev-2", diff: {}, task: { id: "task-52ff10", kind: "task", payload: {} } });
+    expect(JSON.parse(await rooted.request!.text())).toEqual({ parent: null });
+  });
+
+  it("refuses a loop id where a task id belongs, locally, and teaches the difference", async () => {
+    for (const argv of [["task", "update", "task-52ff10", "--parent", "loop-4c1d77"], ["task", "create", "--file", "-", "--parent", "loop-4c1d77"]]) {
+      const { code, stdout, request } = await run(argv, {}, 200, { readStdin: () => "---\ntitle: A\n---\nbody\n" });
+      expect(code, argv.join(" ")).toBe(2);
+      // No round trip: a shape error is the CLI's own to answer.
+      expect(request).toBeUndefined();
+      expect(stdout).toContain('error: "--parent takes a task id"');
+      expect(stdout).toContain("the loop that acts next is the watcher");
+    }
+  });
+
+  it("prints the kernel's cycle refusal verbatim, hint included", async () => {
+    const { code, stdout } = await run(["task", "update", "task-a", "--parent", "task-b"], {
+      code: "PARENT_CYCLE",
+      message: "task-a is already an ancestor of task-b",
+      issues: [{ path: "parentId", got: "task-b", expected: "a task outside this task's subtree" }],
+      hint: "a task tree is a tree: pick a parent that is not this task and not underneath it, or clear the parent to make this task a root. Nothing was written.",
+    }, 409);
+    expect(code).toBe(2);
+    expect(stdout).toContain('error: "task-a is already an ancestor of task-b"');
+    expect(stdout).toContain("code: CONFLICT\n");
+    expect(stdout).toContain("wrote:    task-b\n");
+    expect(stdout).toContain("a task tree is a tree");
+  });
+
+  it("shows a task's parent and its sub-tasks, both directions on one screen", async () => {
+    const { stdout } = await run(["task", "show", "task-child"], {
+      task: { id: "task-child", kind: "task", title: "step 1", status: "open", followUpAt: null, watcher: "loop-4c1d77", parentId: "task-7f3a91", pendingQuestion: null, key: null, payload: {} },
+      children: [{ id: "task-leaf", title: "sub step", status: "open", watcher: "loop-8e3311" }],
+      events: [],
+    });
+    expect(stdout).toContain("parent: task-7f3a91\n");
+    expect(stdout).toContain("children[1]{id,title,status,watcher}:\n");
+    expect(stdout).toContain("  task-leaf,\"sub step\",open,loop-8e3311\n");
+  });
+
+  // A ROOT is the ordinary case, and it says so: an absent line would leave a
+  // run inferring "no parent" from silence. An empty children list is omitted,
+  // because "no sub-tasks" is not a fact worth a heading.
+  it("says a root has no parent, and prints no empty children block", async () => {
+    const { stdout } = await run(["task", "show", "task-7f3a91"], {
+      task: { id: "task-7f3a91", kind: "task", title: "epic", status: "open", followUpAt: null, watcher: "loop-4c1d77", parentId: null, pendingQuestion: null, key: null, payload: {} },
+      children: [],
+      events: [],
+    });
+    expect(stdout).toContain("parent: \u2014\n");
+    expect(stdout).not.toContain("children");
+  });
+});
+
 describe("task update", () => {
   it("echoes the field-level diff the events table stores", async () => {
     const { code, stdout } = await run(["task", "update", "task-52ff10", "--watcher", "loop-4c1d77", "--follow-up", "+3d"], {
@@ -373,7 +446,7 @@ describe("task update", () => {
     const { code, stdout } = await run(["task", "update", "task-52ff10"], {});
     expect(code).toBe(2);
     expect(stdout).toContain('error: "task update requires at least one field"');
-    expect(stdout).toContain("allowed[5]: --follow-up, --watcher, --needs-human, --payload-merge, --file");
+    expect(stdout).toContain("allowed[6]: --follow-up, --watcher, --parent, --needs-human, --payload-merge, --file");
   });
 
   it("prints the server's NOT_HUMAN teaching verbatim under its own slug", async () => {
@@ -583,7 +656,7 @@ describe("the flag grammar is local, loud, and never ignored", () => {
     expect(stdout).toContain("only a human clears a pending question");
     // `mirrors` is flagged create-only in the key set, because it is a
     // constructor argument rather than a field an update can rewrite.
-    expect(stdout).toContain("see also:\n  task front matter: title, key, follow_up, watcher, needs_human, payload, mirrors (create-only)\n");
+    expect(stdout).toContain("see also:\n  task front matter: title, key, parent, follow_up, watcher, needs_human, payload, mirrors (create-only)\n");
   });
 
   it("refuses an unknown command with the verb list", async () => {

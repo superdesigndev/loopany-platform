@@ -1,11 +1,11 @@
-import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 
 import {
   fetchTask, fetchTasks, postDirective, postVerdict, transferWatcher, ViewError,
-  type BoardColumn, type MirrorRef, type TaskCard, type TaskView, type TasksView,
+  type BoardColumn, type MirrorRef, type TaskCard, type TaskRef, type TaskRow, type TaskView, type TasksView,
 } from './api'
 import { cardActions, hasActions, tellMode, type TellMode } from './board'
-import { flattenColumns, groupTasks, readTasksView, writeTasksView, type TaskGroup, type TasksViewMode } from './taskList'
+import { flattenColumns, groupTasks, parentRef, readTasksView, treeRows, writeTasksView, type TaskGroup, type TasksViewMode } from './taskList'
 import { isDeletedLoop, loopLabel } from './loopLabel'
 import { ExecutionBlock, Markdown } from './Render'
 import {
@@ -142,6 +142,10 @@ export function TasksPane({ selected, onSelect, onOpenLoop }: { selected: string
             id={selected}
             loops={data?.loops ?? []}
             onOpenLoop={onOpenLoop}
+            // Walking the tree REPLACES the drawer's subject rather than stacking
+            // a second one: the opener (the row that started this) is kept, so
+            // closing after two hops still hands the keyboard back to the list.
+            onOpenTask={(next) => onSelect(next)}
             onTransfer={(target, loop) => run(() => transferWatcher(target.id, loop))}
           />
         </Drawer>
@@ -185,6 +189,9 @@ function TaskList({ columns, selected, onOpen }: { columns: BoardColumn[]; selec
 }
 
 function TaskGroupSection({ group, selected, onOpen }: { group: TaskGroup; selected: string | null; onOpen: (id: string, from?: HTMLElement | null) => void }) {
+  // The tree is assembled INSIDE the group, never across groups: grouping stays
+  // "whose work is this", and hierarchy is orthogonal to it (`taskList.ts`).
+  const rows = treeRows(group.tasks)
   return (
     <Section
       // A loop's desk and the closed record are both plain content — there is no
@@ -195,41 +202,69 @@ function TaskGroupSection({ group, selected, onOpen }: { group: TaskGroup; selec
       note={group.note}
     >
       <div className="artifact-list">
-        {group.tasks.map((task) => (
-          <TaskRowEntry key={task.id} task={task} selected={task.id === selected} onOpen={onOpen} />
+        {rows.map((row) => (
+          <TaskRowEntry key={row.task.id} task={row.task} depth={row.depth} detached={row.detached} selected={row.task.id === selected} onOpen={onOpen} />
         ))}
       </div>
     </Section>
   )
 }
 
+/** How far the indent actually travels. The DEPTH stays true (the tree is not
+ *  re-rooted); only the offset stops growing, so a deep chain leans instead of
+ *  marching the titles off the right edge. */
+const MAX_INDENT = 6
+
 /**
- * A ROW is an entrance, nothing else. The badges are exactly the two facts that
- * change what a person would do next — a question waiting, and a follow-up date
- * that has arrived — and both survive the move to the list unchanged.
+ * The chip a card or row wears when it belongs to a parent the layout cannot
+ * show it under — a parent watched by another loop, or one off this page.
+ *
+ * It is TEXT, not a link, on both surfaces: a row and a card are each ONE button
+ * that opens the task (the standing rule), so a nested control would be a button
+ * inside a button. The navigable version of this reference lives in the drawer,
+ * which is where every other act on a task lives too.
  */
-function TaskRowEntry({ task, selected, onOpen }: { task: TaskCard; selected: boolean; onOpen: (id: string, from?: HTMLElement | null) => void }) {
+function ParentChip({ parent }: { parent: TaskRef }) {
+  if (!parent) return null
+  return <span className="state-label">part of {parent.missing ? `deleted task ${parent.id}` : (parent.title ?? parent.id)}</span>
+}
+
+/**
+ * A ROW is an entrance, nothing else. The badges are exactly the facts that
+ * change what a person would do next — a question waiting, a follow-up date that
+ * has arrived — plus, since S4, where this task sits in a tree when the indent
+ * could not say it.
+ */
+function TaskRowEntry({ task, depth, detached, selected, onOpen }: { task: TaskCard; depth: number; detached: boolean; selected: boolean; onOpen: (id: string, from?: HTMLElement | null) => void }) {
   const asking = Boolean(task.pendingQuestion?.trim())
   const overdue = task.due && task.status === 'open'
   return (
-    <ArtifactRow
-      icon={asking ? 'question' : task.status === 'closed' ? 'close' : 'task'}
-      iconTone={asking ? 'question' : 'task'}
-      title={task.title ?? task.id}
-      source={<>{task.creator ? loopLabel(task.creator) : (task.createdByLoop ?? 'opened by you')}</>}
-      badges={
-        <>
-          {asking && <span className="state-label state-human">question</span>}
-          {overdue && <span className="state-label state-floor">overdue</span>}
-          {task.status === 'closed' && <span className="state-label state-ok">closed</span>}
-        </>
-      }
-      when={task.status === 'closed' ? (task.closedAt ?? task.updatedAt) : (task.followUpAt ?? task.updatedAt)}
-      action={<span className="artifact-action">open ›</span>}
-      selected={selected}
-      onOpen={(event) => onOpen(task.id, event.currentTarget)}
-      ariaLabel={`Open ${task.title ?? task.id}`}
-    />
+    <div
+      className="task-tree-row"
+      data-depth={depth}
+      data-nested={depth > 0 ? '1' : '0'}
+      style={{ '--tree-depth': Math.min(depth, MAX_INDENT) } as CSSProperties}
+    >
+      <ArtifactRow
+        icon={asking ? 'question' : task.status === 'closed' ? 'close' : 'task'}
+        iconTone={asking ? 'question' : 'task'}
+        title={task.title ?? task.id}
+        source={<>{task.creator ? loopLabel(task.creator) : (task.createdByLoop ?? 'opened by you')}</>}
+        badges={
+          <>
+            {asking && <span className="state-label state-human">question</span>}
+            {overdue && <span className="state-label state-floor">overdue</span>}
+            {task.status === 'closed' && <span className="state-label state-ok">closed</span>}
+            {detached && <ParentChip parent={parentRef(task)} />}
+          </>
+        }
+        when={task.status === 'closed' ? (task.closedAt ?? task.updatedAt) : (task.followUpAt ?? task.updatedAt)}
+        action={<span className="artifact-action">open ›</span>}
+        selected={selected}
+        onOpen={(event) => onOpen(task.id, event.currentTarget)}
+        ariaLabel={`Open ${task.title ?? task.id}`}
+      />
+    </div>
   )
 }
 
@@ -260,6 +295,11 @@ function Column({ column, selected, onOpen }: { column: BoardColumn; selected: s
  * A card is COMPACT by design: title, watcher, and only the badges that change
  * what a person would do. It is now also PASSIVE — the whole card is one button
  * that opens the task, and every write lives in the drawer behind it.
+ *
+ * **THE BOARD IGNORES HIERARCHY except for the chip** (design §3). A column is a
+ * STATE predicate, and nesting cards inside one would mean a child is shown
+ * somewhere its own state does not put it — the board's whole claim is that a
+ * card's column is true of that card. So a parent is named, never drawn.
  */
 function BoardCard({ card, selected, onOpen }: { card: TaskCard; selected: boolean; onOpen: (id: string, from?: HTMLElement | null) => void }) {
   const asking = Boolean(card.pendingQuestion?.trim())
@@ -279,6 +319,7 @@ function BoardCard({ card, selected, onOpen }: { card: TaskCard; selected: boole
       </button>
       <div className="board-card-meta">
         <span>{loopLabel(card.watcherLoop, card.watcher)}</span>
+        <ParentChip parent={parentRef(card)} />
         {card.due && card.status === 'open' && <span className="state-label state-floor">overdue</span>}
         <When iso={card.status === 'closed' ? (card.closedAt ?? card.updatedAt) : (card.followUpAt ?? card.updatedAt)} />
       </div>
@@ -338,12 +379,55 @@ function ExternalItems({ mirrors }: { mirrors: MirrorRef[] }) {
   )
 }
 
+/**
+ * SUB-TASKS — the other half of the hierarchy, and the only place it is
+ * navigable.
+ *
+ * Rendered ONLY when there are children: an empty "Sub-tasks" section on every
+ * ordinary task would teach that a task is supposed to have some. There is no
+ * progress count and no roll-up either — a parent is closed by its watcher, never
+ * by its last child (design §3), so a "2 of 3 done" line would imply a coupling
+ * the two-status discipline forbids.
+ */
+function SubTasks({ children, onOpenTask }: { children: TaskRow[]; onOpenTask: (id: string) => void }) {
+  return (
+    <DrawerSection
+      title="Sub-tasks"
+      note="Each keeps its OWN watcher, follow-up and ending. Closing them does not close this one, and closing this one does not close them."
+    >
+      <div className="artifact-list">
+        {children.map((child) => (
+          <ArtifactRow
+            key={child.id}
+            icon={child.pendingQuestion?.trim() ? 'question' : child.status === 'closed' ? 'close' : 'task'}
+            iconTone={child.pendingQuestion?.trim() ? 'question' : 'task'}
+            title={child.title ?? child.id}
+            source={<>{loopLabel(child.watcherLoop, child.watcher)}</>}
+            badges={
+              <>
+                {child.pendingQuestion?.trim() && <span className="state-label state-human">question</span>}
+                {child.due && child.status === 'open' && <span className="state-label state-floor">overdue</span>}
+                {child.status === 'closed' && <span className="state-label state-ok">closed</span>}
+              </>
+            }
+            when={child.status === 'closed' ? (child.closedAt ?? child.updatedAt) : (child.followUpAt ?? child.updatedAt)}
+            action={<span className="artifact-action">open ›</span>}
+            onOpen={() => onOpenTask(child.id)}
+            ariaLabel={`Open ${child.title ?? child.id}`}
+          />
+        ))}
+      </div>
+    </DrawerSection>
+  )
+}
+
 function TaskDetail({
-  id, loops, onOpenLoop, onTransfer,
+  id, loops, onOpenLoop, onOpenTask, onTransfer,
 }: {
   id: string
   loops: TasksView['loops']
   onOpenLoop: (id: string) => void
+  onOpenTask: (id: string) => void
   onTransfer: (target: TaskTarget, loop: string) => void
 }) {
   const { data, error, refresh } = useLiveView(`task:${id}`, () => fetchTask(id), affectsObject(id))
@@ -401,6 +485,22 @@ function TaskDetail({
               (data.creator ? loopLabel(data.creator) : 'you')
             ),
           ],
+          // THE PARENT, navigable. Present only when there is one — a "part of:
+          // —" line on every root task would advertise a field a flat task is
+          // not missing. A deleted parent reads as a tombstone, never as a link
+          // into nothing (the same ruling `loopRefs.ts` makes for a watcher).
+          ...(data.parent
+            ? ([[
+                'part of',
+                data.parent.missing ? (
+                  `deleted task ${data.parent.id}`
+                ) : (
+                  <button type="button" className="ws-link" onClick={() => onOpenTask(data.parent!.id)}>
+                    {data.parent.title ?? data.parent.id}
+                  </button>
+                ),
+              ]] as [string, ReactNode][])
+            : []),
           ['follow-up', <When iso={task.followUpAt} />],
           ['updated', <When iso={task.updatedAt} />],
         ]}
@@ -418,6 +518,8 @@ function TaskDetail({
       <ExecutionBlock payload={data.execution} />
 
       {task.body?.trim() ? <Markdown>{task.body}</Markdown> : <Empty>No body.</Empty>}
+
+      {data.children && data.children.length > 0 && <SubTasks children={data.children} onOpenTask={onOpenTask} />}
 
       <ExternalItems mirrors={data.mirrors ?? []} />
 

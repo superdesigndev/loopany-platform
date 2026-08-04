@@ -1244,9 +1244,7 @@ loops authoritative. Hierarchy UI/CLI (S4) and cleanup (S5) remain later stages.
   could not have (its parent was a front-matter SLUG with files as the writers), so the guard
   is possible at all and slug-collision ambiguity is gone. `parentId: null` is a legal move
   to root — unlike `watcher: null`. A CLOSED parent is deliberately NOT refused: there is no
-  roll-up in either direction. The artifact key, the `--parent` flag and the tree rendering
-  are S4, so `parentId` is NOT on `CONTENT_KEYS`/`expressedDiffs` yet — add it to both
-  together.
+  roll-up in either direction. S4 (below) opened the surfaces on top of it.
 - Migrations mint as **0007+ on the rewrite chain**; 0003–0006 are applied on the captain's
   pglite journal and are never renumbered (the cross-line renumber stays a chain-merge step).
 - Verified end to end on an isolated stack (own port/data dir/`LOOPANY_HOME`, seeded before
@@ -1366,6 +1364,56 @@ instant (cv-s3-review F1). S3.1 makes it hold by code rather than by runbook.
   claiming and reporting normally, provenance discrimination, boot ordering, and the F3
   refusal). Verified on an isolated stack: a stranded `claimed` row planted pre-boot, the
   loud terminalization at boot, then a real daemon claiming and completing fresh runs.
+## Convergence S4 — hierarchy reaches the surfaces
+
+Stage S4 opened S1's `parent_id` to the CLI and the workspace. Nothing about the kernel
+changed: the guard, the task-only CHECK and the "no roll-up either way" ruling are all
+S1's, and every surface here is a door onto them.
+
+- **`parentId` joined `CONTENT_KEYS` and `expressedDiffs` together** (the S1 note's
+  instruction). A replay whose file names a different parent now reports `parentId` as a
+  differing field instead of silently reading as identical.
+- **The artifact key is `parent:`** (`KIND_KEYS.task`, second after `key`), a TASK id
+  checked for SHAPE at the seam and for reality at the write chokepoint. It is EMITTED by
+  `serializeKindArtifact`, so `show --file` → re-upload preserves the hierarchy; an absent
+  key is a root. Pinned by `artifactSeam.test.ts` + the round-trip case in
+  `taskParent.integration.test.ts`.
+- **`patchTask` accepts `parent`**, string-or-null, and **null is legal** — the one place
+  hierarchy and the watcher rule differ (a watcher is transferred and never cleared; a task
+  may stop being a sub-task). The CLI mirrors it: `--parent <task-id>` on `task create` and
+  `task update`, `--parent null` on update only, with `taskIdRefusal` catching a loop id
+  locally at exit 2 and teaching the parent/watcher distinction rather than the regex.
+- **`task show` prints BOTH directions**: a `parent:` row (`—` for a root, printed either
+  way so "no parent" is never inferred from silence) and a `children[N]{id,title,status,
+  watcher}` block, omitted when empty. Each child names its OWN watcher — hierarchy never
+  says who acts next. `task list` deliberately grew NO parent column: most tasks are roots,
+  and `show` is where the tree is read.
+- **`views.ts` carries the edge and the parent's NAME.** `taskRow` gained `parentId`; the
+  board payload adds a resolved `parent` ref via `parentIndex` (one extra query, page rows
+  consulted first, TEAM-SCOPED so a foreign parent tombstones rather than leaking a title);
+  the task page adds `parent` + `children`. A dangling parent resolves to
+  `{missing: true}`, the same tombstone-not-null ruling `loopRefs.ts` makes for a watcher.
+- **`components/workspace/taskList.ts` `treeRows` is the ONE tree assembly** — pure, and
+  tolerant as defence in depth (ported from `feat/task-tree-v2`): a self-parent, an unknown
+  parent and EVERY member of a cycle all surface as roots, the descent is depth-bounded, and
+  the test asserts totality + disjointness over trees/orphans/cycles together for the same
+  reason the grouping and board mappings do.
+- **Grouping did not change, because hierarchy is ORTHOGONAL to the watcher.** A child is
+  indented under its parent only WITHIN its watcher's group; a child watched by another loop
+  stays in ITS group and carries a `part of <title>` chip (`detached`), never re-parented
+  visually. **The BOARD nests nothing** — a column is a state predicate, so a card sits where
+  its own state puts it — and carries the same chip. The chip is TEXT on both surfaces, since
+  a row and a card are each one button; the navigable references live in the drawer (`part of`
+  in the meta grid, a `Sub-tasks` section rendered only when there are children, and no
+  progress count anywhere — a roll-up would imply a coupling the two statuses forbid).
+- Verified end to end on an isolated stack (own port 3186 / data dir / `LOOPANY_HOME`, seeded
+  then converged so watchers are production loops): a parent + two children + a grandchild
+  created through the real CLI's `--parent`; a human create with `--parent` and no `--watcher`
+  refused `WATCHER_REQUIRED` (a parent never implies a watcher); a nonexistent parent
+  `NOT_FOUND` and a loop id refused locally, both teaching; `A→B, B→A` and a self-parent both
+  `PARENT_CYCLE` with nothing written; the list showing depth 0/1/2 with the elbow, the
+  cross-watcher child chipped in FollowUp's group, board chips with zero nesting, and the
+  drawer walking up and down; zero console errors, no page-level horizontal scroll at 760.
 
 ## Maintaining this file
 

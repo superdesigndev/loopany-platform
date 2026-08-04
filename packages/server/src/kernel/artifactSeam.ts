@@ -23,7 +23,7 @@ import { refusal, type ApiRefusal } from "./refusals.js";
  * body somebody could cache external state in.
  */
 export const KIND_KEYS = {
-  task: ["title", "key", "follow_up", "watcher", "needs_human", "payload", "mirrors"],
+  task: ["title", "key", "parent", "follow_up", "watcher", "needs_human", "payload", "mirrors"],
   doc: ["title", "key", "format", "payload", "mirrors"],
   loop: ["title", "key", "cron", "workdir", "payload", "mirrors"],
 } as const satisfies Record<ArtifactKind, readonly string[]>;
@@ -57,6 +57,10 @@ export interface ArtifactProjection {
   payload: Record<string, unknown> | null;
   followUpAt?: string | null;
   watcher?: string | null;
+  /** The parent TASK's id, or null for a root. A reference by ID, never by slug
+   *  — which is what makes the kernel's write-time cycle guard possible at all
+   *  (`applyTransition.ts` `parentIssue`). */
+  parentId?: string | null;
   pendingQuestion?: string | null;
   format?: "markdown" | "html";
   cron?: string | null;
@@ -118,6 +122,12 @@ export function parseKindArtifact(kind: ArtifactKind, raw: string, now: Date): A
   const key = stringOrNull("key") ?? null;
   const watcher = stringOrNull("watcher");
   if (watcher && !watcher.startsWith("loop-")) issues.push({ path: "watcher", message: "must be a loop id", got: watcher, expected: "loop-<id>" });
+  // `parent:` is a TASK id, checked for SHAPE here and for reality (exists, is a
+  // task, same team, not inside its own subtree) at the kernel's write
+  // chokepoint. A wrong-kind id caught here saves a round trip; everything else
+  // is a fact only a transaction can know.
+  const parent = stringOrNull("parent");
+  if (parent && !parent.startsWith("task-")) issues.push({ path: "parent", message: "must be a task id", got: parent, expected: "task-<id>" });
   const question = stringOrNull("needs_human");
   if (typeof question === "string" && !question.trim()) issues.push({ path: "needs_human", message: "must be non-empty text or null", got: question });
   const cron = stringOrNull("cron");
@@ -157,7 +167,7 @@ export function parseKindArtifact(kind: ArtifactKind, raw: string, now: Date): A
   if (issues.length) return { ok: false, error: refusal("SCHEMA_VIOLATION", "artifact front matter has invalid values", issues, "fix every listed field and retry") };
   return { ok: true, document: parsed.value, value: {
     title: title ?? null, key, body: parsed.value.body, payload, mirrors: mirrors.value,
-    ...(kind === "task" ? { followUpAt: followUpAt ?? null, watcher: watcher ?? null, pendingQuestion: question ?? null } : {}),
+    ...(kind === "task" ? { followUpAt: followUpAt ?? null, watcher: watcher ?? null, parentId: parent ?? null, pendingQuestion: question ?? null } : {}),
     ...(kind === "doc" ? { format: (head.format as "markdown" | "html" | undefined) ?? "markdown" } : {}),
     ...(kind === "loop" ? { cron: cron ?? null, workdir: workdir ?? null } : {}),
   } };
@@ -234,7 +244,7 @@ export function parseDate(value: string, now: Date): string | undefined {
  */
 export function serializeKindArtifact(kind: ArtifactKind, object: ArtifactProjection): string {
   const frontMatter: Record<string, unknown> = { title: object.title, key: object.key };
-  if (kind === "task") Object.assign(frontMatter, { follow_up: object.followUpAt, watcher: object.watcher, needs_human: object.pendingQuestion });
+  if (kind === "task") Object.assign(frontMatter, { parent: object.parentId, follow_up: object.followUpAt, watcher: object.watcher, needs_human: object.pendingQuestion });
   if (kind === "doc") frontMatter.format = object.format ?? "markdown";
   if (kind === "loop") Object.assign(frontMatter, { cron: object.cron, workdir: object.workdir });
   // NOT `?? {}`: an absent payload must serialize as an ABSENT key, or the file

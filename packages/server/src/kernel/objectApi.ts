@@ -27,7 +27,7 @@ export type ApiResult<T> = { ok: true; status?: number; value: T } | { ok: false
 
 export function objectShape(row: KernelObject): Record<string, unknown> {
   const common = { id: row.id, kind: row.kind, team: row.teamId, status: row.status, title: row.title, key: row.key, payload: row.payload ?? {}, body: row.body ?? "", createdByRun: row.createdByRun, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt };
-  if (row.kind === "task") return { ...common, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, closedAt: row.closedAt };
+  if (row.kind === "task") return { ...common, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, parentId: row.parentId, closedAt: row.closedAt };
   if (row.kind === "doc") return { ...common, format: row.format ?? "markdown" };
   // A MIRROR drops `payload` and `body` from the common shape rather than
   // echoing the empty defaults: the fields do not exist on the row (the DDL
@@ -105,7 +105,7 @@ async function createObjectInTransaction(input: { kind: ArtifactKind; p: ReturnT
     const created = await createObjectIn(tx, {
       teamId: context.teamId, kind, actor: context.actor, now: now.toISOString(), key: p.key,
       title: p.title, body: p.body, payload: p.payload,
-      ...(kind === "task" ? { followUpAt: p.followUpAt, pendingQuestion: p.pendingQuestion, watcher: p.watcher } : {}),
+      ...(kind === "task" ? { followUpAt: p.followUpAt, pendingQuestion: p.pendingQuestion, watcher: p.watcher, parentId: p.parentId } : {}),
       ...(kind === "doc" ? { format: p.format } : {}),
       ...(kind === "loop" ? { cron: p.cron, workdir: p.workdir } : {}),
       createdByRun: context.run?.id ?? null, createdByLoop: context.run?.loopId ?? null,
@@ -129,7 +129,7 @@ function projection(p: ArtifactProjection) { return p; }
 
 function expressedDiffs(row: KernelObject, p: ArtifactProjection, kind: ArtifactKind): string[] {
   const pairs: [string, unknown, unknown][] = [["title", row.title, p.title], ["body", row.body ?? "", p.body], ["payload", row.payload ?? null, p.payload]];
-  if (kind === "task") pairs.push(["followUpAt", row.followUpAt, p.followUpAt], ["watcher", row.watcher, p.watcher], ["pendingQuestion", row.pendingQuestion, p.pendingQuestion]);
+  if (kind === "task") pairs.push(["followUpAt", row.followUpAt, p.followUpAt], ["watcher", row.watcher, p.watcher], ["parentId", row.parentId, p.parentId], ["pendingQuestion", row.pendingQuestion, p.pendingQuestion]);
   if (kind === "doc") pairs.push(["format", row.format ?? "markdown", p.format]);
   if (kind === "loop") pairs.push(["cron", row.cron, p.cron], ["workdir", row.workdir, p.workdir]);
   return pairs.filter(([, a, b]) => !sameValue(a, b)).map(([key]) => key);
@@ -180,13 +180,23 @@ export async function showObject(kind: ObjectKind, id: string, context: ApiConte
   const value: Record<string, unknown> = { [kind]: objectShape(row), events: history.map(eventShape), mirrors: await mirrorsFor(undefined, context.teamId, id) };
   if (kind === "task") {
     value.runs = await db.select({ id: runs.id, state: runs.queueState, scope: runs.scope, reason: runs.reason, finishedAt: runs.finishedAt }).from(runs).where(or(eq(runs.scope, `task:${id}`), eq(runs.id, row.createdByRun ?? ""))).orderBy(desc(runs.ts));
+    // BOTH DIRECTIONS of the hierarchy, because a run reading one task has to be
+    // able to walk it: `parent` is on the row itself (a column), `children` is
+    // the reverse lookup nothing else would give it. A missing parent row is
+    // reported as such rather than omitted — the write guard refuses a dangling
+    // reference, so one that exists is a fact worth seeing, not a blank.
+    value.children = (await db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.parentId, id))).orderBy(asc(objects.createdAt))).map(taskListShape);
+    if (row.parentId) {
+      const parent = await store.getObject(undefined, row.parentId);
+      value.parent = parent && parent.teamId === context.teamId ? taskListShape(parent) : { id: row.parentId, missing: true };
+    }
   }
   return { ok: true, value };
 }
 
 export function objectArtifact(row: KernelObject): string {
   if (!isArtifactKind(row.kind)) throw new Error(`${row.kind} is not authored as a file`);
-  return serializeKindArtifact(row.kind, { title: row.title, key: row.key, body: row.body ?? "", payload: row.payload, followUpAt: row.followUpAt, watcher: row.watcher, pendingQuestion: row.pendingQuestion, format: (row.format ?? "markdown") as "markdown" | "html", cron: row.cron, workdir: row.workdir });
+  return serializeKindArtifact(row.kind, { title: row.title, key: row.key, body: row.body ?? "", payload: row.payload, followUpAt: row.followUpAt, watcher: row.watcher, parentId: row.parentId, pendingQuestion: row.pendingQuestion, format: (row.format ?? "markdown") as "markdown" | "html", cron: row.cron, workdir: row.workdir });
 }
 
 export async function replaceFromArtifact(kind: ArtifactKind, id: string, raw: string, context: ApiContext, now = new Date(), eventKind?: string): Promise<ApiResult<Record<string, unknown>>> {
@@ -212,7 +222,7 @@ export async function replaceFromArtifact(kind: ArtifactKind, id: string, raw: s
     // pass may not do it silently (captain ruling 2026-08-04).
     if (kind === "loop" && parsed.value.workdir !== before!.workdir) return { ok: false, error: refusal("APPROVAL_REQUIRED", "changing this loop's bound working directory requires an approval key", [{ path: "workdir", message: "changed on the free-zone endpoint", got: parsed.value.workdir ?? "(none)", expected: before!.workdir ?? "(none)" }], `use POST /api/loops/${id} with workdir and a human answer event`) };
     const fields: WritableFields = { title: parsed.value.title, body: parsed.value.body, payload: parsed.value.payload };
-    if (kind === "task") Object.assign(fields, { followUpAt: parsed.value.followUpAt, watcher: parsed.value.watcher, pendingQuestion: parsed.value.pendingQuestion });
+    if (kind === "task") Object.assign(fields, { followUpAt: parsed.value.followUpAt, watcher: parsed.value.watcher, parentId: parsed.value.parentId, pendingQuestion: parsed.value.pendingQuestion });
     if (kind === "doc") fields.format = parsed.value.format;
     const result = await applyUpdateIn(tx, { objectId: id, actor: context.actor, now: now.toISOString(), fields, eventKind: eventKind ?? (kind === "loop" ? "charter-evolved" : "object-updated") });
     return kernelUpdateResult(kind, result);
@@ -220,7 +230,7 @@ export async function replaceFromArtifact(kind: ArtifactKind, id: string, raw: s
 }
 
 export async function patchTask(id: string, body: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  const allowed = ["followUp", "watcher", "needsHuman", "title", "payloadMerge", "body"];
+  const allowed = ["followUp", "watcher", "parent", "needsHuman", "title", "payloadMerge", "body"];
   if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: refusal("INVALID_BODY", "task patch must be a JSON object") };
   const rec = body as Record<string, unknown>; const unknown = Object.keys(rec).find((k) => !allowed.includes(k));
   if (unknown) return { ok: false, error: unknownJsonKey("task patch", unknown, allowed) };
@@ -234,6 +244,18 @@ export async function patchTask(id: string, body: unknown, context: ApiContext, 
     // gesture arriving at a surface that no longer has one — refused by name
     // rather than silently coerced (captain ruling 2026-08-04, types.ts).
     if (Object.hasOwn(rec, "watcher")) { if (typeof rec.watcher !== "string" || !rec.watcher.startsWith("loop-")) return { ok: false, error: refusal("WATCHER_REQUIRED", "watcher must name the loop that acts next", [{ path: "watcher", message: "must be a loop id", got: rec.watcher === null ? "null" : JSON.stringify(rec.watcher), expected: "loop-<id>" }], "a watcher is TRANSFERRED to another loop, never cleared — `loopany loop list` prints the ids") }; fields.watcher = rec.watcher; }
+    // MOVE, or MOVE TO ROOT. `parent: null` is a legal write — a task genuinely
+    // can stop being a sub-task — which is the one place hierarchy and the
+    // watcher rule differ: a watcher is transferred and never cleared, a parent
+    // may be cleared and there is no roll-up either way. Reality (exists, is a
+    // task, same team, not inside its own subtree) is the kernel's call at the
+    // write chokepoint; only the SHAPE is decided here.
+    if (Object.hasOwn(rec, "parent")) {
+      if (rec.parent !== null && (typeof rec.parent !== "string" || !rec.parent.startsWith("task-"))) {
+        return { ok: false, error: refusal("SCHEMA_VIOLATION", "parent must name a task, or be null to make this task a root", [{ path: "parent", message: "must be a task id or null", got: rec.parent === null ? "null" : JSON.stringify(rec.parent), expected: "task-<id>" }], "hierarchy is a TASK relation and the reference is by id: `loopany task list` prints them. The loop that acts next is the watcher, not the parent.") };
+      }
+      fields.parentId = rec.parent as string | null;
+    }
     if (Object.hasOwn(rec, "needsHuman")) { if (rec.needsHuman !== null && (typeof rec.needsHuman !== "string" || !rec.needsHuman.trim())) return { ok: false, error: refusal("SCHEMA_VIOLATION", "needsHuman must be non-empty text or null") }; if (context.mode === "agent" && before!.pendingQuestion && rec.needsHuman !== before!.pendingQuestion) return { ok: false, error: refusal("NOT_HUMAN", "a run cannot clear or replace a pending question", [], "a human answers it in the inbox") }; fields.pendingQuestion = rec.needsHuman as string | null; }
     if (Object.hasOwn(rec, "title")) { if (typeof rec.title !== "string") return { ok: false, error: refusal("SCHEMA_VIOLATION", "title must be text") }; fields.title = rec.title; }
     if (Object.hasOwn(rec, "body")) { if (typeof rec.body !== "string") return { ok: false, error: refusal("SCHEMA_VIOLATION", "body must be text") }; fields.body = rec.body; }
@@ -706,7 +728,7 @@ function notHuman(context: ApiContext, message = "this question is waiting for a
 }
 function notYourLoop(context: ApiContext, id: string): ApiRefusal { return refusal("NOT_YOUR_LOOP", `${context.run?.id ?? "this run"} belongs to ${context.run?.loopId ?? "another loop"} and may not write ${id}`, [{ path: "id", message: "must be the run's own loop", got: id, expected: context.run?.loopId ?? "" }], "a run evolves and governs only its own loop") }
 function mergePayload(before: Record<string, unknown> | null, patch: Record<string, unknown>) { const out = { ...(before ?? {}) }; for (const [key, value] of Object.entries(patch)) if (value === null) delete out[key]; else out[key] = value; return out; }
-export function taskListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, key: row.key, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
+export function taskListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, parentId: row.parentId, key: row.key, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
 export function loopListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire, workdir: row.workdir, key: row.key, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
 export function eventShape(row: KernelEvent) { return { id: row.id, seq: row.seq, objectId: row.objectId, kind: row.kind, entrance: row.entrance, actor: row.actorId, transition: row.transition, diff: row.diff, note: row.note, ts: row.ts }; }
 function lookbackDate(value: string, now: Date): string | undefined { const m = /^(\d+)(h|d)$/.exec(value); if (m) return new Date(now.getTime() - Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000)).toISOString(); return parseDate(value, now); }

@@ -22,7 +22,7 @@ export interface VerbSpec {
   seeAlso?: string;
 }
 
-const TASK_KEYS = "task front matter: title, key, follow_up, watcher, needs_human, payload, mirrors (create-only)";
+const TASK_KEYS = "task front matter: title, key, parent, follow_up, watcher, needs_human, payload, mirrors (create-only)";
 const DOC_KEYS = "doc front matter: title, key, format, payload, mirrors (create-only)";
 const LOOP_KEYS = "loop front matter: title, key, cron, workdir, payload, mirrors (create-only) — body is the charter";
 const MIRROR_LAW = "a mirror tells you WHERE to look, never WHAT state it is in";
@@ -88,16 +88,19 @@ export const VERBS: Record<string, VerbSpec> = {
       ["--file <path>", "the artifact file IS the object; `-` reads stdin"],
       ["--needs-human <text>", "attach a question; the task enters the human inbox"],
       ["--watcher <loop-id>", "the loop that acts next; DEFAULTS to your own loop, so pass it only to hand the task on"],
+      ["--parent <task-id>", "file this under a bigger task (e.g. task-7f3a91); it keeps its own watcher and its own ending"],
       ["--follow-up <date>", "RFC 3339 with offset, or relative (+3d, +12h); its arrival WAKES the watcher"],
     ],
     examples: [
       "loopany task create --file observe-pr-201.md",
       'loopany task create --file reddit-reply-a.md --needs-human "Post this reply?" --watcher loop-8e3311',
+      "loopany task create --file step-1.md --parent task-7f3a91",
     ],
     notes: [
       "a flag and a front-matter key supplying the same field is refused, never overridden",
       "title, key and payload have no flags — they belong in the file so a retry replays byte-identically",
       "a task ALWAYS has a watcher: yours by default from a run, and required outright when a human creates one",
+      "a parent is a TASK, never a loop, and it never implies a watcher: the parent's follow-up wakes the PARENT's watcher only",
     ],
     seeAlso: TASK_KEYS,
   },
@@ -106,6 +109,7 @@ export const VERBS: Record<string, VerbSpec> = {
     flags: [
       ["--follow-up <date>", "RFC 3339 with offset, or relative (+3d, +12h); `null` clears"],
       ["--watcher <loop-id>", "HAND the task to another loop (e.g. loop-4c1d77); there is no release — `null` is refused"],
+      ["--parent <task-id>", "move it under another task; `null` makes it a root again"],
       ["--needs-human <text>", "attach a question; the task enters the human inbox"],
       ["--payload-merge <json>", "one JSON object, shallow top-level merge; a `null` value deletes a key"],
       ["--file <path>", "replace front matter + body from an artifact file; `-` reads stdin"],
@@ -113,12 +117,14 @@ export const VERBS: Record<string, VerbSpec> = {
     examples: [
       "loopany task update task-7f3a91 --watcher loop-4c1d77 --follow-up +3d",
       'loopany task update task-7f3a91 --needs-human "error rate doubled — (a) revert (b) one more day"',
+      "loopany task update task-7f3a91 --parent task-4c1d77",
       "loopany task update task-7f3a91 --payload-merge '{\"merged_at\":\"2026-08-02T11:31:00+08:00\"}'",
     ],
     notes: [
       "a flag and a front-matter key supplying the same field is refused, never overridden",
       "only a human clears a pending question — a run may attach one, never empty or replace one",
       "a watcher is transferred, never cleared: the loop that acts next is always named",
+      "a parent CAN be cleared (`--parent null`): a task may stop being a sub-task, and a parent inside its own subtree is refused PARENT_CYCLE",
     ],
     seeAlso: TASK_KEYS,
   },

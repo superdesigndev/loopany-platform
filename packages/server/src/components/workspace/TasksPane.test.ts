@@ -41,19 +41,27 @@ const TASKS: TasksView = {
     },
     {
       key: 'due', label: 'Due', rule: 'The follow-up date has arrived.',
+      // A CHILD of task-ask watched by the SAME loop: in the Alpha group the
+      // indent can carry the relationship, so this row is nested and wears no chip.
       tasks: [{
         id: 'task-due', title: 'Nightly backup check', status: 'open', followUpAt: '2026-08-01T09:00:00.000Z',
         pendingQuestion: null, watcher: 'loop-a', watcherLoop: { id: 'loop-a', title: 'Alpha watch' },
         createdByLoop: 'loop-a', creator: { id: 'loop-a', title: 'Alpha watch' },
+        parentId: 'task-ask', parent: { id: 'task-ask', title: 'Revert or wait?', status: 'open' },
         createdAt: '', updatedAt: '', due: true, column: 'due',
       }],
     },
     {
       key: 'watched', label: 'Watched', rule: 'A loop is watching.',
+      // A CHILD of task-ask watched by ANOTHER loop: hierarchy is orthogonal to
+      // the watcher, so it stays in Beta's group (never re-parented visually)
+      // and the relationship is carried by a chip instead of an indent.
       tasks: [{
         id: 'task-held', title: 'Follow the migration', status: 'open', followUpAt: null, pendingQuestion: null,
         watcher: 'loop-b', watcherLoop: { id: 'loop-b', title: 'Beta watch' }, createdByLoop: 'loop-b',
-        creator: { id: 'loop-b', title: 'Beta watch' }, createdAt: '', updatedAt: '', due: false, column: 'watched',
+        creator: { id: 'loop-b', title: 'Beta watch' },
+        parentId: 'task-ask', parent: { id: 'task-ask', title: 'Revert or wait?', status: 'open' },
+        createdAt: '', updatedAt: '', due: false, column: 'watched',
       }],
     },
     { key: 'closed', label: 'Closed', rule: 'Closed is one-way.', tasks: [] },
@@ -68,8 +76,10 @@ const MIRROR = {
   attachedTo: ['task-held'], createdByLoop: 'loop-b', createdAt: '', updatedAt: '2026-08-04T08:00:00.000Z',
 }
 
+const allCards = () => TASKS.columns.flatMap((column) => column.tasks)
+
 const taskView = (id: string): TaskView => {
-  const card: TaskCard = TASKS.columns.flatMap((column) => column.tasks).find((task) => task.id === id)!
+  const card: TaskCard = allCards().find((task) => task.id === id)!
   return {
     cursorSeq: 12,
     task: {
@@ -77,7 +87,12 @@ const taskView = (id: string): TaskView => {
       watcher: card.watcher, followUpAt: card.followUpAt, createdAt: '', updatedAt: '', closedAt: null,
     },
     execution: {}, mirrors: id === 'task-held' ? [MIRROR] : [], due: card.due,
-    creator: card.creator ?? null, watcherLoop: card.watcherLoop ?? null, timeline: [], runs: [],
+    creator: card.creator ?? null, watcherLoop: card.watcherLoop ?? null,
+    // BOTH directions, exactly as `views.ts` composes them: the parent from the
+    // row's own column, the children by reverse lookup.
+    parent: card.parent ?? null,
+    children: allCards().filter((task) => task.parentId === id),
+    timeline: [], runs: [],
   }
 }
 
@@ -187,6 +202,80 @@ describe('the default view is a list, grouped by loop', () => {
       expect(strip).toMatch(/questions waiting on you/)
       expect(strip).not.toMatch(/orphan|unwatched/i)
     }
+  })
+})
+
+/**
+ * THE TREE (convergence S4). Three rules, and each is a design ruling rather
+ * than a layout preference: the list indents a child under its parent WITHIN a
+ * group, a child whose watcher differs stays in its own watcher's group and
+ * says where it belongs with a chip, and the BOARD nests nothing — a column is
+ * a state predicate, so a card sits where its own state puts it.
+ */
+describe('the list renders the hierarchy as a tree', () => {
+  const rows = () => [...host!.querySelectorAll('.task-tree-row')]
+  const rowText = () => rows().map((row) => [row.getAttribute('data-depth'), (row.querySelector('h3')?.textContent ?? '')])
+
+  it('indents a child under its parent inside the same group', async () => {
+    await mount()
+    expect(rowText()).toEqual([
+      ['0', 'Revert or wait?'],
+      ['1', 'Nightly backup check'],
+      ['0', 'Follow the migration'],
+    ])
+    // The indent IS the statement, so the nested row carries no chip.
+    const nested = rows()[1]!
+    expect(nested.querySelector('.artifact-badges')!.textContent).not.toMatch(/part of/)
+    expect(nested.getAttribute('data-nested')).toBe('1')
+  })
+
+  it('leaves a child watched by another loop in ITS group, with a chip instead', async () => {
+    await mount()
+    const headings = [...host!.querySelectorAll('h2')].map((h) => h.textContent)
+    expect(headings).toEqual(['Alpha watch', 'Beta watch'])
+    const detached = rows()[2]!
+    expect(detached.getAttribute('data-depth')).toBe('0')
+    expect(detached.querySelector('.artifact-badges')!.textContent).toMatch(/part of Revert or wait\?/)
+  })
+
+  it('names the parent on a board card and nests nothing there', async () => {
+    await mount()
+    await click(byText('Board'))
+    const chips = [...host!.querySelectorAll('.board-card-meta')].map((cell) => cell.textContent ?? '')
+    expect(chips.filter((cell) => /part of Revert or wait\?/.test(cell))).toHaveLength(2)
+    expect(host!.querySelector('.board .task-tree-row')).toBeNull()
+    expect(host!.querySelectorAll('.board-card')).toHaveLength(3)
+  })
+})
+
+describe('the drawer walks the tree', () => {
+  it('opens the parent from a child, as a navigable reference', async () => {
+    const onSelect = vi.fn()
+    await mount('task-due', onSelect)
+    const meta = host!.querySelector('.preview-meta')!.textContent ?? ''
+    expect(meta).toMatch(/part of/)
+    await click(buttons().find((button) => (button.textContent ?? '').trim() === 'Revert or wait?'))
+    expect(onSelect).toHaveBeenCalledWith('task-ask')
+  })
+
+  it('lists the sub-tasks on the parent, each opening its own task', async () => {
+    const onSelect = vi.fn()
+    await mount('task-ask', onSelect)
+    expect(text()).toMatch(/Sub-tasks/)
+    // No roll-up in either direction, so the section states no progress.
+    expect(text()).not.toMatch(/\d+ of \d+ (done|closed)/)
+    const titles = [...host!.querySelectorAll('.preview-document .artifact-row h3')].map((h) => h.textContent)
+    expect(titles).toEqual(expect.arrayContaining(['Nightly backup check', 'Follow the migration']))
+    await click(buttons().find((button) => (button.textContent ?? '').includes('Nightly backup check')))
+    expect(onSelect).toHaveBeenCalledWith('task-due')
+  })
+
+  // An empty "Sub-tasks" section on every leaf would teach that a task is
+  // supposed to have some. It is absent, not empty.
+  it('renders no Sub-tasks section for a task with no children', async () => {
+    await mount('task-held')
+    expect(text()).toMatch(/part of/)
+    expect(text()).not.toMatch(/Sub-tasks/)
   })
 })
 

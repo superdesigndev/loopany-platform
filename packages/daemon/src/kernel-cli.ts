@@ -302,6 +302,7 @@ function plan(command: string, positional: string[], flags: Flags, argv: string[
     case "task create": case "doc create": {
       const kind = command.startsWith("task") ? "task" : "doc";
       const file = requireFile(command, flags, out); if (typeof file === "number") return file;
+      if (typeof flags.parent === "string") { const bad = taskIdRefusal(flags.parent, "--parent"); if (bad) return emit(out, bad, 2); }
       const raw_ = readArtifact(file, deps, out); if (typeof raw_ === "number") return raw_;
       const shaped = applyArtifactFlags(kind, raw_, flags); if (!shaped.ok) return emit(out, shaped.refusal, 2);
       return { path: `/api/${kind}s`, method: "POST", headers: markdown(), body: shaped.text, render: (body) => renderCreate(kind, body, now()) };
@@ -534,7 +535,7 @@ function planLoopList(flags: Flags, out: Emit): Plan | number {
 
 function planTaskUpdate(id: string | undefined, flags: Flags, deps: KernelCliDeps, out: Emit, now: () => number): Plan | number {
   if (!id) return emit(out, missingArgument("task update requires a task id", "loopany task update <id> --follow-up +3d", ["Run `loopany task list --open` to find the id"]), 2);
-  const fieldFlags = ["follow-up", "watcher", "needs-human", "payload-merge"].filter((key) => flags[key] !== undefined);
+  const fieldFlags = ["follow-up", "watcher", "parent", "needs-human", "payload-merge"].filter((key) => flags[key] !== undefined);
   if (!flags.file && !fieldFlags.length) {
     return emit(out, errorEnvelope({ message: "task update requires at least one field", code: "VALIDATION_ERROR", expected: `loopany task update ${id} --follow-up +3d`, allowed: flagNames("task update"), help: [`Run \`loopany task show ${id}\` if you only wanted to read it`] }), 2);
   }
@@ -542,6 +543,9 @@ function planTaskUpdate(id: string | undefined, flags: Flags, deps: KernelCliDep
   // pool, and the pool is gone (`kernel/types.ts` WATCHER_HINT). Refused HERE,
   // client-side, so the release habit is corrected before a round trip.
   if (typeof flags.watcher === "string") { const bad = loopIdRefusal(flags.watcher, "--watcher"); if (bad) return emit(out, bad, 2); }
+  // `null` IS allowed here, and that asymmetry with `--watcher` is the point: a
+  // task may stop being a sub-task, but it may never stop having a watcher.
+  if (typeof flags.parent === "string") { const bad = taskIdRefusal(flags.parent, "--parent", true); if (bad) return emit(out, bad, 2); }
 
   if (typeof flags.file === "string") {
     if (flags["payload-merge"] !== undefined) {
@@ -555,6 +559,7 @@ function planTaskUpdate(id: string | undefined, flags: Flags, deps: KernelCliDep
   const patch: Body = {};
   if (flags["follow-up"] !== undefined) patch.followUp = nullToken(flags["follow-up"]);
   if (flags.watcher !== undefined) patch.watcher = flags.watcher;
+  if (flags.parent !== undefined) patch.parent = nullToken(flags.parent);
   if (flags["needs-human"] !== undefined) patch.needsHuman = nullToken(flags["needs-human"]);
   let merged: string[] = []; let deleted: string[] = [];
   if (flags["payload-merge"] !== undefined) {
@@ -652,6 +657,33 @@ function loopIdRefusal(value: string, where: string): string | undefined {
   });
 }
 
+/**
+ * A TASK id, wherever `--parent` takes one — the same local shape check
+ * `loopIdRefusal` makes for a watcher, and for the same reason: the kind prefix
+ * IS the type, so naming a loop as a parent is caught before a round trip.
+ *
+ * The teaching is the distinction the two flags exist to keep apart. A parent is
+ * the bigger piece of WORK this task is part of; the watcher is the loop that
+ * ACTS next. `--parent` never implies a watcher and a parent's follow-up wakes
+ * the parent's watcher only — there is no roll-up in either direction.
+ *
+ * `null` is legal only where clearing is (`task update`): a task genuinely can
+ * stop being a sub-task, unlike a watcher, which is transferred and never
+ * released.
+ */
+function taskIdRefusal(value: string, where: string, allowNull = false): string | undefined {
+  if (value.startsWith("task-")) return undefined;
+  if (allowNull && value === "null") return undefined;
+  return errorEnvelope({
+    message: `${where} takes a task id`, code: "VALIDATION_ERROR", wrote: value, expected: "task-7f3a91",
+    help: [
+      "Task ids are kind-prefixed: they start with `task-`. Run `loopany task list` — every row prints one",
+      "A parent is a TASK, never a loop: hierarchy is what this work is PART OF, while the loop that acts next is the watcher (`--watcher`)",
+      ...(allowNull ? ["`--parent null` clears it and makes this task a root again"] : ["Omit `--parent` entirely for a top-level task"]),
+    ],
+  });
+}
+
 function missingArgument(message: string, expected: string, help: string[]): string {
   return errorEnvelope({ message, code: "VALIDATION_ERROR", expected, help });
 }
@@ -674,7 +706,7 @@ function readArtifact(path: string, deps: KernelCliDeps, out: Emit): string | nu
  *  loudly, with BOTH values printed. There is no precedence rule to memorize, and
  *  the silent version routes a future human answer to the wrong loop. */
 const FLAG_TO_KEY: Record<string, Record<string, string>> = {
-  task: { "needs-human": "needs_human", watcher: "watcher", "follow-up": "follow_up" },
+  task: { "needs-human": "needs_human", watcher: "watcher", parent: "parent", "follow-up": "follow_up" },
   doc: {},
 };
 
@@ -744,6 +776,10 @@ function taskRows(row: Body, now: number): [string, unknown][] {
   // clock comparison it is unreliable at.
   rows.push(["follow_up", row.followUpAt ? raw(`${String(row.followUpAt)}${dueAnnotation(row.followUpAt as string, now)}`) : ABSENT]);
   rows.push(["watcher", row.watcher ?? ABSENT]);
+  // The task this one is PART OF. Absent means a root, which is the ordinary
+  // case — printed either way, because "no parent" is an answer a run reading
+  // this should not have to infer from a missing line.
+  rows.push(["parent", row.parentId ?? ABSENT]);
   rows.push(["question", row.pendingQuestion], ["key", row.key]);
   for (const field of ["createdByRun", "createdByLoop", "createdAt", "updatedAt", "closedAt"]) {
     if (row[field] !== undefined) rows.push([label(field), row[field]]);
@@ -790,6 +826,7 @@ function renderShow(kind: Kind, body: Body, full: boolean, now: number): string 
   // point of the kind is that a run reading this knows what to go and check, so
   // burying it below the event tail would defeat it. `coords` is what you use;
   // there is no state column here and there never will be.
+  text += childrenBlock(body);
   text += mirrorsBlock(body);
   const events = (Array.isArray(body.events) ? body.events : []) as Body[];
   // `seq` leads: it is what totally orders the tail even when two events share a
@@ -798,6 +835,22 @@ function renderShow(kind: Kind, body: Body, full: boolean, now: number): string 
   text += typedList("events", ["seq", "ts", "actor", "entrance", "change"], events.map((event) => [event.seq, event.ts, event.actor, event.entrance, changeSummary(event)]));
   const id = String(row.id ?? "<id>");
   return text + helpBlock(showHints(kind, id, row));
+}
+
+/**
+ * THE SUB-TASKS of a task, on `task show` — the reverse of the `parent` row.
+ *
+ * A task knows its parent by reading its own column; its children exist only as
+ * this lookup, so without the block the tree could only ever be walked upwards.
+ * Rendered only when the server sent the key AND there are any: an empty
+ * `children[0]:` on every ordinary task would teach that a task is supposed to
+ * have some. Each row prints its OWN watcher, because a child's watcher is its
+ * own — hierarchy never implies who acts next.
+ */
+function childrenBlock(body: Body): string {
+  if (!Array.isArray(body.children) || !body.children.length) return "";
+  const children = body.children as Body[];
+  return typedList("children", ["id", "title", "status", "watcher"], children.map((child) => [child.id, child.title, child.status, child.watcher]));
 }
 
 /** The mirrors attached to an object, on every `show`. Rendered only when the
@@ -810,7 +863,7 @@ function mirrorsBlock(body: Body): string {
 }
 
 function showHints(kind: Kind, id: string, row: Body): string[] {
-  if (kind === "task") return [`Run \`loopany task update ${id} --follow-up +1d\` to push the check out`, `Run \`loopany task update ${id} --needs-human "…"\` if you need a decision`, `Run \`loopany task close ${id} --note "…"\` when it is verified`];
+  if (kind === "task") return [`Run \`loopany task update ${id} --follow-up +1d\` to push the check out`, `Run \`loopany task update ${id} --needs-human "…"\` if you need a decision`, `Run \`loopany task create --file <path> --parent ${id}\` to break a piece of it out — the sub-task keeps its own watcher and its own ending`, `Run \`loopany task close ${id} --note "…"\` when it is verified`];
   if (kind === "doc") return [`Run \`loopany doc show ${id} --full\` to read the complete body`, `Run \`loopany doc show ${id} --file > d.md\` to start an edit from the current text`];
   if (row.status === "retired") return [`${id} is retired: its charter is frozen and it never fires again, but the whole record stays readable`, "Run `loopany loop list --status active` for the loops that are still running"];
   return [

@@ -8,7 +8,7 @@ describe("kind artifact seam", () => {
     // `mirrors` is the one key here that is not a FIELD of the task: it is a
     // constructor argument, consumed at create and never stored on the row (see
     // `artifactSeam.MIRRORS_KEY`), which is why `show --file` never emits it.
-    expect(KIND_KEYS.task).toEqual(["title", "key", "follow_up", "watcher", "needs_human", "payload", "mirrors"]);
+    expect(KIND_KEYS.task).toEqual(["title", "key", "parent", "follow_up", "watcher", "needs_human", "payload", "mirrors"]);
     const result = parseKindArtifact("task", "---\ntitle: A\npayload:\n  anything:\n    goes: here\n---\nbody\n", NOW);
     expect(result.ok).toBe(true);
   });
@@ -24,6 +24,44 @@ describe("kind artifact seam", () => {
     expect(parseDate("+3d", NOW)).toBe("2026-08-06T00:00:00.000Z");
     expect(parseDate("2026-08-06T08:00:00+08:00", NOW)).toBe("2026-08-06T00:00:00.000Z");
     for (const bad of ["tomorrow", "+2w", "+30m", "2026-08-06", "2026-08-06T08:00:00"]) expect(parseDate(bad, NOW)).toBeUndefined();
+  });
+});
+
+/**
+ * `parent:` — the hierarchy key (convergence S4). The seam checks SHAPE only:
+ * whether the parent exists, is a task, is in this team and is outside this
+ * task's subtree are facts only a transaction can know, and the kernel's
+ * `parentIssue` guard knows them.
+ */
+describe("parent: is a task id, checked for shape and round-tripped", () => {
+  it("reads a task id, and an absent key as a root", () => {
+    const child = parseKindArtifact("task", "---\ntitle: step\nparent: task-7f3a91\n---\nbody\n", NOW);
+    expect(child.ok && child.value.parentId).toBe("task-7f3a91");
+    const root = parseKindArtifact("task", "---\ntitle: step\n---\nbody\n", NOW);
+    expect(root.ok && root.value.parentId).toBe(null);
+  });
+
+  // The kind prefix IS the type, so a loop id here is caught before the write.
+  it("refuses a parent that is not a task id", () => {
+    const result = parseKindArtifact("task", "---\ntitle: step\nparent: loop-4c1d77\n---\nbody\n", NOW);
+    expect(!result.ok && result.error.code).toBe("SCHEMA_VIOLATION");
+    expect(!result.ok && result.error.issues).toMatchObject([{ path: "parent", expected: "task-<id>" }]);
+  });
+
+  it("is task-only: a doc or a loop that names one gets the key-set refusal", () => {
+    for (const kind of ["doc", "loop"] as const) {
+      const result = parseKindArtifact(kind, "---\ntitle: x\nparent: task-7f3a91\n---\nbody\n", NOW);
+      expect(!result.ok && result.error.code).toBe("UNKNOWN_KEY");
+    }
+  });
+
+  /** `show --file` must emit a file its own re-upload preserves — otherwise a
+   *  whole-file update silently re-roots the task. */
+  it("serializes into the canonical file, and omits it for a root", () => {
+    const text = serializeKindArtifact("task", { title: "step", key: null, body: "b", payload: null, parentId: "task-7f3a91", watcher: "loop-4c1d77" });
+    expect(text).toContain("parent: task-7f3a91");
+    expect(parseKindArtifact("task", text, NOW)).toMatchObject({ ok: true, value: { parentId: "task-7f3a91" } });
+    expect(serializeKindArtifact("task", { title: "step", key: null, body: "b", payload: null, parentId: null, watcher: "loop-4c1d77" })).not.toContain("parent:");
   });
 });
 

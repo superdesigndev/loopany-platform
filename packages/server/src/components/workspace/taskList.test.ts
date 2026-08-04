@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { BoardColumn, TaskCard } from './api'
 import {
-  DEFAULT_TASKS_VIEW, TASKS_VIEW_STORAGE_KEY, flattenColumns, groupTasks, readTasksView, writeTasksView,
+  DEFAULT_TASKS_VIEW, TASKS_VIEW_STORAGE_KEY, TREE_MAX_DEPTH, flattenColumns, groupTasks, parentRef, readTasksView, treeRows, writeTasksView,
 } from './taskList'
 
 /**
@@ -118,6 +118,98 @@ describe('groupTasks — one group per loop, plus the record', () => {
     const placed = groupTasks(facts).flatMap((group) => group.tasks.map((task) => task.id))
     expect(placed.length).toBe(facts.length)
     expect(new Set(placed).size).toBe(facts.length)
+  })
+})
+
+/**
+ * THE TREE (convergence S4), held to the same bar as the grouping: TOTAL and
+ * DISJOINT. A tree layout has one extra way to lose a task that a flat list does
+ * not — a child whose parent is unreachable, or a cycle nothing descends into —
+ * so every tolerance case below ends by asserting the row is still ON SCREEN.
+ */
+describe('treeRows — parent/child indentation inside one group', () => {
+  const sub = (id: string, parentId: string | null, over: Partial<TaskCard> = {}): TaskCard =>
+    card({ id, parentId, ...(parentId ? { parent: { id: parentId, title: `Title of ${parentId}`, status: 'open' } } : {}), ...over })
+
+  it('indents a child under its parent and keeps the server order among siblings', () => {
+    const rows = treeRows([sub('t-parent', null), sub('t-a', 't-parent'), sub('t-b', 't-parent')])
+    expect(rows.map((row) => [row.task.id, row.depth])).toEqual([['t-parent', 0], ['t-a', 1], ['t-b', 1]])
+    expect(rows.every((row) => !row.detached)).toBe(true)
+  })
+
+  it('nests a grandchild under its own parent, not under the root', () => {
+    const rows = treeRows([sub('t-1', null), sub('t-2', 't-1'), sub('t-3', 't-2')])
+    expect(rows.map((row) => row.depth)).toEqual([0, 1, 2])
+  })
+
+  // A child is filed under its parent even when the payload lists it first: the
+  // rows arrive in the server's order, which is not a topological one.
+  it('does not depend on a parent arriving before its child', () => {
+    const rows = treeRows([sub('t-child', 't-parent'), sub('t-parent', null)])
+    expect(rows.map((row) => [row.task.id, row.depth])).toEqual([['t-parent', 0], ['t-child', 1]])
+  })
+
+  /**
+   * The watcher-orthogonality case, and the reason `detached` exists: a child
+   * watched by ANOTHER loop is grouped under ITS watcher (never re-parented
+   * visually), so in that group the indent cannot express the relationship and
+   * a chip has to.
+   */
+  it('roots a child whose parent is in another group, and flags it detached', () => {
+    const rows = treeRows([sub('t-child', 't-elsewhere')])
+    expect(rows.map((row) => [row.task.id, row.depth, row.detached])).toEqual([['t-child', 0, true]])
+  })
+
+  it('treats a self-parent as a root rather than descending into it', () => {
+    const rows = treeRows([sub('t-self', 't-self')])
+    expect(rows.map((row) => [row.task.id, row.depth])).toEqual([['t-self', 0]])
+  })
+
+  /**
+   * The kernel's write guard makes a cycle unreachable, and the reader still
+   * must not hang on one (defence in depth, ported from `feat/task-tree-v2`).
+   * EVERY member surfaces as a root: losing one would hide work, and the whole
+   * point of the tolerance is that hostile data degrades to a flat list.
+   */
+  it('surfaces every member of a cycle, exactly once, instead of hanging', () => {
+    const rows = treeRows([sub('t-a', 't-b'), sub('t-b', 't-a'), sub('t-c', 't-b')])
+    expect(rows.map((row) => row.task.id).sort()).toEqual(['t-a', 't-b', 't-c'])
+    expect(rows.every((row) => row.depth === 0)).toBe(true)
+  })
+
+  it('is TOTAL and DISJOINT over trees, orphans, cycles and roots together', () => {
+    const tasks = [
+      sub('t-root', null), sub('t-kid', 't-root'), sub('t-grandkid', 't-kid'),
+      sub('t-orphan', 't-missing'), sub('t-self', 't-self'),
+      sub('t-cycle-a', 't-cycle-b'), sub('t-cycle-b', 't-cycle-a'),
+    ]
+    const rows = treeRows(tasks)
+    expect(rows.length).toBe(tasks.length)
+    expect(new Set(rows.map((row) => row.task.id)).size).toBe(tasks.length)
+  })
+
+  it('bounds the descent, and the bound is the one the kernel guard uses', () => {
+    expect(TREE_MAX_DEPTH).toBeGreaterThan(12)
+    const chain = Array.from({ length: 40 }, (_, i) => sub(`t-${i}`, i === 0 ? null : `t-${i - 1}`))
+    expect(() => treeRows(chain)).not.toThrow()
+  })
+
+  it('reads an empty list as an empty tree', () => {
+    expect(treeRows([])).toEqual([])
+  })
+})
+
+describe('parentRef — what a chip names', () => {
+  it('prefers the server-resolved reference, title included', () => {
+    expect(parentRef({ parent: { id: 't-1', title: 'The epic', status: 'open' }, parentId: 't-1' })).toEqual({ id: 't-1', title: 'The epic', status: 'open' })
+  })
+
+  // An id alone is still a TRUE reference: printing nothing because the title
+  // never arrived would hide the relationship rather than degrade it.
+  it('falls back to the bare id, and says nothing at all for a root', () => {
+    expect(parentRef({ parentId: 't-9' })).toEqual({ id: 't-9', title: null, status: null })
+    expect(parentRef({ parentId: null })).toBe(null)
+    expect(parentRef({})).toBe(null)
   })
 })
 

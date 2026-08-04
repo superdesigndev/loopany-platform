@@ -1,7 +1,8 @@
 /**
- * TASK HIERARCHY — `objects.parent_id` and the write-time cycle guard, against a
- * real pglite database (convergence stage S1 lands the schema and the guard;
- * stage S4 lands the tree UI and the `--parent` flag on top of them).
+ * TASK HIERARCHY — `objects.parent_id`, the write-time cycle guard, and the
+ * WRITE SURFACES that reach them, against a real pglite database. Convergence S1
+ * landed the column and the guard; S4 opened the artifact key (`parent:`), the
+ * field patch (`parent`) and the read surface (`parent` + `children` on show).
  *
  * The guard is asserted at BOTH altitudes, for the same reason the kind
  * firewalls are: once through the kernel (the teaching refusal an agent reads)
@@ -22,6 +23,7 @@ let tmp: string;
 let db: typeof import("../db/index.js");
 let kernel: typeof import("./applyTransition.js");
 let schema: typeof import("../db/kernel-schema.js");
+let api: typeof import("./objectApi.js");
 
 const TEAM = "team-parent";
 const OTHER = "team-elsewhere";
@@ -30,6 +32,7 @@ const HUMAN = { entrance: "human", actorId: "u_alice" } as const;
 const T0 = "2026-08-03T07:00:00.000Z";
 const T1 = "2026-08-03T08:00:00.000Z";
 const WATCHER = "loop-fixture";
+const HUMAN_CTX = { teamId: TEAM, actor: HUMAN, mode: "human" } as never;
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-parent-"));
@@ -39,6 +42,7 @@ beforeAll(async () => {
   await db.runMigrations();
   kernel = await import("./applyTransition.js");
   schema = await import("../db/kernel-schema.js");
+  api = await import("./objectApi.js");
 });
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -152,6 +156,15 @@ describe("the write-time cycle guard", () => {
     expect(child.parentId).toBe(parent.id);
   });
 
+  it("refuses a parent on the ARTIFACT create path, teaching rather than crashing", async () => {
+    // A nonexistent parent through the file door: the same NOT_FOUND the field
+    // patch gives, because there is no FK and the write seam is the only guard.
+    const refused = await api.createFromArtifact("task", `---\ntitle: step 1\nwatcher: ${WATCHER}\nparent: task-nope01\n---\n\nbody\n`, HUMAN_CTX, new Date(T0));
+    expect(refused.ok).toBe(false);
+    expect((refused as { error: { code: string; hint: string } }).error.code).toBe("NOT_FOUND");
+    expect((refused as { error: { hint: string } }).error.hint).toContain("copy the id");
+  });
+
   it("bounds the ancestor walk rather than following a chain forever", async () => {
     // Depth is bounded by construction, so a legal tree well inside the bound
     // still lands: what the bound protects is a transaction holding a row lock.
@@ -163,5 +176,107 @@ describe("the write-time cycle guard", () => {
     expect(kernel.PARENT_MAX_HOPS).toBeGreaterThan(12);
     const deepest = await kernel.applyUpdate({ objectId: previous!, actor: AGENT, now: T1, fields: { title: "deepest" } });
     expect(deepest.ok).toBe(true);
+  });
+});
+
+/**
+ * THE S4 SURFACES — the artifact key, the field patch, and what a `show` says.
+ *
+ * The guard itself is covered above; these cases pin that each DOOR reaches it
+ * and that a person or a run gets a teaching refusal rather than a stack trace.
+ */
+/**
+ * THE S4 SURFACES — the artifact key, the field patch, and what a `show` says.
+ *
+ * The guard itself is covered above; these cases pin that each DOOR reaches it
+ * and that a person or a run gets a teaching refusal rather than a stack trace.
+ */
+describe("the write surfaces that reach the guard", () => {
+  const file = (over: string) => `---\ntitle: step\nwatcher: ${WATCHER}\n${over}\n---\n\nbody\n`;
+  /** The wire shapes, read back without re-declaring the whole payload type. */
+  const valueOf = (r: unknown) => (r as { value: Record<string, unknown> }).value;
+  const taskOf = (r: unknown) => valueOf(r).task as Record<string, unknown>;
+  const errorOf = (r: unknown) => (r as { error: { code: string; hint: string; issues: { path: string }[] } }).error;
+  const parentOf = async (id: string) => (await kernel.applyUpdate({ objectId: id, actor: AGENT, now: T1, fields: {} })) as { ok: boolean; object?: { parentId: string | null; status: string } };
+
+  it("files a sub-task through `parent:` in the front matter", async () => {
+    const parent = await task({ title: "epic" });
+    const created = await api.createFromArtifact("task", file(`parent: ${parent.id}`), HUMAN_CTX, new Date(T0));
+    expect(created.ok).toBe(true);
+    expect(taskOf(created).parentId).toBe(parent.id);
+  });
+
+  // The kind prefix IS the type, so a loop id in `parent:` is caught for SHAPE at
+  // the seam and never reaches the transaction.
+  it("refuses a `parent:` that is not a task id, at the artifact seam", async () => {
+    const refused = await api.createFromArtifact("task", file("parent: loop-4c1d77"), HUMAN_CTX, new Date(T0));
+    expect(errorOf(refused).code).toBe("SCHEMA_VIOLATION");
+    expect(errorOf(refused).issues.map((i) => i.path)).toContain("parent");
+  });
+
+  it("MOVES a task through the field patch, and back to a root with null", async () => {
+    const parent = await task({ title: "epic" });
+    const child = await task({ title: "step" });
+    expect(taskOf(await api.patchTask(child.id, { parent: parent.id }, HUMAN_CTX, new Date(T1))).parentId).toBe(parent.id);
+    // The asymmetry with `watcher` is deliberate: a task may stop being a
+    // sub-task, but it may never stop having a watcher.
+    expect(taskOf(await api.patchTask(child.id, { parent: null }, HUMAN_CTX, new Date(T1))).parentId).toBe(null);
+  });
+
+  it("surfaces the CYCLE refusal through the patch, with the teaching intact", async () => {
+    const a = await task({ title: "a" });
+    const b = await task({ title: "b", parentId: a.id });
+    const refused = await api.patchTask(a.id, { parent: b.id }, HUMAN_CTX, new Date(T1));
+    expect(refused.ok).toBe(false);
+    expect(errorOf(refused).code).toBe("PARENT_CYCLE");
+    expect(errorOf(refused).hint).toContain("a task tree is a tree");
+    // Nothing was written — a refusal is never a partial apply.
+    expect((await parentOf(a.id)).object!.parentId).toBe(null);
+  });
+
+  it("refuses a `parent` that names anything but a task id or null", async () => {
+    const child = await task({ title: "step" });
+    const refused = await api.patchTask(child.id, { parent: "loop-4c1d77" }, HUMAN_CTX, new Date(T1));
+    expect(errorOf(refused).code).toBe("SCHEMA_VIOLATION");
+    expect(errorOf(refused).hint).toContain("watcher");
+  });
+
+  it("shows BOTH directions — the parent column and the children lookup", async () => {
+    const parent = await task({ title: "epic" });
+    const first = await task({ title: "step 1", parentId: parent.id });
+    const second = await task({ title: "step 2", parentId: parent.id });
+
+    const onParent = valueOf(await api.showObject("task", parent.id, HUMAN_CTX));
+    expect((onParent.children as { id: string }[]).map((c) => c.id).sort()).toEqual([first.id, second.id].sort());
+    expect(onParent.parent).toBeUndefined();
+
+    const onChild = valueOf(await api.showObject("task", first.id, HUMAN_CTX));
+    expect(onChild.parent).toMatchObject({ id: parent.id, title: "epic" });
+    expect(onChild.children).toEqual([]);
+  });
+
+  // A closed parent keeps its children: there is no roll-up in either direction,
+  // so a `show` says what is true rather than what would be tidy.
+  it("keeps a closed parent's children listed, and closes none of them", async () => {
+    const parent = await task({ title: "epic" });
+    const child = await task({ title: "leftover", parentId: parent.id });
+    await kernel.applyTransition({ objectId: parent.id, transition: "close", actor: AGENT, now: T1, note: "done" });
+    const value = valueOf(await api.showObject("task", parent.id, HUMAN_CTX));
+    expect((value.children as { id: string }[]).map((c) => c.id)).toEqual([child.id]);
+    expect((await parentOf(child.id)).object!.status).toBe("open");
+  });
+
+  /** `show --file` → `create` must round-trip, so the parent has to be IN the
+   *  file the server itself emits — otherwise re-uploading it silently reroots
+   *  the task. */
+  it("round-trips `parent:` through the canonical artifact file", async () => {
+    const parent = await task({ title: "epic" });
+    const child = await task({ title: "step", parentId: parent.id });
+    const text = api.objectArtifact(child);
+    expect(text).toContain(`parent: ${parent.id}`);
+
+    const replayed = await api.replaceFromArtifact("task", child.id, text, HUMAN_CTX, new Date(T1));
+    expect(replayed.ok).toBe(true);
+    expect((await parentOf(child.id)).object!.parentId).toBe(parent.id);
   });
 });

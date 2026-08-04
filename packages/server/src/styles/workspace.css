@@ -185,6 +185,19 @@
   .artifact-row time { color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .artifact-action { display: flex; align-items: center; justify-content: flex-end; gap: 3px; color: var(--muted); font-size: .75rem; font-weight: 500; }
 
+  /* ---- the task tree, INSIDE one group ----
+
+     Indentation is the whole mechanism: the row grammar is untouched, a wrapper
+     supplies the offset and an elbow rule draws the branch into the icon tile.
+     `--tree-depth` is clamped by the component, so a deep chain leans rather
+     than marching off the right edge. */
+  .task-tree-row { position: relative; }
+  .task-tree-row > .artifact-row { padding-left: calc(8px + var(--tree-depth, 0) * 22px); }
+  .task-tree-row[data-nested='1']::before,
+  .task-tree-row[data-nested='1']::after { content: ''; position: absolute; background: var(--line); pointer-events: none; }
+  .task-tree-row[data-nested='1']::before { left: calc(8px + (var(--tree-depth) - 1) * 22px + 14px); top: 0; height: 31px; width: 1px; }
+  .task-tree-row[data-nested='1']::after { left: calc(8px + (var(--tree-depth) - 1) * 22px + 14px); top: 31px; width: 9px; height: 1px; }
+
   .state-label { justify-self: start; padding: 3px 7px; border-radius: 999px; background: #efede9; color: #716e67; font-size: .6875rem; white-space: nowrap; }
   .state-human { background: #fff0c8; color: #86600d; }
   .state-floor { background: #f7e4e6; color: #8f4c53; }

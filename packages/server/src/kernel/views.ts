@@ -325,9 +325,47 @@ function taskRow(task: KernelObject, stamp: string) {
   return {
     id: task.id, title: task.title, status: task.status, followUpAt: task.followUpAt,
     pendingQuestion: task.pendingQuestion, watcher: task.watcher, createdByLoop: task.createdByLoop,
+    // The hierarchy edge itself (design §3). A row carries the ID; whether it is
+    // rendered as an indent or as a "part of …" chip is the CLIENT's call, and
+    // `components/workspace/taskList.ts` owns that one decision.
+    parentId: task.parentId,
     createdAt: task.createdAt, updatedAt: task.updatedAt, closedAt: task.closedAt,
     due: Boolean(task.followUpAt && task.followUpAt <= stamp),
   };
+}
+
+/**
+ * A TASK reference — the shape every hierarchy pointer renders through.
+ *
+ * `status` rides along because a parent chip on a closed epic should say so, and
+ * `missing: true` is the tombstone for a parent that is no longer readable. The
+ * pattern is `loopRefs.ts`'s deliberately: a dangling reference resolves to a
+ * FACT ("the task is gone"), never to `null`, which would read as "no parent" —
+ * a different thing entirely. There is no FK, so this can happen even though the
+ * write guard refuses a dangling parent at write time.
+ */
+interface TaskRefWire { id: string; title: string | null; status: string | null; missing?: true }
+
+const taskRefOf = (id: string, known: Map<string, KernelObject>): TaskRefWire => {
+  const row = known.get(id);
+  return row ? { id: row.id, title: row.title, status: row.status } : { id, title: null, status: null, missing: true };
+};
+
+/**
+ * Resolve every parent named by a page of task rows, in ONE extra query.
+ *
+ * A card's parent is very often on the same page (a tree is filed together), so
+ * the rows in hand are consulted first and only the genuine strangers are
+ * fetched — and they are fetched TEAM-SCOPED, so a parent that somehow named
+ * another team's task resolves to the tombstone rather than leaking its title.
+ */
+async function parentIndex(rows: KernelObject[], teamId: string): Promise<Map<string, KernelObject>> {
+  const known = new Map(rows.map((row) => [row.id, row]));
+  const missing = [...new Set(rows.map((row) => row.parentId).filter((id): id is string => Boolean(id) && !known.has(id!)))];
+  if (!missing.length) return known;
+  const fetched = await db.select().from(objects).where(and(eq(objects.teamId, teamId), eq(objects.kind, "task"), inArray(objects.id, missing)));
+  for (const row of fetched) known.set(row.id, row);
+  return known;
 }
 
 /** The closed column is a RECORD, not a worklist: it is bounded far tighter than
@@ -374,10 +412,16 @@ export async function tasksView(context: ApiContext, query: URLSearchParams, now
     loadTeamLoopIndex(context.teamId),
   ]);
   const truncated = openRows.length > limit || closedRows.length > CLOSED_COLUMN_CAP;
-  const cards = [...openRows.slice(0, limit), ...closedRows.slice(0, CLOSED_COLUMN_CAP)].map((t) => ({
+  const page = [...openRows.slice(0, limit), ...closedRows.slice(0, CLOSED_COLUMN_CAP)];
+  // The PARENT'S TITLE, resolved server-side like every loop reference on this
+  // payload. A card whose parent is off this page still says "part of <title>"
+  // rather than printing a bare id at a person.
+  const parents = await parentIndex(page, context.teamId);
+  const cards = page.map((t) => ({
     ...taskRow(t, stamp),
     creator: loopRef(t.createdByLoop, loops),
     watcherLoop: loopRef(t.watcher, loops),
+    parent: t.parentId ? taskRefOf(t.parentId, parents) : null,
     column: columnFor(t, stamp),
   }));
 
@@ -408,14 +452,21 @@ export async function taskView(id: string, context: ApiContext, now = new Date()
   // run that created it. The creating-run clause is omitted ENTIRELY when there
   // is none — a placeholder id would be a query for a row that cannot exist.
   const touchedBy = task.createdByRun ? or(eq(runs.scope, `task:${id}`), eq(runs.id, task.createdByRun))! : eq(runs.scope, `task:${id}`);
-  const [tail, touching, mirrors] = await Promise.all([
+  const [tail, touching, mirrors, childRows] = await Promise.all([
     store.listObjectEvents(undefined, id),
     db.select().from(runs).where(touchedBy).orderBy(desc(runs.ts)).limit(RECENT_RUNS_CAP),
     // The external items this task depends on, by reverse lookup — a task
     // carries no pointer column, so this is the only way it has them.
     mirrorsFor(undefined, context.teamId, id),
+    // THE OTHER DIRECTION of the hierarchy. `parent_id` is a column, so a task
+    // knows its parent by reading itself; its children exist only as this
+    // reverse lookup, and a page that showed one edge and not the other would be
+    // a tree you can only ever walk upwards.
+    db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.parentId, id))).orderBy(asc(objects.createdAt)),
   ]);
   const loops = await loadTeamLoopIndex(context.teamId);
+  const stamp = now.toISOString();
+  const parents = await parentIndex([task], context.teamId);
   return { ok: true, value: {
     task: objectShape(task),
     execution: task.payload ?? {},
@@ -423,6 +474,11 @@ export async function taskView(id: string, context: ApiContext, now = new Date()
     due: Boolean(task.followUpAt && task.followUpAt <= now.toISOString()),
     creator: loopRef(task.createdByLoop, loops),
     watcherLoop: loopRef(task.watcher, loops),
+    // NAVIGABLE REFERENCES, both ways. No roll-up rides with them: a parent is
+    // closed by its watcher and never by its last child, so these are pointers
+    // to other work, never a state this task derives from.
+    parent: task.parentId ? taskRefOf(task.parentId, parents) : null,
+    children: childRows.map((child) => ({ ...taskRow(child, stamp), watcherLoop: loopRef(child.watcher, loops) })),
     // Oldest first: a timeline is read forwards, and `seq` is the order (the
     // content id dedups, the seq orders).
     timeline: tail.slice(-TIMELINE_CAP).map(eventShape),

@@ -153,7 +153,7 @@ const WRITABLE_KEYS = [
  * this comparison does not feed. Reporting less than the truth here only hid the
  * fact from a direct kernel caller.
  */
-const CONTENT_KEYS = ["title", "body", "payload", "cron", "followUpAt", "watcher", "pendingQuestion", "workdir", "format", "mirrorKind", "mirrorCoords"] as const;
+const CONTENT_KEYS = ["title", "body", "payload", "cron", "followUpAt", "watcher", "parentId", "pendingQuestion", "workdir", "format", "mirrorKind", "mirrorCoords"] as const;
 
 // ---- results ----
 

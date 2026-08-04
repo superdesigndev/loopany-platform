@@ -297,6 +297,55 @@ describe("GET /api/views/tasks — the board, and /task/:id", () => {
     expect(new Set(all).size).toBe(9);
   });
 
+  /**
+   * THE HIERARCHY ON THE WIRE (convergence S4). The view carries the EDGE and
+   * the parent's NAME; whether that renders as an indent or as a chip is the
+   * client's decision (`components/workspace/taskList.ts`). Grouping is
+   * untouched — hierarchy is orthogonal to the watcher — so these cases assert
+   * the data only.
+   */
+  it("carries the parent edge on a card, resolved to a title", async () => {
+    const parent = await make({ kind: "task", title: "Ship the migration", createdByLoop: housekeeper, watcher: housekeeper });
+    await make({ kind: "task", title: "Step 1 — write the plan", createdByLoop: housekeeper, watcher: housekeeper, parentId: parent.id });
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    const cards = value.columns.flatMap((c) => c.tasks) as { title: string; parentId: string | null; parent: unknown }[];
+    expect(cards.find((c) => c.title === "Step 1 — write the plan")).toMatchObject({
+      parentId: parent.id,
+      parent: { id: parent.id, title: "Ship the migration", status: "open" },
+    });
+    // A ROOT says so explicitly: null is "no parent", which the client must be
+    // able to tell from "the parent is gone".
+    expect(cards.find((c) => c.title === "Freshly filed")).toMatchObject({ parentId: null, parent: null });
+  });
+
+  /**
+   * The tombstone. There is no FK and the write guard refuses a dangling
+   * parent, so this state needs a raw write to reach — which is exactly why the
+   * read has to tolerate it: a card must never print a bare id at a person, and
+   * "gone" is a different fact from "none".
+   */
+  it("resolves an unreadable parent to a tombstone rather than to null", async () => {
+    const orphan = await make({ kind: "task", title: "Left behind", createdByLoop: housekeeper, watcher: housekeeper });
+    await database.db.update(schema.objects).set({ parentId: "task-gone01" }).where(eq(schema.objects.id, orphan.id));
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    const card = (value.columns.flatMap((c) => c.tasks) as { title: string; parent: unknown }[]).find((c) => c.title === "Left behind");
+    expect(card!.parent).toEqual({ id: "task-gone01", title: null, status: null, missing: true });
+  });
+
+  it("gives the task page both directions, each one navigable", async () => {
+    const parent = await make({ kind: "task", title: "Ship the migration", createdByLoop: housekeeper, watcher: housekeeper });
+    const child = await make({ kind: "task", title: "Step 1 — write the plan", createdByLoop: housekeeper, watcher: steward, parentId: parent.id });
+
+    const onParent = ok(await views.taskView(parent.id, human, NOW)) as Record<string, unknown>;
+    expect(onParent.parent).toBe(null);
+    // A child names its OWN watcher here: hierarchy never says who acts next.
+    expect(onParent.children).toMatchObject([{ id: child.id, title: "Step 1 — write the plan", watcherLoop: { id: steward, title: "FollowUp" } }]);
+
+    const onChild = ok(await views.taskView(child.id, human, NOW)) as Record<string, unknown>;
+    expect(onChild.parent).toEqual({ id: parent.id, title: "Ship the migration", status: "open" });
+    expect(onChild.children).toEqual([]);
+  });
+
   it("carries the one-sentence rule per column, so the screen never restates the lifecycle", async () => {
     const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
     expect(value.columns.map((c) => c.key)).toEqual(["waiting", "due", "watched", "closed"]);
@@ -340,7 +389,7 @@ describe("GET /api/views/tasks — the board, and /task/:id", () => {
     const board = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
     const id = (board.columns.find((c) => c.key === "waiting")!.tasks as { id: string; title: string }[]).find((t) => t.title === "Watch the error rate")!.id;
     const value = ok(await views.taskView(id, human, NOW)) as Record<string, unknown>;
-    expect(Object.keys(value).sort()).toEqual(["creator", "cursorSeq", "due", "execution", "mirrors", "runs", "task", "timeline", "watcherLoop"]);
+    expect(Object.keys(value).sort()).toEqual(["children", "creator", "cursorSeq", "due", "execution", "mirrors", "parent", "runs", "task", "timeline", "watcherLoop"]);
     expect(value.due).toBe(true);
     const timeline = value.timeline as { seq: number; kind: string }[];
     expect(timeline.map((e) => e.kind)).toEqual(["object-created", "object-updated"]);
