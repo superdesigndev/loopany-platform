@@ -21,7 +21,7 @@
  * aggregates. There is no topology table and no way to wire two loops, because
  * loops never wire to loops — they meet at the instance layer (design §10.6).
  */
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { events, objects, type KernelEvent, type KernelObject } from "../db/kernel-schema.js";
@@ -30,6 +30,7 @@ import { runs, type Run } from "../db/schema.js";
 import { cronText } from "../lib/format.js";
 import { eventShape, eventTail, inboxCounts, inboxUnion, objectShape, type ApiResult } from "./objectApi.js";
 import { refusal } from "./refusals.js";
+import { BOARD_COLUMNS, columnFor } from "./taskBoard.js";
 import type { ApiContext } from "./apiAuth.js";
 
 /** Per-item event tail on the inbox screen (spec §8.1: "capped at 5 per item"). */
@@ -254,32 +255,67 @@ function taskRow(task: KernelObject, stamp: string) {
   };
 }
 
-/** `GET /api/views/tasks` — the task list. Filters are STATE predicates only;
- *  a time-window filter would leak work, which is why none is offered. */
+/** The closed column is a RECORD, not a worklist: it is bounded far tighter than
+ *  the open ones so a year of history cannot dominate the board payload. */
+const CLOSED_COLUMN_CAP = 25;
+
+/**
+ * `GET /api/views/tasks` — THE TASK BOARD.
+ *
+ * The screen is a kanban board, so the view composes COLUMNS rather than a
+ * filtered page: the same five state predicates the list screen used to offer as
+ * a chooser (Open / Due / Questions / Unclaimed / Closed), all visible at once.
+ *
+ * The mapping itself lives in the pure `taskBoard.ts` (`columnFor`) and each
+ * column's one-sentence `rule` ships in the payload, so the board never has to
+ * restate the kernel's lifecycle in the client — and cannot restate it wrongly.
+ * Every column is still a STATE predicate; there is no time-window column,
+ * because a window leaks work (design §6).
+ *
+ * `counts` is the §6 safety floor, single-sourced from `inboxCounts` — the same
+ * numbers the inbox badge shows. It rides the board so the floor stays visible
+ * at a glance from the screen where work is actually moved.
+ */
 export async function tasksView(context: ApiContext, query: URLSearchParams, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   const guard = humanOnly(context); if (guard) return guard;
-  const allowed = new Set(["status", "due", "watcher", "creator", "question", "limit"]);
+  const allowed = new Set(["watcher", "creator", "limit"]);
   const unknown = [...query.keys()].find((key) => !allowed.has(key));
-  if (unknown) return { ok: false, error: refusal("UNKNOWN_FILTER", `unknown task filter "${unknown}"`, [{ path: unknown, message: "unknown filter", got: unknown }], `accepted filters: ${[...allowed].join(", ")}`) };
-  const status = query.get("status") ?? "open";
-  if (!["open", "closed"].includes(status)) return { ok: false, error: refusal("UNKNOWN_FILTER", "status must be open or closed") };
+  if (unknown) return { ok: false, error: refusal("UNKNOWN_FILTER", `unknown task filter "${unknown}"`, [{ path: unknown, message: "unknown filter", got: unknown }], `the board owns status, question and due as COLUMNS; accepted narrowing filters: ${[...allowed].join(", ")}`) };
   const limit = Math.min(LIST_CAP, Math.max(1, Number(query.get("limit") ?? 100) || 100));
   const stamp = now.toISOString();
 
-  const conds = [eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.status, status)];
-  if (query.get("due") === "true") conds.push(lte(objects.followUpAt, stamp));
-  if (query.get("question") === "true") conds.push(and(isNotNull(objects.pendingQuestion), ne(objects.pendingQuestion, ""))!);
+  const conds = [eq(objects.teamId, context.teamId), eq(objects.kind, "task")];
   const watcher = query.get("watcher");
   if (watcher === "none") conds.push(isNull(objects.watcher));
   else if (watcher) conds.push(eq(objects.watcher, watcher));
   const creator = query.get("creator"); if (creator) conds.push(eq(objects.createdByLoop, creator));
 
-  const rows = await db.select().from(objects).where(and(...conds)).orderBy(desc(objects.createdAt)).limit(limit + 1);
-  const page = rows.slice(0, limit);
-  const loops = new Map((await teamLoops(context.teamId)).map((loop) => [loop.id, loop]));
+  // Two queries, not one: the open columns are the worklist and take the page
+  // budget; the closed column is a record and takes a much smaller, separate
+  // one. A single ORDER BY could otherwise fill the whole page with history.
+  const [openRows, closedRows, loopRows] = await Promise.all([
+    db.select().from(objects).where(and(...conds, eq(objects.status, "open"))).orderBy(desc(objects.createdAt)).limit(limit + 1),
+    db.select().from(objects).where(and(...conds, eq(objects.status, "closed"))).orderBy(desc(objects.closedAt)).limit(CLOSED_COLUMN_CAP + 1),
+    teamLoops(context.teamId),
+  ]);
+  const loops = new Map(loopRows.map((loop) => [loop.id, loop]));
+  const truncated = openRows.length > limit || closedRows.length > CLOSED_COLUMN_CAP;
+  const cards = [...openRows.slice(0, limit), ...closedRows.slice(0, CLOSED_COLUMN_CAP)].map((t) => ({
+    ...taskRow(t, stamp),
+    creator: loopRef(t.createdByLoop ? loops.get(t.createdByLoop) : undefined),
+    watcherLoop: loopRef(t.watcher ? loops.get(t.watcher) : undefined),
+    column: columnFor(t, stamp),
+  }));
+
+  const { rows: inboxRows } = await inboxUnion(context.teamId, now);
   return { ok: true, value: {
-    tasks: page.map((t) => ({ ...taskRow(t, stamp), creator: loopRef(t.createdByLoop ? loops.get(t.createdByLoop) : undefined), watcherLoop: loopRef(t.watcher ? loops.get(t.watcher) : undefined) })),
-    truncated: rows.length > limit, now: stamp, cursorSeq: await eventTail(context.teamId),
+    columns: BOARD_COLUMNS.map((spec) => ({ ...spec, tasks: cards.filter((card) => card.column === spec.key) })),
+    // The loops a card can be handed to. The board's claim control is a
+    // `watcher` PATCH like any other, so it must name a real loop id — a picker,
+    // never a free-text field.
+    loops: loopRows.filter((loop) => loop.status !== "retired").map((loop) => ({ id: loop.id, title: loop.title })),
+    counts: inboxCounts(inboxRows),
+    truncated, now: stamp, cursorSeq: await eventTail(context.teamId),
   } };
 }
 

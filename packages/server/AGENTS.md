@@ -636,6 +636,43 @@ stylesheet (`styles/workspace.css`, loaded `?url`, every rule scoped under
   dedicated run history/detail screen and `/api/views/run(s)`. Runs surface as strips on
   the loop page (`recentRuns`) and the task page (runs that touched it).
 
+## The Tasks screen is a KANBAN BOARD (`kernel/taskBoard.ts` + `workspace/board.ts`)
+
+The five filters the Tasks list used to offer (Open / Due / Questions / Unclaimed /
+Closed) became five COLUMNS — the same state predicates, turned from a chooser into a
+layout. `/api/views/tasks` composes them; there is no separate board endpoint, because
+the board IS the Tasks screen and a second one would be exactly the drift the BFF rule
+forbids. The raw `/api/tasks` (`objectApi.listTasks`, the human CLI) is untouched.
+
+- **`kernel/taskBoard.ts` is the ONE column mapping** — pure, clock-free, no imports:
+  `BOARD_COLUMNS` (key + label + the one sentence that explains the column, which ships
+  in the payload so the client never restates the lifecycle) and `columnFor(facts,
+  stamp)`. A column is not a new state: the kernel has two (`open → closed`) plus three
+  facets (`pendingQuestion`, `watcher`, `followUpAt`), and a column names one cell of
+  that fact table. Precedence is `closed → waiting → unclaimed → due → watched`, so the
+  mapping is TOTAL and DISJOINT by construction — `taskBoard.test.ts` asserts both over
+  the whole fact-table cross product, because a board that drops a card hides work.
+  Deliberate: due-AND-unwatched lands in `unclaimed` (a date on a task no loop watches is
+  nobody's alarm); the card still carries its overdue badge and the §6 safety-floor
+  counters ride the board payload (`counts`, single-sourced from `inboxCounts`).
+- **`components/workspace/board.ts` is the drag legality guard** — pure, tested without a
+  DOM. A drop is offered ONLY where a legal human entrance already exists: `close` (the
+  one task transition, note collected BEFORE the write since the kernel requires it) and
+  `release` (`PATCH {watcher: null}`). Everything else is refused with a reason rather
+  than fired at the server: no reopen (close is one-way), no human asking themself a
+  question, no due↔watched (a drop carries no date), no claim by drop (a column cannot
+  name a loop — claim is a picker on the card, over the same PATCH). The guard is an
+  AFFORDANCE layer, never authority: the kernel re-decides every move and its refusal is
+  rendered verbatim. The card buttons (`claim…`/`release`/`close…`) call the same two
+  helpers past the same guard, so the board works without a pointing device.
+- **The card in hand rides a REF as well as state** (`TasksPane` `inHand`/`pickUp`):
+  state drives the per-column legal/illegal hints, but `drop` must read what was picked
+  up, not the closure from the last render.
+- Verified against the seeded pglite stack (`workspace:seed` then `LOOPANY_PORT=… pnpm
+  dev` on the same `LOOPANY_DATA_DIR`): drag-to-Closed collects the note and lands a
+  `task-closed` event with `entrance: human`, an illegal drop writes nothing, and an
+  out-of-band `PATCH` moves a card between columns over SSE with no user action.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

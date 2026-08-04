@@ -215,8 +215,8 @@ describe("GET /api/views/loop/:id", () => {
   });
 
   it("refuses a task id with WRONG_KIND rather than a confusing empty page", async () => {
-    const task = (await views.tasksView(human, new URLSearchParams(), NOW)) as { ok: true; value: { tasks: { id: string }[] } };
-    const result = await views.loopView(task.value.tasks[0]!.id, human, NOW);
+    const board = (await views.tasksView(human, new URLSearchParams(), NOW)) as { ok: true; value: { columns: { tasks: { id: string }[] }[] } };
+    const result = await views.loopView(board.value.columns.flatMap((c) => c.tasks)[0]!.id, human, NOW);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("WRONG_KIND");
   });
@@ -237,35 +237,73 @@ describe("GET /api/views/loop/:id", () => {
 
 // --------------------------------------------------------------------- tasks
 
-describe("GET /api/views/tasks and /task/:id", () => {
-  it("filters on state predicates only, and refuses an unknown one", async () => {
-    const open = ok(await views.tasksView(human, new URLSearchParams({ status: "open" }), NOW)) as { tasks: unknown[] };
-    const closed = ok(await views.tasksView(human, new URLSearchParams({ status: "closed" }), NOW)) as { tasks: { title: string }[] };
-    const due = ok(await views.tasksView(human, new URLSearchParams({ status: "open", due: "true" }), NOW)) as { tasks: { title: string }[] };
-    const pool = ok(await views.tasksView(human, new URLSearchParams({ status: "open", watcher: "none" }), NOW)) as { tasks: { title: string }[] };
-    const questions = ok(await views.tasksView(human, new URLSearchParams({ status: "open", question: "true" }), NOW)) as { tasks: { title: string }[] };
-    expect(open.tasks.length).toBe(8);
-    expect(closed.tasks.map((t) => t.title)).toEqual(["Already closed"]);
-    expect(due.tasks.map((t) => t.title).sort()).toEqual(["Draft the pricing FAQ", "Watch the error rate", "Watched and due"]);
-    expect(pool.tasks.map((t) => t.title).sort()).toEqual(["Draft the pricing FAQ", "Fresh and unwatched", "Nobody asked for this"]);
-    expect(questions.tasks.map((t) => t.title).sort()).toEqual(["Reddit reply to r/selfhosted", "Watch the error rate"]);
+type BoardValue = {
+  columns: { key: string; label: string; rule: string; tasks: Record<string, unknown>[] }[];
+  loops: { id: string; title: string | null }[];
+  counts: Record<string, number>;
+  truncated: boolean;
+};
+const titlesByColumn = (value: BoardValue) =>
+  Object.fromEntries(value.columns.map((c) => [c.key, (c.tasks as { title: string }[]).map((t) => t.title).sort()]));
 
-    const refused = await views.tasksView(human, new URLSearchParams({ since: "14d" }), NOW);
-    expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.error.code).toBe("UNKNOWN_FILTER");
+describe("GET /api/views/tasks — the board, and /task/:id", () => {
+  it("puts every task in exactly one column, derived from the kernel's own facts", async () => {
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    expect(titlesByColumn(value)).toEqual({
+      // A question blocks every other move, so it outranks watcher and date.
+      waiting: ["Reddit reply to r/selfhosted", "Watch the error rate"],
+      // Due-and-unwatched stays in the pool: nobody owns it, so nobody is late.
+      unclaimed: ["Draft the pricing FAQ", "Fresh and unwatched", "Nobody asked for this"],
+      due: ["Watched and due"],
+      watched: ["Adopted from the pool", "Observe the impact of PR #201"],
+      closed: ["Already closed"],
+    });
+    const all = value.columns.flatMap((c) => c.tasks.map((t) => t.id));
+    expect(all.length).toBe(9);
+    expect(new Set(all).size).toBe(9);
   });
 
-  it("resolves creator and watcher titles so the list never shows a bare id", async () => {
-    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as { tasks: Record<string, unknown>[] };
-    const row = value.tasks.find((t) => t.title === "Observe the impact of PR #201")!;
+  it("carries the one-sentence rule per column, so the screen never restates the lifecycle", async () => {
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    expect(value.columns.map((c) => c.key)).toEqual(["waiting", "unclaimed", "due", "watched", "closed"]);
+    for (const column of value.columns) expect(column.rule.length).toBeGreaterThan(20);
+  });
+
+  it("keeps the §6 safety floor visible from the board, single-sourced with the inbox", async () => {
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    const inbox = ok(await views.inboxView(human, NOW)) as { counts: Record<string, number> };
+    expect(value.counts).toEqual(inbox.counts);
+  });
+
+  it("offers the loops a card can be claimed for — claim names a loop, never free text", async () => {
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    expect(value.loops.map((l) => l.id).sort()).toEqual([housekeeper, steward].sort());
+  });
+
+  it("narrows on state predicates only, and refuses a filter the board owns as a column", async () => {
+    const pool = ok(await views.tasksView(human, new URLSearchParams({ watcher: "none" }), NOW)) as BoardValue;
+    expect(titlesByColumn(pool).unclaimed).toEqual(["Draft the pricing FAQ", "Fresh and unwatched", "Nobody asked for this"]);
+    expect(titlesByColumn(pool).watched).toEqual([]);
+
+    for (const filter of [["since", "14d"], ["status", "open"], ["question", "true"]] as [string, string][]) {
+      const refused = await views.tasksView(human, new URLSearchParams([filter]), NOW);
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.error.code).toBe("UNKNOWN_FILTER");
+    }
+  });
+
+  it("resolves creator and watcher titles so a card never shows a bare id", async () => {
+    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    const row = value.columns.flatMap((c) => c.tasks).find((t) => t.title === "Observe the impact of PR #201")!;
     expect(row.creator).toEqual({ id: housekeeper, title: "Housekeeper" });
     expect(row.watcherLoop).toEqual({ id: steward, title: "FollowUp" });
     expect(row.due).toBe(false);
+    expect(row.column).toBe("watched");
   });
 
   it("the detail carries the artifact, the execution payload and the seq-ordered timeline", async () => {
-    const list = ok(await views.tasksView(human, new URLSearchParams({ status: "open", question: "true" }), NOW)) as { tasks: { id: string; title: string }[] };
-    const id = list.tasks.find((t) => t.title === "Watch the error rate")!.id;
+    const board = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
+    const id = (board.columns.find((c) => c.key === "waiting")!.tasks as { id: string; title: string }[]).find((t) => t.title === "Watch the error rate")!.id;
     const value = ok(await views.taskView(id, human, NOW)) as Record<string, unknown>;
     expect(Object.keys(value).sort()).toEqual(["creator", "cursorSeq", "due", "execution", "runs", "task", "timeline", "watcherLoop"]);
     expect(value.due).toBe(true);

@@ -79,8 +79,26 @@ export interface TaskRow {
   watcherLoop?: LoopRef
 }
 
+export type BoardColumnKey = 'waiting' | 'unclaimed' | 'due' | 'watched' | 'closed'
+
+/** A board card: a task row plus the column the SERVER put it in. The client
+ *  never re-derives the column — `kernel/taskBoard.ts` is the one mapping. */
+export interface TaskCard extends TaskRow {
+  column: BoardColumnKey
+}
+
+export interface BoardColumn {
+  key: BoardColumnKey
+  label: string
+  /** The one sentence explaining why a card is here, authored server-side. */
+  rule: string
+  tasks: TaskCard[]
+}
+
 export interface TasksView extends ViewPayload {
-  tasks: TaskRow[]
+  columns: BoardColumn[]
+  loops: { id: string; title: string | null }[]
+  counts: { question: number; dueUnwatched: number; orphan: number; total: number }
   truncated: boolean
   now: string
 }
@@ -259,16 +277,42 @@ export const fetchSystemGraph = (days?: number) =>
  * runs change the world.
  */
 export async function postVerdict(taskId: string, answer: string): Promise<{ run: { id: string; alreadyQueued: boolean } | null }> {
-  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/verdict`, {
-    method: 'POST',
+  return write<{ run: { id: string; alreadyQueued: boolean } | null }>(`/api/tasks/${encodeURIComponent(taskId)}/verdict`, 'POST', { answer }, 'the verdict was refused')
+}
+
+/**
+ * The board's two writes, and they are the ONLY ones it performs.
+ *
+ * Both are existing kernel endpoints called exactly as the CLI calls them —
+ * there is no board-specific write path, and there is deliberately no client
+ * guess about legality: `board.ts` decides what may be DRAGGED, the kernel
+ * decides what may HAPPEN, and a refusal from the second is rendered verbatim.
+ */
+
+/** `close` — the one task transition (types.ts `TRANSITIONS`). The note is
+ *  required by the kernel, so the board must collect it before it asks. */
+export async function postClose(taskId: string, note: string): Promise<{ changed: boolean; event: string | null }> {
+  return write<{ changed: boolean; event: string | null }>(`/api/tasks/${encodeURIComponent(taskId)}/close`, 'POST', { note }, 'the close was refused')
+}
+
+/** Claim / release — a `watcher` facet PATCH, not a transition. `null` returns
+ *  the task to the unclaimed pool; a loop id hands it to that loop. */
+export async function patchWatcher(taskId: string, watcher: string | null): Promise<{ changed: boolean }> {
+  return write<{ changed: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}`, 'PATCH', { watcher }, 'the watcher change was refused')
+}
+
+async function write<T>(path: string, method: string, body: unknown, fallback: string): Promise<T> {
+  const response = await fetch(path, {
+    method,
     headers: { 'content-type': 'application/json' },
     credentials: 'same-origin',
-    body: JSON.stringify({ answer }),
+    body: JSON.stringify(body),
   })
-  const body = (await response.json()) as Record<string, unknown>
+  const text = await response.text()
+  const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {}
   if (!response.ok) {
-    const error = (body.error ?? body) as { code?: string; message?: string; hint?: string }
-    throw new ViewError(error.code ?? `HTTP_${response.status}`, error.message ?? 'the verdict was refused', error.hint)
+    const error = (parsed.error ?? parsed) as { code?: string; message?: string; hint?: string }
+    throw new ViewError(error.code ?? `HTTP_${response.status}`, error.message ?? fallback, error.hint)
   }
-  return body as { run: { id: string; alreadyQueued: boolean } | null }
+  return parsed as T
 }
