@@ -24,8 +24,8 @@ import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
 import { flagNames, verbHelp } from "./kernel-help.js";
 import {
   ABSENT, bodyValue, cell, changedBlock, countLine, detailBlock, dueAnnotation,
-  errorEnvelope, eventLine, exitForStatus, helpBlock, inlineArray, label, raw,
-  slugFor, typedList, waiting,
+  errorEnvelope, eventLine, exitForStatus, helpBlock, inlineArray, label,
+  nextFireCell, raw, slugFor, typedList, waiting,
 } from "./kernel-render.js";
 
 export interface KernelCliDeps {
@@ -123,7 +123,7 @@ const COMMANDS = new Set([
   "task list", "task show", "task create", "task update", "task close",
   "doc show", "doc create", "doc update",
   "loop list", "loop show", "loop create", "loop evolve", "loop update",
-  "loop pause", "loop resume", "loop retire",
+  "loop pause", "loop resume", "loop retire", "loop run-now",
   "inbox", "answer",
 ]);
 /**
@@ -138,7 +138,7 @@ const COMMANDS = new Set([
  * along when one is set, so a human who typed this inside a run is refused too —
  * correctly, since the actor stamped on the event would be wrong.
  */
-const HUMAN_COMMANDS = new Set(["inbox", "answer", "loop create", "loop pause", "loop resume", "loop retire"]);
+const HUMAN_COMMANDS = new Set(["inbox", "answer", "loop create", "loop pause", "loop resume", "loop retire", "loop run-now"]);
 
 /** The three loop statuses, as the `--status` grammar. Duplicated from the
  *  server's `LOOP_STATUSES` on purpose: the flag VALUE set is the CLI's own
@@ -261,6 +261,13 @@ function plan(command: string, positional: string[], flags: Flags, argv: string[
         render: (body) => renderLifecycle(verb, body),
       };
     }
+    case "loop run-now": {
+      if (!id) return emit(out, missingArgument("loop run-now requires a loop id", "loopany loop run-now <loop-id>", ["Run `loopany loop list` to find it — the roster prints every loop's id and status"]), 2);
+      const bad = loopIdRefusal(id, "loop run-now"); if (bad) return emit(out, bad, 2);
+      // No body: the loop already says what it does, so an off-cadence run is a
+      // button, not a form (API spec §1.16).
+      return { path: `/api/loops/${encodeURIComponent(id)}/run-now`, method: "POST", headers: json(), body: "{}", render: (body) => renderRunNow(body) };
+    }
     case "loop evolve": {
       if (!id) return emit(out, missingArgument("loop evolve requires a loop id", "loopany loop evolve <loop-id> --file <path>", ["There is no `self` — every command takes an explicit id", "Your work order names your loop id on its first line"]), 2);
       const bad = loopIdRefusal(id, "loop evolve"); if (bad) return emit(out, bad, 2);
@@ -271,23 +278,44 @@ function plan(command: string, positional: string[], flags: Flags, argv: string[
     case "loop update": {
       if (!id) return emit(out, missingArgument("loop update requires a loop id", 'loopany loop update <loop-id> --cron "0 * * * *" --approval ev-<id>', ["Your work order names your loop id on its first line"]), 2);
       const bad = loopIdRefusal(id, "loop update"); if (bad) return emit(out, bad, 2);
-      if (typeof flags.cron !== "string") return emit(out, missingArgument("loop update requires --cron", `loopany loop update ${id} --cron "0 * * * *" --approval ev-<id>`, ["Cadence is the only governance field in v1"]), 2);
+      // The TWO governed execution facets: WHEN a loop runs and WHERE it runs.
+      // Either alone is a legal change, both ride the ONE approval gate — and the
+      // CLI must offer both, because `loop evolve` refuses a differing `workdir:`
+      // by naming this verb, and a refusal may only name a route that exists.
+      if (typeof flags.cron !== "string" && typeof flags.workdir !== "string") {
+        return emit(out, missingArgument("loop update requires --cron and/or --workdir", `loopany loop update ${id} --cron "0 * * * *" --approval ev-<id>`, ["Governance moves a loop's cadence, its bound directory, or both — the charter is the free zone (`loop evolve`)"]), 2);
+      }
+      if (typeof flags.workdir === "string" && !flags.workdir.startsWith("/")) {
+        return emit(out, errorEnvelope({
+          message: "--workdir takes an absolute path", code: "VALIDATION_ERROR", wrote: flags.workdir, expected: "/Users/you/Workspace/your-repo",
+          help: ["The claiming machine is unknown when this is written, so a relative or `~` path has nothing to resolve against", "The directory must already EXIST on the machine that runs this loop — a machine that lacks it fails the run rather than creating a lookalike"],
+        }), 2);
+      }
       if (typeof flags.approval !== "string") {
+        const wrote = [typeof flags.cron === "string" ? `--cron ${flags.cron}` : "", typeof flags.workdir === "string" ? `--workdir ${flags.workdir}` : ""].filter(Boolean).join(" ");
         // The one refusal where an agent cannot proceed without being told a
         // whole protocol it has no other way to discover — so it prints all of it.
         return emit(out, errorEnvelope({
           message: "loop update requires --approval", code: "FORBIDDEN",
-          wrote: `loopany loop update ${id} --cron ${flags.cron}`,
-          expected: `loopany loop update ${id} --cron ${flags.cron} --approval ev-<id>`,
+          wrote: `loopany loop update ${id} ${wrote}`,
+          expected: `loopany loop update ${id} ${wrote} --approval ev-<id>`,
           help: [
-            "Cadence is the keyed zone: an agent changes it only by presenting a human approval event",
-            `Step 1: \`loopany task create --file <path> --needs-human "propose this cadence: …" --watcher ${id}\``,
+            "Cadence and workdir are the keyed zone: an agent changes them only by presenting a human approval event",
+            `Step 1: \`loopany task create --file <path> --needs-human "propose this change: …" --watcher ${id}\``,
             "Step 2: a human answers in the inbox; one run is queued for your loop with that task's scope",
             "Step 3: that run reads the verdict event id with `loopany task show <id>` and passes it as --approval",
           ],
         }), 2);
       }
-      return { path: `/api/loops/${encodeURIComponent(id)}`, method: "POST", headers: json(), body: JSON.stringify({ cron: flags.cron, approval: flags.approval }), render: (body) => renderGovernance(body) };
+      return {
+        path: `/api/loops/${encodeURIComponent(id)}`, method: "POST", headers: json(),
+        body: JSON.stringify({
+          ...(typeof flags.cron === "string" ? { cron: flags.cron } : {}),
+          ...(typeof flags.workdir === "string" ? { workdir: flags.workdir } : {}),
+          approval: flags.approval,
+        }),
+        render: (body) => renderGovernance(body),
+      };
     }
     case "inbox": {
       if (argv.length !== 1) return emit(out, errorEnvelope({ message: "inbox takes no arguments", code: "VALIDATION_ERROR", wrote: argv.join(" "), expected: "loopany inbox", help: ["The inbox is the safety floor — a filter could hide an arm of it, so there are none"] }), 2);
@@ -544,16 +572,6 @@ function docRows(row: Body): [string, unknown][] {
   return rows;
 }
 
-/** `next_fire` is the cadence CURSOR, so an absent one is never printed bare:
- *  the reason it is absent (paused, retired, no cadence at all) is the whole
- *  answer to "why is this loop not running?". */
-function nextFireCell(row: Body): unknown {
-  if (row.nextFire) return row.nextFire;
-  if (row.status === "retired") return raw(`${ABSENT} (retired — terminal)`);
-  if (row.status === "paused") return raw(`${ABSENT} (paused)`);
-  return raw(`${ABSENT} (no cadence — runs on demand only)`);
-}
-
 function loopRows(row: Body): [string, unknown][] {
   // `workdir` is the loop's BOUND execution site, so it belongs beside the
   // cadence: cron says when, workdir says where. Absent ⇒ the claiming daemon's
@@ -665,6 +683,32 @@ function renderLifecycle(verb: string, body: Body): string {
   text += changedBlock(body.diff as never);
   text += eventLine(body.event);
   return text + helpBlock(changed ? lifecycleHints(verb, id) : [`Already ${row.status ?? past} — the lifecycle verbs are idempotent, so a retry after a dropped connection costs nothing`]);
+}
+
+/**
+ * `loop run-now` — the MANUAL fire. Two things must be unmissable in the output,
+ * because both are counter-intuitive from any other scheduler:
+ *
+ *   1. a PAUSED loop fires and STAYS paused (pause governs the cadence, not this
+ *      button), so the render prints the status back and says the cadence was not
+ *      touched — a caller must never read a successful fire as a resume;
+ *   2. the queue is one-run-per-loop, so a second fire REPORTS the run already
+ *      queued rather than minting a twin.
+ */
+function renderRunNow(body: Body): string {
+  const row = object(body) ?? {};
+  const run = (body.run ?? {}) as Body;
+  const already = body.alreadyQueued === true;
+  const paused = row.status === "paused";
+  let text = `ok: ${already ? "already queued" : "queued"} ${cell(run.id)} for ${cell(row.id)}\n`;
+  text += detailBlock("loop", [["id", row.id], ["title", row.title], ["status", row.status], ["next_fire", nextFireCell(row)]]);
+  text += detailBlock("run", [["id", run.id], ["state", run.state], ["reason", run.reason]]);
+  const hints: string[] = [];
+  if (already) hints.push("This loop already had a run queued — one queued run per loop, so the fire joined it instead of minting a twin");
+  if (paused) hints.push(`${cell(row.id)} is PAUSED and stays paused: the fire does not resume the cadence, so it is one run and then quiet again`);
+  hints.push("A machine of this team claims it on its next poll; a loop bound to a workdir that machine lacks fails the run rather than running elsewhere");
+  hints.push(`Run \`loopany loop show ${cell(row.id)}\` to watch it land in the event tail`);
+  return text + helpBlock(hints);
 }
 
 function lifecycleHints(verb: string, id: string): string[] {

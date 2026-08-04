@@ -1024,6 +1024,50 @@ source scripts/rewrite-local-run.env.sh
   loop by creating it with the daemon DOWN and pausing in the same breath — that leaves
   no window in which its birth-armed cadence could be claimed.
 
+## The DEV entry surface — bare `loopany`, `--help`, and the `loopany-dev` skill
+
+The CLI entry points used to answer a rewrite stack in the SHIPPING product's voice.
+Three fixes, all keyed on the one flag both sides already agree on
+(`daemon/src/flags.ts` `runsV2Enabled` — a LEAF module so the pure router can read it
+without importing the daemon):
+
+- **Bare `loopany` on a runs-v2 stack renders the KERNEL home** (`daemon/src/kernel-home.ts`,
+  route kind `kernel-home`); flag off keeps `home.ts` byte-identical (pinned by
+  `dev-entry.test.ts` and by diffing the real output against the pre-change binary). It
+  is COMPOSED from two existing reads in parallel — `GET /api/views/loops` and
+  `GET /api/inbox` — and rendered locally with `kernel-render.ts`, unlike the legacy home
+  which the SERVER renders. `loopsView` gained `recentRuns` (the team's newest runs, each
+  with its `loopId`) built from the rows `loopHealth` already loaded, so the home is ONE
+  round trip; there is still no runs ENDPOINT. It is a HUMAN surface: the device token is
+  deliberately NOT attached (same rule as `kernel-cli.ts` `HUMAN_COMMANDS`), a
+  `LOOPANY_SESSION` cookie rides along, and every failure degrades to a definitive home at
+  exit 0 (it runs on the SessionStart hot path).
+- **`loopany --help` carries a delimited "Rewrite (kernel) verbs" section** — a SIGNPOST
+  only; the grammar stays single-sourced in `kernel-help.ts` and prints on
+  `loopany <verb> --help`. `loopany loops` (the LEGACY roster) appends one teaching line
+  pointing at `loop list` when the flag is on AND the retained `loops` channel came back
+  empty (`interactive.ts` `kernelRosterHint`) — never when it holds real history.
+- **`loopany-dev` is a SECOND skill distribution** (`packages/daemon/skill-dev/`, authored
+  in-repo, NOT generated and deliberately NOT in package.json `files` so it never ships in
+  the npm tarball). `skill-install.ts` `SkillPackage` (`PROD_SKILL`/`DEV_SKILL`)
+  parameterizes the installer; `loopany skill install --dev` and `skill status` report
+  both. The separation is the front-matter `name`, which is what the `skills` CLI keys on
+  — a different name means a different directory, so one install can never touch the
+  other. Prove the mechanism with `--project` into a throwaway dir, never user scope.
+- **`scripts/loopany-dev`** is the command that skill teaches: this repo's CLI, the local
+  stack env, `LOOPANY_RUNS_V2=1`, and a REFUSAL of any non-loopback `LOOPANY_SERVER_URL`.
+  Plain `loopany` on a dev machine is the PRODUCTION binary (PATH shim + `~/.loopany`), so
+  the guard is structural, not a convention.
+- Two CLI gaps closed while making the help honest: **`loop run-now <id>`** (human-only;
+  fires a PAUSED loop and leaves it paused, refuses a RETIRED one, reports an
+  already-queued run rather than minting a twin) and **`loop update --workdir`** (the API
+  always took it, so the `APPROVAL_REQUIRED` refusal `loop evolve` raises on a differing
+  `workdir:` now names a CLI route that exists).
+- `kernel-render.ts` `cell()` now strips the `raw()` NUL sentinel. `detailBlock` prints a
+  pre-rendered value bare because `key: value` has no separator to break; a typed-list
+  cell does, so it quotes instead — before this, any `raw()` value in a typed list emitted
+  a literal NUL byte.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp

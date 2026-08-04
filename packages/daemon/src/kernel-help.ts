@@ -24,7 +24,7 @@ export interface VerbSpec {
 
 const TASK_KEYS = "task front matter: title, key, follow_up, watcher, needs_human, payload";
 const DOC_KEYS = "doc front matter: title, key, format, payload";
-const LOOP_KEYS = "loop front matter: title, key, cron, payload — body is the charter";
+const LOOP_KEYS = "loop front matter: title, key, cron, workdir, payload — body is the charter";
 
 export const VERBS: Record<string, VerbSpec> = {
   "task list": {
@@ -199,16 +199,34 @@ export const VERBS: Record<string, VerbSpec> = {
       "the loop, its runs and everything it created stay readable: `loop list --status retired`, `loop show <id>`",
     ],
   },
+  "loop run-now": {
+    usage: "loopany loop run-now <loop-id>",
+    flags: [],
+    examples: ["loopany loop run-now loop-8e3311"],
+    notes: [
+      "a HUMAN verb: firing a loop off its cadence is the owner's act, and a run that could wake itself is a loop with no cadence",
+      "a PAUSED loop DOES fire and stays paused — pause governs the clock, not this button, so it is one run and then quiet again",
+      "a RETIRED loop is refused: retirement is terminal, and the charter is frozen",
+      "one queued run per loop: a second fire reports the run already queued instead of minting a twin",
+      "no flags and no body — the loop already says what it does, so an off-cadence run is a button, not a form",
+    ],
+  },
   "loop update": {
-    usage: "loopany loop update <loop-id> --cron <expr> --approval <event-id>",
+    usage: "loopany loop update <loop-id> [--cron <expr>] [--workdir <path>] --approval <event-id>",
     flags: [
       ["--cron <expr>", "the new cadence, five fields: minute hour day-of-month month day-of-week"],
+      ["--workdir <path>", "the new bound directory: absolute, and it must exist on the executing machine"],
       ["--approval <event-id>", "the verdict event id from a human's answer on a task this loop created"],
     ],
-    examples: ['loopany loop update loop-8e3311 --cron "0 * * * *" --approval ev-9c22d1'],
+    examples: [
+      'loopany loop update loop-8e3311 --cron "0 * * * *" --approval ev-9c22d1',
+      "loopany loop update loop-8e3311 --workdir /Users/you/Workspace/your-repo --approval ev-9c22d1",
+    ],
     notes: [
+      "the TWO governed execution facets are WHEN (cron) and WHERE (workdir); either alone is legal, both ride one approval",
       "step 3 of four: propose with `task create --needs-human`, a human answers, then this, then `task close`",
       "the kernel checks the key exists, is human, and hangs on your loop's task — not that it matches the change",
+      "a `cron:`/`workdir:` that differs is exactly what `loop evolve` refuses (APPROVAL_REQUIRED) — this verb is where it lands",
     ],
   },
   inbox: {

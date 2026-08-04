@@ -176,7 +176,16 @@ export async function inboxView(context: ApiContext, now = new Date()): Promise<
 
 // -------------------------------------------------------------------- loops
 
-/** `GET /api/views/loops` — the loop list: identity, cadence, health, load. */
+/**
+ * `GET /api/views/loops` — the loop list: identity, cadence, health, load.
+ *
+ * `recentRuns` is the CROSS-LOOP activity strip: the team's newest runs, each
+ * carrying the loop it belongs to. It is composed from the very rows the health
+ * computation already loaded, so it costs no extra query — and it is what lets a
+ * caller that wants "what has this stack been doing?" (the CLI's kernel home)
+ * answer it in ONE round trip instead of fanning out over `/api/views/loop/:id`.
+ * There is still no runs ENDPOINT; this is a field on a screen's payload.
+ */
 export async function loopsView(context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   const guard = humanOnly(context); if (guard) return guard;
   const loops = await teamLoops(context.teamId);
@@ -191,6 +200,7 @@ export async function loopsView(context: ApiContext, now = new Date()): Promise<
       openTasks: counts.open.get(loop.id) ?? 0,
       questionsWaiting: counts.questions.get(loop.id) ?? 0,
     })),
+    recentRuns: runRows.slice(0, RECENT_RUNS_CAP).map((run) => ({ ...runShape(run), loopId: run.loopId })),
     cursorSeq: await eventTail(context.teamId),
   } };
 }

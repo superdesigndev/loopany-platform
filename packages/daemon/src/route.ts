@@ -1,9 +1,12 @@
 /**
- * The CLI routing decision — pure over (argv, env), no imports/side-effects — so the
- * whole dispatch table (esp. the Batch-6 bare→home move + the `up --foreground` /
- * daemon-flag / run-only-forward branches) is unit-testable without launching anything.
- * `cli.ts` is the entry that maps a `Route` to the lazily-imported handler.
+ * The CLI routing decision — pure over (argv, env), no side effects and no import
+ * heavier than the leaf `flags.ts` — so the whole dispatch table (esp. the Batch-6
+ * bare→home move + the `up --foreground` / daemon-flag / run-only-forward branches)
+ * is unit-testable without launching anything. `cli.ts` is the entry that maps a
+ * `Route` to the lazily-imported handler.
  */
+import { runsV2Enabled } from "./flags.js";
+
 const INTERACTIVE_VERBS = new Set(["loops", "edit"]);
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 // The per-verb short-circuit only fires on the actual FLAG forms (not the bare `help`
@@ -51,6 +54,7 @@ export type Route =
   | { kind: "interactive"; argv: string[] }
   | { kind: "forward"; argv: string[] } // run-only verb out-of-run → device-cred 403
   | { kind: "home" } // bare `loopany` out-of-run → content-first home (device cred)
+  | { kind: "kernel-home" } // …and on a runs-v2 stack, the KERNEL home instead
   | { kind: "unknown"; verb: string };
 
 export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
@@ -91,7 +95,12 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   // report/finish/complete OUTSIDE a run are run-only (F3): forward on the device
   // credential so the server's crafted 403 reaches the agent, not a generic unknown.
   if (verb !== undefined && FORWARD_VERBS.has(verb)) return { kind: "forward", argv };
-  // Bare `loopany` (no args) → the content-first home (P8), NOT the poll loop.
-  if (argv.length === 0) return { kind: "home" };
+  // Bare `loopany` (no args) → the content-first home (P8), NOT the poll loop. On a
+  // REWRITE stack that home is the KERNEL's: the legacy one renders the legacy
+  // tables, which on a runs-v2 stack hold nothing the user is working with, so the
+  // entry surface showed an empty machine dashboard beside a live kernel. Gated on
+  // the same flag the daemon and server already agree on, so a stack that has not
+  // flipped it keeps the legacy home byte-identical.
+  if (argv.length === 0) return runsV2Enabled(env) ? { kind: "kernel-home" } : { kind: "home" };
   return { kind: "unknown", verb: verb! };
 }

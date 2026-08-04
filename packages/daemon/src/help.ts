@@ -12,6 +12,14 @@
  * two separate mechanisms: both funnel through the one shared CLI client that POSTs to
  * the unified `/api/machine/cli` dispatch (see `cli-client.ts`) — only the LOCAL verbs
  * grouped below (up/down/update/skill/status) run without touching the server.
+ *
+ * The screen also carries the REWRITE (kernel) verb family — `task|doc|loop`, `inbox`,
+ * `answer` — in its own delimited section. Those verbs are a THIRD mechanism (the
+ * object HTTP API, `kernel-cli.ts`), and a help screen that never named them left the
+ * whole surface undiscoverable from the one place a user looks. The section is a
+ * SIGNPOST, not a grammar: each verb's flags, examples and combination guards live in
+ * the single-sourced `kernel-help.ts` and print on `loopany <verb> --help`, so this
+ * screen cannot drift into a second copy of them.
  */
 import { daemonVersion } from "./version.js";
 
@@ -22,6 +30,8 @@ Usage: loopany [command] [options]
 
   loopany                 Show the content-first HOME: this machine's live loops +
                           recent runs (the poll loop moved to \`up --foreground\`).
+                          On a rewrite stack (LOOPANY_RUNS_V2=1) this is the KERNEL
+                          home: the loop roster, the inbox floor, the newest runs.
 
 Setup
   up [--foreground]       Connect this machine / ensure its daemon is running
@@ -33,7 +43,9 @@ Setup
   setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
                           view as ambient context each session (--remove uninstalls).
   skill [status|install]  Manage the loopany agent skill install (user scope by
-    [--project]           default; --project installs into the current directory).
+    [--project] [--dev]   default; --project installs into the current directory).
+                          --dev installs the SEPARATE \`loopany-dev\` skill (the
+                          rewrite/kernel flow) beside it, never over it.
   update                  Update this machine's daemon to the version you invoked
                           (run via npx @crewlet/loopany@latest update): stops the
                           running daemon, starts the new one, refreshes the skill/hook/shim.
@@ -47,6 +59,38 @@ Management
     [--transcript]        session id; --transcript/--full adds the transcript).
                           Defaults to the loop for the current directory (--json,
                           --limit N).
+
+Rewrite (kernel) verbs — the event-sourced object surface: loops, tasks and docs.
+Every verb below has its own grammar: run \`loopany <verb> --help\` (answered locally,
+no round trip, before any side effect).
+  loop create --file <p>  Create a loop from an artifact file — the file IS the loop
+                          (front matter title/key/cron/workdir + the charter body).
+  loop list [--status]    The roster: active | paused | retired (absent = all of it).
+  loop show <id>          One loop: cadence, workdir, charter, event tail (--file
+                          emits the artifact, --full the complete charter).
+  loop evolve <id>        Apply a new charter (a run's own free zone; no approval).
+    --file <path>
+  loop update <id>        Change cadence (--cron) and/or the bound directory
+    [--cron] [--workdir]  (--workdir) — governance, so it takes a human approval
+    --approval ev-<id>    event id. The charter is the free zone (loop evolve).
+  loop pause|resume       Pause DISARMS the cadence (next_fire cleared); resume
+    <id> [--note]         re-arms to the NEXT occurrence, never a backlog.
+  loop run-now <id>       Fire once, off cadence. Works on a PAUSED loop and does
+                          NOT resume it (pause governs the clock, not this button);
+                          a RETIRED loop is refused.
+  loop retire <id>        Retire IS the delete (event-sourced: nothing is erased).
+                          Terminal — the charter freezes and run-now is refused.
+  task list [--open]      The worklist: --closed, --due, --unwatched, --watcher <id>,
+                          --creator <id>, --since 14d.
+  task show <id>          One task with its payload and event tail.
+  task create --file <p>  Create a task (--needs-human "…" puts it in the inbox,
+                          --watcher <loop-id> names the loop that acts next).
+  task update <id>        --follow-up +3d / --watcher / --needs-human / --payload-merge.
+  task close <id>         Close with the required --note attestation.
+    --note "…"
+  doc show|create|update  Products, addressed by id and rewritten in place.
+  inbox                   What is waiting on YOU (questions, due+unwatched, orphans).
+  answer <task-id> "…"    Reply in free text; it wakes the watching loop.
 
 Interactive (edit loops from your own agent session, using the stored device token)
   loops [--fields a,b]    List your loops (--json emits the raw JSON array).
@@ -71,7 +115,7 @@ Interactive (edit loops from your own agent session, using the stored device tok
 const VERB_USAGE: Record<string, string> = {
   up: "loopany up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  loopany skill, the SessionStart hook, and the PATH shim). --foreground runs the\n  poll loop attached in this terminal instead of detached.",
   new: "loopany new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing.",
-  skill: "loopany skill [status|install] [--project]\n  Manage the loopany agent skill install (user scope by default; --project installs\n  into the current directory).",
+  skill: "loopany skill [status|install] [--project] [--dev]\n  Manage the loopany agent skill install (user scope by default; --project installs\n  into the current directory). --dev installs the separate `loopany-dev` skill (the\n  rewrite/kernel flow) alongside — a different name, so a different directory: it\n  never overwrites or shadows the production `loopany` skill.",
   setup: "loopany setup hooks [--remove]\n  Install/refresh (or --remove) the SessionStart hook that lands the home view as\n  ambient context each session.",
   update: "loopany update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.",
   status: "loopany status\n  Report whether this machine's daemon is running (local pid) + its connection state.",

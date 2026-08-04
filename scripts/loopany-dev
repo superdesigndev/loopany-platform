@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# `loopany-dev` — the REWRITE (kernel) CLI, pinned to a LOCAL dev stack.
+#
+# WHY THIS EXISTS. On a developer's machine plain `loopany` is the PRODUCTION
+# binary: the PATH shim points at the installed daemon and `~/.loopany` holds a
+# device credential for loopany.ai. Typing `loopany loop list` there does not read
+# your dev kernel — it talks to production. This wrapper removes that foot-gun by
+# construction: it runs THIS repo's CLI, with this repo's dev stack environment,
+# and it REFUSES to run against a non-local server.
+#
+#   scripts/loopany-dev loop list
+#   scripts/loopany-dev                       # the kernel home
+#   scripts/loopany-dev loop run-now loop-…
+#
+# Environment: if LOOPANY_SERVER_URL is already set, it is honored (and checked);
+# otherwise scripts/rewrite-local-run.env.sh is sourced to define the default
+# isolated stack. Override LOOPANY_RW_BASE / LOOPANY_PORT before calling to point
+# at a different local stack. Its banner goes to stderr, never stdout, so the
+# CLI's TOON output stays machine-readable.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+if [ -z "${LOOPANY_SERVER_URL:-}" ]; then
+  # shellcheck source=/dev/null
+  source "$repo_root/scripts/rewrite-local-run.env.sh" 1>&2
+fi
+
+# THE GUARD, not a convention: a dev CLI that can reach production is a dev CLI
+# that will, once. Only loopback hosts are allowed, and the refusal names what to
+# do instead rather than silently falling back to something safe-looking.
+case "${LOOPANY_SERVER_URL:-}" in
+  http://127.0.0.1:*|http://localhost:*|http://[::1]:*|http://127.0.0.1|http://localhost) ;;
+  *)
+    echo "loopany-dev: refusing to run against '${LOOPANY_SERVER_URL:-<unset>}' — this CLI is for a LOCAL dev stack only." >&2
+    echo "loopany-dev: start one with scripts/rewrite-local-run.env.sh (see packages/server/AGENTS.md), or unset LOOPANY_SERVER_URL to use the default." >&2
+    exit 2
+    ;;
+esac
+
+# The rewrite cutover flag must be on for the kernel verbs and the kernel home.
+export LOOPANY_RUNS_V2=1
+
+exec "$repo_root/packages/daemon/node_modules/.bin/tsx" "$repo_root/packages/daemon/src/cli.ts" "$@"

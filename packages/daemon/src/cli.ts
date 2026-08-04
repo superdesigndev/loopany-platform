@@ -5,6 +5,8 @@
  *   loopany                    → the content-first HOME (P8): a live machine
  *                                dashboard on the device credential (in a run, the
  *                                run's own-loop context). NO LONGER the poll loop.
+ *                                On a runs-v2 stack it is the KERNEL home instead
+ *                                (roster + inbox floor + recent runs).
  *   loopany up [--foreground]  → setup mode: ensure a daemon is running for this
  *                                machine (idempotent; installs the session hook + PATH
  *                                shim). `--foreground` runs the poll loop attached in
@@ -88,6 +90,8 @@ async function main(): Promise<number> {
       return (await import("./callback.js")).runCallback(r.argv);
     case "home":
       return (await import("./home.js")).runHome();
+    case "kernel-home":
+      return (await import("./kernel-home.js")).runKernelHome();
     case "unknown":
       process.stderr.write(`loopany: unknown command '${r.verb}' — try \`loopany --help\`\n`);
       return 2;

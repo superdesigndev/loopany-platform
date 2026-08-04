@@ -14,6 +14,7 @@
  */
 import os from "node:os";
 
+import { runsV2Enabled } from "./flags.js";
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { runDelivery, type Delivery } from "./runner.js";
@@ -36,9 +37,10 @@ const REPOLL_MS = 250;
  *  abort SIGTERMs their claude children; KILL_GRACE is 5s, so 10s covers it). */
 const DRAIN_MS = 10_000;
 
-export function runsV2Enabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.LOOPANY_RUNS_V2 === "1";
-}
+// The flag itself lives in the leaf `flags.ts` so the pure router can read it
+// without importing this module; re-exported here because every existing caller
+// (and its test) knows it by this name.
+export { runsV2Enabled };
 
 interface RunsV2Claim {
   run: null | { id: string; loopId: string; loopTitle?: string | null; scope: string };
