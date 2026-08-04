@@ -176,17 +176,12 @@
 
 .ws-board { display: flex; gap: 14px; align-items: flex-start; min-width: 0; overflow-x: auto; padding-bottom: 14px; }
 .ws-column { flex: 0 0 268px; width: 268px; border: 1px solid var(--line); border-radius: 12px; background: #f7f5f1; padding: 12px; }
-.ws-column.is-legal { border-color: var(--green); background: var(--green-soft); }
-.ws-column.is-illegal { opacity: .55; }
-.ws-column.is-legal.is-over { box-shadow: 0 0 0 2px var(--green) inset; }
 .ws-column-head h2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; font-size: .84rem; font-weight: 600; letter-spacing: -.01em; }
 .ws-column-count { color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
 .ws-column-head p { margin: 0 0 10px; color: var(--muted); font-size: .68rem; line-height: 1.45; }
-.ws-column-refuse { color: var(--red); }
 .ws-column-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 
 .ws-task-card { border: 1px solid var(--line); border-radius: 9px; background: var(--surface); padding: 10px 11px; }
-.ws-task-card[draggable="true"] { cursor: grab; }
 .ws-task-card.is-selected { border-color: var(--ink); }
 .ws-task-card.is-question { border-left: 3px solid var(--red); }
 .ws-task-title { display: block; width: 100%; border: 0; padding: 0; background: none; text-align: left; font-size: .82rem; font-weight: 500; line-height: 1.35; }

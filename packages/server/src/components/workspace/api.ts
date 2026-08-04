@@ -270,7 +270,7 @@ export const fetchSystemGraph = (days?: number) =>
   get<SystemGraphView>(`/api/views/system-graph${days ? `?days=${days}` : ''}`)
 
 /**
- * The verdict. THE ONLY WRITE this workspace performs, and it is deliberately
+ * The verdict — the inbox's one write, and it is deliberately
  * plain: free text, recorded as the answer. Approve, reject and instructions are
  * all just the answer — the platform never parses it, only agents interpret it
  * (design §6). Nothing is executed here; the inbox changes task state, and only

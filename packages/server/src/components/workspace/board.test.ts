@@ -2,24 +2,22 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-import { isDraggable, legalMove } from './board'
-import type { BoardColumnKey, TaskCard } from './api'
+import { cardActions, hasActions } from './board'
+import type { TaskCard } from './api'
 
 /**
- * The drag legality guard.
+ * Which actions a card offers.
  *
- * The rule under test is not "which drops feel natural" — it is "which drops
- * correspond to a legal HUMAN ENTRANCE that already exists in the kernel".
- * There are exactly two (`close`, and the `watcher` PATCH), so the interesting
- * assertions are the REFUSALS: every other drop must be refused here, with a
- * reason, rather than fired at the server to see what happens.
+ * The rule under test is not "which moves feel natural" — it is "which acts
+ * correspond to a human entrance that already exists in the kernel". There are
+ * exactly three (`close`, and the `watcher` PATCH in both directions), each an
+ * explicit button; the board offers no drag path, so a write can only happen
+ * through one of them.
  *
  * NB the source-reading guard at the bottom keeps the path in a VARIABLE — Vite
  * statically rewrites the literal `new URL('./x', import.meta.url)` form into an
  * asset URL, which `fileURLToPath` then rejects.
  */
-
-const COLUMNS: BoardColumnKey[] = ['waiting', 'unclaimed', 'due', 'watched', 'closed']
 
 const card = (over: Partial<TaskCard> = {}): TaskCard => ({
   id: 'task-1', title: 'Verify the nightly backup', status: 'open', followUpAt: null, pendingQuestion: null,
@@ -27,69 +25,55 @@ const card = (over: Partial<TaskCard> = {}): TaskCard => ({
 })
 
 describe('close — the one task transition', () => {
-  it('is legal from any open column and demands the note the kernel requires', () => {
-    for (const column of ['unclaimed', 'due', 'watched'] as BoardColumnKey[]) {
-      expect(legalMove(card({ column, watcher: column === 'unclaimed' ? null : 'loop-a' }), 'closed')).toEqual({ ok: true, verb: 'close', needsNote: true })
-    }
+  it('is offered on any open card, watched or not', () => {
+    expect(cardActions(card({ column: 'watched' })).canClose).toBe(true)
+    expect(cardActions(card({ column: 'unclaimed', watcher: null })).canClose).toBe(true)
+    expect(cardActions(card({ column: 'due', followUpAt: '2026-01-01T00:00:00.000Z', due: true })).canClose).toBe(true)
   })
 
-  it('is refused while a question is waiting — the kernel refuses it too (OPEN_QUESTION)', () => {
-    const verdict = legalMove(card({ column: 'waiting', pendingQuestion: 'revert or wait?' }), 'closed')
-    expect(verdict.ok).toBe(false)
-    if (!verdict.ok) expect(verdict.reason).toMatch(/answer it in the inbox/)
-  })
-})
-
-describe('release — the watcher facet, cleared', () => {
-  it('is legal for a watched card dropped on the pool', () => {
-    expect(legalMove(card({ column: 'watched', watcher: 'loop-a' }), 'unclaimed')).toEqual({ ok: true, verb: 'release', needsNote: false })
-    expect(legalMove(card({ column: 'due', watcher: 'loop-a' }), 'unclaimed')).toEqual({ ok: true, verb: 'release', needsNote: false })
+  it('is withheld while a question is waiting — the kernel refuses it too (OPEN_QUESTION)', () => {
+    expect(cardActions(card({ column: 'waiting', pendingQuestion: 'revert or wait?' })).canClose).toBe(false)
   })
 
-  it('is refused when there is no watcher to release', () => {
-    const verdict = legalMove(card({ column: 'waiting', watcher: null, pendingQuestion: 'ask?' }), 'unclaimed')
-    expect(verdict.ok).toBe(false)
+  it('is withheld on a closed card: close is one-way and there is no reopen', () => {
+    expect(cardActions(card({ column: 'closed', status: 'closed' })).canClose).toBe(false)
   })
 })
 
-describe('the refusals — a drop with no kernel transition behind it', () => {
-  it('never lets a closed card move: close is one-way and there is no reopen', () => {
-    for (const to of COLUMNS) {
-      expect(legalMove(card({ column: 'closed', status: 'closed' }), to).ok, `closed → ${to}`).toBe(false)
-    }
-    expect(isDraggable(card({ column: 'closed', status: 'closed' }), COLUMNS)).toBe(false)
+describe('claim and release — the watcher facet, both directions', () => {
+  it('offers claim exactly when nobody watches it', () => {
+    expect(cardActions(card({ column: 'unclaimed', watcher: null })).canClaim).toBe(true)
+    expect(cardActions(card({ column: 'watched', watcher: 'loop-a' })).canClaim).toBe(false)
   })
 
-  it('never lets a human ask themself a question', () => {
-    const verdict = legalMove(card({ column: 'watched' }), 'waiting')
-    expect(verdict.ok).toBe(false)
-    if (!verdict.ok) expect(verdict.reason).toMatch(/asked by a run/)
+  it('offers release exactly when somebody does', () => {
+    expect(cardActions(card({ column: 'watched', watcher: 'loop-a' })).canRelease).toBe(true)
+    expect(cardActions(card({ column: 'due', watcher: 'loop-a' })).canRelease).toBe(true)
+    expect(cardActions(card({ column: 'unclaimed', watcher: null })).canRelease).toBe(false)
   })
 
-  it('refuses due ↔ watched: a drop carries no follow-up date', () => {
-    expect(legalMove(card({ column: 'watched' }), 'due').ok).toBe(false)
-    expect(legalMove(card({ column: 'due' }), 'watched').ok).toBe(false)
+  // Consequential (the eventual answer would wake no loop) but deliberate: a
+  // labelled button on one named card, not a gesture that can be made by
+  // accident. There is no drag surface that could green-light it silently.
+  it('still offers release on a waiting card — an explicit act, not a spatial one', () => {
+    expect(cardActions(card({ column: 'waiting', watcher: 'loop-a', pendingQuestion: 'revert or wait?' })).canRelease).toBe(true)
   })
 
-  it('refuses a claim by drop, because a column cannot name a loop', () => {
-    const verdict = legalMove(card({ column: 'unclaimed', watcher: null }), 'watched')
-    expect(verdict.ok).toBe(false)
-    if (!verdict.ok) expect(verdict.reason).toMatch(/claim picker/)
-  })
-
-  it('treats a same-column drop as a no-op, not an error to shout about', () => {
-    expect(legalMove(card({ column: 'watched' }), 'watched')).toEqual({ ok: false, reason: 'it is already here' })
+  it('offers neither on a closed card — it is a record', () => {
+    const closed = cardActions(card({ column: 'closed', status: 'closed', watcher: 'loop-a' }))
+    expect(closed).toEqual({ canClose: false, canClaim: false, canRelease: false })
   })
 })
 
-describe('isDraggable — a card never suggests a destination it has not got', () => {
-  it('is true for an open card with at least one legal move', () => {
-    expect(isDraggable(card({ column: 'watched', watcher: 'loop-a' }), COLUMNS)).toBe(true)
-    expect(isDraggable(card({ column: 'unclaimed', watcher: null }), COLUMNS)).toBe(true)
+describe('hasActions — a card shows no empty action bar', () => {
+  it('is true for any open card', () => {
+    expect(hasActions(card({ column: 'watched', watcher: 'loop-a' }))).toBe(true)
+    expect(hasActions(card({ column: 'unclaimed', watcher: null }))).toBe(true)
+    expect(hasActions(card({ column: 'waiting', watcher: null, pendingQuestion: 'ask?' }))).toBe(true)
   })
 
-  it('is false for a question card with no watcher — it can neither close nor release', () => {
-    expect(isDraggable(card({ column: 'waiting', watcher: null, pendingQuestion: 'ask?' }), COLUMNS)).toBe(false)
+  it('is false for a closed card', () => {
+    expect(hasActions(card({ column: 'closed', status: 'closed', watcher: null }))).toBe(false)
   })
 })
 
@@ -110,5 +94,14 @@ describe('the board invents no write path', () => {
   it('performs no write from the pane except through those helpers', () => {
     const pane = read('./TasksPane.tsx')
     expect(pane).not.toMatch(/fetch\(/)
+  })
+
+  // The board is a read layout plus buttons, by product decision: no card is
+  // draggable, no column is a drop target, and nothing may quietly reintroduce
+  // one — a drop carries no note, no loop id and no date, so every write here
+  // needs a labelled control anyway.
+  it('has no drag-and-drop surface at all', () => {
+    const pane = read('./TasksPane.tsx')
+    expect(pane).not.toMatch(/draggable|onDrag[A-Z]|onDrop|dataTransfer/)
   })
 })

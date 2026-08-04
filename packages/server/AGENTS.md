@@ -655,23 +655,24 @@ forbids. The raw `/api/tasks` (`objectApi.listTasks`, the human CLI) is untouche
   Deliberate: due-AND-unwatched lands in `unclaimed` (a date on a task no loop watches is
   nobody's alarm); the card still carries its overdue badge and the §6 safety-floor
   counters ride the board payload (`counts`, single-sourced from `inboxCounts`).
-- **`components/workspace/board.ts` is the drag legality guard** — pure, tested without a
-  DOM. A drop is offered ONLY where a legal human entrance already exists: `close` (the
-  one task transition, note collected BEFORE the write since the kernel requires it) and
-  `release` (`PATCH {watcher: null}`). Everything else is refused with a reason rather
-  than fired at the server: no reopen (close is one-way), no human asking themself a
-  question, no due↔watched (a drop carries no date), no claim by drop (a column cannot
-  name a loop — claim is a picker on the card, over the same PATCH). The guard is an
-  AFFORDANCE layer, never authority: the kernel re-decides every move and its refusal is
-  rendered verbatim. The card buttons (`claim…`/`release`/`close…`) call the same two
-  helpers past the same guard, so the board works without a pointing device.
-- **The card in hand rides a REF as well as state** (`TasksPane` `inHand`/`pickUp`):
-  state drives the per-column legal/illegal hints, but `drop` must read what was picked
-  up, not the closure from the last render.
+- **`components/workspace/board.ts` says which ACTIONS a card offers** — pure, tested
+  without a DOM. **There is NO drag-and-drop, by product decision**: a column renders a
+  fact, not a control, and a task changes only through a human entrance the kernel
+  actually has — `close` (the one transition, note collected BEFORE the write since the
+  kernel requires it) and the `watcher` PATCH in both directions (`claim…` is a picker,
+  because a loop must be named; `release` clears it). Each is a labelled button on the
+  card, so the board is keyboard-usable and no write can be made by an accidental
+  gesture. `cardActions`/`hasActions` are an AFFORDANCE layer, never authority: the
+  kernel re-decides every write and its refusal is rendered verbatim. `release` is
+  offered on a WAITING card too — consequential (the eventual answer then wakes no loop)
+  but a deliberate, named act rather than a spatial one; that combination was exactly the
+  misleading green-lit drop the drag surface used to allow. `board.test.ts` pins the
+  absence of any drag wiring in the pane.
 - Verified against the seeded pglite stack (`workspace:seed` then `LOOPANY_PORT=… pnpm
-  dev` on the same `LOOPANY_DATA_DIR`): drag-to-Closed collects the note and lands a
-  `task-closed` event with `entrance: human`, an illegal drop writes nothing, and an
-  out-of-band `PATCH` moves a card between columns over SSE with no user action.
+  dev` on the same `LOOPANY_DATA_DIR`): no card is draggable and no column takes a drop;
+  `close…` collects the note and lands a `task-closed` event with `entrance: human`;
+  `claim…`/`release` move a card between columns; and an out-of-band `PATCH` moves one
+  over SSE with no user action.
 
 ## Maintaining this file
 
