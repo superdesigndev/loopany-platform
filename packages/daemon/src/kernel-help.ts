@@ -24,6 +24,7 @@ export interface VerbSpec {
 
 const TASK_KEYS = "task front matter: title, key, follow_up, watcher, needs_human, payload";
 const DOC_KEYS = "doc front matter: title, key, format, payload";
+const LOOP_KEYS = "loop front matter: title, key, cron, payload — body is the charter";
 
 export const VERBS: Record<string, VerbSpec> = {
   "task list": {
@@ -128,6 +129,34 @@ export const VERBS: Record<string, VerbSpec> = {
     ],
     seeAlso: DOC_KEYS,
   },
+  "loop create": {
+    usage: "loopany loop create --file <path>",
+    flags: [["--file <path>", "the artifact file IS the loop: front matter + the charter body; `-` reads stdin"]],
+    examples: ["loopany loop create --file housekeeper.md"],
+    notes: [
+      "a HUMAN verb: creating a loop mints a standing cadence and a new actor, which is governance",
+      "a run proposes one instead: `task create --needs-human \"create a loop that …\" --watcher <its own id>`",
+      "`cron:` arms the loop at birth — next_fire is the first occurrence after now; omit it for an on-demand loop",
+      "there is no machine to bind: a queued run is claimed by any machine of the team",
+    ],
+    seeAlso: LOOP_KEYS,
+  },
+  "loop list": {
+    usage: "loopany loop list [--status <state>]",
+    flags: [["--status <state>", "active | paused | retired; absent shows the whole roster"]],
+    examples: ["loopany loop list", "loopany loop list --status active", "loopany loop list --status retired"],
+    notes: [
+      "a loop has THREE states, so status takes a value — there is no two-flag form that spans them",
+      "the default is every loop including retired ones: a team's roster is small, and history is the point",
+    ],
+  },
+  "loop show": {
+    usage: "loopany loop show <loop-id> [flags]",
+    flags: [["--file", "emit the canonical loop artifact instead of the TOON view"], ["--full", "do not truncate the charter"]],
+    examples: ["loopany loop show loop-8e3311", "loopany loop show loop-8e3311 --file > charter.md"],
+    notes: ["--file output is a valid input file: read it, edit the charter, then `loop evolve <id> --file`"],
+    seeAlso: LOOP_KEYS,
+  },
   "loop evolve": {
     usage: "loopany loop evolve <loop-id> --file <path>",
     flags: [["--file <path>", "the full replacement charter; the server computes the diff"]],
@@ -135,8 +164,39 @@ export const VERBS: Record<string, VerbSpec> = {
     notes: [
       "the free zone: no approval key, but the server checks the loop is your run's own",
       "cadence is NOT here — it is governance, and needs a human approval key (`loop update`)",
+      "a retired loop's charter is frozen: evolve is refused for good, never queued",
     ],
-    seeAlso: "loop front matter: title, cron, payload — body is the charter",
+    seeAlso: LOOP_KEYS,
+  },
+  "loop pause": {
+    usage: "loopany loop pause <loop-id> [--note <text>]",
+    flags: [["--note <text>", "why, recorded on the event; optional, one sentence"]],
+    examples: ['loopany loop pause loop-8e3311 --note "muted while the API migration lands"'],
+    notes: [
+      "a HUMAN verb: a run never pauses a loop, it proposes with `task create --needs-human`",
+      "pausing disarms the cadence (next_fire is cleared) and no run of it is claimed until it resumes",
+      "pausing an already-paused loop is a success that changed nothing — a retry is free",
+    ],
+  },
+  "loop resume": {
+    usage: "loopany loop resume <loop-id> [--note <text>]",
+    flags: [["--note <text>", "why, recorded on the event; optional, one sentence"]],
+    examples: ["loopany loop resume loop-8e3311"],
+    notes: [
+      "time never un-pauses a loop — this verb is the only exit, including from a failure auto-pause",
+      "re-arms to the NEXT occurrence: a week paused owes exactly one fire, not a week of them",
+      "a retired loop cannot be resumed; retirement is terminal",
+    ],
+  },
+  "loop retire": {
+    usage: "loopany loop retire <loop-id> [--note <text>]",
+    flags: [["--note <text>", "why, recorded on the event; optional but strongly advised"]],
+    examples: ['loopany loop retire loop-8e3311 --note "the outreach experiment is over"'],
+    notes: [
+      "retire IS the delete: the kernel is event-sourced, so nothing is ever erased and there is no `loop delete`",
+      "terminal — the charter freezes, the cadence is gone, and there is no un-retire",
+      "the loop, its runs and everything it created stay readable: `loop list --status retired`, `loop show <id>`",
+    ],
   },
   "loop update": {
     usage: "loopany loop update <loop-id> --cron <expr> --approval <event-id>",
@@ -175,7 +235,10 @@ export function flagNames(command: string): string[] {
 
 export function verbHelp(command: string): string {
   const spec = VERBS[command];
-  if (!spec) return `usage: loopany <task|doc|loop> <verb> [flags]\nverbs[12]: ${Object.keys(VERBS).join(", ")}\nhelp[1]:\n  Run \`loopany task list --help\` for one verb's full grammar\n`;
+  if (!spec) {
+    const names = Object.keys(VERBS);
+    return `usage: loopany <task|doc|loop> <verb> [flags]\nverbs[${names.length}]: ${names.join(", ")}\nhelp[1]:\n  Run \`loopany task list --help\` for one verb's full grammar\n`;
+  }
   const width = Math.max(0, ...spec.flags.map(([flag]) => flag.length));
   let text = `usage: ${spec.usage}\n`;
   text += spec.flags.length ? `flags:\n${spec.flags.map(([flag, meaning]) => `  ${flag.padEnd(width)}  ${meaning}`).join("\n")}\n` : "flags: none\n";

@@ -129,6 +129,21 @@ describe("the auth table keys on run-context presence, not on a credential type"
     // The refusal names the run it saw, so the caller can tell WHY it was
     // classified as an agent rather than guessing at its credential.
     expect(!result.ok && result.error.issues[0]).toMatchObject({ path: "X-Loopany-Run", got: runId });
+    expect(!result.ok && result.error.hint).toContain("the human inbox");
+  });
+
+  it("teaches the proposal path, not the inbox, when the human-only endpoint is loop governance", async () => {
+    const machineId = await machine();
+    const { runId } = await claimedRun(machineId);
+    const agent = request({ Authorization: `Bearer ${DEVICE}`, "X-Loopany-Run": runId });
+    // The ROUTE guard answers before any kernel function runs, so this is the
+    // refusal a run attempting `loop create|pause|resume|retire` actually reads:
+    // the inbox voice would be teaching a surface it never touched (review F2).
+    const result = await auth.resolveApiContext(agent, { human: "loop-governance" }, true, SIGNED_IN);
+    expect(code(result)).toBe("NOT_HUMAN");
+    expect(!result.ok && result.error.message).toContain("governance");
+    expect(!result.ok && result.error.hint).toContain("--needs-human");
+    expect(!result.ok && result.error.hint).not.toContain("inbox");
   });
 
   it("gives a bare device credential the DAEMON answers: NO_RUN_CONTEXT on dual, UNAUTHORIZED on human-only", async () => {

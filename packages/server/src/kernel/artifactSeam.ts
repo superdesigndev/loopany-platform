@@ -2,10 +2,20 @@ import { safeParseArtifact, serializeArtifact, type ArtifactDocument } from "../
 import type { ObjectKind } from "./types.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 
+/**
+ * The closed top-level key set per kind.
+ *
+ * `key` is on the LOOP set even though API spec §1.16 writes the create key set
+ * as `title, cron, payload`: the same paragraph also promises "the same
+ * key-idempotency rule as tasks", and that rule is unreachable without a `key`
+ * to be idempotent on. Admitting it also makes `loop show --file` round-trip —
+ * `serializeKindArtifact` emits `key:` for every kind, so a keyed loop would
+ * otherwise serialize a file its own parser refuses.
+ */
 export const KIND_KEYS = {
   task: ["title", "key", "follow_up", "watcher", "needs_human", "payload"],
   doc: ["title", "key", "format", "payload"],
-  loop: ["title", "cron", "payload"],
+  loop: ["title", "key", "cron", "payload"],
 } as const satisfies Record<ObjectKind, readonly string[]>;
 
 /** The doc body formats the kernel serves (spec §1.9). Closed, two values. */
@@ -118,7 +128,12 @@ export function serializeKindArtifact(kind: ObjectKind, object: ArtifactProjecti
   if (kind === "task") Object.assign(frontMatter, { follow_up: object.followUpAt, watcher: object.watcher, needs_human: object.pendingQuestion });
   if (kind === "doc") frontMatter.format = object.format ?? "markdown";
   if (kind === "loop") frontMatter.cron = object.cron;
-  frontMatter.payload = object.payload ?? {};
+  // NOT `?? {}`: an absent payload must serialize as an ABSENT key, or the file
+  // this very function emits no longer round-trips. `{}` re-parses to an empty
+  // mapping, which `expressedDiffs` reads as different from a null payload — so
+  // `show --file` → `create` reported a spurious `differs: payload`, and the
+  // task/doc `--file` update path wrote a junk `null → {}` diff event.
+  frontMatter.payload = object.payload;
   for (const key of Object.keys(frontMatter)) if (frontMatter[key] == null) delete frontMatter[key];
   return serializeArtifact({ frontMatter, body: object.body }, { keyOrder: [...KIND_KEYS[kind]] });
 }

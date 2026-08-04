@@ -223,5 +223,10 @@ export function refuseAbout(code: RefusalCode, subject: string, issues: KernelIs
 }
 
 export function refusalResponse(value: ApiRefusal, init?: ResponseInit): Response {
-  return Response.json(value, { ...init, status: init?.status ?? REFUSAL_STATUS[value.code] });
+  // The `?? 400` is a FLOOR, not a mapping. Several call sites widen a kernel
+  // result code into this envelope with a cast (`refusal(result.code as never)`),
+  // and a code with no row in the table would otherwise resolve to `undefined` —
+  // which `Response.json` renders as **200**, so a refusal would reach the CLI as
+  // a success and exit 0. Any unmapped code is a client error at worst.
+  return Response.json(value, { ...init, status: init?.status ?? REFUSAL_STATUS[value.code] ?? 400 });
 }

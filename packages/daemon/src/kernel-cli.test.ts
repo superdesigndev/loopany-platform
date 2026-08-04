@@ -240,6 +240,20 @@ describe("task create", () => {
     expect(stdout).toContain("Run `loopany task update task-7f3a91 --file <path>` to apply them");
   });
 
+  it("never sends a human to the agent-only evolve when a loop key already exists", async () => {
+    const { code, stdout } = await run(["loop", "create", "--file", "-"], {
+      created: false, contentDiffers: true, differingFields: ["body"], event: null,
+      notice: { code: "KEY_EXISTS_CONTENT_DIFFERS", message: "key \"housekeeper\" already names loop-01KZ; the submitted file differs from it and was not applied" },
+      loop: { id: "loop-01KZ", kind: "loop", title: "Housekeeper", status: "active", key: "housekeeper", cron: "0 7 * * *", nextFire: "2026-08-05T07:00:00.000Z", payload: {} },
+    }, 200, { readStdin: () => "---\ntitle: Housekeeper\nkey: housekeeper\n---\n\nnew charter\n" });
+    expect(code).toBe(0);
+    expect(stdout).toContain("your changes were NOT applied");
+    // `loop create` is human-only and `loop evolve` is agent-only: a hint naming
+    // evolve would walk the same person straight into NO_RUN_CONTEXT.
+    expect(stdout).not.toContain("Run `loopany loop evolve");
+    expect(stdout).toContain("edit the charter on the loop page");
+  });
+
   it("treats an unreadable file as transport, not as a bad command", async () => {
     const { code, stdout } = await run(["task", "create", "--file", "/tmp/definitely-not-here-9f13.md"], {});
     expect(code).toBe(1);
@@ -417,6 +431,195 @@ describe("loop evolve and loop update", () => {
     expect(stdout).toContain("  next_fire: — (paused)\n");
     expect(stdout).toContain("warning: ");
     expect(stdout).toContain("Time never un-pauses a loop — a human does");
+  });
+});
+
+describe("loop create, list and show", () => {
+  const CHARTER = '---\ntitle: Housekeeper\ncron: "0 7 * * *"\nkey: housekeeper\n---\n\nYou are the Housekeeper.\n';
+  const LOOP = { id: "loop-8e3311", kind: "loop", title: "Housekeeper", status: "active", cron: "0 7 * * *", timezone: null, key: "housekeeper", nextFire: "2026-08-04T07:00:00.000Z", body: "You are the Housekeeper.\n" };
+
+  it("posts the artifact to the loop collection and never carries the machine's credential", async () => {
+    // Creating a loop is the OWNER's act, so it is a human verb: a device token
+    // here would name the wrong actor on the object-created event.
+    const { code, stdout, request } = await run(["loop", "create", "--file", "-"], { created: true, loop: LOOP, event: "ev-1" }, 201, { readStdin: () => CHARTER });
+    expect(code).toBe(0);
+    expect(request!.method).toBe("POST");
+    expect(new URL(request!.url).pathname).toBe("/api/loops");
+    expect(request!.headers.get("authorization")).toBeNull();
+    expect(await request!.text()).toBe(CHARTER);
+    expect(stdout).toContain("ok: created loop-8e3311\n");
+    expect(stdout).toContain('  next_fire: "2026-08-04T07:00:00.000Z"\n');
+    expect(stdout).toContain("claimed by any machine of this team — there is no machine to bind");
+  });
+
+  it("says plainly that a loop born without a cadence will never fire on its own", async () => {
+    const { stdout } = await run(["loop", "create", "--file", "-"], { created: true, loop: { ...LOOP, cron: null, nextFire: null }, event: "ev-1" }, 201, { readStdin: () => CHARTER });
+    expect(stdout).toContain("  next_fire: — (no cadence — runs on demand only)\n");
+    expect(stdout).toContain("will never fire on its own");
+  });
+
+  it("renders the roster with the cadence cursor as a column", async () => {
+    const { code, stdout, request } = await run(["loop", "list"], {
+      total: 2,
+      loops: [
+        { id: "loop-8e3311", title: "Housekeeper", status: "active", cron: "0 7 * * *", nextFire: "2026-08-04T07:00:00.000Z" },
+        { id: "loop-4c1d77", title: "Reddit Outreach", status: "retired", cron: null, nextFire: null },
+      ],
+    });
+    expect(code).toBe(0);
+    expect(new URL(request!.url).search).toBe("");
+    expect(stdout).toBe(
+      "count: 2\n" +
+      "loops[2]{id,title,status,cron,next_fire}:\n" +
+      '  loop-8e3311,Housekeeper,active,"0 7 * * *","2026-08-04T07:00:00.000Z"\n' +
+      '  loop-4c1d77,"Reddit Outreach",retired,—,—\n' +
+      "help[3]:\n" +
+      "  Run `loopany loop show <loop-id>` to read one, with its charter and event tail\n" +
+      "  A blank next_fire means the loop is paused, retired, or has no cadence — `loop show` names which\n" +
+      "  Retired loops stay listed on purpose: the kernel is event-sourced, so nothing is ever deleted\n",
+    );
+  });
+
+  it("passes --status through and echoes the filter when it matched nothing", async () => {
+    const { stdout, request } = await run(["loop", "list", "--status", "retired"], { total: 0, loops: [] });
+    expect(new URL(request!.url).search).toBe("?status=retired");
+    expect(stdout).toContain("count: 0\nloops: []\n");
+    expect(stdout).toContain('filter: "--status retired"\n');
+    expect(stdout).toContain("An empty roster is a clean result, not an error");
+  });
+
+  it("refuses a status a loop cannot hold, locally and before any round trip", async () => {
+    let called = false;
+    const { code, stdout } = await run(["loop", "list", "--status", "closed"], {}, 200, { fetchImpl: async () => { called = true; return reply({}); } });
+    expect(code).toBe(2);
+    expect(called).toBe(false);
+    expect(stdout).toContain("allowed[3]: active, paused, retired");
+    expect(stdout).toContain("it never closes, because it is a standing cadence and not a unit of work");
+  });
+
+  it("shows the charter and the seq-ordered timeline, and names the next legal move", async () => {
+    const { code, stdout } = await run(["loop", "show", "loop-8e3311"], {
+      loop: LOOP,
+      events: [
+        { seq: 1, ts: "2026-08-01T00:00:00.000Z", actor: "u-owner", entrance: "human", kind: "object-created" },
+        { seq: 4, ts: "2026-08-02T09:00:00.000Z", actor: "run-3f8a20", entrance: "agent", kind: "charter-evolved", diff: { body: { old: "a", new: "b" } } },
+      ],
+    });
+    expect(code).toBe(0);
+    expect(stdout).toContain("loop:\n  id: loop-8e3311\n");
+    expect(stdout).toContain(String.raw`charter: "You are the Housekeeper.\\n"` + "\n");
+    expect(stdout).toContain("events[2]{seq,ts,actor,entrance,change}:\n");
+    expect(stdout).toContain("Run `loopany loop evolve loop-8e3311 --file charter.md` to apply it");
+  });
+
+  it("emits the raw artifact under --file, with no ok: line to corrupt it", async () => {
+    let stdout = "";
+    const code = await runKernelCli(["loop", "show", "loop-8e3311", "--file"], {
+      server: "https://example.test", token: "dk_test", env: {}, out: (t) => { stdout += t; },
+      fetchImpl: async (input, init) => {
+        expect(new Request(input, init).headers.get("accept")).toBe("text/markdown");
+        return reply(CHARTER, 200, "text/markdown");
+      },
+    });
+    expect(code).toBe(0);
+    expect(stdout).toBe(CHARTER);
+  });
+});
+
+describe("the loop lifecycle: pause, resume and retire — there is no delete", () => {
+  const LOOP = { id: "loop-8e3311", kind: "loop", title: "Housekeeper", cron: "0 7 * * *" };
+
+  it("pauses on the owner's credential, carries the note, and says what disarming means", async () => {
+    const { code, stdout, request } = await run(["loop", "pause", "loop-8e3311", "--note", "muted for the migration"], {
+      changed: true, event: "ev-77a1", diff: { status: { old: "active", new: "paused" }, nextFire: { old: "2026-08-04T07:00:00.000Z", new: null } },
+      loop: { ...LOOP, status: "paused", nextFire: null },
+    });
+    expect(code).toBe(0);
+    expect(new URL(request!.url).pathname).toBe("/api/loops/loop-8e3311/pause");
+    expect(request!.headers.get("authorization")).toBeNull();
+    expect(JSON.parse(await request!.text())).toEqual({ note: "muted for the migration" });
+    expect(stdout).toContain("ok: paused loop-8e3311\n");
+    expect(stdout).toContain("  next_fire: — (paused)\n");
+    expect(stdout).toContain("  status: active → paused\n");
+    expect(stdout).toContain("event: ev-77a1\n");
+    expect(stdout).toContain("Time never un-pauses a loop");
+  });
+
+  it("resumes with one fire owed, not a backlog", async () => {
+    const { code, stdout, request } = await run(["loop", "resume", "loop-8e3311"], {
+      changed: true, event: "ev-77a2", diff: { status: { old: "paused", new: "active" } },
+      loop: { ...LOOP, status: "active", nextFire: "2026-08-20T07:00:00.000Z" },
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(await request!.text())).toEqual({});
+    expect(stdout).toContain("ok: resumed loop-8e3311\n");
+    expect(stdout).toContain("a week paused owes exactly one fire, not a week of them");
+  });
+
+  it("names retire as the delete, and the freeze it forces", async () => {
+    const { code, stdout, request } = await run(["loop", "retire", "loop-8e3311", "--note", "the experiment is over"], {
+      changed: true, event: "ev-77a3", diff: { status: { old: "active", new: "retired" } },
+      loop: { ...LOOP, status: "retired", nextFire: null },
+    });
+    expect(code).toBe(0);
+    expect(new URL(request!.url).pathname).toBe("/api/loops/loop-8e3311/retire");
+    expect(stdout).toContain("ok: retired loop-8e3311\n");
+    expect(stdout).toContain("  next_fire: — (retired — terminal)\n");
+    expect(stdout).toContain("the kernel is event-sourced, so nothing is erased and there is no un-retire");
+    expect(stdout).toContain("`loop evolve` and `loop update` are refused for this loop for good");
+  });
+
+  it("reads a repeated verb as the free retry it is", async () => {
+    const { code, stdout } = await run(["loop", "pause", "loop-8e3311"], { changed: false, event: null, diff: {}, loop: { ...LOOP, status: "paused", nextFire: null } });
+    expect(code).toBe(0);
+    expect(stdout).toContain("ok: paused loop-8e3311 (no change: already paused)\n");
+    expect(stdout).toContain("event: — (no event written for an empty diff)\n");
+    expect(stdout).toContain("a retry after a dropped connection costs nothing");
+  });
+
+  it("renders the terminal refusal when a retired loop is asked to come back", async () => {
+    const { code, stdout } = await run(["loop", "resume", "loop-8e3311"], {
+      code: "RETIRED", message: "loop-8e3311 is retired and cannot be resumed",
+      issues: [{ path: "status", message: "retirement is terminal", got: "retired", expected: "active|paused" }],
+      hint: "there is no un-retire: the charter is frozen and the cadence is gone for good",
+    }, 409);
+    expect(code).toBe(2);
+    expect(stdout).toContain("code: CONFLICT\n");
+    expect(stdout).toContain("wrote:    retired\n");
+    expect(stdout).toContain("expected: active|paused\n");
+    expect(stdout).toContain("there is no un-retire");
+  });
+
+  it("teaches the property, not the spelling, when an agent reaches for `loop delete`", async () => {
+    for (const wrong of [["loop", "delete", "loop-8e3311"], ["loop", "remove", "loop-8e3311"], ["loop", "rm", "loop-8e3311"], ["loop", "archive", "loop-8e3311"]]) {
+      let called = false;
+      const { code, stdout } = await run(wrong, {}, 200, { fetchImpl: async () => { called = true; return reply({}); } });
+      expect(code, wrong.join(" ")).toBe(2);
+      expect(called).toBe(false);
+      expect(stdout).toContain("expected: loopany loop retire <loop-id>");
+      expect(stdout).toContain("the kernel is event-sourced, so nothing is ever erased");
+      expect(stdout).toContain("`loop retire` IS the D in CRUD");
+    }
+  });
+
+  it("refuses a missing or non-prefixed loop id locally", async () => {
+    const missing = await run(["loop", "retire"], {});
+    expect(missing.code).toBe(2);
+    expect(missing.stdout).toContain("expected: loopany loop retire <loop-id>");
+    const bare = await run(["loop", "pause", "self"], {});
+    expect(bare.code).toBe(2);
+    expect(bare.stdout).toContain("There is no `self` keyword");
+  });
+
+  it("answers `loop retire --help` locally, naming retire as the D in CRUD", async () => {
+    let called = false;
+    let stdout = "";
+    const code = await runKernelCli(["loop", "retire", "--help"], { server: "https://example.test", token: "dk", env: {}, out: (t) => { stdout += t; }, fetchImpl: async () => { called = true; return reply({}); } });
+    expect(code).toBe(0);
+    expect(called).toBe(false);
+    expect(stdout).toContain("usage: loopany loop retire <loop-id> [--note <text>]\n");
+    expect(stdout).toContain("retire IS the delete");
+    expect(stdout).toContain("there is no `loop delete`");
   });
 });
 

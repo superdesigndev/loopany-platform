@@ -67,5 +67,22 @@ describe("the closed key sets are per kind, and the kind firewalls are named", (
     const back = parseKindArtifact("task", file, NOW);
     expect(back.ok && back.value).toMatchObject({ title: "Observe", key: "pr-201", watcher: "loop-4c1d77", followUpAt: "2026-08-06T00:00:00.000Z", payload: { pr: 201 } });
   });
+
+  it("omits payload entirely when there is none, so an absent payload survives the round trip", () => {
+    const file = serializeKindArtifact("loop", { title: "Housekeeper", key: "housekeeper", body: "charter\n", payload: null, cron: "0 7 * * *" });
+    // `payload: {}` would re-parse to an empty mapping — a value, not an absence —
+    // and every consumer diffing it against a null payload would report a change
+    // the file never expressed (review F1).
+    expect(file).not.toContain("payload");
+    const back = parseKindArtifact("loop", file, NOW);
+    expect(back.ok && back.value.payload).toBeNull();
+  });
+
+  it("keeps an explicitly empty payload, because that is a value the file did express", () => {
+    const file = serializeKindArtifact("doc", { title: "Note", key: "note", body: "text\n", payload: {}, format: "markdown" });
+    expect(file).toContain("payload");
+    const back = parseKindArtifact("doc", file, NOW);
+    expect(back.ok && back.value.payload).toEqual({});
+  });
 });
 
