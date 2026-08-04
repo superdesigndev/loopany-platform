@@ -1,4 +1,6 @@
-import { fetchLoop, fetchLoops, type CharterDiff, type LoopListRow, type TaskRow } from './api'
+import { useState } from 'react'
+
+import { fetchLoop, fetchLoops, postRunNow, type CharterDiff, type LoopListRow, type RunNowResult, type TaskRow } from './api'
 import { Markdown } from './Render'
 import {
   ArtifactRow, BigState, Drawer, DrawerHead, DrawerSection, Empty, Loading, Refusal, RunStrip, Section, StateChip, Timeline, ViewHeader, When,
@@ -23,6 +25,15 @@ import { affectsLoop, useLiveView } from './useLiveView'
  * its own amber section above the rest — the reference's "Needs you" idea applied
  * to structure, and the reason a paused-and-asking loop cannot hide in a long
  * list.
+ *
+ * UNIT 11: the drawer gained the screen's ONE write — `Run now`, the manual fire
+ * the shipping dashboard has always offered. It lives on the detail surface and
+ * not on the list row for a structural reason, not a taste one: `ArtifactRow` IS
+ * a button (that is what makes the whole row one keyboard target), so a control
+ * in its action slot would be a button inside a button — invalid markup with a
+ * genuinely ambiguous click target. The row keeps its quiet `open ›` affordance
+ * and the act itself is one click deeper, next to the cadence and health it
+ * overrides.
  */
 export function LoopsPane({ selected, onSelect, onOpenTask }: { selected: string | null; onSelect: (id: string | null) => void; onOpenTask: (id: string) => void }) {
   const { data, error, loading } = useLiveView('loops', fetchLoops)
@@ -108,7 +119,7 @@ function LoopRow({ loop, selected, onSelect }: { loop: LoopListRow; selected: bo
 }
 
 function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) => void }) {
-  const { data, error } = useLiveView(`loop:${id}`, () => fetchLoop(id), affectsLoop(id))
+  const { data, error, refresh } = useLiveView(`loop:${id}`, () => fetchLoop(id), affectsLoop(id))
   if (error && !data) {
     return (
       <div className="preview-document">
@@ -150,6 +161,8 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
         ]}
       />
 
+      <RunNow id={loop.id} onQueued={refresh} />
+
       {health.consecutiveFailures > 0 && (
         <p className="inbox-floor">
           Consecutive failures auto-pause a loop and raise a question here. Time never un-pauses a loop — a human does.
@@ -178,6 +191,67 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
         <Timeline events={data.events} emptyNote="No events on this loop yet." />
       </DrawerSection>
     </article>
+  )
+}
+
+/**
+ * RUN NOW — the manual fire, and the one write this screen performs.
+ *
+ * Three rules it keeps, in descending order of how easy they are to break:
+ *
+ * 1. **The button is never pre-hidden.** A paused or retired loop is refused by
+ *    the kernel (`runLoopNow`), with a sentence and a hint naming the move that
+ *    would work — `resume it first: POST /api/loops/<id>/resume`. Disabling the
+ *    button on `status !== 'active'` would replace that teaching with silence,
+ *    and would put a second copy of the lifecycle rule in the client where it
+ *    could drift. The refusal renders verbatim, exactly as the CLI shows one.
+ * 2. **The queue's answer is reported, not smoothed over.** One queued run per
+ *    loop is the discipline, so a second press reports the run already waiting
+ *    rather than pretending to have made a new one.
+ * 3. **Nothing here waits for the run.** Queuing is the whole act; the run
+ *    appears in `Recent runs` when the stream says so (`run-queued` carries the
+ *    loop's own object id, so `affectsLoop` already refetches this drawer). The
+ *    `onQueued` refresh only removes the wait for that round trip.
+ */
+function RunNow({ id, onQueued }: { id: string; onQueued: () => void }) {
+  const [firing, setFiring] = useState(false)
+  const [result, setResult] = useState<RunNowResult | null>(null)
+  const [failure, setFailure] = useState<Error | undefined>(undefined)
+
+  const fire = async () => {
+    setFiring(true)
+    setFailure(undefined)
+    setResult(null)
+    try {
+      setResult(await postRunNow(id))
+      onQueued()
+    } catch (cause) {
+      setFailure(cause instanceof Error ? cause : new Error(String(cause)))
+    } finally {
+      setFiring(false)
+    }
+  }
+
+  return (
+    <div className="preview-actions">
+      <div className="preview-actions-row">
+        <button type="button" className="verdict-button" onClick={fire} disabled={firing}>
+          {firing ? 'queueing…' : 'Run now'}
+        </button>
+        <p className="ws-note-line">
+          Fires this loop off its cadence. The run is queued here and starts when a machine of this team claims it.
+        </p>
+      </div>
+      {result && (
+        <p className="ws-queued" role="status">
+          {result.alreadyQueued
+            ? 'This loop already had a run queued — one queued run per loop, so that run will carry this fire.'
+            : 'Queued.'}
+          {result.run && <> Run <code className="ws-id">{result.run.id}</code>.</>}
+        </p>
+      )}
+      {failure && <Refusal error={failure} />}
+    </div>
   )
 }
 

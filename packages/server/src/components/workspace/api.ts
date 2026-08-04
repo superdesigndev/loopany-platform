@@ -304,6 +304,31 @@ export async function patchWatcher(taskId: string, watcher: string | null): Prom
   return write<{ changed: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}`, 'PATCH', { watcher }, 'the watcher change was refused')
 }
 
+/**
+ * The loop page's one write: fire this loop off its cadence, now.
+ *
+ * Deliberately body-less — the loop already says what it does, so an
+ * off-cadence run is a button, not a form (the route says the same). The
+ * response is the queue's own answer: `queued` for a fresh run, or
+ * `alreadyQueued` when this loop already had one waiting, since the kernel
+ * allows exactly one queued run per loop (`runs_one_queued_idx`) and reports
+ * the existing one rather than refusing.
+ *
+ * A paused or retired loop is refused by the SERVER with a teaching refusal,
+ * and that is the whole point of not pre-hiding the button: the screen would
+ * otherwise have to restate the lifecycle rule, and its copy would drift from
+ * the kernel's.
+ */
+export interface RunNowResult {
+  queued: boolean
+  alreadyQueued: boolean
+  run: { id: string; state: string | null; reason: string | null } | null
+}
+
+export async function postRunNow(loopId: string): Promise<RunNowResult> {
+  return write<RunNowResult>(`/api/loops/${encodeURIComponent(loopId)}/run-now`, 'POST', {}, 'the run was refused')
+}
+
 async function write<T>(path: string, method: string, body: unknown, fallback: string): Promise<T> {
   const response = await fetch(path, {
     method,

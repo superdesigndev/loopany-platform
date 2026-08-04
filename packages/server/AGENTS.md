@@ -892,6 +892,35 @@ rather than forking a second execution stack.
   `runs_one_queued_idx` (a second call reports `alreadyQueued`), then `notifyRunQueued()`
   so a parked claim wakes instead of waiting out its ~20s hold.
 
+## `Run now` on the Loops screen — landing unit 11
+
+The workspace's Loops drawer gained the manual fire (`postRunNow` → the unit-10 route),
+so the rewrite matches the shipping dashboard's one UI-triggered run. Three rules, each
+the kind a later change breaks by being helpful:
+
+- **The button is NEVER pre-hidden or disabled by status.** A paused or retired loop is
+  refused by `runLoopNow` with a sentence AND a hint naming the move that works
+  (`resume it first: POST /api/loops/<id>/resume`); gating the button client-side would
+  replace that teaching with silence and put a second copy of the lifecycle rule where
+  it can drift. The refusal renders through the shared `Refusal` exactly as the CLI
+  prints one. `runNow.test.ts` pins both halves — offered on a paused loop, and the
+  code/sentence/hint all on screen.
+- **It lives on the DRAWER, not the list row.** `ArtifactRow` IS a `<button>` (that is
+  what makes the whole row one keyboard target), so a control in its action slot would
+  be a button inside a button. Adding a row-level action means restructuring that shared
+  primitive for every screen, not just this one.
+- **Nothing waits for the run.** Queuing is the act; the run reaches `Recent runs`
+  because `run-queued` carries the loop's own object id, so the drawer's existing
+  `affectsLoop` refetch already covers it. The post-write `refresh()` only removes the
+  round trip's wait.
+
+Verified in a browser on an isolated seeded stack (own port + `LOOPANY_DATA_DIR`, no
+daemon — a queued run is the proof): a fresh fire renders `Queued. Run run-…` and the
+run appears in the strip; a second fire on a loop that already had one queued reports
+that run instead of minting a twin; an out-of-band `POST …/pause` moves the drawer to
+`PAUSED LOOP` over SSE with no user action; and firing it then renders the `PAUSED`
+refusal with its resume hint.
+
 ### The recipe (replayable against any stack, including the demo on :3000)
 
 `scripts/rewrite-local-run.env.sh` defines an isolated stack (own port, own

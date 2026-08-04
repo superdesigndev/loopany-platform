@@ -308,6 +308,16 @@
   .preview-meta div { min-width: 0; }
   .preview-meta dt { margin-bottom: 4px; color: var(--faint); font-size: .625rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
   .preview-meta dd { overflow: hidden; margin: 0; color: #56534d; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+  /* The drawer's action band — one consequential act (unit 11's `Run now`) with
+     the sentence that says what it does, then whatever the server answered. It
+     sits directly under the meta grid, so the act reads against the cadence and
+     health it is overriding. */
+  .preview-actions { margin: -18px 0 34px; }
+  .preview-actions-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .preview-actions-row .ws-note-line { flex: 1 1 24ch; margin: 0; }
+  .ws-queued { margin: 12px 0 0; padding: 9px 12px; border: 1px solid #dbe0d4; border-radius: 8px; background: #f4f6f0; color: #4d4a45; font-size: .8125rem; line-height: 1.55; }
+  .preview-actions .ws-refusal { margin: 12px 0 0; }
+
   .preview-section { margin-top: 38px; }
   .preview-section > h2 { margin: 0 0 4px; color: var(--muted); font-size: .6875rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
   .preview-section > h3 { margin: 18px 0 4px; font-size: .8125rem; font-weight: 600; }
