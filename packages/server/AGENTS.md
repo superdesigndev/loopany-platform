@@ -497,7 +497,12 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
   collision would otherwise be SILENT — swallowed by the same `ON CONFLICT DO NOTHING`
   that implements dedup, handing back a stranger's row. Both halves are pinned by
   `ids.test.ts` + `idCollision.integration.test.ts` (which scripts the mint through a
-  partial mock of `ids.js` to stage a collision on demand). Two invariants ride on the
+  partial mock of `ids.js` to stage a collision on demand). **Write an organic event
+  through `applyTransition.ts`'s exported `appendOrganicEvent`, never a bare
+  `organicEventId(...)` inline** — the ladder lives in that one helper, so an inline
+  mint silently opts its fact out of the retry and a taken id is swallowed rather than
+  redrawn (`objectApi.runLoopNow`'s manual `run-queued` event is the out-of-module
+  caller this exists for). Two invariants ride on the
   widths and are pinned: no organic rung may equal `DERIVED_HEX` (equal widths would let
   the two families produce the same id STRING, reopening a cross-family silent merge),
   and the `attempt` parameter — which used to be a TIMESTAMP, same type — is
@@ -670,7 +675,11 @@ stylesheet (`styles/workspace.css`, loaded `?url`, every rule scoped under
   instead: an event moving `watcher` null → a loop id.
 - **Local fixture**: `pnpm --filter @loopany/server workspace:seed` writes a full fixture
   THROUGH the kernel (real events, diffs, provenance). pglite is single-writer, so seed
-  BEFORE starting `pnpm dev` on the same `LOOPANY_DATA_DIR`.
+  BEFORE starting `pnpm dev` on the same `LOOPANY_DATA_DIR`. Violating that order does
+  not merely fail the seed — it CORRUPTS the data dir: the seed appears to succeed while
+  the running server never sees the rows, and the next boot aborts inside the pglite wasm
+  (every request 500s `HTTPError`). The recovery is `rm -rf "$LOOPANY_DATA_DIR"` and a
+  re-seed, so do not try to salvage the directory.
 - **NOT built** (design §9 names it among UI reads; unit 5's brief scoped it out): a
   dedicated run history/detail screen and `/api/views/run(s)`. Runs surface as strips on
   the loop page (`recentRuns`) and the task page (runs that touched it).
