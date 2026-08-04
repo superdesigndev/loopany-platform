@@ -11,11 +11,14 @@ let kernelSchema: typeof import("../db/kernel-schema.js");
 let store: typeof import("../db/store.js");
 let kernel: typeof import("./applyTransition.js");
 let queue: typeof import("./runQueue.js");
+let kernelStore: typeof import("../db/kernelStore.js");
 let api: typeof import("./objectApi.js");
 let delivery: typeof import("../gateway/delivery.js");
 let gatewayModule: typeof import("../gateway/index.js");
 let auth: typeof import("./apiAuth.js");
 let ids: typeof import("./ids.js");
+let schedulerModule: typeof import("../scheduler/index.js");
+let tokens: typeof import("../gateway/tokens.js");
 
 const TEAM = "team-s2";
 const USER = "u-s2";
@@ -34,11 +37,14 @@ beforeAll(async () => {
   store = await import("../db/store.js");
   kernel = await import("./applyTransition.js");
   queue = await import("./runQueue.js");
+  kernelStore = await import("../db/kernelStore.js");
   api = await import("./objectApi.js");
   delivery = await import("../gateway/delivery.js");
   gatewayModule = await import("../gateway/index.js");
   auth = await import("./apiAuth.js");
   ids = await import("./ids.js");
+  schedulerModule = await import("../scheduler/index.js");
+  tokens = await import("../gateway/tokens.js");
 });
 
 afterAll(() => fs.rmSync(temp, { recursive: true, force: true }));
@@ -139,6 +145,21 @@ describe("S2 prod-claimable trigger rows", () => {
     expect(await queue.tickDueTasks(NOW)).toMatchObject({ scanned: 1, queued: 1 });
   });
 
+  it("F1: a real cron tick preserves a deferred due trigger and its instant remains represented", async () => {
+    const { loop } = await fixtures();
+    const due = await task(loop.id, { followUpAt: "2026-08-04T11:00:00.000Z" });
+    expect(await queue.tickDueTasks(NOW)).toMatchObject({ queued: 1 });
+    const dueId = ids.dueRunId(loop.id, due.id, due.followUpAt!);
+
+    const scheduler = new schedulerModule.Scheduler({ dispatch(): void {} });
+    await (scheduler as unknown as { runLoop(id: string): Promise<void> }).runLoop(loop.id);
+
+    const rows = await database.db.select().from(schema.runs);
+    expect(rows.find((row) => row.id === dueId)).toMatchObject({ phase: "pending", reason: "due", scope: `task:${due.id}` });
+    expect(rows.some((row) => row.id !== dueId && row.reason == null && row.scope == null)).toBe(true);
+    expect(await queue.tickDueTasks(NOW)).toMatchObject({ replayed: 1, queued: 0 });
+  });
+
   it("queues a directive as a prod run and carries its words + payload in the first turn", async () => {
     const { loop, machineId } = await fixtures();
     const watched = await task(loop.id);
@@ -164,6 +185,30 @@ describe("S2 prod-claimable trigger rows", () => {
     expect(joined.run).toMatchObject({ alreadyQueued: true });
     expect(await database.db.select().from(schema.runs)).toHaveLength(1);
   });
+
+  it("F3: a directive arriving during execution queues its own scoped pending row", async () => {
+    const { loop, machineId } = await fixtures();
+    const watched = await task(loop.id);
+    const executing = await store.addRun({
+      loopId: loop.id,
+      userId: USER,
+      machineId,
+      phase: "running",
+      role: "exec",
+      ts: NOW.toISOString(),
+    });
+
+    const result = ok(await api.leaveDirective(watched.id, "Deliver this after the active run.", human, NOW));
+    expect(result.run).toMatchObject({ alreadyQueued: false, reason: "directive" });
+    const rows = await database.db.select().from(schema.runs);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.id !== executing.id)).toMatchObject({
+      phase: "pending",
+      scope: `task:${watched.id}`,
+      triggerEventId: result.event,
+    });
+    expect((await gateway().poll(TOKEN)).body).toMatchObject({ deliveries: [] });
+  });
 });
 
 describe("S2 manual, claim, auth and finalize", () => {
@@ -187,6 +232,107 @@ describe("S2 manual, claim, auth and finalize", () => {
     const polled = await gateway().poll(TOKEN);
     expect((polled.body as { deliveries: unknown[] }).deliveries).toHaveLength(0);
     expect((await store.openRunsForLoop(loop.id)).map((run) => run.phase).sort()).toEqual(["pending", "running"]);
+  });
+
+  it("F2: sweep does not fail a 21-minute pending trigger held behind a healthy running sibling", async () => {
+    const { loop, machineId } = await fixtures();
+    await store.updateMachine(machineId, { online: true, lastSeen: new Date().toISOString() });
+    const old = new Date(Date.now() - 21 * 60_000).toISOString();
+    const executing = await store.addRun({
+      loopId: loop.id,
+      userId: USER,
+      machineId,
+      phase: "running",
+      role: "exec",
+      ts: old,
+      progress: { step: 2, label: "still working", at: new Date().toISOString() },
+    });
+    const held = await store.addRun({
+      loopId: loop.id,
+      userId: USER,
+      machineId,
+      phase: "pending",
+      role: "exec",
+      ts: old,
+      reason: "directive",
+      scope: "task:held",
+    });
+
+    await gateway().sweep();
+    expect(await store.getRun(executing.id)).toMatchObject({ phase: "running" });
+    expect(await store.getRun(held.id)).toMatchObject({ phase: "pending", error: null });
+  });
+
+  it("F4: sweep reclaim appends run-finished for a provenance-carrying terminal run", async () => {
+    const { loop, machineId } = await fixtures();
+    await store.updateMachine(machineId, { online: true, lastSeen: new Date().toISOString() });
+    const old = new Date(Date.now() - 21 * 60_000).toISOString();
+    const run = await store.addRun({
+      loopId: loop.id,
+      userId: USER,
+      machineId,
+      phase: "running",
+      role: "exec",
+      ts: old,
+      reason: "due",
+      scope: "task:sweep-repro",
+      progress: { step: 1, label: "stale", at: old },
+    });
+
+    await gateway().sweep();
+    expect(await store.getRun(run.id)).toMatchObject({ phase: "error", error: "machine timed out / disconnected" });
+    const finished = await database.db.select().from(kernelSchema.events).where(eq(kernelSchema.events.kind, "run-finished"));
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ objectId: loop.id, actorId: run.id });
+    expect(finished[0]!.payload).toMatchObject({ outcome: "failure", reason: "due", scope: "task:sweep-repro" });
+
+    await store.updateMachine(machineId, { online: false, lastSeen: "2000-01-01T00:00:00.000Z" });
+    const expired = await store.addRun({
+      loopId: loop.id,
+      userId: USER,
+      machineId,
+      phase: "pending",
+      role: "exec",
+      ts: new Date(Date.now() - 8 * 86_400_000).toISOString(),
+      reason: "directive",
+      scope: "task:backstop-repro",
+    });
+    await gateway().sweep();
+    expect(await store.getRun(expired.id)).toMatchObject({ phase: "canceled", outcome: "skipped" });
+    const afterBackstop = await database.db.select().from(kernelSchema.events).where(eq(kernelSchema.events.kind, "run-finished"));
+    expect(afterBackstop.find((event) => event.actorId === expired.id)?.payload).toMatchObject({
+      outcome: "skipped",
+      reason: "directive",
+      scope: "task:backstop-repro",
+    });
+  });
+
+  it("F5: a failed due instant re-arms the same frozen id, while a completed one permanently replays", async () => {
+    const { loop, machineId } = await fixtures();
+    await store.updateMachine(machineId, { online: true, lastSeen: new Date().toISOString() });
+    const due = await task(loop.id, { followUpAt: "2026-08-04T11:00:00.000Z" });
+    expect(await queue.tickDueTasks(NOW)).toMatchObject({ queued: 1 });
+    const dueId = ids.dueRunId(loop.id, due.id, due.followUpAt!);
+    const old = new Date(Date.now() - 21 * 60_000).toISOString();
+    await store.updateRun(dueId, { phase: "running", ts: old, progress: { step: 1, label: "stale", at: old } });
+    const oldLease = await tokens.registerRunLease({
+      runId: dueId,
+      loopId: loop.id,
+      machineId,
+      role: "exec",
+      allowControl: true,
+    });
+    await gateway().sweep();
+    expect(await store.getRun(dueId)).toMatchObject({ phase: "error" });
+    expect((await tokens.resolveLease(oldLease))?.state).toBe("terminal-grace");
+
+    expect(await queue.tickDueTasks(new Date())).toMatchObject({ queued: 1, replayed: 0 });
+    expect(await store.getRun(dueId)).toMatchObject({ id: dueId, phase: "pending", outcome: null, error: null, reason: "due" });
+    expect(await tokens.resolveLease(oldLease)).toBeUndefined();
+
+    await store.updateRun(dueId, { phase: "done", outcome: "exec" });
+    expect(await queue.tickDueTasks(new Date())).toMatchObject({ queued: 0, replayed: 1 });
+    expect(await store.getRun(dueId)).toMatchObject({ phase: "done", outcome: "exec" });
   });
 
   it("claims through prod, resolves object auth from the prod lease, and appends run-finished on report", async () => {
@@ -215,5 +361,30 @@ describe("S2 manual, claim, auth and finalize", () => {
     expect(finished).toHaveLength(1);
     expect(finished[0]).toMatchObject({ objectId: loop.id, actorId: claimed.runId, origin: "derived" });
     expect(finished[0]!.payload).toMatchObject({ outcome: "success", reason: "directive", scope: `task:${watched.id}` });
+  });
+
+  it("F6: a run-finished collision is logged best-effort and cannot wedge lease retirement", async () => {
+    const { loop } = await fixtures(false);
+    const watched = await task(loop.id);
+    ok(await api.leaveDirective(watched.id, "Finish despite the event collision.", human, NOW));
+    const gw = gateway();
+    const polled = await gw.poll(TOKEN);
+    const claimed = (polled.body as { deliveries: Array<{ runId: string; runToken: string }> }).deliveries[0]!;
+    const collisionId = ids.derivedEventId({ runId: claimed.runId, kind: "run-finished", outcome: "success" });
+    await kernelStore.appendEvent(undefined, {
+      id: collisionId,
+      teamId: TEAM,
+      objectId: watched.id,
+      kind: "run-finished",
+      origin: "derived",
+      entrance: "agent",
+      actorId: "run-collision-holder",
+      payload: { outcome: "success" },
+      ts: NOW.toISOString(),
+    });
+
+    expect((await gw.report(claimed.runToken, { ok: true, message: "done" })).status).toBe(200);
+    expect(await tokens.resolveLease(claimed.runToken)).toBeUndefined();
+    expect(await store.getRun(claimed.runId)).toMatchObject({ phase: "done", message: "done" });
   });
 });

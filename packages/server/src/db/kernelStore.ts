@@ -31,7 +31,7 @@ import {
   type NewKernelEvent,
   type NewKernelObject,
 } from "./kernel-schema.js";
-import { runs, type NewRun, type Run } from "./schema.js";
+import { runLeases, runs, type NewRun, type Run } from "./schema.js";
 
 /**
  * Anything that can run a statement: the root `db` handle or a transaction from
@@ -161,15 +161,15 @@ export type QueueRunOutcome =
    *  caller must fail loudly rather than report a stranger's run as this loop's
    *  own (`runQueue.ts` `queueKernelRun` branches on exactly that difference). */
   | "id-taken"
-  /** The loop already has an open run. Trigger paths join it rather than
-   *  stacking a second run. */
+  /** The loop already has a not-yet-executing run. Trigger paths join it rather
+   *  than stacking another pending row. */
   | "loop-busy";
 
 /**
  * Insert a run, swallowing an id replay and reporting which condition fired.
  *
  * The distinction matters: a primary-key collision is a REPLAY (harmless, the
- * fire already landed), while an existing open run is the queue-discipline JOIN.
+ * fire already landed), while an existing pending run is the queue-discipline JOIN.
  * `queueKernelRun` locks the owning loop row before calling this function, so
  * the lookup and insert are one serialized transaction without relying on the
  * retired `runs_one_queued_idx`.
@@ -184,11 +184,60 @@ export async function queueRun(
   row: NewRun & { queueState: "queued" | null },
 ): Promise<{ run?: Run; outcome: QueueRunOutcome }> {
   const exec = X(x);
-  // Identity is the idempotency floor even after a run finishes: a derived fire
-  // replays forever, rather than being turned into a fresh run merely because no
-  // open row remains.
+  // Identity is the idempotency floor while a fire is open and after it
+  // COMPLETES. A due fire that terminalized without completing is level-
+  // triggered: re-arm this exact frozen id once the loop has no queued sibling.
+  // Reusing the row (rather than minting a new id) preserves the derived seed.
   const byId = (await exec.select().from(runs).where(eq(runs.id, row.id!)))[0];
-  if (byId) return { run: byId, outcome: byId.loopId === row.loopId ? "replay" : "id-taken" };
+  if (byId) {
+    if (byId.loopId !== row.loopId) return { run: byId, outcome: "id-taken" };
+    const retryableDue =
+      row.reason === "due" &&
+      byId.reason === "due" &&
+      (byId.phase === "error" || byId.phase === "canceled" || byId.queueState === "failure");
+    if (!retryableDue) return { run: byId, outcome: "replay" };
+
+    const open = await openRunForLoop(exec, row.loopId, row.queueState === "queued" ? "kernel" : "prod");
+    if (open) return { run: open, outcome: "loop-busy" };
+    // A shipping run reclaimed after claim can still have a terminal-grace
+    // lease. Once this level trigger re-arms the same run identity, that old
+    // authority must die before a new delivery can mint its lease.
+    await exec.delete(runLeases).where(eq(runLeases.runId, byId.id));
+    const rearmed = (
+      await exec
+        .update(runs)
+        .set({
+          ...row,
+          outcome: null,
+          status: null,
+          message: null,
+          durationMs: null,
+          error: null,
+          state: null,
+          control: null,
+          sessionId: null,
+          costUsd: null,
+          usage: null,
+          artifacts: null,
+          transcript: null,
+          progress: null,
+          claimedBy: null,
+          claimedAt: null,
+          leaseExpiresAt: null,
+          leaseState: null,
+          attempts: 0,
+          reportDocId: null,
+          outcomeSummary: null,
+          runCost: null,
+          startedAt: null,
+          finishedAt: null,
+        })
+        .where(eq(runs.id, byId.id))
+        .returning()
+    )[0];
+    if (!rearmed) throw new Error(`due run disappeared while re-arming: ${byId.id}`);
+    return { run: rearmed, outcome: "queued" };
+  }
 
   const open = await openRunForLoop(exec, row.loopId, row.queueState === "queued" ? "kernel" : "prod");
   if (open) return { run: open, outcome: "loop-busy" };
@@ -206,16 +255,16 @@ export async function queueRun(
   throw new Error(`run insert was swallowed but neither id nor open-run holder exists: ${row.id}`);
 }
 
-/** The transactional `alreadyQueued` join rule. Kernel rows stay on their v2
- * queue lifecycle through S2; production rows use the shipping phase lifecycle. */
+/** The transactional `alreadyQueued` join rule. Only not-yet-executing rows can
+ * absorb a trigger: a claimed/running row already consumed its delivery. */
 export async function openRunForLoop(
   x: KernelExec | undefined,
   loopId: string,
   world: "kernel" | "prod",
 ): Promise<Run | undefined> {
   const condition = world === "kernel"
-    ? inArray(runs.queueState, ["queued", "claimed"])
-    : and(isNull(runs.queueState), inArray(runs.phase, ["pending", "running"]));
+    ? eq(runs.queueState, "queued")
+    : and(isNull(runs.queueState), eq(runs.phase, "pending"));
   return (
     await X(x)
       .select()

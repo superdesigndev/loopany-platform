@@ -80,26 +80,36 @@ export async function queueProductionManualRun(
  * event-silent. The derived seed is the frozen v2 run-finished seed verbatim. */
 export async function appendProductionRunFinished(
   run: Run | undefined,
-  outcome: "success" | "failure",
+  outcome: "success" | "failure" | "skipped",
   stamp: string,
   summary?: string | null,
 ): Promise<void> {
   if (!run || (run.reason == null && run.scope == null)) return;
-  const loop = await legacyStore.getLoop(run.loopId);
-  if (!loop) return;
-  await db.transaction(async (rawTx) => {
-    await appendDerivedEvent(rawTx as unknown as store.KernelExec, {
-      id: derivedEventId({ runId: run.id, kind: "run-finished", outcome }),
-      teamId: queueLoopTeamId(loop),
-      objectId: loop.id,
-      kind: "run-finished",
-      origin: "derived",
-      entrance: "agent",
-      actorId: run.id,
-      payload: { outcome, reason: run.reason, scope: run.scope, summary: summary ?? null },
-      ts: stamp,
+  try {
+    const loop = await legacyStore.getLoop(run.loopId);
+    if (!loop) return;
+    await db.transaction(async (rawTx) => {
+      await appendDerivedEvent(rawTx as unknown as store.KernelExec, {
+        id: derivedEventId({ runId: run.id, kind: "run-finished", outcome }),
+        teamId: queueLoopTeamId(loop),
+        objectId: loop.id,
+        kind: "run-finished",
+        origin: "derived",
+        entrance: "agent",
+        actorId: run.id,
+        payload: { outcome, reason: run.reason, scope: run.scope, summary: summary ?? null },
+        ts: stamp,
+      });
     });
-  });
+  } catch (err) {
+    // Audit/SSE is important but subordinate to the shipping run lifecycle: a
+    // collision or transient kernel write failure must never wedge report lease
+    // retirement (nor a sweep/supersede terminal transition).
+    log.error(
+      { runId: run.id, outcome, err: err instanceof Error ? err.message : String(err) },
+      "production run-finished event append failed — run terminalization continues",
+    );
+  }
 }
 
 export const RUN_LEASE_MS = envPositive("LOOPANY_RUN_LEASE_MS", 20 * 60_000);
@@ -200,7 +210,8 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
 
   // The unique one-queued index retired in S2. Serialize every trigger for this
   // loop on its authoritative row, then let `queueRun` transactionally join an
-  // existing open run. Kernel wins an id collision during the dual-read stage.
+  // existing not-yet-executing run. Kernel wins an id collision during the
+  // dual-read stage.
   if (kernelLoop) {
     await store.getObjectForUpdate(tx, loop.id);
   } else {

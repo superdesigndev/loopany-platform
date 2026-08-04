@@ -189,7 +189,7 @@ test("boot misfire catch-up: covered or too-young loops do NOT re-fire", async (
   expect(await store.openRunsForLoop(young.id)).toHaveLength(0);
 });
 
-test("manual run-now joins a PENDING or RUNNING run instead of stacking", async () => {
+test("manual run-now joins PENDING, but queues behind a RUNNING run whose delivery is already built", async () => {
   const loop = await dueLoop("overlap");
   // No-op dispatcher leaves the run open (pending) — simulates a machine that
   // hasn't claimed it (asleep/offline at fire time).
@@ -208,18 +208,59 @@ test("manual run-now joins a PENDING or RUNNING run instead of stacking", async 
   expect(open1).toHaveLength(1);
   expect(open1[0]!.phase).toBe("pending");
 
-  // A RUNNING run still blocks the tick outright (never two agents on one loop).
+  // A RUNNING run has already consumed its delivery, so this new event needs a
+  // pending row of its own. Poll's claim guard prevents concurrent execution.
   await store.updateRun(open1[0]!.id, { phase: "running" });
-  expect(await s.runNow(loop.id)).toMatchObject({ queued: false, alreadyQueued: true, run: { id: open1[0]!.id } });
+  expect(await s.runNow(loop.id)).toMatchObject({ queued: true, alreadyQueued: false });
   await new Promise((r) => setTimeout(r, 100));
   ac.abort();
 
-  expect((await store.listRuns(loop.id)).length).toBe(1);
-  expect((await store.openRunsForLoop(loop.id))[0]!.phase).toBe("running");
+  const open2 = await store.openRunsForLoop(loop.id);
+  expect(open2).toHaveLength(2);
+  expect(open2.map((run) => run.phase).sort()).toEqual(["pending", "running"]);
 
   // The old cadence supersede helper remains phase-guarded: a claimed run is
   // never canceled underneath its agent.
   expect(await store.supersedePendingRun(open1[0]!.id, "x")).toBe(false);
+});
+
+test("the real CroneR callback preserves a pending trigger and queues its pure cadence sibling", async () => {
+  const machine = await store.createMachine({
+    id: "m-cron-trigger-collision",
+    userId: "u1",
+    name: "offline laptop",
+    tokenHash: "hash",
+    online: false,
+  });
+  const loop = await store.createLoop({
+    userId: "u1",
+    machineId: machine.id,
+    name: "cron collision",
+    // Seconds-level cadence keeps this a real timer test without a minute wait.
+    cron: "*/1 * * * * *",
+    enabled: true,
+    notify: "never",
+  });
+  const trigger = await store.addRun({
+    id: "run-deferred-due",
+    loopId: loop.id,
+    userId: loop.userId,
+    machineId: loop.machineId,
+    phase: "pending",
+    role: "exec",
+    ts: new Date().toISOString(),
+    reason: "due",
+    scope: "task:offline-probe",
+  });
+
+  const ac = new AbortController();
+  const scheduler = new sched.Scheduler({ dispatch(): void {} });
+  await scheduler.start(ac.signal);
+  await waitFor(async () => (await store.listRuns(loop.id)).some((run) => run.id !== trigger.id && run.phase === "pending"), 4000);
+  ac.abort();
+
+  expect(await store.getRun(trigger.id)).toMatchObject({ phase: "pending", reason: "due", scope: "task:offline-probe" });
+  expect((await store.listRuns(loop.id)).some((run) => run.id !== trigger.id && run.phase === "pending" && run.reason == null && run.scope == null)).toBe(true);
 });
 
 test("maybeFlagEvolve bootstraps on the first run (no run-count wait)", async () => {

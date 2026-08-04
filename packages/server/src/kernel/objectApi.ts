@@ -435,9 +435,10 @@ export function retirementWarning(loopId: string, openTasks: number) {
  * a manual run is claimed, leased, reported and retried by exactly the machinery
  * a clock fire uses — the only difference is the entrance recorded on the event.
  *
- * The transactional open-run lookup is the queue discipline, and a manual fire
- * OBEYS it rather than jumping it: an already-open run is reported
- * back with `alreadyQueued: true`, the same ruling the verdict path takes.
+ * The transactional pending-run lookup is the queue discipline, and a manual
+ * fire joins work that has not claimed yet. Once a run is executing its delivery
+ * is immutable, so a later manual fire queues behind it and the claim guard
+ * prevents overlap.
  *
  * **A PAUSED loop accepts a manual fire** (captain ruling 2026-08-04). Pause
  * governs the CADENCE — it clears `next_fire` so the clock can never select the

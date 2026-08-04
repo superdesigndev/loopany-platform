@@ -588,13 +588,11 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
   NB-1 asked for two; the third is free because the kernel guard is entrance-based.
   Note the file path is a clear in disguise — dropping `needs_human` from a whole-file
   replacement discards a live question, so it is refused too.
-- **A verdict JOINS an already-open run, it never refuses the human.** One open run per
-  loop is the queue discipline (the transactional `queued|claimed` / `pending|running`
-  lookup), so R-answer reports the existing run with `alreadyQueued: true` and the run
-  pulls both answered tasks
-  when it claims. Refusing here would fail a person's answer for a reason that is not
-  about them. Deliberate reading of CLI spec §7.2 over API spec §4.2, whose
-  `ON CONFLICT (id)` does not cover the one-queued-run index at all.
+- **A verdict JOINS only a not-yet-claimed run, it never refuses the human.** The
+  transactional lookup covers kernel `queued` / production `pending`; an executing
+  run has already consumed its delivery, so a new trigger gets a fresh pending row
+  and the poll guard holds it until the sibling finishes. This preserves the human's
+  context without allowing two agents on one loop.
 - Two response fields are ADDITIVE to API spec §1.5, and both exist for the CLI:
   `total` (so a truncated page prints `count: N of T total` instead of clipping
   silently) and `viewerLoop` (the caller's own loop id from run context, so a hint can
@@ -1317,20 +1315,27 @@ legacy runner environment case in `packages/daemon/src/runner.test.ts`.
   through `appendOrganicEvent`; derived events still pass the collision-checked append
   seam.
 - Migration `0008` drops `runs_one_queued_idx`. Queueing locks the authoritative loop
-  row and transactionally joins any open run: kernel `queued|claimed`, production
-  `pending|running` with NULL `queueState`. The production poll also refuses to claim a
-  pending sibling while another run for that loop is running.
+  row and joins only a not-yet-executing run: kernel `queued`, production `pending`
+  with NULL `queueState`. A trigger arriving during execution queues separately; the
+  production poll holds it while a sibling is running, and sweep does not classify
+  that guard-held row as never claimed.
+- Cron supersede coalesces only provenance-free cadence rows; trigger rows survive.
+  A due instant's failed/canceled row re-arms with the SAME frozen id after the loop's
+  pending slot clears, while an open or completed row remains the idempotency floor.
 - The shipping scheduler's run-now is immediate even for a disabled loop: it clears any
   deferred `nextRunAt`, queues one production run, and leaves `enabled` false. A second
-  fire while that run is open returns `alreadyQueued`; the retired deferred-fire-on-enable
-  behavior must not return.
+  fire while that run is still pending returns `alreadyQueued`; if it is already
+  executing, the new fire queues behind it. The retired deferred-fire-on-enable behavior
+  must not return.
 - Delivery resolves scoped task/event context for production rows, includes the human's
   directive or answer verbatim as untrusted trigger data, and exports `LOOPANY_RUN_ID` on
   the legacy daemon path. Rewrite API run context can authorize either kernel leases or
   durable production run leases during the dual-transport stage.
-- Each terminal shipping `report()` path appends the frozen derived `run-finished` event
-  before retiring the lease, keeping workspace SSE/timelines live. Trigger-created rows
-  carry provenance; ordinary production cron/edit/evolve history remains event-silent.
+- Every terminal shipping path appends the frozen derived `run-finished` event for a
+  provenance-carrying row (including sweep/reclaim and the 7-day skipped backstop),
+  keeping workspace SSE/timelines live. Event append is best-effort-with-log and can
+  never block lease retirement. Ordinary production cron/edit/evolve history remains
+  event-silent.
 
 ## Maintaining this file
 

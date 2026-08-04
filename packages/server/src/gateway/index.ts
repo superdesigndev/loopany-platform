@@ -347,8 +347,8 @@ export class MachineGateway {
    * Periodic maintenance: mark stale machines offline, and reclaim stuck runs.
    * A RUNNING run that went silent is reclaimed as timed out; a PENDING run on
    * an OFFLINE machine is NOT failed — it is held as a deferred catch-up (the
-   * pending row is the durable inbox; the daemon's next poll claims it, and the
-   * next cron fire supersedes it as `skipped`), bounded by DEFERRED_MAX_MS.
+   * pending row is the durable inbox and the daemon's next poll claims it),
+   * bounded by DEFERRED_MAX_MS. Cron coalescing never supersedes trigger rows.
    * Only a pending run a healthy ONLINE machine never claims becomes an error.
    */
   async sweep(): Promise<void> {
@@ -366,11 +366,19 @@ export class MachineGateway {
           // An online daemon claims pending runs on its next poll (seconds) —
           // and a busy machine clears its own queue — so age here means the
           // delivery is wedged (never claimable), a real anomaly.
-          if (age > RUN_TIMEOUT_MS) await this.reclaimRun(run, "run never claimed");
+          // A trigger queued behind a healthy executing sibling has not yet had
+          // a claimable moment. The poll guard deliberately holds it pending;
+          // never misclassify that protected state as "never claimed".
+          if (age > RUN_TIMEOUT_MS && !(await store.hasRunningRun(run.loopId))) {
+            await this.reclaimRun(run, "run never claimed");
+          }
         } else if (age > DEFERRED_MAX_MS) {
           // The machine never came back inside the catch-up horizon — retire
           // the queue slot honestly: skipped, not failed, no alert.
-          await store.supersedePendingRun(run.id, "skipped - the machine stayed offline past the catch-up window");
+          const message = "skipped - the machine stayed offline past the catch-up window";
+          if (await store.supersedePendingRun(run.id, message)) {
+            await appendProductionRunFinished(run, "skipped", nowIso(), message);
+          }
         } else {
           // DEFERRED, not failed: the pending row IS the durable inbox — the
           // daemon's next poll claims it on reconnect (catch-up), and the next
@@ -421,7 +429,9 @@ export class MachineGateway {
    *  reconciliation retires the lease single-shot. A pending run (no lease minted
    *  yet) is unaffected — the terminalize is a no-op there. */
   private async reclaimRun(run: Run, reason: string): Promise<void> {
-    await store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: nowIso() });
+    const stamp = nowIso();
+    const finalized = await store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: stamp });
+    await appendProductionRunFinished(finalized, "failure", stamp, reason);
     await terminalizeLease(run.id);
     if (run.role === "evolve") await this.scheduler.finishEvolution(run.loopId);
     await this.notifyRunFailure(run.loopId, run.role, reason);
@@ -505,7 +515,9 @@ export class MachineGateway {
       if (await store.hasRunningRun(run.loopId)) continue;
       const loop = await store.getLoop(run.loopId);
       if (!loop) {
-        await store.updateRun(run.id, { phase: "error", outcome: "error", error: "loop removed", ts: nowIso() });
+        const stamp = nowIso();
+        const finalized = await store.updateRun(run.id, { phase: "error", outcome: "error", error: "loop removed", ts: stamp });
+        await appendProductionRunFinished(finalized, "failure", stamp, "loop removed");
         continue;
       }
       // ATOMIC claim (pending -> running, conditional on the phase): with an async
@@ -1554,7 +1566,7 @@ export class MachineGateway {
     // is lost; the enriching report overrides it with the precise value.
     const run = await store.getRun(lease.runId);
     const durationMs = run ? Date.now() - Date.parse(run.ts) : NaN;
-    await store.updateRun(lease.runId, {
+    const finalized = await store.updateRun(lease.runId, {
       phase: "done",
       outcome: "exec",
       status: "resolved",
@@ -1564,6 +1576,7 @@ export class MachineGateway {
       progress: null,
       ts,
     });
+    await appendProductionRunFinished(finalized, "success", ts, message);
     const loop = await store.updateLoop(lease.loopId, { completedAt: ts, completionReason: reason, enabled: false });
     this.scheduler.removeLoop(lease.loopId);
     // Snapshot the loop's end-state (Phase 3 diff baseline), best-effort like report().

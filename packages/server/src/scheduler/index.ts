@@ -7,9 +7,9 @@
  * JS, no claude. The pending run row IS a durable inbox: if the bound machine
  * isn't reachable it simply waits (the gateway sweep holds, never fails, an
  * offline machine's pending run), the daemon's next poll claims it on
- * reconnect (catch-up), and the NEXT cron fire supersedes a still-waiting one
- * (`skipped`) so the queue coalesces to exactly one catch-up run however long
- * the sleep lasted. Overlapping ticks for a loop with a RUNNING run are skipped.
+ * reconnect (catch-up). The next cron fire coalesces only a provenance-free
+ * cadence row; a scoped/reasoned trigger survives because it is distinct work.
+ * Overlapping ticks for a loop with a RUNNING run are skipped.
  *
  * Evolution and timeout-reclaim land in later phases; the run
  * lifecycle (pending → running → done/error) and the Dispatcher seam are shaped
@@ -20,7 +20,7 @@ import { Cron } from "croner";
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
 import type { Loop, Run } from "../db/schema.js";
-import { queueProductionManualRun } from "../kernel/runQueue.js";
+import { appendProductionRunFinished, queueProductionManualRun } from "../kernel/runQueue.js";
 
 const log = logger.child({ mod: "scheduler" });
 
@@ -294,12 +294,17 @@ export class Scheduler {
         // failure — and the queue stays depth-1). Evolve/edit passes, and a
         // pending evolve/edit, keep the old skip-this-tick behavior.
         if (role !== "exec" || pending.some((r) => r.role !== "exec")) return;
-        for (const r of pending) {
+        // A scoped/reasoned row is a distinct trigger event, not an older copy
+        // of this cadence fire. Preserve it; only routine cron rows coalesce.
+        const supersedable = pending.filter((r) => r.reason == null && r.scope == null);
+        for (const r of supersedable) {
           // Atomic phase-guard: if the daemon claimed it in this same instant,
           // back off — the claimed run is executing, this tick is redundant.
           if (!(await store.supersedePendingRun(r.id, "skipped - the machine was unreachable at the scheduled time; superseded by the next scheduled run"))) return;
         }
-        log.info({ id, superseded: pending.length }, "tick: superseded deferred pending run(s)");
+        if (supersedable.length) {
+          log.info({ id, superseded: supersedable.length }, "tick: superseded deferred pending run(s)");
+        }
       }
 
       // Consume a due one-shot override so it doesn't re-fire.
@@ -325,7 +330,10 @@ export class Scheduler {
         await this.dispatcher.dispatch(loop, run);
         log.info({ id, runId: run.id, role, machine: loop.machineId }, "tick: run pending");
       } catch (err) {
-        await store.updateRun(run.id, { phase: "error", outcome: "error", error: msg(err), ts: new Date().toISOString() });
+        const stamp = new Date().toISOString();
+        const reason = msg(err);
+        const finalized = await store.updateRun(run.id, { phase: "error", outcome: "error", error: reason, ts: stamp });
+        await appendProductionRunFinished(finalized, "failure", stamp, reason);
         if (role === "evolve") await this.finishEvolution(id);
         else if (role === "edit") await this.finishEdit(id); // clear the marker so a failed dispatch doesn't re-fire forever
         log.error({ id, runId: run.id, err: msg(err) }, "tick: dispatch failed");

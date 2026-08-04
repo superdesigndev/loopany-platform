@@ -338,8 +338,8 @@ export const runs = pgTable(
     index("runs_loop_ts_idx").on(t.loopId, t.ts),
     // ---- rewrite queue indexes (spec §5.3) ----
     // `runs_one_queued_idx` retired in convergence S2. Trigger paths serialize
-    // on the owning loop row, then transactionally join any open run; production
-    // legitimately holds multiple pending rows briefly during cron supersede.
+    // on the owning loop row, then join only a not-yet-executing run; production
+    // legitimately holds a pending trigger behind a running sibling.
     /** The claim scan: queued rows, oldest first. */
     index("runs_claim_idx").on(t.ts).where(sql`${t.queueState} = 'queued'`),
     /** The lease-expiry sweep. */
