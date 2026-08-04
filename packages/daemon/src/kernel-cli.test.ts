@@ -243,8 +243,8 @@ describe("task create", () => {
   it("never sends a human to the agent-only evolve when a loop key already exists", async () => {
     const { code, stdout } = await run(["loop", "create", "--file", "-"], {
       created: false, contentDiffers: true, differingFields: ["body"], event: null,
-      notice: { code: "KEY_EXISTS_CONTENT_DIFFERS", message: "key \"housekeeper\" already names loop-01KZ; the submitted file differs from it and was not applied" },
-      loop: { id: "loop-01KZ", kind: "loop", title: "Housekeeper", status: "active", key: "housekeeper", cron: "0 7 * * *", nextFire: "2026-08-05T07:00:00.000Z", payload: {} },
+      notice: { code: "KEY_EXISTS_CONTENT_DIFFERS", message: "key \"housekeeper\" already names loop-4c1d77; the submitted file differs from it and was not applied" },
+      loop: { id: "loop-4c1d77", kind: "loop", title: "Housekeeper", status: "active", key: "housekeeper", cron: "0 7 * * *", nextFire: "2026-08-05T07:00:00.000Z", payload: {} },
     }, 200, { readStdin: () => "---\ntitle: Housekeeper\nkey: housekeeper\n---\n\nnew charter\n" });
     expect(code).toBe(0);
     expect(stdout).toContain("your changes were NOT applied");

@@ -486,6 +486,22 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
   row's id from its identity alone (no clock, no attempt counter, no nonce) and every
   such insert is `ON CONFLICT DO NOTHING`. Changing a seed shape FORKS identity and
   silently breaks dedup — treat the seeds in `ids.ts` as frozen.
+- **Ids are SHORT and kind-prefixed** (design §8 / CLI spec §5.1: `task-7f3a91`), and
+  the two halves are DELIBERATELY different widths — `kernel/ids.ts`'s header owns the
+  reasoning, read it before touching a width. In one line: an ORGANIC id is six hex
+  because a collision is re-mintable (bounded retry with fresh randomness, inside the
+  same transaction, widening after a run of misses — `createObjectIn`'s mint loop,
+  `appendOrganicEvent`, `queueKernelRun`'s manual branch), while a DERIVED id is twelve
+  because it may NEVER be re-minted (that purity IS replay idempotency) and its
+  collision would be SILENT — swallowed by the same `ON CONFLICT DO NOTHING` that
+  implements dedup, handing back a stranger's row. Both halves are pinned by
+  `ids.test.ts` + `idCollision.integration.test.ts` (which scripts the mint through a
+  partial mock of `ids.js` to stage a collision on demand).
+- **No id is a clock.** `events.seq` is the log's only ordering authority and every
+  reader already uses it. `listTasks`/`listLoops` still paginate `ORDER BY objects.id`
+  with a `>` cursor — a total order, so the cursor is exact — but the row order is now
+  arbitrary rather than incidentally creation-ordered; the composed views that care
+  (`kernel/views.ts`) order by `createdAt`/`closedAt` explicitly and are unaffected.
 - **`events.seq` IS sparse — the spec is wrong about this.** §5.4 claims a swallowed
   insert consumes no identity value; Postgres draws it before detecting the conflict, so
   gaps exist. Harmless for `WHERE seq > :since ORDER BY seq`, but no consumer may read a

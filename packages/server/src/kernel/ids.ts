@@ -1,20 +1,48 @@
 /**
  * Rewrite kernel — deterministic id minting.
  *
- * PORTED nearly as-is from the graph line (`fm/graph-clockshadow-c1`,
- * `src/graph/ids.ts`), which is the harvest the design names: the dedup
- * invariant survived that build's adversarial E2E, so the pattern is carried
- * forward rather than re-derived. What changed: ids are KIND-PREFIXED
- * (`task-`/`doc-`/`loop-`/`run-`/`ev-`) per design §8, and the graph-specific
- * mints (mirrors, edges, outbox actions, the type registry) are gone.
+ * PORTED from the graph line (`fm/graph-clockshadow-c1`, `src/graph/ids.ts`) for
+ * the dedup invariant, then reshaped to the SHORT id the design always asked for.
+ *
+ * THE SHAPE (design §8, CLI spec §5.1): ids are server-issued and kind-prefixed —
+ * `task-7f3a91`, `doc-2b8e04`, `loop-4c1d77`, `run-…`, `ev-9c22d1` — printed at
+ * creation and carried on every list row, so **the agent never memorizes one**.
+ * A 26-char ULID or a 64-char sha256 is hostile to exactly that audience: long to
+ * type, expensive to carry in a prompt, and impossible to read back over a
+ * sentence. Handle economy is the point, so the id is six lowercase hex.
  *
  * THE INVARIANT (design §2 invariant 1, spec §5.4): every re-derivable row's id
  * is a pure function of its own identity, so a re-derivation collides on the
  * primary key and `ON CONFLICT DO NOTHING` swallows it. **A window is never a
- * dedup key** — nothing here reads a clock or consults recent history, so
- * correctness cannot degrade as the log grows or as a retry gets slower. That is
- * exactly the failure mode a "have I seen this in the last N?" check has, and it
- * fails at the worst moment (a slow retry after an outage).
+ * dedup key** — nothing here reads a clock, consults history or touches the
+ * database, so correctness cannot degrade as the log grows or as a retry gets
+ * slower. That is exactly the failure mode a "have I seen this in the last N?"
+ * check has, and it fails at the worst moment (a slow retry after an outage).
+ *
+ * ---------------------------------------------------------------------------
+ * THE COLLISION POSTURE — why organic and derived ids are NOT the same width
+ * ---------------------------------------------------------------------------
+ * A short id is a small space, so collisions are a design input, not an
+ * afterthought. The two halves have opposite remedies, so they get opposite
+ * widths:
+ *
+ *  - ORGANIC (`ORGANIC_HEX` = 6). A fresh random id carries no identity, so a
+ *    collision is FIXED BY RE-MINTING: the insert is swallowed, the caller draws
+ *    new randomness and tries again inside the same transaction
+ *    (`ORGANIC_MINT_ATTEMPTS`; `organicWidth` widens the ladder after a run of
+ *    misses, so a saturated space degrades rather than fails). Six hex is
+ *    therefore free, and it is the shape the spec prints.
+ *
+ *  - DERIVED (`DERIVED_HEX` = 12). A derived id may NEVER be re-minted — being a
+ *    pure function of the seed is the whole property replay idempotency rests on
+ *    — so width is its ONLY remedy. And its failure mode is silent: two distinct
+ *    seeds landing on one id would be swallowed by the same `ON CONFLICT DO
+ *    NOTHING` that implements dedup, handing the caller somebody else's row.
+ *    At 6 hex (16.7M values) the birthday-expected first collision per kind
+ *    prefix is ~5,000 rows — routine, not exotic. At 12 hex (2.8e14) it is ~20
+ *    million rows per prefix, while staying under half a ULID and a fifth of a
+ *    full sha256. The deviation from the spec's printed six is deliberate and
+ *    buys exactly one thing: safety for the id that cannot retry.
  *
  * Pure and dependency-free apart from `node:crypto`; unit-tested directly.
  */
@@ -47,59 +75,75 @@ export function contentHash(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
-// ---- ULID (time-ordered, for organic ids) ----
+// ---- the two widths ----
 
-const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/** The designed shape: six lowercase hex after the kind prefix (`task-7f3a91`). */
+export const ORGANIC_HEX = 6;
+
+/** A derived id cannot be re-minted, so it buys its safety with width. */
+export const DERIVED_HEX = 12;
+
+/** How many times a caller re-mints an organic id before giving up. Eight is far
+ *  past any plausible occupancy given the widening ladder below. */
+export const ORGANIC_MINT_ATTEMPTS = 8;
 
 /**
- * A ULID: 10 chars of millisecond timestamp + 16 chars of randomness, Crockford
- * base32. Lexicographic order matches time order, so an append-only log sorts by
- * id. Hand-rolled (26 lines) rather than adding a dependency for it.
- *
- * `nowMs` is PASSED IN, never read here — the kernel never reads a clock (spec
- * §4 header), which is what makes history seedable and tests deterministic.
+ * The organic widening ladder. The first three attempts mint the designed
+ * six-hex shape; a RUN of collisions means the space is genuinely crowded rather
+ * than unlucky, so the id widens instead of the mint failing. A pure function of
+ * the attempt number, so a test can drive any rung.
  */
-export function ulid(nowMs: number, random: (n: number) => Uint8Array = randomBytes): string {
-  let t = Math.floor(nowMs);
-  let time = "";
-  for (let i = 0; i < 10; i++) {
-    time = CROCKFORD[t % 32] + time;
-    t = Math.floor(t / 32);
-  }
-  const bytes = random(16);
-  let rand = "";
-  // Low 5 bits of each byte — uniform over the 32-char alphabet (no modulo bias).
-  for (let i = 0; i < 16; i++) rand += CROCKFORD[bytes[i]! & 31];
-  return time + rand;
+export function organicWidth(attempt: number): number {
+  if (attempt < 3) return ORGANIC_HEX;
+  if (attempt < 6) return 10;
+  return 16;
 }
 
-/** Milliseconds of an ISO timestamp; 0 for anything unparseable (never throws —
- *  an id mint must not be the thing that fails a transaction). */
-export function msOf(iso: string): number {
-  const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? 0 : ms;
+/** `chars` of lowercase hex drawn from INJECTED randomness — the kernel owns no
+ *  entropy source of its own, which is what makes a mint seedable in a test. */
+export function randomHex(chars: number, random: (n: number) => Uint8Array = randomBytes): string {
+  const bytes = random(Math.ceil(chars / 2));
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) out += bytes[i]!.toString(16).padStart(2, "0");
+  return out.slice(0, chars);
+}
+
+/** The suffix of an ORGANIC id at a given retry rung. */
+export function organicSuffix(attempt = 0, random: (n: number) => Uint8Array = randomBytes): string {
+  return randomHex(organicWidth(attempt), random);
+}
+
+/** The suffix of a DERIVED id: the leading `DERIVED_HEX` of sha256(seed). Pure —
+ *  same seed, same suffix, forever, on any machine, in any process. */
+export function derivedSuffix(seed: unknown): string {
+  return contentHash(seed).slice(0, DERIVED_HEX);
 }
 
 // ---- object ids ----
 
 /**
- * An ORGANIC object id — `<kind>-<ulid>`. For an object with no re-derivable
+ * An ORGANIC object id — `<kind>-<6 hex>`. For an object with no re-derivable
  * identity: a task an agent decided to create, a doc it authored.
+ *
+ * `attempt` is the caller's retry counter: a swallowed insert means this id was
+ * already taken, so the caller mints the next one rather than resolving the
+ * stranger's row (`kernel/applyTransition.ts` `createObjectIn`).
  */
-export function newObjectId(kind: ObjectKind, nowMs: number): string {
-  return `${kind}-${ulid(nowMs)}`;
+export function newObjectId(kind: ObjectKind, attempt = 0, random?: (n: number) => Uint8Array): string {
+  return `${kind}-${organicSuffix(attempt, random)}`;
 }
 
 /**
- * A DERIVED object id — `<kind>-<sha256hex(seed)>`. For an object a replay or a
- * retry can produce again: a run's report doc, the circuit breaker's question.
+ * A DERIVED object id — `<kind>-<12 hex of sha256(seed)>`. For an object a replay
+ * or a retry can produce again: a run's report doc, the circuit breaker's
+ * question.
  *
  * The KIND PREFIX is deliberately NOT part of the seed (spec §5.4): two ids of
  * different kinds could not collide anyway, and keeping the seed prefix-free
  * means a seed reads as pure identity.
  */
 export function derivedObjectId(kind: ObjectKind, seed: unknown): string {
-  return `${kind}-${contentHash(seed)}`;
+  return `${kind}-${derivedSuffix(seed)}`;
 }
 
 /**
@@ -129,7 +173,7 @@ export function autoPauseTaskId(loopId: string, runId: string): string {
  * dedup silently stops working while still looking correct.
  */
 export function derivedEventId(seed: unknown): string {
-  return `ev-${contentHash(seed)}`;
+  return `ev-${derivedSuffix(seed)}`;
 }
 
 /**
@@ -137,9 +181,16 @@ export function derivedEventId(seed: unknown): string {
  * identity (a human verdict, an agent's update, a close). Never deduplicated:
  * two identical-looking patches a week apart are two real facts, and collapsing
  * them would erase history (spec §4.3).
+ *
+ * NOT time-ordered, and nothing depends on it being so. The append-only log's
+ * ordering authority is `events.seq` (`db/kernel-schema.ts` says so in as many
+ * words: "the content id dedups, the seq orders") and every reader already uses
+ * it — `listObjectEvents`, `eventsAfter` and `eventTail` all sort by `seq`, and
+ * the SSE resume cursor is a seq. The former ULID's lexicographic time-order was
+ * incidental and unread; it was already absent from every derived event.
  */
-export function organicEventId(nowMs: number): string {
-  return `ev-${ulid(nowMs)}`;
+export function organicEventId(attempt = 0, random?: (n: number) => Uint8Array): string {
+  return `ev-${organicSuffix(attempt, random)}`;
 }
 
 /** The `object-created` event of any object (spec §5.4). Derived from the
@@ -154,17 +205,17 @@ export function createdEventId(objectId: string): string {
  *  is the cron OCCURRENCE instant, never "now" at fire time: a crash between the
  *  fire commit and the cursor advance re-derives the same id on retry. */
 export function clockRunId(loopId: string, scheduledFor: string): string {
-  return `run-${contentHash({ loopId, scheduledFor, seed: "clock" })}`;
+  return `run-${derivedSuffix({ loopId, scheduledFor, seed: "clock" })}`;
 }
 
 /** An R-answer run's id — derived from the verdict event that woke it (§4.2), so
  *  a retried verdict transaction queues one run, not two. */
 export function answeredRunId(verdictEventId: string): string {
-  return `run-${contentHash({ verdictEventId, seed: "answered" })}`;
+  return `run-${derivedSuffix({ verdictEventId, seed: "answered" })}`;
 }
 
 /** A manually fired run — an organic occurrence (a person pressed the button
  *  twice on purpose is two real facts; the one-queued-run index bounds it). */
-export function newRunId(nowMs: number): string {
-  return `run-${ulid(nowMs)}`;
+export function newRunId(attempt = 0, random?: (n: number) => Uint8Array): string {
+  return `run-${organicSuffix(attempt, random)}`;
 }

@@ -45,11 +45,11 @@
  * CHECK (`db/kernel-schema.ts`).
  */
 import { db } from "../db/index.js";
-import type { KernelEvent, KernelObject, NewKernelObject } from "../db/kernel-schema.js";
+import type { KernelEvent, KernelObject, NewKernelEvent, NewKernelObject } from "../db/kernel-schema.js";
 import * as kernel from "../db/kernelStore.js";
 import type { KernelExec } from "../db/kernelStore.js";
 import { logger } from "../logger.js";
-import { createdEventId, derivedEventId, msOf, newObjectId, organicEventId } from "./ids.js";
+import { ORGANIC_MINT_ATTEMPTS, createdEventId, derivedEventId, newObjectId, organicEventId } from "./ids.js";
 import { nextOccurrenceAfter } from "./schedule.js";
 import {
   INITIAL_STATUS,
@@ -162,7 +162,7 @@ export interface CreateObjectInput extends WritableFields {
   createdByRun?: string | null;
   createdByLoop?: string | null;
   /** An explicit DERIVED id (a run's report doc, the auto-pause question). Omitted
-   *  ⇒ an organic `<kind>-<ulid>`. */
+   *  ⇒ an organic `<kind>-<6 hex>`, re-minted on a collision. */
   id?: string;
   /**
    * Initial status, when it is not the kind's default. The ONLY caller is the
@@ -205,7 +205,8 @@ export interface ApplyTransitionInput {
    * on the primary key and the whole transition is a no-op replay.
    *
    * Omit it for an ORGANIC occurrence (a human pausing a loop, an agent closing a
-   * task): the event gets a ULID and is never deduplicated. A window is never a
+   * task): the event gets a fresh random id and is never deduplicated (a taken
+   * one is simply re-minted, `appendOrganicEvent`). A window is never a
    * dedup key.
    */
   derivedFrom?: unknown;
@@ -271,6 +272,27 @@ function assertedFields(fields: Record<string, unknown>): string[] {
   return Object.keys(fields).filter((k) => fields[k] !== null);
 }
 
+// ---- the organic mint ladder ----
+
+/**
+ * Append an ORGANIC event, re-minting on a taken id.
+ *
+ * A short random id (design §8) is a small space, so a collision is an ordinary
+ * event rather than an impossibility — and unlike a derived id, an organic one
+ * carries no identity, so the fix is simply another number. Redrawing happens
+ * INSIDE the caller's transaction, so the retry is invisible to everyone else.
+ * `organicEventId` widens after a run of misses, so a saturated space degrades
+ * instead of failing; exhausting the ladder throws rather than returning a
+ * stranger's event.
+ */
+async function appendOrganicEvent(tx: KernelExec, row: Omit<NewKernelEvent, "id">): Promise<KernelEvent> {
+  for (let attempt = 0; attempt < ORGANIC_MINT_ATTEMPTS; attempt++) {
+    const { event, inserted } = await kernel.appendEvent(tx, { ...row, id: organicEventId(attempt) });
+    if (inserted) return event;
+  }
+  throw new Error(`could not mint a free organic event id after ${ORGANIC_MINT_ATTEMPTS} attempts`);
+}
+
 // ---- create ----
 
 export async function createObject(input: CreateObjectInput): Promise<CreateObjectResult> {
@@ -310,9 +332,8 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     );
   }
 
-  const id = input.id ?? newObjectId(kind, msOf(now));
   const row: NewKernelObject = {
-    id,
+    id: input.id ?? newObjectId(kind),
     teamId,
     kind,
     status,
@@ -339,14 +360,40 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     closedAt: null,
   };
 
-  const { object, inserted } = await kernel.insertObject(tx, row);
+  // THE MINT LOOP. A swallowed insert has three possible causes and they are not
+  // interchangeable: the KEY collided (idempotent re-create — the §4.1 ruling),
+  // the explicit DERIVED id already existed (a replayed derivation, also
+  // idempotent), or this ORGANIC six-hex number was simply taken by an unrelated
+  // object. Only the third is a mistake, and its fix is fresh randomness — never
+  // resolving the stranger's row, which is the silent-wrong-object failure a
+  // short id would otherwise introduce. A derived id is NEVER re-minted: being a
+  // pure function of its seed IS the dedup invariant.
+  let id = row.id;
+  let object: KernelObject | undefined;
+  let found: KernelObject | undefined;
+  for (let attempt = 0; ; attempt++) {
+    const out = await kernel.insertObject(tx, { ...row, id });
+    if (out.inserted) {
+      object = out.object;
+      break;
+    }
+    const byKey = input.key ? await kernel.getObjectByKey(tx, teamId, input.key) : undefined;
+    if (byKey) {
+      found = byKey;
+      break;
+    }
+    if (input.id === undefined) {
+      if (attempt + 1 >= ORGANIC_MINT_ATTEMPTS) {
+        throw new Error(`could not mint a free ${kind} id after ${ORGANIC_MINT_ATTEMPTS} attempts`);
+      }
+      id = newObjectId(kind, attempt + 1);
+      continue;
+    }
+    found = await kernel.getObject(tx, id);
+    break;
+  }
 
-  if (!inserted) {
-    // The insert was swallowed. Either the key collided (idempotent re-create) or
-    // the explicit derived id already existed (a replayed derivation).
-    const found =
-      (input.key ? await kernel.getObjectByKey(tx, teamId, input.key) : undefined) ??
-      (await kernel.getObject(tx, id));
+  if (!object) {
     if (!found) {
       // Only reachable if the row vanished between the swallow and this read.
       return fail(refuse("NOT_FOUND", "the conflicting object could not be resolved", []), where);
@@ -393,7 +440,7 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     ts: now,
   });
 
-  return { ok: true, object: object!, created: true, event };
+  return { ok: true, object, created: true, event };
 }
 
 // ---- update ----
@@ -483,8 +530,7 @@ export async function applyUpdateIn(tx: KernelExec, input: ApplyUpdateInput): Pr
 
   // Update events are ORGANIC: two identical-looking patches a week apart are two
   // real facts, and deduplicating them would erase history (spec §4.3).
-  const { event } = await kernel.appendEvent(tx, {
-    id: organicEventId(msOf(now)),
+  const event = await appendOrganicEvent(tx, {
     teamId: before.teamId,
     objectId,
     kind: input.eventKind ?? "object-updated",
@@ -546,11 +592,9 @@ export async function applyTransitionIn(tx: KernelExec, input: ApplyTransitionIn
   }
   const spec: TransitionSpec = TRANSITIONS[transition];
 
-  const eventId =
-    input.derivedFrom === undefined
-      ? organicEventId(msOf(now))
-      : derivedEventId({ objectId, transition, seed: input.derivedFrom });
-  if (input.derivedFrom !== undefined) {
+  const derived = input.derivedFrom !== undefined;
+  const eventId = derived ? derivedEventId({ objectId, transition, seed: input.derivedFrom }) : undefined;
+  if (eventId) {
     const prior = await kernel.getEvent(tx, eventId);
     if (prior) return { ok: true, object: before, event: prior, replay: true };
   }
@@ -626,12 +670,11 @@ export async function applyTransitionIn(tx: KernelExec, input: ApplyTransitionIn
   // insert is its race-safe backstop — a re-derived transition mints the same id,
   // the conflict is swallowed, and we return before touching the status, so a
   // replay can never double-apply even if two derivations arrive in one instant.
-  const { event, inserted } = await kernel.appendEvent(tx, {
-    id: eventId,
+  const eventRow: Omit<NewKernelEvent, "id"> = {
     teamId: before.teamId,
     objectId,
     kind: spec.eventKind,
-    origin: input.derivedFrom === undefined ? "organic" : "derived",
+    origin: derived ? "derived" : "organic",
     entrance: actor.entrance,
     actorId: actor.actorId,
     // NOT NULL for a status diff, enforced by `events_state_change_sufficient`.
@@ -640,9 +683,18 @@ export async function applyTransitionIn(tx: KernelExec, input: ApplyTransitionIn
     note: input.note ?? null,
     payload: { from: before.status, to: spec.to, ...(input.eventPayload ?? {}) },
     ts: now,
-  });
-  if (!inserted) {
-    return { ok: true, object: (await kernel.getObject(tx, objectId))!, event, replay: true };
+  };
+  let event: KernelEvent;
+  if (eventId) {
+    const derivedAppend = await kernel.appendEvent(tx, { ...eventRow, id: eventId });
+    if (!derivedAppend.inserted) {
+      return { ok: true, object: (await kernel.getObject(tx, objectId))!, event: derivedAppend.event, replay: true };
+    }
+    event = derivedAppend.event;
+  } else {
+    // An ORGANIC transition can never be a replay — a swallowed insert here is a
+    // taken id, not a repeated fact — so it re-mints instead of latching.
+    event = await appendOrganicEvent(tx, eventRow);
   }
 
   const after = await kernel.setObjectStatus(tx, objectId, patch);

@@ -37,10 +37,12 @@ import { ENTRANCES, EVENT_ORIGINS, OBJECT_KINDS, type EventDiff } from "../kerne
 export const objects = pgTable(
   "objects",
   {
-    /** Kind-prefixed and server-issued: `task-<ulid>` / `doc-…` / `loop-…`,
-     *  or `<kind>-<sha256hex>` when the object is re-derivable (spec §5.4).
-     *  Migrated production loops keep their existing id verbatim (§5.5) — it is
-     *  already `loop-` prefixed, so run history and artifact paths keep resolving. */
+    /** SHORT and kind-prefixed, server-issued (design §8): `task-7f3a91` /
+     *  `doc-…` / `loop-…` — six lowercase hex when organic, twelve of sha256(seed)
+     *  when the object is re-derivable (`kernel/ids.ts` owns both widths and the
+     *  reasoning). Migrated production loops keep their existing id verbatim
+     *  (§5.5) — already `loop-` prefixed, so run history and artifact paths keep
+     *  resolving. */
     id: text("id").primaryKey(),
     /** Owning team — the scope everything is listed and authorized by. */
     teamId: text("team_id").notNull(),
@@ -144,16 +146,18 @@ export const events = pgTable(
   "events",
   {
     /**
-     * `ev-<sha256hex>` when `origin = 'derived'`, `ev-<ulid>` when `organic`.
-     * The dedup invariant is STRUCTURAL: a re-derivable fact's id is a pure
-     * function of the fact, so re-deriving it collides here and
-     * `ON CONFLICT DO NOTHING` makes the second insert a no-op.
+     * `ev-<12 hex of sha256(seed)>` when `origin = 'derived'`, `ev-<6 hex random>`
+     * when `organic` (`kernel/ids.ts`). The dedup invariant is STRUCTURAL: a
+     * re-derivable fact's id is a pure function of the fact, so re-deriving it
+     * collides here and `ON CONFLICT DO NOTHING` makes the second insert a no-op.
      */
     id: text("id").primaryKey(),
     /**
-     * THE STREAM CURSOR (spec §5.4 "`seq` vs `id`"). A hash id has no
-     * monotonicity, so SSE resume gets its own identity column: **the content id
-     * dedups, the seq orders**.
+     * THE STREAM CURSOR (spec §5.4 "`seq` vs `id`"). No event id — hashed or
+     * random — carries monotonicity, so SSE resume gets its own identity column:
+     * **the content id dedups, the seq orders**. Nothing anywhere reads an event
+     * id as a clock; every tail (`listObjectEvents`, `eventsAfter`, `eventTail`)
+     * sorts by this column.
      *
      * CORRECTION TO THE SPEC. §5.4 argues that a dedup collision consumes no seq
      * and therefore leaves no gap. That is not how Postgres identity columns

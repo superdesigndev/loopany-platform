@@ -14,6 +14,7 @@ import { clipText, type HttpResult } from "../gateway/http.js";
 import { logger } from "../logger.js";
 import { applyTransitionIn, createObjectIn } from "./applyTransition.js";
 import {
+  ORGANIC_MINT_ATTEMPTS,
   answeredRunId,
   autoPauseTaskId,
   clockRunId,
@@ -65,14 +66,13 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
   if (reason === "answered" && !input.verdictEventId) {
     throw new Error("answered runs require verdictEventId for deterministic identity");
   }
-  const id =
+  const derivedId =
     reason === "clock" && input.scheduledFor
       ? clockRunId(loop.id, input.scheduledFor)
       : reason === "answered" && input.verdictEventId
         ? answeredRunId(input.verdictEventId)
-        : newRunId(Date.parse(now));
-  return store.queueRun(tx, {
-    id,
+        : undefined;
+  const row = {
     loopId: loop.id,
     // Additive reuse of the legacy table requires these columns. They are not
     // authority in v2: claim stamps the actual machine and loop→team owns scope.
@@ -86,7 +86,20 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
     reason,
     entrance: reason === "clock" ? "clock" : reason === "answered" ? "answer" : "human",
     scheduledFor: input.scheduledFor ?? null,
-  });
+  } as const;
+
+  if (derivedId) return store.queueRun(tx, { ...row, id: derivedId });
+
+  // A MANUAL fire is organic (a person pressing the button twice is two real
+  // facts), so its short id carries no identity and a `replay` outcome here means
+  // the number was taken, not that the fire already landed — re-mint rather than
+  // hand the caller a stranger's run. `loop-busy` is the queue discipline firing
+  // and is returned untouched.
+  for (let attempt = 0; attempt < ORGANIC_MINT_ATTEMPTS; attempt++) {
+    const queued = await store.queueRun(tx, { ...row, id: newRunId(attempt) });
+    if (queued.outcome !== "replay") return queued;
+  }
+  throw new Error(`could not mint a free run id after ${ORGANIC_MINT_ATTEMPTS} attempts`);
 }
 
 export interface TickResult {
