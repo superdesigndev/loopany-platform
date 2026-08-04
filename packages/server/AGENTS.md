@@ -647,8 +647,9 @@ row of §10 is stale rather than a rule this unit broke.
 - **The human/agent split is the whole design.** `loop create` and the three lifecycle
   verbs are HUMAN-ONLY: creating a loop mints a standing cadence and a new actor, and
   pausing/retiring is the operational call the owner keeps. Guarded at two altitudes —
-  the route's `resolveApiContext(request, "human")` and a `mode !== "human"` check inside
-  `createFromArtifact`/`loopLifecycle` — and the CLI belts-and-braces it by adding them to
+  the route's `resolveApiContext(request, { human: "loop-governance" })` and a
+  `mode !== "human"` check inside `createFromArtifact`/`loopLifecycle` — and the CLI
+  belts-and-braces it by adding them to
   `HUMAN_COMMANDS`, so the device token is never attached. `loop list`/`loop show` are
   DUAL, like `task list`: a team-scoped read an agent legitimately needs to resolve the
   loop id it is about to name as a `--watcher`.
@@ -662,6 +663,25 @@ row of §10 is stale rather than a rule this unit broke.
   key-idempotency rule as tasks", which is unreachable without a key, and
   `serializeKindArtifact` emits `key:` for every kind — so without it `loop show --file`
   produced a file its own parser refused. The round trip is verified end to end.
+- **An ABSENT payload serializes as an ABSENT key** (`serializeKindArtifact`, review F1):
+  `payload: {}` re-parses to an empty mapping, which `expressedDiffs` reads as different
+  from a null payload — so the canonical file the CLI itself emits reported a spurious
+  `differs: payload` on create replay (and wrote a junk `null → {}` diff event on the
+  task/doc `--file` update path). An explicitly empty `payload: {}` in the file is still
+  a value and survives. Pinned by `artifactSeam.test.ts` + the loop round-trip case in
+  `objectApi.integration.test.ts`.
+- **A human-only refusal names the SURFACE it refused** (`apiAuth.ts` `HumanSurface` /
+  `NOT_HUMAN_TEACHING`, review F2): the route guard answers before any kernel function
+  runs, so the kernel's careful proposal-path hint in `createFromArtifact`/`loopLifecycle`
+  was unreachable at the wire and every run got the inbox voice. `resolveApiContext` takes
+  `{ human: <surface> }` where the teaching differs; plain `"human"` keeps the inbox
+  default.
+- **A replay's "not applied" hint may only name routes that EXIST** (review F3): with
+  `PATCH /api/loops/:id` unbuilt and `loop evolve` agent-only, a human whose keyed loop
+  file differs has NO CLI path today — so both the server notice
+  (`applyDifferingHint`) and the CLI hint (`kernel-cli.ts` `renderCreate`) say the loop
+  page, name evolve as the run's move, and flag that a differing `cron:` is
+  `APPROVAL_REQUIRED` even then. Revisit both together when the human loop edit lands.
 - **`retire` IS the D in CRUD, and the CLI says so.** No hard delete exists anywhere on
   this surface (the kernel is event-sourced). `NEAR_MISS` in `kernel-cli.ts` turns
   `loop delete|remove|rm|archive|close`, `task delete` and `doc delete` into a teaching

@@ -128,7 +128,12 @@ export function serializeKindArtifact(kind: ObjectKind, object: ArtifactProjecti
   if (kind === "task") Object.assign(frontMatter, { follow_up: object.followUpAt, watcher: object.watcher, needs_human: object.pendingQuestion });
   if (kind === "doc") frontMatter.format = object.format ?? "markdown";
   if (kind === "loop") frontMatter.cron = object.cron;
-  frontMatter.payload = object.payload ?? {};
+  // NOT `?? {}`: an absent payload must serialize as an ABSENT key, or the file
+  // this very function emits no longer round-trips. `{}` re-parses to an empty
+  // mapping, which `expressedDiffs` reads as different from a null payload — so
+  // `show --file` → `create` reported a spurious `differs: payload`, and the
+  // task/doc `--file` update path wrote a junk `null → {}` diff event.
+  frontMatter.payload = object.payload;
   for (const key of Object.keys(frontMatter)) if (frontMatter[key] == null) delete frontMatter[key];
   return serializeArtifact({ frontMatter, body: object.body }, { keyOrder: [...KIND_KEYS[kind]] });
 }

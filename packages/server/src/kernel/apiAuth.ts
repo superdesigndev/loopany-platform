@@ -41,6 +41,32 @@ export interface ApiContext {
 
 export type ApiAuthResult = { ok: true; context: ApiContext } | { ok: false; error: ApiRefusal };
 
+/**
+ * WHICH human surface a human-only endpoint is, so the run-context refusal
+ * teaches the path that run actually has.
+ *
+ * The route guard answers FIRST — before any kernel function runs — so a hint
+ * that only exists in the kernel (`createFromArtifact`/`loopLifecycle` both
+ * write one) is unreachable at the wire. Rather than let the inbox voice speak
+ * for every human-only endpoint, each route names its surface and the two
+ * altitudes teach the same thing.
+ */
+export type HumanSurface = "inbox" | "loop-governance";
+
+/** `"human"` keeps the default inbox voice; the object form names the surface. */
+export type ApiRequirement = "dual" | "agent" | "human" | { human: HumanSurface };
+
+const NOT_HUMAN_TEACHING: Record<HumanSurface, { message: string; hint: string }> = {
+  inbox: {
+    message: "this operation is waiting for a human",
+    hint: "a run cannot answer or read the human inbox — its worklist is `task list --watcher <your-loop-id> --due`",
+  },
+  "loop-governance": {
+    message: "creating a loop and moving its lifecycle are governance and are the owner's act",
+    hint: "a run proposes it instead: `loopany task create --file <path> --needs-human \"<the ask>\" --watcher <your-loop-id>`",
+  },
+};
+
 /** The session half, injected so the seam is testable without the framework's
  *  request-scoped context. Production always uses the real pair. */
 export interface SessionSeam {
@@ -53,10 +79,12 @@ const REAL_SESSION: SessionSeam = { currentUser, requestScope, authEnabled };
 
 export async function resolveApiContext(
   request: Request,
-  requirement: "dual" | "agent" | "human",
+  need: ApiRequirement,
   mutation = false,
   session: SessionSeam = REAL_SESSION,
 ): Promise<ApiAuthResult> {
+  const requirement = typeof need === "string" ? need : "human";
+  const humanSurface: HumanSurface = typeof need === "string" ? "inbox" : need.human;
   const runHeader = request.headers.get("x-loopany-run")?.trim();
   const auth = request.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
@@ -67,11 +95,12 @@ export async function resolveApiContext(
   // ---- the agent class: run context present ----
   if (runHeader) {
     if (requirement === "human") {
+      const teaching = NOT_HUMAN_TEACHING[humanSurface];
       return { ok: false, error: refusal(
         "NOT_HUMAN",
-        "this operation is waiting for a human",
+        teaching.message,
         [{ path: "X-Loopany-Run", message: "a request carrying run context is an agent's", got: runHeader }],
-        "a run cannot answer or read the human inbox — its worklist is `task list --watcher <your-loop-id> --due`",
+        teaching.hint,
       ) };
     }
     const machine = await authenticateDevice(token);

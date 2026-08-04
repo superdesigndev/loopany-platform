@@ -51,8 +51,21 @@ export async function createFromArtifact(kind: ObjectKind, raw: string, context:
     // An idempotent hit writes nothing, so it reports no event — the caller must
     // be able to tell a fresh effect from a replay (spec §1.4).
     [name]: objectShape(result.object), event: result.created ? result.event?.id ?? null : null,
-    ...(!result.created && differingFields.length ? { notice: { code: "KEY_EXISTS_CONTENT_DIFFERS", message: `key "${p.key}" already names ${result.object.id}; the submitted file differs from it and was not applied`, hint: `to change it: PATCH /api/${name}s/${result.object.id} with the same file` } } : {}),
+    ...(!result.created && differingFields.length ? { notice: { code: "KEY_EXISTS_CONTENT_DIFFERS", message: `key "${p.key}" already names ${result.object.id}; the submitted file differs from it and was not applied`, hint: applyDifferingHint(kind, result.object.id, name) } } : {}),
   } };
+}
+
+/**
+ * A replay's "your file was not applied" notice must name a route that EXISTS.
+ * Tasks and docs have the human whole-file PATCH; a loop does not — `PATCH
+ * /api/loops/:id` is spec'd but unbuilt, and `POST /api/loops/:id/evolve` is
+ * agent-only — so the loop hint teaches the two paths a charter change really
+ * has today rather than a 404.
+ */
+function applyDifferingHint(kind: ObjectKind, id: string, name: string): string {
+  return kind === "loop"
+    ? `a loop charter has no human edit route yet: a run of this loop applies it with POST /api/loops/${id}/evolve (agent-only, and a differing cron: is refused APPROVAL_REQUIRED), or edit it on the loop page`
+    : `to change it: PATCH /api/${name}s/${id} with the same file`;
 }
 
 async function createObjectInTransaction(input: { kind: ObjectKind; p: ReturnType<typeof projection>; context: ApiContext; now: Date }) {

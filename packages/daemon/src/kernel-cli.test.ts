@@ -240,6 +240,20 @@ describe("task create", () => {
     expect(stdout).toContain("Run `loopany task update task-7f3a91 --file <path>` to apply them");
   });
 
+  it("never sends a human to the agent-only evolve when a loop key already exists", async () => {
+    const { code, stdout } = await run(["loop", "create", "--file", "-"], {
+      created: false, contentDiffers: true, differingFields: ["body"], event: null,
+      notice: { code: "KEY_EXISTS_CONTENT_DIFFERS", message: "key \"housekeeper\" already names loop-01KZ; the submitted file differs from it and was not applied" },
+      loop: { id: "loop-01KZ", kind: "loop", title: "Housekeeper", status: "active", key: "housekeeper", cron: "0 7 * * *", nextFire: "2026-08-05T07:00:00.000Z", payload: {} },
+    }, 200, { readStdin: () => "---\ntitle: Housekeeper\nkey: housekeeper\n---\n\nnew charter\n" });
+    expect(code).toBe(0);
+    expect(stdout).toContain("your changes were NOT applied");
+    // `loop create` is human-only and `loop evolve` is agent-only: a hint naming
+    // evolve would walk the same person straight into NO_RUN_CONTEXT.
+    expect(stdout).not.toContain("Run `loopany loop evolve");
+    expect(stdout).toContain("edit the charter on the loop page");
+  });
+
   it("treats an unreadable file as transport, not as a bad command", async () => {
     const { code, stdout } = await run(["task", "create", "--file", "/tmp/definitely-not-here-9f13.md"], {});
     expect(code).toBe(1);

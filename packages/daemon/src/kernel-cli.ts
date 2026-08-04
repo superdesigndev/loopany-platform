@@ -696,8 +696,18 @@ function renderCreate(kind: Kind, body: Body, now: number): string {
   text += detailBlock(kind, kindRows(kind, row, now));
   const hints: string[] = [];
   if (replay && body.contentDiffers) {
-    const applyWith = kind === "loop" ? `loopany loop evolve ${id} --file <path>` : `loopany ${kind} update ${id} --file <path>`;
-    hints.push(`Key ${cell(row.key)} already exists — create is idempotent, so your changes were NOT applied`, `Run \`${applyWith}\` to apply them`);
+    hints.push(`Key ${cell(row.key)} already exists — create is idempotent, so your changes were NOT applied`);
+    // `loop create` is human-only and `loop evolve` is agent-only, so pointing a
+    // human at evolve sends them into a NO_RUN_CONTEXT refusal. Until the human
+    // loop edit lands, say what a person can actually do.
+    if (kind === "loop") {
+      hints.push(
+        `There is no human CLI verb that applies them: \`loop evolve\` runs inside a run, so edit the charter on the loop page`,
+        `A run of this loop evolves its own charter; a differing \`cron:\` stays yours even then (evolve refuses it, APPROVAL_REQUIRED)`,
+      );
+    } else {
+      hints.push(`Run \`loopany ${kind} update ${id} --file <path>\` to apply them`);
+    }
   } else if (kind === "loop") {
     // Every safe default has a CONSEQUENCE, and a loop with no cadence is the
     // one that silently never runs. Say which of the two was born.

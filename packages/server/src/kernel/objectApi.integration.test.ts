@@ -322,6 +322,32 @@ describe("loop create is a human entrance, armed at birth", () => {
     expect(again.contentDiffers).toBe(true);
     expect(again.differingFields).toContain("body");
   });
+
+  it("round-trips its own `loop show --file` bytes back through create with nothing differing", async () => {
+    const created = ok(await api.createFromArtifact("loop", file("You are the Housekeeper."), human, T1));
+    const row = (await store.getObject(undefined, (created.loop as { id: string }).id))!;
+    // The default loop carries NO payload, and the serializer must therefore emit
+    // no `payload:` key: `payload: {}` re-parses to an empty mapping, which reads
+    // as different from a null payload and reported a spurious `differs: payload`
+    // on exactly the flow the help text teaches (review F1).
+    expect(row.payload).toBeNull();
+    const artifact = api.objectArtifact(row);
+    expect(artifact).not.toContain("payload:");
+    const replay = ok(await api.createFromArtifact("loop", artifact, human, T1));
+    expect(replay.created).toBe(false);
+    expect(replay.contentDiffers).toBe(false);
+    expect(replay.differingFields).toEqual([]);
+    expect(replay.notice).toBeUndefined();
+  });
+
+  it("names a route that exists when a keyed replay differs — never the unbuilt loop PATCH", async () => {
+    ok(await api.createFromArtifact("loop", file("v1"), human, T1));
+    const again = ok(await api.createFromArtifact("loop", file("v2"), human, T1));
+    const hint = (again.notice as { hint: string }).hint;
+    expect(hint).not.toContain("PATCH");
+    expect(hint).toContain("/evolve");
+    expect(hint).toContain("loop page");
+  });
 });
 
 describe("loop list and loop show are the read half", () => {

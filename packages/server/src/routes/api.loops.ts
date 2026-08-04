@@ -10,5 +10,5 @@ import { apiResponse, authFailure, rawArtifact } from "../kernel/routeSupport.js
  */
 export const Route = createFileRoute("/api/loops")({ server: { handlers: {
   GET: async ({ request }: { request: Request }) => { const auth = await resolveApiContext(request, "dual"); if (!auth.ok) return authFailure(auth.error); return apiResponse(await listLoops(auth.context, new URL(request.url).searchParams)); },
-  POST: async ({ request }: { request: Request }) => { const auth = await resolveApiContext(request, "human", true); if (!auth.ok) return authFailure(auth.error); const raw = await rawArtifact(request); if (!raw.ok) return raw.response; return apiResponse(await createFromArtifact("loop", raw.text, auth.context)); },
+  POST: async ({ request }: { request: Request }) => { const auth = await resolveApiContext(request, { human: "loop-governance" }, true); if (!auth.ok) return authFailure(auth.error); const raw = await rawArtifact(request); if (!raw.ok) return raw.response; return apiResponse(await createFromArtifact("loop", raw.text, auth.context)); },
 } } });
