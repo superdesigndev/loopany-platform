@@ -194,6 +194,45 @@ describe("claim leases", () => {
   });
 });
 
+describe("the claim delivers the loop's BOUND directory, and is the v2 enrollment surface", () => {
+  it("hands the machine the workdir the loop binds, marked required", async () => {
+    // Captain ruling 2026-08-04: the loop's own column decides WHERE the agent
+    // runs — not the free-zone payload, which a charter could move past the
+    // governance gate.
+    const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z", workdir: "/Users/me/Workspace/repo", payload: { workdir: "/tmp/impostor", agent: "claude-code" } });
+    const m = await machine("m-a", "dk_machine_a");
+    await queue.queueKernelRun(database.db as never, { loop: l, now: NOW.toISOString(), reason: "manual" });
+    const response = await queue.claimRun(m, { agent: "test-daemon" }, NOW);
+    expect((response.body as any).execution).toMatchObject({ workdir: "/Users/me/Workspace/repo", requireWorkdir: true });
+  });
+
+  it("leaves an unbound loop unbound, so the daemon may use its own scratch dir", async () => {
+    const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });
+    const m = await machine("m-a", "dk_machine_a");
+    await queue.queueKernelRun(database.db as never, { loop: l, now: NOW.toISOString(), reason: "manual" });
+    const response = await queue.claimRun(m, { agent: "test-daemon" }, NOW);
+    expect((response.body as any).execution).toMatchObject({ workdir: null, requireWorkdir: false });
+  });
+
+  it("self-registers a brand-new machine, because a v2 daemon polls nothing else", async () => {
+    // Before this the rewrite line had no enrollment surface at all: the daemon
+    // never calls /api/machine/poll under LOOPANY_RUNS_V2, so first contact 401'd
+    // forever and no machine could ever claim.
+    const token = "dk_" + "f".repeat(48);
+    expect(await queue.authenticateDevice(token)).toBeUndefined();
+    const enrolled = await queue.enrollDeviceForClaim(token, { host: "laptop", version: "0.13.0" });
+    expect(enrolled).toMatchObject({ id: tokens.machineIdFromToken(token), name: "laptop", online: true });
+    // Idempotent: the second contact resolves the SAME machine, never a twin.
+    expect((await queue.enrollDeviceForClaim(token, { host: "laptop" }))!.id).toBe(enrolled!.id);
+    expect(await queue.authenticateDevice(token)).toBeTruthy();
+  });
+
+  it("refuses a malformed token rather than minting a machine for it", async () => {
+    expect(await queue.enrollDeviceForClaim("not-a-device-token")).toBeUndefined();
+    expect(await queue.enrollDeviceForClaim("")).toBeUndefined();
+  });
+});
+
 describe("finish", () => {
   it("a non-string report format falls back to plain Markdown and cannot wedge finish", async () => {
     const l = await loop({ nextFire: "2026-08-04T00:00:00.000Z" });

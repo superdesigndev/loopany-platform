@@ -2,12 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { resolveApiContext } from "../kernel/apiAuth.js";
 import { eventTail, eventsAfter } from "../kernel/objectApi.js";
 import * as store from "../db/kernelStore.js";
-import { authFailure } from "../kernel/routeSupport.js";
+import { authFailure, ensureBooted } from "../kernel/routeSupport.js";
 
 const enc = new TextEncoder();
 const liveSessions = new Map<string, () => void>();
 export const Route = createFileRoute("/api/events/stream")({ server: { handlers: { GET: async ({ request }: { request: Request }) => {
-  const auth = await resolveApiContext(request, "human"); if (!auth.ok) return authFailure(auth.error);
+  await ensureBooted(); const auth = await resolveApiContext(request, "human"); if (!auth.ok) return authFailure(auth.error);
   const tail = await eventTail(auth.context.teamId); const header = request.headers.get("last-event-id"); const query = new URL(request.url).searchParams.get("since");
   let cursor = Number(header ?? query ?? tail); if (!Number.isFinite(cursor) || cursor < 0) cursor = tail;
   const reset = tail - cursor > 1000; if (reset) cursor = tail;

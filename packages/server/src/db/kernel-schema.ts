@@ -12,9 +12,10 @@
  * stays single-sourced across the postgres-js and pglite driver tiers.
  *
  * Three invariants are enforced by the SCHEMA, not by callers:
- *   1. THE KIND FIREWALLS (design §4). A cadence is a loop facet, a question is
- *      a task facet, `format` is a doc facet — three CHECKs, so a `--cron` on a
- *      task cannot reach the disk even if every verb guard were removed. The
+ *   1. THE KIND FIREWALLS (design §4). A cadence and a bound workdir are loop
+ *      facets, a question is a task facet, `format` is a doc facet — four
+ *      CHECKs, so a `--cron` on a task cannot reach the disk even if every verb
+ *      guard were removed. The
  *      verb guards in `kernel/types.ts` remain the teaching surface; these are
  *      the floor.
  *   2. PER-TEAM KEY UNIQUENESS — a partial UNIQUE index, so creation-time
@@ -63,6 +64,11 @@ export const objects = pgTable(
      *  whole claim predicate is `next_fire <= now`, level-triggered, so downtime
      *  owes exactly ONE catch-up fire (design §5 R-clock). Null ⇒ not armed. */
     nextFire: text("next_fire"),
+    /** THE BOUND DIRECTORY the loop's runs execute in (absolute path). Captain
+     *  ruling 2026-08-04, amending design §8 / API spec §1.16: a loop binds a
+     *  workdir exactly as the shipping product does, and the claiming machine
+     *  launches the agent there. Null ⇒ the daemon's own per-loop scratch dir. */
+    workdir: text("workdir"),
 
     // ---- task facets (CHECK: null on every other kind) ----
     /** DATA, NOT A TIMER (design §6). "Due" is the query-time predicate
@@ -99,6 +105,7 @@ export const objects = pgTable(
   (t) => [
     // ---- the kind firewalls, welded (design §4 rule 2) ----
     check("objects_cron_loop_only", sql`${t.kind} = 'loop' OR (${t.cron} IS NULL AND ${t.timezone} IS NULL AND ${t.nextFire} IS NULL)`),
+    check("objects_workdir_loop_only", sql`${t.kind} = 'loop' OR ${t.workdir} IS NULL`),
     check(
       "objects_task_facets_only",
       sql`${t.kind} = 'task' OR (${t.followUpAt} IS NULL AND ${t.pendingQuestion} IS NULL AND ${t.watcher} IS NULL)`,

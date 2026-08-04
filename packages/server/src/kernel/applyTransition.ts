@@ -84,6 +84,8 @@ export interface WritableFields {
   cron?: string | null;
   timezone?: string | null;
   nextFire?: string | null;
+  /** The bound directory a run executes in (absolute path, machine-local). */
+  workdir?: string | null;
   // task facets
   followUpAt?: string | null;
   pendingQuestion?: string | null;
@@ -99,6 +101,7 @@ const WRITABLE_KEYS = [
   "cron",
   "timezone",
   "nextFire",
+  "workdir",
   "followUpAt",
   "pendingQuestion",
   "watcher",
@@ -106,7 +109,7 @@ const WRITABLE_KEYS = [
 ] as const;
 
 /** The fields a key-collision comparison reads (§4.1 `differs`). */
-const CONTENT_KEYS = ["title", "body", "payload", "followUpAt", "watcher", "pendingQuestion"] as const;
+const CONTENT_KEYS = ["title", "body", "payload", "followUpAt", "watcher", "pendingQuestion", "workdir"] as const;
 
 // ---- results ----
 
@@ -319,6 +322,7 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     title: input.title ?? null,
     cron: input.cron ?? null,
     timezone: input.timezone ?? null,
+    workdir: input.workdir ?? null,
     nextFire:
       input.nextFire !== undefined
         ? input.nextFire

@@ -27,12 +27,10 @@ import { autopauseMessage, completionMessage, deferredMessage, dispatchNotificat
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { machinePresence } from "../lib/machinePresence.js";
-import { loginGateEnabled } from "../lib/loginGate.js";
+import { enrollMachine, stampMachineContact, type EnrollResult } from "./enroll.js";
 import { snapshotRetention } from "../env.js";
 import {
   machineIdFromToken,
-  isDeviceTokenShape,
-  getDeviceOwner,
   readClaimIntent,
   registerRunLease,
   resolveLease,
@@ -130,12 +128,13 @@ const MAX_PROGRESS_ENTRIES = 32;
  *  step/label signal itself hasn't moved — throttled so the ~3s poll hot path isn't
  *  a per-heartbeat UPDATE, but the sweep still sees minute-fresh activity. */
 const PROGRESS_STAMP_REFRESH_MS = 60_000;
-/** How often the poll hot path re-stamps `machines.lastSeen`. Only the sweep
- *  (ONLINE_TTL_MS granularity) and presence reads consume the stamp, so an
- *  every-poll UPDATE is pure write amplification on Postgres — refresh at 10s
- *  and an idle poll becomes read-only, with worst-case staleness well inside
- *  the 30s TTL (max stamp gap = refresh + one poll interval). */
-const LAST_SEEN_REFRESH_MS = 10_000;
+/** The 401 sentence per enrollment refusal (`gateway/enroll.ts`). The gated
+ *  "not connected" wording is load-bearing: it names the fix, not the failure. */
+const ENROLL_REFUSAL: Record<Extract<EnrollResult, { ok: false }>["reason"], string> = {
+  malformed: "invalid device token",
+  "token-mismatch": "device token mismatch",
+  "not-connected": "unknown device token — connect this machine first",
+};
 /** How long an opted-in poll (`wait:true`) is held open for work before returning
  *  empty. Bounded under the daemon's 30s fetch timeout AND under ONLINE_TTL_MS
  *  (with the end-of-wait re-stamp) so a parked long-poll never looks offline. */
@@ -461,75 +460,17 @@ export class MachineGateway {
      *  watch array is omitted from the response (an old daemon never echoes). */
     watchDigest?: string,
   ): Promise<HttpResult> {
-    // Reject malformed tokens (empty / wrong prefix / junk) before any DB work —
-    // a cheap filter at the enrollment surface (the auth boundary is the gate below).
-    if (!isDeviceTokenShape(deviceToken)) {
-      return { status: 401, body: { error: "invalid device token" } };
+    // Enrollment + the presence/identity stamp live in `gateway/enroll.ts`, so
+    // the legacy poll and the rewrite claim endpoint share ONE gate (open-mode
+    // anonymous enrol, gated-mode connect-key requirement, full token-hash
+    // re-verify) rather than growing two policies.
+    const resolved = await enrollMachine(deviceToken, info);
+    if (!resolved.ok) {
+      return { status: 401, body: { error: ENROLL_REFUSAL[resolved.reason] } };
     }
-    const machineId = machineIdFromToken(deviceToken);
-    let machine = await store.getMachine(machineId);
-    if (machine) {
-      // Already enrolled: the derived machine id matched. Verify the FULL token hash
-      // too — defense against a 64-bit machine-id truncation collision handing one
-      // machine's authority to a different token (audit H-01 criterion (a)).
-      if (machine.tokenHash && machine.tokenHash !== sha256(deviceToken)) {
-        return { status: 401, body: { error: "device token mismatch" } };
-      }
-    } else {
-      // First contact — self-register, but ONLY an enrollable token:
-      //  - open/dev mode (gate off): any well-shaped token enrolls into the shared
-      //    workspace (anonymous BYOA is intentional there);
-      //  - gated mode (GitHub login on): the token MUST resolve to a live, unexpired
-      //    connect key bound to a signed-in user (getDeviceOwner) — i.e. the owner
-      //    ran the web/AI-First connect flow. An unknown/forged token is REJECTED,
-      //    never minted into a "shared" machine (audit H-01 / M2). This closes the
-      //    unauthenticated self-registration + resource-creation hole.
-      const owner = await getDeviceOwner(machineId);
-      if (loginGateEnabled() && owner == null) {
-        return { status: 401, body: { error: "unknown device token — connect this machine first" } };
-      }
-      const ownerId = owner ?? "shared";
-      // Home/default team for this machine: ALWAYS the owner's personal team (the
-      // no-claim fallback for loops created on it later). A loop's actual team comes
-      // from the validated claim intent at createLoop time, never from this home
-      // team — so cross-team capture still lands in team B. Keeping home = personal
-      // team preserves the safe invariant that a machine's fallback can never be a
-      // shared team the owner is merely a (possibly later-revoked) member of.
-      const teamId = store.teamIdForUser(ownerId);
-      await store.ensureTeam(teamId, ownerId === "shared" ? "Shared Workspace" : "Personal Team", ownerId === "shared" ? null : ownerId);
-      machine = await store.createMachine({
-        id: machineId,
-        userId: ownerId,
-        teamId,
-        // Always name it (never blank) — listMachines hides empty-name rows, so a
-        // self-registered machine must carry a name to show up + be counted.
-        name: info?.host || `machine-${machineId.slice(2, 8)}`,
-        tokenHash: sha256(deviceToken),
-        token: deviceToken,
-        online: true,
-      });
-      log.info({ machineId, host: info?.host }, "poll: self-registered machine");
-    }
-    // Stamp online + lastSeen — THROTTLED: only when the flag must flip or the
-    // stamp is older than LAST_SEEN_REFRESH_MS. Only the sweep (ONLINE_TTL_MS)
-    // and presence reads consume it, so the hot path stays read-only.
-    if (!machine.online || !machine.lastSeen || Date.now() - Date.parse(machine.lastSeen) > LAST_SEEN_REFRESH_MS) {
-      await store.setMachineOnline(machineId, true);
-    }
-    // Identity rarely changes after the first poll — only write it when a field
-    // actually differs, so the hot path (every ~3s/machine) isn't a 2nd UPDATE.
-    if (info) {
-      // Untrusted wire input: a version is a short semver, so clip defensively.
-      const version = typeof info.version === "string" ? clipText(info.version, 64) : undefined;
-      const patch = {
-        ...(info.host && info.host !== machine.hostname ? { hostname: info.host } : {}),
-        ...(info.platform && info.platform !== machine.platform ? { platform: info.platform } : {}),
-        ...(info.arch && info.arch !== machine.arch ? { arch: info.arch } : {}),
-        ...(version && version !== machine.daemonVersion ? { daemonVersion: version } : {}),
-        ...(info.host && !machine.name?.trim() ? { name: info.host } : {}),
-      };
-      if (Object.keys(patch).length) await store.updateMachine(machineId, patch);
-    }
+    const machine = resolved.machine;
+    const machineId = machine.id;
+    await stampMachineContact(machine, info);
 
     // Live progress for in-flight runs (slim activity line, not the transcript).
     // Scope to this machine's own running rows; a finalized row is left alone.

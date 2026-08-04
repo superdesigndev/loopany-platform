@@ -139,6 +139,9 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
         }
         meta={[
           ['cadence', loop.cronText ?? '—'],
+          // Cron says WHEN; workdir says WHERE. A loop binds a directory and no
+          // machine, so the bound path is the other half of "what does this run".
+          ['workdir', loop.workdir ?? '— (the daemon\'s scratch dir)'],
           ['next fire', <When iso={loop.nextFire} />],
           ['last run', <When iso={health.lastRunAt} />],
           ['7d ok / fail', `${health.runs7d.success} / ${health.runs7d.failure}`],

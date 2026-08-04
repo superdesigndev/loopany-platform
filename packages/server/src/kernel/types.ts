@@ -116,8 +116,10 @@ export function isTransitionName(v: string): v is TransitionName {
 
 // ---- the kind firewalls (design §4, welded twice: here and in the DDL) ----
 
-/** A cadence is a loop facet. `--cron` on a task is refused (design §4 rule 2). */
-export const LOOP_ONLY_FIELDS = ["cron", "timezone", "nextFire"] as const;
+/** A cadence and a bound workdir are loop facets. `--cron` on a task is refused
+ *  (design §4 rule 2); `workdir` joined them under the 2026-08-04 captain ruling
+ *  that a loop binds a directory the way the shipping product does. */
+export const LOOP_ONLY_FIELDS = ["cron", "timezone", "nextFire", "workdir"] as const;
 /** Question / resurface date / who-acts-next are task facets. */
 export const TASK_ONLY_FIELDS = ["followUpAt", "pendingQuestion", "watcher"] as const;
 /** `format: html` is a doc narrow door (design §7). */
@@ -187,7 +189,7 @@ export function refuse(
  * field names the write carries, return one issue per field that belongs to a
  * DIFFERENT kind.
  *
- * The DDL's three CHECK constraints are the floor (a cron on a task cannot reach
+ * The DDL's four CHECK constraints are the floor (a cron on a task cannot reach
  * the disk even if this were removed); this is the TEACHING surface — the
  * §3.3 special-cased hints exist because "unknown key" alone does not tell an
  * agent where a cadence actually lives.
@@ -202,7 +204,9 @@ export function firewallIssues(kind: ObjectKind, fields: Iterable<string>): Kern
       message:
         field === "cron" || field === "timezone" || field === "nextFire"
           ? "a cadence belongs to a loop, not a " + kind
-          : `${field} is a ${owner} facet, not a ${kind} one`,
+          : field === "workdir"
+            ? "a bound working directory belongs to a loop, not a " + kind
+            : `${field} is a ${owner} facet, not a ${kind} one`,
       got: field,
     });
   }
@@ -215,7 +219,7 @@ export function firewallHint(kind: ObjectKind): string {
     return "tasks have no cadence. A standing schedule is a loop; a resurface date is follow_up:";
   }
   if (kind === "doc") return "docs carry title, key, format and payload; a schedule is a loop's";
-  return "loops carry title, cron and payload (body = the charter); questions and follow-ups are a task's";
+  return "loops carry title, cron, workdir and payload (body = the charter); questions and follow-ups are a task's";
 }
 
 /** Immutable-field issues for a write that tried to move identity or status. */

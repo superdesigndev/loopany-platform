@@ -171,6 +171,9 @@ export interface LoopView extends ViewPayload {
     timezone: string | null
     cronText: string | null
     nextFire: string | null
+    /** The BOUND directory every run of this loop executes in; null ⇒ the
+     *  claiming daemon's own per-loop scratch dir. */
+    workdir: string | null
     body: string
     payload: Record<string, unknown>
     createdAt: string

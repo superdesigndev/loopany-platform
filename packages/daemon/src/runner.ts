@@ -6,6 +6,7 @@
  * claude-code. Finally report the run back to the server.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { boundedFetch } from "./http.js";
@@ -42,6 +43,9 @@ export interface Delivery {
   /** Server-configured workdir jail — may only NARROW the daemon's local env
    *  LOOPANY_ROOTS jail, never widen it (see roots.effectiveRoots). */
   roots?: string[];
+  /** The loop BOUND a directory, so this machine must already have it: creating
+   *  it would execute the charter against an empty lookalike (rewrite v2 path). */
+  requireWorkdir?: boolean;
   systemPrompt: string;
   task: string;
   /** Rewrite queue protocol. Absent means the shipping run-token/report path. */
@@ -346,7 +350,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   const jail = effectiveRoots(roots, d.roots);
   let workdir: string;
   try {
-    workdir = resolveWorkdir(d.loop.workdir, d.loop.id, jail);
+    workdir = resolveWorkdir(d.loop.workdir, d.loop.id, jail, d.requireWorkdir === true);
   } catch (err) {
     return reportRun({ runId: d.runId, ok: false, durationMs: Date.now() - start, error: msg(err) });
   }
@@ -689,7 +693,20 @@ function readTaskFile(workdir: string, taskFile: string | null, localRoots: stri
   }
 }
 
-function resolveWorkdir(workdir: string | null, loopId: string, roots: string[]): string {
+/**
+ * Where this run executes.
+ *
+ * No workdir at all ⇒ the daemon's own per-loop scratch dir, created on demand
+ * (its location is local and fixed, so creating it invents nothing).
+ *
+ * A DECLARED workdir is a BINDING to a place on a machine. On the legacy path the
+ * daemon still creates it (the loop was bound to one machine at birth, so the
+ * path was authored against this filesystem). On the rewrite path ANY machine of
+ * the team may claim the run, so `requireExisting` is set: a missing directory is
+ * a loud failure rather than a freshly-mkdir'd empty lookalike of the repo the
+ * charter names — silent misplacement is the one outcome worth refusing.
+ */
+function resolveWorkdir(workdir: string | null, loopId: string, roots: string[], requireExisting = false): string {
   if (!workdir) {
     const scratch = path.join(LOOPANY_DIR, "work", loopId);
     fs.mkdirSync(scratch, { recursive: true });
@@ -698,6 +715,15 @@ function resolveWorkdir(workdir: string | null, loopId: string, roots: string[])
   const abs = path.resolve(expandTilde(workdir));
   if (roots.length && !isWithinRoots(abs, roots)) {
     throw new Error(`workdir ${abs} is outside this machine's allowed roots`);
+  }
+  if (requireExisting) {
+    if (!fs.existsSync(abs)) {
+      throw new Error(`this loop is bound to ${abs}, which does not exist on this machine (${os.hostname()}) — bind the loop to a machine that has it, or create the directory there. Nothing was created and no agent was launched.`);
+    }
+    if (!fs.statSync(abs).isDirectory()) {
+      throw new Error(`this loop is bound to ${abs}, which is not a directory on this machine (${os.hostname()})`);
+    }
+    return abs;
   }
   fs.mkdirSync(abs, { recursive: true });
   return abs;

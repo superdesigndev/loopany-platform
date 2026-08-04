@@ -477,8 +477,9 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
   Refusals are typed `{ok:false, code, message, issues, hint}` (spec §3.1) with the
   legal move in `hint` — never thrown, never retried in-seam.
 - **The kind firewalls live at TWO altitudes and both are tested**: `kernel/types.ts`
-  (pure, teaching refusal) and three DDL CHECKs (`objects_cron_loop_only` /
-  `_task_facets_only` / `_format_doc_only`, plus `objects_closed_pair`). Asserting only
+  (pure, teaching refusal) and four DDL CHECKs (`objects_cron_loop_only` /
+  `_workdir_loop_only` / `_task_facets_only` / `_format_doc_only`, plus
+  `objects_closed_pair`). Asserting only
   the verb would let the floor evaporate on a refactor. Drizzle wraps driver errors as
   a generic "Failed query: …", so assert the constraint NAME off `err.cause.constraint`
   (SQLSTATE 23514) — `kernel.integration.test.ts` `expectCheckViolation` is the helper.
@@ -653,11 +654,12 @@ row of §10 is stale rather than a rule this unit broke.
   `HUMAN_COMMANDS`, so the device token is never attached. `loop list`/`loop show` are
   DUAL, like `task list`: a team-scoped read an agent legitimately needs to resolve the
   loop id it is about to name as a `--watcher`.
-- **`loop create` binds no machine, and that is the design answering, not an omission.**
+- **`loop create` binds no MACHINE, and that is the design answering, not an omission.**
   The kernel `objects` row has no machine column and `runQueue.claimOnce` selects queued
   runs by `objects.teamId`, so any machine of the team claims. A loop with `cron:` is
   armed at birth (`createObjectIn` sets `next_fire`); without one it never fires on its
-  own, and the create render says which of the two was born.
+  own, and the create render says which of the two was born. It DOES bind a
+  **directory** — see the unit-10 note, which added `workdir:` to the loop key set.
 - **`key` is on `KIND_KEYS.loop`** (`artifactSeam.ts`) even though API spec §1.16 writes
   the loop key set as `title, cron, payload`: the same paragraph promises "the same
   key-idempotency rule as tasks", which is unreachable without a key, and
@@ -699,11 +701,11 @@ row of §10 is stale rather than a rule this unit broke.
   code with no `REFUSAL_STATUS` row resolved to `undefined`, which `Response.json`
   renders as **200** — a refusal reaching the CLI as a success at exit 0. Pure hardening
   (no shipped code path reached it), but do not remove the floor.
-- **Still NOT built, deliberately** (out of unit 6's enumerated scope, both spec'd at API
-  spec §1.16 if a later unit wants them): `PATCH /api/loops/:id`, the human's whole-file
+- **Still NOT built, deliberately** (out of unit 6's enumerated scope, spec'd at API
+  spec §1.16 if a later unit wants it): `PATCH /api/loops/:id`, the human's whole-file
   loop edit — so a person who typo'd a charter must fix it through a run's `loop evolve`
-  or the web UI, since evolve is agent-only; and `POST /api/loops/:id/run-now`, the manual
-  fire. Neither is a CLI verb today.
+  or the web UI, since evolve is agent-only. `POST /api/loops/:id/run-now` WAS in this
+  list; unit 10 built it (route only, still not a CLI verb).
 
 ## The Tasks screen is a KANBAN BOARD (`kernel/taskBoard.ts` + `workspace/board.ts`)
 
@@ -796,6 +798,84 @@ existing button → `/api/*` paths.
   (the board still scrolls inside its own pane). NB the deployed graph reference is
   allowlist-gated, so signed out it renders `SignIn` — to compare against it, render the
   branch's own `styles/workspace.css` with its `WorkspaceView.tsx` markup instead.
+
+## Real local execution on the rewrite line — landing unit 10
+
+The rewrite stopped being display-only: a local daemon claims kernel runs and a real
+agent executes them in the loop's own directory. Two captain rulings shape it
+(2026-08-04, amending design §8 / API spec §1.16, which predate them): **a loop BINDS a
+workdir like the shipping product does**, and **reuse the original daemon mechanics**
+rather than forking a second execution stack.
+
+- **`objects.workdir` is a loop facet** — a real column with a `objects_workdir_loop_only`
+  CHECK (migration `0005`), on `LOOP_ONLY_FIELDS`, and a first-class `workdir:` key in
+  `KIND_KEYS.loop`. Deliberately NOT `payload.workdir`: the free zone is writable by a
+  charter, and WHERE a loop executes must sit behind the same governance gate as WHEN.
+  Absolute paths only — the claiming machine is unknown at write time, so "relative to
+  what?" has no answer the server could give.
+- **Moving it is governance, exactly like moving the cron.** `loop evolve` refuses a
+  differing `workdir:` with `APPROVAL_REQUIRED`; `governLoop` (`POST /api/loops/:id`)
+  now takes `cron` and/or `workdir` under the one approval gate, so that refusal names a
+  route that exists (the unit-6 F3 rule).
+- **No MACHINE is bound, and a machine that lacks the directory FAILS the run.** Prod
+  `mkdir -p`s a declared workdir, which is right when the loop was bound to one machine
+  at birth; here any machine of the team claims, so creating it would run the charter
+  against an empty lookalike of the repo it names. `runner.ts` `resolveWorkdir` takes
+  `requireExisting` (set from the claim's `execution.requireWorkdir`) and reports a
+  teaching failure naming the path, the host and "nothing was created". The legacy path
+  is byte-for-byte unchanged; the daemon's own scratch dir (no bound workdir at all) is
+  still created on demand.
+- **`gateway/enroll.ts` is the ONE machine-enrollment gate**, shared by legacy
+  `poll` and the rewrite claim (`enrollDeviceForClaim`). A `LOOPANY_RUNS_V2=1` daemon
+  never calls `/api/machine/poll`, so before this the rewrite line had no self-register
+  surface at all: first contact 401'd forever. The claim is also the v2 machine's only
+  heartbeat, so it stamps presence too.
+- **`routeSupport.ensureBooted()` is the rewrite line's boot entrance**, called first in
+  every rewrite route. `ensureServer()` used to be reachable only from a legacy server
+  fn, so a rewrite-only stack never migrated (a fresh pglite dir 500'd with `relation
+  "teams" does not exist`) and — worse — never started `RunQueueScheduler`, so no loop
+  ever fired.
+- **The kernel CLI attaches the device token only WITH run context** (`kernel-cli.ts`).
+  §2.6 answers a device credential and no run context with `NO_RUN_CONTEXT` on a DUAL
+  endpoint, so `loop show`/`loop list`/`task list` refused the owner on every machine the
+  daemon is registered on — the unit-4 review's B1, one layer out. `HUMAN_COMMANDS` stays
+  for the other direction (a human verb typed inside a run).
+- **`POST /api/loops/:id/run-now`** (`objectApi.runLoopNow`) is the manual fire, human
+  only like the lifecycle verbs. It reuses `queueKernelRun`'s `manual` reason and OBEYS
+  `runs_one_queued_idx` (a second call reports `alreadyQueued`), then `notifyRunQueued()`
+  so a parked claim wakes instead of waiting out its ~20s hold.
+
+### The recipe (replayable against any stack, including the demo on :3000)
+
+`scripts/rewrite-local-run.env.sh` defines an isolated stack (own port, own
+`LOOPANY_DATA_DIR`, own `LOOPANY_HOME`, own device token). Source it, never run it. To
+drive the captain's demo instead, keep its `LOOPANY_PORT`/`LOOPANY_DATA_DIR`/`LOOPANY_HOME`
+and set `LOOPANY_RUNS_V2=1` on BOTH sides — server and daemon must agree.
+
+```sh
+source scripts/rewrite-local-run.env.sh
+(cd packages/server && LOOPANY_PORT=$LOOPANY_PORT pnpm dev)          # terminal 1
+(cd packages/daemon && LOOPANY_ROOTS="$LOOPANY_RW_BASE" \
+   ./node_modules/.bin/tsx src/cli.ts up --foreground)               # terminal 2
+```
+
+- **`up --foreground` is the ONLY safe daemon launch here.** Plain `up` runs `ensure`,
+  which writes the REAL `~/.local/bin` shim and `~/.claude/settings.json` hooks
+  regardless of `LOOPANY_HOME`. `--foreground` classifies straight to `runDaemon`.
+- **Registration is automatic and needs no separate step**: the first claim enrolls the
+  machine from its `dk_`-shaped token (open mode ⇒ `team-shared`, which is also
+  `requestScope`'s open-mode team, so the human CLI and the daemon share a scope).
+- Create a loop with `loop create --file <artifact>` (`workdir:` binds the directory),
+  fire it with `POST /api/loops/<id>/run-now`, and read the result three ways: the
+  events on `GET /api/loops/<id>`, `loopany loop show <id>`, and the loop drawer at
+  `/dev/workspace` (which names the bound `workdir` beside the cadence).
+- State lives in exactly three places: the server's pglite dir (`LOOPANY_DATA_DIR`), the
+  daemon's `LOOPANY_HOME` (device token, server URL, pidfile, callback bin, scratch
+  dirs), and each loop's bound workdir. Stop with `pkill -f "up --foreground"` then the
+  dev server; a restart re-uses the same token, so the machine identity is stable.
+- `scripts/rewrite-smoke-loop.md` is the harmless read-only smoke loop that proves the
+  path end to end; `scripts/rewrite-twins/` holds the two staged Housekeeper twins and
+  their side-effect inventory.
 
 ## Maintaining this file
 

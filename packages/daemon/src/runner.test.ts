@@ -464,6 +464,64 @@ describe("runDelivery — a timed-out run keeps its session pointer", () => {
   }, 30000);
 });
 
+describe("runDelivery — a BOUND workdir the machine lacks fails loudly, never silently", () => {
+  /** Collect the run's report POSTs against a throwaway local server. */
+  async function reportsFor(d: Delivery): Promise<any[]> {
+    const reports: any[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => { reports.push(JSON.parse(body)); res.end("{}"); });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    try {
+      await runDelivery(d, `http://127.0.0.1:${(srv.address() as AddressInfo).port}`, []);
+    } finally {
+      srv.close();
+    }
+    return reports;
+  }
+
+  test("a missing bound directory reports a teaching failure and creates NOTHING", async () => {
+    // The rewrite binds a loop to a directory but binds no machine, so any machine
+    // of the team may claim. Creating the directory here would run the charter
+    // against an empty lookalike of the repo it names; refusing says so instead.
+    process.env.LOOPANY_CLAUDE_BIN = writeFakeClaude();
+    const missing = path.join(root, "no-such-repo");
+    const reports = await reportsFor(delivery({
+      loop: { ...delivery().loop, workdir: missing, workflow: null },
+      requireWorkdir: true,
+    }));
+    const rep = reports.find((r) => r.runId === "run-1");
+    expect(rep.ok).toBe(false);
+    expect(rep.error).toContain(missing);
+    expect(rep.error).toMatch(/does not exist on this machine/);
+    expect(rep.error).toMatch(/Nothing was created and no agent was launched/);
+    expect(fs.existsSync(missing)).toBe(false);
+  }, 30000);
+
+  test("without the binding flag the legacy path still creates the workdir", async () => {
+    // Legacy loops bind a MACHINE at birth, so their path was authored against
+    // this filesystem — that behavior is untouched.
+    process.env.LOOPANY_CLAUDE_BIN = writeFakeClaude();
+    const fresh = path.join(root, "legacy-made-me");
+    await reportsFor(delivery({ loop: { ...delivery().loop, workdir: fresh, workflow: null } }));
+    expect(fs.existsSync(fresh)).toBe(true);
+  }, 30000);
+
+  test("an existing bound directory runs there", async () => {
+    process.env.LOOPANY_CLAUDE_BIN = writeFakeClaude();
+    const reports = await reportsFor(delivery({
+      loop: { ...delivery().loop, workflow: null },
+      requireWorkdir: true,
+    }));
+    const rep = reports.find((r) => r.runId === "run-1");
+    expect(rep.ok).toBe(true);
+    // The fake claude writes its captured task into its OWN cwd.
+    expect(fs.existsSync(path.join(workdir, "captured-task.txt"))).toBe(true);
+  }, 30000);
+});
+
 describe("runDelivery — the exec timeout is opt-in (unlimited by default)", () => {
   test("with LOOPANY_EXEC_TIMEOUT_MS unset, no timer is armed — a slow claude completes ok", async () => {
     // Fresh runner import so the module-load timeout read sees the env UNSET (0 ⇒ unlimited).

@@ -75,12 +75,21 @@ export async function runKernelCli(argv: string[], deps: KernelCliDeps = {}): Pr
   const token = deps.token ?? env.LOOPANY_TOKEN ?? readStored(DEVICE_FILE);
 
   const headers: Record<string, string> = { ...built.headers };
-  // The two human verbs authenticate as a PERSON, so they never carry the
-  // machine's credential — the ordinary human runs this CLI on the same machine
-  // the daemon is registered on, and a device token on a human surface names the
-  // wrong actor. Belt and braces with the server's own presence-of-run-context
-  // guard: either side alone is sufficient, both together leave no seam.
-  if (token && !HUMAN_COMMANDS.has(command)) headers.Authorization = `Bearer ${token}`;
+  // THE CREDENTIAL TRAVELS WITH THE RUN CONTEXT, never on its own.
+  //
+  // What makes a caller an agent is the presence of run context (CLI spec §2.2),
+  // and the daemon sets the token and `LOOPANY_RUN_ID` together. Outside a run
+  // the person at the keyboard is the caller, and the device token is merely a
+  // readable file on their disk — attaching it names the wrong actor. It also
+  // BREAKS the DUAL reads: §2.6 answers a device credential with no run context
+  // `NO_RUN_CONTEXT`, so `loop show` / `loop list` / `task list` refused exactly
+  // the owner they exist to serve, on every machine the daemon is registered on
+  // (the same shape as the unit-4 review's B1, one layer out).
+  //
+  // HUMAN_COMMANDS stays as belt and braces for the other direction: a human
+  // verb typed INSIDE a run still carries the run header, and the server refuses
+  // it by run context before the credential is ever read.
+  if (token && env.LOOPANY_RUN_ID && !HUMAN_COMMANDS.has(command)) headers.Authorization = `Bearer ${token}`;
   // The run context is INVISIBLE: read from the environment the daemon set,
   // attached as a header, never surfaced as an argument the agent could edit.
   if (env.LOOPANY_RUN_ID) headers["X-Loopany-Run"] = env.LOOPANY_RUN_ID;
@@ -546,7 +555,10 @@ function nextFireCell(row: Body): unknown {
 }
 
 function loopRows(row: Body): [string, unknown][] {
-  const rows: [string, unknown][] = [["id", row.id], ["title", row.title], ["status", row.status], ["cron", row.cron], ["timezone", row.timezone], ["next_fire", nextFireCell(row)], ["key", row.key]];
+  // `workdir` is the loop's BOUND execution site, so it belongs beside the
+  // cadence: cron says when, workdir says where. Absent ⇒ the claiming daemon's
+  // own per-loop scratch dir, which is a real answer, not a blank.
+  const rows: [string, unknown][] = [["id", row.id], ["title", row.title], ["status", row.status], ["cron", row.cron], ["timezone", row.timezone], ["next_fire", nextFireCell(row)], ["workdir", row.workdir ?? raw(`${ABSENT} (the daemon's own scratch dir)`)], ["key", row.key]];
   for (const field of ["createdByRun", "createdByLoop", "createdAt", "updatedAt"]) {
     if (row[field] !== undefined) rows.push([label(field), row[field]]);
   }
@@ -703,7 +715,7 @@ function renderCreate(kind: Kind, body: Body, now: number): string {
     if (kind === "loop") {
       hints.push(
         `There is no human CLI verb that applies them: \`loop evolve\` runs inside a run, so edit the charter on the loop page`,
-        `A run of this loop evolves its own charter; a differing \`cron:\` stays yours even then (evolve refuses it, APPROVAL_REQUIRED)`,
+        `A run of this loop evolves its own charter; a differing \`cron:\` or \`workdir:\` stays yours even then (evolve refuses it, APPROVAL_REQUIRED)`,
       );
     } else {
       hints.push(`Run \`loopany ${kind} update ${id} --file <path>\` to apply them`);
@@ -712,8 +724,11 @@ function renderCreate(kind: Kind, body: Body, now: number): string {
     // Every safe default has a CONSEQUENCE, and a loop with no cadence is the
     // one that silently never runs. Say which of the two was born.
     hints.push(row.nextFire
-      ? `Armed: the first run fires at ${cell(row.nextFire)} and is claimed by any machine of this team — there is no machine to bind`
+      ? `Armed: the first run fires at ${cell(row.nextFire)} and is claimed by any machine of this team — no MACHINE is bound`
       : "No `cron:` in the file, so this loop has no cadence and will never fire on its own — add one and evolve, or drive it by hand");
+    hints.push(row.workdir
+      ? `Bound to ${cell(row.workdir)}: every run executes there, and a machine that lacks it fails the run instead of running elsewhere`
+      : "No `workdir:` in the file, so runs get the daemon's own per-loop scratch dir — bind one to run in a real checkout");
     hints.push(`Run \`loopany loop show ${id}\` to read it back, \`loopany loop pause ${id}\` to stop it`);
     hints.push(`Its runs evolve the charter themselves; cadence, lifecycle and creating further loops stay yours`);
   } else {

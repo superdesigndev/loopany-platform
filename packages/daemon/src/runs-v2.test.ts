@@ -22,4 +22,34 @@ describe("LOOPANY_RUNS_V2", () => {
     expect(delivery!.task).toContain("Pull the worklist.");
     expect(delivery!.task).toContain("loop-1");
   });
+
+  it("carries the loop's BOUND workdir and marks it required", () => {
+    // Captain ruling 2026-08-04: a loop binds a directory. The claiming machine
+    // must run there and must not invent it — `requireWorkdir` is what stops the
+    // runner mkdir-ing an empty lookalike of the repo the charter names.
+    const delivery = deliveryFromRunsV2(
+      {
+        run: { id: "run-2", loopId: "loop-2", loopTitle: "Housekeeper (local)", scope: "routine" },
+        charter: "Sweep the repo.",
+        execution: { workdir: "/Users/me/Workspace/repo", requireWorkdir: true },
+      },
+      "dk_device",
+    );
+    expect(delivery!.loop.workdir).toBe("/Users/me/Workspace/repo");
+    expect(delivery!.requireWorkdir).toBe(true);
+  });
+
+  it("requires the workdir from its presence alone, so an older server still binds", () => {
+    const delivery = deliveryFromRunsV2(
+      { run: { id: "run-3", loopId: "loop-3", scope: "routine" }, execution: { workdir: "/Users/me/Workspace/repo" } },
+      "dk_device",
+    );
+    expect(delivery!.requireWorkdir).toBe(true);
+  });
+
+  it("leaves an unbound loop free to use the daemon's own scratch dir", () => {
+    const delivery = deliveryFromRunsV2({ run: { id: "run-4", loopId: "loop-4", scope: "routine" } }, "dk_device");
+    expect(delivery!.loop.workdir).toBeNull();
+    expect(delivery!.requireWorkdir).toBe(false);
+  });
 });

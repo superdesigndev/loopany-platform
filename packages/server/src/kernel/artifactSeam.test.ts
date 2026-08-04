@@ -78,6 +78,36 @@ describe("the closed key sets are per kind, and the kind firewalls are named", (
     expect(back.ok && back.value.payload).toBeNull();
   });
 
+  it("carries a loop's BOUND workdir through the round trip", () => {
+    // Captain ruling 2026-08-04: a loop binds a directory like the shipping
+    // product does, so `workdir:` is a first-class loop key, not payload data.
+    const file = serializeKindArtifact("loop", { title: "Housekeeper (local)", key: "hk-local", body: "charter\n", payload: null, cron: "0 7 * * *", workdir: "/Users/me/Workspace/repo" });
+    expect(file).toContain("workdir: /Users/me/Workspace/repo");
+    const back = parseKindArtifact("loop", file, NOW);
+    expect(back.ok && back.value.workdir).toBe("/Users/me/Workspace/repo");
+  });
+
+  it("omits an absent workdir, so an unbound loop round-trips unbound", () => {
+    const file = serializeKindArtifact("loop", { title: "Nomad", key: "nomad", body: "charter\n", payload: null, cron: "0 7 * * *", workdir: null });
+    expect(file).not.toContain("workdir");
+    const back = parseKindArtifact("loop", file, NOW);
+    expect(back.ok && back.value.workdir).toBeNull();
+  });
+
+  it("refuses a relative workdir, because the claiming machine is unknown at write time", () => {
+    const rel = parseKindArtifact("loop", "---\nworkdir: ./repo\n---\ncharter\n", NOW);
+    expect(!rel.ok && rel.error).toMatchObject({ code: "SCHEMA_VIOLATION", issues: [{ path: "workdir", message: "must be an absolute path" }] });
+    const tilde = parseKindArtifact("loop", "---\nworkdir: ~/repo\n---\ncharter\n", NOW);
+    expect(!tilde.ok && tilde.error.code).toBe("SCHEMA_VIOLATION");
+  });
+
+  it("keeps workdir off a task and a doc — only a loop has an execution site", () => {
+    for (const kind of ["task", "doc"] as const) {
+      const result = parseKindArtifact(kind, "---\nworkdir: /Users/me/repo\n---\nbody\n", NOW);
+      expect(!result.ok && result.error).toMatchObject({ code: "UNKNOWN_KEY", issues: [{ message: `a bound working directory belongs to a loop, not a ${kind}` }] });
+    }
+  });
+
   it("keeps an explicitly empty payload, because that is a value the file did express", () => {
     const file = serializeKindArtifact("doc", { title: "Note", key: "note", body: "text\n", payload: {}, format: "markdown" });
     expect(file).toContain("payload");

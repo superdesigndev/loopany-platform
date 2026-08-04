@@ -48,7 +48,10 @@ interface RunsV2Claim {
   task?: unknown;
   execution?: {
     agent?: "claude-code" | "codex" | "grok";
+    /** The loop's BOUND directory (absolute). The agent runs there. */
     workdir?: string | null;
+    /** Set when the loop declares one: the daemon must not invent it. */
+    requireWorkdir?: boolean;
     taskFile?: string | null;
     workflow?: string | null;
     model?: string | null;
@@ -86,6 +89,12 @@ export function deliveryFromRunsV2(claim: RunsV2Claim, deviceToken: string): Del
       agent: execution.agent ?? "claude-code",
     },
     prevState: execution.prevState ?? null,
+    // A loop BINDS its directory (captain ruling 2026-08-04) and the binding is
+    // machine-local, so the claiming machine may not have it. Creating it here
+    // would run the charter against an empty lookalike of the repo it names —
+    // silent misplacement. The run fails loudly instead; only the daemon's own
+    // scratch fallback (no bound workdir at all) is still created on demand.
+    requireWorkdir: execution.requireWorkdir === true || typeof execution.workdir === "string",
     roots: claim.roots,
     systemPrompt: "",
     task: prompt,
@@ -216,7 +225,10 @@ export async function runDaemon(): Promise<number> {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(
           runsV2
-            ? { agent: `daemon-${daemonVersion()}-pid${process.pid}`, wait: inFlight.size === 0 }
+            // Identity rides the claim because it is the ONLY call a v2 daemon
+            // makes: the server enrols + stamps presence from it, exactly as the
+            // legacy poll does from `buildPollBody`.
+            ? { ...info, agent: `daemon-${daemonVersion()}-pid${process.pid}`, wait: inFlight.size === 0 }
             : buildPollBody(info, progress, inFlight.size === 0, watchDigest),
         ),
       }, POLL_TIMEOUT_MS, ac.signal);
