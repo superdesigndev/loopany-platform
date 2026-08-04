@@ -33,7 +33,7 @@ export const REFUSAL_CODES = [
   "APPROVAL_NOT_HUMAN", "APPROVAL_FOREIGN", "NOT_FOUND", "OPEN_QUESTION",
   "NO_OPEN_QUESTION", "WRONG_KIND", "KEY_KIND_MISMATCH", "IMMUTABLE_KEY",
   "CLOSED", "PAUSED", "RETIRED", "QUEUED_ALREADY", "LEASE_LOST",
-  "TOO_LARGE", "RATE_LIMITED",
+  "TOO_LARGE", "RATE_LIMITED", "ID_COLLISION",
 ] as const;
 
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
@@ -51,7 +51,7 @@ export const REFUSAL_STATUS: Record<RefusalCode, number> = {
   NOT_FOUND: 404, OPEN_QUESTION: 409, NO_OPEN_QUESTION: 409, WRONG_KIND: 409,
   KEY_KIND_MISMATCH: 409, IMMUTABLE_KEY: 409, CLOSED: 409, PAUSED: 409,
   RETIRED: 409, QUEUED_ALREADY: 409, LEASE_LOST: 409, TOO_LARGE: 413,
-  RATE_LIMITED: 429,
+  RATE_LIMITED: 429, ID_COLLISION: 409,
 };
 
 interface RefusalTemplate {
@@ -202,6 +202,10 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   RATE_LIMITED: {
     message: `%s was rate limited`,
     hint: "retry after the Retry-After interval; this is a transport condition, not a refusal of the work",
+  },
+  ID_COLLISION: {
+    message: `%s already names a different object than the one this call derived it for`,
+    hint: "this is a server-side identity fault, not a mistake in your command: the work did NOT happen and retrying re-derives the same id. Report it to the loop's owner.",
   },
 };
 

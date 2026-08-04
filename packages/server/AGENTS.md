@@ -493,10 +493,32 @@ transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/grap
   same transaction, widening after a run of misses — `createObjectIn`'s mint loop,
   `appendOrganicEvent`, `queueKernelRun`'s manual branch), while a DERIVED id is twelve
   because it may NEVER be re-minted (that purity IS replay idempotency) and its
-  collision would be SILENT — swallowed by the same `ON CONFLICT DO NOTHING` that
-  implements dedup, handing back a stranger's row. Both halves are pinned by
+  collision would otherwise be SILENT — swallowed by the same `ON CONFLICT DO NOTHING`
+  that implements dedup, handing back a stranger's row. Both halves are pinned by
   `ids.test.ts` + `idCollision.integration.test.ts` (which scripts the mint through a
-  partial mock of `ids.js` to stage a collision on demand).
+  partial mock of `ids.js` to stage a collision on demand). Two invariants ride on the
+  widths and are pinned: no organic rung may equal `DERIVED_HEX` (equal widths would let
+  the two families produce the same id STRING, reopening a cross-family silent merge),
+  and the `attempt` parameter — which used to be a TIMESTAMP, same type — is
+  domain-checked to `[0, ORGANIC_MINT_ATTEMPTS)`, so a stale `newObjectId(kind, nowMs)`
+  call throws instead of quietly minting 16-hex ids forever.
+- **Width is NOT the only remedy for a derived collision — NOTICING is.** Purity forbids
+  re-minting a derived id; it does not forbid checking that the row a swallowed insert
+  resolved to is the identity the seed named. Four guards do exactly that and refuse
+  loudly (`ID_COLLISION`, logged at ERROR via `applyTransition.ts` `failCollision`;
+  `runQueue.ts` throws, rolling its transaction back): `createObjectIn`'s explicit-id
+  conflict path refuses a `found.teamId !== teamId` (this closed a cross-team data
+  handoff); `applyTransitionIn`'s derived-event latch AND its post-append swallow both
+  refuse a prior event on a different object (`objectId` is IN the seed, so a foreign
+  holder is a certain collision, never a replay); `kernelStore.queueRun` reports a
+  foreign-loop id hit as the new outcome `id-taken` rather than `replay` (organic manual
+  fires re-mint on it, derived clock fires fail loud); and `runQueue.appendDerivedEvent`
+  wraps every derived `store.appendEvent` so a fact can never land on a stranger's
+  timeline. `tickRunClock` isolates the failure per loop (`TickResult.failed`) and
+  deliberately does NOT advance that loop's cursor, so the fire stays due instead of
+  being silently consumed. THE ONE RESIDUE, pinned by its own test: two seeds colliding
+  inside ONE team on ONE object still resolve as a replay — telling those apart needs the
+  seed (or its 64-hex hash) persisted in a column, held as a separate schema decision.
 - **No id is a clock.** `events.seq` is the log's only ordering authority and every
   reader already uses it. `listTasks`/`listLoops` still paginate `ORDER BY objects.id`
   with a `>` cursor — a total order, so the cursor is exact — but the row order is now

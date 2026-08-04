@@ -195,4 +195,48 @@ describe("the organic widening ladder", () => {
     expect(ORGANIC_MINT_ATTEMPTS).toBeGreaterThan(0);
     expect(Number.isInteger(ORGANIC_MINT_ATTEMPTS)).toBe(true);
   });
+
+  /**
+   * THE DISJOINTNESS PIN. No organic rung may equal `DERIVED_HEX`, and that is
+   * load-bearing rather than cosmetic: equal widths would let an organic mint
+   * land on the exact value some later derivation truncates to, and that
+   * derivation would then resolve the organic row as its own "replay" — a silent
+   * merge with NO remedy, since an organic id carries no seed to compare
+   * against. The two families can never collide only because their id STRINGS
+   * can never be equal. A future rung at 12 would reopen the channel invisibly.
+   */
+  it("keeps every organic rung a different width from a derived id", () => {
+    const widths = Array.from({ length: ORGANIC_MINT_ATTEMPTS }, (_, i) => organicWidth(i));
+    for (const width of widths) expect(width, `rung width ${width} must not equal DERIVED_HEX`).not.toBe(DERIVED_HEX);
+    expect(new Set(widths).has(DERIVED_HEX)).toBe(false);
+    // Belt and braces at the id level: no organic mint can ever produce a string
+    // the derived family could produce.
+    expect(newObjectId("task", 6, counting)).not.toMatch(new RegExp(`^task-[0-9a-f]{${DERIVED_HEX}}$`));
+  });
+
+  /**
+   * THE TRIPWIRE (review rw9 F2). This parameter used to be a TIMESTAMP
+   * (`newObjectId(kind, nowMs)`) and is now the retry rung — same type, opposite
+   * meaning — so a stale call site compiles clean and used to mint valid-looking
+   * 16-hex ids forever, with nothing downstream able to notice. The ladder's
+   * domain is now enforced, which turns that silent trap into an immediate,
+   * obvious failure at the first call.
+   */
+  describe("the attempt tripwire", () => {
+    it("refuses a timestamp where a retry rung belongs", () => {
+      const nowMs = Date.parse("2026-08-03T07:00:00.000Z");
+      expect(() => organicWidth(nowMs)).toThrow(/retry rung, not a timestamp/);
+      expect(() => newObjectId("task", nowMs)).toThrow(/retry rung, not a timestamp/);
+      expect(() => newRunId(nowMs)).toThrow(/retry rung, not a timestamp/);
+      expect(() => organicEventId(nowMs)).toThrow(/retry rung, not a timestamp/);
+    });
+
+    it("pins the ladder's domain at both ends", () => {
+      expect(() => organicWidth(-1)).toThrow(/\[0, 8\)/);
+      expect(() => organicWidth(ORGANIC_MINT_ATTEMPTS)).toThrow(/\[0, 8\)/);
+      expect(() => organicWidth(1.5)).toThrow(/integer/);
+      // Every rung a mint loop can actually reach stays legal.
+      for (let i = 0; i < ORGANIC_MINT_ATTEMPTS; i++) expect(() => organicWidth(i)).not.toThrow();
+    });
+  });
 });

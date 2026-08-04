@@ -152,8 +152,15 @@ export async function countEventsById(x: KernelExec | undefined, id: string): Pr
 export type QueueRunOutcome =
   /** A fresh queued run landed. */
   | "queued"
-  /** This exact run id already existed: a replayed fire, an idempotent no-op. */
+  /** This exact run id already existed AND it belongs to this loop: a replayed
+   *  fire, an idempotent no-op. */
   | "replay"
+  /** The id existed but belongs to ANOTHER LOOP — the number is taken, not the
+   *  fire replayed. For an ORGANIC (manual) run that is ordinary and the caller
+   *  simply draws again; for a DERIVED one it is a truncation collision, and the
+   *  caller must fail loudly rather than report a stranger's run as this loop's
+   *  own (`runQueue.ts` `queueKernelRun` branches on exactly that difference). */
+  | "id-taken"
   /** The loop already has a queued run (`runs_one_queued_idx`). §6.1 records a
    *  `clock-skipped` event here rather than stacking a second run. */
   | "loop-busy";
@@ -179,7 +186,11 @@ export async function queueRun(
   const out = await exec.insert(runs).values(row).onConflictDoNothing().returning();
   if (out[0]) return { run: out[0], outcome: "queued" };
   const byId = (await exec.select().from(runs).where(eq(runs.id, row.id!)))[0];
-  if (byId) return { run: byId, outcome: "replay" };
+  // A primary-key hit is a REPLAY only if the existing row is this loop's own
+  // run. Run ids are short (derived ones are a truncated hash), so an id hit on
+  // a different loop is an identity collision — reporting it as a replay would
+  // silently skip this loop's scheduled fire and hand back the other loop's run.
+  if (byId) return { run: byId, outcome: byId.loopId === row.loopId ? "replay" : "id-taken" };
   const queued = (
     await exec
       .select()

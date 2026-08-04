@@ -23,7 +23,7 @@ import {
   reportDocId,
 } from "./ids.js";
 import { nextOccurrenceAfter } from "./schedule.js";
-import { refusal, type RefusalCode } from "./refusals.js";
+import { REFUSAL_STATUS, refusal, type RefusalCode } from "./refusals.js";
 
 const log = logger.child({ mod: "run-queue" });
 
@@ -88,18 +88,67 @@ export async function queueKernelRun(tx: store.KernelExec, input: QueueInput) {
     scheduledFor: input.scheduledFor ?? null,
   } as const;
 
-  if (derivedId) return store.queueRun(tx, { ...row, id: derivedId });
+  if (derivedId) {
+    const queued = await store.queueRun(tx, { ...row, id: derivedId });
+    // A DERIVED run id may never be re-minted, so an id already held by ANOTHER
+    // loop is not a replay to swallow — it is two identities truncated onto one
+    // id. Swallowing it would drop this loop's fire and report the stranger's
+    // run as ours. There is no repair inside the seam (the id is a pure function
+    // of the seed), so the honest outcome is a loud failure that rolls the
+    // transaction back and leaves the fire due for the next level-triggered pass.
+    if (queued.outcome === "id-taken") {
+      log.error(
+        { runId: derivedId, loopId: loop.id, heldBy: queued.run?.loopId, reason },
+        "derived run id collision — refusing to report another loop's run as this fire",
+      );
+      throw new Error(
+        `derived run id ${derivedId} already belongs to ${queued.run?.loopId}, not ${loop.id} — refusing to queue`,
+      );
+    }
+    return queued;
+  }
 
   // A MANUAL fire is organic (a person pressing the button twice is two real
-  // facts), so its short id carries no identity and a `replay` outcome here means
-  // the number was taken, not that the fire already landed — re-mint rather than
-  // hand the caller a stranger's run. `loop-busy` is the queue discipline firing
-  // and is returned untouched.
+  // facts), so its short id carries no identity and a taken number — whether the
+  // holder is this loop (`replay`) or another one (`id-taken`) — is a mistake
+  // with a cheap fix: re-mint rather than hand the caller a stranger's run.
+  // `loop-busy` is the queue discipline firing and is returned untouched.
   for (let attempt = 0; attempt < ORGANIC_MINT_ATTEMPTS; attempt++) {
     const queued = await store.queueRun(tx, { ...row, id: newRunId(attempt) });
-    if (queued.outcome !== "replay") return queued;
+    if (queued.outcome !== "replay" && queued.outcome !== "id-taken") return queued;
   }
   throw new Error(`could not mint a free run id after ${ORGANIC_MINT_ATTEMPTS} attempts`);
+}
+
+/**
+ * Append a DERIVED event, refusing a truncation collision instead of swallowing
+ * it.
+ *
+ * A swallowed insert here is normally the dedup invariant firing — the same fact
+ * re-derived, which is the whole point of a derived id. It is NOT that when the
+ * existing row hangs on a DIFFERENT object: the seed of every event below names
+ * its object (or its run, which names one loop), so a foreign holder can only be
+ * two seeds colliding on one truncated hash. Swallowing that would leave the
+ * fact permanently absent from its own object's timeline while the caller
+ * carried on as if it had been recorded — an audit-log hole nothing ever
+ * surfaces. Runs' events are the fastest-growing, never-pruned pool of derived
+ * ids in the system, so this is the pool where the collision math actually bites.
+ */
+async function appendDerivedEvent(
+  tx: store.KernelExec,
+  row: Parameters<typeof store.appendEvent>[1],
+): Promise<Awaited<ReturnType<typeof store.appendEvent>>> {
+  const out = await store.appendEvent(tx, row);
+  if (!out.inserted && out.event.objectId !== row.objectId) {
+    log.error(
+      { eventId: row.id, kind: row.kind, objectId: row.objectId, heldBy: out.event.objectId },
+      "derived event id collision — refusing to drop the fact onto a stranger's timeline",
+    );
+    throw new Error(
+      `derived event id ${row.id} already records a fact about ${out.event.objectId}, not ${row.objectId}`,
+    );
+  }
+  return out;
 }
 
 export interface TickResult {
@@ -107,6 +156,10 @@ export interface TickResult {
   queued: number;
   skipped: number;
   replayed: number;
+  /** Fires the queue REFUSED (an identity collision, or any transaction error).
+   *  The loop's cursor is deliberately left un-advanced, so the fire is still
+   *  due on the next pass rather than silently lost. */
+  failed: number;
 }
 
 /** One level-triggered pass. Fire and cursor deliberately commit separately. */
@@ -118,40 +171,20 @@ export async function tickRunClock(now: Date = new Date()): Promise<TickResult> 
     .where(and(eq(objects.kind, "loop"), eq(objects.status, "active"), lte(objects.nextFire, nowIso)))
     .orderBy(asc(objects.nextFire))
     .limit(25);
-  const result: TickResult = { scanned: due.length, queued: 0, skipped: 0, replayed: 0 };
+  const result: TickResult = { scanned: due.length, queued: 0, skipped: 0, replayed: 0, failed: 0 };
 
   for (const loop of due) {
     const scheduledFor = loop.nextFire!;
-    const outcome = await db.transaction(async (rawTx) => {
-      const tx = rawTx as unknown as store.KernelExec;
-      const queued = await queueKernelRun(tx, { loop, now: nowIso, reason: "clock", scheduledFor });
-      if (queued.outcome === "queued") {
-        await store.appendEvent(tx, {
-          id: derivedEventId({ loopId: loop.id, kind: "run-queued", scheduledFor }),
-          teamId: loop.teamId,
-          objectId: loop.id,
-          kind: "run-queued",
-          origin: "derived",
-          entrance: "clock",
-          actorId: loop.id,
-          payload: { runId: queued.run!.id, reason: "clock", scheduledFor },
-          ts: nowIso,
-        });
-      } else if (queued.outcome === "loop-busy") {
-        await store.appendEvent(tx, {
-          id: derivedEventId({ loopId: loop.id, kind: "clock-skipped", scheduledFor }),
-          teamId: loop.teamId,
-          objectId: loop.id,
-          kind: "clock-skipped",
-          origin: "derived",
-          entrance: "clock",
-          actorId: loop.id,
-          payload: { queuedRunId: queued.run?.id ?? null, scheduledFor },
-          ts: nowIso,
-        });
-      }
-      return queued.outcome;
-    });
+    const attempt = await queueOneFire(loop, scheduledFor, nowIso);
+    if (!attempt.ok) {
+      // One loop's identity fault must not starve the others, and its fire must
+      // not be silently consumed: the cursor advance below is SKIPPED, so the
+      // loop stays due and every pass re-raises the error until a human acts.
+      log.error({ err: attempt.err, loopId: loop.id, scheduledFor }, "run clock could not queue a due fire");
+      result.failed += 1;
+      continue;
+    }
+    const outcome = attempt.outcome;
 
     // Separate transaction: commit fire first so a crash can replay, never lose it.
     await db.transaction(async (rawTx) => {
@@ -166,6 +199,50 @@ export async function tickRunClock(now: Date = new Date()): Promise<TickResult> 
   }
   if (result.queued) wakeClaims();
   return result;
+}
+
+/** One due loop's queue transaction, with its refusal captured rather than
+ *  thrown — see `TickResult.failed`. */
+async function queueOneFire(
+  loop: KernelObject,
+  scheduledFor: string,
+  nowIso: string,
+): Promise<{ ok: true; outcome: store.QueueRunOutcome } | { ok: false; err: string }> {
+  try {
+    const outcome = await db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as store.KernelExec;
+      const queued = await queueKernelRun(tx, { loop, now: nowIso, reason: "clock", scheduledFor });
+      if (queued.outcome === "queued") {
+        await appendDerivedEvent(tx, {
+          id: derivedEventId({ loopId: loop.id, kind: "run-queued", scheduledFor }),
+          teamId: loop.teamId,
+          objectId: loop.id,
+          kind: "run-queued",
+          origin: "derived",
+          entrance: "clock",
+          actorId: loop.id,
+          payload: { runId: queued.run!.id, reason: "clock", scheduledFor },
+          ts: nowIso,
+        });
+      } else if (queued.outcome === "loop-busy") {
+        await appendDerivedEvent(tx, {
+          id: derivedEventId({ loopId: loop.id, kind: "clock-skipped", scheduledFor }),
+          teamId: loop.teamId,
+          objectId: loop.id,
+          kind: "clock-skipped",
+          origin: "derived",
+          entrance: "clock",
+          actorId: loop.id,
+          payload: { queuedRunId: queued.run?.id ?? null, scheduledFor },
+          ts: nowIso,
+        });
+      }
+      return queued.outcome;
+    });
+    return { ok: true, outcome };
+  } catch (err) {
+    return { ok: false, err: String(err) };
+  }
 }
 
 /** Cutover repair for migrated active loops plus the create/resume arming seam. */
@@ -284,7 +361,7 @@ async function claimOnce(machine: Machine, agent: string, now: Date): Promise<{ 
         .returning()
     )[0];
     if (!claimed) return undefined;
-    await store.appendEvent(tx, {
+    await appendDerivedEvent(tx, {
       id: derivedEventId({ runId: claimed.id, kind: "run-claimed", attempts: claimed.attempts }),
       teamId: picked.loop.teamId,
       objectId: picked.loop.id,
@@ -371,7 +448,7 @@ async function finishExpiredAsFailure(tx: store.KernelExec, run: Run, now: Date,
       leaseExpiresAt: null,
     })
     .where(eq(runs.id, run.id));
-  await store.appendEvent(tx, {
+  await appendDerivedEvent(tx, {
     id: derivedEventId({ runId: run.id, kind: "run-finished", outcome: "failure" }),
     teamId: loop.teamId,
     objectId: loop.id,
@@ -428,11 +505,15 @@ export async function finishRun(machine: Machine, contextRunId: string, pathRunI
         createdByRun: run.id,
         createdByLoop: loop.id,
       });
-      if (!created.ok) return problem(400, created.code, created.message);
+      // A report doc's id is DERIVED from the run, so a refusal here can be the
+      // identity guard firing (`ID_COLLISION`, 409) as well as an ordinary
+      // content refusal. Surface the code's own status so the agent sees a
+      // conflict it must escalate, not a 400 it will try to rewrite its way out of.
+      if (!created.ok) return problem(REFUSAL_STATUS[created.code as RefusalCode] ?? 400, created.code, created.message);
       report = { id: created.object.id, created: created.created };
     }
 
-    const finishedEvent = await store.appendEvent(tx, {
+    const finishedEvent = await appendDerivedEvent(tx, {
       id: derivedEventId({ runId: run.id, kind: "run-finished", outcome: body.outcome }),
       teamId: loop.teamId,
       objectId: loop.id,
@@ -516,7 +597,15 @@ async function maybeAutoPause(tx: store.KernelExec, loop: KernelObject, runId: s
     derivedFrom: { runId, streak },
     eventPayload: { streak, lastFailure: runId },
   });
-  if (!paused.ok) return undefined;
+  // An ordinary refusal here (the loop moved under us) simply means no pause to
+  // report. An `ID_COLLISION` is the identity guard, and swallowing it would
+  // reproduce exactly the failure it exists to catch: the circuit breaker
+  // reporting success while the loop keeps firing. It rides out of the
+  // transaction instead, rolling back with it.
+  if (!paused.ok) {
+    if (paused.code === "ID_COLLISION") throw new Error(`auto-pause refused: ${paused.message}`);
+    return undefined;
+  }
   const question = autoPauseTaskId(loop.id, runId);
   const task = await createObjectIn(tx, {
     id: question,
@@ -530,7 +619,10 @@ async function maybeAutoPause(tx: store.KernelExec, loop: KernelObject, runId: s
     createdByRun: runId,
     createdByLoop: loop.id,
   });
-  if (!task.ok) return undefined;
+  if (!task.ok) {
+    if (task.code === "ID_COLLISION") throw new Error(`auto-pause question refused: ${task.message}`);
+    return undefined;
+  }
   return { loop: loop.id, streak, question: task.object.id };
 }
 

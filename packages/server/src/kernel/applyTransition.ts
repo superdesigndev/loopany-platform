@@ -219,6 +219,47 @@ function fail(r: KernelRefusal, ctx: Record<string, unknown>): KernelRefusal {
   return r;
 }
 
+/**
+ * THE IDENTITY GUARD's refusal — an `ID_COLLISION`, logged at ERROR rather than
+ * warn because it is not a caller's mistake but a breach of the invariant the
+ * whole dedup scheme rests on: a short derived id resolved to a row that is NOT
+ * the identity the seed named.
+ *
+ * A derived id is `sha256(seed)` TRUNCATED (`ids.ts` `derivedSuffix`), and
+ * truncation is not injective — two distinct seeds can land on one id. Purity
+ * forbids re-minting (that purity IS replay idempotency), so the remedy is not
+ * a different id; it is NOTICING. Every place below that would otherwise resolve
+ * a swallowed insert into somebody else's row compares the identity it can see
+ * (team, object) and refuses here instead. A collision then costs one visible,
+ * attributable failure rather than a silent merge of two identities.
+ *
+ * WHAT THIS DOES NOT CATCH, deliberately: two seeds colliding on ONE team's ONE
+ * object (e.g. two different runs' report docs). Distinguishing those needs the
+ * full seed (or its 64-hex hash) persisted alongside the row, which is a schema
+ * change held as a separate decision. Nothing here narrows that gap; it closes
+ * the cross-team and cross-object variants, which are the dangerous ones.
+ */
+function failCollision(r: KernelRefusal, ctx: Record<string, unknown>): KernelRefusal {
+  logger.error({ code: r.code, ...ctx }, `kernel identity invariant breached: ${r.message}`);
+  return r;
+}
+
+/** The refusal both derived-event guards raise — one sentence, one shape. */
+function collidedEvent(
+  eventId: string,
+  objectId: string,
+  priorObjectId: string | null,
+  transition: string,
+): KernelRefusal {
+  const held = priorObjectId ?? "no object";
+  return refuse(
+    "ID_COLLISION",
+    `the derived event id ${eventId} already records a fact about ${held}, not ${objectId}`,
+    [{ path: "derivedFrom", message: "derived event id resolves to another object", got: held, expected: objectId }],
+    `${transition} did NOT happen and nothing was written; the id is a pure function of its seed, so escalate rather than retry`,
+  );
+}
+
 // ---- pure helpers (exported for direct unit testing) ----
 
 /** Structural equality over JSON-able values; `null` and `undefined` are one. */
@@ -398,13 +439,48 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
       // Only reachable if the row vanished between the swallow and this read.
       return fail(refuse("NOT_FOUND", "the conflicting object could not be resolved", []), where);
     }
+    // THE CROSS-TEAM IDENTITY GUARD. Only the explicit-id branch can trip this:
+    // `getObjectByKey` is team-scoped, while the explicit-id resolution above is
+    // a GLOBAL primary-key read. A swallowed insert on an explicit (derived) id
+    // is normally the replay this whole scheme is built for — the same seed, the
+    // same identity, resolved rather than duplicated. It is emphatically NOT a
+    // replay when the row belongs to another team: no seed in this kernel spans
+    // teams, so the only way here is two seeds truncating onto one id, and
+    // returning `found` would hand this caller another team's object verbatim —
+    // a cross-team data handoff with nothing logged and nothing thrown. It also
+    // has to be checked BEFORE the kind mismatch below, whose message quotes the
+    // stranger's kind and id.
+    if (found.teamId !== teamId) {
+      return failCollision(
+        refuse(
+          "ID_COLLISION",
+          `${id} already names an object outside this team — two identities collided on one derived id`,
+          [{ path: "id", message: "resolves to another team's object", got: id }],
+          "nothing was written; this id cannot be re-minted (it is a pure function of its seed), so escalate rather than retry",
+        ),
+        { ...where, id, foundTeamId: found.teamId },
+      );
+    }
     if (found.kind !== kind) {
+      // The subject is whichever identity actually collided: a supplied key, or
+      // (on the explicit-id branch, which carries no key) the id itself. Naming
+      // `key "undefined"` here would teach a fiction.
+      const keyed = input.key !== undefined;
       return fail(
         refuse(
           "KEY_KIND_MISMATCH",
-          `key "${input.key}" already names a ${found.kind} in this team`,
-          [{ path: "key", message: `already used by a ${found.kind}`, got: input.key ?? "", expected: kind }],
-          `pick a different key, or address the existing ${found.kind} by its id (${found.id})`,
+          `${keyed ? `key "${input.key}"` : `id ${id}`} already names a ${found.kind} in this team`,
+          [
+            {
+              path: keyed ? "key" : "id",
+              message: `already used by a ${found.kind}`,
+              got: keyed ? input.key! : id,
+              expected: kind,
+            },
+          ],
+          keyed
+            ? `pick a different key, or address the existing ${found.kind} by its id (${found.id})`
+            : `address the existing ${found.kind} by its id (${found.id})`,
         ),
         where,
       );
@@ -596,7 +672,22 @@ export async function applyTransitionIn(tx: KernelExec, input: ApplyTransitionIn
   const eventId = derived ? derivedEventId({ objectId, transition, seed: input.derivedFrom }) : undefined;
   if (eventId) {
     const prior = await kernel.getEvent(tx, eventId);
-    if (prior) return { ok: true, object: before, event: prior, replay: true };
+    if (prior) {
+      // THE OBJECT-IDENTITY GUARD, and the reason it is exact rather than a
+      // heuristic: `objectId` is IN the seed, so a prior event derived from the
+      // same seed necessarily hangs on this same object. A prior on a DIFFERENT
+      // object is therefore a certain truncation collision — never a replay —
+      // and latching on it would drop this transition entirely while reporting
+      // success (the circuit breaker's pause that silently does not happen).
+      if (prior.objectId !== objectId) {
+        return failCollision(collidedEvent(eventId, objectId, prior.objectId, transition), {
+          ...where,
+          eventId,
+          priorObjectId: prior.objectId,
+        });
+      }
+      return { ok: true, object: before, event: prior, replay: true };
+    }
   }
 
   // KIND FIREWALL. A loop's lifecycle is operational — `close` does not apply to
@@ -688,6 +779,15 @@ export async function applyTransitionIn(tx: KernelExec, input: ApplyTransitionIn
   if (eventId) {
     const derivedAppend = await kernel.appendEvent(tx, { ...eventRow, id: eventId });
     if (!derivedAppend.inserted) {
+      // Same guard as the latch above, for the race the latch cannot see: the
+      // swallowed row is a replay only if it belongs to this object.
+      if (derivedAppend.event.objectId !== objectId) {
+        return failCollision(collidedEvent(eventId, objectId, derivedAppend.event.objectId, transition), {
+          ...where,
+          eventId,
+          priorObjectId: derivedAppend.event.objectId,
+        });
+      }
       return { ok: true, object: (await kernel.getObject(tx, objectId))!, event: derivedAppend.event, replay: true };
     }
     event = derivedAppend.event;

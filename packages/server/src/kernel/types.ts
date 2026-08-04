@@ -161,7 +161,12 @@ export type KernelErrorCode =
   | "CLOSED"
   | "NOT_HUMAN"
   | "KEY_KIND_MISMATCH"
-  | "SCHEMA_VIOLATION";
+  | "SCHEMA_VIOLATION"
+  /** An INVARIANT BREACH, not a user error: a short id resolved to a row that is
+   *  not the identity the caller meant. Its own code because the only honest
+   *  answer to a truncation collision is a loud, attributable failure — the
+   *  alternative is silently operating on a stranger's object. */
+  | "ID_COLLISION";
 
 export interface KernelRefusal {
   ok: false;

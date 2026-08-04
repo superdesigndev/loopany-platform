@@ -44,6 +44,15 @@
  *    full sha256. The deviation from the spec's printed six is deliberate and
  *    buys exactly one thing: safety for the id that cannot retry.
  *
+ * THE TWO WIDTHS ARE DISJOINT, and that is load-bearing rather than incidental:
+ * the organic ladder is {6, 10, 16} and no rung equals `DERIVED_HEX` (12), so an
+ * organic id string can never equal a derived one. That closes the whole
+ * cross-family channel — an organic mint landing on the value some later
+ * derivation truncates to would make that derivation "replay" a stranger's row,
+ * a silent merge with no remedy at all (an organic id carries no seed to compare
+ * against). Adding a 12-hex rung would reopen it invisibly, so `ids.test.ts`
+ * pins the disjointness.
+ *
  * Pure and dependency-free apart from `node:crypto`; unit-tested directly.
  */
 import { createHash, randomBytes } from "node:crypto";
@@ -92,8 +101,25 @@ export const ORGANIC_MINT_ATTEMPTS = 8;
  * six-hex shape; a RUN of collisions means the space is genuinely crowded rather
  * than unlucky, so the id widens instead of the mint failing. A pure function of
  * the attempt number, so a test can drive any rung.
+ *
+ * NO RUNG MAY EQUAL `DERIVED_HEX` — see the header; the disjointness is what
+ * keeps an organic id from ever colliding with a derived one.
+ *
+ * THE TRIPWIRE. `attempt` is a retry rung, and it occupies the parameter slot
+ * that used to carry a TIMESTAMP (`newObjectId(kind, nowMs)` and friends, before
+ * the short-id reshape). Same type, opposite meaning — so a stale call site
+ * passing `nowMs` compiles clean, resolves the top rung and mints 16-hex ids
+ * forever, silently shipping the wrong id shape with nothing downstream ever
+ * flagging it. The ladder's domain is `[0, ORGANIC_MINT_ATTEMPTS)`; anything
+ * else is a caller bug and fails here, immediately and loudly.
  */
 export function organicWidth(attempt: number): number {
+  if (!Number.isInteger(attempt) || attempt < 0 || attempt >= ORGANIC_MINT_ATTEMPTS) {
+    throw new Error(
+      `organic mint attempt must be an integer in [0, ${ORGANIC_MINT_ATTEMPTS}) — got ${attempt}. ` +
+        "This parameter is a retry rung, not a timestamp.",
+    );
+  }
   if (attempt < 3) return ORGANIC_HEX;
   if (attempt < 6) return 10;
   return 16;

@@ -139,7 +139,9 @@ describe("R-clock", () => {
   it("does one level-triggered catch-up and advances after now (C5 shape)", async () => {
     const l = await loop();
     const result = await queue.tickRunClock(NOW);
-    expect(result).toEqual({ scanned: 1, queued: 1, skipped: 0, replayed: 0 });
+    // `failed` counts fires the queue REFUSED (an identity collision, or any
+    // transaction error): zero on every healthy tick.
+    expect(result).toEqual({ scanned: 1, queued: 1, skipped: 0, replayed: 0, failed: 0 });
     const rows = await database.db.select().from(legacySchema.runs);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ loopId: l.id, queueState: "queued", scheduledFor: DUE, reason: "clock" });

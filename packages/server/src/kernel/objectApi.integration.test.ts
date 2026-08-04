@@ -462,7 +462,7 @@ describe("governance refuses before it authorizes", () => {
     expect(code(await api.governLoop(loop.id, { cron: "0 * * * *" }, agentIn(loop.id), T1))).toBe("APPROVAL_REQUIRED");
     expect(code(await api.governLoop(loop.id, { cron: "0 * * * *", approval: "ev-x", status: "paused" }, agentIn(loop.id), T1))).toBe("UNKNOWN_KEY");
     const task = await makeTask({}, loop.id);
-    const approval = await store.appendEvent(undefined, { id: ids.organicEventId(T1.getTime()), teamId: TEAM, objectId: task.id, kind: "question-answered", origin: "organic", entrance: "human", actorId: "u-owner", note: "yes", ts: T1.toISOString() });
+    const approval = await store.appendEvent(undefined, { id: ids.organicEventId(), teamId: TEAM, objectId: task.id, kind: "question-answered", origin: "organic", entrance: "human", actorId: "u-owner", note: "yes", ts: T1.toISOString() });
     expect(code(await api.governLoop(loop.id, { cron: "every hour", approval: approval.event.id }, agentIn(loop.id), T1))).toBe("BAD_CRON");
   });
 });
@@ -565,13 +565,13 @@ describe("approval key checks", () => {
     if (!foreignTask.ok) throw new Error(foreignTask.message);
     const notHuman = await api.governLoop(loop.id, { cron: "0 * * * *", approval: foreignTask.event!.id }, context, T1);
     expect(!notHuman.ok && notHuman.error.code).toBe("APPROVAL_NOT_HUMAN");
-    const foreignApproval = await store.appendEvent(undefined, { id: ids.organicEventId(T1.getTime()), teamId: TEAM, objectId: foreignTask.object.id, kind: "question-answered", origin: "organic", entrance: "human", actorId: "u-owner", note: "yes", ts: T1.toISOString() });
+    const foreignApproval = await store.appendEvent(undefined, { id: ids.organicEventId(), teamId: TEAM, objectId: foreignTask.object.id, kind: "question-answered", origin: "organic", entrance: "human", actorId: "u-owner", note: "yes", ts: T1.toISOString() });
     const foreign = await api.governLoop(loop.id, { cron: "0 * * * *", approval: foreignApproval.event.id }, context, T1);
     expect(!foreign.ok && foreign.error.code).toBe("APPROVAL_FOREIGN");
 
     const ownTask = await kernel.createObject({ teamId: TEAM, kind: "task", actor: { entrance: "agent", actorId: "run-proposer" }, now: T0, title: "Own", createdByLoop: loop.id });
     if (!ownTask.ok) throw new Error(ownTask.message);
-    const approval = await store.appendEvent(undefined, { id: ids.organicEventId(T1.getTime() + 1), teamId: TEAM, objectId: ownTask.object.id, kind: "question-answered", origin: "organic", entrance: "human", actorId: "u-owner", note: "yes", ts: T1.toISOString() });
+    const approval = await store.appendEvent(undefined, { id: ids.organicEventId(), teamId: TEAM, objectId: ownTask.object.id, kind: "question-answered", origin: "organic", entrance: "human", actorId: "u-owner", note: "yes", ts: T1.toISOString() });
     const valid = await api.governLoop(loop.id, { cron: "0 * * * *", approval: approval.event.id }, context, T1);
     expect(valid.ok).toBe(true); expect(valid.ok && (valid.value.approval as { event: string }).event).toBe(approval.event.id);
   });
