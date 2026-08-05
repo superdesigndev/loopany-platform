@@ -1085,12 +1085,21 @@ Traced through `runner.ts` (the child env), `spawn.ts` `execEnv`/`allowlistEnv` 
   `drizzle/meta/_journal.json` against what the volume actually holds** (read it from a
   COPY of `/data/pgdata`, never the live dir - see below); a shared 0000-000N prefix plus
   divergent tails means the deploy cannot land without reconciling the DB first.
-- **Reading the testing DB is a load hazard.** The machine is `shared-cpu-1x`/512MB and
-  the live server holds pglite open, so `cp -a /data/pgdata /tmp/... && node` a second
-  PGlite over the copy can push the machine past its memory ceiling and drop it out of
-  the load balancer ("no known healthy instances"). Recovery is
-  `flyctl machine restart <id> -a loopany-testing` (container reboot only, volume and
-  data untouched). Take ONE reading, write the answer to a file, and get out.
+- **Resetting that volume needs 1024mb, and testing now has it** (`fly.toml` `[[vm]]`,
+  matching `fly.prod.toml`). Booting the pglite tier against an EMPTY volume runs initdb
+  (WASM), which OOM-killed node at 512mb before the server ever bound :3000 - the machine
+  crash-looped to its restart cap and the deploy failed on health checks with the
+  misleading "app is not listening on the expected address". An already-initialized
+  volume never re-runs initdb, which is why 512mb survived for as long as the volume did.
+  Do not shrink it back.
+- **Reading the testing DB is a load hazard.** The live server holds pglite open, so
+  `cp -a /data/pgdata /tmp/... && node` a second PGlite over the copy competes for the
+  same ceiling; at 512mb that dropped the machine out of the load balancer ("no known
+  healthy instances"). Recovery is `flyctl machine restart <id> -a loopany-testing`
+  (container reboot only, volume and data untouched). Read the COPY, never the live dir;
+  take ONE reading, `nohup` it and write the answer to a file, then `cat` that file in a
+  SECOND ssh call - `flyctl ssh console -C` routinely loses the output of a long command
+  ("remote command exited without exit status").
 - `deploy-prod.yml`: **auto-promotes after a GREEN staging deploy** -> `loopany-prod` /
   loopany.ai, `--ha=false` single machine (single-scheduler invariant). It triggers on
   `workflow_run` of "Deploy (Fly)" and the job `if:` gates on
