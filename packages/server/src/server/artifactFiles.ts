@@ -1,5 +1,5 @@
 /**
- * Server-side reads over a loop's live-synced artifacts (Phase 2). Pure helpers
+ * Server-side reads over a loop's STORED artifact history. Pure helpers
  * (no request/session context) so they're shared by the lazy server fns
  * (`getArtifacts` / `getArtifact` in loopApi) AND the download route, and are
  * directly unit-testable against the in-memory blob store — authorization is the
@@ -8,10 +8,13 @@
  * The bytes live in the gateway's BlobStore (R2 in prod, in-memory in dev/tests);
  * here we only read them — never write — so the feature is strictly read-only and
  * the server's zero-exec invariant holds (it decodes text, never interprets it).
+ * Since the folder watcher retired, NOTHING writes these rows any more: this is a
+ * history surface over what earlier syncs left behind, plus whatever a loop's task
+ * file carries (which arrives on the run report, not here).
  */
 import * as store from "../db/store.js";
 import { safeRelPath } from "../gateway/artifacts.js";
-import { getArtifactSync } from "./boot.js";
+import { getBlobStore } from "./boot.js";
 import { toArtifactSummary } from "./adapters.js";
 import type { ArtifactContent, ArtifactSummary } from "../types.js";
 
@@ -36,10 +39,10 @@ export async function readLoopArtifact(loopId: string, rawPath: string): Promise
   if (row.binary || row.oversize) {
     return { binary: true, size: row.size ?? null, oversize: row.oversize };
   }
-  // A text file whose bytes haven't been recorded yet (transient mid-sync): a
-  // distinct pending marker, not a binary dead-end with no download link.
-  if (!row.hash) return { error: "file not synced yet" };
-  const bytes = await (await getArtifactSync()).readBlob(row.hash);
+  // A row whose bytes were never recorded (a sync that never completed before the
+  // watcher retired): a distinct marker, not a binary dead-end with no download link.
+  if (!row.hash) return { error: "file has no stored bytes" };
+  const bytes = await (await getBlobStore()).get(row.hash);
   if (!bytes) return { error: "file not found" }; // blob bytes not (yet) stored
   return { text: bytes.toString("utf8") };
 }
@@ -63,7 +66,7 @@ export async function readLoopArtifactBytes(loopId: string, rawPath: string): Pr
   if (!rel) return { status: 400 };
   const row = await store.getArtifactFile(loopId, rel);
   if (!row || row.deleted || !row.hash) return { status: 404 }; // tombstone/oversize ⇒ no bytes
-  const bytes = await (await getArtifactSync()).readBlob(row.hash);
+  const bytes = await (await getBlobStore()).get(row.hash);
   if (!bytes) return { status: 404 };
   return { status: 200, bytes, binary: row.binary, filename: rel.split("/").pop() || "file" };
 }

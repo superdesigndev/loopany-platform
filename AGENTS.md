@@ -19,9 +19,8 @@ computes pure functions. Run instructions: `README.md`.
     poll/report run-lifecycle core + owner verbs + retention/GC; `cli.ts`:
     `CliGateway`, the credential-keyed CLI dispatch for /api/machine/cli +
     /agent-api/loop; `validate.ts`: the ONE ui/workflow/schema validator module
-    both write surfaces import; `sync.ts`: `ArtifactSync`, the sync/blob byte
-    ingress - boot shares ONE blob store between the classes), run tokens,
-    delivery, prompt, notify, blobstore (R2/in-memory), artifacts.
+    both write surfaces import), run tokens, delivery, prompt, notify,
+    blobstore (R2/in-memory, read+GC only - byte ingress retired), artifacts.
   - `src/db/` - Drizzle schema
     (machines/loops/runs/blobs/artifact_files/run_snapshots/run_leases/connect_keys)
     + store + auth-schema.
@@ -352,78 +351,54 @@ computes pure functions. Run instructions: `README.md`.
   (exec runs have no `set-workflow`) - the agent writes `workflow-setup-<date>.md`
   and surfaces a one-line owner prompt. The workflow cursor never advances on failure.
 
-## Artifacts / storage
+## Artifacts / storage — the folder watcher is RETIRED
 
-- The daemon watcher syncs each loop's folder: full sha256 manifest
-  (deletions = absence) -> `POST /api/machine/sync` (device token, not run token) ->
-  server replies `needHashes` -> `PUT /api/machine/blob/:hash` (server verifies the
-  hash). The manifest is always FULL but hashing is INCREMENTAL (`watcher.ts`
-  `buildManifest`): a stat cache (size+mtime+ctime, git-index-style racy-write
-  guard) means unchanged files are never re-read; bytes are re-read + re-verified
-  only when the server wants them (never buffered per-flush); PUTs run
-  4-concurrent; a rebuild whose digest matches the last acked sync skips the
-  network entirely. Inline blobs (≤64KB each) are budgeted 1MB aggregate per POST
-  (a burst must never 413 the server's 32MB `SYNC_BODY_CAP`; overflow takes the
-  PUT path), and the FIRST flush after watcher start inlines nothing
-  (post-restart the server already has almost everything). Bytes live in R2
-  (`LOOPANY_R2_*`; in-memory store when unset - the test/dev
-  default), metadata in `blobs`/`artifact_files`. The **never-syncable dir** list
-  (`.git`, `node_modules`, `.worktrees`, common build/tool caches, `.loopany`) +
-  `.env*`/key files is enforced on BOTH daemon (`watcher.ts` `IGNORE_DIRS`) and
-  server (`gateway/artifacts.ts` `IGNORE_DIRS`) - keep the two in sync. Per-file
-  cap 10MB (larger = metadata-only `oversize`).
-- **A loop folder is a synced CONTENT home, not a scratch workspace** (the
-  2026-07-07 prod incident: a run dropped a 1.3GB/125k-file git worktree in the
-  loop dir and flooded sync). Two defenses: (1) the never-syncable dirs above
-  exclude a checkout/worktree/build tree at the source; (2) `watcher.ts`
-  `capManifest` bounds every sync to a per-loop file-count + byte ceiling
-  (`LOOPANY_SYNC_MAX_FILES` 5000 / `LOOPANY_SYNC_MAX_BYTES` 256MB) - over either,
-  it keeps the shallowest-then-smallest files (the top-level content home always
-  survives) and DROPS the overflow with ONE loud warning, so the bounded POST
-  can't 413/timeout into an endless retry storm. The SKILL teaches runs to keep
-  heavy work OUT of the loop folder (`skill/run/exec-core.md` non-negotiable +
-  `references/run.md` §1 + `create.md` §3 + the worktree templates).
-- **A WATCHER MAY NEVER HOLD fds PROPORTIONAL TO A TREE'S FILE COUNT** (convergence
-  S3.2; the daemon's ability to work at all, not a tidiness rule). At
-  `spawn.ts` `SPAWN_FD_CEILING` — macOS `OPEN_MAX`, **10240** open fds — every
-  `child_process.spawn` throws `spawn EBADF`, so an fd-hungry watcher silently
-  disables the coding agent the daemon exists to run. MEASURED, not assumed: it is
-  NOT the rlimit (orders of magnitude higher; the process happily holds >20k fds and
-  only SPAWNING breaks), NOT kqueue-specific (plain `fs.openSync` fds reproduce it),
-  and it keys on the COUNT of fds below the ceiling, not the highest fd number. The
-  live incident: chokidar v4 (no fsevents backend) opened one `fs.watch` — one kqueue
-  fd — per watched FILE, so six repo-workdir loops warmed to 12,537 fds and every
-  spawn after the first EBADF'd until restart. **The watch layer is therefore a plain
-  change DOORBELL** — ONE native recursive `fs.watch` per loop, ringing "rebuild the
-  manifest" (nothing downstream ever used per-path events; every flush rebuilds the
-  FULL manifest anyway). chokidar is GONE from the daemon's deps; do not reintroduce
-  a per-file watch backend. Cost: one FSEvents stream per loop on macOS (0-1 fds,
-  tree-size independent), one inotify watcher per DIRECTORY on Linux. Guarded by
-  `watcher.fdCeiling.test.ts`; a failed spawn is diagnosed rather than mystifying
-  (`spawn.ts` `explainSpawnFailure` prints the fd count + the ceiling).
-- **The watch/sync CONTRACT: a loop's content home is never a WORKSPACE**
-  (`watcher.ts` `resolveHomeScope`, settled BEFORE any watch handle opens or any tree
-  is enumerated — the "enforce the caps first" half of S3.2). `root-only` when the
-  folder is the loop's own bound `workdir` AND carries a VCS marker, or when a bounded
-  pre-scan (`probeFileCount`, early-aborting) already finds it past `MAX_SYNC_FILES`:
-  only the folder's TOP-LEVEL files are watched, walked and synced — the task file plus
-  whatever products a run writes beside it — and subdirectories are never touched.
-  Otherwise `recursive` (the normal dedicated `loopany/<slug>/` shape), unchanged.
-  **Converged loops land in `root-only` by construction**, since S3 materializes their
-  task file at `<workdir>/loopany-task.md` on a repo root. This adds NO product
-  surface: a loop that needs a synced subtree moves its task file into a dedicated
-  folder and full recursion returns automatically. `capManifest` remains the second
-  line of defense for a folder that grows past the cap after the watcher opened.
-  Paused loops are still watched (an owner's edit to a paused loop's task file must
-  sync, and at O(1) fds per loop it costs nothing).
-- Server-side, an oversized sync fails HONESTLY instead of grinding into a 500:
-  `SYNC_MAX_MANIFEST_ENTRIES` (`gateway/artifacts.ts`, 20k — well above the daemon's
-  own 5000 file cap, so a healthy daemon can never trip it) refuses an over-cap
-  manifest with a 413 and reconciles nothing (no tombstones), and the reconcile loop
-  asks `store.blobsExisting(hashes)` ONCE per manifest instead of two sequential
-  lookups per FILE.
-- `run_snapshots` capture the manifest at `report()`; `getRunDiff` diffs run N vs
-  the prior snapshot (jsdiff) for the run page's "Changes".
+**A run's products travel as OBJECTS, never as files off a disk.** The daemon
+watches nothing; the server has no byte ingress. What a run sends home is exactly
+two things: its `report()` payload (message, metrics, the session-derived
+`RunArtifact[]`, and the task file's latest bytes) and whatever it FILES through
+the object verbs (`loopany doc|task|mirror`). A file a run merely writes into its
+folder reaches nobody.
+
+- **What retired** (captain ruling 2026-08-05): the daemon's whole `watcher.ts`
+  (the S3.2 recursive-`fs.watch` doorbell, manifest building, blob upload, sync
+  scheduling, `resolveHomeScope`, the sync caps/warnings), the poll response's
+  watch set + digest echo, `POST /api/machine/sync`, `PUT /api/machine/blob/:hash`,
+  `gateway/sync.ts` (`ArtifactSync`), the artifact-file WRITE path (upsert /
+  tombstone / cap accounting / the 413 over-cap refusal / `blobsExisting`), the
+  `run_snapshots` capture at `report()`, and the run page's snapshot DIFF
+  (`runDiff.ts` + `getRunDiff` + `DiffView` + `lib/diff.ts`). The `LOOPANY_SYNC_*`
+  / `LOOPANY_WATCH_RESCAN_MS` / `LOOPANY_LOOP_BYTES_CAP` knobs went with them.
+- **Data was NOT destroyed and there is no migration.** `blobs`, `artifact_files`
+  and `run_snapshots` keep every row; the READ surfaces stay live (`getArtifacts` /
+  `getArtifact`, `server/artifactFiles.ts`, the byte-serving route, the Files panel
+  and the `loop-embed`/`loop-calendar`/`loop-kanban` dashboard primitives). They are
+  HISTORY: for a loop created after the retirement they are simply empty. The one
+  UI that could only ever go stale — the run page's "Changes" diff, which needs two
+  manifests to compare — was retired honestly and replaced by a **Files** card
+  sourced from the report's own `RunArtifact[]`.
+- **The task file is the ONE channel still keeping a server-side copy of something
+  on disk**, and it rides the run REPORT (`daemon/src/runner.ts` `readTaskFile` →
+  `taskFileContent` → `gateway/index.ts` `report()` → `loops.taskFileContent`). So a
+  charter is fresh as of the loop's last FINISHED run — an evolve's rewrite shows up
+  when that evolve reports, not before. `kernel/views.ts` renders it for the Loops
+  pane; `LoopFilesPanel` pins it as the task row.
+- Bytes still live in R2 (`LOOPANY_R2_*`; in-memory store when unset — the test/dev
+  default) behind `server/boot.ts` `getBlobStore()`, the ONE shared store. Its only
+  writer left is the GC's delete.
+- Retention/GC (`gateway/retention.ts`, periodic `maintainStorage` with an
+  in-flight latch) is still LIVE and still matters: `store.deleteLoop` cascades
+  runs/run_leases/artifact_files/run_snapshots, which unreferences that loop's
+  blobs. Snapshot pruning (keep 20) unpins old blobs; blob GC computes a live
+  keep-set, honors a 1h grace window, re-checks referencedness per candidate, and
+  deletes bytes BEFORE metadata (never leaves a live `blobs` row pointing at
+  deleted bytes). Bias: when in doubt KEEP.
+- **Keep-heavy-work-out-of-the-workdir survives as HYGIENE, not as a sync defence.**
+  A loop's workdir is often a real repository, so a run still does clones,
+  worktrees, `node_modules` and build output OUTSIDE it and cleans up. Taught by
+  `skill/run/exec-core.md`, `references/run.md` §1, `create.md` §3 and the worktree
+  templates. `LOOPANY_ROOTS` is untouched — it is the daemon's execution jail for
+  workdirs (`daemon/src/roots.ts`), never part of the sync feature.
 - **Byte serving** (`routes/api.artifact.$loopId.$.ts`, session-authed, `loopInScope`):
   default disposition is `attachment` (download); `?view=inline` on a KNOWN image
   (`lib/artifactKind.ts` `imageMime` allowlist) serves the real image content-type
@@ -432,26 +407,20 @@ computes pure functions. Run instructions: `README.md`.
   (vite) intercepts asset-extension paths (`.png/.svg/.md/...`) BEFORE the SSR route
   and 404s them** ("Cannot GET …"), so image rendering only works against a nitro
   PROD build (`pnpm build && pnpm start`, `PORT=…` not `LOOPANY_PORT`); markdown is
-  unaffected (it reads via the `getArtifact` server fn, not this route). Verify image
-  serving against prod, not dev.
+  unaffected (it reads via the `getArtifact` server fn, not this route).
 - **Front-matter convention** (migration `0018`, `blobs.meta`): markdown products
   MAY open with a fenced `---` block of flat `key: value` scalars; the indexed
-  subset `{type?, title?, date?}` is parsed once at byte ingress (both `sync()`
-  inline and `putBlob`; `server/frontmatter.ts` - pure, bounded, never throws) and
-  stored on the blob row (dedup reuses the first parse; old blobs stay `meta` null,
-  no backfill). A SOFT convention (prompt + UI incentive, never a sync/storage
-  gate). Front-matter `date:` is the AUTHORITATIVE product date
-  (`lib/productDate.ts`); filename date is the fallback, sync time last. UI:
-  `LoopFilesPanel` type/title chips (task file exempt, keeps its TASK treatment).
-- Retention/GC (`gateway/retention.ts`, periodic `maintainStorage` with an in-flight
-  latch): snapshot pruning (keep 20) unpins old blobs; blob GC computes a live
-  keep-set, honors a 1h grace window, re-checks referencedness per candidate, and
-  deletes bytes BEFORE metadata (never leaves a live `blobs` row pointing at deleted
-  bytes). Bias: when in doubt KEEP (a leaked blob is a cost bug; a wrong delete is
-  data loss). Per-loop 500MB cap enforced at `sync()` AND authoritatively at
-  `putBlob` (real byte length; also handshake-gated - only accepts hashes the sync
-  asked THIS machine for, so a device token is not an uncapped write channel).
-  `store.deleteLoop` cascades runs/run_leases/artifact_files/run_snapshots.
+  subset `{type?, title?, date?}` was parsed at byte ingress and stored on the blob
+  row. With ingress gone this is historical for `blobs`, but the CONVENTION lives
+  on where it now matters — the file a run hands to `loopany doc create --file` /
+  `task create --file`, parsed at the artifact seam (`kernel/artifactSeam.ts`).
+  Front-matter `date:` stays the AUTHORITATIVE product date (`lib/productDate.ts`).
+- **OPEN FOLLOW-UP** (raised with this change, deliberately not taken): the three
+  artifact dashboard primitives read `artifact_files`, so a NEW loop can no longer
+  feed them. `evolve.md` now says so and steers new dashboards to metrics +
+  `<loop-chart>`, with file-shaped products going to docs. Re-pointing those
+  primitives at kernel docs is the natural next step; the captain's ruling put
+  `ui`/`stateSchema` out of scope here.
 
 ## Security / hardening invariants
 
@@ -542,14 +511,9 @@ computes pure functions. Run instructions: `README.md`.
   fairness), 429 when spent, bounded-memory LRU eviction. Env-tunable
   (`LOOPANY_RL_IP_BURST`/`_PER_SEC`, `LOOPANY_RL_TOKEN_*`); defaults (240 burst /
   8·s per IP) comfortably clear a connected daemon's 3s/20s poll.
-  The byte-ingress routes — blob-PUT (`api.machine.blob.$hash`) and sync-POST
-  (`api.machine.sync`) — are EXEMPT from rate limiting ENTIRELY (they never call
-  `machineRouteLimit`): a large first sync bursts many concurrent blob PUTs on ONE
-  device token, so either tier would only throttle legit uploads. Both already
-  require a VALID registered device token (unknown ⇒ 401, not an unauthenticated
-  surface) and are bounded by the sync hash-handshake (server only accepts hashes it
-  asked THIS machine for) + per-loop 500MB / per-file 10MB / 32MB-body caps, so a
-  limiter adds no real protection. Every OTHER machine route keeps BOTH tiers.
+  The two byte-ingress routes were the ONE exemption; they retired with the folder
+  watcher, so **every** remaining machine route now carries BOTH tiers (pinned by
+  `rateLimit.test.ts`, which asserts those route files are gone).
   OFF under vitest (`VITEST`/`NODE_ENV=test`) unless `LOOPANY_RATE_LIMIT=on`, so it
   never trips the suites; force either way with `LOOPANY_RATE_LIMIT`. `clientIp`
   trusts `Fly-Client-IP` → first `X-Forwarded-For` hop → `X-Real-IP` → one shared
@@ -932,7 +896,7 @@ computes pure functions. Run instructions: `README.md`.
   the stored-XSS containment, load-bearing; a Preview/Source toggle exposes raw
   markup). Images (incl. SVG - scriptable, so NEVER inlined into the app DOM) render
   via `<img src=inlineHref>` off the hardened `?view=inline` route. Markdown → the
-  shared pipeline; oversize → a metadata-only note (no synced bytes). `LoopEmbed`
+  shared pipeline; oversize → a metadata-only note (no stored bytes). `LoopEmbed`
   disables the pixel-collapse for html/image (they self-bound + scroll internally).
 - **The dashboard is a DEFAULT responsive grid CAPPED AT TWO COLUMNS** (`.loopview` in
   `styles/app.css`, `auto-fit minmax(min(100%, max(28rem, (100% - gap) / 2)), 1fr)`):

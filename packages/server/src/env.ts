@@ -107,16 +107,6 @@ function posIntEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
-/**
- * Per-loop total stored-bytes cap. Once a loop's live (byte-backed) artifact
- * footprint reaches this, the sync stops accepting NEW bytes for that loop (it
- * still reconciles deletions and already-stored files) and surfaces the cap —
- * mirroring how the per-file 10MB cap surfaces oversize. Generous default so a
- * normal loop folder never hits it; a runaway growing folder does. 500MB.
- */
-export function loopBytesCap(): number {
-  return posIntEnv("LOOPANY_LOOP_BYTES_CAP", 500 * 1024 * 1024);
-}
 
 /**
  * How many of the most recent run snapshots to keep per loop. Older ones are

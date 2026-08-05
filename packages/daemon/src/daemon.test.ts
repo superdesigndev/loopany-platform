@@ -59,17 +59,16 @@ describe("poll transport helpers", () => {
     const { buildPollBody } = await import("./daemon.js");
     const info = { host: "mac", platform: "darwin" };
 
-    const idle = buildPollBody(info, [], true, undefined);
+    const idle = buildPollBody(info, [], true);
     expect(idle).toEqual({ host: "mac", platform: "darwin", wait: true });
 
-    // A run in flight: no wait flag (progress heartbeat needs the short cadence),
-    // progress rides along, and the last-seen digest is echoed.
-    const busy = buildPollBody(info, [{ runId: "r1", step: 2, label: "editing" }], false, "d1");
+    // A run in flight: no wait flag (progress heartbeat needs the short cadence)
+    // and progress rides along. Nothing else — the poll carries no watch state.
+    const busy = buildPollBody(info, [{ runId: "r1", step: 2, label: "editing" }], false);
     expect(busy).toEqual({
       host: "mac",
       platform: "darwin",
       progress: [{ runId: "r1", step: 2, label: "editing" }],
-      watchDigest: "d1",
     });
   });
 

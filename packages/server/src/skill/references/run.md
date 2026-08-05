@@ -44,21 +44,21 @@ three standing sections:
 - `## Timeline` — a bounded log of prior runs, newest work appended as one concise
   timestamped entry per run.
 
-If the file does not exist yet, a run creates it from its Spec. That folder is the
-loop's home: a run's real products — the task file, reports, exports, dashboard `ui`,
-small artifacts — go inside it by default, so the loop's output stays self-contained.
+If the file does not exist yet, a run creates it from its Spec.
 
-**The loop folder is a synced content home, not a scratch workspace.** The daemon
-continuously syncs this folder to the server, so it must hold only lightweight content
-(reports, state, ui, small artifacts) — never a heavy work product. If a run needs to
-clone a repo, open a git worktree, install dependencies (`node_modules`), or produce
-build output or caches, it does that work **outside** the loop folder — a sibling
-directory next to the loop folder, or a throwaway temp dir (`mktemp -d`) — and writes
-only the finished report or artifact back into the loop folder. A repo checkout or a
-`.worktrees/` tree dumped inside the loop folder floods the sync and degrades it for
-every loop on the machine; keep bulk out. (The daemon defensively caps how much it will
-sync per loop and excludes never-syncable dirs like `node_modules`/`.git`/`.worktrees`,
-but the run should not rely on that — put heavy work in the right place to begin with.)
+**The task file is the ONE thing in the folder the server sees.** Its latest content
+rides the run's own report, so the charter you leave behind is what the loop page shows
+until the next run finishes. Nothing else in the folder travels: there is no folder
+sync. A file you merely write to disk is local scratch — durable products are filed
+through the object verbs (§4), and anything you want the owner to read this run goes in
+the report `--message`.
+
+**The folder is still not a scratch workspace.** It is often a real repository, and a
+run that dumps bulk into it leaves a mess for the human and for every later run. If a
+run needs to clone a repo, open a git worktree, install dependencies (`node_modules`),
+or produce build output or caches, it does that work **outside** the loop folder — a
+sibling directory next to it, or a throwaway temp dir (`mktemp -d`) — and cleans up
+after itself.
 
 **Compress, don't append forever.** The Timeline is bounded, not an ever-growing log.
 As a run adds its entry, it folds older, now-stale entries up into
@@ -259,8 +259,10 @@ defines — those types are what dashboard views (calendars, kanban boards) grou
 filter by, so a consistent vocabulary is what makes the products line up. `date:` is
 the authoritative product date (a filename date is only a fallback), so a dated product
 lands on the right day of a calendar. This is a soft convention — a product without
-front matter still syncs — but following it is what lets the loop's output assemble
-into a coherent dashboard over time.
+front matter is still accepted — but following it is what lets the loop's output
+assemble into a coherent dashboard over time. The convention applies to the file you
+hand to `loopany doc create --file` / `task create --file`: the front matter is read
+where the verb files it, not from the folder.
 
 ## 7. One pass, then stop
 

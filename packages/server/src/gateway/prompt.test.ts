@@ -212,8 +212,12 @@ test("exec task signposts the product model: report vs doc vs task vs mirror", (
   expect(t).toMatch(/stable `key:`/);
   expect(t).toMatch(/never a new doc per day/i);
   expect(t).toMatch(/attached to the task or doc that owns it/i);
-  // The loop folder keeps its narrowed role.
-  expect(t).toMatch(/dashboard and exports need/i);
+  // The folder is local scratch: a file that is not FILED reaches nobody. This is
+  // the load-bearing half of the folder-sync retirement — a run that writes a
+  // report to disk and stops has produced nothing.
+  expect(t).toMatch(/nothing on this machine reaches the server by itself/i);
+  expect(t).toMatch(/local scratch/i);
+  expect(t).not.toMatch(/continuously synced/i);
   // The skill pointer advertises the depth this signpost is the short form of.
   expect(t).toMatch(/product\/object model/i);
 });

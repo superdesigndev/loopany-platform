@@ -18,7 +18,6 @@ import type {
   JobPayload,
   JobSummary,
   MutationResult,
-  RunDiffResult,
   RunSummary,
   BundleView,
   TeamsView,
@@ -283,20 +282,6 @@ export const getArtifact = createServerFn({ method: 'GET' })
     if (!(await ownedLoop(data.loopId))) return { error: 'file not found' }
     const { readLoopArtifact } = await import('./artifactFiles.js')
     return readLoopArtifact(data.loopId, data.path)
-  })
-
-/** GET — a run's per-file diff vs the previous run (Phase 3). Lazy by runId like
- *  getTranscript; computed on the server at read time (no stored diffs). Old runs
- *  with no snapshot return `hasSnapshot: false` for the degrade copy. */
-export const getRunDiff = createServerFn({ method: 'GET' })
-  .validator((d: { runId: string }) => d)
-  .handler(async ({ data }): Promise<RunDiffResult> => {
-    await backend()
-    const run = await store.getRun(data.runId)
-    if (!run) return { hasSnapshot: false, files: [] }
-    if (!(await ownedLoop(run.loopId))) return { hasSnapshot: false, files: [] }
-    const { computeRunDiff } = await import('./runDiff.js')
-    return computeRunDiff(data.runId)
   })
 
 // ---- catalog ----

@@ -10,8 +10,8 @@ or other auth is needed.
   is **JSON-only**: one `--json '<patch>'` of just the fields that change.
 - **What the loop does** (its instructions, context, log) — the loop's **task file
   (`loopany/<slug>/README.md`) on this machine**. Edit it directly in the repo,
-  keeping its `## Spec` / `## Current understanding` / `## Timeline` structure; it
-  syncs back to the server on the loop's next run. (How a run maintains it:
+  keeping its `## Spec` / `## Current understanding` / `## Timeline` structure; the
+  server's copy refreshes when the loop's next run reports. (How a run maintains it:
   `evolve.md`.) To point the loop at a *different* task file, patch the path:
   `--json '{"taskFile":"…"}'` (the server records the path only; move/create the
   file yourself).

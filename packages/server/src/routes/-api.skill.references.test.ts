@@ -198,9 +198,9 @@ describe('/api/skill/references/$', () => {
   })
 
   test('internal run prompts are NOT served (public surface = create/update/evolve only)', async () => {
-    // exec-loop.md / edit.md live under skill/run/ — internal run-dispatch only. They
+    // exec-core.md / edit.md live under skill/run/ — internal run-dispatch only. They
     // must never leak through the public references route (or the npm bundle).
-    for (const name of ['exec-loop.md', 'edit.md', 'control-on.md', 'control-off.md']) {
+    for (const name of ['exec-core.md', 'edit.md', 'control-on.md', 'control-off.md']) {
       const res = await call(`/api/skill/references/${name}`)
       expect(res.status).toBe(404)
     }

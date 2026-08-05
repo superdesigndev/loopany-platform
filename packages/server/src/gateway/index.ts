@@ -28,7 +28,6 @@ import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { machinePresence } from "../lib/machinePresence.js";
 import { enrollMachine, stampMachineContact, type EnrollResult } from "./enroll.js";
-import { snapshotRetention } from "../env.js";
 import {
   machineIdFromToken,
   readClaimIntent,
@@ -41,7 +40,6 @@ import {
   readClaim,
   readNewIdempotency,
   recordNewIdempotency,
-  sha256,
   type ClaimResult,
   type RunLease,
 } from "./tokens.js";
@@ -141,11 +139,6 @@ const ENROLL_REFUSAL: Record<Extract<EnrollResult, { ok: false }>["reason"], str
  *  empty. Bounded under the daemon's 30s fetch timeout AND under ONLINE_TTL_MS
  *  (with the end-of-wait re-stamp) so a parked long-poll never looks offline. */
 const LONG_POLL_WAIT_MS = 20_000;
-/** Watch-set cache TTL: the per-poll `loopsForMachine` rebuild is served from a
- *  short per-machine cache. Any delivery (the run may belong to a brand-new loop)
- *  and every gateway create/edit invalidates early, so a new or re-pathed loop
- *  folder is watched promptly; slower write paths are covered by the TTL. */
-const WATCH_CACHE_TTL_MS = 15_000;
 /** The run outcomes a report may claim (untrusted wire input; anything else falls
  *  back to the role default). Mirrors the runs.outcome enum minus "error", which
  *  only the server assigns. */
@@ -226,22 +219,15 @@ function coerceTranscript(raw: unknown): TranscriptStep[] | undefined {
   return out.length ? out : undefined;
 }
 
-/** One entry of the poll response's watch set (the daemon resolves the folder). */
-interface WatchEntry {
-  loopId: string;
-  workdir: string | null;
-  taskFile: string | null;
-}
-
 export class MachineGateway {
   constructor(
     /** Public (not private): `CliGateway.applyMutation` re-arms it after a
      *  run-token schedule mutation. */
     readonly scheduler: Scheduler,
     /** Artifact blob byte store (R2 in prod; injectable in-memory store for tests).
-     *  Only `maintainStorage` (retention/GC) reads it here - the byte-ingress
-     *  methods live on `ArtifactSync` (`sync.ts`), and boot hands BOTH classes
-     *  the same instance. */
+     *  There is no byte INGRESS any more (the folder watcher retired), so the only
+     *  use here is `maintainStorage` (retention/GC) reclaiming what a deleted loop
+     *  or a pruned snapshot frees. Reads go through boot's `getBlobStore()`. */
     private readonly blobStore: BlobStore = createBlobStore(),
     /** Push dispatcher — injectable (like blobStore) so tests observe notifications
      *  without a network call; defaults to the real per-channel `dispatchNotification`. */
@@ -307,18 +293,9 @@ export class MachineGateway {
    *  run-lease table: a deploy drops parked waiters, and the daemon just re-polls. */
   private readonly pollWaiters = new Map<string, (woken: boolean) => void>();
 
-  /** Per-machine watch-set cache (TTL + explicit invalidation) — the poll hot
-   *  path serves the watch list from here instead of rebuilding it every poll. */
-  private readonly watchCache = new Map<string, { at: number; digest: string; watch: WatchEntry[] }>();
-
   /** Resolve (and disarm) a machine's parked long-poll waiter, if any. */
   private wakeMachine(machineId: string): void {
     this.pollWaiters.get(machineId)?.(true);
-  }
-
-  /** Drop a machine's cached watch set (its loop bindings/paths just changed). */
-  private invalidateWatch(machineId: string): void {
-    this.watchCache.delete(machineId);
   }
 
   /** Arm this machine's long-poll waiter: the promise resolves `true` when
@@ -453,9 +430,9 @@ export class MachineGateway {
    * Periodic storage maintenance: prune each loop's run snapshots to the
    * retention window, then GC blob bytes no live row needs. Wired to its own
    * interval in boot (independent of the faster offline-sweep) and exposed for
-   * tests / on-demand triggers. Safe to run concurrently with active syncs (a
-   * grace window + final re-check protect freshly-written/referenced blobs) and
-   * idempotent with no garbage. Best-effort — never throws into the caller.
+   * tests / on-demand triggers. Nothing writes bytes any more, so this only
+   * reclaims what deleted loops/pruned snapshots free. Idempotent with no
+   * garbage. Best-effort — never throws into the caller.
    */
   async maintainStorage(): Promise<MaintainResult> {
     if (this.maintenanceRunning) {
@@ -479,9 +456,6 @@ export class MachineGateway {
     deviceToken: string,
     info?: { host?: string; platform?: string; arch?: string; version?: string },
     progress?: Array<{ runId: string; step: number; label: string }>,
-    /** The daemon's echo of the last watch digest it applied — matching ⇒ the
-     *  watch array is omitted from the response (an old daemon never echoes). */
-    watchDigest?: string,
   ): Promise<HttpResult> {
     // Enrollment + the presence/identity stamp live in `gateway/enroll.ts`, so
     // the legacy poll and the rewrite claim endpoint share ONE gate (open-mode
@@ -570,37 +544,10 @@ export class MachineGateway {
       deliveries.push(await buildDelivery(loop, run.id, token, machine.roots ?? []));
     }
 
-    // Watch set: every loop bound to this machine (not just those with a pending
-    // run) so the daemon watches each loop's folder continuously — between runs
-    // and across restarts (the set stays server-authoritative). Served from a
-    // short-TTL cache; any delivery recomputes (the run may belong to a brand-new
-    // loop whose folder must be watched before it writes). The daemon resolves
-    // the actual folder per loop (dirname(taskFile) → workdir).
-    let cached = this.watchCache.get(machineId);
-    if (!cached || deliveries.length || Date.now() - cached.at > WATCH_CACHE_TTL_MS) {
-      const watch: WatchEntry[] = (await store.loopsForMachine(machineId))
-        .map((l) => ({
-          loopId: l.id,
-          workdir: l.workdir ?? null,
-          taskFile: l.taskFile ?? null,
-        }))
-        .sort((a, b) => (a.loopId < b.loopId ? -1 : a.loopId > b.loopId ? 1 : 0));
-      cached = { at: Date.now(), digest: sha256(JSON.stringify(watch)), watch };
-      this.watchCache.set(machineId, cached);
-    }
-
     if (deliveries.length) log.info({ machineId, exec: deliveries.length }, "poll: delivered");
-    // A matching digest echo means the daemon already holds this exact watch set —
-    // omit the array. An old daemon never echoes, so it always gets the full list
-    // (omission requires proof the client speaks the digest protocol, never a default).
-    return {
-      status: 200,
-      body: {
-        deliveries,
-        watchDigest: cached.digest,
-        ...(watchDigest === cached.digest ? {} : { watch: cached.watch }),
-      },
-    };
+    // Deliveries and nothing else: the daemon watches no folder, so the poll
+    // response carries no watch set.
+    return { status: 200, body: { deliveries } };
   }
 
   /**
@@ -615,14 +562,14 @@ export class MachineGateway {
     deviceToken: string,
     info?: { host?: string; platform?: string; arch?: string; version?: string },
     progress?: Array<{ runId: string; step: number; label: string }>,
-    opts?: { wait?: boolean; watchDigest?: string; waitMs?: number },
+    opts?: { wait?: boolean; waitMs?: number },
   ): Promise<HttpResult> {
-    if (!opts?.wait) return this.poll(deviceToken, info, progress, opts?.watchDigest);
+    if (!opts?.wait) return this.poll(deviceToken, info, progress);
     const machineId = machineIdFromToken(deviceToken);
     const waitMs = Math.min(Math.max(opts.waitMs ?? LONG_POLL_WAIT_MS, 0), LONG_POLL_WAIT_MS);
     const waiter = this.armPollWaiter(machineId, waitMs);
     try {
-      const first = await this.poll(deviceToken, info, progress, opts.watchDigest);
+      const first = await this.poll(deviceToken, info, progress);
       if (first.status !== 200) return first;
       if ((first.body as { deliveries: Delivery[] }).deliveries.length) return first;
       const woken = await waiter.promise;
@@ -633,7 +580,7 @@ export class MachineGateway {
         return first;
       }
       // Woken: re-run the claim pass (identity/progress were already applied).
-      return await this.poll(deviceToken, undefined, undefined, opts.watchDigest);
+      return await this.poll(deviceToken, undefined, undefined);
     } finally {
       waiter.cancel();
     }
@@ -886,7 +833,6 @@ export class MachineGateway {
     // create is AUTONOMOUSLY INERT from its first instant: the clock can never
     // select it.
     this.scheduler.addLoop(loop);
-    this.invalidateWatch(machineId); // a new loop folder must be watched promptly
     // Run once immediately so a freshly-created loop produces output without
     // waiting for its first cron tick — a feature of an ENABLED create only. A
     // paused create fires nothing and arms no deferred one-shot (level triggers:
@@ -1174,7 +1120,6 @@ export class MachineGateway {
     // Re-arm the scheduler: an enabled flip toggles add/remove, any other change re-adds.
     if (updated.enabled) this.scheduler.addLoop(updated);
     else this.scheduler.removeLoop(updated.id);
-    this.invalidateWatch(machineId); // taskFile may have moved the watched folder
     log.info({ machineId, loopId: id, fields: Object.keys(update) }, "editLoop: applied");
     const applied = Object.keys(update);
     return {
@@ -1442,13 +1387,6 @@ export class MachineGateway {
       // Single-shot: no second late report may re-flip this run.
       await appendProductionRunFinished(finalized, ok ? "success" : "failure", nowIso(), finalized?.message);
       await retireLease(runToken);
-      // Re-capture the end-state snapshot (best-effort), same as the normal path.
-      try {
-        await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
-        await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
-      } catch (err) {
-        log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
-      }
       if (ok && lease.role !== "evolve" && lease.role !== "edit") {
         // The failure alert was WRONG — the run actually succeeded. Flipping the row
         // to `done` already corrects the failure streak (it's derived from persisted
@@ -1530,22 +1468,6 @@ export class MachineGateway {
     });
     await appendProductionRunFinished(finalized, ok ? "success" : "failure", nowIso(), finalized?.message);
     await retireLease(runToken);
-
-    // Capture the loop's full file set as THIS run's snapshot (Phase 3 diff
-    // baseline). Cheap: just record the manifest from the already-synced
-    // artifact_files; the diff is computed lazily on read (getRunDiff), never
-    // here. The daemon flushes a final run-tagged sync before reporting, so this
-    // reflects the run's end-state. Best-effort — never let it fail the report.
-    try {
-      await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
-      // Bound the snapshot history right away (cheap, keeps the table from growing
-      // unbounded between maintenance passes). The blobs this unpins are reclaimed
-      // by the periodic GC, not here — the grace window means a just-unreferenced
-      // blob isn't collectable yet anyway, and report() must stay lean + zero-exec.
-      await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
-    } catch (err) {
-      log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
-    }
 
     if (lease.role === "evolve") {
       await this.scheduler.finishEvolution(lease.loopId);
@@ -1639,13 +1561,6 @@ export class MachineGateway {
     await appendProductionRunFinished(finalized, "success", ts, message);
     const loop = await store.updateLoop(lease.loopId, { completedAt: ts, completionReason: reason, enabled: false });
     this.scheduler.removeLoop(lease.loopId);
-    // Snapshot the loop's end-state (Phase 3 diff baseline), best-effort like report().
-    try {
-      await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
-      await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
-    } catch (err) {
-      log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "finish: snapshot capture failed");
-    }
     // Completion is a distinct terminal event — notify unless the user opted out
     // of all pushes (notify: "never"). Best-effort (void), like the report path.
     if (loop && loop.notify !== "never") {

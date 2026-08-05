@@ -35,7 +35,7 @@ const LoopView = lazy(() => import('./LoopView').then((m) => ({ default: m.LoopV
  * Loop detail PAGE body (`/loops/$loopId`) — the redesign of the former modal.
  * One scrolling page: a loop header (name / status / schedule / agent / machine +
  * the action toolbar), an optional agent-authored dashboard, then a two-column
- * main with the UNIFIED Files panel (the task file alongside synced artifacts) and
+ * main with the UNIFIED Files panel (the task file alongside stored artifacts) and
  * the Runs timeline (a strip + a clickable list, each run linking to its own
  * detail route). Self-polls while open (fast while a run is live).
  *

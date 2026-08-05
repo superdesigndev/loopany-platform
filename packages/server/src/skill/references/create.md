@@ -97,16 +97,19 @@ not an interview.)
 
 Every loop gets its **own folder** under the project: `<project>/loopany/<slug>/`
 (make it if needed; pick a short `<slug>` from the loop name). Its task file lives
-there, and by default the lightweight products it produces (reports, exports, dashboard
-`ui`, small artifacts) land there too, so its output stays self-contained.
+there, and it is the loop's local scratch space on this machine.
 
-**This folder is a synced content home, not a scratch workspace.** The daemon
-continuously syncs it to the server, so heavy work products MUST live elsewhere: when a
-run needs to clone a repo, open a git worktree, install `node_modules`, or produce build
-output or caches, it does that work **outside** the loop folder (a sibling directory or a
-temp dir) and writes only the finished report/artifact back in. Author the Spec so runs
-naturally keep bulk out — e.g. *"do the fix in a git worktree created outside this loop
-folder"*, never inside it. A repo checkout dropped in the loop folder floods the sync.
+**Nothing in that folder reaches the server by itself.** The only file the server ever
+sees is the task file, whose latest content rides each run's report. Durable products
+travel as **objects** — a doc, a task, a mirror (see the `## Products` step below) —
+so a run that writes a report to disk and stops has produced nothing anybody can read.
+
+**The folder is not a scratch workspace either.** It is often a real repository, so
+heavy work products MUST live elsewhere: when a run needs to clone a repo, open a git
+worktree, install `node_modules`, or produce build output or caches, it does that work
+**outside** the loop folder (a sibling directory or a temp dir) and cleans up after
+itself. Author the Spec so runs naturally keep bulk out — e.g. *"do the fix in a git
+worktree created outside this loop folder"*, never inside it.
 
 Write the **task file** at `<project>/loopany/<slug>/README.md` — the loop's durable
 brief and running memory. Each scheduled run reads it for context and maintains it

@@ -126,7 +126,7 @@ Then register the bet in the ledger: term · one-line thesis (what you expect th
 - Never spawn, pause, or retire an engine yourself. You recommend; the human ticks.
 - One seed per week max; zero is valid. Do not force a weak article — thin seeds pollute the archetype evidence every future bet is judged against.
 - Never fabricate a metric. Never commit to main.
-- Keep heavy work OUT of this synced folder — worktrees, clones, build output go to a temp dir; only reports and drafts land here.
+- Keep heavy work OUT of the loop folder — worktrees, clones, build output go to a temp dir; only reports and drafts land here.
 
 ## Current understanding
 

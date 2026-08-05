@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
  * Regression guard for the run-detail redesign's width containment.
  *
  * The redesign widened the run page to the loop page's shell and moved to a
- * two-column layout with a wide diff/transcript column. The hard project rule is
+ * two-column layout with a wide report/files/transcript column. The hard project rule is
  * NO page-level horizontal scroll at any width: every grid/flex child must be able
  * to shrink (`min-w-0`) and any wide inner content (a long diff/transcript line)
  * must scroll INSIDE its own pane, never widen the page. These assertions pin the
@@ -14,7 +14,6 @@ import { describe, expect, it } from 'vitest'
  */
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 const runView = read('./RunView.tsx')
-const diffView = read('./DiffView.tsx')
 const route = read('../routes/loops.$loopId_.runs.$runId.tsx')
 
 describe('run detail page width containment', () => {
@@ -30,12 +29,6 @@ describe('run detail page width containment', () => {
     // The Card wrapper must carry min-w-0. Assert ONLY the behavioral class -
     // the decoration around it is fashion and must be free to change.
     expect(runView).toMatch(/<section className="min-w-0 /)
-  })
-
-  it('scrolls the diff body inside its own pane rather than widening the page', () => {
-    expect(diffView).toMatch(/min-w-0 max-h-\[420px\] overflow-auto/)
-    // Long lines DON'T wrap — they scroll horizontally inside the capped pane.
-    expect(diffView).toMatch(/whitespace-pre/)
   })
 
   it('retires the modal-era bracket loading/error placeholders', () => {

@@ -100,7 +100,7 @@ export function ArtifactFileRow({ loopId, file }: { loopId: string; file: Artifa
   )
 }
 
-/** A recorded artifact whose blob is no longer synced - non-clickable, with a
+/** A file the run recorded that the server holds no bytes for - non-clickable, with a
  *  subtle hint rather than a dead link. */
 export function UnavailableFileRow({ path }: { path: string }) {
   return (

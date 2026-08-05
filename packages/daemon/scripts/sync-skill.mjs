@@ -6,7 +6,7 @@
  *
  * SELECTIVE COPY — only the PUBLIC skill surface ships: SKILL.md (installable skill
  * root) + the references/ quartet (create/update/evolve authoring + run runtime
- * protocol). The INTERNAL run prompts under skill/run/ (exec-loop, edit) are
+ * protocol). The INTERNAL run prompts under skill/run/ (exec-core, edit) are
  * server-side run-dispatch ONLY,
  * bootstrap.md is the SERVER-ONLY first-capture onboarding doc served at /api/skill
  * (not an installable skill file), and skill/templates/ is the template-market

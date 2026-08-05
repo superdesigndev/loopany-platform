@@ -154,7 +154,7 @@ Repo-hygiene variant — pick the one that matches reality:
 - Never date-bump without a real change (artificial freshness is a ranking risk). But DO bump `dateModified` when the change IS real — Google defines it as the date the article was last genuinely modified.
 - Never target a head term one of your own pages already ranks pos <15 for.
 - Respect the cooldowns. One edit per page per window.
-- Keep heavy work OUT of this synced folder — worktrees, clones, node_modules, build output go in a temp dir; only the finished report lands here.
+- Keep heavy work OUT of the loop folder — worktrees, clones, node_modules, build output go in a temp dir; only the finished report lands here.
 
 ## AUTO-APPLY LANE — leave OFF until the safety nets have run for a few weeks
 

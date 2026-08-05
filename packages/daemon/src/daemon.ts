@@ -11,6 +11,11 @@
  * Machine identity + workdir roots are the daemon's local config: the device
  * token (env) identifies the machine; LOOPANY_ROOTS is the cwd jail (empty ⇒
  * unrestricted — the bind-time UI is where a user would normally set this).
+ *
+ * The daemon watches NOTHING on disk. A run's products reach the server through
+ * the object verbs (`loopany doc|task|mirror`) and its report payload; a loop's
+ * folder is local scratch plus the home of its task file, and nothing in it
+ * travels by itself.
  */
 import os from "node:os";
 
@@ -20,7 +25,6 @@ import { runDelivery, type Delivery } from "./runner.js";
 import { DEVICE_FILE, SERVER_FILE, persist, readStored } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
 import { snapshotProgress } from "./progress.js";
-import { WatchManager, type WatchSpec } from "./watcher.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion, writeRunningVersion } from "./version.js";
 
@@ -44,18 +48,16 @@ function flag(name: string): string | undefined {
 
 /** Poll request body: machine identity + optional progress + long-poll opt-in
  *  (idle only — with a run in flight the short cadence keeps the progress
- *  heartbeat fresh) + the last watch digest echo (absent until a server sent one). */
+ *  heartbeat fresh). */
 export function buildPollBody(
   info: Record<string, unknown>,
   progress: Array<{ runId: string; step: number; label: string }>,
   idle: boolean,
-  watchDigest: string | undefined,
 ): Record<string, unknown> {
   return {
     ...info,
     ...(progress.length ? { progress } : {}),
     ...(idle ? { wait: true } : {}),
-    ...(watchDigest ? { watchDigest } : {}),
   };
 }
 
@@ -126,12 +128,6 @@ export async function runDaemon(): Promise<number> {
     process.on(sig, () => ac.abort());
   }
 
-  // Continuously watch each loop's folder and live-sync artifacts to the server.
-  // The watch set is learned from the poll response (server-authoritative), so it
-  // survives restarts and covers idle-time human edits, not just in-run output —
-  // but the LOCAL roots jail still confines which folders may ever be watched.
-  const watchManager = new WatchManager(server, token, roots);
-
   logger.info({ server, pollMs: POLL_MS, roots: roots.length ? roots : "(no workdir jail)" }, "polling for deliveries");
 
   // Runs execute in the BACKGROUND so the poll loop keeps heart-beating and can
@@ -140,10 +136,6 @@ export async function runDaemon(): Promise<number> {
   // reclaimed any queued run as "machine offline"). `inFlight` dedups in case the
   // same delivery is ever returned twice.
   const inFlight = new Set<string>();
-
-  // Last watch digest the server sent (echoed on the next poll so an unchanged
-  // watch set is omitted from the response — old servers never send one).
-  let watchDigest: string | undefined;
 
   while (!ac.signal.aborted) {
     const started = Date.now();
@@ -155,16 +147,11 @@ export async function runDaemon(): Promise<number> {
       const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest)),
+        body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0)),
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
         const raw = await res.json();
-        const data = raw as { deliveries?: Delivery[]; watch?: WatchSpec[]; watchDigest?: string };
-        // Reconcile the loop-folder watchers against the server's current set.
-        // An ABSENT `watch` means "unchanged since the digest you echoed" (the
-        // server omits it only after a matching echo) — never an empty set.
-        if (Array.isArray(data.watch)) watchManager.reconcile(data.watch);
-        if (typeof data.watchDigest === "string") watchDigest = data.watchDigest;
+        const data = raw as { deliveries?: Delivery[] };
         for (const d of data.deliveries ?? []) {
           if (inFlight.has(d.runId)) continue;
           inFlight.add(d.runId);
@@ -194,7 +181,6 @@ export async function runDaemon(): Promise<number> {
   while (inFlight.size > 0 && Date.now() < drainDeadline) {
     await new Promise((r) => setTimeout(r, 200));
   }
-  await watchManager.closeAll();
   // Only clear the pidfile if it still records OUR pid — never delete a file a
   // newer daemon has since claimed.
   clearPidFile(process.pid);

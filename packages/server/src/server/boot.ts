@@ -11,9 +11,8 @@ import { sql } from "drizzle-orm";
 import { runMigrations, closeClient, db } from "../db/index.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
-import { ArtifactSync } from "../gateway/sync.js";
 import { CliGateway } from "../gateway/cli.js";
-import { createBlobStore } from "../gateway/blobstore.js";
+import { createBlobStore, type BlobStore } from "../gateway/blobstore.js";
 import {
   gcIntervalMs,
   dbWatchdogEnabled,
@@ -29,7 +28,7 @@ interface Booted {
   scheduler: Scheduler;
   dueTaskScheduler: DueTaskScheduler;
   gateway: MachineGateway;
-  artifactSync: ArtifactSync;
+  blobStore: BlobStore;
   cliGateway: CliGateway;
   abort: AbortController;
 }
@@ -67,13 +66,12 @@ async function boot(): Promise<Booted> {
   let gateway: MachineGateway;
   const dispatcher: Dispatcher = { dispatch: (loop) => gateway.dispatcher.dispatch(loop) };
   const scheduler = new Scheduler(dispatcher);
-  // ONE blob store, shared explicitly: ArtifactSync writes/reads the bytes and
-  // the gateway's maintainStorage (retention/GC) deletes them - two stores would
-  // GC bytes the other half just wrote.
+  // ONE blob store, shared: the artifact READERS resolve bytes through it
+  // (`getBlobStore`) and the gateway's `maintainStorage` reclaims them. Byte
+  // ingress retired with the folder watcher, so nothing else writes to it.
   const blobStore = createBlobStore();
   gateway = new MachineGateway(scheduler, blobStore);
   setProductionRunDispatcher((loop) => gateway.dispatcher.dispatch(loop));
-  const artifactSync = new ArtifactSync(blobStore);
   // CLI verb dispatch (unified /api/machine/cli + legacy /agent-api/loop) over
   // the same core gateway instance.
   const cliGateway = new CliGateway(gateway);
@@ -127,15 +125,17 @@ async function boot(): Promise<Booted> {
   }
 
   logger.info("loopany server booted");
-  return { scheduler, dueTaskScheduler, gateway, artifactSync, cliGateway, abort };
+  return { scheduler, dueTaskScheduler, gateway, blobStore, cliGateway, abort };
 }
 
 export async function getGateway(): Promise<MachineGateway> {
   return (await ensureServer()).gateway;
 }
 
-export async function getArtifactSync(): Promise<ArtifactSync> {
-  return (await ensureServer()).artifactSync;
+/** The process's ONE artifact blob byte store. Read-only in practice: byte ingress
+ *  retired with the folder watcher, so the only writer left is the GC's delete. */
+export async function getBlobStore(): Promise<BlobStore> {
+  return (await ensureServer()).blobStore;
 }
 
 export async function getCliGateway(): Promise<CliGateway> {

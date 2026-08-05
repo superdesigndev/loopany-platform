@@ -11,8 +11,7 @@
  * 2MB — generously above the largest legitimate body: a report can carry a
  * 512KB taskFileContent (WIRE_TEXT_CAP) + a ~800KB transcript (200 steps ×
  * 4KB fields) + a 256KB cursor (CURSOR_CAP) ≈ 1.6MB; an editLoop/agent-api
- * payload maxes out around one or two 512KB content fields. The sync route has
- * its own, larger cap (SYNC_BODY_CAP — it inlines blob bytes).
+ * payload maxes out around one or two 512KB content fields.
  */
 export const MACHINE_BODY_CAP = 2 * 1024 * 1024;
 
@@ -25,8 +24,7 @@ export type JsonBodyResult =
  * Read + parse a JSON body, bounded by `maxBytes`: the declared content-length
  * is checked first (cheap reject for honest clients), then the actual text
  * length (code units ≤ UTF-8 bytes, so the cap is enforced within a small
- * constant factor — same basis the sync route always used). An unreadable or
- * empty body parses as `{}` (matching the old `request.json().catch(() => ({}))`);
+ * constant factor). An unreadable or empty body parses as `{}` (matching the old `request.json().catch(() => ({}))`);
  * unparseable text is reported as `invalid` so each route keeps its own policy
  * (fall back to `{}`, or 400).
  */
@@ -44,7 +42,7 @@ export async function readJsonBody(request: Request, maxBytes: number): Promise<
 }
 
 // ---- shared wire-egress shape + string discipline ----
-// Generic plumbing shared by every gateway module (index / cli / sync). It lives
+// Generic plumbing shared by every gateway module (index / cli). It lives
 // here - a leaf module with no gateway imports - so index.ts stays pure
 // run-lifecycle core instead of doubling as the toolbox (pinned by layout.test.ts).
 

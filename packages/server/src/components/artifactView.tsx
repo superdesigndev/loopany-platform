@@ -24,7 +24,7 @@ import { TaskFileView } from './TaskFileView'
  *  - markdown → the shared markdown pipeline (Preview) with a raw Source toggle.
  *  - text   → monospace source.
  * Everything keeps a Download fallback; an oversize (metadata-only) artifact has
- * no synced bytes to render, so it says so rather than showing an empty pane.
+ * no stored bytes to render, so it says so rather than showing an empty pane.
  */
 
 export const isMarkdown = (path: string): boolean => artifactKind(path) === 'markdown'
@@ -61,7 +61,7 @@ export function BinaryNotice({
   return (
     <div className="px-5 py-8 text-body text-secondary">
       {oversize ? (
-        <span className="text-disabled">Too large to preview - stored as metadata only (no synced bytes).</span>
+        <span className="text-disabled">Too large to preview - stored as metadata only (no bytes).</span>
       ) : (
         <>
           Binary file - not previewable.{' '}
@@ -236,7 +236,7 @@ function TextArtifactView({ loopId, file, kind }: { loopId: string; file: Artifa
 export function ArtifactBody({ loopId, file }: { loopId: string; file: ArtifactSummary }) {
   const kind = artifactKind(file.path)
 
-  // Oversize is metadata-only regardless of type: no synced bytes to render.
+  // Oversize is metadata-only regardless of type: no stored bytes to render.
   if (file.oversize) return <BinaryNotice loopId={loopId} path={file.path} oversize />
   // Images (incl. SVG) render via the inline route, never inlined into the DOM.
   // Key by path AND updatedAt so a new file resets the inner state (failed) and a

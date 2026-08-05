@@ -14,7 +14,7 @@ import { Modal, ModalHead } from './Modal'
  * silent). Clicking a product reviews its full body in the shared Modal
  * (focus trap, Esc, scroll lock come from Base UI Dialog - the kanban card
  * pattern); close returns to the grid. `match` is optional - the default is
- * every synced artifact except the task file.
+ * every stored artifact except the task file.
  *
  * Monday-start (ISO), mono day numbers top-right, today inverted. Chips carry
  * the product's basename (max 2 per day + a "+N" overflow); under ~620px of
@@ -103,7 +103,7 @@ export function LoopCalendar({
   taskFile,
 }: {
   loopId: string
-  /** The loop's synced artifact list (null while loading). */
+  /** The loop's stored artifact list (null while loading). */
   artifacts: ArtifactSummary[] | null
   match?: string
   /** The loop's task-file path - excluded from the default (no-match) product set. */

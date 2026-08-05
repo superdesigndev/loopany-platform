@@ -338,31 +338,6 @@ export type ArtifactContent =
   | { binary: true; size: number | null; oversize: boolean }
   | { error: string }
 
-// ---- per-run diff: what changed vs the previous run (Phase 3) ----
-
-/** One file's change between a run and the previous run. */
-export interface RunDiffFile {
-  path: string
-  status: 'added' | 'modified' | 'removed'
-  /** Binary/oversize on either side → no inline diff, just the size delta. */
-  binary: boolean
-  /** A real text file that exceeds the inline-diff size cap (but is under the
-   *  oversize cap) → no inline diff, but it's NOT binary — the UI says "too large
-   *  to diff" rather than mislabeling it. */
-  tooLarge?: boolean
-  /** newSize − oldSize (added ⇒ +newSize, removed ⇒ −oldSize); null when unknown. */
-  sizeDelta: number | null
-  /** Unified text diff (text files only); absent for binary/oversize/too-large. */
-  diff?: string
-}
-
-/** getRunDiff result. `hasSnapshot` false ⇒ this run predates the feature
- *  (no recorded manifest) → the UI shows the degrade copy, not an empty diff. */
-export interface RunDiffResult {
-  hasSnapshot: boolean
-  files: RunDiffFile[]
-}
-
 export type TranscriptResult =
   | { query?: string; system?: string; steps: TranscriptStep[] }
   | { error: string }

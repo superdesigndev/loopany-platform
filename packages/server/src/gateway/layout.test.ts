@@ -1,17 +1,18 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 /**
- * Gateway layout guard - pins the module structure the two extraction cuts
- * (ArtifactSync -> sync.ts, CliGateway -> cli.ts) established, so it can't
- * silently regress in review noise (same test-as-guardrail pattern as the
- * daemon's sync-skill.test.ts):
+ * Gateway layout guard - pins the module structure the CliGateway extraction cut
+ * established, so it can't silently regress in review noise (same test-as-guardrail
+ * pattern as the daemon's sync-skill.test.ts):
  *
- *   - dependency direction is one-way: cli.ts / sync.ts import index.ts,
- *     never the reverse (no cycles, the core never depends on its satellites);
+ *   - dependency direction is one-way: cli.ts imports index.ts, never the
+ *     reverse (no cycles, the core never depends on its satellite);
  *   - both write surfaces import the ONE validators module (the anti-drift
  *     invariant documented in validate.ts);
- *   - http.ts stays a leaf (shared wire helpers must not grow gateway deps).
+ *   - http.ts stays a leaf (shared wire helpers must not grow gateway deps);
+ *   - the retired byte-ingress module (sync.ts) stays gone.
  */
 
 const read = (name: string): string => readFileSync(new URL(`./${name}`, import.meta.url), "utf8");
@@ -21,15 +22,17 @@ const read = (name: string): string => readFileSync(new URL(`./${name}`, import.
 const importsOf = (source: string): string[] =>
   [...source.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]!);
 
-test("index.ts never imports its extracted satellites (cli.ts / sync.ts)", () => {
-  const imports = importsOf(read("index.ts"));
-  expect(imports).not.toContain("./cli.js");
-  expect(imports).not.toContain("./sync.js");
+test("index.ts never imports its extracted satellite (cli.ts)", () => {
+  expect(importsOf(read("index.ts"))).not.toContain("./cli.js");
 });
 
-test("cli.ts and sync.ts do not import each other", () => {
-  expect(importsOf(read("cli.ts"))).not.toContain("./sync.js");
-  expect(importsOf(read("sync.ts"))).not.toContain("./cli.js");
+test("the retired byte-ingress module is gone and nothing imports it", () => {
+  // Path in a VARIABLE: Vite statically rewrites a LITERAL new URL("./x", import.meta.url).
+  const rel = "./sync.ts";
+  expect(existsSync(fileURLToPath(new URL(rel, import.meta.url)))).toBe(false);
+  for (const name of ["index.ts", "cli.ts", "http.ts", "retention.ts"]) {
+    expect(importsOf(read(name))).not.toContain("./sync.js");
+  }
 });
 
 test("both write surfaces import the one validators module (anti-drift)", () => {

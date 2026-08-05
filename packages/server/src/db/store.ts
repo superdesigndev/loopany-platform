@@ -903,50 +903,18 @@ export async function deleteChannel(id: string): Promise<boolean> {
 
 // ---- blobs (content-addressed artifact bytes; metadata only — bytes live in R2) ----
 
-/** Does the server already have metadata for this blob hash? (drives needHashes). */
+/** Does the server already have metadata for this blob hash? */
 export async function blobExists(hash: string): Promise<boolean> {
   return !!(await db.select({ hash: blobs.hash }).from(blobs).where(eq(blobs.hash, hash)))[0];
 }
 
-/** Batched `blobExists`: which of these hashes does the server already hold?
- *  The sync ingress asks this once per manifest instead of twice per FILE — on a
- *  large folder that is the difference between one query and thousands of
- *  sequential round-trips (the S3.2 oversized-sync stall). Chunked so the bind
- *  parameter list stays well inside every driver's limit. */
-export async function blobsExisting(hashes: string[]): Promise<Set<string>> {
-  const found = new Set<string>();
-  const unique = [...new Set(hashes)];
-  const CHUNK = 500;
-  for (let i = 0; i < unique.length; i += CHUNK) {
-    const chunk = unique.slice(i, i + CHUNK);
-    if (!chunk.length) continue;
-    const rows = await db.select({ hash: blobs.hash }).from(blobs).where(inArray(blobs.hash, chunk));
-    for (const r of rows) found.add(r.hash);
-  }
-  return found;
-}
-
 /** Record a blob's metadata (idempotent — same hash ⇒ same bytes, so a no-op on
  *  conflict). `meta` is the parsed front-matter subset for a non-binary product
- *  (null for binary / unparsed); computed once at ingress and reused on every
- *  content-addressed re-reference (the conflict no-op keeps the first-parsed meta). */
+ *  (null for binary / unparsed). Byte ingress retired with the folder watcher, so
+ *  in production nothing calls this any more; it remains the storage layer's writer
+ *  for the artifact history the GC still reasons about (and its tests seed). */
 export async function recordBlob(hash: string, size: number, binary: boolean, meta: ArtifactMeta | null = null): Promise<void> {
   await db.insert(blobs).values({ hash, size, binary, meta, createdAt: nowIso() }).onConflictDoNothing();
-}
-
-/** Does any LIVE artifact_files row on a loop bound to `machineId` point at `hash`?
- *  Gates putBlob: a device may only upload bytes the sync handshake actually asked
- *  it for (a row a prior sync wrote for one of ITS loops), never arbitrary
- *  self-hashed blobs — otherwise any device token is an uncapped R2 write channel. */
-export async function machineReferencesBlob(machineId: string, hash: string): Promise<boolean> {
-  return !!(
-    await db
-      .select({ id: artifactFiles.id })
-      .from(artifactFiles)
-      .innerJoin(loops, eq(artifactFiles.loopId, loops.id))
-      .where(and(eq(loops.machineId, machineId), eq(artifactFiles.hash, hash), eq(artifactFiles.deleted, false)))
-      .limit(1)
-  )[0];
 }
 
 // ---- artifact_files (the current file set of each loop) ----
@@ -1012,15 +980,6 @@ export async function tombstoneMissingArtifacts(loopId: string, keepPaths: strin
   return tombstoned;
 }
 
-/** The loop's current (non-deleted) file set, path-sorted. */
-export async function listArtifacts(loopId: string): Promise<ArtifactFile[]> {
-  return db
-    .select()
-    .from(artifactFiles)
-    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)))
-    .orderBy(artifactFiles.path);
-}
-
 /** One live artifact row joined with its blob's parsed front-matter meta (null for
  *  a binary / oversize / not-yet-stored / untyped file). Read path only — the list
  *  view surfaces the type/title/date without a per-file blob byte fetch. */
@@ -1068,16 +1027,6 @@ export async function getArtifactFile(loopId: string, path: string): Promise<Art
   )[0];
 }
 
-/** The loop's CURRENT live file set as a snapshot manifest (path → metadata) —
- *  what report() captures as the finishing run's end-state. */
-export async function buildLoopManifest(loopId: string): Promise<SnapshotManifest> {
-  const manifest: SnapshotManifest = {};
-  for (const f of await listArtifacts(loopId)) {
-    manifest[f.path] = { hash: f.hash, size: f.size, binary: f.binary, oversize: f.oversize };
-  }
-  return manifest;
-}
-
 // ---- run_snapshots (the loop's full manifest at each run boundary; Phase 3 diff) ----
 
 /** Write/overwrite a run's snapshot (path → file metadata). Idempotent on runId
@@ -1092,22 +1041,6 @@ export async function putRunSnapshot(runId: string, loopId: string, manifest: Sn
 /** A run's captured snapshot, or undefined when the run predates the feature. */
 export async function getRunSnapshot(runId: string): Promise<RunSnapshot | undefined> {
   return (await db.select().from(runSnapshots).where(eq(runSnapshots.runId, runId)))[0];
-}
-
-/** The most recent snapshot for this loop strictly before `beforeTs` (the prior
- *  run's end-state — the diff baseline). Joins run_snapshots to runs for the ts
- *  ordering; undefined when there is no earlier snapshotted run. */
-export async function prevRunSnapshot(loopId: string, beforeTs: string): Promise<RunSnapshot | undefined> {
-  const row = (
-    await db
-      .select({ snap: runSnapshots })
-      .from(runSnapshots)
-      .innerJoin(runs, eq(runSnapshots.runId, runs.id))
-      .where(and(eq(runSnapshots.loopId, loopId), lt(runs.ts, beforeTs)))
-      .orderBy(desc(runs.ts))
-      .limit(1)
-  )[0];
-  return row?.snap;
 }
 
 // ---- retention / GC accounting (see gateway/retention.ts) ----
@@ -1217,97 +1150,4 @@ export async function snapshotBlobRefs(): Promise<Set<string>> {
 export async function countRunSnapshots(): Promise<number> {
   const r = (await db.select({ n: sql<number>`count(*)` }).from(runSnapshots))[0];
   return Number(r?.n ?? 0);
-}
-
-/** Distinct loop ids with a LIVE (non-deleted) file row pointing at this hash.
- *  Drives the per-loop cap re-check at putBlob, where the only loop context is
- *  the artifact_files rows a prior sync already wrote for the requested hash. */
-export async function loopsReferencingHash(hash: string): Promise<string[]> {
-  return (
-    await db
-      .selectDistinct({ loopId: artifactFiles.loopId })
-      .from(artifactFiles)
-      .where(and(eq(artifactFiles.hash, hash), eq(artifactFiles.deleted, false)))
-  ).map((r) => r.loopId);
-}
-
-/** A loop's live byte footprint EXCLUDING any rows pointing at `hash` — the base
- *  the putBlob cap guard adds the blob's REAL byte length to (the placeholder row
- *  a sync wrote for `hash` carries a client-reported size we must not trust). Sums
- *  the VERIFIED blobs.size where the bytes are stored, falling back to the reported
- *  artifact_files.size only for not-yet-stored (pending) rows, so a daemon that
- *  under-reports sizes can't keep the base artificially low. */
-export async function loopStoredBytesExcludingHash(loopId: string, hash: string): Promise<number> {
-  const row = (
-    await db
-      .select({ total: sql<number>`coalesce(sum(coalesce(${blobs.size}, ${artifactFiles.size})), 0)` })
-      .from(artifactFiles)
-      .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
-      .where(
-        and(
-          eq(artifactFiles.loopId, loopId),
-          eq(artifactFiles.deleted, false),
-          eq(artifactFiles.oversize, false),
-          isNotNull(artifactFiles.hash),
-          ne(artifactFiles.hash, hash),
-        ),
-      )
-  )[0];
-  return Number(row?.total ?? 0);
-}
-
-/** Hard-delete a loop's file rows pointing at `hash` — used when putBlob refuses
- *  the bytes (per-loop cap), so nothing dangles pointing at a blob never stored.
- *  Returns the number removed. */
-export async function dropArtifactFilesForHash(loopId: string, hash: string): Promise<number> {
-  const deleted = await db
-    .delete(artifactFiles)
-    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.hash, hash)))
-    .returning({ id: artifactFiles.id });
-  return deleted.length;
-}
-
-/** A loop's current live (non-deleted) byte footprint: sum of sizes over files
- *  that actually have bytes stored (hash non-null, not oversize). Prefers the
- *  VERIFIED blobs.size (real length recorded at recordBlob) and only falls back to
- *  the client-reported artifact_files.size for a row whose blob isn't stored yet
- *  (pending), so an under-reporting daemon can't creep past the cap. This is the
- *  figure the per-loop storage cap is enforced against. */
-export async function loopStoredBytes(loopId: string): Promise<number> {
-  const row = (
-    await db
-      .select({ total: sql<number>`coalesce(sum(coalesce(${blobs.size}, ${artifactFiles.size})), 0)` })
-      .from(artifactFiles)
-      .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
-      .where(
-        and(
-          eq(artifactFiles.loopId, loopId),
-          eq(artifactFiles.deleted, false),
-          eq(artifactFiles.oversize, false),
-          isNotNull(artifactFiles.hash),
-        ),
-      )
-  )[0];
-  return Number(row?.total ?? 0);
-}
-
-/** The PER-PATH breakdown of loopStoredBytes: each live, byte-backed file row's
- *  counted size (verified blobs.size, falling back to the client-reported
- *  artifact_files.size for a pending row — the exact per-row basis
- *  loopStoredBytes sums). One query per sync so the overwrite "freed" credit
- *  doesn't cost two point queries per manifest file on the ~1.5s flush path. */
-export async function liveArtifactSizes(loopId: string): Promise<Map<string, number>> {
-  const rows = await db
-    .select({ path: artifactFiles.path, size: sql<number | null>`coalesce(${blobs.size}, ${artifactFiles.size})` })
-    .from(artifactFiles)
-    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
-    .where(
-      and(
-        eq(artifactFiles.loopId, loopId),
-        eq(artifactFiles.deleted, false),
-        eq(artifactFiles.oversize, false),
-        isNotNull(artifactFiles.hash),
-      ),
-    );
-  return new Map(rows.map((r) => [r.path, Number(r.size ?? 0)]));
 }

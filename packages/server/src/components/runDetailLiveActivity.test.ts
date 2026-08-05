@@ -25,7 +25,6 @@ vi.mock('../server/loopApi', () => ({
   getJobDetail: vi.fn(async () => h.detail),
   loadOlderRuns: vi.fn(async () => []),
   getArtifacts: vi.fn(async () => []),
-  getRunDiff: vi.fn(async () => ({ hasSnapshot: false, files: [] })),
   getTranscript: vi.fn(async () => ({ steps: [] })),
   cancelRun: vi.fn(async () => ({})),
 }))

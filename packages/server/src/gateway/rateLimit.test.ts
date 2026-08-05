@@ -110,17 +110,18 @@ describe("machineRouteLimit", () => {
   });
 });
 
-// The byte-ingress routes (blob PUT / sync POST) are EXEMPT from rate limiting
-// entirely — they never import or call machineRouteLimit. Guard that here so a
-// future edit can't silently re-add a limiter that would throttle a large sync.
-describe("byte-ingress routes are unlimited", () => {
-  test("blob PUT and sync POST route source never references machineRouteLimit", async () => {
-    const { readFile } = await import("node:fs/promises");
+// The byte-ingress routes (blob PUT / sync POST) were the ONE rate-limit exemption.
+// They retired with the folder watcher, so the exemption retires with them: EVERY
+// remaining machine route must carry the limiter. Guard the absence of the routes
+// so a re-add has to defeat a named test rather than slip back in unlimited.
+describe("the exempt byte-ingress routes are gone", () => {
+  test("no blob PUT / sync POST route file exists", async () => {
+    const { existsSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
-    const dir = fileURLToPath(new URL("../routes/", import.meta.url));
+    const rel = "../routes/";
+    const dir = fileURLToPath(new URL(rel, import.meta.url));
     for (const f of ["api.machine.blob.$hash.ts", "api.machine.sync.ts"]) {
-      const src = await readFile(dir + f, "utf8");
-      expect(src).not.toContain("machineRouteLimit");
+      expect(existsSync(dir + f)).toBe(false);
     }
   });
 });

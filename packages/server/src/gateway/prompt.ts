@@ -19,8 +19,8 @@
  * is the self-sufficient CORE (identity + untrusted-data guard + the non-negotiable
  * fallback core + per-run trigger + a pointer to the installable loopany skill for
  * the deep protocol); the deep protocol itself moves to the skill in a later batch.
- * The old standing system prompt (exec-loop.md) is retained as that batch's source
- * but is no longer imported or delivered.
+ * The old standing system prompt (exec-loop.md) has been retired: its depth lives
+ * in the public `references/run.md`, and it is neither imported nor delivered.
  *
  * Batch 2 extends the same move to the EVOLVE and EDIT runs, and trims the inlined
  * run history. `buildEvolvePrompt`/`buildEditPrompt` now return "" (empty system

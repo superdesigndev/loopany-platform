@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import type { ArtifactSummary, JobDetail, RunDiffResult, RunSummary, TranscriptResult } from '../types'
+import type { ArtifactSummary, JobDetail, RunSummary, TranscriptResult } from '../types'
 import { dur, fmt, fnum, money } from '../lib/format'
 import { loopDir } from '../lib/editPrompt'
-import { cancelRun, getArtifacts, getJobDetail, getRunDiff, getTranscript, loadOlderRuns } from '../server/loopApi'
+import { cancelRun, getArtifacts, getJobDetail, getTranscript, loadOlderRuns } from '../server/loopApi'
 import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
-import { DiffView } from './DiffView'
 import { TranscriptView } from './TranscriptView'
 import { btn, btnDanger, Loading, Pill, runPulseStyle, sectionHeadCls, StatusPill } from './ui'
 import { LoadErrorCard, useContinueSession } from './actionUi'
@@ -51,11 +50,12 @@ function Fold({ title, sub, body }: { title: string; sub?: string; body: string 
   )
 }
 
-/** Historical fallback for a run with no snapshot (predates Phase 3): the run's
- *  recorded produced-file list, reusing the Phase 2 file viewer. Files still
- *  synced to the loop expand/download inline; ones with no synced blob render
- *  non-clickable with a subtle hint instead of a dead link. */
-function RecordedFiles({ run }: { run: RunSummary }) {
+/** The files this run's own session created/edited, parsed from its transcript and
+ *  carried on the report payload — NOT a folder listing (nothing on the machine
+ *  reaches the server by itself). A path the server also holds stored bytes for
+ *  expands/downloads inline; the rest render non-clickable with a subtle hint
+ *  instead of a dead link. */
+function RunFiles({ run }: { run: RunSummary }) {
   const artifacts = run.artifacts ?? []
   const [live, setLive] = useState<ArtifactSummary[] | null>(null)
   useEffect(() => {
@@ -84,57 +84,27 @@ function RecordedFiles({ run }: { run: RunSummary }) {
   )
 }
 
-/** Per-run artifact diff vs the previous run (Phase 3), rendered as a colored diff
- *  view. Lazy by runId; degrades to a calm fallback for runs with no snapshot. */
-function Changes({ run }: { run: RunSummary }) {
-  const [data, setData] = useState<RunDiffResult | null>(null)
-  useEffect(() => {
-    if (run.running) return // snapshot is captured at finalize — nothing to diff yet
-    let alive = true
-    getRunDiff({ data: { runId: run.id } })
-      .then((d) => alive && setData(d))
-      .catch(() => alive && setData({ hasSnapshot: false, files: [] }))
-    return () => {
-      alive = false
-    }
-  }, [run.id, run.running])
-
+/** The run's produced files. Sourced ONLY from the report payload's artifact list
+ *  (the session transcript), which is what survived the folder-watcher retirement:
+ *  there is no longer any manifest to diff, so this card states what the run wrote
+ *  rather than what a folder happens to contain. */
+function Files({ run }: { run: RunSummary }) {
+  const count = run.artifacts?.length ?? 0
   if (run.running)
     return (
-      <Card label="Changes">
-        <div className="text-body text-disabled">File changes appear once the run finishes.</div>
+      <Card label="Files">
+        <div className="text-body text-disabled">Files appear once the run finishes.</div>
       </Card>
     )
-  if (!data)
+  if (count === 0)
     return (
-      <Card label="Changes">
-        <Loading />
+      <Card label="Files">
+        <div className="text-body text-disabled">This run recorded no created or edited files.</div>
       </Card>
     )
-  if (!data.hasSnapshot) {
-    // Runs predating Phase 3 have no diff snapshot — fall back to the run's
-    // recorded produced-file list so the file surface isn't lost.
-    if ((run.artifacts?.length ?? 0) > 0)
-      return (
-        <Card label="Files" count={run.artifacts?.length ?? 0}>
-          <RecordedFiles run={run} />
-        </Card>
-      )
-    return (
-      <Card label="Changes">
-        <div className="text-body text-disabled">
-          No recorded file changes for this run (an earlier run); runs from now on track what changed.
-        </div>
-      </Card>
-    )
-  }
   return (
-    <Card label="Changes" count={data.files.length}>
-      {data.files.length === 0 ? (
-        <div className="text-body text-disabled">No files changed since the previous run.</div>
-      ) : (
-        <DiffView files={data.files} />
-      )}
+    <Card label="Files" count={count}>
+      <RunFiles run={run} />
     </Card>
   )
 }
@@ -170,7 +140,7 @@ function Transcript({ runId, running }: { runId: string; running?: boolean }) {
 /**
  * Live activity for an in-flight run — the run detail page's answer to the loop
  * page's Runs list line (pulsing dot + step + label). Without this an executing
- * run's own page showed nothing about what it was doing (Report/Changes/Transcript
+ * run's own page showed nothing about what it was doing (Report/Files/Transcript
  * all settle only at finalize), while the list that links to it streamed progress.
  *
  * The page self-polls every 3s while running, so `run.progress`/`run.ts` refresh in
@@ -240,8 +210,8 @@ const MAX_OLDER_PAGES = 64
  * with the existing `loadOlderRuns` cursor fn. Self-polls while it's in flight.
  *
  * Layout mirrors the loop detail page: a header card (name / status pill / chips
- * + action toolbar), then a two-column main — the meaty content (Changes diff +
- * Execution trace + Report) in a wide `minmax(0,1fr)` column, the run metadata in
+ * + action toolbar), then a two-column main — the meaty content (Report + Files +
+ * Execution trace) in a wide `minmax(0,1fr)` column, the run metadata in
  * a capped right rail. `min-w-0` everywhere + panes that scroll their own wide
  * content keep the page free of horizontal scroll at any width.
  */
@@ -406,7 +376,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             </Card>
           )}
 
-          <Changes run={run} />
+          <Files run={run} />
 
           {run.control && run.control.length > 0 && (
             <Card label="Control actions" count={run.control.length}>

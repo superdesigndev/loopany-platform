@@ -338,26 +338,20 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   flip or the stamp is older than `LAST_SEEN_REFRESH_MS` (10s) - an idle poll is
   read-only. The claim scan is `store.pendingRunsForMachine(machineId)` (targeted,
   `runs_phase_idx`), never the all-open `openRuns()` scan (that stays sweep-only).
-- Watch set: served from a per-machine cache (`WATCH_CACHE_TTL_MS` 15s), response
-  always carries `watchDigest`; when the daemon echoes a matching digest the
-  `watch` array is OMITTED. Omission requires the echo (proof the client speaks
-  the protocol) - an old daemon always gets the full list, and an ABSENT `watch`
-  means "unchanged", never "empty" (`daemon.ts` only reconciles on `Array.isArray`).
-  Any delivery forces a recompute (the run may belong to a brand-new loop whose
-  folder must be watched before it writes); gateway `createLoop`/`editLoop` call
-  `invalidateWatch`; store-direct write paths (web loopApi) are covered by the TTL.
+- The poll response body is `{deliveries}` and NOTHING else. The watch set +
+  `watchDigest` echo retired with the folder watcher; `gateway/index.test.ts` pins
+  the exact key list so a re-add has to defeat a named test.
 
 ## Gateway layout (the MachineGateway decomposition)
 
 - `gateway/index.ts` (`MachineGateway`) is the run-lifecycle core: poll/pollWait,
   report/reclaimRun/sweep, `finishLoop`, `maintainStorage` (retention/GC), the
   owner verbs (createLoop/listLoops/editLoop/loopLog/renderLoopLog), and the
-  presence/watch state.
-- The artifact byte-ingress cluster lives in `gateway/sync.ts` as `ArtifactSync`:
-  `sync()` (POST /api/machine/sync manifest reconcile), `putBlob()` (PUT
-  /api/machine/blob/:hash), `readBlob()` (the download seam `artifactFiles.ts` /
-  `runDiff.ts` resolve bytes through), plus the private task-file mirror
-  `refreshTaskFileContent`.
+  machine presence state.
+- There is NO byte-ingress cluster: `gateway/sync.ts` (`ArtifactSync`) retired with
+  the folder watcher. Artifact bytes are READ through `boot.ts` `getBlobStore()`
+  (`server/artifactFiles.ts` is the only consumer) and reclaimed by the gateway's
+  `maintainStorage`.
 - The CLI dispatch cluster lives in `gateway/cli.ts` as `CliGateway`
   (constructor-injected with the `MachineGateway`): `cli()` (the unified
   /api/machine/cli credential router + `finalizeCli`), `agentApi()`
@@ -371,18 +365,17 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   INVARIANT: the owner edit surface (`createLoop`/`editLoop` in index.ts) and the
   run-token `set-*` surface (`applySet*` in cli.ts) import this ONE module, so the
   two write paths cannot validate differently.
-- **Boot constructs ONE `createBlobStore()` and hands the SAME instance to
-  `MachineGateway` and `ArtifactSync`** (`boot.ts`; accessors `getGateway()` /
-  `getArtifactSync()` / `getCliGateway()`). This is load-bearing with the
-  in-memory store: two instances would mean retention/GC deleting bytes
-  ArtifactSync never wrote (and vice versa). Tests mirror the sharing
-  (`retention.test.ts` `gatewayWithStore`).
+- **Boot constructs ONE `createBlobStore()`** (`boot.ts`; accessors `getGateway()` /
+  `getBlobStore()` / `getCliGateway()`) and hands it to `MachineGateway` for
+  retention/GC while the artifact readers resolve bytes through `getBlobStore()`.
+  Still load-bearing with the in-memory store: a second instance would mean the GC
+  deleting bytes the readers can see (and vice versa).
 - Import direction: the generic wire plumbing (`HttpResult`, `WIRE_TEXT_CAP`,
   `clipText`/`stripNul`, `nowIso`) lives in the leaf module `gateway/http.ts`,
-  imported by index/cli/sync alike - one clipping/NUL-stripping discipline, no
-  fork; domain helpers (caps, renders) still flow `index.ts` -> `cli.ts`/`sync.ts`,
-  and `index.ts` never imports its satellites, so there is no cycle. The whole
-  shape is pinned by `gateway/layout.test.ts`.
+  imported by index and cli alike - one clipping/NUL-stripping discipline, no
+  fork; domain helpers (caps, renders) still flow `index.ts` -> `cli.ts`, and
+  `index.ts` never imports its satellite, so there is no cycle. The whole shape is
+  pinned by `gateway/layout.test.ts` (which also pins that `sync.ts` stays gone).
 - The legacy `/api/machine/loop` + `/api/machine/log` routes call the owner-verb
   methods on `MachineGateway` directly; `/api/machine/cli` + `/agent-api/loop`
   route through `getCliGateway()`.
@@ -1067,26 +1060,25 @@ shape above plus these two rules.
   no longer has the dropped columns), then `migrate()` against the real folder.
   Copy it when a future migration carries data steps.
 
-## Artifact sync — a workspace is not a content home
+## The folder watcher is RETIRED (2026-08-05)
 
-The daemon's folder watcher held one fd per watched FILE, and six repo-workdir
-loops warmed past macOS's `OPEN_MAX` — from that instant every
-`child_process.spawn` threw `spawn EBADF` and the daemon could no longer run the
-coding agent it exists to run. The diagnosis, the measured ceiling and the
-watch/sync contract live in the root `AGENTS.md` ("Artifacts / storage") and in
-`packages/daemon/src/watcher.ts`'s header; read those.
+There is no artifact sync. The daemon watches no directory and the server has no
+byte-ingress route: a run's products travel as OBJECTS (`loopany doc|task|mirror`)
+plus its `report()` payload. The full ruling, what retired, what was deliberately
+KEPT as read-only history, and the open follow-up are in the root `AGENTS.md`
+("Artifacts / storage — the folder watcher is RETIRED"); read that rather than
+re-deriving it here. Three consequences that bite in this package:
 
-- **The contract in one line**: a loop bound to a workspace syncs that folder's
-  top-level files only. Do not "fix" a converged loop's missing subtree by
-  widening the scope — move its task file into a dedicated folder, which is what
-  restores full recursion.
-- **The server half**: `SYNC_MAX_MANIFEST_ENTRIES` refuses an over-cap manifest
-  with a 413 that reconciles nothing, and `store.blobsExisting` answers a whole
-  manifest's hashes in one batched query. Both pinned in `gateway/sync.test.ts`.
-- Regression anchor: `packages/daemon/src/watcher.fdCeiling.test.ts`.
-- Prod `loops.workdir` is LOAD-BEARING for this: the poll's watch set carries it
-  and `isWorkspaceRoot` keys on it. (The kernel's own `objects.workdir` facet
-  retired with the loop kind — different column, different fate.)
+- **`loops.taskFileContent` has exactly ONE writer: `report()`.** The sync-time
+  mirror (`refreshTaskFileContent`) went with `gateway/sync.ts`, so a charter is
+  fresh as of the loop's last FINISHED run — never mid-run, never on an idle-time
+  human edit. `kernel/views.ts` and `LoopFilesPanel` both render that column.
+- **`blobs` / `artifact_files` / `run_snapshots` are read-only history.** No
+  migration dropped them (the ruling said keep stored history readable). The GC in
+  `gateway/retention.ts` is still live — a deleted loop cascades its rows and frees
+  its bytes — and it is the ONLY thing that writes to the blob store now.
+- **Every machine route is rate-limited again.** The blob-PUT/sync-POST exemption
+  retired with the routes; `gateway/rateLimit.test.ts` pins their absence.
 
 ## Maintaining this file
 

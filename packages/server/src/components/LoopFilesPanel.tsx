@@ -8,12 +8,17 @@ import { TaskFileView } from './TaskFileView'
 
 /**
  * The unified "Files" surface of the loop detail page — the loop's spec (its task
- * file) shown ALONGSIDE every live-synced artifact in ONE master-detail panel,
+ * file) shown ALONGSIDE its stored artifact history in ONE master-detail panel,
  * not two separate boxes. A file list (task file pinned first, then artifacts
  * path-sorted) drives a content viewer on the right; the task file is selected by
  * default. Text files render inline (markdown → formatted, else mono); binary /
- * oversize files offer the download route. The artifact list is fetched lazily by
- * loopId and self-polls so files appear as the loop writes them (Phase 1-2 reuse).
+ * oversize files offer the download route.
+ *
+ * The TASK FILE is the live half: its content arrives on every run report, so it
+ * is fresh as of the loop's last finished run. The artifact rows are HISTORY —
+ * the folder watcher retired, so nothing adds to them; a run's durable products
+ * are objects (doc / task / mirror) now. The list is still fetched lazily and
+ * self-polls, which is what keeps the task row current.
  */
 
 const basename = (path: string) => path.split('/').pop() || path
@@ -80,7 +85,7 @@ export function LoopFilesPanel({
   // ONLY the user's explicit choice (set by the row buttons below).
   const activePath = selected && entries.some((e) => e.path === selected) ? selected : entries[0]?.path ?? null
   const active = entries.find((e) => e.path === activePath) ?? null
-  // The task row — synthetic OR a synced artifact badged as the task — always
+  // The task row — synthetic OR a stored artifact badged as the task — always
   // renders from the loop record's `taskFileContent` (authoritative + always
   // present), not the artifact's own blob fetch. Same file, but this is robust to
   // a missing blob and avoids a redundant round-trip.
@@ -94,12 +99,12 @@ export function LoopFilesPanel({
         <h2 className="text-label font-semibold text-secondary">
           Files{artifacts ? ` (${entries.length})` : ''}
         </h2>
-        <span className="text-caption font-medium text-disabled">Spec + synced artifacts</span>
+        <span className="text-caption font-medium text-disabled">Spec + stored artifacts</span>
       </div>
 
       {entries.length === 0 ? (
         <div className="rounded-card border border-hairline bg-surface px-5 py-10 text-center text-body text-disabled shadow-card">
-          {artifacts == null ? 'Loading…' : 'No files yet - the task file and synced artifacts appear here.'}
+          {artifacts == null ? 'Loading…' : "No files yet - the loop's task file appears here once a run reports."}
         </div>
       ) : (
         <div className="grid h-[min(600px,68vh)] grid-cols-1 overflow-hidden rounded-card border border-hairline bg-surface shadow-card sm:grid-cols-[210px_1fr]">

@@ -1,7 +1,7 @@
 /**
  * The bundled skill that ships in the npm tarball must be EXACTLY the public
  * surface — SKILL.md + references/{create,update,evolve,run}.md — and nothing else.
- * The server's src/skill/ also holds INTERNAL run prompts under run/ (exec-loop,
+ * The server's src/skill/ also holds INTERNAL run prompts under run/ (exec-core,
  * edit) that are server-side run-dispatch only; a naive recursive copy would leak
  * them into every user's installed ./.claude/skills/loopany/. This runs the real
  * sync-skill.mjs and asserts the selectivity (guards against a regression to
@@ -36,7 +36,7 @@ test("sync-skill bundles ONLY the public surface (no internal run prompts)", () 
   const files = listTree(bundle);
   expect(files).toEqual(["SKILL.md", "references/create.md", "references/update.md", "references/evolve.md", "references/run.md"].sort());
   // Explicitly: the internal run prompts never reach the tarball.
-  expect(files).not.toContain("run/exec-loop.md");
+  expect(files).not.toContain("run/exec-core.md");
   expect(files).not.toContain("run/edit.md");
   expect(files.some((f) => f.startsWith("run/"))).toBe(false);
   // And the server-only first-capture onboarding doc (served at /api/skill) is NOT

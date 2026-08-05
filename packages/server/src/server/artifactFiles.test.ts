@@ -1,9 +1,11 @@
 /**
- * Phase 2 — web artifact reads. Drives the booted in-memory blob store
- * (no R2/creds) through `getArtifactSync()` so the read helpers resolve the same
- * bytes the sync wrote. Covers the list/text/binary/oversize/not-found server-fn
- * core, the download route's byte resolver (path-safety + 404s), and the shared
- * canAccessLoop authorization predicate (membership-based, cross-team-link fix).
+ * Web artifact reads over the server's STORED artifact history. Byte ingress
+ * retired with the folder watcher, so these helpers are strictly read-only; the
+ * tests seed the history the way the storage layer holds it (blob bytes into the
+ * booted in-memory store via `getBlobStore()`, rows via `store`) rather than
+ * through a sync that no longer exists. Covers the list/text/binary/oversize/
+ * not-found server-fn core, the download route's byte resolver (path-safety +
+ * 404s), and the shared canAccessLoop authorization predicate.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -18,7 +20,7 @@ let boot: typeof import("./boot.js");
 let tokens: typeof import("../gateway/tokens.js");
 let artifacts: typeof import("./artifactFiles.js");
 let auth: typeof import("../auth.js");
-let art: Awaited<ReturnType<typeof import("./boot.js")["getArtifactSync"]>>;
+let blobs: Awaited<ReturnType<typeof import("./boot.js")["getBlobStore"]>>;
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-art2-"));
@@ -32,7 +34,7 @@ beforeAll(async () => {
   tokens = await import("../gateway/tokens.js");
   artifacts = await import("./artifactFiles.js");
   auth = await import("../auth.js");
-  art = await boot.getArtifactSync();
+  blobs = await boot.getBlobStore();
 });
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -53,33 +55,24 @@ async function seed() {
   return { token, machineId, loop };
 }
 
-/** Sync one inline file (text or binary bytes) and return its hash. */
-async function syncFile(token: string, loopId: string, p: string, bytes: Buffer, binary = false) {
+/** Seed one stored file: bytes in the blob store, metadata + row in the DB. */
+async function storeFile(loopId: string, p: string, bytes: Buffer, binary = false) {
   const hash = sha256(bytes);
-  await art.sync(token, {
-    loopId,
-    manifest: [{ path: p, hash, size: bytes.length, binary }],
-    blobs: [{ hash, encoding: "base64", data: bytes.toString("base64") }],
-  });
+  await blobs.put(hash, bytes);
+  await store.recordBlob(hash, bytes.length, binary);
+  await store.upsertArtifactFile({ loopId, path: p, hash, size: bytes.length, binary, oversize: false, lastRunId: null });
   return hash;
 }
 
+/** Seed one metadata-only (oversize) row: a path with a size and no bytes. */
+async function storeOversize(loopId: string, p: string, size: number) {
+  await store.upsertArtifactFile({ loopId, path: p, hash: null, size, binary: false, oversize: true, lastRunId: null });
+}
+
 test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes text", async () => {
-  const { token, loop } = await seed();
-  // One full-manifest sync (each sync is a complete reconciliation, not append).
-  const z = Buffer.from("# Z");
-  const b = Buffer.from("hello");
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [
-      { path: "z.md", hash: sha256(z), size: z.length },
-      { path: "a/b.txt", hash: sha256(b), size: b.length },
-    ],
-    blobs: [
-      { hash: sha256(z), encoding: "base64", data: z.toString("base64") },
-      { hash: sha256(b), encoding: "base64", data: b.toString("base64") },
-    ],
-  });
+  const { loop } = await seed();
+  await storeFile(loop.id, "z.md", Buffer.from("# Z"));
+  await storeFile(loop.id, "a/b.txt", Buffer.from("hello"));
 
   const list = await artifacts.listLoopArtifacts(loop.id);
   expect(list.map((f) => f.path)).toEqual(["a/b.txt", "z.md"]); // path-sorted
@@ -91,36 +84,33 @@ test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes 
 });
 
 test("readLoopArtifact returns a binary marker for binary files (download-only)", async () => {
-  const { token, loop } = await seed();
-  await syncFile(token, loop.id, "logo.png", Buffer.from([0x89, 0x50, 0x00, 0x4e]), true);
+  const { loop } = await seed();
+  await storeFile(loop.id, "logo.png", Buffer.from([0x89, 0x50, 0x00, 0x4e]), true);
   const content = await artifacts.readLoopArtifact(loop.id, "logo.png");
   expect(content).toEqual({ binary: true, size: 4, oversize: false });
 });
 
 test("readLoopArtifact marks oversize (metadata-only) files; no bytes are read", async () => {
-  const { token, loop } = await seed();
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "big.bin", hash: sha256("x"), size: 20 * 1024 * 1024, oversize: true }],
-  });
+  const { loop } = await seed();
+  await storeOversize(loop.id, "big.bin", 20 * 1024 * 1024);
   const content = await artifacts.readLoopArtifact(loop.id, "big.bin");
   expect(content).toEqual({ binary: true, size: 20 * 1024 * 1024, oversize: true });
 });
 
 test("readLoopArtifact reports not-found for unknown + tombstoned paths", async () => {
-  const { token, loop } = await seed();
-  await syncFile(token, loop.id, "keep.md", Buffer.from("a"));
+  const { loop } = await seed();
+  await storeFile(loop.id, "keep.md", Buffer.from("a"));
   expect(await artifacts.readLoopArtifact(loop.id, "nope.md")).toEqual({ error: "file not found" });
 
-  // Re-sync without keep.md → it tombstones → no longer readable inline.
-  await art.sync(token, { loopId: loop.id, manifest: [] });
+  // A tombstoned row (a historical deletion) is no longer readable inline.
+  await store.tombstoneMissingArtifacts(loop.id, [], null);
   expect(await artifacts.readLoopArtifact(loop.id, "keep.md")).toEqual({ error: "file not found" });
 });
 
 test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid bytes (200)", async () => {
-  const { token, loop } = await seed();
+  const { loop } = await seed();
   const bytes = Buffer.from("downloadable");
-  await syncFile(token, loop.id, "data/raw.json", bytes, false);
+  await storeFile(loop.id, "data/raw.json", bytes, false);
 
   // Traversal / absolute → rejected before any blob lookup.
   expect((await artifacts.readLoopArtifactBytes(loop.id, "../../etc/passwd")).status).toBe(400);
@@ -133,11 +123,7 @@ test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid byte
   expect(ok.filename).toBe("raw.json");
 
   // Oversize has no stored bytes → 404.
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "data/raw.json", hash: sha256(bytes), size: bytes.length }, { path: "huge.bin", hash: sha256("h"), size: 20 * 1024 * 1024, oversize: true }],
-    blobs: [{ hash: sha256(bytes), encoding: "base64", data: bytes.toString("base64") }],
-  });
+  await storeOversize(loop.id, "huge.bin", 20 * 1024 * 1024);
   expect((await artifacts.readLoopArtifactBytes(loop.id, "huge.bin")).status).toBe(404);
   expect((await artifacts.readLoopArtifactBytes(loop.id, "ghost.md")).status).toBe(404);
 });

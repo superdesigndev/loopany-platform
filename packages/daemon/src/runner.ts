@@ -18,7 +18,6 @@ import { effectiveRoots, isWithinRoots } from "./roots.js";
 import { sessionTrace, type RunArtifact, type TranscriptStep } from "./artifacts.js";
 import { CALLBACK_BIN_DIR } from "./callback-bin.js";
 import { setProgress, clearProgress } from "./progress.js";
-import { flushLoop, markRunActive, markRunDone } from "./watcher.js";
 import { LOOPANY_DIR } from "./config.js";
 import type { CodingAgent } from "./create.js";
 
@@ -87,8 +86,8 @@ interface ReportBody {
   finalText?: string;
 }
 
-/** Daemon-side cap on the synced task-file body — it's a growing log doc, so a
- *  huge one is tailed (recent entries are what the detail view is for). */
+/** Daemon-side cap on the task-file body carried in the report — it's a growing
+ *  log doc, so a huge one is tailed (recent entries are what the detail view is for). */
 const TASKFILE_CAP = 256 * 1024;
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
@@ -188,8 +187,6 @@ export function buildAgentSpawn(opts: {
 // (runProcess treats a falsy/≤0 timeoutMs as "no timeout").
 const rawExecTimeout = Number(process.env.LOOPANY_EXEC_TIMEOUT_MS);
 const TIMEOUT_MS = Number.isFinite(rawExecTimeout) && rawExecTimeout > 0 ? rawExecTimeout : 0;
-/** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
-const FLUSH_TIMEOUT_MS = 2500;
 
 // Transient-failure recovery: when claude dies mid-run on an infrastructure
 // error (an API "Connection closed mid-response", ECONNRESET, overloaded/5xx,
@@ -317,31 +314,11 @@ export function costFromResult(j: ClaudeJson): RunCost | undefined {
 }
 
 export async function runDelivery(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<void> {
-  // Attribute artifact syncs that happen during this run to its runId (Phase 3
-  // seam) — the loop's folder watcher reads this while the run is in-flight.
-  markRunActive(d.loop.id, d.runId);
-  try {
-    return await runDeliveryImpl(d, serverUrl, roots, signal);
-  } finally {
-    markRunDone(d.loop.id);
-  }
-}
-
-async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<void> {
   const start = Date.now();
-  // Force a final, run-tagged sync of the loop folder right before reporting so
-  // the server's run snapshot (Phase 3) captures end-state even if a late write
-  // slipped the watcher's debounce. Best-effort and bounded: the flush is raced
-  // against a short timeout so a slow/hung server can't stall run reporting (and
-  // the notification it triggers) past FLUSH_TIMEOUT_MS — the reclaim sweep + the
-  // continuous watcher still converge the server's artifact state afterward.
-  const reportRun = async (body: ReportBody): Promise<void> => {
-    await Promise.race([
-      flushLoop(d.loop.id).catch(() => {}),
-      new Promise<void>((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
-    ]);
-    return report(serverUrl, d.runToken, body);
-  };
+  // The ONE channel out of a run: the report payload (message/metrics/artifacts
+  // and the task file's latest bytes). Durable products the agent files itself
+  // through the object verbs. Nothing on disk travels on its own.
+  const reportRun = (body: ReportBody): Promise<void> => report(serverUrl, d.runToken, body);
   // The LOCAL env jail (LOOPANY_ROOTS) always applies when set; server-sent
   // roots can only narrow it — a hostile server must not widen the jail.
   const jail = effectiveRoots(roots, d.roots);
@@ -375,7 +352,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     } else {
       cursor = wf.result!.state;
       if (wf.result!.agentCalls.length === 0) {
-        // Pure workflow: direct message (or silent). No claude — but still sync
+        // Pure workflow: direct message (or silent). No claude — but still carry
         // the task file if the loop maintains one (the workflow may write it).
         return reportRun({
           runId: d.runId, ok: true, durationMs: Date.now() - start,
@@ -671,9 +648,10 @@ export function foldEscalation(calls: AgentCall[]): string {
     .join("\n\n");
 }
 
-/** Best-effort read of the loop's task file for sync to the server. The path may
- *  be absolute, ~-rooted, or relative to the run's workdir. Never throws — a
- *  missing/unreadable file just syncs nothing (the report must still go out).
+/** Best-effort read of the loop's task file to carry in the run report — the ONE
+ *  channel that keeps the server's charter copy fresh. The path may be absolute,
+ *  ~-rooted, or relative to the run's workdir. Never throws — a missing/unreadable
+ *  file just carries nothing (the report must still go out).
  *  taskFile is SERVER-SENT: under a local LOOPANY_ROOTS jail a path outside both
  *  the (already-jailed) workdir and the local roots is never read. */
 function readTaskFile(workdir: string, taskFile: string | null, localRoots: string[]): string | undefined {

@@ -2919,38 +2919,19 @@ test("poll claims only THIS machine's pending runs (targeted query, cross-machin
   expect(b).toHaveLength(1);
 });
 
-test("poll watch digest: matching echo omits the array; a delivery recomputes and resends", async () => {
+test("the poll response carries deliveries and NOTHING else — no watch set", async () => {
+  // The folder watcher retired, so the poll must not hand the daemon anything to
+  // watch. A regression here would resurrect the retired sync channel silently.
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/w/a/TASK.md" }));
+  (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
 
   const gw = gateway();
-  const r1 = (await gw.poll(token)).body as { watch?: Array<{ loopId: string }>; watchDigest: string };
-  expect(r1.watch).toHaveLength(1);
-  expect(r1.watchDigest).toBeTruthy();
-
-  // Echoing the digest back ⇒ the unchanged watch array is omitted (digest still present).
-  const r2 = (await gw.poll(token, undefined, undefined, r1.watchDigest)).body as { watch?: unknown[]; watchDigest: string };
-  expect(r2.watch).toBeUndefined();
-  expect(r2.watchDigest).toBe(r1.watchDigest);
-
-  // No echo (old daemon) ⇒ always the full list.
-  const r3 = (await gw.poll(token)).body as { watch?: unknown[] };
-  expect(r3.watch).toHaveLength(1);
-
-  // A delivery forces a recompute: a NEW loop's pending run arrives together with
-  // the updated watch set (its folder must be watched before the run writes).
-  const loop2 = (await store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/w/b/TASK.md" }));
-  (await store.addRun({ loopId: loop2.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
-  const r4 = (await gw.poll(token, undefined, undefined, r1.watchDigest)).body as {
-    deliveries: unknown[];
-    watch?: Array<{ loopId: string }>;
-    watchDigest: string;
-  };
-  expect(r4.deliveries).toHaveLength(1);
-  expect(r4.watch?.map((w) => w.loopId).sort()).toEqual([loop.id, loop2.id].sort());
-  expect(r4.watchDigest).not.toBe(r1.watchDigest);
+  const body = (await gw.poll(token)).body as Record<string, unknown>;
+  expect(Object.keys(body)).toEqual(["deliveries"]);
+  expect((body.deliveries as unknown[])).toHaveLength(1);
 });
 
 test("pollWait parks an idle long-poll and the dispatcher wake delivers the new run immediately", async () => {

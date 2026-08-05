@@ -168,10 +168,11 @@ export const loops = pgTable(
     workdir: text("workdir"),
     /** Path ON THE MACHINE to the loop's durable context+log doc. */
     taskFile: text("task_file"),
-    /** Latest synced snapshot of `taskFile`'s content — the daemon pushes it on
-     *  report (capped; tail if huge). Null ⇒ never synced (no run yet / no file). */
+    /** Latest copy of `taskFile`'s content. The run REPORT is the ONE channel that
+     *  refreshes it (the daemon reads the file at run end; capped, tail if huge), so
+     *  it is fresh as of the loop's last finished run. Null ⇒ no run yet / no file. */
     taskFileContent: text("task_file_content"),
-    /** When `taskFileContent` was last synced from the machine (ISO). */
+    /** When `taskFileContent` last arrived on a run report (ISO). */
     taskFileSyncedAt: text("task_file_synced_at"),
     /** Zero-LLM pre-filter JS (authored by human / evolve). Runs on the machine. */
     workflow: text("workflow"),
@@ -461,17 +462,22 @@ export const notificationChannels = pgTable(
   (t) => [index("notification_channels_team_idx").on(t.teamId)],
 );
 
-// ---- artifacts: content-addressed live-synced loop files (Phase 1 foundation) ----
+// ---- artifacts: content-addressed loop files (HISTORY — no writer remains) ----
 //
-// The daemon watches each loop's folder and live-syncs changed files. Blob BYTES
-// live in external object storage (Cloudflare R2), keyed by sha256 content hash —
-// NOT in the DB (no `content` column), keeping the business DB lean and preserving
-// the server's zero-exec invariant (it only stores/reads bytes, never interprets
-// them). These two tables hold only metadata.
+// While the daemon watched each loop's folder, changed files synced here. Blob
+// BYTES live in external object storage (Cloudflare R2), keyed by sha256 content
+// hash — NOT in the DB (no `content` column), keeping the business DB lean and
+// preserving the server's zero-exec invariant (it only stores/reads bytes, never
+// interprets them). These two tables hold only metadata.
+//
+// The watcher retired: these tables are READ-ONLY history now. They are kept
+// rather than dropped so nothing stored is destroyed and the read surfaces keep
+// rendering; the GC still reclaims bytes a deleted loop frees.
 
 /**
  * One content-addressed blob (deduped across every loop/run). The bytes live in
  * R2 under the hash; this row records that the server has them + their shape.
+ * Historical: nothing writes new blobs (the GC only deletes).
  */
 export const blobs = pgTable("blobs", {
   /** sha256 hex of the bytes (the R2 object key). */
@@ -489,10 +495,16 @@ export const blobs = pgTable("blobs", {
 });
 
 /**
- * The CURRENT file set of each loop — one row per live (or tombstoned) path,
- * relative to the loop's watch folder. `hash` → `blobs.hash`; null when the file
- * is deleted (tombstone) or oversize (metadata-only, no bytes synced). The
- * unique (loopId, path) index is the upsert key the sync reconciliation drives.
+ * HISTORY: the file set each loop's folder had while the artifact watcher ran —
+ * one row per live (or tombstoned) path, relative to that folder. `hash` →
+ * `blobs.hash`; null when the file is deleted (tombstone) or oversize
+ * (metadata-only, no bytes stored).
+ *
+ * The folder watcher retired: NOTHING writes these rows any more. They are kept
+ * (rather than dropped) so stored history stays readable — the Files panel and
+ * the dashboard primitives still render what a loop accumulated — and so the
+ * blob GC keeps a live keep-set. A run's products now travel as objects
+ * (doc / task / mirror) and its report payload.
  */
 export const artifactFiles = pgTable(
   "artifact_files",
@@ -511,23 +523,19 @@ export const artifactFiles = pgTable(
     /** Tombstone: the file vanished from the loop's manifest (kept for future diffs). */
     deleted: boolean("deleted").notNull().default(false),
     updatedAt: text("updated_at").notNull(),
-    /** The run in-flight when this change synced (null for idle-time human edits). */
+    /** The run in-flight when this row was last written (null for an idle-time edit). */
     lastRunId: text("last_run_id"),
   },
   (t) => [
     index("artifact_files_loop_idx").on(t.loopId),
     uniqueIndex("artifact_files_loop_path_idx").on(t.loopId, t.path),
-    // The blob GC's per-candidate referenced re-check + the putBlob cap guard both
-    // do a point lookup by hash; without this they full-scan artifact_files.
+    // The blob GC's per-candidate referenced re-check does a point lookup by
+    // hash; without this it full-scans artifact_files.
     index("artifact_files_hash_idx").on(t.hash),
   ],
 );
 
-/**
- * One file's metadata in a run snapshot (path → this). Richer than a bare
- * path→hash map so the per-run diff can compute a size delta and pick a render
- * mode (text diff vs "binary changed ±KB") without re-reading artifact_files.
- */
+/** One file's metadata in a retained run snapshot (path → this). */
 export interface SnapshotEntry {
   /** → blobs.hash; null for an oversize (metadata-only) file. */
   hash: string | null;
@@ -540,11 +548,12 @@ export interface SnapshotEntry {
 export type SnapshotManifest = Record<string, SnapshotEntry>;
 
 /**
- * The loop's full artifact manifest captured at each run's finalize — the input
- * to the per-run diff (Phase 3). Written cheaply on report (no diff computed on
- * write); `getRunDiff` lazily diffs run N's snapshot against the prior run's.
- * One row per run (runId PK); runs predating the feature simply have no row
- * (the diff view degrades to its "no recorded changes" copy).
+ * HISTORY: the loop's full artifact manifest as captured at a run's finalize while
+ * the folder watcher ran. Nothing writes it any more (the capture retired with the
+ * watcher, and the per-run diff it fed retired with it — a manifest that can never
+ * change again cannot produce a diff). The rows stay so the blob GC keeps honoring
+ * them as a keep-set and so no stored history is destroyed; retention still prunes
+ * them to the configured window.
  */
 export const runSnapshots = pgTable(
   "run_snapshots",
