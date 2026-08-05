@@ -602,7 +602,23 @@ authorizes it, the shipping sweep guards it and the shipping report finalizes it
   the sweep does not classify that guard-held row as never claimed.
   `runs.claimable_at` (migration `0009`) is what makes the hold safe — a row held
   behind a running sibling begins its never-claimed timeout at the first ELIGIBLE
-  poll, not at creation.
+  poll, not at creation. **The field measures ELIGIBLE time, so the guard CLEARS a
+  stamp it holds** (`store.clearRunClaimable`, called from both poll and sweep):
+  the stamp is write-once, and one taken while the row was still claimable would
+  otherwise keep aging behind a sibling that started later and be reclaimed as
+  "run never claimed" the moment the sibling reports.
+- **The one-agent-per-loop guard lives INSIDE `store.claimPendingRun`, not in its
+  caller.** Multiple pending rows per loop are legal now, so the poll's
+  "no running sibling" read and its claim were two statements and two concurrent
+  polls could claim two different rows of one loop. A `NOT EXISTS` in the WHERE
+  does not close it (write skew under READ COMMITTED), so the claim takes the same
+  `loops` row lock the trigger mint takes. Keep the caller's read as a cheap
+  pre-filter; never move the guard back out.
+- **The due scan filters ENABLED watchers in SQL**, not only in its per-task
+  transaction: the scan is a bounded `follow_up asc` window (`DUE_SCAN_LIMIT`), so
+  a task whose watcher can never act does not merely waste a round trip — it
+  occupies a slot for as long as it stays due. The in-transaction re-check stays
+  the authority.
 - A due instant's failed/canceled row re-arms with the SAME frozen id once the
   loop's pending slot clears; an open or completed row remains the idempotency
   floor. Cron supersede coalesces only provenance-free cadence rows; trigger rows
@@ -821,6 +837,13 @@ The reasoning lives in `kernel/types.ts` `WATCHER_HINT` — read that.
   `PARENT_CYCLE`, and nothing is written. A CLOSED parent is deliberately NOT
   refused: there is **no roll-up in either direction**, so a parent is closed by
   its watcher and never by its last child.
+- **The walk is a READ, so it takes ONE lock per team first**
+  (`kernelStore.lockTeamHierarchy`, a `pg_advisory_xact_lock`). The child's row
+  lock is not enough: on the multi-connection hosted tier two concurrent writes
+  `A.parent=B` and `B.parent=A` each walk a chain without the other's uncommitted
+  edge and both commit a cycle. Locking the walked rows instead would trade the
+  cycle for a deadlock, so it is one team-wide lock, always taken before the first
+  ancestor read.
 - `parentId: null` is a legal move to root — the one place hierarchy and the
   watcher rule differ. The artifact key is `parent:`, EMITTED by
   `serializeKindArtifact` so `show --file` → re-upload preserves the hierarchy;
@@ -963,6 +986,14 @@ shape above plus these two rules.
   UNCONVERGED kernel loop is deliberately left in place: it is the only record of
   itself, and an inert row nothing reads beats silently destroying a loop nobody
   migrated.
+- **A migration with DATA steps needs a journal-at-N fixture to be tested at all.**
+  Every suite database is created FRESH, so a data step always runs over empty
+  tables in CI and proves nothing. `db/migration0010.integration.test.ts` is the
+  reusable recipe: copy `drizzle/` to a temp dir, delete the new `.sql` and
+  truncate `meta/_journal.json` to the previous idx, `migrate()` a bare PGlite
+  against that folder, seed the pre-migration shapes with RAW SQL (the TS schema
+  no longer has the dropped columns), then `migrate()` against the real folder.
+  Copy it when a future migration carries data steps.
 
 ## Artifact sync — a workspace is not a content home
 

@@ -186,7 +186,7 @@ export const VERBS: Record<string, VerbSpec> = {
     ],
     examples: [
       'loopany mirror attach task-7f3a91 --kind github-pr --coords superdesigndev/loopany-platform#57 --note "seed article PR"',
-      "loopany mirror attach loop-8e3311 --kind gsc-property --coords sc-domain:example.com",
+      "loopany mirror attach doc-4b21c7 --kind gsc-property --coords sc-domain:example.com",
     ],
     notes: [
       MIRROR_LAW + " — there is no state field, and the schema has nowhere to put one",

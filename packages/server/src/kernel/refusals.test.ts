@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { REFUSAL_CODES, REFUSAL_STATUS, REFUSAL_TEMPLATES, refusal, refuseAbout, refusalResponse, renderTemplate } from "./refusals.js";
@@ -52,6 +55,22 @@ describe("the refusal catalogue", () => {
     for (const gone of ["NOT_YOUR_LOOP", "APPROVAL_REQUIRED", "RETIRED", "BAD_CRON"]) {
       expect(codes.has(gone), gone).toBe(false);
     }
+  });
+
+  it("teaches no hint through the RETIRED `loopany loop` surface", () => {
+    // The codes went with the loop kind, but a hint is prose and survives a code
+    // sweep: three live refusals still sent readers to `loopany loop list` /
+    // `loopany loop run-now`, which now answer with a SURFACE_MOVED pointer
+    // rather than the thing the hint promised (cv-s5 F2). Every refusal a server
+    // path can still produce must name a command that does the job in one hop.
+    const sources = ["./refusals.ts", "./objectApi.ts"].map((rel) =>
+      readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8"),
+    );
+    for (const source of sources) {
+      expect(source).not.toMatch(/loopany loop (list|show|create|evolve|update|pause|resume|run-now|retire)/);
+    }
+    // …and the surviving guidance names the surface that exists.
+    expect(REFUSAL_TEMPLATES.WATCHER_REQUIRED.hint).toContain("`loopany loops`");
   });
 
   it("carries the subject into the message and keeps caller overrides", () => {

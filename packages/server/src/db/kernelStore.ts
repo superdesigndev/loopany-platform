@@ -51,6 +51,29 @@ const X = (x?: KernelExec): KernelExec => x ?? db;
  * re-validates against it. Without this, two concurrent writers could both
  * compute `old` from the same pre-image and the diff would lie.
  */
+/**
+ * Serialize this team's HIERARCHY writes for the rest of the transaction.
+ *
+ * The cycle guard is a read-then-write walk: it reads the ancestor chain above
+ * the proposed parent and then writes the child's `parent_id`. Row locks on the
+ * child alone do not make that sound — under READ COMMITTED (the multi-connection
+ * hosted tier) two concurrent writes `A.parent=B` and `B.parent=A` each walk a
+ * chain that does not yet contain the other's uncommitted edge, so both pass the
+ * guard and both commit: a stored cycle no single writer could have made. Locking
+ * the walked rows instead would trade the cycle for a deadlock (each holds its own
+ * child and wants the other's), so the guard takes ONE lock per team, always
+ * before any hierarchy read, which is deadlock-free by construction: it is the
+ * only lock of its kind and nothing holding it waits on a row another holder owns.
+ *
+ * Transaction-scoped (`pg_advisory_xact_lock`), so it releases at commit/rollback
+ * and is safe through a transaction pooler; re-entrant within one transaction, so
+ * a create that walks twice never self-blocks. On the pglite tier the single
+ * writer already serialized everything and this is a no-op cost on a rare path.
+ */
+export async function lockTeamHierarchy(x: KernelExec | undefined, teamId: string): Promise<void> {
+  await X(x).execute(sql`select pg_advisory_xact_lock(hashtext(${`hierarchy:${teamId}`})::bigint)`);
+}
+
 export async function getObjectForUpdate(x: KernelExec | undefined, id: string): Promise<KernelObject | undefined> {
   const rows = await X(x).select().from(objects).where(eq(objects.id, id)).for("update");
   return rows[0];

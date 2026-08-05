@@ -393,6 +393,12 @@ export async function parentIssue(
 
   if (parentId === childId) return cycle(`${childId} cannot be its own parent`);
 
+  // The walk below is a READ, and the caller's write lands after it, so the guard
+  // is only as strong as what stops a concurrent hierarchy write from landing in
+  // between. One lock per team, taken before the first ancestor read — see
+  // `kernelStore.lockTeamHierarchy` for why it is a team lock and not row locks.
+  await kernel.lockTeamHierarchy(tx, teamId);
+
   const parent = await kernel.getObject(tx, parentId);
   if (!parent || parent.teamId !== teamId) {
     return refuse(

@@ -25,7 +25,7 @@ import { flagNames, loopSurfacePointer, verbHelp } from "./kernel-help.js";
 import {
   ABSENT, bodyValue, cell, changedBlock, countLine, detailBlock, dueAnnotation,
   errorEnvelope, eventLine, exitForStatus, helpBlock, inlineArray, label,
-  nextFireCell, raw, slugFor, typedList, waiting,
+  raw, slugFor, typedList, waiting,
 } from "./kernel-render.js";
 
 export interface KernelCliDeps {
@@ -43,7 +43,7 @@ export interface KernelCliDeps {
 type Flags = Record<string, string | true>;
 type Body = Record<string, unknown>;
 type Emit = (text: string) => void;
-type Kind = "task" | "doc" | "loop";
+type Kind = "task" | "doc";
 
 interface Plan {
   path: string;
@@ -196,26 +196,12 @@ function mirrorIdRefusal(value: string, where: string): string | undefined {
 /**
  * The verbs an agent trained on any other CRUD CLI reaches for, and the one
  * substitution that fixes each. A generic "unknown command" would be true and
- * useless here: the reason there is no `loop delete` is a property of the system
+ * useless here: the reason there is no `task delete` is a property of the system
  * (the kernel is event-sourced), so the refusal teaches the property, not just
- * the spelling.
+ * the spelling. Every `loop *` spelling is answered EARLIER, by the surface
+ * pointer, so no loop near-miss belongs here.
  */
 const NEAR_MISS: Record<string, { expected: string; help: string[] }> = {
-  "loop delete": {
-    expected: "loopany loop retire <loop-id>",
-    help: [
-      "There is no hard delete anywhere in this surface: the kernel is event-sourced, so nothing is ever erased",
-      "`loop retire` IS the D in CRUD — terminal, the charter freezes, the cadence is gone, the record stays readable",
-      "To stop a loop only for now, run `loopany loop pause <loop-id>` — it resumes with one fire owed, not a backlog",
-    ],
-  },
-  "loop close": {
-    expected: "loopany loop retire <loop-id>",
-    help: [
-      "Closing is a TASK transition; a loop's lifecycle is pause ⇄ resume, and retire is the terminal one",
-      "A loop never closes by finishing work — it is a standing cadence, not a unit of work",
-    ],
-  },
   "task delete": {
     expected: 'loopany task close <task-id> --note "…"',
     help: [
@@ -266,9 +252,6 @@ NEAR_MISS["task directive"] = {
     "Both queue one run for the watcher, scoped to the task, carrying your words verbatim",
   ],
 };
-NEAR_MISS["loop remove"] = NEAR_MISS["loop delete"]!;
-NEAR_MISS["loop rm"] = NEAR_MISS["loop delete"]!;
-NEAR_MISS["loop archive"] = NEAR_MISS["loop delete"]!;
 
 function plan(command: string, positional: string[], flags: Flags, argv: string[], deps: KernelCliDeps, out: Emit, now: () => number): Plan | number {
   if (!COMMANDS.has(command)) {
@@ -691,19 +674,8 @@ function docRows(row: Body): [string, unknown][] {
   return rows;
 }
 
-function loopRows(row: Body): [string, unknown][] {
-  // `workdir` is the loop's BOUND execution site, so it belongs beside the
-  // cadence: cron says when, workdir says where. Absent ⇒ the claiming daemon's
-  // own per-loop scratch dir, which is a real answer, not a blank.
-  const rows: [string, unknown][] = [["id", row.id], ["title", row.title], ["status", row.status], ["cron", row.cron], ["timezone", row.timezone], ["next_fire", nextFireCell(row)], ["workdir", row.workdir ?? raw(`${ABSENT} (the daemon's own scratch dir)`)], ["key", row.key]];
-  for (const field of ["createdByRun", "createdByLoop", "createdAt", "updatedAt"]) {
-    if (row[field] !== undefined) rows.push([label(field), row[field]]);
-  }
-  return rows;
-}
-
 function kindRows(kind: Kind, row: Body, now: number): [string, unknown][] {
-  return kind === "task" ? taskRows(row, now) : kind === "doc" ? docRows(row) : loopRows(row);
+  return kind === "task" ? taskRows(row, now) : docRows(row);
 }
 
 function payloadBlock(row: Body): string {
@@ -717,7 +689,7 @@ function renderShow(kind: Kind, body: Body, full: boolean, now: number): string 
   if (!row) return `error: "the server returned no ${kind}"\ncode: ERROR\n${helpBlock(["Retry; if it persists the server and this CLI disagree about the response shape"])}`;
   let text = detailBlock(kind, kindRows(kind, row, now));
   text += payloadBlock(row);
-  if (typeof row.body === "string") text += `${kind === "loop" ? "charter" : "body"}: ${cell(bodyValue(row.body, full))}\n`;
+  if (typeof row.body === "string") text += `body: ${cell(bodyValue(row.body, full))}\n`;
   // EXTERNAL ITEMS, right under the object and above its history: the whole
   // point of the kind is that a run reading this knows what to go and check, so
   // burying it below the event tail would defeat it. `coords` is what you use;
@@ -730,7 +702,7 @@ function renderShow(kind: Kind, body: Body, full: boolean, now: number): string 
   // is a dedup key, not a handle, so it is not printed.
   text += typedList("events", ["seq", "ts", "actor", "entrance", "change"], events.map((event) => [event.seq, event.ts, event.actor, event.entrance, changeSummary(event)]));
   const id = String(row.id ?? "<id>");
-  return text + helpBlock(showHints(kind, id, row));
+  return text + helpBlock(showHints(kind, id));
 }
 
 /**
@@ -758,17 +730,9 @@ function mirrorsBlock(body: Body): string {
   return typedList("mirrors", ["id", "kind", "coords", "note"], mirrors.map((m) => [m.id, m.externalKind, m.coords, m.note]));
 }
 
-function showHints(kind: Kind, id: string, row: Body): string[] {
+function showHints(kind: Kind, id: string): string[] {
   if (kind === "task") return [`Run \`loopany task update ${id} --follow-up +1d\` to push the check out`, `Run \`loopany task update ${id} --needs-human "…"\` if you need a decision`, `Run \`loopany task create --file <path> --parent ${id}\` to break a piece of it out — the sub-task keeps its own watcher and its own ending`, `Run \`loopany task close ${id} --note "…"\` when it is verified`];
-  if (kind === "doc") return [`Run \`loopany doc show ${id} --full\` to read the complete body`, `Run \`loopany doc show ${id} --file > d.md\` to start an edit from the current text`];
-  if (row.status === "retired") return [`${id} is retired: its charter is frozen and it never fires again, but the whole record stays readable`, "Run `loopany loop list --status active` for the loops that are still running"];
-  return [
-    `Run \`loopany loop show ${id} --file > charter.md\` to start a charter edit from the current text`,
-    `Run \`loopany loop evolve ${id} --file charter.md\` to apply it — the charter is the free zone, no approval key`,
-    row.status === "paused"
-      ? `Paused, so next_fire is empty; a human resumes it with \`loopany loop resume ${id}\``
-      : `Cadence is governance: \`loopany loop update ${id} --cron "…" --approval ev-<id>\` from a run, or the owner edits it`,
-  ];
+  return [`Run \`loopany doc show ${id} --full\` to read the complete body`, `Run \`loopany doc show ${id} --file > d.md\` to start an edit from the current text`];
 }
 
 function changeSummary(event: Body): string {
@@ -822,28 +786,7 @@ function renderCreate(kind: Kind, body: Body, now: number): string {
   const hints: string[] = [];
   if (replay && body.contentDiffers) {
     hints.push(`Key ${cell(row.key)} already exists — create is idempotent, so your changes were NOT applied`);
-    // `loop create` is human-only and `loop evolve` is agent-only, so pointing a
-    // human at evolve sends them into a NO_RUN_CONTEXT refusal. Until the human
-    // loop edit lands, say what a person can actually do.
-    if (kind === "loop") {
-      hints.push(
-        `There is no human CLI verb that applies them: \`loop evolve\` runs inside a run, so edit the charter on the loop page`,
-        `A run of this loop evolves its own charter; a differing \`cron:\` or \`workdir:\` stays yours even then (evolve refuses it, APPROVAL_REQUIRED)`,
-      );
-    } else {
-      hints.push(`Run \`loopany ${kind} update ${id} --file <path>\` to apply them`);
-    }
-  } else if (kind === "loop") {
-    // Every safe default has a CONSEQUENCE, and a loop with no cadence is the
-    // one that silently never runs. Say which of the two was born.
-    hints.push(row.nextFire
-      ? `Armed: the first run fires at ${cell(row.nextFire)} and is claimed by any machine of this team — no MACHINE is bound`
-      : "No `cron:` in the file, so this loop has no cadence and will never fire on its own — add one and evolve, or drive it by hand");
-    hints.push(row.workdir
-      ? `Bound to ${cell(row.workdir)}: every run executes there, and a machine that lacks it fails the run instead of running elsewhere`
-      : "No `workdir:` in the file, so runs get the daemon's own per-loop scratch dir — bind one to run in a real checkout");
-    hints.push(`Run \`loopany loop show ${id}\` to read it back, \`loopany loop pause ${id}\` to stop it`);
-    hints.push(`Its runs evolve the charter themselves; cadence, lifecycle and creating further loops stay yours`);
+    hints.push(`Run \`loopany ${kind} update ${id} --file <path>\` to apply them`);
   } else {
     hints.push(`Run \`loopany ${kind} show ${id}\` to read it back`);
     if (kind === "task") {

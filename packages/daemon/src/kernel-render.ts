@@ -67,10 +67,12 @@ export function countLine(shown: number, total?: number): string {
 
 // ---------------------------------------------------------------- the error envelope
 
-/** §3.3. Two kernel-specific slugs ride on 403 alongside FORBIDDEN because each
+/** §3.3. One kernel-specific slug rides on 403 alongside FORBIDDEN because it
  *  names a guard an agent recovers from differently; everything else is derived
- *  from the HTTP status, so no prose is parsed. */
-const KERNEL_SLUGS = new Set(["NOT_YOUR_LOOP", "NOT_HUMAN"]);
+ *  from the HTTP status, so no prose is parsed. (`NOT_YOUR_LOOP` retired with
+ *  the loop kind — a catalogue entry the server can no longer produce teaches a
+ *  refusal nobody receives.) */
+const KERNEL_SLUGS = new Set(["NOT_HUMAN"]);
 
 export function slugFor(code: string | undefined, status: number): string {
   if (code && KERNEL_SLUGS.has(code)) return code;
@@ -186,10 +188,9 @@ export function eventLine(id: unknown): string {
 }
 
 /** `next_fire` is the cadence CURSOR, so an absent one is never printed bare:
- *  the reason it is absent (paused, retired, no cadence at all) is the whole
- *  answer to "why is this loop not running?". Shared by every surface that
- *  prints a loop row — `loop show`/`loop list` and the kernel home — so the
- *  three cannot explain a blank cadence three different ways. */
+ *  the reason it is absent (paused, no cadence at all) is the whole answer to
+ *  "why is this loop not running?". The kernel home's loops roster is its one
+ *  remaining surface — the loop kind's own render retired with it. */
 export function nextFireCell(row: { nextFire?: unknown; status?: unknown }): unknown {
   if (row.nextFire) return row.nextFire;
   if (row.status === "retired") return raw(`${ABSENT} (retired — terminal)`);

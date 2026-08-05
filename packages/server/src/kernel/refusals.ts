@@ -110,7 +110,7 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   },
   WATCHER_REQUIRED: {
     message: `%s would leave no loop watching it, and a task always names the loop that acts next`,
-    hint: "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loop list` and `loopany loops` both print ids you can name — a watcher may be a kernel loop or one of this machine's production loops, and either id is used verbatim. A paused loop is still a legal watcher: it acts the next time it runs. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.",
+    hint: "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loops` prints the ids you can name — a watcher is one of this machine's production loops, and the id is used verbatim. A paused loop is still a legal watcher: it acts the next time it runs. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.",
   },
   PARENT_CYCLE: {
     message: `%s would sit inside its own subtree`,

@@ -196,15 +196,37 @@ export async function updateRun(id: string, patch: Partial<NewRun>): Promise<Run
  *  Conditional on the current phase, so two concurrent claimers can never both win:
  *  the async session opened a read-check -> write window in poll() that the old
  *  sync-SQLite handler never had. Returns the claimed row, or undefined when the
- *  run is gone / already claimed / no longer pending (the caller skips delivery). */
-export async function claimPendingRun(id: string): Promise<Run | undefined> {
-  return (
-    await db
-      .update(runs)
-      .set({ phase: "running", ts: nowIso() })
-      .where(and(eq(runs.id, id), eq(runs.phase, "pending")))
-      .returning()
-  )[0];
+ *  run is gone / already claimed / no longer pending (the caller skips delivery).
+ *
+ *  THE ONE-AGENT-PER-LOOP GUARD LIVES HERE, not in the caller. Trigger rows made
+ *  multiple pending rows per loop legal, so poll()'s "no running sibling" read and
+ *  its claim were two statements: two concurrent polls (an HTTP retry racing its
+ *  timed-out original, or two daemons sharing one device token) could each read
+ *  "nothing running" before either committed and then claim a DIFFERENT pending row
+ *  of the same loop — two agents on one loop. A `NOT EXISTS` in the WHERE would not
+ *  close it either: under READ COMMITTED neither transaction sees the other's
+ *  uncommitted claim (classic write skew). So the guard and the claim serialize on
+ *  the loop's authoritative row — the SAME lock the trigger mint takes
+ *  (`kernel/runQueue.queueKernelRun`), so the two writers agree on one order. */
+export async function claimPendingRun(id: string, loopId: string): Promise<Run | undefined> {
+  return db.transaction(async (tx) => {
+    await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, loopId)).for("update");
+    const running = (
+      await tx
+        .select({ id: runs.id })
+        .from(runs)
+        .where(and(eq(runs.loopId, loopId), eq(runs.phase, "running")))
+        .limit(1)
+    )[0];
+    if (running) return undefined;
+    return (
+      await tx
+        .update(runs)
+        .set({ phase: "running", ts: nowIso() })
+        .where(and(eq(runs.id, id), eq(runs.phase, "pending")))
+        .returning()
+    )[0];
+  });
 }
 
 /** Stamp the first moment a pending run is eligible for the production poll.
@@ -216,6 +238,26 @@ export async function markRunClaimable(id: string, at: string): Promise<Run | un
       .update(runs)
       .set({ claimableAt: at })
       .where(and(eq(runs.id, id), eq(runs.phase, "pending"), isNull(runs.claimableAt)))
+      .returning()
+  )[0];
+}
+
+/** Un-stamp a pending run the claim guard is HOLDING behind a running sibling.
+ *  Write-once (`markRunClaimable`) makes the stamp a floor, and a floor goes STALE:
+ *  a row stamped while it was claimable, then held behind a sibling that only
+ *  started running afterwards, keeps aging across the whole held window and the
+ *  first sweep after the sibling clears reclaims it as "run never claimed" — a
+ *  false failure on a healthy loop. Clearing the stamp while the guard holds the
+ *  row restores the field's meaning: `claimable_at` is the first moment the row
+ *  was ELIGIBLE, so the never-claimed timeout only ever measures eligible time.
+ *  Conditional on a stamp being present, so a held row costs ONE write, not one
+ *  per 3s poll. */
+export async function clearRunClaimable(id: string): Promise<Run | undefined> {
+  return (
+    await db
+      .update(runs)
+      .set({ claimableAt: null })
+      .where(and(eq(runs.id, id), eq(runs.phase, "pending"), isNotNull(runs.claimableAt)))
       .returning()
   )[0];
 }

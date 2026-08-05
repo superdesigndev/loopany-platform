@@ -370,15 +370,19 @@ export class MachineGateway {
           // A trigger queued behind a healthy executing sibling has not yet had
           // a claimable moment. The poll guard deliberately holds it pending;
           // never misclassify that protected state as "never claimed".
-          if (!(await store.hasRunningRun(run.loopId))) {
-            if (!run.claimableAt) {
-              // This can be the first sweep after a long sibling completed. Give
-              // the now-eligible row its full claim window; creation age is not
-              // evidence of a wedged delivery while the overlap guard held it.
-              await store.markRunClaimable(run.id, nowIso());
-            } else if (now - Date.parse(run.claimableAt) > RUN_TIMEOUT_MS) {
-              await this.reclaimRun(run, "run never claimed");
-            }
+          if (await store.hasRunningRun(run.loopId)) {
+            // Held by the guard, so the row is not eligible and any stamp it
+            // carries is stale (it was claimable when the stamp was taken, and a
+            // sibling started running afterwards). Clear it here too: the sweep
+            // may observe the hold on a machine whose poll is between passes.
+            if (run.claimableAt) await store.clearRunClaimable(run.id);
+          } else if (!run.claimableAt) {
+            // This can be the first sweep after a long sibling completed. Give
+            // the now-eligible row its full claim window; creation age is not
+            // evidence of a wedged delivery while the overlap guard held it.
+            await store.markRunClaimable(run.id, nowIso());
+          } else if (now - Date.parse(run.claimableAt) > RUN_TIMEOUT_MS) {
+            await this.reclaimRun(run, "run never claimed");
           }
         } else if (age > DEFERRED_MAX_MS) {
           // The machine never came back inside the catch-up horizon — retire
@@ -520,7 +524,14 @@ export class MachineGateway {
       // Trigger rows are durable events, so they may be queued while this loop
       // already has an agent working. Never claim the deferred row concurrently:
       // leave it pending and a later poll claims it after the running run reports.
-      if (await store.hasRunningRun(run.loopId)) continue;
+      if (await store.hasRunningRun(run.loopId)) {
+        // HELD, so it is not eligible — and eligible time is the only thing the
+        // never-claimed timeout may measure. A row stamped before the sibling
+        // started would otherwise keep aging behind it and be falsely reclaimed
+        // in the window right after the sibling reports.
+        if (run.claimableAt) await store.clearRunClaimable(run.id);
+        continue;
+      }
       if (!run.claimableAt) await store.markRunClaimable(run.id, nowIso());
       const loop = await store.getLoop(run.loopId);
       if (!loop) {
@@ -535,8 +546,11 @@ export class MachineGateway {
       // read this run as pending and both deliver it - double execution. Under
       // sync SQLite the whole handler was atomic, so the plain read-then-write was
       // safe; now only the winner of the conditional UPDATE mints the lease and
-      // ships the delivery, and the loser skips.
-      if (!(await store.claimPendingRun(run.id))) continue;
+      // ships the delivery, and the loser skips. The claim RE-CHECKS the
+      // no-running-sibling condition under the loop's row lock, so the guard
+      // above is a cheap pre-filter and not the authority: two concurrent polls
+      // could otherwise both pass it and then claim two DIFFERENT rows.
+      if (!(await store.claimPendingRun(run.id, run.loopId))) continue;
       // Edit + evolve runs exist to change the loop, so they always get control
       // AND the structural edit caps (schedule, UI, schema, workflow).
       const structural = run.role === "evolve" || run.role === "edit";

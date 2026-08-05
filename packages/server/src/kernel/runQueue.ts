@@ -27,7 +27,7 @@
  *     a replay — it fails loudly and rolls back rather than reporting a
  *     stranger's run as this loop's fire.
  */
-import { and, asc, eq, isNotNull, lte } from "drizzle-orm";
+import { and, asc, eq, exists, isNotNull, lte } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { objects } from "../db/kernel-schema.js";
@@ -132,6 +132,13 @@ export async function appendProductionRunFinished(
 
 /** How often the due-task scan runs. */
 export const RUN_TICK_MS = envPositive("LOOPANY_RUN_TICK_MS", 5_000);
+
+/** How many due tasks ONE scan pass considers, oldest follow-up first. The
+ *  window is bounded so a large workspace cannot turn one tick into an unbounded
+ *  transaction storm; the trigger is level, so anything past it is picked up by
+ *  a later pass — provided nothing INERT can squat a slot (see the scan's
+ *  enablement predicate). */
+export const DUE_SCAN_LIMIT = envPositive("LOOPANY_DUE_SCAN_LIMIT", 50);
 
 function envPositive(name: string, fallback: number): number {
   const n = Number(process.env[name]);
@@ -333,10 +340,24 @@ export async function tickDueTasks(now: Date = new Date()): Promise<TickResult> 
         eq(objects.status, "open"),
         isNotNull(objects.followUpAt),
         lte(objects.followUpAt, nowIso),
+        // The enablement gate is IN SQL, not only in the per-task transaction.
+        // The scan is a bounded `follow_up asc` window, so a task whose watcher
+        // can never act is not merely a wasted round trip — it OCCUPIES a slot
+        // for as long as it stays due, and enough of them (a paused or deleted
+        // watcher with a stale follow-up never moves) push every actionable due
+        // task out of the window forever. Filtering here means an inert task can
+        // never hold a slot; the in-transaction re-check below stays the
+        // authority (the loop can be paused between this read and the write).
+        exists(
+          db
+            .select({ id: loops.id })
+            .from(loops)
+            .where(and(eq(loops.id, objects.watcher), eq(loops.teamId, objects.teamId), eq(loops.enabled, true))),
+        ),
       ),
     )
     .orderBy(asc(objects.followUpAt))
-    .limit(50);
+    .limit(DUE_SCAN_LIMIT);
   const result: TickResult = { scanned: 0, queued: 0, skipped: 0, replayed: 0, failed: 0 };
 
   for (const task of dueTasks) {

@@ -198,7 +198,7 @@ export async function patchTask(id: string, body: unknown, context: ApiContext, 
     // unclaimed pool; there is no pool any more, so a null here is the release
     // gesture arriving at a surface that no longer has one — refused by name
     // rather than silently coerced (captain ruling 2026-08-04, types.ts).
-    if (Object.hasOwn(rec, "watcher")) { if (typeof rec.watcher !== "string" || !rec.watcher.startsWith("loop-")) return { ok: false, error: refusal("WATCHER_REQUIRED", "watcher must name the loop that acts next", [{ path: "watcher", message: "must be a loop id", got: rec.watcher === null ? "null" : JSON.stringify(rec.watcher), expected: "loop-<id>" }], "a watcher is TRANSFERRED to another loop, never cleared — `loopany loop list` prints the ids") }; fields.watcher = rec.watcher; }
+    if (Object.hasOwn(rec, "watcher")) { if (typeof rec.watcher !== "string" || !rec.watcher.startsWith("loop-")) return { ok: false, error: refusal("WATCHER_REQUIRED", "watcher must name the loop that acts next", [{ path: "watcher", message: "must be a loop id", got: rec.watcher === null ? "null" : JSON.stringify(rec.watcher), expected: "loop-<id>" }], "a watcher is TRANSFERRED to another loop, never cleared — `loopany loops` prints the ids") }; fields.watcher = rec.watcher; }
     // MOVE, or MOVE TO ROOT. `parent: null` is a legal write — a task genuinely
     // can stop being a sub-task — which is the one place hierarchy and the
     // watcher rule differ: a watcher is transferred and never cleared, a parent
@@ -436,7 +436,7 @@ export async function leaveDirective(id: string, directive: unknown, context: Ap
     const task = await store.getObjectForUpdate(tx, id);
     const guard = scopedKindGuard(task, "task", context.teamId); if (guard) return guard;
     if (task!.status !== "open") {
-      return { ok: false as const, error: refusal("CLOSED", `${id} is closed, and a closed task is a record`, [{ path: "status", message: "closed", got: task!.status }], "closed is terminal and there is no reopen — file a new task for the follow-on work, or fire the loop directly with `loopany loop run-now <loop-id>`") };
+      return { ok: false as const, error: refusal("CLOSED", `${id} is closed, and a closed task is a record`, [{ path: "status", message: "closed", got: task!.status }], "closed is terminal and there is no reopen — file a new task for the follow-on work, or fire the loop directly with Run now on its loop page") };
     }
     if (task!.pendingQuestion?.trim()) {
       return { ok: false as const, error: refusal("OPEN_QUESTION", `${id} is already waiting on you for an answer`, [{ path: "pendingQuestion", message: "a question is open on this task", got: task!.pendingQuestion }], `answer it instead — \`loopany answer ${id} "…"\` records your reply AND wakes the watcher, and the answer is free text, so any instruction fits in it`) };

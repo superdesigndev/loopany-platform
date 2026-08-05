@@ -1,9 +1,16 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { runKernelCli, type KernelCliDeps } from "./kernel-cli.js";
+import { slugFor } from "./kernel-render.js";
 import { classify } from "./route.js";
 
 const NOW = Date.parse("2026-08-03T09:00:00.000Z");
+/** Kept in a VARIABLE: a literal `new URL("./x.ts", import.meta.url)` is
+ *  statically rewritten into an asset URL, which `fileURLToPath` then rejects. */
+const CLI_SOURCE = "./kernel-cli.ts";
 
 function reply(body: unknown, status = 200, type = "application/json") {
   return new Response(type === "application/json" ? JSON.stringify(body) : String(body), { status, headers: { "Content-Type": type } });
@@ -537,6 +544,22 @@ describe("S3 kernel loop commands are teaching pointers only", () => {
     expect(called).toBe(false);
     expect(stdout).toContain("code: SURFACE_MOVED");
     expect(stdout).toContain(hint);
+  });
+
+  it("carries NO render machinery for the retired loop kind", () => {
+    // The `loop *` verbs short-circuit above, so every loop-shaped render branch
+    // downstream was unreachable — and unreachable teaching is worse than none:
+    // it names commands (`loopany loop pause`, `loop update … --approval`) that
+    // answer with a pointer, and facets (cron/timezone/next_fire/workdir) the
+    // kernel no longer stores (cv-s5 F1). Deleted; pinned deleted.
+    const cli = readFileSync(fileURLToPath(new URL(CLI_SOURCE, import.meta.url)), "utf8");
+    for (const dead of ["loopRows", '"task" | "doc" | "loop"', 'kind === "loop"', "loopany loop pause", "loopany loop resume", "--approval ev-"]) {
+      expect(cli, dead).not.toContain(dead);
+    }
+    // The kernel-only 403 slug retired with the code the server can no longer
+    // produce, so it degrades to the status-derived FORBIDDEN.
+    expect(slugFor("NOT_YOUR_LOOP", 403)).toBe("FORBIDDEN");
+    expect(slugFor("NOT_HUMAN", 403)).toBe("NOT_HUMAN");
   });
 });
 
