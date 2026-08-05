@@ -36,6 +36,7 @@
  * that is current config, not history, and is genuinely useful for a surgical edit.
  */
 import type { Loop, Run, StateField } from "../db/schema.js";
+import { viaHostSuffix } from "../lib/envTarget.js";
 
 export interface ScopedTrigger {
   reason: "answered" | "due" | "directive" | string;
@@ -113,7 +114,9 @@ export function buildExecTask(loop: Loop, trigger?: ScopedTrigger | null): strin
   const goalLine = loop.goal ? `Goal (finish line): ${loop.goal}` : "";
   const stateLine = stateReportLine(loop);
   const triggerBlock = trigger ? renderScopedTrigger(trigger) : "";
-  return fillVars(loadPrompt("exec-core"), { name, taskFile, goalLine, stateLine, triggerBlock });
+  // The banner names the SERVING HOST on a developer stack and is EMPTY on
+  // production, so production prompt bytes are unchanged (lib/envTarget.ts).
+  return fillVars(loadPrompt("exec-core"), { name, taskFile, goalLine, stateLine, triggerBlock, viaHost: viaHostSuffix() });
 }
 
 /** A trigger is DATA, not a second prompt. The task payload is serialized whole

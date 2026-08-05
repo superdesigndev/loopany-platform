@@ -755,6 +755,11 @@ folder reaches nobody.
   derive from it; widening the set is a one-line edit there).
 - External touches (process/network/fs) are injectable seams throughout; tests never
   need a real process or network.
+- **TEST HAZARD, real home**: `runner.test.ts`'s sys-prompt-file cases read
+  `LOOPANY_HOME || ~/.loopany` and assert `runs/sys-run-1.md` is ABSENT, so two worktrees
+  running the daemon suite at once can flake each other through the shared real home. A
+  lone failure there is cross-lane interference, not a regression - re-run before
+  investigating.
 - **Unified CLI transport `cli-client.ts` `postCli(argv, legacy, deps)`** (batch 5):
   the ONE client behind BOTH CLI worlds. It selects the credential by env (run token
   from `LOOPANY_RUN_TOKEN` wins, else the persisted device token), inlines the file
@@ -1002,6 +1007,62 @@ folder reaches nobody.
 - **Shared-Chrome contention in browser verify**: other lanes drive the same Chrome, so a
   bare `chrome-devtools-axi` tab gets navigated out from under you mid-flow. Set
   `CHROME_DEVTOOLS_AXI_SESSION=<lane>` to get a fully isolated browser instance for the run.
+
+## Three environments on one machine (developer-only)
+
+A developer can have three stacks on one machine - a local dev server, the deployed
+`loopany-testing`, and production - while every prompt and habit says plainly
+`loopany`. An ordinary user has exactly ONE environment, so all of this is SILENT on
+production by construction and there is nothing to configure or turn off.
+
+- **The three-command convention.** Bare `loopany` is PRODUCTION. `loopany-dev` and
+  `loopany-testing` are the developer's explicit non-prod entries - LOCAL wrappers
+  (`scripts/loopany-dev` is the one in this repo), never a product surface and never
+  shipped in the npm tarball. Never point a task at the captain's demo stack and never
+  source `scripts/rewrite-local-run.env.sh`; use the isolated-stack recipe in
+  `packages/server/AGENTS.md`.
+- **The env banner** (`packages/daemon/src/env-banner.ts`, printed by `cli.ts` `main`)
+  is ONE stderr line naming a non-production target, e.g. `» loopany · DEV ·
+  127.0.0.1:4319` / `» loopany · TESTING · loopany-testing.fly.dev`. Classification is
+  by the RESOLVED server URL and recognizes exactly two developer targets (loopback ⇒
+  DEV, a `loopany-testing` host ⇒ TESTING); production and every other host print
+  NOTHING. STDERR is load-bearing: every machine-readable path (`--json`,
+  `log --transcript`, the SessionStart hook's ambient context, the daemon-as-text-sink
+  render) is STDOUT, so the banner can never corrupt a consumer.
+- **The run prompt names its host the same way**: `exec-core.md`'s first line is
+  `[loop run · {{name}}{{viaHost}}]`, filled by `lib/envTarget.ts` `viaHostSuffix()` -
+  ` · via <host>` on a developer stack, the EMPTY string on production, so production
+  prompt bytes are unchanged (pinned by `gateway/prompt.test.ts`, whose every assertion
+  runs under `LOOPANY_BASE_URL=https://loopany.ai`). The server's own base URL is
+  `LOOPANY_BASE_URL` (as in `auth.ts`); unset means local dev and falls back to
+  `http://127.0.0.1:${LOOPANY_PORT ?? 3000}`.
+- `lib/envTarget.ts` and `env-banner.ts` are deliberate TWIN copies of one ~15-line pure
+  classifier, one per package (the daemon ships as its own npm tarball and shares no
+  module with the server). Change one rule, change both.
+
+### A delivery's bare `loopany` is bound by ENV, not by PATH (verified, nothing added)
+
+Traced through `runner.ts` (the child env), `spawn.ts` `execEnv`/`allowlistEnv` and
+`callback-bin.ts`, then proven end to end on an isolated stack (own port, own
+`LOOPANY_DATA_DIR`, own `LOOPANY_HOME`, a fake agent binary reporting what it sees):
+
+- `runner.ts` builds every run's env with `PATH: <daemon LOOPANY_HOME>/bin:<PATH>` plus
+  `LOOPANY_SERVER_URL`, `LOOPANY_RUN_ID` and `LOOPANY_RUN_TOKEN`. `ensureCallbackBin()`
+  writes that `bin/loopany` re-exec wrapper once at daemon boot, before any run, and the
+  env is built with NO per-agent branch - so there is no agent type without the shim.
+- Measured inside a delivery: `command -v loopany` and a NESTED `sh -c 'command -v
+  loopany'` both resolve to `<delivering LOOPANY_HOME>/bin/loopany`, and in-run
+  `loopany help` / `loopany show` answer from the delivering stack.
+- PATH ordering loss is NOT a hole: with the callback bin dir stripped from PATH, bare
+  `loopany` falls through to the ordinary global shim and STILL answers from the
+  delivering stack, because the binding is the ENV (`LOOPANY_SERVER_URL` +
+  `LOOPANY_RUN_TOKEN`), which every nested shell inherits. The PATH prepend is a second,
+  independent binding (it also pins the delivering daemon's own CODE version), not the
+  only one.
+- `LOOPANY_HOME` is deliberately NOT in the child env allowlist, and must not be added -
+  see `packages/server/AGENTS.md` ("a run's own lease ALSO authenticates it") for why
+  handing the coding agent a machine-wide credential to buy back a narrower one it
+  already has is the wrong trade.
 
 ## CI/CD (`.github/workflows/`)
 

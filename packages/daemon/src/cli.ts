@@ -43,6 +43,8 @@
  * legacy per-credential endpoints on a 404 (old server). Only the LOCAL verbs below
  * (up/down/update/skill/status/help/version/bare-daemon) keep their own fast-paths.
  */
+import { resolveServerUrl } from "./config.js";
+import { printEnvBanner } from "./env-banner.js";
 import { classify } from "./route.js";
 
 // Lazy-import per branch: claude re-execs this CLI for every `loopany report …`
@@ -50,6 +52,10 @@ import { classify } from "./route.js";
 // routing decision itself lives in the pure `route.ts` (unit-tested); this just maps
 // each Route to its lazily-imported handler.
 async function main(): Promise<number> {
+  // One stderr line naming a NON-production target, and nothing at all otherwise
+  // (see env-banner.ts). Deliberately a conditional at the entry, not a subsystem:
+  // the three-stacks-on-one-machine problem is the developer's alone.
+  printEnvBanner(resolveServerUrl(undefined));
   const r = classify(process.argv.slice(2), process.env);
   switch (r.kind) {
     case "kernel":

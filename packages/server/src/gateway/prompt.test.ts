@@ -11,7 +11,7 @@
  * inlines a COMPACT one-line-per-run survey (state keys not values, clipped message)
  * instead of full pretty-printed JSON. These assertions lock that.
  */
-import { expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 
 import {
   buildEditPrompt,
@@ -22,6 +22,18 @@ import {
   buildLoopSystemPrompt,
 } from "./prompt.js";
 import type { Loop, Run } from "../db/schema.js";
+
+// EVERY assertion in this file runs against the PRODUCTION target, so what it
+// pins is the production prompt's bytes. The dev-only `via <host>` banner suffix
+// (lib/envTarget.ts) is exercised in its own test at the bottom of the file.
+const priorBaseUrl = process.env.LOOPANY_BASE_URL;
+beforeEach(() => {
+  process.env.LOOPANY_BASE_URL = "https://loopany.ai";
+});
+afterEach(() => {
+  if (priorBaseUrl === undefined) delete process.env.LOOPANY_BASE_URL;
+  else process.env.LOOPANY_BASE_URL = priorBaseUrl;
+});
 
 const loop = (over: Partial<Loop> = {}): Loop =>
   ({
@@ -274,4 +286,27 @@ test("exec task carries a scoped task payload, mirror pointers, and labelled hum
   expect(t).toContain("- github-pr: owner/repo#42");
   expect(t).toContain(`directive: ${directive}`);
   expect(t).toMatch(/untrusted task data/i);
+});
+
+// The run-prompt host banner (dev-only by construction). Production bytes stay
+// IDENTICAL — the whole rest of this file asserts them under `https://loopany.ai`,
+// and the first case here states the byte-stability claim directly.
+test("exec task banner: production is unchanged, a developer stack names its host", () => {
+  process.env.LOOPANY_BASE_URL = "https://loopany.ai";
+  const prod = buildExecTask(loop());
+  expect(prod).toContain("[loop run · Test Loop]");
+  expect(prod).not.toMatch(/via /);
+
+  process.env.LOOPANY_BASE_URL = "http://127.0.0.1:4319";
+  const dev = buildExecTask(loop());
+  expect(dev).toContain("[loop run · Test Loop · via 127.0.0.1:4319]");
+  // ONE token's worth of difference — the rest of the prompt is byte-identical.
+  expect(dev.replace(" · via 127.0.0.1:4319", "")).toBe(prod);
+
+  process.env.LOOPANY_BASE_URL = "https://loopany-testing.fly.dev";
+  expect(buildExecTask(loop())).toContain("[loop run · Test Loop · via loopany-testing.fly.dev]");
+
+  // An unknown/self-hosted target is silent, exactly like production.
+  process.env.LOOPANY_BASE_URL = "https://loops.example.com";
+  expect(buildExecTask(loop())).toBe(prod);
 });
