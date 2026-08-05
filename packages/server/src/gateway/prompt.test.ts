@@ -199,6 +199,25 @@ test("exec task carries the CORE: identity, fallback core, report/finish, skill 
   expect(t).not.toMatch(/\{\{\w+\}\}/);
 });
 
+// The product signpost: every converged loop learns the object model from the
+// PLATFORM, not from its own charter. exec-core stays lean — it names the three
+// object verbs and points at the skill for the depth (references/run.md §4).
+test("exec task signposts the product model: report vs doc vs task vs mirror", () => {
+  const t = buildExecTask(loop());
+  expect(t).toContain("loopany doc create --file");
+  expect(t).toContain("loopany doc update <key> --file");
+  expect(t).toContain("loopany task create --file");
+  expect(t).toContain("loopany mirror attach");
+  // The rules that decide WHICH product a thing is.
+  expect(t).toMatch(/stable `key:`/);
+  expect(t).toMatch(/never a new doc per day/i);
+  expect(t).toMatch(/attached to the task or doc that owns it/i);
+  // The loop folder keeps its narrowed role.
+  expect(t).toMatch(/dashboard and exports need/i);
+  // The skill pointer advertises the depth this signpost is the short form of.
+  expect(t).toMatch(/product\/object model/i);
+});
+
 test("exec task keeps the untrusted-data guard prominent in the user turn", () => {
   const t = buildExecTask(loop());
   expect(t).toMatch(/Untrusted data/i);

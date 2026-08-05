@@ -677,6 +677,40 @@ authorizes it, the shipping sweep guards it and the shipping report finalizes it
   will never honor. Pinned end to end by
   `gateway/createPaused.integration.test.ts`, which drives the REAL Scheduler.
 
+## The product model is taught by the PLATFORM, not by each charter
+
+Every loop learns the four nouns — loop / task / doc / mirror — from the run-time
+instruction layer, so a charter never has to (and a charter that improvises its own
+vocabulary is drift). The teaching lives in exactly three places, at three depths:
+
+- `skill/run/exec-core.md` — the SIGNPOST, one bullet in the non-negotiable core:
+  `report` is the immediate channel, durable content is a **doc** under a stable key,
+  something to revisit is a **task**, an external artifact you produced gets a
+  **mirror** attached to the object that owns it, the loop folder is dashboard/exports
+  only. It stays ONE bullet: exec-core's whole point is a self-sufficient core plus a
+  pointer, and every line here is paid for on every run of every loop.
+- `skill/references/run.md` §4 "Products and the object model" — the BODY: the four
+  nouns and their relations, the which-product-is-this decision table, the verb shapes,
+  ownership/boundaries and lifecycle. Renumbering note: the schedule/front-matter/
+  one-pass sections shifted to §5/§6/§7.
+- `skill/references/create.md` — the `## Products` charter section: at create time,
+  name the docs by stable key, the tasks and their closing bar, and what gets mirrored.
+  STRONGLY RECOMMENDED, never a required field.
+
+Two rules that came out of live validation and must not be softened: **another loop's
+charter is never edited by a run** (an agent folded its learnings into a shared charter;
+run.md §4 now forbids it by name and points at `task create --watcher <that-loop-id>`
+as the way to tell another loop something), and a **doc is rewritten in place under one
+key** — a dated product per run is a loop-FOLDER convention, never a new doc per day.
+
+`kernel/refusals.ts` is the fourth surface and must not disagree with the skill: a
+refusal's hint and the skill's teaching name the SAME commands. The pass that landed
+with this change fixed the hints that still spoke the retired loop-kind vocabulary
+(`UNSUPPORTED_FORMAT`, `WRONG_KIND`), the `UNAUTHORIZED` hint that predated a run
+authenticating with its own lease, and `PAUSED`'s "resume it on the loop page" (the
+resume surface is `loopany edit <loop-id> --json '{"enabled":true}'`). When you change
+one side, change the other in the same commit.
+
 ## The rewrite CLI (`packages/daemon/src/kernel-{cli,render,help}.ts`)
 
 - Three modules, split so the goldens are testable without a server:

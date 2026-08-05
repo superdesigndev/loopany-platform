@@ -11,7 +11,8 @@ author a Spec that a run will follow and know what its levers are.
 A run reaches the user and changes anything only through the `loopany` command on its
 PATH — `loopany help` prints the full, role-aware verb list, and `loopany <verb> --help`
 prints one verb's syntax + availability for this run. In practice a run uses
-`report`, `show`, and — for a loop with a goal — `finish`.
+`report`, `show`, the product verbs `doc`/`task`/`mirror` (§4), and — for a loop with a
+goal — `finish`.
 
 **Command forms.** Every loop verb has a canonical explicit form that names the loop it
 acts on: `loopany <verb> --loop <loop-id> …` (for `log` and `show` the id may also be
@@ -123,7 +124,101 @@ then `loopany report --status new --message "<one line on what is blocking>"` an
 exits. If finishing genuinely needs a human decision, the run says so plainly in that
 message.
 
-## 4. Adjusting the schedule — only when a run warrants it
+## 4. Products and the object model
+
+A run's report is a message, not a filing cabinet. Everything a loop produces that
+outlives the run is one of four things, and knowing which one it is decides where it
+goes and who is responsible for it afterwards.
+
+| Noun | What it is | The rule that defines it |
+| --- | --- | --- |
+| **loop** | the standing worker — *you*: a cadence, a charter (the task file is your memory), a machine to run on | created and governed by humans (`loopany new` / `loopany edit`); a run never authors a loop |
+| **task** | a thread you owe — work that is not finished yet | exactly ONE watcher loop, always named; the open tasks watched by you are your worklist |
+| **doc** | an authored product for humans — a card, a ledger, a living report | one stable `key`, rewritten in place, never deleted |
+| **mirror** | a signpost to work that lives elsewhere — a PR, an issue, a deploy | pure `kind` + `coords`; it says WHERE, never in what state |
+
+How they relate:
+
+- **A task always names a watcher, and that watcher is a loop.** There is no unwatched
+  pile. Three things wake the watcher for a run: a `follow_up` date coming due, a human
+  answering a question the task asked, or a human leaving a directive on it. A task a
+  run files defaults to that run's own loop, so `--watcher <loop-id>` is only for a
+  hand-off. Tasks nest with `--parent <task-id>`, and a child keeps its own watcher and
+  its own ending — a parent is never closed by its last child.
+- **A doc is a product, addressed by the key you chose.** An object id is fresh
+  randomness and no run remembers it; the `key:` in the front matter is the handle that
+  survives across runs, so the next run reads its own last product back by name.
+- **A mirror is attached to the task or doc that owns the work**, and it carries no
+  state by design — there is no `state:`/`status:` field and the schema has nowhere to
+  put one. It tells you where to go and look; what you find there is what you record on
+  the task that owns the work.
+
+### Which product is this?
+
+| What you have | Where it goes |
+| --- | --- |
+| something the owner should know *now* | `loopany report --status new --message "…"` |
+| a number this run measured, for the trend | `loopany report --state '{"<key>":<n>}'` |
+| content that updates over time | a **doc** — one stable key, rewritten in place |
+| something to revisit later, or to ask | a **task** — `--follow-up <date>`, or `--needs-human "<question>"` |
+| an external artifact you produced | a **mirror**, attached to the task or doc that owns it |
+| a file the dashboard renders or a human exports | the loop folder (§1, §6) |
+
+The verbs, in the shapes a run uses them:
+
+    loopany doc create --file <path>              # the artifact file IS the doc: front matter carries key:, title:
+    loopany doc show <key> --file > d.md          # read last pass's product back by its key…
+    loopany doc update <key> --file d.md          # …and rewrite it in place
+    loopany task create --file <path> [--follow-up +3d] [--needs-human "<question>"]
+    loopany task list --watcher <your-loop-id> --open      # your worklist (`loopany show` prints your id)
+    loopany task update <id-or-key> --follow-up +3d
+    loopany task close <id> --note "<what you verified>"
+    loopany mirror attach <task-or-doc-id> --kind github-pr --coords owner/repo#57
+    loopany task create --help                    # any verb's full grammar, answered locally
+
+These verbs work inside a run: the daemon sets the run context and the CLI attaches the
+run's own credential. `loopany inbox` and `loopany answer` are the human's side of the
+same conversation — a run cannot answer a question, including one its own loop asked.
+
+**A dated file per run is a loop-folder convention (§6); it is not a doc convention.** If
+you find yourself creating `weekly-summary-2026-08-05` as a doc, what you wanted was a
+rewrite of `weekly-summary`.
+
+### Ownership and boundaries
+
+- **Provenance is automatic.** Objects a run creates are stamped with the loop that
+  created them; you never write provenance by hand and never claim someone else's.
+- **A watcher is transferred, never released.** Handing a task to another loop is
+  `loopany task update <id> --watcher <loop-id>`; clearing it is refused everywhere,
+  because a task with nobody to act on it is work that quietly stops.
+- **Another loop's charter is not yours — never edit it, not one character.** A loop's
+  task file is that loop's memory and its owner's instrument. If a run learns something
+  another loop needs, it files a task watched by that loop (`loopany task create --file
+  <path> --watcher <that-loop-id>`) or says so in its report. Folding your learnings into
+  a shared or neighbouring loop's task file rewrites a brief nobody asked you to rewrite,
+  and the loop that owns it will act on words it never agreed to.
+- **Your own charter changes on an evolve pass, not mid-run.** An exec run maintains
+  `## Current understanding` and `## Timeline` (§1). The `## Spec` — the standing brief —
+  is sharpened by an evolve pass or an owner edit, so a single run's surprise never
+  silently redefines the loop's job.
+
+### Lifecycle
+
+- **A task ends when a run reconciles reality, not by fiat.** Closing is an attestation:
+  go and look at what the task describes, do whatever reality still needs (merge or close
+  the PR, delete the branch, revert the change), and only then
+  `loopany task close <id> --note "<what you verified>"`. Closed is terminal — there is
+  no reopen verb; follow-on work is a new task.
+- **Docs are rewritten, never deleted.** A superseded ledger is a rewrite of the same
+  key. Nothing in this workspace is destroyed to make room for its successor.
+- **A mirror is detached only when it points at the WRONG thing** — the PR you named was
+  not the PR this task is about. Completion never detaches it: a merged PR's mirror is
+  still the true record of where that work lives, and its state is discovered by looking,
+  never cached. Coords are the external thing's identity and cannot be repointed; a
+  different PR is a different mirror (`loopany mirror detach <mirror-id> --from
+  <object-id>`, then attach the new one).
+
+## 5. Adjusting the schedule — only when a run warrants it
 
 A run can steer its own cadence, but usually it should not. First decide whether what
 this run found means the loop should run sooner or later, or change its regular
@@ -147,7 +242,7 @@ floors** apply to a run's own changes: a run cannot schedule itself more frequen
 than the floor allows. Those floors bind the run path only — the owner can set any
 schedule via `loopany edit`, with no floor.
 
-## 5. Front-matter product conventions
+## 6. Front-matter product conventions
 
 When a run writes a markdown product (a report, a summary, a dashboard card), it opens
 the file with a front-matter block so the product is typed and dated on the dashboard.
@@ -167,7 +262,7 @@ lands on the right day of a calendar. This is a soft convention — a product wi
 front matter still syncs — but following it is what lets the loop's output assemble
 into a coherent dashboard over time.
 
-## 6. One pass, then stop
+## 7. One pass, then stop
 
 A run is one pass, not a session. It does its work once and exits; the scheduler wakes
 it again on cadence. A run never polls, sleeps, or waits for more — if there is nothing

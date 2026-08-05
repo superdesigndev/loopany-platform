@@ -78,7 +78,7 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   },
   UNSUPPORTED_FORMAT: {
     message: `%s names a body format this kernel does not serve`,
-    hint: "markdown is the default and html is doc-only; a task or loop body is always Markdown",
+    hint: "markdown is the default and html is doc-only; a task body is always Markdown",
   },
   MISSING_FRONT_MATTER: {
     message: `%s does not open with a front-matter fence`,
@@ -118,7 +118,7 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   },
   UNAUTHORIZED: {
     message: `%s carried no credential this server recognizes`,
-    hint: "the machine's device credential authenticates every call — re-register the machine, then retry",
+    hint: "inside a run the run's own credential authenticates the call and the CLI attaches it; outside one it is the machine's device credential. If neither is recognized, re-register the machine with `loopany up`, then retry.",
   },
   NOT_HUMAN: {
     message: `%s is waiting for a human`,
@@ -146,7 +146,7 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   },
   WRONG_KIND: {
     message: `%s is not the kind this verb acts on`,
-    hint: "the id names its own kind: task-, doc- and loop- each have their own verbs",
+    hint: "the id names its own kind: task-, doc- and mirror- each have their own verbs, and a loop is the shipping product's (`loopany show <loop-id>`)",
   },
   KEY_KIND_MISMATCH: {
     message: `%s already names an object of a different kind in this team`,
@@ -162,7 +162,7 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   },
   PAUSED: {
     message: `%s is paused`,
-    hint: "time never un-pauses a loop — a human resumes it on the loop page",
+    hint: "time never un-pauses a loop — the owner resumes it with `loopany edit <loop-id> --json '{\"enabled\":true}'`",
   },
   QUEUED_ALREADY: {
     message: `%s already has a queued run`,

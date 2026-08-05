@@ -126,6 +126,12 @@ Spec with a sentence or two restating the mission and the finish line — prose 
 the authoritative, checkable setpoint lives in the config `goal`, not here. There is
 NO `## Goal` section.
 
+## Products
+What this loop files and where. Name each **doc** it maintains by its stable `key`
+(one doc, rewritten in place every run — never one per day), when it opens a **task**
+and what closing that task requires, and what external work it **mirrors** (PRs,
+issues, deploys). Leave out any line that doesn't apply.
+
 ## Current understanding
 The baseline / known state / open issues — what the loop currently expects. Seed it
 with what we established this session; each run updates it.
@@ -133,6 +139,23 @@ with what we established this session; each run updates it.
 ## Timeline
 <!-- one dated entry per run, appended below by the loop -->
 ```
+
+**The product contract (`## Products`) is strongly recommended, not required.** A loop
+runs fine without it, but the runtime teaches every run the same four nouns — the loop
+itself, tasks it owes, docs it authors, mirrors pointing at external work (see `run.md`
+§4) — and a loop that hasn't decided which of them it produces improvises a different
+answer every run. So settle it here, at create time, in three short lines:
+
+- **Docs it maintains.** Pick the stable `key` now (`weekly-summary`, `paid-funnel-ledger`)
+  and say what it holds. A run reads it back with `loopany doc show <key>` and rewrites
+  it with `loopany doc update <key> --file <path>` — one living product, not a pile.
+- **Tasks it opens.** Say what merits a task (something to revisit, something waiting on
+  a person) rather than a line in the report, and what a run must verify before closing
+  it. If the loop needs the owner's decision, that's `--needs-human "<question>"`, which
+  puts the task in their inbox.
+- **What it mirrors.** If runs produce external artifacts, say so: each one gets a mirror
+  attached to the task or doc that owns it. A mirror is a pointer (`kind` + `coords`) and
+  never records status — a later run goes and looks.
 
 Keep the absolute path to `README.md` — it goes in the config as `taskFile`.
 

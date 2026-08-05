@@ -134,6 +134,37 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('`metrics` column carries them as `key=value`')
   })
 
+  test('run.md teaches the four-noun product model and where each product goes', async () => {
+    const body = flat(await (await call('/api/skill/references/run.md')).text())
+    // The four nouns, named together — the platform-level teaching that used to live
+    // only in individual loop charters.
+    expect(body).toContain('Products and the object model')
+    for (const noun of ['**loop**', '**task**', '**doc**', '**mirror**']) {
+      expect(body, noun).toContain(noun)
+    }
+    // The defining rule of each noun.
+    expect(body).toContain('exactly ONE watcher loop')
+    expect(body).toContain('one stable `key`, rewritten in place, never deleted')
+    expect(body).toContain('it says WHERE, never in what state')
+    // The decision guide's verbs, in the shapes a run types them.
+    expect(body).toContain('loopany doc create --file')
+    expect(body).toContain('loopany doc update <key> --file')
+    expect(body).toContain('loopany task create --file')
+    expect(body).toContain('loopany task close <id> --note')
+    expect(body).toContain('loopany mirror attach')
+    expect(body).toContain('--needs-human')
+    // Boundaries: the live-validation violation this section exists to forbid.
+    expect(body).toContain("Another loop's charter is not yours — never edit it, not one character")
+    expect(body).toContain('A watcher is transferred, never released')
+    expect(body).toContain('Your own charter changes on an evolve pass')
+    // Lifecycle: close is reconciliation, docs are rewritten, a mirror outlives completion.
+    expect(body).toContain('A task ends when a run reconciles reality, not by fiat')
+    expect(body).toContain('Docs are rewritten, never deleted')
+    expect(body).toContain('Completion never detaches it')
+    // A doc is not a dated file per run.
+    expect(body).toContain('is not a doc convention')
+  })
+
   test('run.md is dual-audience (in-run enrichment + owner-readable), not edit-run mechanics', async () => {
     const body = flat(await (await call('/api/skill/references/run.md')).text())
     // Explicitly addresses both the in-run agent and the owner reading the skill.
@@ -145,6 +176,19 @@ describe('/api/skill/references/$', () => {
     expect(body).not.toContain('set-ui')
     expect(body).not.toContain('set-workflow')
     expect(body).not.toContain('set-schema')
+  })
+
+  test('create.md carries the product contract in the charter template', async () => {
+    const body = flat(await (await call('/api/skill/references/create.md')).text())
+    // The charter template gains a `## Products` section: which docs (by stable key),
+    // which tasks, what it mirrors — strongly recommended, never a hard-required field.
+    expect(body).toContain('## Products')
+    expect(body).toContain('strongly recommended, not required')
+    expect(body).toContain('stable `key`')
+    expect(body).toContain('loopany doc update <key> --file')
+    expect(body).toContain('--needs-human')
+    // It points at the runtime protocol rather than restating it.
+    expect(body).toContain('run.md` §4')
   })
 
   test('unknown name → 404 json', async () => {

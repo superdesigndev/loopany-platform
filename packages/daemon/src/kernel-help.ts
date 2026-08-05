@@ -169,7 +169,7 @@ export const VERBS: Record<string, VerbSpec> = {
     examples: ["loopany doc create --file weekly-summary.md"],
     notes: [
       "register a product as soon as it exists — partial products survive a dead run",
-      "not for the run report: `finish` turns the run's own output into a doc row",
+      "not for the run's own report — that goes to `loopany report`; a doc is a product that outlives the run",
     ],
     seeAlso: DOC_KEYS,
   },
@@ -225,7 +225,7 @@ export const VERBS: Record<string, VerbSpec> = {
     ],
     notes: [
       "predicates compose as AND; a mirror carries no state, so there is nothing to filter by state",
-      "`task show` / `doc show` / `loop show` already print the mirrors attached to that object",
+      "`task show` / `doc show` already print the mirrors attached to that object",
     ],
   },
   "mirror kinds": {
