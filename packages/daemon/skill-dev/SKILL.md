@@ -37,7 +37,8 @@ Never:
   `## Spec`.
 - A **task** is event-sourced work with an always-present `watcher`, an optional
   `follow_up` that wakes that production loop, and an optional human question.
-- A **doc** is an authored product, addressed by id and rewritten in place.
+- A **doc** is an authored product, addressed by id or by its creation `key`,
+  and rewritten in place.
 - A **mirror** is a stateless pointer to an external PR, issue or URL. It says
   where to look, never what state the external thing is in.
 

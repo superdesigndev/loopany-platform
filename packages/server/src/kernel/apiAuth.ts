@@ -20,6 +20,20 @@
  * machine must say which run it speaks for) and `UNAUTHORIZED` on a human-only
  * one (a machine's credential is not a person's, and no widening of it ever
  * makes one).
+ *
+ * WHICH CREDENTIAL AUTHENTICATES AN AGENT: either the machine's device token OR
+ * **the run's own lease token** — and the lease is the one a delivery is
+ * guaranteed to carry. The device token is a FILE on the machine's disk under
+ * `LOOPANY_HOME`, and the daemon does not put `LOOPANY_HOME` (or the token) into
+ * the coding agent's allowlisted child env, so a stack whose home is relocated —
+ * which every dev/demo stack's is — had the in-run CLI read `~/.loopany`, send
+ * some OTHER server's token, and get `UNAUTHORIZED` on every kernel verb. A run
+ * could not file its own products. The lease is env-carried (`LOOPANY_RUN_TOKEN`),
+ * per-run, already the authority this seam checks two lines further down, and
+ * narrower than the machine-wide device token, so accepting it is the fix at the
+ * authoritative spot. It authenticates ONLY the run it was minted for: a lease
+ * naming another run is refused, and a lease with NO run context is not an agent
+ * at all (it falls through to the human branch like any unknown token).
  */
 import { authEnabled, currentUser, requestScope } from "../auth.js";
 import * as store from "../db/kernelStore.js";
@@ -27,7 +41,7 @@ import * as legacyStore from "../db/store.js";
 import type { Loop, Machine, Run } from "../db/schema.js";
 import { authenticateDevice } from "./runQueue.js";
 import { machineRouteLimit } from "../gateway/rateLimit.js";
-import { resolveRunContextLease } from "../gateway/tokens.js";
+import { resolveLease, resolveRunContextLease } from "../gateway/tokens.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 import type { Actor } from "./types.js";
 
@@ -78,6 +92,39 @@ export interface SessionSeam {
 
 const REAL_SESSION: SessionSeam = { currentUser, requestScope, authEnabled };
 
+/**
+ * Authenticate the MACHINE behind a request that carries run context, from
+ * either of the two credentials a delivery can hold.
+ *
+ * The device token is tried first (unchanged, and the only shape an older daemon
+ * sends). A token that is not a device token is tried as the run's LEASE, which
+ * is what the daemon exports as `LOOPANY_RUN_TOKEN` into every run. The lease is
+ * accepted only for the run it names: a lease for a DIFFERENT run is a wrong
+ * credential, not an unknown one, and says so — silently ignoring it would leave
+ * the caller re-reading a generic "unknown credential" with nothing to fix.
+ *
+ * A lease whose machine row is gone is UNAUTHORIZED rather than a crash: the
+ * machine was deleted under a live run, and the answer is the same one an
+ * unenrolled machine gets.
+ */
+async function authenticateRunCaller(
+  token: string,
+  runHeader: string,
+): Promise<{ ok: true; machine: Machine } | { ok: false; error: ApiRefusal }> {
+  const device = await authenticateDevice(token);
+  if (device) return { ok: true, machine: device };
+  const lease = token ? await resolveLease(token) : undefined;
+  if (!lease) {
+    return { ok: false, error: refusal("UNAUTHORIZED", "unknown credential", [{ path: "Authorization", message: "neither this machine's device token nor this run's lease" }], "connect this machine with `loopany up`; inside a run the CLI sends the run's own credential") };
+  }
+  if (lease.runId !== runHeader) {
+    return { ok: false, error: refusal("UNAUTHORIZED", "this run credential belongs to another run", [{ path: "Authorization", message: "the lease names a different run", got: lease.runId, expected: runHeader }], "a run authenticates with its own credential only — do not carry one between runs") };
+  }
+  const machine = await legacyStore.getMachine(lease.machineId);
+  if (!machine) return { ok: false, error: refusal("UNAUTHORIZED", "unknown credential", [{ path: "Authorization", message: "the lease's machine is no longer enrolled" }], "connect this machine with `loopany up`") };
+  return { ok: true, machine };
+}
+
 export async function resolveApiContext(
   request: Request,
   need: ApiRequirement,
@@ -104,8 +151,9 @@ export async function resolveApiContext(
         teaching.hint,
       ) };
     }
-    const machine = await authenticateDevice(token);
-    if (!machine) return { ok: false, error: refusal("UNAUTHORIZED", "unknown device credential", [], "connect this machine with `loopany up`") };
+    const caller = await authenticateRunCaller(token, runHeader);
+    if (!caller.ok) return { ok: false, error: caller.error };
+    const machine = caller.machine;
     const run = await store.getRunRow(undefined, runHeader);
     // "No such run" and "not yours" are one answer on purpose: the endpoint must
     // not be usable to enumerate another machine's runs.

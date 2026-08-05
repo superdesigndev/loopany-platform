@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { resolveApiContext } from "../kernel/apiAuth.js";
+import { resolveObjectRef } from "../kernel/objectRefs.js";
 import { leaveDirective } from "../kernel/objectApi.js";
 import { apiResponse, authFailure, ensureBooted, jsonBody } from "../kernel/routeSupport.js";
 
@@ -12,4 +13,4 @@ import { apiResponse, authFailure, ensureBooted, jsonBody } from "../kernel/rout
  * — a request naming a run is an agent's, and a loop instructing itself is a
  * loop with no cadence at all. The kernel double-covers it (`leaveDirective`).
  */
-export const Route = createFileRoute("/api/tasks/$taskId/directive")({ server: { handlers: { POST: async ({ request, params }: { request: Request; params: { taskId: string } }) => { await ensureBooted(); const auth = await resolveApiContext(request, "human", true); if (!auth.ok) return authFailure(auth.error); const body = await jsonBody(request); if (!body.ok) return body.response; return apiResponse(await leaveDirective(params.taskId, (body.value as { directive?: unknown })?.directive, auth.context)); } } } });
+export const Route = createFileRoute("/api/tasks/$taskId/directive")({ server: { handlers: { POST: async ({ request, params }: { request: Request; params: { taskId: string } }) => { await ensureBooted(); const auth = await resolveApiContext(request, "human", true); if (!auth.ok) return authFailure(auth.error); const body = await jsonBody(request); if (!body.ok) return body.response; return apiResponse(await leaveDirective(await resolveObjectRef(params.taskId, auth.context.teamId), (body.value as { directive?: unknown })?.directive, auth.context)); } } } });

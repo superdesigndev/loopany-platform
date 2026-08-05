@@ -89,8 +89,10 @@ async function claimedRun(machineId: string) {
     scope: "routine", reason: "clock", entrance: "clock",
   });
   const { registerRunLease } = await import("../gateway/tokens.js");
-  await registerRunLease({ runId: "run-3f8a20", loopId, machineId, role: "exec", allowControl: true });
-  return { loopId, runId: "run-3f8a20" };
+  // The wire token the daemon exports as `LOOPANY_RUN_TOKEN` into the run — the
+  // credential a delivery is actually guaranteed to carry.
+  const runToken = await registerRunLease({ runId: "run-3f8a20", loopId, machineId, role: "exec", allowControl: true });
+  return { loopId, runId: "run-3f8a20", runToken };
 }
 
 const code = (r: Awaited<ReturnType<typeof auth.resolveApiContext>>) => (r.ok ? "OK" : r.error.code);
@@ -188,7 +190,7 @@ describe("the auth table keys on run-context presence, not on a credential type"
 // ------------------------------------------------------------ run-context guards
 
 describe("run context is resolved against the runs table, never trusted from the wire", () => {
-  it("refuses run context with no device credential — the run id authorizes nothing on its own", async () => {
+  it("refuses run context with no credential at all — the run id authorizes nothing on its own", async () => {
     const machineId = await machine();
     const { runId } = await claimedRun(machineId);
     expect(code(await auth.resolveApiContext(request({ "X-Loopany-Run": runId }), "dual", true, SIGNED_OUT))).toBe("UNAUTHORIZED");
@@ -221,5 +223,76 @@ describe("run context is resolved against the runs table, never trusted from the
     const { runId } = await claimedRun(machineId);
     await database.db.update(legacySchema.runLeases).set({ expiresAt: T0 });
     expect(code(await auth.resolveApiContext(request({ Authorization: `Bearer ${DEVICE}`, "X-Loopany-Run": runId }), "dual", true, SIGNED_OUT))).toBe("LEASE_LOST");
+  });
+});
+
+// ------------------------------------------------- the run's OWN credential
+
+/**
+ * THE REGRESSION THIS BLOCK EXISTS FOR. The device token lives in a file under
+ * `LOOPANY_HOME`, and the daemon hands the coding agent an allowlisted child env
+ * that carries neither that variable nor the token — so on every stack with a
+ * relocated home the in-run CLI read some OTHER machine's `~/.loopany` token and
+ * each kernel verb came back `UNAUTHORIZED`. A run could not file its products.
+ * `LOOPANY_RUN_TOKEN` is the credential a delivery always has, so the seam takes
+ * it — for the run it names, and for nothing else.
+ */
+describe("a run authenticates with its own lease, not only with the machine's device token", () => {
+  it("admits the run's own lease token on a dual endpoint and resolves the same agent context", async () => {
+    const machineId = await machine();
+    const { runId, loopId, runToken } = await claimedRun(machineId);
+    const result = await auth.resolveApiContext(request({ Authorization: `Bearer ${runToken}`, "X-Loopany-Run": runId }), "dual", true, SIGNED_OUT);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.context).toMatchObject({ mode: "agent", teamId: TEAM, actor: { entrance: "agent", actorId: runId } });
+    expect(result.ok && result.context.loop?.id).toBe(loopId);
+    expect(result.ok && result.context.machine?.id).toBe(machineId);
+  });
+
+  it("keeps every downstream lease guard — a reclaimed lease still refuses the mutation", async () => {
+    const machineId = await machine();
+    const { runId, runToken } = await claimedRun(machineId);
+    const { terminalizeLease } = await import("../gateway/tokens.js");
+    await terminalizeLease(runId);
+    const headers = { Authorization: `Bearer ${runToken}`, "X-Loopany-Run": runId };
+    expect(code(await auth.resolveApiContext(request(headers), "dual", true, SIGNED_OUT))).toBe("LEASE_LOST");
+    expect((await auth.resolveApiContext(request(headers), "dual", false, SIGNED_OUT)).ok).toBe(true);
+  });
+
+  it("refuses a lease that names ANOTHER run, and says which — never a silent retarget", async () => {
+    const machineId = await machine();
+    const { runToken } = await claimedRun(machineId);
+    await database.db.insert(legacySchema.runs).values({
+      id: "run-sibling", loopId: "loop-apiauth01", userId: "u-owner", machineId, phase: "running", role: "exec", ts: T0,
+      scope: "routine", reason: "clock", entrance: "clock",
+    });
+    const { registerRunLease } = await import("../gateway/tokens.js");
+    await registerRunLease({ runId: "run-sibling", loopId: "loop-apiauth01", machineId, role: "exec", allowControl: true });
+    const result = await auth.resolveApiContext(request({ Authorization: `Bearer ${runToken}`, "X-Loopany-Run": "run-sibling" }), "dual", true, SIGNED_OUT);
+    expect(code(result)).toBe("UNAUTHORIZED");
+    expect(!result.ok && result.error.issues[0]).toMatchObject({ path: "Authorization", got: "run-3f8a20", expected: "run-sibling" });
+  });
+
+  it("does not make a run credential a human — a lease with no run context is not an agent", async () => {
+    const machineId = await machine();
+    const { runToken } = await claimedRun(machineId);
+    // No `X-Loopany-Run`, so this is not the agent class at all: the lease is
+    // just an unknown token to the human branch, and the gate answers.
+    const result = await auth.resolveApiContext(request({ Authorization: `Bearer ${runToken}` }), "human", true, SIGNED_OUT);
+    expect(code(result)).toBe("UNAUTHORIZED");
+  });
+
+  it("refuses an unknown credential with run context, and teaches both shapes", async () => {
+    const machineId = await machine();
+    const { runId } = await claimedRun(machineId);
+    const result = await auth.resolveApiContext(request({ Authorization: "Bearer rk_forged", "X-Loopany-Run": runId }), "dual", true, SIGNED_OUT);
+    expect(code(result)).toBe("UNAUTHORIZED");
+    expect(!result.ok && result.error.issues[0]).toMatchObject({ message: "neither this machine's device token nor this run's lease" });
+  });
+
+  it("refuses a lease whose machine was deleted under it", async () => {
+    const machineId = await machine();
+    const { runId, runToken } = await claimedRun(machineId);
+    await database.db.delete(legacySchema.machines);
+    expect(code(await auth.resolveApiContext(request({ Authorization: `Bearer ${runToken}`, "X-Loopany-Run": runId }), "dual", true, SIGNED_OUT))).toBe("UNAUTHORIZED");
   });
 });

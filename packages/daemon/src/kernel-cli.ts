@@ -13,10 +13,12 @@
  * the same field are all refused here, loudly, before any side effect. Never
  * ignored and never resolved by a precedence rule (§5.7, §6.4).
  *
- * AUTH (§2.2): there are no per-run bearer tokens. Authentication is the
- * machine's device credential; `LOOPANY_RUN_ID` rides as the `X-Loopany-Run`
- * header — never a command argument and never a flag, so an agent can neither
- * type it nor forge a different one.
+ * AUTH (§2.2): `LOOPANY_RUN_ID` rides as the `X-Loopany-Run` header — never a
+ * command argument and never a flag, so an agent can neither type it nor forge a
+ * different one. The credential beside it is the run's own lease
+ * (`LOOPANY_RUN_TOKEN`), falling back to the machine's device credential; see
+ * the comment at the attachment point for why the file-read token alone was not
+ * reachable from inside a delivery.
  */
 import fs from "node:fs";
 
@@ -81,15 +83,25 @@ export async function runKernelCli(argv: string[], deps: KernelCliDeps = {}): Pr
 
   const server = (deps.server ?? resolveServerUrl(undefined)).replace(/\/$/, "");
   if (!server) return emit(out, errorEnvelope({ message: "this machine is not configured for a Loopany server", code: "ERROR", help: ["Run `loopany up` to register the machine, then retry"] }), 1);
-  const token = deps.token ?? env.LOOPANY_TOKEN ?? readStored(DEVICE_FILE);
+  // INSIDE A RUN THE CREDENTIAL IS THE RUN'S OWN LEASE, not the device token.
+  //
+  // The device token lives in a FILE under `LOOPANY_HOME`, and the daemon hands
+  // the coding agent an allowlisted env that carries neither `LOOPANY_HOME` nor
+  // the token — so a stack with a relocated home (every dev/demo stack) had this
+  // read resolve to `~/.loopany` and post some OTHER server's token, and every
+  // kernel verb in the delivery came back `UNAUTHORIZED`. `LOOPANY_RUN_TOKEN` is
+  // set on every run, is the authority the server already checks, and is
+  // narrower than a machine-wide credential. The device token stays the
+  // fallback so an old server (device-only) keeps working.
+  const token = deps.token ?? env.LOOPANY_RUN_TOKEN ?? env.LOOPANY_TOKEN ?? readStored(DEVICE_FILE);
 
   const headers: Record<string, string> = { ...built.headers };
   // THE CREDENTIAL TRAVELS WITH THE RUN CONTEXT, never on its own.
   //
   // What makes a caller an agent is the presence of run context (CLI spec §2.2),
-  // and the daemon sets the token and `LOOPANY_RUN_ID` together. Outside a run
-  // the person at the keyboard is the caller, and the device token is merely a
-  // readable file on their disk — attaching it names the wrong actor. It also
+  // and the daemon sets the credential and `LOOPANY_RUN_ID` together. Outside a
+  // run the person at the keyboard is the caller, and the device token is merely
+  // a readable file on their disk — attaching it names the wrong actor. It also
   // BREAKS the DUAL reads: §2.6 answers a device credential with no run context
   // `NO_RUN_CONTEXT`, so `loop show` / `loop list` / `task list` refused exactly
   // the owner they exist to serve, on every machine the daemon is registered on

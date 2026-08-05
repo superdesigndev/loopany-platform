@@ -45,6 +45,32 @@ describe("routing and the invisible run context", () => {
     expect(request!.url).not.toContain("run-3f8a20");
   });
 
+  /**
+   * THE IN-RUN CREDENTIAL. The device token is a FILE under `LOOPANY_HOME`, and
+   * the daemon's allowlisted child env carries neither that variable nor the
+   * token — so on a stack with a relocated home this read resolved to some other
+   * machine's `~/.loopany` and every kernel verb in the delivery came back
+   * UNAUTHORIZED. `LOOPANY_RUN_TOKEN` is set on every run and is the authority
+   * the server checks anyway, so it is what rides.
+   */
+  it("sends the RUN's own lease token inside a run, and falls back to the device token", async () => {
+    const send = async (env: NodeJS.ProcessEnv) => {
+      let request: Request | undefined;
+      await runKernelCli(["task", "list"], {
+        server: "https://example.test", env, out: () => {},
+        readFile: () => "", now: () => NOW,
+        fetchImpl: async (input, init) => { request = new Request(input, init); return reply({ tasks: [], total: 0 }); },
+      });
+      return request!.headers.get("authorization");
+    };
+    expect(await send({ LOOPANY_RUN_ID: "run-3f8a20", LOOPANY_RUN_TOKEN: "rk_lease", LOOPANY_TOKEN: "dk_device" })).toBe("Bearer rk_lease");
+    // No lease in the env (an older daemon's delivery) ⇒ the device token still
+    // authenticates, so this is not a flag day.
+    expect(await send({ LOOPANY_RUN_ID: "run-3f8a20", LOOPANY_TOKEN: "dk_device" })).toBe("Bearer dk_device");
+    // …and outside a run neither credential is attached at all.
+    expect(await send({ LOOPANY_RUN_TOKEN: "rk_lease", LOOPANY_TOKEN: "dk_device" })).toBeNull();
+  });
+
   it("never sends the machine's credential on the two HUMAN verbs", async () => {
     // The ordinary human runs this CLI on the same machine the daemon is
     // registered on, so the device token is always on disk. Sending it names the
@@ -673,7 +699,7 @@ describe("the flag grammar is local, loud, and never ignored", () => {
     const code = await runKernelCli(["task", "update", "--help"], { server: "https://example.test", token: "dk", env: {}, out: (t) => { stdout += t; }, fetchImpl: async () => { called = true; return reply({}); } });
     expect(code).toBe(0);
     expect(called).toBe(false);
-    expect(stdout).toContain("usage: loopany task update <id> [flags]\n");
+    expect(stdout).toContain("usage: loopany task update <id-or-key> [flags]\n");
     expect(stdout).toContain("flags:\n");
     expect(stdout).toContain("examples:\n");
     expect(stdout).toContain("only a human clears a pending question");

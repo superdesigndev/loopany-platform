@@ -75,10 +75,13 @@ export const VERBS: Record<string, VerbSpec> = {
     seeAlso: TASK_KEYS,
   },
   "task show": {
-    usage: "loopany task show <id> [flags]",
+    usage: "loopany task show <id-or-key> [flags]",
     flags: [["--file", "emit the canonical artifact file instead of the TOON view"], ["--full", "do not truncate the body"]],
-    examples: ["loopany task show task-7f3a91", "loopany task show task-7f3a91 --file > t.md"],
-    notes: ["--file output is a valid input file: read it, edit it, then `task update <id> --file`"],
+    examples: ["loopany task show task-7f3a91", "loopany task show weekly-cleanup", "loopany task show task-7f3a91 --file > t.md"],
+    notes: [
+      "--file output is a valid input file: read it, edit it, then `task update <id> --file`",
+      "the creation `key:` addresses the object too — the handle to carry across runs, since an id is fresh randomness",
+    ],
     seeAlso: TASK_KEYS,
   },
   "task create": {
@@ -104,7 +107,7 @@ export const VERBS: Record<string, VerbSpec> = {
     seeAlso: TASK_KEYS,
   },
   "task update": {
-    usage: "loopany task update <id> [flags]",
+    usage: "loopany task update <id-or-key> [flags]",
     flags: [
       ["--follow-up <date>", "RFC 3339 with offset, or relative (+3d, +12h); `null` clears"],
       ["--watcher <loop-id>", "HAND the task to another loop (e.g. loop-4c1d77); there is no release — `null` is refused"],
@@ -152,9 +155,12 @@ export const VERBS: Record<string, VerbSpec> = {
     ],
   },
   "doc show": {
-    usage: "loopany doc show <id> [flags]",
+    usage: "loopany doc show <id-or-key> [flags]",
     flags: [["--file", "emit the canonical artifact file instead of the TOON view"], ["--full", "do not truncate the body"]],
-    examples: ["loopany doc show doc-2b8e04", "loopany doc show doc-2b8e04 --file > d.md"],
+    examples: ["loopany doc show doc-2b8e04", "loopany doc show weekly-summary", "loopany doc show doc-2b8e04 --file > d.md"],
+    notes: [
+      "the creation `key:` addresses the doc too — a run re-reads the product it filed last pass by the key it chose, not by an id it would have to memorize",
+    ],
     seeAlso: DOC_KEYS,
   },
   "doc create": {
@@ -168,7 +174,7 @@ export const VERBS: Record<string, VerbSpec> = {
     seeAlso: DOC_KEYS,
   },
   "doc update": {
-    usage: "loopany doc update <id> --file <path>",
+    usage: "loopany doc update <id-or-key> --file <path>",
     flags: [["--file <path>", "the replacement artifact: front matter + body; `-` reads stdin"]],
     examples: ["loopany doc show doc-2b8e04 --file > d.md", "loopany doc update doc-2b8e04 --file d.md"],
     notes: [

@@ -19,6 +19,7 @@ let auth: typeof import("./apiAuth.js");
 let ids: typeof import("./ids.js");
 let schedulerModule: typeof import("../scheduler/index.js");
 let tokens: typeof import("../gateway/tokens.js");
+let refs: typeof import("./objectRefs.js");
 
 const TEAM = "team-s2";
 const USER = "u-s2";
@@ -45,6 +46,7 @@ beforeAll(async () => {
   ids = await import("./ids.js");
   schedulerModule = await import("../scheduler/index.js");
   tokens = await import("../gateway/tokens.js");
+  refs = await import("./objectRefs.js");
 });
 
 afterAll(() => fs.rmSync(temp, { recursive: true, force: true }));
@@ -360,6 +362,60 @@ describe("S2 manual, claim, auth and finalize", () => {
     expect(finished).toHaveLength(1);
     expect(finished[0]).toMatchObject({ objectId: loop.id, actorId: claimed.runId, origin: "derived" });
     expect(finished[0]!.payload).toMatchObject({ outcome: "success", reason: "directive", scope: `task:${watched.id}` });
+  });
+
+  /**
+   * PRODUCTS ARE KERNEL OBJECTS, so a run must be able to file one with the
+   * credentials its OWN delivery handed it — and read it back next pass by the
+   * only handle that survives: the key it chose. The daemon exports `runToken`
+   * (this delivery's lease) and `runId`; it does NOT export the machine's device
+   * token, which is why the whole verb set came back UNAUTHORIZED once a stack's
+   * `LOOPANY_HOME` moved. The claim is driven through the real prod poll, and
+   * every call below carries exactly what the delivery carried, nothing else.
+   */
+  it("a run files a doc and reads it back BY KEY with the credential its delivery carried", async () => {
+    const { loop } = await fixtures();
+    const watched = await task(loop.id);
+    ok(await api.leaveDirective(watched.id, "File the cleanup card as a product.", human, NOW));
+    const gw = gateway();
+    const polled = await gw.poll(TOKEN);
+    const claimed = (polled.body as { deliveries: Array<{ runId: string; runToken: string }> }).deliveries[0]!;
+
+    const signedOut = {
+      currentUser: async () => null,
+      requestScope: async () => ({ enforce: true, userId: null, teamId: TEAM }),
+      authEnabled: true,
+    };
+    // The exact pair the in-run CLI sends: the delivery's lease token, and the
+    // run id as the invisible context header.
+    const asRun = (mutation: boolean) => auth.resolveApiContext(
+      new Request("https://example.test/api/docs", { headers: { Authorization: `Bearer ${claimed.runToken}`, "X-Loopany-Run": claimed.runId } }),
+      "dual", mutation, signedOut,
+    );
+
+    const write = await asRun(true);
+    expect(write.ok, JSON.stringify(!write.ok && write.error)).toBe(true);
+    if (!write.ok) return;
+
+    const filed = ok(await api.createFromArtifact("doc", "---\ntitle: Cleanup card\nkey: housekeeper-cleanup-card\n---\n\nOne deleted export.\n", write.context, NOW));
+    const docId = (filed.doc as { id: string }).id;
+    expect(filed.created).toBe(true);
+    // Provenance is the RUN's, which is what makes it the loop's product.
+    expect(filed.doc).toMatchObject({ createdByRun: claimed.runId, createdByLoop: loop.id });
+
+    // The read-back, exactly as a later pass does it: by the key, never by an id
+    // the run would have had to memorize across runs.
+    const read = await asRun(false);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    const resolved = await refs.resolveObjectRef("housekeeper-cleanup-card", read.context.teamId);
+    expect(resolved).toBe(docId);
+    expect(ok(await api.showObject("doc", resolved, read.context)).doc).toMatchObject({ id: docId, title: "Cleanup card" });
+
+    // And the worklist read the exec core points every run at.
+    const listed = ok(await api.listTasks(read.context, new URLSearchParams({ watcher: loop.id })));
+    expect((listed.tasks as Array<{ id: string }>).map((t) => t.id)).toContain(watched.id);
+    expect(listed.viewerLoop).toBe(loop.id);
   });
 
   it("F6: a run-finished collision is logged best-effort and cannot wedge lease retirement", async () => {

@@ -165,11 +165,18 @@ everything citing it follows.
 loopany doc create --file weekly-summary.md
 loopany doc show doc-2b8e04 --file > d.md      # start an edit from the current text
 loopany doc update doc-2b8e04 --file d.md
+loopany doc show weekly-summary                # the same doc, by its creation key
 ```
 
 Register a product **as soon as it exists** — a partial product survives a dead
 run, an unregistered one does not. Cite it from a task by putting `doc: doc-…`
 under `payload:` and naming the id in the body.
+
+**The `key` is the handle that survives across runs.** An id is fresh randomness
+at creation, so the run that files a product this pass cannot reconstruct it next
+pass — give the file a `key:` and address it by that instead. It resolves
+anywhere an id does (`doc show`, `doc update`, `task show`, `task update`,
+`task close`), and an id always wins when both could match.
 
 ## The inbox and `answer`
 

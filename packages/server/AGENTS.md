@@ -551,6 +551,32 @@ the convergence design is `data/rw-converge-s1/report.md`.
   integration test (`apiAuth.integration.test.ts`) driving real `Request`s against
   real machine/run/lease rows, one case per §2.6 cell; only the session half is
   injected.
+- **A run's own lease ALSO authenticates it, and inside a delivery it is the only
+  credential that reliably can.** The device token is a FILE under `LOOPANY_HOME`,
+  and the daemon's allowlisted coding-agent env (`spawn.ts` `BASE_ALLOW`) carries
+  neither that variable nor the token — so on any stack with a relocated home
+  (every dev/demo stack) the in-run CLI read `~/.loopany`, posted some OTHER
+  server's token, and EVERY kernel verb answered `UNAUTHORIZED: unknown device
+  credential`. A run could not file its own products, and a real loop's charter
+  drifted into routing them through its task file instead. Fix, both halves:
+  `kernel-cli.ts` sends `LOOPANY_RUN_TOKEN` when in a run (device token still the
+  fallback, so an old server keeps working), and `apiAuth.ts`'s
+  `authenticateRunCaller` accepts a lease FOR THE RUN THE HEADER NAMES — a lease
+  naming another run is a loud `UNAUTHORIZED`, and a lease with no run context is
+  not an agent at all. Nothing else widened: run context is still the positive
+  test, every downstream lease/state guard is unchanged, and the human-only verbs
+  still refuse a run with their own teaching. **Do not "simplify" this by putting
+  the device token or `LOOPANY_HOME` into the agent's child env** — that hands the
+  coding agent a machine-wide credential to buy back a narrower one it already has.
+- **A task or doc is addressed BY ID OR BY ITS CREATION KEY**, resolved in the ONE
+  place `kernel/objectRefs.ts`, which every `$taskId`/`$docId` route runs its path
+  segment through (pinned by a wiring guard in `objectRefs.integration.test.ts`).
+  Id wins, then `(team, key)`; an unresolvable ref comes back verbatim so the
+  caller's NOT_FOUND names what was typed. The key is the ONLY handle that
+  survives across runs — an object id is organic randomness — so without this a
+  run could file a product and never read it back. Mirrors are out of scope: their
+  id and key both derive from `(team, kind, coords)`, so there is no handle to
+  remember.
 - `kernel/objectApi.ts` owns the transactional task/doc/inbox/verdict/directive
   verbs plus `runLoopNow` (the manual fire on a PRODUCTION loop). Loop CRUD,
   lifecycle and charter governance are GONE — a loop is created with `loopany new`

@@ -69,7 +69,7 @@ no round trip, before any side effect).
   task update <id>        --follow-up +3d / --watcher / --needs-human / --payload-merge.
   task close <id>         Close with the required --note attestation.
     --note "…"
-  doc show|create|update  Products, addressed by id and rewritten in place.
+  doc show|create|update  Products, addressed by id or creation key, rewritten in place.
   mirror attach|detach    Stateless pointers to external work; list/show/update.
   inbox                   What is waiting on YOU (questions only).
   answer <task-id> "…"    Reply in free text; it wakes the watching loop.
