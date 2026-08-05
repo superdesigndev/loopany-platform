@@ -844,6 +844,7 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: [
       "Run `loopany new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create a loop",
       "Run `loopany new --json '{...}' --dry-run` to validate without creating",
+      "Run `loopany new --json '{...,\"enabled\":false}'` to create it paused — no cadence, no first run",
     ],
   },
   loops: {
@@ -934,11 +935,15 @@ function schemaField(schema: StateField[] | null): { key: string; value: Scalar 
 
 /** The next cadence fire (the derived read-only aggregate), formatted in the loop's
  *  OWN timezone with a short zone name (`2026-07-13 06:00:00 PDT`) — matching how the
- *  scheduler arms it. Distinct from the writable `runAt` override (F4). */
-function nextFireDisplay(cron: string, timezone: string | null): string {
-  const iso = nextFires(cron, timezone, 1)[0];
+ *  scheduler arms it. Distinct from the writable `runAt` override (F4). A PAUSED loop
+ *  has no next fire at all — the clock can never select it — so it renders the absent
+ *  marker, exactly as the `loops` list does; printing a time a paused loop will not
+ *  honor is the same silent-drop class as ignoring `enabled` at create. */
+function nextFireDisplay(loop: Loop): string {
+  if (!loop.enabled) return ABSENT;
+  const iso = nextFires(loop.cron, loop.timezone ?? null, 1)[0];
   if (!iso) return "(never)";
-  return fmtTimeZoned(iso, timezone, { seconds: true });
+  return fmtTimeZoned(iso, loop.timezone ?? null, { seconds: true });
 }
 
 /**
@@ -998,7 +1003,7 @@ function renderShowText(
       ];
   return doc(
     block,
-    kvLine("nextFire", nextFireDisplay(loop.cron, loop.timezone ?? null)),
+    kvLine("nextFire", nextFireDisplay(loop)),
     `classification: ${classification}`,
     `runs: ${runsTally}`,
     // EFFECTIVE run capabilities (camelCase, replacing the old self-schedule/

@@ -2407,6 +2407,16 @@ test("show: derived aggregates (nextFire/classification/runs) accompany the enve
   expect(text).toMatch(/^runs: \d+ total/m);
 });
 
+test("show: a PAUSED loop has no nextFire — the clock can never select it", async () => {
+  const { deviceToken, id, gw } = (await seededRichLoop());
+  await store.updateLoop(id, { enabled: false, nextRunAt: null });
+  const text = textOf((await gw.cli(deviceToken, ["show", id])));
+  // Same absent marker `loops` prints for a paused row — never a time the loop
+  // will not honor (the same silent-drop class as ignoring `enabled` at create).
+  expect(text).toMatch(/^nextFire: —$/m);
+  expect(text).toContain("enabled: false");
+});
+
 test("show --json [R]: the run credential emits the same envelope, scoped to its own loop", async () => {
   const { runToken, loop } = (await seededCli({ allowControl: true }));
   const res = (await gateway().cli(runToken, ["show", "--json"]));

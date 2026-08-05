@@ -214,6 +214,11 @@ Rules:
 - `ui` is optional — the loop's dashboard panel as small HTML (see **Dashboard at
   create** below).
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
+- `enabled` is optional and defaults to `true` — the loop is scheduled and its
+  first run starts immediately. Pass `"enabled": false` only when the user asked
+  for a loop that must NOT act yet (a staging twin, a loop whose workdir isn't
+  ready): it is created with no cadence and no first run, and starts only when the
+  user fires it or re-enables it with `loopany edit <id> --json '{"enabled":true}'`.
 - **Don't add `timezone`, `claim`, or any auth** — `loopany new` injects the
   timezone, the connect-key claim, and this machine's device token. (If the user
   states a different zone, pass `--tz <IANA>` in §5.)

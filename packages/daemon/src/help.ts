@@ -96,7 +96,7 @@ Interactive (edit loops from your own agent session, using the stored device tok
  */
 const VERB_USAGE: Record<string, string> = {
   up: "loopany up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  loopany skill, the SessionStart hook, and the PATH shim). --foreground runs the\n  poll loop attached in this terminal instead of detached.",
-  new: "loopany new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing.",
+  new: "loopany new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing. Add \"enabled\": false to the config to\n  create the loop paused — no cadence and no first run until you run it or\n  re-enable it.",
   skill: "loopany skill [status|install] [--project] [--dev]\n  Manage the loopany agent skill install (user scope by default; --project installs\n  into the current directory). --dev installs the separate `loopany-dev` skill (the\n  local convergence flow) alongside — a different name, so a different directory: it\n  never overwrites or shadows the production `loopany` skill.",
   setup: "loopany setup hooks [--remove]\n  Install/refresh (or --remove) the SessionStart hook that lands the home view as\n  ambient context each session.",
   update: "loopany update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.",

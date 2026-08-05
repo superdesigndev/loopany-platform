@@ -686,6 +686,14 @@ export class MachineGateway {
        *  grok). Absent for older daemons → defaults to claude-code. The daemon
        *  spawns that agent on the bound machine. */
       agent?: unknown;
+      /** Cadence state at birth. Absent ⇒ `true` (the ordinary create: schedule it
+       *  and fire once immediately). `false` creates the loop ARMED BUT PAUSED — no
+       *  cron registration, no immediate first run and no deferred one-shot, so the
+       *  first run happens only on an explicit run-now or after a re-enable. This is
+       *  what lets a staging/twin loop be expressed AT CREATION instead of racing a
+       *  follow-up pause edit against the creation run. A non-boolean is refused
+       *  rather than coerced: an operational flag must never be silently dropped. */
+      enabled?: unknown;
       /** Web's New-loop claim token — correlates this loop back to the dialog. */
       claim?: unknown;
       /** Validate-only (`loopany new --dry-run`): run every check, persist NOTHING,
@@ -731,6 +739,15 @@ export class MachineGateway {
     // Optional setpoint (clipped one-liner); absent/blank ⇒ open loop.
     const goal = str(body.goal)?.slice(0, GOAL_CAP) ?? null;
 
+    // Cadence at birth. Fail LOUD on a non-boolean rather than degrading like
+    // `agent` does: `agent` has a harmless default and is descriptive, while a
+    // dropped `enabled` silently arms a loop the caller asked to keep paused —
+    // exactly the failure this field exists to prevent.
+    if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
+      return { status: 400, body: { error: `enabled must be a boolean (got ${JSON.stringify(body.enabled)})` } };
+    }
+    const enabled = body.enabled !== false;
+
     const notify = body.notify === "always" || body.notify === "never" ? body.notify : "auto";
     // Recorded coding agent: trust the daemon's resolved value when it's a known
     // agent, else default to claude-code (older daemons omit it; an unrecognized /
@@ -768,8 +785,11 @@ export class MachineGateway {
         notify,
         agent,
         stateSchema,
+        enabled,
       };
-      const nextRuns = nextFires(cron, timezone, 3);
+      // A paused create has no cadence to preview — the fire list would advertise
+      // times the clock can never select. Its first run is the owner's run-now.
+      const nextRuns = enabled ? nextFires(cron, timezone, 3) : [];
       return {
         status: 200,
         body: {
@@ -860,12 +880,17 @@ export class MachineGateway {
       notify,
       goal,
       agent,
-      enabled: true,
+      enabled,
     });
+    // `addLoop` registers the cron only when the loop is enabled, so a paused
+    // create is AUTONOMOUSLY INERT from its first instant: the clock can never
+    // select it.
     this.scheduler.addLoop(loop);
     this.invalidateWatch(machineId); // a new loop folder must be watched promptly
     // Run once immediately so a freshly-created loop produces output without
-    // waiting for its first cron tick (gated on `enabled`).
+    // waiting for its first cron tick — a feature of an ENABLED create only. A
+    // paused create fires nothing and arms no deferred one-shot (level triggers:
+    // the first run is an explicit run-now, or the cadence after a re-enable).
     if (loop.enabled) await this.scheduler.runNow(loop.id);
     const name = loop.name ?? loop.id;
     if (typeof body.claim === "string" && body.claim.trim()) {
@@ -884,8 +909,9 @@ export class MachineGateway {
         id: loop.id,
         name,
         ui: ui != null,
+        enabled: loop.enabled,
         ...(uiWarning ? { warning: uiWarning } : {}),
-        text: renderCreatedText(name, loop.id, cron, timezone ?? null, goal, ui != null, uiWarning),
+        text: renderCreatedText(name, loop.id, cron, timezone ?? null, goal, ui != null, loop.enabled, uiWarning),
       },
     };
   }
@@ -1863,21 +1889,32 @@ function renderCreatedText(
   timezone: string | null,
   goal: string | null,
   uiApplied: boolean,
+  enabled: boolean,
   warning: string | undefined,
 ): string {
   // Render the fire preview in the loop's OWN tz with a zone label (F9), matching
-  // `show`'s `nextFire` — not raw, unlabeled UTC.
-  const nextRuns = nextFires(cron, timezone, 3).map((iso) => fmtTimeZoned(iso, timezone));
+  // `show`'s `nextFire` — not raw, unlabeled UTC. A PAUSED create has no cadence
+  // to preview and fired nothing, so it names the one lever that starts it
+  // instead of advertising times the clock can never select.
+  const nextRuns = enabled ? nextFires(cron, timezone, 3).map((iso) => fmtTimeZoned(iso, timezone)) : [];
   return doc(
     `created: ${scalar(name)} (${loopId})`,
+    `enabled: ${enabled ? "on — scheduled, first run started now" : "paused — no cadence, no first run"}`,
     `classification: ${goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
     `dashboard: ${uiApplied ? "applied" : "not applied"}`,
     nextRuns.length ? inlineArray("nextRuns", nextRuns, " · ") : null,
     warning ? kvLine("warning", warning) : null,
-    helpBlock([
-      `Run \`loopany show ${loopId}\` to see the full config`,
-      `Run \`loopany log ${loopId}\` after the first run to see how it went`,
-    ]),
+    helpBlock(
+      enabled
+        ? [
+            `Run \`loopany show ${loopId}\` to see the full config`,
+            `Run \`loopany log ${loopId}\` after the first run to see how it went`,
+          ]
+        : [
+            `Run \`loopany show ${loopId}\` to see the full config`,
+            `Run \`loopany edit ${loopId} --json '{"enabled":true}'\` to start the cadence`,
+          ],
+    ),
   );
 }
 
@@ -1894,7 +1931,7 @@ function renderReplayText(name: string, loopId: string, goal: string | null): st
 
 /** `loopany new --dry-run` — the normalized config + fire preview (no persistence). */
 function renderCreateDryRunText(
-  config: { name: string | null; cron: string; timezone: string | null; taskFile: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
+  config: { name: string | null; cron: string; timezone: string | null; taskFile: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string; enabled: boolean },
   nextRuns: string[],
   warning: string | undefined,
 ): string {
@@ -1908,6 +1945,11 @@ function renderCreateDryRunText(
       ["ui", config.ui ? "present" : "absent"],
       ["goal", config.goal],
       ["notify", config.notify],
+      // The intent must be visible BEFORE creating: an armed-but-paused create
+      // schedules nothing and fires nothing. A bare token (the same vocabulary
+      // `loops` prints) rather than a sentence — this block echoes CONFIG, and
+      // the empty `nextRuns` below already shows the consequence.
+      ["enabled", config.enabled ? "on" : "paused"],
     ]),
     nextRuns.length ? inlineArray("nextRuns", nextRuns.map((iso) => fmtTimeZoned(iso, config.timezone)), " · ") : null,
     `classification: ${config.goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,

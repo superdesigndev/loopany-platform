@@ -638,6 +638,18 @@ authorizes it, the shipping sweep guards it and the shipping report finalizes it
   deferred `nextRunAt`, queues one production run, and leaves `enabled` false. A
   second fire while that run is pending returns `alreadyQueued`. The retired
   deferred-fire-on-enable behavior must not return.
+- **A loop may be created ARMED BUT PAUSED**: `createLoop` honors `enabled` from
+  the create config (default `true`; a non-boolean is a 400, never coerced — an
+  operational flag must not be silently dropped, which is exactly the bug F1
+  found). `enabled: false` registers no cron and fires NO immediate first run —
+  the create-time `runNow` is a feature of an enabled create only — and arms no
+  deferred one-shot, so the first run is an explicit run-now or the cadence after
+  a re-enable. This is what lets a staging/twin loop be expressed AT creation
+  instead of racing a follow-up pause edit against the creation run. `--dry-run`
+  echoes the state and previews no fires when paused, and `show`'s `nextFire`
+  renders `—` for a paused loop (matching `loops`) rather than a time the clock
+  will never honor. Pinned end to end by
+  `gateway/createPaused.integration.test.ts`, which drives the REAL Scheduler.
 
 ## The rewrite CLI (`packages/daemon/src/kernel-{cli,render,help}.ts`)
 
