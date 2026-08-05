@@ -11,7 +11,7 @@ import path from "node:path";
 
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
-import { execEnv, runProcess } from "./spawn.js";
+import { execEnv, explainSpawnFailure, runProcess } from "./spawn.js";
 import { runWorkflow, type AgentCall } from "./workflow.js";
 import { expandTilde } from "./loopdir.js";
 import { effectiveRoots, isWithinRoots } from "./roots.js";
@@ -508,7 +508,9 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       if (signal?.aborted) break;
     }
   } catch (err) {
-    error = `failed to run ${agentLabel}: ${msg(err)}`;
+    // A raw `spawn EBADF`/`EMFILE` names no resource; explainSpawnFailure adds the
+    // fd count and the ceiling, so the cause is readable straight off the run.
+    error = explainSpawnFailure(err, `failed to run ${agentLabel}: ${msg(err)}`);
   } finally {
     if (sysFile) fs.rmSync(sysFile, { force: true }); // don't let prompt files accumulate
   }

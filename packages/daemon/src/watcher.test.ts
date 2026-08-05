@@ -305,7 +305,7 @@ describe("LoopWatcher flush pipeline (injected sync server)", () => {
 });
 
 describe("LoopWatcher sync caps — graceful degradation of a flooded loop folder", () => {
-  test("over the file-count cap: the smallest real-content files keep syncing, the bulk work product is dropped, and the sync converges in ONE bounded POST (no doomed retry)", async () => {
+  test("over the file-count cap: the pre-scan narrows the content home to the folder ROOT, so the real content keeps syncing and the bulk work product is shed entirely in ONE bounded POST (no doomed retry)", async () => {
     // Re-import with a tiny cap so the test doesn't need thousands of files. The
     // caps are read at module load (like the transient-retry consts), so a fresh
     // module instance picks up the env — the static-import tests are unaffected.
@@ -327,19 +327,22 @@ describe("LoopWatcher sync caps — graceful degradation of a flooded loop folde
       const m = new w.WatchManager("https://srv.test", "dk_x", [], srv.fetchImpl);
       m.reconcile([{ loopId: "l1", workdir: dir, taskFile: null }]);
       await w.flushLoop("l1");
+      // The bounded pre-scan ran BEFORE any watch handle opened and found the
+      // folder already past the cap, so the content home narrowed to its root.
+      expect(m.watchedScopes().get("l1")).toBe("root-only");
       await m.closeAll();
 
       // Exactly ONE bounded sync POST — never a doomed giant that 413s and hot-retries.
       expect(srv.syncs).toHaveLength(1);
       const synced = srv.syncs[0].manifest.map((e) => e.path);
-      expect(synced).toHaveLength(3); // capped at MAX_SYNC_FILES
-      // The two tiny real-content files are the smallest → always kept and synced.
+      // The two tiny real-content files live at the root → always kept and synced.
       expect(synced).toContain("report.md");
       expect(synced).toContain("state.json");
       expect(srv.store.get(sha256(Buffer.from("r")))?.toString()).toBe("r");
       expect(srv.store.get(sha256(Buffer.from("s")))?.toString()).toBe("s");
-      // The bulk checkout is shed (only the single file that fit under the cap remains).
-      expect(synced.filter((p) => p.startsWith("checkout/"))).toHaveLength(1);
+      // The bulk checkout is shed WHOLESALE — never walked, hashed, or synced.
+      expect(synced.filter((p) => p.startsWith("checkout/"))).toHaveLength(0);
+      expect(synced).toHaveLength(2);
     } finally {
       delete process.env.LOOPANY_SYNC_MAX_FILES;
       vi.resetModules();

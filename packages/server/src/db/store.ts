@@ -870,6 +870,24 @@ export async function blobExists(hash: string): Promise<boolean> {
   return !!(await db.select({ hash: blobs.hash }).from(blobs).where(eq(blobs.hash, hash)))[0];
 }
 
+/** Batched `blobExists`: which of these hashes does the server already hold?
+ *  The sync ingress asks this once per manifest instead of twice per FILE — on a
+ *  large folder that is the difference between one query and thousands of
+ *  sequential round-trips (the S3.2 oversized-sync stall). Chunked so the bind
+ *  parameter list stays well inside every driver's limit. */
+export async function blobsExisting(hashes: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  const unique = [...new Set(hashes)];
+  const CHUNK = 500;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    if (!chunk.length) continue;
+    const rows = await db.select({ hash: blobs.hash }).from(blobs).where(inArray(blobs.hash, chunk));
+    for (const r of rows) found.add(r.hash);
+  }
+  return found;
+}
+
 /** Record a blob's metadata (idempotent — same hash ⇒ same bytes, so a no-op on
  *  conflict). `meta` is the parsed front-matter subset for a non-binary product
  *  (null for binary / unparsed); computed once at ingress and reused on every

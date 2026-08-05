@@ -1364,6 +1364,30 @@ instant (cv-s3-review F1). S3.1 makes it hold by code rather than by runbook.
   claiming and reporting normally, provenance discrimination, boot ordering, and the F3
   refusal). Verified on an isolated stack: a stranded `claimed` row planted pre-boot, the
   loud terminalization at boot, then a real daemon claiming and completing fresh runs.
+## Convergence S3.2 — a workspace is not a content home
+
+S3 gave converged loops a task file at `<workdir>/loopany-task.md`, which pointed the
+daemon's folder watcher at whole REPOSITORIES. The consequence was not a slow sync but a
+dead daemon: the watcher held one fd per watched FILE, six repo-workdir loops warmed past
+macOS's `OPEN_MAX`, and from that instant every `child_process.spawn` threw `spawn EBADF`
+— the daemon could no longer run the coding agent it exists to run. The whole diagnosis,
+the measured ceiling and the watch/sync contract live in the root `AGENTS.md`
+("Artifacts / storage", the two S3.2 bullets) and in `packages/daemon/src/watcher.ts`'s
+header; read those, not a summary here.
+
+- **The server half**: an oversized manifest now fails honestly rather than stalling —
+  `SYNC_MAX_MANIFEST_ENTRIES` refuses over-cap manifests with a 413 that reconciles
+  nothing, and `store.blobsExisting` answers a whole manifest's hashes in one batched
+  query instead of two sequential lookups per file. Both pinned in `gateway/sync.test.ts`.
+- **The contract in one line**: a loop bound to a workspace syncs that folder's top-level
+  files only. Do not "fix" a converged loop's missing subtree by widening the scope — move
+  its task file into a dedicated folder, which is what restores full recursion.
+- Regression anchor: `packages/daemon/src/watcher.fdCeiling.test.ts`. Verified on an
+  isolated stack (own port/data dir/`LOOPANY_HOME`) reproducing the incident's shape — 10
+  loops watching 20,620 files across repo-scale workdirs held the daemon at 25 open fds
+  (4 REG; the live incident was 12,537/12,515), and three consecutive run-now cycles
+  (exec + evolve each) all spawned, 22 runs, zero EBADF, zero sync failures, zero 5xx.
+
 ## Convergence S4 — hierarchy reaches the surfaces
 
 Stage S4 opened S1's `parent_id` to the CLI and the workspace. Nothing about the kernel

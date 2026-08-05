@@ -510,3 +510,42 @@ test("a loop without a taskFile is untouched by sync's mirror", async () => {
   });
   expect((await store.getLoop(loop.id))!.taskFileContent).toBeNull();
 });
+
+// ---- S3.2: an oversized manifest must fail HONESTLY, never grind into a 500 ----
+
+test("a manifest past the entry cap is refused 413 with a reason — and reconciles nothing", async () => {
+  const { token, loop } = (await seed());
+  const { art } = syncWithStore();
+  const good = "kept\n";
+  await art.sync(token, { loopId: loop.id, manifest: [{ path: "report.md", hash: sha256(good), size: good.length }], blobs: [{ hash: sha256(good), encoding: "utf8", data: good }] });
+  expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["report.md"]);
+
+  const { SYNC_MAX_MANIFEST_ENTRIES } = await import("./artifacts.js");
+  const huge = Array.from({ length: SYNC_MAX_MANIFEST_ENTRIES + 1 }, (_, i) => ({ path: `f${i}.txt`, hash: sha256(`f${i}`), size: 2 }));
+  const res = await art.sync(token, { loopId: loop.id, manifest: huge, blobs: [] });
+  expect(res.status).toBe(413);
+  expect(String((res.body as { error: string }).error)).toContain("content home");
+  // Refusing must be inert: the prior state stands, nothing was tombstoned.
+  const after = await store.listArtifacts(loop.id);
+  expect(after.map((f) => f.path)).toEqual(["report.md"]);
+});
+
+test("blobsExisting answers the whole manifest in one batched query (and only for hashes it holds)", async () => {
+  const { token, loop } = (await seed());
+  const { art } = syncWithStore();
+  const have = "already here\n";
+  await art.sync(token, { loopId: loop.id, manifest: [{ path: "a.md", hash: sha256(have), size: have.length }], blobs: [{ hash: sha256(have), encoding: "utf8", data: have }] });
+
+  const missing = sha256("not uploaded yet");
+  expect(await store.blobsExisting([sha256(have), missing])).toEqual(new Set([sha256(have)]));
+  // The reconcile path must reach the same verdict: only the unknown hash is asked for.
+  const res = await art.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "a.md", hash: sha256(have), size: have.length },
+      { path: "b.md", hash: missing, size: 16 },
+    ],
+    blobs: [],
+  });
+  expect((res.body as { needHashes: string[] }).needHashes).toEqual([missing]);
+});

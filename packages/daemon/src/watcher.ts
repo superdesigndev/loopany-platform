@@ -3,15 +3,58 @@
  * own folder continuously — between runs and across restarts — and live-syncs
  * changed files to the server, which stores them content-addressed in R2.
  *
+ * ## The fd model (convergence S3.2 — read this before changing the watch layer)
+ *
+ * A watcher may NEVER hold file descriptors proportional to the watched tree's
+ * FILE count. This is not a tidiness preference, it is the daemon's ability to
+ * work at all: at `SPAWN_FD_CEILING` (macOS `OPEN_MAX`, 10240) open fds every
+ * `child_process.spawn` throws `spawn EBADF`, so an fd-hungry watcher silently
+ * disables the coding agent the whole daemon exists to run. The old chokidar
+ * backend opened one `fs.watch` — hence one kqueue fd — per watched FILE, so a
+ * loop bound to a repo-scale folder warmed up into exactly that failure (live
+ * incident: six repo-workdir loops ⇒ 12,537 fds ⇒ every spawn after the first
+ * EBADF until the daemon restarted). See `spawn.ts` `SPAWN_FD_CEILING` for the
+ * measured mechanism and `watcher.fdCeiling.test.ts` for the regression.
+ *
+ * So the watch layer is a plain change DOORBELL, not an event stream: ONE native
+ * recursive `fs.watch` handle per loop, whose only job is "something under here
+ * changed, rebuild the manifest". Nothing downstream ever used chokidar's
+ * per-path events — every flush rebuilds the FULL manifest regardless — so the
+ * doorbell loses no information. Cost per watched loop: one FSEvents stream on
+ * macOS (0-1 fds, independent of tree size) and one inotify watcher per
+ * DIRECTORY on Linux (Node's recursive shim) — bounded by directory count,
+ * never by file count. A `root-only` home (below) is a single non-recursive
+ * handle on every platform.
+ *
+ * ## The content-home contract
+ *
+ * A loop folder is a synced CONTENT home (task file, reports, state, dashboard
+ * ui, small artifacts) — never a workspace. `resolveHomeScope` enforces that
+ * BEFORE any watch handle opens or any tree is enumerated:
+ *   • `root-only` — the folder is a code WORKSPACE (it is the loop's own bound
+ *     `workdir` and carries a VCS marker), or a pre-scan finds it already past
+ *     `MAX_SYNC_FILES`. Only the folder's TOP-LEVEL files are watched, walked
+ *     and synced: the task file plus whatever products a run writes beside it.
+ *     Subdirectories of a workspace are the workspace's own content (source
+ *     trees, checkouts, build output) and are never touched. Converged loops,
+ *     whose task file is materialized at `<workdir>/loopany-task.md`, land here
+ *     by construction.
+ *   • `recursive` — a dedicated loop folder (the normal `loopany/<slug>/`
+ *     shape). Full-subtree behavior, unchanged.
+ * A loop that outgrows `root-only` does not need new product surface: move its
+ * task file into a dedicated folder and full syncing returns automatically.
+ *
  * The watch SET is server-authoritative: the poll response carries `watch:[…]`
- * for every loop bound to this machine, and `WatchManager.reconcile()` opens a
- * watcher for each (closing any that vanished). Each `LoopWatcher`:
+ * for every loop bound to this machine (paused ones included — an owner's edit
+ * to a paused loop's task file must still sync, and at O(1) fds per loop that
+ * costs nothing), and `WatchManager.reconcile()` opens a watcher for each
+ * (closing any that vanished). Each `LoopWatcher`:
  *   • resolves the loop's folder (dirname(taskFile) → workdir → scratch),
  *   • ignores .git/node_modules/.worktrees/common caches/.loopany/secrets/.DS_Store
  *     (never-syncable dirs — a loop folder is a synced CONTENT home, not a
  *     scratch workspace, so a repo clone / git worktree / build tree dropped in
  *     it is excluded at the source rather than flooding the sync),
- *   • debounces with chokidar's awaitWriteFinish + a coalescing flush window,
+ *   • coalesces a burst of doorbell rings into one flush,
  *   • builds a FULL manifest of the folder (deletions = absence), hashing
  *     INCREMENTALLY: a stat cache (size+mtime+ctime, with a git-index-style
  *     racy-write guard) means an unchanged file is never re-read, so a flush
@@ -35,11 +78,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { watch, type FSWatcher } from "chokidar";
 
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
-import { resolveLoopDir } from "./loopdir.js";
+import { expandTilde, resolveLoopDir } from "./loopdir.js";
 import { isScratchDir, isWithinResolvedRoots, resolveRoots } from "./roots.js";
 
 const log = logger.child({ mod: "watcher" });
@@ -74,6 +116,11 @@ const RACY_MS = 2000;
  *  it; `capManifest` sheds the overflow and keeps the real content syncing. */
 export const MAX_SYNC_FILES = Number(process.env.LOOPANY_SYNC_MAX_FILES || 5000);
 export const MAX_SYNC_BYTES = Number(process.env.LOOPANY_SYNC_MAX_BYTES || 256 * 1024 * 1024); // 256MB
+/** Safety rescan for the (exotic) platforms where recursive `fs.watch` is
+ *  unavailable and the doorbell degrades to the folder root: a nested edit
+ *  raises no event there, so ring on a slow timer instead of missing it. Never
+ *  armed on macOS/Linux/Windows, where recursive watching is supported. */
+const FALLBACK_RESCAN_MS = Number(process.env.LOOPANY_WATCH_RESCAN_MS || 30_000);
 
 /** One loop folder the server asked this machine to watch. */
 export interface WatchSpec {
@@ -81,6 +128,17 @@ export interface WatchSpec {
   workdir: string | null;
   taskFile: string | null;
 }
+
+/**
+ * How much of a loop's folder is its synced content home.
+ *  • `recursive` — a dedicated loop folder: the whole subtree.
+ *  • `root-only` — a workspace (or an already-oversized folder): the top-level
+ *    files ONLY. Never watched, walked, hashed or synced below depth 0.
+ */
+export type HomeScope = "recursive" | "root-only";
+
+/** Markers that make a directory a code WORKSPACE rather than a content home. */
+const WORKSPACE_MARKERS = [".git", ".hg", ".svn"];
 
 /** The network seam (injectable for tests): boundedFetch-shaped. */
 export type SyncFetch = (url: string, init: RequestInit, timeoutMs: number) => Promise<Response>;
@@ -150,6 +208,111 @@ function isIgnoredRel(rel: string): boolean {
   if (base.startsWith("id_rsa") || base.startsWith("id_ed25519")) return true;
   if (base === ".npmrc" || base === ".netrc" || base === "credentials") return true;
   return false;
+}
+
+/**
+ * Count the files under `dir` (applying the same ignore rules as a manifest
+ * build), ABORTING as soon as `limit` is exceeded. Bounded by construction: a
+ * repo-scale folder costs ~`limit` dirents, never a full enumeration — which is
+ * the point, since this runs BEFORE the folder is committed to as a content
+ * home. Returns the count, clamped at `limit + 1` when it overflows.
+ */
+export function probeFileCount(dir: string, limit: number): number {
+  let seen = 0;
+  const walk = (abs: string, rel: string): boolean => {
+    let dirents: fs.Dirent[];
+    try {
+      dirents = fs.readdirSync(abs, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const d of dirents) {
+      const childRel = rel ? `${rel}/${d.name}` : d.name;
+      if (isIgnoredRel(childRel) || d.isSymbolicLink()) continue;
+      if (d.isDirectory()) {
+        if (walk(path.join(abs, d.name), childRel)) return true;
+        continue;
+      }
+      if (!d.isFile()) continue;
+      if (++seen > limit) return true;
+    }
+    return false;
+  };
+  walk(dir, "");
+  return seen;
+}
+
+/** Is this loop's folder the loop's own bound WORKSPACE — a checkout it executes
+ *  in, rather than a dedicated content home? True only when the resolved folder
+ *  IS the bound `workdir` (so a task file in a `loopany/<slug>/` subfolder is
+ *  unaffected) and that directory carries a VCS marker. */
+export function isWorkspaceRoot(spec: WatchSpec, dir: string): boolean {
+  if (!spec.workdir) return false;
+  if (path.resolve(expandTilde(spec.workdir)) !== dir) return false;
+  return WORKSPACE_MARKERS.some((m) => fs.existsSync(path.join(dir, m)));
+}
+
+/**
+ * Decide a loop folder's content-home scope BEFORE opening a watch handle or
+ * enumerating the tree — the "enforce the caps first" half of the S3.2 fix.
+ * A workspace is settled structurally (no scan at all: a repo root must never be
+ * walked just to discover it is huge); anything else gets the bounded pre-scan
+ * and degrades only when it is ALREADY past the per-loop file cap.
+ */
+export function resolveHomeScope(spec: WatchSpec, dir: string, maxFiles = MAX_SYNC_FILES): { scope: HomeScope; reason: "workspace" | "oversized" | null } {
+  if (isWorkspaceRoot(spec, dir)) return { scope: "root-only", reason: "workspace" };
+  if (probeFileCount(dir, maxFiles) > maxFiles) return { scope: "root-only", reason: "oversized" };
+  return { scope: "recursive", reason: null };
+}
+
+/** One loop folder's change DOORBELL: a single native watch handle that rings
+ *  `onRing` when anything (not ignored) under the folder changes. Deliberately
+ *  carries no per-path state and opens no per-file descriptor — see the fd-model
+ *  note at the top of this file. */
+interface Doorbell {
+  close(): void;
+  /** True when the platform gave us real recursive watching (false ⇒ the
+   *  root-level fallback plus the safety rescan is in play). */
+  recursive: boolean;
+}
+
+function openDoorbell(dir: string, recursive: boolean, onRing: () => void, onError: (err: unknown) => void): Doorbell {
+  const attach = (rec: boolean): fs.FSWatcher => {
+    const w = fs.watch(dir, { recursive: rec, persistent: true });
+    w.on("change", (_event, name) => {
+      // `name` is the folder-RELATIVE path (POSIX separators, even recursively),
+      // so the never-syncable dirs are filtered at the doorbell: a busy `.git`
+      // inside a workspace must not ring on every object write.
+      const rel = typeof name === "string" ? name : Buffer.isBuffer(name) ? name.toString("utf8") : "";
+      if (rel && isIgnoredRel(rel)) return;
+      onRing();
+    });
+    w.on("error", onError);
+    return w;
+  };
+  let watcher: fs.FSWatcher;
+  let effective = recursive;
+  try {
+    watcher = attach(recursive);
+  } catch (err) {
+    if (!recursive) throw err;
+    // Recursive watching is unsupported here (AIX/SmartOS; macOS, Linux and
+    // Windows all support it). Watch the root and let the rescan carry nesting.
+    effective = false;
+    watcher = attach(false);
+  }
+  let rescan: NodeJS.Timeout | null = null;
+  if (recursive && !effective) {
+    rescan = setInterval(onRing, FALLBACK_RESCAN_MS);
+    rescan.unref();
+  }
+  return {
+    recursive: effective,
+    close: () => {
+      if (rescan) clearInterval(rescan);
+      watcher.close();
+    },
+  };
 }
 
 interface ManifestEntry {
@@ -224,8 +387,16 @@ export interface ManifestBuild {
  * safely older than when that entry was hashed — the racy-write guard) reuses
  * the cached hash without being read. No file bytes are retained: callers
  * re-read (and re-verify) bytes on demand when the server actually wants them.
+ *
+ * `scope` decides how far down the folder is the loop's content home: a
+ * `root-only` home stops at depth 0, so a workspace's subtrees are never even
+ * enumerated (never mind hashed).
  */
-export async function buildManifest(dir: string, prev: Map<string, HashCacheEntry> = new Map()): Promise<ManifestBuild> {
+export async function buildManifest(
+  dir: string,
+  prev: Map<string, HashCacheEntry> = new Map(),
+  scope: HomeScope = "recursive",
+): Promise<ManifestBuild> {
   const entries: ManifestEntry[] = [];
   const paths = new Map<string, string>();
   const cache = new Map<string, HashCacheEntry>();
@@ -242,7 +413,7 @@ export async function buildManifest(dir: string, prev: Map<string, HashCacheEntr
       if (d.isSymbolicLink()) continue;
       const childAbs = path.join(abs, d.name);
       if (d.isDirectory()) {
-        await walk(childAbs, childRel);
+        if (scope === "recursive") await walk(childAbs, childRel);
         continue;
       }
       if (!d.isFile()) continue;
@@ -370,7 +541,7 @@ async function forEachLimit<T>(items: T[], limit: number, fn: (item: T) => Promi
 
 /** Watches one loop folder and live-syncs it to the server. */
 class LoopWatcher {
-  private fsw: FSWatcher | null = null;
+  private bell: Doorbell | null = null;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private dirty = false;
@@ -401,25 +572,32 @@ class LoopWatcher {
     private readonly server: string,
     private readonly token: string,
     private readonly fetchImpl: SyncFetch = boundedFetch,
+    /** How much of the folder is this loop's content home (see `HomeScope`). */
+    private readonly scope: HomeScope = "recursive",
+    /** Why the scope was narrowed — logged once, for the owner's benefit. */
+    private readonly scopeReason: "workspace" | "oversized" | null = null,
   ) {}
 
   start(): void {
-    this.fsw = watch(this.dir, {
-      ignored: (p: string) => {
-        const rel = path.relative(this.dir, p);
-        if (rel === "") return false;
-        if (rel.startsWith("..")) return true;
-        return isIgnoredRel(rel);
-      },
-      awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
-      ignoreInitial: false, // emit the current tree on start → initial reconciliation
-      followSymlinks: false,
-      depth: 99,
-    });
-    this.fsw.on("all", () => this.schedule());
-    this.fsw.on("error", (err) => log.warn({ loopId: this.loopId, err: msg(err) }, "watch error"));
+    this.bell = openDoorbell(
+      this.dir,
+      this.scope === "recursive",
+      () => this.schedule(),
+      (err) => log.warn({ loopId: this.loopId, err: msg(err) }, "watch error"),
+    );
     watchersByLoop.set(this.loopId, this);
-    log.info({ loopId: this.loopId, dir: this.dir }, "watching loop folder");
+    log.info({ loopId: this.loopId, dir: this.dir, scope: this.scope }, "watching loop folder");
+    if (this.scopeReason) {
+      log.warn(
+        { loopId: this.loopId, dir: this.dir, reason: this.scopeReason },
+        this.scopeReason === "workspace"
+          ? `${this.dir} is this loop's WORKSPACE (a checkout), not a content home — syncing its top-level files only (the task file plus the products a run writes beside it). Subdirectories of a workspace are never watched or synced. To sync a subtree, give the loop a dedicated folder (e.g. loopany/<slug>/) and point its task file there.`
+          : `${this.dir} already holds more than ${MAX_SYNC_FILES} files — syncing its top-level files only. A loop folder is a synced content home for reports/state/ui/small artifacts, not a scratch workspace: keep heavy work products (repo clones, git worktrees, node_modules, build output, caches) OUTSIDE it.`,
+      );
+    }
+    // The doorbell, unlike the old chokidar backend, does not replay the current
+    // tree on start — so ring it once for the initial reconciliation.
+    this.schedule(0);
   }
 
   /** Force an immediate flush (bypassing the debounce timer) and await it — the
@@ -466,7 +644,7 @@ class LoopWatcher {
 
   private async runFlush(): Promise<void> {
     try {
-      const built = await buildManifest(this.dir, this.hashCache);
+      const built = await buildManifest(this.dir, this.hashCache, this.scope);
       const { paths, cache } = built;
       this.hashCache = cache;
 
@@ -603,14 +781,23 @@ class LoopWatcher {
     return this.dir;
   }
 
+  /** How much of that folder is the loop's content home (introspection/tests). */
+  get homeScope(): HomeScope {
+    return this.scope;
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer);
     // Only drop the registry entry if it still points at THIS watcher (a dir-move
     // reconcile may have already replaced it with a fresh one for the same loop).
     if (watchersByLoop.get(this.loopId) === this) watchersByLoop.delete(this.loopId);
-    if (this.fsw) await this.fsw.close().catch(() => {});
-    this.fsw = null;
+    try {
+      this.bell?.close();
+    } catch {
+      /* already closed / folder vanished — nothing to release */
+    }
+    this.bell = null;
   }
 }
 
@@ -666,7 +853,10 @@ export class WatchManager {
         this.watchers.delete(id);
       }
       if (!fs.existsSync(dir)) continue;
-      const w = new LoopWatcher(id, dir, this.server, this.token, this.fetchImpl);
+      // Settle the content-home scope BEFORE any watch handle opens: a workspace
+      // must never be enumerated, never mind watched, just to discover it is huge.
+      const { scope, reason } = resolveHomeScope(spec, dir);
+      const w = new LoopWatcher(id, dir, this.server, this.token, this.fetchImpl, scope, reason);
       w.start();
       this.watchers.set(id, w);
     }
@@ -675,6 +865,11 @@ export class WatchManager {
   /** The dirs currently watched, by loopId (introspection/test seam). */
   watchedDirs(): Map<string, string> {
     return new Map([...this.watchers].map(([id, w]) => [id, w.watchDir] as const));
+  }
+
+  /** The content-home scope in force per watched loop (introspection/test seam). */
+  watchedScopes(): Map<string, HomeScope> {
+    return new Map([...this.watchers].map(([id, w]) => [id, w.homeScope] as const));
   }
 
   async closeAll(): Promise<void> {

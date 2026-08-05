@@ -3,8 +3,50 @@
  * (SIGTERM→SIGKILL), enforce a wall-clock timeout. Ported from c0's handoff
  * spawn.ts. Task text goes via argv; stdin is unused.
  */
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 import type { CodingAgent } from "./create.js";
+
+/**
+ * The hard ceiling on a process's OPEN FILE DESCRIPTORS beyond which spawning is
+ * impossible on macOS — `OPEN_MAX` (10240). MEASURED, not assumed: once the
+ * process holds this many fds, EVERY `child_process.spawn` throws `spawn EBADF`,
+ * because libuv's stdio pipes land at or above `OPEN_MAX` and Darwin's
+ * `posix_spawn` file actions reject such a descriptor. Three properties pin the
+ * mechanism down (see `spawn.fdCeiling.test.ts`):
+ *   • it is NOT the rlimit — `ulimit -n` is orders of magnitude higher and the
+ *     process happily holds >20k fds; only SPAWNING breaks;
+ *   • it is NOT kqueue/`fs.watch`-specific — plain `fs.openSync` fds reproduce it
+ *     identically, so any fd hoarder can cause it;
+ *   • it is the COUNT of fds below the ceiling, not the highest fd number —
+ *     freeing low fds while still holding a high one restores spawning at once.
+ * The daemon's defense is structural: nothing it runs may hold fds proportional
+ * to a watched folder's file count (see `watcher.ts`).
+ */
+export const SPAWN_FD_CEILING = 10240;
+
+/** How many fds this process currently holds (-1 when unknowable). Diagnostic
+ *  only — read on the spawn-failure path, never in the hot path. */
+export function openFdCount(): number {
+  try {
+    return fs.readdirSync("/dev/fd").length;
+  } catch {
+    return -1;
+  }
+}
+
+/** Turn a raw spawn failure into an actionable one. `spawn EBADF` is otherwise
+ *  baffling: it names no resource and no path. When the process is at/near
+ *  `SPAWN_FD_CEILING` it is fd exhaustion, and saying so turns a mystery into a
+ *  one-line diagnosis. Pure apart from the fd read; returns the input text
+ *  unchanged for every other failure. */
+export function explainSpawnFailure(err: unknown, text: string): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code !== "EBADF" && code !== "EMFILE" && code !== "ENFILE") return text;
+  const fds = openFdCount();
+  const at = fds < 0 ? "an unknown number of" : String(fds);
+  return `${text} — this process holds ${at} open file descriptors (spawning is impossible at ${SPAWN_FD_CEILING}); something is hoarding descriptors`;
+}
 
 export interface SpawnResult {
   code: number | null;

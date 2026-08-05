@@ -15,7 +15,7 @@ import { logger } from "../logger.js";
 import * as store from "../db/store.js";
 import type { Loop } from "../db/schema.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
-import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
+import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf, SYNC_MAX_MANIFEST_ENTRIES } from "./artifacts.js";
 import { artifactMeta } from "../server/frontmatter.js";
 import { pickTaskPath } from "../lib/fileEntries.js";
 import { loopBytesCap } from "../env.js";
@@ -90,6 +90,29 @@ export class ArtifactSync {
     }
 
     const manifest = Array.isArray(body.manifest) ? body.manifest : [];
+    // Bound the WORK, not just the bytes: reconciling a manifest costs a row
+    // upsert per entry, so an unbounded one stalls the request rather than
+    // failing. Refuse it honestly (413) — the daemon keeps its last acked state,
+    // nothing is tombstoned, and the log names the real problem.
+    if (manifest.length > SYNC_MAX_MANIFEST_ENTRIES) {
+      log.warn({ loopId, entries: manifest.length, cap: SYNC_MAX_MANIFEST_ENTRIES }, "sync manifest over the entry cap — refused");
+      return {
+        status: 413,
+        body: {
+          error: `manifest has ${manifest.length} entries (cap ${SYNC_MAX_MANIFEST_ENTRIES}) — a loop folder is a synced content home, not a workspace`,
+        },
+      };
+    }
+    // ONE existence query for every hash this manifest mentions, instead of two
+    // sequential lookups per file. Nothing writes to `blobs` between here and the
+    // reconcile loop, so the prefetched set stays authoritative throughout it.
+    const manifestHashes: string[] = [];
+    for (const raw of manifest) {
+      const h = (raw as { hash?: unknown })?.hash;
+      if (isValidHash(h)) manifestHashes.push(h);
+    }
+    const storedHashes = await store.blobsExisting(manifestHashes);
+
     const keepPaths: string[] = [];
     const seenPaths = new Set<string>();
     const needHashes = new Set<string>();
@@ -158,7 +181,7 @@ export class ArtifactSync {
       // a buggy/hostile client, which we want to bound, not trust). putBlob re-checks
       // against the real byte length regardless.
       const fileSize = inlined?.length ?? (sizeOk ? rawSize : BLOB_CAP);
-      const addsNewBytes = !((await store.blobExists(hash)) || toStore.has(hash) || needHashes.has(hash));
+      const addsNewBytes = !(storedHashes.has(hash) || toStore.has(hash) || needHashes.has(hash));
       if (addsNewBytes) {
         // Cap only the NET growth: overwriting an existing live, byte-backed row at
         // `rel` FREES its currently-counted bytes (the upsert below replaces it), so
@@ -183,7 +206,7 @@ export class ArtifactSync {
       }
 
       if (inlined) toStore.set(hash, inlined);
-      else if (!(await store.blobExists(hash))) needHashes.add(hash);
+      else if (!storedHashes.has(hash)) needHashes.add(hash);
 
       await store.upsertArtifactFile({
         loopId,

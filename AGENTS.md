@@ -354,7 +354,7 @@ computes pure functions. Run instructions: `README.md`.
 
 ## Artifacts / storage
 
-- The daemon watcher (chokidar) syncs each loop's folder: full sha256 manifest
+- The daemon watcher syncs each loop's folder: full sha256 manifest
   (deletions = absence) -> `POST /api/machine/sync` (device token, not run token) ->
   server replies `needHashes` -> `PUT /api/machine/blob/:hash` (server verifies the
   hash). The manifest is always FULL but hashing is INCREMENTAL (`watcher.ts`
@@ -383,6 +383,45 @@ computes pure functions. Run instructions: `README.md`.
   can't 413/timeout into an endless retry storm. The SKILL teaches runs to keep
   heavy work OUT of the loop folder (`skill/run/exec-core.md` non-negotiable +
   `references/run.md` §1 + `create.md` §3 + the worktree templates).
+- **A WATCHER MAY NEVER HOLD fds PROPORTIONAL TO A TREE'S FILE COUNT** (convergence
+  S3.2; the daemon's ability to work at all, not a tidiness rule). At
+  `spawn.ts` `SPAWN_FD_CEILING` — macOS `OPEN_MAX`, **10240** open fds — every
+  `child_process.spawn` throws `spawn EBADF`, so an fd-hungry watcher silently
+  disables the coding agent the daemon exists to run. MEASURED, not assumed: it is
+  NOT the rlimit (orders of magnitude higher; the process happily holds >20k fds and
+  only SPAWNING breaks), NOT kqueue-specific (plain `fs.openSync` fds reproduce it),
+  and it keys on the COUNT of fds below the ceiling, not the highest fd number. The
+  live incident: chokidar v4 (no fsevents backend) opened one `fs.watch` — one kqueue
+  fd — per watched FILE, so six repo-workdir loops warmed to 12,537 fds and every
+  spawn after the first EBADF'd until restart. **The watch layer is therefore a plain
+  change DOORBELL** — ONE native recursive `fs.watch` per loop, ringing "rebuild the
+  manifest" (nothing downstream ever used per-path events; every flush rebuilds the
+  FULL manifest anyway). chokidar is GONE from the daemon's deps; do not reintroduce
+  a per-file watch backend. Cost: one FSEvents stream per loop on macOS (0-1 fds,
+  tree-size independent), one inotify watcher per DIRECTORY on Linux. Guarded by
+  `watcher.fdCeiling.test.ts`; a failed spawn is diagnosed rather than mystifying
+  (`spawn.ts` `explainSpawnFailure` prints the fd count + the ceiling).
+- **The watch/sync CONTRACT: a loop's content home is never a WORKSPACE**
+  (`watcher.ts` `resolveHomeScope`, settled BEFORE any watch handle opens or any tree
+  is enumerated — the "enforce the caps first" half of S3.2). `root-only` when the
+  folder is the loop's own bound `workdir` AND carries a VCS marker, or when a bounded
+  pre-scan (`probeFileCount`, early-aborting) already finds it past `MAX_SYNC_FILES`:
+  only the folder's TOP-LEVEL files are watched, walked and synced — the task file plus
+  whatever products a run writes beside it — and subdirectories are never touched.
+  Otherwise `recursive` (the normal dedicated `loopany/<slug>/` shape), unchanged.
+  **Converged loops land in `root-only` by construction**, since S3 materializes their
+  task file at `<workdir>/loopany-task.md` on a repo root. This adds NO product
+  surface: a loop that needs a synced subtree moves its task file into a dedicated
+  folder and full recursion returns automatically. `capManifest` remains the second
+  line of defense for a folder that grows past the cap after the watcher opened.
+  Paused loops are still watched (an owner's edit to a paused loop's task file must
+  sync, and at O(1) fds per loop it costs nothing).
+- Server-side, an oversized sync fails HONESTLY instead of grinding into a 500:
+  `SYNC_MAX_MANIFEST_ENTRIES` (`gateway/artifacts.ts`, 20k — well above the daemon's
+  own 5000 file cap, so a healthy daemon can never trip it) refuses an over-cap
+  manifest with a 413 and reconciles nothing (no tombstones), and the reconcile loop
+  asks `store.blobsExisting(hashes)` ONCE per manifest instead of two sequential
+  lookups per FILE.
 - `run_snapshots` capture the manifest at `report()`; `getRunDiff` diffs run N vs
   the prior snapshot (jsdiff) for the run page's "Changes".
 - **Byte serving** (`routes/api.artifact.$loopId.$.ts`, session-authed, `loopInScope`):

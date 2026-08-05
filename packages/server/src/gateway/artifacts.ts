@@ -10,6 +10,14 @@ import { createHash } from "node:crypto";
 export const BLOB_CAP = 10 * 1024 * 1024; // 10MB
 /** Hard ceiling on a sync POST body (manifest + any inlined blobs). */
 export const SYNC_BODY_CAP = 32 * 1024 * 1024; // 32MB
+/** Hard ceiling on a sync manifest's ENTRY COUNT. The body cap bounds bytes; this
+ *  bounds WORK — reconciling one entry costs a row upsert, so a manifest orders of
+ *  magnitude past the daemon's own per-loop file cap (`LOOPANY_SYNC_MAX_FILES`,
+ *  5000) is a client that has lost its bounds, and grinding through it stalls the
+ *  request into a 500 instead of failing honestly. Set well ABOVE the daemon's cap
+ *  so a healthy daemon can never trip it. Refusing is safe: the daemon keeps its
+ *  last acked state and retries, and nothing is tombstoned from a rejected sync. */
+export const SYNC_MAX_MANIFEST_ENTRIES = 20_000;
 
 export function sha256Buf(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
