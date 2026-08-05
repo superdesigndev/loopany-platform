@@ -1,14 +1,12 @@
 /**
  * MACHINE ENROLLMENT — the one place a device token becomes a `machines` row.
  *
- * Extracted from `MachineGateway.poll` so the now-dormant rewrite claim endpoint
- * (`kernel/runQueue.claimRun`, `POST /api/agent/runs/claim`) enrolled exactly the
- * way the production poll does. Before this, a daemon started with
- * `LOOPANY_RUNS_V2=1` never touched `/api/machine/poll`, so a fresh machine had
- * no self-register surface at all on the rewrite line and every claim 401'd.
- * Two enrollment policies would be an audit hole, not a convenience — so there
- * is one function and both transports call it. S3 runtime uses production poll;
- * the claim transport remains only until S5 cleanup.
+ * Extracted from `MachineGateway.poll` so the rewrite line's own claim endpoint
+ * enrolled exactly the way the production poll does — two enrollment policies
+ * would be an audit hole, not a convenience. That second transport RETIRED at
+ * convergence S5, so `poll` is once again the only caller; the module stays
+ * because the gate rules below are worth having in one named place rather than
+ * inlined in the poll hot path.
  *
  * The gate rules it carries, verbatim from the poll path (audit H-01 / M2):
  *   - malformed tokens are filtered by SHAPE before any DB work (cheap filter,

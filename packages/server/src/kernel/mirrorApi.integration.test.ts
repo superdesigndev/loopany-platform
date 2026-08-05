@@ -191,19 +191,16 @@ describe("detach — this object no longer depends on that thing", () => {
 
 // ---------------------------------------------------- the reverse lookup
 
-describe("task/doc/loop show compose mirrors[] by reverse lookup", () => {
-  it("finds every mirror attached to the object, on all three kinds", async () => {
+describe("task/doc show compose mirrors[] by reverse lookup", () => {
+  it("finds every mirror attached to the object, on both attachable kinds", async () => {
     const task = await makeTask();
     const doc = await kernel.createObject({ teamId: TEAM, kind: "doc", actor: human.actor, now: T0, title: "report" });
-    const loop = await kernel.createObject({ teamId: TEAM, kind: "loop", actor: human.actor, now: T0, title: "watcher", body: "charter" });
-    if (!doc.ok || !loop.ok) throw new Error("fixture");
+    if (!doc.ok) throw new Error("fixture");
     ok(await attach(task.id, { note: "the PR" }));
     ok(await attach(doc.object.id, { kind: "url", coords: "https://example.com/report" }));
-    ok(await attach(loop.object.id, { kind: "gsc-property", coords: "sc-domain:example.com" }));
 
     expect(ok(await api.showObject("task", task.id, human)).mirrors).toMatchObject([{ externalKind: "github-pr" }]);
     expect(ok(await api.showObject("doc", doc.object.id, human)).mirrors).toMatchObject([{ externalKind: "url" }]);
-    expect(ok(await api.showObject("loop", loop.object.id, human)).mirrors).toMatchObject([{ externalKind: "gsc-property" }]);
   });
 
   it("is empty, never absent, for an object with none", async () => {

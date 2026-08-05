@@ -44,7 +44,9 @@ afterAll(() => fs.rmSync(temp, { recursive: true, force: true }));
 beforeEach(async () => {
   await database.db.delete(schema.events);
   await database.db.delete(schema.objects);
+  await database.db.delete(legacySchema.runLeases);
   await database.db.delete(legacySchema.runs);
+  await database.db.delete(legacySchema.loops);
   await database.db.delete(legacySchema.machines);
 });
 
@@ -72,16 +74,23 @@ async function machine(): Promise<string> {
   return id;
 }
 
-/** A claimed run with a live lease — the state an agent request must be in. */
+/** A running run with a live DURABLE lease — the state an agent request must be
+ *  in. Authority is the `run_leases` row (the kernel's parallel lease columns
+ *  retired with its queue); the loop is a PRODUCTION loop, the only kind. */
 async function claimedRun(machineId: string) {
-  const loop = await kernel.createObject({ teamId: TEAM, kind: "loop", actor: { entrance: "human", actorId: "u-owner" }, now: T0, title: "Housekeeper", cron: "0 7 * * *", body: "charter" });
-  if (!loop.ok) throw new Error(loop.message);
+  const loopId = "loop-apiauth01";
+  await database.db.insert(legacySchema.loops).values({
+    id: loopId, userId: "u-owner", teamId: TEAM, machineId, name: "Housekeeper", cron: "0 7 * * *",
+    timezone: null, enabled: true, notify: "auto", allowControl: true, agent: "claude-code",
+    createdAt: T0, updatedAt: T0,
+  } as never);
   await database.db.insert(legacySchema.runs).values({
-    id: "run-3f8a20", loopId: loop.object.id, userId: TEAM, machineId, phase: "running", role: "exec", ts: T0,
-    queueState: "claimed", scope: "routine", reason: "clock", entrance: "clock",
-    leaseState: "active", leaseExpiresAt: new Date(Date.now() + 600_000).toISOString(),
+    id: "run-3f8a20", loopId, userId: "u-owner", machineId, phase: "running", role: "exec", ts: T0,
+    scope: "routine", reason: "clock", entrance: "clock",
   });
-  return { loopId: loop.object.id, runId: "run-3f8a20" };
+  const { registerRunLease } = await import("../gateway/tokens.js");
+  await registerRunLease({ runId: "run-3f8a20", loopId, machineId, role: "exec", allowControl: true });
+  return { loopId, runId: "run-3f8a20" };
 }
 
 const code = (r: Awaited<ReturnType<typeof auth.resolveApiContext>>) => (r.ok ? "OK" : r.error.code);
@@ -200,7 +209,8 @@ describe("run context is resolved against the runs table, never trusted from the
   it("refuses a mutation on a reclaimed lease but still serves the read that lets it report", async () => {
     const machineId = await machine();
     const { runId } = await claimedRun(machineId);
-    await database.db.update(legacySchema.runs).set({ leaseState: "terminal-grace" });
+    const { terminalizeLease } = await import("../gateway/tokens.js");
+    await terminalizeLease(runId);
     const headers = { Authorization: `Bearer ${DEVICE}`, "X-Loopany-Run": runId };
     expect(code(await auth.resolveApiContext(request(headers), "dual", true, SIGNED_OUT))).toBe("LEASE_LOST");
     expect((await auth.resolveApiContext(request(headers), "dual", false, SIGNED_OUT)).ok).toBe(true);
@@ -209,7 +219,7 @@ describe("run context is resolved against the runs table, never trusted from the
   it("refuses an expired lease", async () => {
     const machineId = await machine();
     const { runId } = await claimedRun(machineId);
-    await database.db.update(legacySchema.runs).set({ leaseExpiresAt: T0 });
+    await database.db.update(legacySchema.runLeases).set({ expiresAt: T0 });
     expect(code(await auth.resolveApiContext(request({ Authorization: `Bearer ${DEVICE}`, "X-Loopany-Run": runId }), "dual", true, SIGNED_OUT))).toBe("LEASE_LOST");
   });
 });

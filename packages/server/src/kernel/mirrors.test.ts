@@ -151,7 +151,7 @@ describe("a mirror has nowhere to record external state", () => {
     expect(statelessIssues("mirror", ["payload", "body"]).map((i) => i.path)).toEqual(["payload", "body"]);
     expect(statelessIssues("task", ["payload", "body"])).toEqual([]);
     expect(statelessIssues("doc", ["payload", "body"])).toEqual([]);
-    expect(statelessIssues("loop", ["payload", "body"])).toEqual([]);
+    expect(statelessIssues("doc", ["payload", "body"])).toEqual([]);
   });
 
   it("says WHY the field is missing rather than that it is unknown", () => {

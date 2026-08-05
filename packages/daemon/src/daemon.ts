@@ -36,84 +36,6 @@ const REPOLL_MS = 250;
  *  abort SIGTERMs their claude children; KILL_GRACE is 5s, so 10s covers it). */
 const DRAIN_MS = 10_000;
 
-// Retained until S5 removes the old protocol modules. S3's runtime no longer
-// consults it: every daemon polls the production machine endpoint.
-export { runsV2Enabled } from "./flags.js";
-
-interface RunsV2Claim {
-  run: null | { id: string; loopId: string; loopTitle?: string | null; scope: string };
-  charter?: string;
-  identityLine?: string;
-  scopeNote?: string | null;
-  /** A human's INSTRUCTION on a task this loop watches, in their own words
-   *  (`task tell`). Present only on a `directive` run. */
-  directive?: string | null;
-  /** A human's REPLY to a question this loop asked, in their own words.
-   *  Present only on an `answered` run. */
-  answer?: string | null;
-  task?: unknown;
-  execution?: {
-    agent?: "claude-code" | "codex" | "grok";
-    /** The loop's BOUND directory (absolute). The agent runs there. */
-    workdir?: string | null;
-    /** Set when the loop declares one: the daemon must not invent it. */
-    requireWorkdir?: boolean;
-    taskFile?: string | null;
-    workflow?: string | null;
-    model?: string | null;
-    allowControl?: boolean;
-    prevState?: unknown;
-  };
-  roots?: string[];
-}
-
-/** Adapt the new work order into the existing runner instead of forking its
- * workflow/spawn/retry machinery. */
-export function deliveryFromRunsV2(claim: RunsV2Claim, deviceToken: string): Delivery | undefined {
-  if (!claim.run) return undefined;
-  const execution = claim.execution ?? {};
-  const prompt = [
-    claim.charter ?? "",
-    claim.identityLine ?? `You are running for ${claim.run.loopId}.`,
-    claim.scopeNote ?? "",
-    // THE HUMAN'S OWN WORDS, VERBATIM and labelled by which conversation they
-    // belong to. Never summarized and never merged into the scope note: a run
-    // acting on an instruction has to be able to quote what it was told, and it
-    // must never mistake a reply-to-its-own-question for an unasked-for order.
-    claim.directive ? `A human left this DIRECTIVE, verbatim:\n\n${claim.directive}\n\nExecute the INTENT against reality first (external systems), then this kernel's records last.` : "",
-    claim.answer ? `A human answered, verbatim:\n\n${claim.answer}` : "",
-    claim.task ? `Task in scope:\n${JSON.stringify(claim.task, null, 2)}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-  return {
-    runId: claim.run.id,
-    runToken: deviceToken,
-    role: "exec",
-    loop: {
-      id: claim.run.loopId,
-      name: claim.run.loopTitle ?? claim.run.loopId,
-      workdir: execution.workdir ?? null,
-      taskFile: execution.taskFile ?? null,
-      workflow: execution.workflow ?? null,
-      model: execution.model ?? null,
-      allowControl: execution.allowControl === true,
-      agent: execution.agent ?? "claude-code",
-    },
-    prevState: execution.prevState ?? null,
-    // A loop BINDS its directory (captain ruling 2026-08-04) and the binding is
-    // machine-local, so the claiming machine may not have it. Creating it here
-    // would run the charter against an empty lookalike of the repo it names —
-    // silent misplacement. The run fails loudly instead; only the daemon's own
-    // scratch fallback (no bound workdir at all) is still created on demand.
-    requireWorkdir: execution.requireWorkdir === true || typeof execution.workdir === "string",
-    roots: claim.roots,
-    systemPrompt: "",
-    task: prompt,
-    runsV2: { deviceToken, reportTitle: `${claim.run.loopTitle ?? claim.run.loopId} run report` },
-  };
-}
-
 /** Read a `--flag value` from argv. */
 function flag(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -135,28 +57,6 @@ export function buildPollBody(
     ...(idle ? { wait: true } : {}),
     ...(watchDigest ? { watchDigest } : {}),
   };
-}
-
-/**
- * Rewrite claim body: machine identity (the claim is the ONLY call a v2 daemon
- * makes, so the server enrols + stamps presence from it, exactly as the legacy
- * poll does from `buildPollBody`) + the long-poll opt-in + this poll's
- * ATTESTATION.
- *
- * `inFlight` — the runs we are still executing — is the only thing that renews a
- * lease server-side. Sending it is what lets a run we LOST (crash, restart, a
- * `runDelivery` that threw) expire and be reclaimed, instead of being kept alive
- * forever by our own polls while nothing executes it. It is therefore sent
- * ALWAYS, empty included: an empty attestation is a real statement ("I am
- * running nothing"), not an absent one.
- */
-export function buildClaimBody(
-  info: Record<string, unknown>,
-  agent: string,
-  inFlight: Iterable<string>,
-): Record<string, unknown> {
-  const running = [...inFlight];
-  return { ...info, agent, wait: running.length === 0, inFlight: running };
 }
 
 /** Elapsed-based cadence: a response that consumed the poll interval was a

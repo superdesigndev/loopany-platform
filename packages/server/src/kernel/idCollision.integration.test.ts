@@ -32,7 +32,7 @@ const scripted = vi.hoisted(() => ({
   events: [] as string[],
   runs: [] as string[],
   derivedEvents: [] as string[],
-  clockRuns: [] as string[],
+  dueRuns: [] as string[],
 }));
 
 vi.mock("./ids.js", async (importOriginal) => {
@@ -44,8 +44,8 @@ vi.mock("./ids.js", async (importOriginal) => {
     organicEventId: (attempt = 0, random?: never) => scripted.events.shift() ?? actual.organicEventId(attempt, random),
     newRunId: (attempt = 0, random?: never) => scripted.runs.shift() ?? actual.newRunId(attempt, random),
     derivedEventId: (seed: unknown) => scripted.derivedEvents.shift() ?? actual.derivedEventId(seed),
-    clockRunId: (loopId: string, scheduledFor: string) =>
-      scripted.clockRuns.shift() ?? actual.clockRunId(loopId, scheduledFor),
+    dueRunId: (loopId: string, taskId: string, followUpAt: string) =>
+      scripted.dueRuns.shift() ?? actual.dueRunId(loopId, taskId, followUpAt),
   };
 });
 
@@ -57,6 +57,7 @@ let ids: typeof import("./ids.js");
 let schema: typeof import("../db/kernel-schema.js");
 let runQueue: typeof import("./runQueue.js");
 let runsTable: typeof import("../db/schema.js").runs;
+let loopsTable: typeof import("../db/schema.js").loops;
 
 const TEAM = "team-alpha";
 const AGENT = { entrance: "agent", actorId: "run-4a19c2" } as const;
@@ -77,6 +78,7 @@ beforeAll(async () => {
   schema = await import("../db/kernel-schema.js");
   runQueue = await import("./runQueue.js");
   runsTable = (await import("../db/schema.js")).runs;
+  loopsTable = (await import("../db/schema.js")).loops;
 });
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -86,10 +88,11 @@ beforeEach(async () => {
   scripted.events.length = 0;
   scripted.runs.length = 0;
   scripted.derivedEvents.length = 0;
-  scripted.clockRuns.length = 0;
+  scripted.dueRuns.length = 0;
   await db.db.delete(schema.events);
   await db.db.delete(schema.objects);
   await db.db.delete(runsTable);
+  await db.db.delete(loopsTable);
 });
 
 /** Watched by default — the kernel refuses a task with no loop on the hook
@@ -101,12 +104,15 @@ async function task(over: Record<string, unknown> = {}) {
   return r;
 }
 
-async function loop(over: Record<string, unknown> = {}) {
-  const r = await kernel.createObject({
-    teamId: TEAM, kind: "loop", actor: HUMAN, now: T0, title: "Housekeeper", cron: "0 7 * * *", nextFire: T1, ...over,
+/** A PRODUCTION loop — the only kind of loop there is. Trigger runs are queued
+ *  onto one, so the collision paths below need a real row to serialize on. */
+let loopSeq = 0;
+async function loop(over: { name?: string } = {}) {
+  const store = await import("../db/store.js");
+  return store.createLoop({
+    id: `loop-collide${loopSeq++}`, userId: "u_alice", teamId: TEAM, machineId: "m-collide",
+    name: over.name ?? "Housekeeper", cron: "0 7 * * *", timezone: null, enabled: true, notify: "auto",
   });
-  if (!r.ok) throw new Error(`fixture create failed: ${r.code} ${r.message}`);
-  return r.object;
 }
 
 // ------------------------------------------------------------------- organic
@@ -189,8 +195,8 @@ describe("an organic event id collision", () => {
 
 describe("an organic run id collision", () => {
   it("re-mints a manual fire rather than reporting the stranger's run as a replay", async () => {
-    const first = await loop({ key: "hk" });
-    const second = await loop({ key: "fu", title: "FollowUp" });
+    const first = await loop({ name: "Housekeeper" });
+    const second = await loop({ name: "FollowUp" });
     const one = await db.db.transaction(async (tx) =>
       runQueue.queueKernelRun(tx as never, { loop: first, now: T0, reason: "manual" }),
     );
@@ -210,7 +216,7 @@ describe("an organic run id collision", () => {
 
 describe("a derived id", () => {
   it("is NEVER re-minted: a repeated derivation resolves to the one row", async () => {
-    const id = ids.reportDocId("run-4a19c2");
+    const id = ids.derivedObjectId("doc", { runId: "run-4a19c2", kind: "report" });
     const first = await kernel.createObject({ id, teamId: TEAM, kind: "doc", actor: AGENT, now: T0, title: "report", body: "a" });
     const again = await kernel.createObject({ id, teamId: TEAM, kind: "doc", actor: AGENT, now: T1, title: "report", body: "a" });
 
@@ -221,16 +227,16 @@ describe("a derived id", () => {
   });
 
   it("survives a scripted organic mint entirely — the explicit id wins", async () => {
-    const id = ids.autoPauseTaskId("loop-4c1d77", "run-4a19c2");
+    const id = ids.derivedObjectId("task", { loopId: "loop-4c1d77", runId: "run-4a19c2" });
     scripted.objects.push("task-ffffff");
     const created = await kernel.createObject({ id, teamId: TEAM, kind: "task", actor: AGENT, now: T0, title: "paused", watcher: WATCHER });
     expect(created.ok && created.object.id).toBe(id);
   });
 
   it("keeps its derived event a single row across repeated derivations", async () => {
-    const l = await loop();
-    const one = await kernel.applyTransition({ objectId: l.id, transition: "auto-pause", actor: AGENT, now: T0, derivedFrom: { runId: "run-4a19c2", streak: 10 } });
-    const two = await kernel.applyTransition({ objectId: l.id, transition: "auto-pause", actor: AGENT, now: T1, derivedFrom: { runId: "run-4a19c2", streak: 10 } });
+    const t = (await task()).object;
+    const one = await kernel.applyTransition({ objectId: t.id, transition: "close", actor: AGENT, now: T0, note: "done", derivedFrom: { runId: "run-4a19c2" } });
+    const two = await kernel.applyTransition({ objectId: t.id, transition: "close", actor: AGENT, now: T1, note: "done", derivedFrom: { runId: "run-4a19c2" } });
 
     expect(one.ok && one.replay).toBe(false);
     expect(two.ok && two.replay).toBe(true);
@@ -285,28 +291,28 @@ describe("a derived-id truncation collision between two DIFFERENT seeds", () => 
   });
 
   it("refuses a SAME-TEAM transition event collision instead of dropping the transition as a replay", async () => {
-    const a = await loop({ key: "a", title: "Loop A" });
-    const b = await loop({ key: "b", title: "Loop B" });
-    // One id for two different objects' auto-pause seeds — the collision.
+    const a = (await task({ title: "Task A" })).object;
+    const b = (await task({ title: "Task B" })).object;
+    // One id for two different objects' close seeds — the collision.
     scripted.derivedEvents.push("ev-cccccccccccc", "ev-cccccccccccc");
 
-    const pauseA = await kernel.applyTransition({
-      objectId: a.id, transition: "auto-pause", actor: AGENT, now: T0, derivedFrom: { runId: "run-000001", streak: 10 },
+    const closeA = await kernel.applyTransition({
+      objectId: a.id, transition: "close", actor: AGENT, now: T0, note: "done", derivedFrom: { runId: "run-000001" },
     });
-    const pauseB = await kernel.applyTransition({
-      objectId: b.id, transition: "auto-pause", actor: AGENT, now: T1, derivedFrom: { runId: "run-000002", streak: 10 },
+    const closeB = await kernel.applyTransition({
+      objectId: b.id, transition: "close", actor: AGENT, now: T1, note: "done", derivedFrom: { runId: "run-000002" },
     });
 
-    expect(pauseA.ok && pauseA.replay).toBe(false);
-    expect((await kernelStore.getObject(undefined, a.id))!.status).toBe("paused");
-    // B's pause is REFUSED, not silently swallowed as A's replay.
-    expect(pauseB.ok).toBe(false);
-    expect(!pauseB.ok && pauseB.code).toBe("ID_COLLISION");
-    expect(!pauseB.ok && pauseB.message).toContain(a.id);
-    expect(!pauseB.ok && pauseB.hint).toMatch(/did NOT happen/);
-    // Loop B is still active — which is exactly what the refusal is telling the
-    // caller, instead of reporting a pause that never happened.
-    expect((await kernelStore.getObject(undefined, b.id))!.status).toBe("active");
+    expect(closeA.ok && closeA.replay).toBe(false);
+    expect((await kernelStore.getObject(undefined, a.id))!.status).toBe("closed");
+    // B's close is REFUSED, not silently swallowed as A's replay.
+    expect(closeB.ok).toBe(false);
+    expect(!closeB.ok && closeB.code).toBe("ID_COLLISION");
+    expect(!closeB.ok && closeB.message).toContain(a.id);
+    expect(!closeB.ok && closeB.hint).toMatch(/did NOT happen/);
+    // Task B is still open — which is exactly what the refusal is telling the
+    // caller, instead of reporting a close that never happened.
+    expect((await kernelStore.getObject(undefined, b.id))!.status).toBe("open");
     // A's timeline keeps its one event; B's never gained a foreign one.
     expect(await kernelStore.countEventsById(undefined, "ev-cccccccccccc")).toBe(1);
     expect((await kernelStore.listObjectEvents(undefined, b.id)).map((e) => e.kind)).toEqual(["object-created"]);
@@ -319,13 +325,13 @@ describe("a derived-id truncation collision between two DIFFERENT seeds", () => 
     // blinded here instead: the executor hands the latch an empty result and the
     // insert still meets the committed row. That is exactly the race's shape,
     // and the swallow branch has to make the same decision the latch would have.
-    const a = await loop({ key: "a", title: "Loop A" });
-    const b = await loop({ key: "b", title: "Loop B" });
+    const a = (await task({ title: "Task A" })).object;
+    const b = (await task({ title: "Task B" })).object;
     const shared = "ev-dddddddddddd";
     scripted.derivedEvents.push(shared, shared);
 
     const first = await kernel.applyTransition({
-      objectId: a.id, transition: "auto-pause", actor: AGENT, now: T0, derivedFrom: { runId: "run-1", streak: 10 },
+      objectId: a.id, transition: "close", actor: AGENT, now: T0, note: "done", derivedFrom: { runId: "run-1" },
     });
     expect(first.ok).toBe(true);
 
@@ -345,13 +351,13 @@ describe("a derived-id truncation collision between two DIFFERENT seeds", () => 
     };
 
     const second = await kernel.applyTransitionIn(blinded as never, {
-      objectId: b.id, transition: "auto-pause", actor: AGENT, now: T1, derivedFrom: { runId: "run-2", streak: 10 },
+      objectId: b.id, transition: "close", actor: AGENT, now: T1, note: "done", derivedFrom: { runId: "run-2" },
     });
 
     expect(second.ok).toBe(false);
     expect(!second.ok && second.code).toBe("ID_COLLISION");
     expect(!second.ok && second.message).toContain(a.id);
-    expect((await kernelStore.getObject(undefined, b.id))!.status).toBe("active");
+    expect((await kernelStore.getObject(undefined, b.id))!.status).toBe("open");
     // Proof the blinding worked and this is the BACKSTOP, not the latch: the
     // append ran, and its post-swallow re-read is a third select.
     expect(selects).toBeGreaterThanOrEqual(3);
@@ -400,12 +406,12 @@ describe("a derived-id truncation collision between two DIFFERENT seeds", () => 
 
 describe("a derived RUN id collision", () => {
   it("reports a foreign-loop id hit as taken, never as this loop's replay", async () => {
-    const a = await loop({ key: "a", title: "Loop A" });
-    const b = await loop({ key: "b", title: "Loop B" });
+    const a = await loop({ name: "Loop A" });
+    const b = await loop({ name: "Loop B" });
     const shared = "run-ffffffffffff";
     const base = {
-      userId: TEAM, machineId: "", phase: "pending", role: "exec", ts: T0,
-      queueState: "queued", scope: "routine", reason: "clock", entrance: "clock", scheduledFor: T1,
+      userId: "u_alice", machineId: "m-collide", phase: "pending", role: "exec", ts: T0,
+      scope: "routine", reason: "due", entrance: "clock", scheduledFor: T1,
     } as const;
 
     const first = await kernelStore.queueRun(undefined, { ...base, id: shared, loopId: a.id });
@@ -419,20 +425,20 @@ describe("a derived RUN id collision", () => {
     expect(replay.run!.loopId).toBe(a.id);
   });
 
-  it("fails a clock fire loudly rather than skipping the loop's run as a replay", async () => {
-    const a = await loop({ key: "a", title: "Loop A" });
-    const b = await loop({ key: "b", title: "Loop B" });
+  it("fails a DUE fire loudly rather than skipping the loop's run as a replay", async () => {
+    const a = await loop({ name: "Loop A" });
+    const b = await loop({ name: "Loop B" });
     const shared = "run-eeeeeeeeeeee";
-    scripted.clockRuns.push(shared, shared);
+    scripted.dueRuns.push(shared, shared);
 
     const first = await db.db.transaction(async (tx) =>
-      runQueue.queueKernelRun(tx as never, { loop: a, now: T0, reason: "clock", scheduledFor: T1 }),
+      runQueue.queueKernelRun(tx as never, { loop: a, now: T0, reason: "due", scheduledFor: T1, due: { taskId: "task-aaa111", followUpAt: T1 } }),
     );
     expect(first.outcome).toBe("queued");
 
     await expect(
       db.db.transaction(async (tx) =>
-        runQueue.queueKernelRun(tx as never, { loop: b, now: T0, reason: "clock", scheduledFor: T1 }),
+        runQueue.queueKernelRun(tx as never, { loop: b, now: T0, reason: "due", scheduledFor: T1, due: { taskId: "task-bbb222", followUpAt: T1 } }),
       ),
     ).rejects.toThrow(/already belongs to/);
     // Loop B queued nothing; loop A's run is untouched.
@@ -441,21 +447,25 @@ describe("a derived RUN id collision", () => {
     expect(rows[0]!.loopId).toBe(a.id);
   });
 
-  it("keeps the fire DUE when the tick refuses it, and never starves the other loops", async () => {
-    // The tick must isolate one loop's identity fault: the healthy loop queues
-    // and advances, the collided one is counted, logged, and left due — a lost
-    // fire would be the silent half all over again.
-    const early = await loop({ key: "a", title: "Loop A", nextFire: "2026-08-03T07:00:00.000Z" });
-    const late = await loop({ key: "b", title: "Loop B", nextFire: "2026-08-03T07:30:00.000Z" });
+  it("keeps the fire DUE when the scan refuses it, and never starves the other tasks", async () => {
+    // The scan must isolate one fire's identity fault: the healthy task queues,
+    // the collided one is counted, logged, and left DUE — a lost fire would be
+    // the silent half all over again. Nothing is consumed either way, which is
+    // what makes the level trigger safe.
+    const one = await loop({ name: "Loop A" });
+    const two = await loop({ name: "Loop B" });
+    const early = (await task({ title: "early", watcher: one.id, followUpAt: "2026-08-03T07:00:00.000Z" })).object;
+    const late = (await task({ title: "late", watcher: two.id, followUpAt: "2026-08-03T07:30:00.000Z" })).object;
     const shared = "run-dddddddddddd";
-    scripted.clockRuns.push(shared, shared);
+    scripted.dueRuns.push(shared, shared);
 
-    const result = await runQueue.tickRunClock(new Date("2026-08-03T08:00:00.000Z"));
+    const result = await runQueue.tickDueTasks(new Date("2026-08-03T08:00:00.000Z"));
 
-    expect(result).toMatchObject({ scanned: 2, queued: 1, failed: 1 });
+    expect(result).toMatchObject({ queued: 1, failed: 1 });
     expect((await db.db.select().from(runsTable))).toHaveLength(1);
-    // The healthy loop advanced its cursor; the refused one did not.
-    expect((await kernelStore.getObject(undefined, early.id))!.nextFire).not.toBe("2026-08-03T07:00:00.000Z");
-    expect((await kernelStore.getObject(undefined, late.id))!.nextFire).toBe("2026-08-03T07:30:00.000Z");
+    // Neither task was mutated: the follow-up date is the level, and a level
+    // trigger consumes nothing.
+    expect((await kernelStore.getObject(undefined, early.id))!.followUpAt).toBe("2026-08-03T07:00:00.000Z");
+    expect((await kernelStore.getObject(undefined, late.id))!.followUpAt).toBe("2026-08-03T07:30:00.000Z");
   });
 });

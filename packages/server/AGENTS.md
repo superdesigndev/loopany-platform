@@ -459,523 +459,456 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   unauthenticated). The destination restriction closes the SSRF regardless of creator;
   tightening create to team-owner-only is a separate change.
 
-## Rewrite kernel (`src/kernel/` + `db/kernel-schema.ts`) — landing unit 2
+## The kernel (`src/kernel/` + `db/kernel-schema.ts`)
 
-The rewrite's storage + kernel skeleton. The loop migration COPIES (`loops` is never
-touched). Units 3-4 add the scheduler/claim path and object HTTP/CLI verbs while the
-legacy runtime remains alongside them. Contracts:
-`data/loopany-rewrite-design/design.md` + `data/api-spec-s3/report.md` (§4 kernel
-transactions, §5 DDL, §6 scheduler); the harvest is the graph line's `src/graph/ids.ts`
-(`fm/graph-clockshadow-c1`).
+`objects` + `events` hold the workspace's own entities beside the shipping
+machines/loops/runs schema. Convergence retired the `loop` kind: **the shipping
+product's `loops` row is THE loop**, and `objects.watcher` / `created_by_loop`
+are plain text references to one. Three kinds remain — **task, doc, mirror**.
+Contracts: `data/loopany-rewrite-design/design.md` + `data/api-spec-s3/report.md`;
+the convergence design is `data/rw-converge-s1/report.md`.
 
-- **`kernel/applyTransition.ts` is THE single code exit for `objects.status`** — three
-  entries (`createObject` / `applyUpdate` / `applyTransition`), each also exposed as
-  `…In(tx, …)` so unit 4's verdict and §6.6's failure backoff can COMPOSE a bigger
-  transaction. Rules it welds: the kernel NEVER reads a clock (`now` is a required
-  input), the row is locked `FOR UPDATE` before any guard, every mutation writes its
-  event with a `{old,new}` diff in the SAME transaction, and a no-op writes no event.
-  Refusals are typed `{ok:false, code, message, issues, hint}` (spec §3.1) with the
-  legal move in `hint` — never thrown, never retried in-seam.
-- **The kind firewalls live at TWO altitudes and both are tested**: `kernel/types.ts`
-  (pure, teaching refusal) and four DDL CHECKs (`objects_cron_loop_only` /
-  `_workdir_loop_only` / `_task_facets_only` / `_format_doc_only`, plus
-  `objects_closed_pair`). Asserting only
-  the verb would let the floor evaporate on a refactor. Drizzle wraps driver errors as
-  a generic "Failed query: …", so assert the constraint NAME off `err.cause.constraint`
-  (SQLSTATE 23514) — `kernel.integration.test.ts` `expectCheckViolation` is the helper.
-- **Dedup is by identity, never by a window.** `kernel/ids.ts` derives a re-derivable
-  row's id from its identity alone (no clock, no attempt counter, no nonce) and every
-  such insert is `ON CONFLICT DO NOTHING`. Changing a seed shape FORKS identity and
-  silently breaks dedup — treat the seeds in `ids.ts` as frozen.
-- **Ids are SHORT and kind-prefixed** (design §8 / CLI spec §5.1: `task-7f3a91`), and
-  the two halves are DELIBERATELY different widths — `kernel/ids.ts`'s header owns the
-  reasoning, read it before touching a width. In one line: an ORGANIC id is six hex
-  because a collision is re-mintable (bounded retry with fresh randomness, inside the
-  same transaction, widening after a run of misses — `createObjectIn`'s mint loop,
-  `appendOrganicEvent`, `queueKernelRun`'s manual branch), while a DERIVED id is twelve
+- **`kernel/applyTransition.ts` is THE single code exit for `objects.status`** —
+  three entries (`createObject` / `applyUpdate` / `applyTransition`), each also
+  exposed as `…In(tx, …)` so a caller can COMPOSE a bigger transaction. Rules it
+  welds: the kernel NEVER reads a clock (`now` is a required input), the row is
+  locked `FOR UPDATE` before any guard, every mutation writes its event with a
+  `{old,new}` diff in the SAME transaction, and a no-op writes no event. Refusals
+  are typed `{ok:false, code, message, issues, hint}` with the legal move in
+  `hint` — never thrown, never retried in-seam.
+- **There is exactly ONE transition: a task's `close`.** The four loop moves
+  (`pause`/`auto-pause`/`resume`/`retire`) retired with the loop kind — a loop's
+  operational lifecycle is the shipping product's (`enabled`, a closed loop's
+  `completedAt`, hard delete), and two lifecycle vocabularies over one loop would
+  be drift by construction. `kernel/types.ts` `TRANSITIONS` is the whole table.
+- **The kind firewalls live at TWO altitudes and both are tested**:
+  `kernel/types.ts` (pure, teaching refusal) and the DDL CHECKs
+  (`objects_task_facets_only` / `_parent_task_only` / `_format_doc_only` /
+  `_mirror_facets_only` / `_mirror_pointer` / `_mirror_stateless` /
+  `_closed_pair`). Asserting only the verb would let the floor evaporate on a
+  refactor. Drizzle wraps driver errors as a generic "Failed query: …", so assert
+  the constraint NAME off `err.cause.constraint` (SQLSTATE 23514) —
+  `kernel.integration.test.ts` `expectCheckViolation` is the helper.
+- **Dedup is by identity, never by a window.** `kernel/ids.ts` derives a
+  re-derivable row's id from its identity alone (no clock, no attempt counter, no
+  nonce) and every such insert is `ON CONFLICT DO NOTHING`. Changing a seed shape
+  FORKS identity and silently breaks dedup — treat the seeds in `ids.ts` as
+  frozen.
+- **Ids are SHORT and kind-prefixed** (`task-7f3a91`), and the two halves are
+  DELIBERATELY different widths — `kernel/ids.ts`'s header owns the reasoning,
+  read it before touching a width. In one line: an ORGANIC id is six hex because
+  a collision is re-mintable (bounded retry with fresh randomness, inside the
+  same transaction, widening after a run of misses), while a DERIVED id is twelve
   because it may NEVER be re-minted (that purity IS replay idempotency) and its
-  collision would otherwise be SILENT — swallowed by the same `ON CONFLICT DO NOTHING`
-  that implements dedup, handing back a stranger's row. Both halves are pinned by
-  `ids.test.ts` + `idCollision.integration.test.ts` (which scripts the mint through a
-  partial mock of `ids.js` to stage a collision on demand). **Write an organic event
-  through `applyTransition.ts`'s exported `appendOrganicEvent`, never a bare
-  `organicEventId(...)` inline** — the ladder lives in that one helper, so an inline
-  mint silently opts its fact out of the retry and a taken id is swallowed rather than
-  redrawn (`objectApi.runLoopNow`'s manual `run-queued` event is the out-of-module
-  caller this exists for). Two invariants ride on the
-  widths and are pinned: no organic rung may equal `DERIVED_HEX` (equal widths would let
-  the two families produce the same id STRING, reopening a cross-family silent merge),
-  and the `attempt` parameter — which used to be a TIMESTAMP, same type — is
-  domain-checked to `[0, ORGANIC_MINT_ATTEMPTS)`, so a stale `newObjectId(kind, nowMs)`
-  call throws instead of quietly minting 16-hex ids forever.
-- **Width is NOT the only remedy for a derived collision — NOTICING is.** Purity forbids
-  re-minting a derived id; it does not forbid checking that the row a swallowed insert
-  resolved to is the identity the seed named. Four guards do exactly that and refuse
-  loudly (`ID_COLLISION`, logged at ERROR via `applyTransition.ts` `failCollision`;
-  `runQueue.ts` throws, rolling its transaction back): `createObjectIn`'s explicit-id
-  conflict path refuses a `found.teamId !== teamId` (this closed a cross-team data
-  handoff); `applyTransitionIn`'s derived-event latch AND its post-append swallow both
-  refuse a prior event on a different object (`objectId` is IN the seed, so a foreign
-  holder is a certain collision, never a replay); `kernelStore.queueRun` reports a
-  foreign-loop id hit as the new outcome `id-taken` rather than `replay` (organic manual
-  fires re-mint on it, derived clock fires fail loud); and `runQueue.appendDerivedEvent`
-  wraps every derived `store.appendEvent` so a fact can never land on a stranger's
-  timeline. `tickRunClock` isolates the failure per loop (`TickResult.failed`) and
-  deliberately does NOT advance that loop's cursor, so the fire stays due instead of
-  being silently consumed. THE ONE RESIDUE, pinned by its own test: two seeds colliding
-  inside ONE team on ONE object still resolve as a replay — telling those apart needs the
-  seed (or its 64-hex hash) persisted in a column, held as a separate schema decision.
-- **No id is a clock.** `events.seq` is the log's only ordering authority and every
-  reader already uses it. `listTasks`/`listLoops` still paginate `ORDER BY objects.id`
-  with a `>` cursor — a total order, so the cursor is exact — but the row order is now
-  arbitrary rather than incidentally creation-ordered; the composed views that care
-  (`kernel/views.ts`) order by `createdAt`/`closedAt` explicitly and are unaffected.
-- **`events.seq` IS sparse — the spec is wrong about this.** §5.4 claims a swallowed
-  insert consumes no identity value; Postgres draws it before detecting the conflict, so
-  gaps exist. Harmless for `WHERE seq > :since ORDER BY seq`, but no consumer may read a
-  gap as a dropped event or derive a count from a delta. Pinned by the integration test.
-- **`runs.state` was already taken** (the per-run metrics jsonb), so spec §5.3's run
-  lifecycle column ships as **`queue_state`**; every other queue/lease column keeps its
-  spec name. All are nullable and NULL on legacy rows. The temporary
-  `runs_one_queued_idx` retired in convergence S2; one-open-run discipline now comes
-  from the transactional lookup described in the S2 note below.
-- **`pnpm kernel:migrate-loops [--dry-run] [--team <id>]`** (`kernel/loopMigration.ts`)
-  copies each loop into one `objects` row. Insert-only by design: it never UPDATES an
-  already-migrated row, because that would overwrite whatever the kernel side has since
-  done to it. Mapping is spec §5.5; the one judgment call is `charterFromTaskFile`
-  (task file `## Spec` section, else the whole file), and `taskFileContent` is the one
-  column deliberately not copied into `payload`.
+  collision would otherwise be SILENT. Both halves are pinned by `ids.test.ts` +
+  `idCollision.integration.test.ts`. **Write an organic event through
+  `applyTransition.ts`'s exported `appendOrganicEvent`, never a bare
+  `organicEventId(...)` inline** — the ladder lives in that one helper. Two
+  invariants ride on the widths and are pinned: no organic rung may equal
+  `DERIVED_HEX`, and the `attempt` parameter is domain-checked to
+  `[0, ORGANIC_MINT_ATTEMPTS)`.
+- **Width is NOT the only remedy for a derived collision — NOTICING is.** Four
+  guards check that the row a swallowed insert resolved to is the identity the
+  seed named, and refuse loudly (`ID_COLLISION`, logged at ERROR via
+  `failCollision`): `createObjectIn`'s explicit-id conflict path refuses a foreign
+  `teamId`; `applyTransitionIn`'s derived-event latch AND its post-append swallow
+  both refuse a prior event on a different object; `kernelStore.queueRun` reports
+  a foreign-loop id hit as `id-taken`; and `runQueue.appendDerivedEvent` wraps
+  every derived append so a fact can never land on a stranger's timeline. THE ONE
+  RESIDUE, pinned by its own test: two seeds colliding inside ONE team on ONE
+  object still resolve as a replay — telling those apart needs the seed persisted
+  in a column, held as a separate schema decision.
+- **No id is a clock.** `events.seq` is the log's only ordering authority.
+  `listTasks` paginates `ORDER BY objects.id` with a `>` cursor (a total order, so
+  the cursor is exact) but the row order is arbitrary; the composed views order by
+  `createdAt`/`closedAt` explicitly.
+- **`events.seq` IS sparse.** Postgres draws the identity value before detecting
+  a conflict, so a swallowed `ON CONFLICT DO NOTHING` burns one. Harmless for
+  `WHERE seq > :since ORDER BY seq`, but no consumer may read a gap as a dropped
+  event or derive a count from a delta. Pinned by the integration test.
 
-## Rewrite verb endpoints + CLI (`src/kernel/objectApi.ts`) — landing unit 4
+## Verb endpoints, the artifact seam, and the auth split (`src/kernel/objectApi.ts`)
 
 - `kernel/artifactSeam.ts` is the single server-owned object-artifact seam: closed
-  top-level keys per kind, BOM/CRLF normalization, date forms, projections, and the
-  deterministic did-you-mean refusal. Keep kind knowledge out of `artifact-format`.
+  top-level keys per kind (`KIND_KEYS`, task + doc — a mirror is not authored as a
+  file, and neither is a loop), BOM/CRLF normalization, date forms, projections,
+  and the deterministic did-you-mean refusal. Keep kind knowledge out of
+  `artifact-format`. A `cron:`/`workdir:` in front matter is an UNKNOWN_KEY whose
+  teaching names the shipping surface (`loopany edit <loop-id>`).
 - `kernel/apiAuth.ts` resolves invisible `X-Loopany-Run` context once into
-  run→loop→team/provenance. `LOOPANY_RUN_ID` is attached by the daemon CLI, never an
-  argument. Human-only verdict/inbox reject any run context.
-- **The human/agent split keys on RUN-CONTEXT presence, never on the credential.** It is
-  a positive test for `X-Loopany-Run` (CLI spec §2.2). This is load-bearing, not a
-  style note: the ordinary human runs the CLI on the SAME machine the daemon is
-  registered on, so a device token is present on every connected machine — keying on it
-  made `loopany inbox`/`answer` refuse `NOT_HUMAN` for exactly the person the endpoint
-  serves (review f3 B1). With no run context a device credential is the DAEMON class,
-  and §2.6 gives it two answers: `NO_RUN_CONTEXT` on a dual endpoint, `UNAUTHORIZED` on
-  a human-only one. The CLI belts-and-braces it by not attaching the token on
-  `inbox`/`answer` at all (`HUMAN_COMMANDS` in `kernel-cli.ts`).
-- **`resolveApiContext` has its OWN integration test** (`apiAuth.integration.test.ts`)
-  driving real `Request`s against real machine/run/lease rows, one case per §2.6 cell.
-  B1 survived 47 CLI goldens and 33 object-API tests because the goldens stub `fetch`
-  and the API tests hand-construct `ApiContext` — neither touches this seam. Only the
-  session half is injected (`SessionSeam`), since it is bound to the framework's
-  request-scoped context; everything the seam actually decides is driven for real.
-- `kernel/objectApi.ts` owns the transactional task/doc/evolve/governance/inbox/verdict
-  verbs. Verdict clears the question, writes the human event, and queues R-answer in
-  one transaction; approval verification is ownership-first, then event/team, human
-  entrance, and approving-task ownership.
+  run→loop→team/provenance. **The human/agent split keys on RUN-CONTEXT presence,
+  never on the credential** — a positive test for `X-Loopany-Run` (CLI spec §2.2).
+  This is load-bearing: the ordinary human runs the CLI on the SAME machine the
+  daemon is registered on, so keying on the token made `loopany inbox`/`answer`
+  refuse `NOT_HUMAN` for exactly the person the endpoint serves. With no run
+  context a device credential is the DAEMON class: `NO_RUN_CONTEXT` on a dual
+  endpoint, `UNAUTHORIZED` on a human-only one. The CLI belts-and-braces it by not
+  attaching the token on `inbox`/`answer` (`HUMAN_COMMANDS` in `kernel-cli.ts`).
+- **Run authority is the durable `run_leases` row**, the ONE run credential — the
+  kernel's parallel queue/lease columns retired at S5. A terminal-grace lease
+  serves READS only, so a woken machine can still read what it was working on
+  while only its final report reconciles. `resolveApiContext` has its OWN
+  integration test (`apiAuth.integration.test.ts`) driving real `Request`s against
+  real machine/run/lease rows, one case per §2.6 cell; only the session half is
+  injected.
+- `kernel/objectApi.ts` owns the transactional task/doc/inbox/verdict/directive
+  verbs plus `runLoopNow` (the manual fire on a PRODUCTION loop). Loop CRUD,
+  lifecycle and charter governance are GONE — a loop is created with `loopany new`
+  and changed with `loopany edit`.
 - Every refusal uses the flat `{code,message,issues,hint}` envelope from
-  `kernel/refusals.ts`. `routes/api.events.stream.ts` is a team-scoped DB-tail SSE
-  invalidation stream; authoritative content is always refetched from object/view APIs.
-- **`kernel/refusals.ts` is a CATALOGUE, not a code list**: every `RefusalCode` has a
-  first-class `{message, hint}` template, so a refusal can never reach an agent as a
-  generic envelope. Adding a code without a template fails to typecheck;
-  `refusals.test.ts` is the guard table (CLI spec §8) and asserts each entry renders a
-  real sentence, a real hint, and a 4xx status. Call sites override with the offending
-  value; they may never emit a bare code.
-- **The human-only question-clear is covered at THREE altitudes** and all three are
-  tested: the route (`resolveApiContext(…, "human")`), the field surface
-  (`patchTask`/`replaceFromArtifact`), and `applyUpdateIn` itself. The unit-2 review's
-  NB-1 asked for two; the third is free because the kernel guard is entrance-based.
-  Note the file path is a clear in disguise — dropping `needs_human` from a whole-file
-  replacement discards a live question, so it is refused too.
-- **A verdict JOINS only a not-yet-claimed run, it never refuses the human.** The
-  transactional lookup covers kernel `queued` / production `pending`; an executing
-  run has already consumed its delivery, so a new trigger gets a fresh pending row
-  and the poll guard holds it until the sibling finishes. This preserves the human's
-  context without allowing two agents on one loop.
-- Two response fields are ADDITIVE to API spec §1.5, and both exist for the CLI:
-  `total` (so a truncated page prints `count: N of T total` instead of clipping
-  silently) and `viewerLoop` (the caller's own loop id from run context, so a hint can
-  inline a real id instead of a placeholder).
+  `kernel/refusals.ts`, a CATALOGUE rather than a code list: every `RefusalCode`
+  has a first-class `{message, hint}` template, so a refusal can never reach an
+  agent as a generic envelope. Adding a code without a template fails to
+  typecheck; `refusals.test.ts` is the guard table and also pins that the retired
+  loop-governance codes (`NOT_YOUR_LOOP`, `APPROVAL_*`, `RETIRED`, `BAD_CRON`)
+  never come back — a code nothing can produce teaches a refusal nobody receives.
+- **`refusalResponse` floors an unmapped code at 400.** A code with no
+  `REFUSAL_STATUS` row resolved to `undefined`, which `Response.json` renders as
+  **200** — a refusal reaching the CLI as a success at exit 0. Do not remove it.
+- **The human-only question-clear is covered at THREE altitudes** and all three
+  are tested: the route (`resolveApiContext(…, "human")`), the field surface
+  (`patchTask`/`replaceFromArtifact`), and `applyUpdateIn` itself. The file path
+  is a clear in disguise — dropping `needs_human` from a whole-file replacement
+  discards a live question, so it is refused too.
+- **A verdict JOINS only a not-yet-executing run, it never refuses the human.**
+  An executing run has already consumed its delivery, so a new trigger gets a
+  fresh pending row and the poll guard holds it until the sibling finishes.
+- `routes/api.events.stream.ts` is a team-scoped DB-tail SSE invalidation stream;
+  authoritative content is always refetched from object/view APIs.
+- Two response fields are ADDITIVE to API spec §1.5 and both exist for the CLI:
+  `total` (so a truncated page prints `count: N of T total`) and `viewerLoop`
+  (the caller's own loop id from run context, so a hint can inline a real id).
+
+## Trigger runs — the ONE run world (`src/kernel/runQueue.ts`)
+
+A kernel fact (a due task, a human's answer, a human's directive, a manual fire)
+queues an **ordinary production pending run**: `phase: pending`, `role: exec`, the
+watcher loop's real `userId`/`machineId`, plus the provenance columns `reason` /
+`scope` / `trigger_event_id`. The shipping poll claims it, the shipping lease
+authorizes it, the shipping sweep guards it and the shipping report finalizes it.
+
+- `queueKernelRun` is the ONE mint point. Derived-id idempotency is the whole
+  safety of the level triggers: `dueRunId` / `answeredRunId` / `directiveRunId`
+  are pure functions of the trigger's identity, so one due instant, one verdict
+  and one directive each queue exactly ONE run however many passes see them.
+  Those seeds are FROZEN. A manual fire is ORGANIC (pressing the button twice is
+  two real facts) and re-mints on a taken id.
+- **A derived id may never be re-minted, so a collision is NOTICED**: an id
+  already held by ANOTHER loop is two identities truncated onto one id, not a
+  replay — it fails loudly and rolls back rather than reporting a stranger's run.
+- Queueing locks the authoritative `loops` row, then joins only a
+  not-yet-executing run (`openRunForLoop`): a trigger arriving during execution
+  queues separately, the production poll holds it while a sibling is running, and
+  the sweep does not classify that guard-held row as never claimed.
+  `runs.claimable_at` (migration `0009`) is what makes the hold safe — a row held
+  behind a running sibling begins its never-claimed timeout at the first ELIGIBLE
+  poll, not at creation.
+- A due instant's failed/canceled row re-arms with the SAME frozen id once the
+  loop's pending slot clears; an open or completed row remains the idempotency
+  floor. Cron supersede coalesces only provenance-free cadence rows; trigger rows
+  survive.
+- **`DueTaskScheduler` is the kernel's ONE remaining clock** and is always armed
+  at boot — a loop's cadence belongs to the production scheduler, but a task's
+  follow-up date is a kernel fact nothing over there knows about.
+- Every terminal shipping path appends the frozen derived `run-finished` event for
+  a provenance-carrying row (`appendProductionRunFinished`, including sweep/reclaim
+  and the 7-day skipped backstop), keeping workspace SSE/timelines live. Event
+  append is best-effort-with-log and can never block lease retirement. Ordinary
+  production cron/edit/evolve history stays event-silent.
+- Delivery resolves scoped task/event context for a trigger row and includes the
+  human's directive or answer VERBATIM as untrusted trigger data; the legacy
+  daemon spawn path exports `LOOPANY_RUN_ID` alongside `LOOPANY_RUN_TOKEN`.
+- The shipping run-now is immediate even for a disabled loop: it clears any
+  deferred `nextRunAt`, queues one production run, and leaves `enabled` false. A
+  second fire while that run is pending returns `alreadyQueued`. The retired
+  deferred-fire-on-enable behavior must not return.
 
 ## The rewrite CLI (`packages/daemon/src/kernel-{cli,render,help}.ts`)
 
-- Three modules, split so the goldens are testable without a server: `kernel-render.ts`
-  is the PURE axi/TOON grammar (quoting rule, typed lists, the five-part teaching
-  envelope, status→slug, status→exit) with no I/O and no clock; `kernel-help.ts` is ONE
-  table behind the `--help` screen, the `allowed[N]:` line and the local grammar check,
-  so those three cannot drift; `kernel-cli.ts` routes, validates flags, and renders.
-- **The CLI validates FLAGS, never front matter.** A flag is the CLI's own surface, so
-  unknown flags / contradictory flags / `self` where a loop id belongs / a signed
-  `--since` / a flag-and-file conflict are refused locally at exit 2 before any side
-  effect. Front-matter validation stays server-side at the one artifact seam — a
-  client-side validator would be a second copy of the closed key set.
-- `wrote:`/`expected:` print VERBATIM (unquoted); only the `error:` sentence is quoted.
-  They are the literal "you wrote / expected" pair an agent diffs, not prose it parses.
-- Exit codes are a pure function of the HTTP status (`exitForStatus`): 404→3,
-  401/429/5xx→1, other 4xx→2. **401/429 are exit 1, not 2** — neither is a mistake in
-  the command and rewriting it cannot fix either (adjudicated against the API spec's
-  blanket "all 4xx exit 2", `decisions-2026-08-03.md` item 11).
-- `route.ts` `KERNEL_VERBS` sends `task|doc|loop|inbox|answer` down this path BEFORE the
-  legacy run-token callback branch: the rewrite verbs authenticate with the device
-  credential plus an invisible `LOOPANY_RUN_ID` header, not the legacy run bearer.
+- Three modules, split so the goldens are testable without a server:
+  `kernel-render.ts` is the PURE axi/TOON grammar (quoting rule, typed lists, the
+  five-part teaching envelope, status→slug, status→exit) with no I/O and no clock;
+  `kernel-help.ts` is ONE table behind the `--help` screen, the `allowed[N]:` line
+  and the local grammar check; `kernel-cli.ts` routes, validates flags, renders.
+- **The CLI validates FLAGS, never front matter.** Unknown flags / contradictory
+  flags / `self` where a loop id belongs / a signed `--since` / a flag-and-file
+  conflict are refused locally at exit 2 before any side effect. Front-matter
+  validation stays server-side at the one artifact seam.
+- `wrote:`/`expected:` print VERBATIM (unquoted); only the `error:` sentence is
+  quoted. Exit codes are a pure function of the HTTP status (`exitForStatus`):
+  404→3, 401/429/5xx→1, other 4xx→2. **401/429 are exit 1, not 2** — neither is a
+  mistake in the command and rewriting it cannot fix either.
+- `route.ts` `KERNEL_VERBS` sends `task|doc|inbox|answer|mirror` down this path
+  BEFORE the legacy run-token callback branch.
+- **Every `loop *` command is a local `SURFACE_MOVED` teaching pointer**
+  (`kernel-help.ts` `loopSurfacePointer`), answered before auth, network or I/O
+  and performing no request. It names the production equivalent per verb
+  (`loopany loops` / `show` / `new` / `edit`). Do not re-add a `loop *` request
+  path: there is one loop surface and it is the shipping product's.
 
-**Known spec drift, deliberately unreconciled** (the two blueprints disagree; the API
-spec owns the wire, so it wins):
-- `loop evolve` takes a whole loop ARTIFACT (front matter + body) per API spec §1.12,
-  not the bare charter body CLI spec §6.9/G24 describes. The cron-equal-is-a-no-op /
-  cron-differs-is-`APPROVAL_REQUIRED` rule is unimplementable without front matter.
-- Evolve therefore also writes `title`/`payload` (API spec §1.12 lists them as
-  non-governance), where CLI spec §6.9 says "the body only".
-- The CLI prints `event: ev-…` without CLI spec §6.5's `(seq N)`: mutation responses
-  carry the event id only (API spec §1.7), and inventing a second lookup for a display
-  parenthesis is not worth a round trip.
+## The workspace UI (`src/kernel/views.ts` + `src/components/workspace/`)
 
-## Rewrite workspace UI (`src/kernel/views.ts` + `src/components/workspace/`) — landing unit 5
-
-The five screens over the rewrite kernel, mounted at the flagged `/dev/workspace`
+Five screens over the kernel, mounted at the flagged `/dev/workspace`
 (`lib/rewriteWorkspace.ts`: local dev always, a deployed build only under
-`LOOPANY_REWRITE_UI`). The shipping dashboard is untouched — its own route, its own
-stylesheet (`styles/workspace.css`, loaded `?url`, every rule scoped under
+`LOOPANY_REWRITE_UI`). The shipping dashboard is untouched — its own route, its
+own stylesheet (`styles/workspace.css`, every rule scoped under
 `.loopany-workspace`), no import from any shipping surface.
 
-- **`kernel/views.ts` is the BFF layer**: one composed, READ-ONLY endpoint per screen
-  (`/api/views/{inbox,tasks,task/:id,loops,loop/:id,docs,doc/:id,system-graph}`), each
-  gated `resolveApiContext(request, "human")` — a run carrying run context is refused, so
-  a view can never become the composed worklist design §6 forbids. Every payload carries
-  `cursorSeq` (the `events.seq` it was assembled at); the client skips a refetch for any
-  stream message at or below it, which is what keeps a refetch from racing the stream.
-- **The §6 inbox union is single-sourced**: `objectApi.inboxUnion`/`inboxCounts` back BOTH
-  the raw `/api/inbox` (human CLI) and `/api/views/inbox` (the screen). Changing the
-  safety floor in one place changes it everywhere; `views.integration.test.ts` pins the
-  surviving branch AND the near misses the two retired arms used to catch (a due task,
-  an old one with no follow-up, a closed one) — see the watcher-rule section below.
-- **Freshness** (`components/workspace/live.ts`): ONE team-scoped `EventSource`, explicit
-  resume at `?since=<highest seq seen>`, `event: reset` → full refetch, two errors inside
-  60 s → 30 s polling while the stream keeps retrying. Every external is an injected seam
-  (`LiveDeps`), so the whole state machine is unit-tested with no network. **`start()`
-  must stay restartable** — StrictMode mounts, tears down and remounts the provider, and a
-  bus that treated `stop()` as terminal was permanently stuck on "connecting".
-- **Two render paths, and the wall between them** (`components/workspace/Render.tsx`):
-  markdown → react-markdown with NO `rehype-raw` (raw inline HTML is simply not rendered —
+- **`kernel/views.ts` is the BFF layer**: one composed, READ-ONLY endpoint per
+  screen (`/api/views/{inbox,tasks,task/:id,loops,loop/:id,docs,doc/:id,system-graph}`),
+  each gated `resolveApiContext(request, "human")`. Every payload carries
+  `cursorSeq` (the `events.seq` it was assembled at); the client skips a refetch
+  for any stream message at or below it, which is what keeps a refetch from racing
+  the stream.
+- **Loops are read from the production roster.** `kernel/loopRefs.ts` is the ONE
+  loop-reference resolver and its rulings live in that file's header; the two a
+  later change breaks by softening: loop ids are used AS-IS (no alias table — a
+  converged loop kept its short id verbatim, and both shapes are opaque `loop-`
+  text), and **a dangling reference resolves to a TOMBSTONE, never to `null`**
+  (`null` means "no watcher", a state the watcher rule abolished; `source:
+  "missing"` means "the loop is gone", which is a fact).
+  `components/workspace/loopLabel.ts` is the one render.
+  A converged loop's kernel EVENTS remain addressable by the same verbatim id, so
+  its history still renders on the loop page — the object row itself is gone.
+- **`runDisplayState` maps the ONE run lifecycle** (the shipping `phase`) to the
+  words the screens show. A run's end is DERIVED (`ts` + `durationMs`), because
+  production stores the start and the measured duration; a running or pending row
+  has no end at all, which is the honest answer.
+- **Freshness** (`components/workspace/live.ts`): ONE team-scoped `EventSource`,
+  explicit resume at `?since=<highest seq seen>`, `event: reset` → full refetch,
+  two errors inside 60s → 30s polling while the stream keeps retrying. Every
+  external is an injected seam, so the whole state machine is unit-tested with no
+  network. **`start()` must stay restartable** — StrictMode mounts, tears down and
+  remounts the provider.
+- **Two render paths, and the wall between them** (`Render.tsx`): markdown →
+  react-markdown with NO `rehype-raw` (raw inline HTML is simply not rendered —
   the XSS answer, no sanitizer to drift); `format: html` docs → an iframe with
-  `srcDoc` + `sandbox="allow-scripts"` and deliberately NO `allow-same-origin` (the two
-  together are equivalent to no sandbox). Verified in a browser: the frame reports
-  `origin: null`, `document.cookie` throws `SecurityError`, `parent.location` is blocked.
-  `render.guard.test.ts` pins all of it by reading the sources with comments stripped.
-- **`ExecutionBlock` renders the task payload VERBATIM** next to the answer box — the
-  execution-integrity invariant (design §7). The view echoes `payload` as a separate
-  `execution` key precisely so that contract is visible at the wire and testable.
-- **The system graph is a projection** — `deriveGraphEdges` is pure (one branch per API
-  spec §8.3 row) and `components/workspace/systemLayout.ts` is deterministic banded Dagre
-  (you / loops), ported from `data/graph-demo-r1/`. Same input ⇒ same coordinates,
-  so a refetch never reshuffles the canvas; manual pins live in localStorage.
-  (The spec §8.3 "adoption detection" deviation this section used to carry is GONE with
-  the pool it described — see "A task's WATCHER is never empty" below.)
-- **Local fixture**: `pnpm --filter @loopany/server workspace:seed` writes a full fixture
-  THROUGH the kernel (real events, diffs, provenance). pglite is single-writer, so seed
-  BEFORE starting `pnpm dev` on the same `LOOPANY_DATA_DIR`. Violating that order does
-  not merely fail the seed — it CORRUPTS the data dir: the seed appears to succeed while
-  the running server never sees the rows, and the next boot aborts inside the pglite wasm
-  (every request 500s `HTTPError`). The recovery is `rm -rf "$LOOPANY_DATA_DIR"` and a
-  re-seed, so do not try to salvage the directory.
-- **NOT built** (design §9 names it among UI reads; unit 5's brief scoped it out): a
-  dedicated run history/detail screen and `/api/views/run(s)`. Runs surface as strips on
-  the loop page (`recentRuns`) and the task page (runs that touched it).
-
-## Rewrite loop CRUD (`objectApi.listLoops`/`loopLifecycle` + 6 CLI verbs) — landing unit 6
-
-Loop CRUD retained on the rewrite surface, so the rewrite CLI is not create-blind. The
-CLI is now **18 verbs**; the added six are `loop create | list | show | pause | resume |
-retire`. Contracts: API spec §1.16 (which specifies all of them) — note **CLI spec §1/§10
-says "there is no `loop list`"**, an absence the captain has since overridden, so that
-row of §10 is stale rather than a rule this unit broke.
-
-- **The human/agent split is the whole design.** `loop create` and the three lifecycle
-  verbs are HUMAN-ONLY: creating a loop mints a standing cadence and a new actor, and
-  pausing/retiring is the operational call the owner keeps. Guarded at two altitudes —
-  the route's `resolveApiContext(request, { human: "loop-governance" })` and a
-  `mode !== "human"` check inside `createFromArtifact`/`loopLifecycle` — and the CLI
-  belts-and-braces it by adding them to
-  `HUMAN_COMMANDS`, so the device token is never attached. `loop list`/`loop show` are
-  DUAL, like `task list`: a team-scoped read an agent legitimately needs to resolve the
-  loop id it is about to name as a `--watcher`.
-- **`loop create` binds no MACHINE, and that is the design answering, not an omission.**
-  The kernel `objects` row has no machine column and `runQueue.claimOnce` selects queued
-  runs by `objects.teamId`, so any machine of the team claims. A loop with `cron:` is
-  armed at birth (`createObjectIn` sets `next_fire`); without one it never fires on its
-  own, and the create render says which of the two was born. It DOES bind a
-  **directory** — see the unit-10 note, which added `workdir:` to the loop key set.
-- **`key` is on `KIND_KEYS.loop`** (`artifactSeam.ts`) even though API spec §1.16 writes
-  the loop key set as `title, cron, payload`: the same paragraph promises "the same
-  key-idempotency rule as tasks", which is unreachable without a key, and
-  `serializeKindArtifact` emits `key:` for every kind — so without it `loop show --file`
-  produced a file its own parser refused. The round trip is verified end to end.
-- **An ABSENT payload serializes as an ABSENT key** (`serializeKindArtifact`, review F1):
-  `payload: {}` re-parses to an empty mapping, which `expressedDiffs` reads as different
-  from a null payload — so the canonical file the CLI itself emits reported a spurious
-  `differs: payload` on create replay (and wrote a junk `null → {}` diff event on the
-  task/doc `--file` update path). An explicitly empty `payload: {}` in the file is still
-  a value and survives. Pinned by `artifactSeam.test.ts` + the loop round-trip case in
-  `objectApi.integration.test.ts`.
-- **A human-only refusal names the SURFACE it refused** (`apiAuth.ts` `HumanSurface` /
-  `NOT_HUMAN_TEACHING`, review F2): the route guard answers before any kernel function
-  runs, so the kernel's careful proposal-path hint in `createFromArtifact`/`loopLifecycle`
-  was unreachable at the wire and every run got the inbox voice. `resolveApiContext` takes
-  `{ human: <surface> }` where the teaching differs; plain `"human"` keeps the inbox
-  default.
-- **A replay's "not applied" hint may only name routes that EXIST** (review F3): with
-  `PATCH /api/loops/:id` unbuilt and `loop evolve` agent-only, a human whose keyed loop
-  file differs has NO CLI path today — so both the server notice
-  (`applyDifferingHint`) and the CLI hint (`kernel-cli.ts` `renderCreate`) say the loop
-  page, name evolve as the run's move, and flag that a differing `cron:` is
-  `APPROVAL_REQUIRED` even then. Revisit both together when the human loop edit lands.
-- **`retire` IS the D in CRUD, and the CLI says so.** No hard delete exists anywhere on
-  this surface (the kernel is event-sourced). `NEAR_MISS` in `kernel-cli.ts` turns
-  `loop delete|remove|rm|archive|close`, `task delete` and `doc delete` into a teaching
-  refusal that names the property, not just the spelling. Retirement is terminal:
-  `loopLifecycle` refuses a move out of `retired` by name (`RETIRED`, 409), and
-  `replaceFromArtifact`/`governLoop` already froze the charter.
-- **Repeating a lifecycle verb is a SUCCESS with `changed:false`**, the same ruling
-  `task close` carries — a retry after a dropped connection must be free. Only the
-  out-of-`retired` moves refuse.
-- **`--status` takes a VALUE, unlike `task list`'s boolean pair**: a loop has three
-  states, so no two-flag form spans them honestly. Absent ⇒ the whole roster, retired
-  included.
-- **`refusalResponse` now floors an unmapped code at 400.** Several call sites widen a
-  kernel result code into the refusal envelope with `refusal(result.code as never)`; a
-  code with no `REFUSAL_STATUS` row resolved to `undefined`, which `Response.json`
-  renders as **200** — a refusal reaching the CLI as a success at exit 0. Pure hardening
-  (no shipped code path reached it), but do not remove the floor.
-- **Still NOT built, deliberately** (out of unit 6's enumerated scope, spec'd at API
-  spec §1.16 if a later unit wants it): `PATCH /api/loops/:id`, the human's whole-file
-  loop edit — so a person who typo'd a charter must fix it through a run's `loop evolve`
-  or the web UI, since evolve is agent-only. `POST /api/loops/:id/run-now` WAS in this
-  list; unit 10 built it (route only, still not a CLI verb).
+  `srcDoc` + `sandbox="allow-scripts"` and deliberately NO `allow-same-origin`
+  (the two together are equivalent to no sandbox). `render.guard.test.ts` pins it
+  by reading the sources with comments stripped.
+- **`ExecutionBlock` renders the task payload VERBATIM** next to the answer box —
+  the execution-integrity invariant (design §7). The view echoes `payload` as a
+  separate `execution` key precisely so the contract is visible at the wire.
+- **The system graph is a projection** — `deriveGraphEdges` is pure (three kinds:
+  `hands-off`, `asks`, `answers`) and `systemLayout.ts` is deterministic banded
+  Dagre, so a refetch never reshuffles the canvas. `you` ALWAYS exists, even at
+  count zero, so the graph's shape does not change as work moves through it.
+  Parallel edges fan and their labels slide (`routeEdges` + `CountEdge`); the lane
+  is assigned per unordered source→target BUNDLE and both the bow and the label
+  offset are computed in the bundle's CANONICAL direction — measured from each
+  edge's own source they cancel out between a forward and a reverse edge, which is
+  the bug that made the first fix a no-op.
+- **The design language is the graph line's, COPIED and never imported.** Both
+  lines own a `components/workspace/` directory AND a `styles/workspace.css`, so
+  sharing a module would only deepen the chain-merge conflict. **TEMPERATURE IS A
+  RULE, not a palette**: amber = a decision you owe; rose = a consequence that did
+  not happen; blue = a decision already made. `parts.tsx` `reasonTone` is the
+  single place that mapping lives.
+- **One shell, one detail surface.** Every screen is a centered `.document-view`
+  with a `ViewHeader`, and ALL detail — task, loop, doc — opens in the shared
+  slide-in `Drawer`. **The counters have three homes and one source**
+  (`inboxCounts`): `CountStrip` on Inbox and Tasks, the rail's Inbox badge, and
+  the rail's bottom status line.
+- **Local fixture**: `pnpm --filter @loopany/server workspace:seed` writes a full
+  fixture THROUGH the kernel (real events, diffs, provenance) plus two PRODUCTION
+  loops. pglite is single-writer, so seed BEFORE starting `pnpm dev` on the same
+  `LOOPANY_DATA_DIR`. Violating that order does not merely fail the seed — it
+  CORRUPTS the data dir (the seed appears to succeed, the running server never
+  sees the rows, and the next boot aborts inside the pglite wasm). Recovery is
+  `rm -rf "$LOOPANY_DATA_DIR"` and a re-seed.
+- **NOT built** (design §9 names it among UI reads): a dedicated run
+  history/detail screen and `/api/views/run(s)`. Runs surface as strips on the
+  loop page (`recentRuns`) and the task page (runs that touched it).
 
 ## The Tasks screen: a grouped LIST by default, the kanban as an alternate view
 
-Captain direction (2026-08-04) settled the shape on three points: **rows and cards carry
-NO action** (every write moved into the task drawer), the **row list grouped by loop is
-the DEFAULT** with the kanban behind a remembered toggle, and both views show the same
-safety-floor counters. `/api/views/tasks` composes ONE payload for both — there is no
-list endpoint beside the board one, because a second shape for the same screen is exactly
-the drift the BFF rule forbids. The raw `/api/tasks` (`objectApi.listTasks`, the human
-CLI) is untouched.
+Captain direction (2026-08-04) settled the shape on three points: **rows and cards
+carry NO action** (every write moved into the task drawer), the **row list grouped
+by loop is the DEFAULT** with the kanban behind a remembered toggle, and both
+views show the same safety-floor counters. `/api/views/tasks` composes ONE payload
+for both — a second shape for the same screen is the drift the BFF rule forbids.
 
-- **`kernel/taskBoard.ts` is the ONE column mapping** — pure, clock-free, no imports:
-  `BOARD_COLUMNS` (key + label + the one sentence that explains the column, which ships
-  in the payload so the client never restates the lifecycle) and `columnFor(facts,
-  stamp)`. A column is not a new state: the kernel has two (`open → closed`) plus three
-  facets (`pendingQuestion`, `watcher`, `followUpAt`), and a column names one cell of
-  that fact table. Precedence is `closed → waiting → due → watched`, so the
-  mapping is TOTAL and DISJOINT by construction — `taskBoard.test.ts` asserts both over
-  the whole fact-table cross product, because a board that drops a card hides work.
-  The §6 safety-floor counters ride the board payload (`counts`, single-sourced from
-  `inboxCounts`). NB the fifth column `unclaimed` and the facet `watcher` both left this
-  mapping with the watcher rule — see "A task's WATCHER is never empty" below.
-- **`components/workspace/taskList.ts` is the ONE list mapping** — pure, no DOM:
-  `groupTasks` puts every task in exactly one group (one group per WATCHING loop,
-  ordered by title, then `closed` last — the `unclaimed` pool group left with the
-  watcher rule, below), and
-  closedness is read FIRST so a closed task never sits on the desk of the loop that used
-  to watch it. `taskList.test.ts` asserts totality + disjointness over the whole fact
-  table, for the same reason `taskBoard.test.ts` does. The module also owns the remembered
-  view (`readTasksView`/`writeTasksView`, localStorage `loopany-workspace-tasks-view-v1`,
-  storage passed IN so it stays pure and SSR-safe — same pattern as the System canvas's
-  manual pins). Grouping by loop is deliberate: the board answers "what is true about this
-  task", the list answers "whose work is this". Question + overdue stay as row BADGES;
-  turning them into groups would just be the board again.
-- **`components/workspace/board.ts` says which ACTIONS a task offers** — pure, tested
-  without a DOM, and unchanged by the move: it always answered *which* acts exist, never
-  *where* they render. **There is NO drag-and-drop, by product decision**, and now no
-  on-row/on-card control either — a row or card is one button that opens the drawer, and
-  `TasksPane`'s `TaskActions` (inside the drawer) is the only write surface: `close…`
-  (note collected BEFORE the write, since the kernel requires it), the `watcher` PATCH
-  (TRANSFER only, a picker because a loop must be named; `release` went with the
-  unclaimed state), and the verdict box for a task that is asking. Answering IS the move
-  there, since the kernel refuses a close while a question is pending, and a person
-  should not have to leave for the Inbox to make it. `cardActions`/`hasActions` stay an AFFORDANCE layer,
-  never authority: the kernel re-decides every write and its refusal renders verbatim.
-  Two details worth keeping: the drawer restores focus to the ROW that opened it (the
-  opener element is captured from the click, not guessed from `document.activeElement`),
-  and the answer confirmation lives in `TaskActions`, NOT in the answer box — a successful
-  answer clears the question, which unmounts the box, and the line saying what the answer
-  did has to outlive it. `board.test.ts` pins the absence of any drag wiring AND of any
-  action on a row or card; `TasksPane.test.ts` drives the screen in jsdom (default view,
-  grouping, toggle persistence across a remount, each drawer write, focus restore).
-- Verified against the seeded pglite stack (`workspace:seed` then `LOOPANY_PORT=… pnpm
-  dev` on the same `LOOPANY_DATA_DIR`, own port + own data dir): both views, no card
-  draggable and no column a drop target, hand-off / close-with-note / answer all
-  driven FROM THE DRAWER only, the toggle surviving a reload, an out-of-band `PATCH`
-  moving a card over SSE with no user action, zero console errors, and no page-level
-  horizontal scroll at 760px or 700px (the board still scrolls inside its own pane).
+- **`kernel/taskBoard.ts` is the ONE column mapping** — pure, clock-free, no
+  imports: `BOARD_COLUMNS` (key + label + the one sentence explaining the column,
+  which ships in the payload so the client never restates the lifecycle) and
+  `columnFor(facts, stamp)`. Precedence is `closed → waiting → due → watched`, so
+  the mapping is TOTAL and DISJOINT by construction — `taskBoard.test.ts` asserts
+  both over the whole fact-table cross product, because a board that drops a card
+  hides work.
+- **`components/workspace/taskList.ts` is the ONE list mapping** — pure, no DOM.
+  `groupTasks` puts every task in exactly one group (one per WATCHING loop,
+  ordered by title, then `closed` last), and closedness is read FIRST so a closed
+  task never sits on the desk of the loop that used to watch it. The module also
+  owns the remembered view (`readTasksView`/`writeTasksView`, storage passed IN so
+  it stays pure and SSR-safe). Grouping by loop is deliberate: the board answers
+  "what is true about this task", the list answers "whose work is this".
+- **`treeRows` is the ONE tree assembly** and is TOLERANT as defence in depth
+  (ported from `feat/task-tree-v2`): a self-parent, an unknown parent and EVERY
+  member of a cycle all surface as roots. **`TREE_MAX_DEPTH` bounds the ROOT
+  CLASSIFICATION walk, never emission** — bounding emission silently dropped the
+  row at exactly that depth (it had classified as a non-root, so it was neither a
+  rescued root nor in any emitted subtree). The module's bar is totality: a layout
+  that loses a task hides work, and the deep-chain test asserts row count, not
+  just `not.toThrow()`.
+- **`components/workspace/board.ts` says which ACTIONS a task offers** — pure,
+  tested without a DOM. **There is NO drag-and-drop, by product decision**, and no
+  on-row/on-card control: a row or card is one button that opens the drawer, and
+  `TasksPane`'s `TaskActions` is the only write surface. `cardActions`/`hasActions`
+  are an AFFORDANCE layer, never authority. `board.test.ts` pins the absence of
+  any drag wiring AND of any action on a row or card.
+- **Hierarchy is ORTHOGONAL to the watcher.** A child is indented under its parent
+  only WITHIN its watcher's group; a child watched by another loop stays in ITS
+  group and carries a `part of <title>` chip, never re-parented visually. **The
+  BOARD nests nothing** — a column is a state predicate. The chip is TEXT on both
+  surfaces; the navigable references live in the drawer, with **no progress count
+  anywhere** — a roll-up would imply a coupling the two statuses forbid.
 
-## The workspace wears the GRAPH line's design language — landing unit 8
+## A task's WATCHER is never empty, and a due task WAKES it
 
-Captain direction: the rewrite workspace should look and feel like the graph workspace
-(branch `fm/graph-testing-deploy-t2`, deployed at `/dev/workspace` on loopany-testing).
-This is an adoption of that design system, not a recolor — the shell, the layout grid,
-the type scale, the tokens, the row/card/section shapes and the drawer all come across.
-Functional contracts were untouched: execution renders verbatim, the doc sandbox stays
-opaque-origin, SSE still drives every screen, and every write still goes through the
-existing button → `/api/*` paths.
+Captain rulings, 2026-08-04. `watcher` named the loop that acts next but was
+allowed to be absent, and the system carried a pile of machinery whose only job
+was to notice that absence (an unclaimed pool, claim-from-pool, a 48h orphan
+floor, a due-unwatched inbox arm). Forbidding the absence DELETED the machinery.
+The reasoning lives in `kernel/types.ts` `WATCHER_HINT` — read that.
 
-- **COPIED, never imported.** Both lines own a `components/workspace/` directory AND a
-  `styles/workspace.css`, so they already conflict at the chain merge; sharing a module
-  would only deepen it. Lifted into the rewrite's own tree: the whole token block + the
-  Instrument Sans `@import` (the rewrite named the face but never loaded it, which is why
-  it used to render in a system font), `.sidebar`/`.loop-mark`/`.sidebar-status`,
-  `.document-view` + `.view-header`, the tinted section cards, the `.artifact-row` grid,
-  `.state-label`, the three button weights (`.verdict-button` / `.attn-button` /
-  `.attn-button.is-quiet`), the `.preview-scrim` drawer, `.system-view` + `.graph-panel` +
-  `.canvas-key` + `.system-node`, and the reduced-motion + breakpoint blocks. If you are
-  diffing the two sheets, expect them to agree down to the hex values.
-- **TEMPERATURE IS A RULE, not a palette.** Amber = a decision you owe; rose = a
-  consequence that did not happen; blue = a decision already made, on its way out. The
-  rewrite's inbox reason maps onto it: `question` is amber (the other two, `due-unwatched`
-  and `orphan`, retired with the unclaimed state — see below; anything that is not a
-  decision you owe stays rose). `parts.tsx` `reasonTone` is
-  the single place that mapping lives — do not re-decide it per screen.
-- **One shell, one detail surface.** Every screen is now a centered `.document-view` with
-  a `ViewHeader` (breadcrumb → large tight title → sentence → right-aligned meta), and
-  ALL detail — task, loop, doc — opens in the shared slide-in `Drawer` (`parts.tsx`).
-  The old `ws-split` two-track layouts on Loops and Docs are gone; a drawer keeps the list
-  full-width whether or not something is open, and it owns the keyboard while up.
-- **The counters have three homes and one source.** `CountStrip` on Inbox and Tasks, the
-  rail's Inbox badge, and the rail's bottom status line all read `counts` from the view
-  payloads (`inboxCounts`), so they cannot disagree. The rail fetches `/api/views/inbox`
-  itself on the same live bus — that is what makes the safety floor legible from the
-  System tab, not just from the Inbox.
-- **`ExecutionBlock` was reframed, never re-rendered.** Keys stay monospaced, values stay
-  in a `<pre>` fed by `scalar`, entries stay `Object.entries` in payload order. A design
-  language may decorate that block; it may never render its contents. Checked at the wire
-  in the browser: rendered keys/values are byte-identical to the view's `execution`.
-- **Parallel graph edges fan and their labels slide** (`SystemGraph.tsx` `routeEdges` +
-  `CountEdge`). A pair of loops routinely has more than one relation (asks AND answers),
-  and drawn on one axis their two counts printed through each other. The lane is assigned
-  per unordered source→target BUNDLE and both the bow and the label offset are computed in
-  the bundle's CANONICAL direction — measured from each edge's own source they cancel out
-  between a forward and a reverse edge, which is the bug that made the first fix a no-op.
-- Verified in a browser on a seeded pglite stack at its own port: all five screens, the
-  inbox answer (lands a `question-answered` human event, counters drop across all three
-  homes), hand-off / close-with-note, the html doc's in-frame self-probe still
-  printing `origin: null · app cookies: threw: SecurityError · parent.location: blocked`,
-  the System canvas, zero console errors, and no page-level horizontal scroll at 760px
-  (the board still scrolls inside its own pane). NB the deployed graph reference is
-  allowlist-gated, so signed out it renders `SignIn` — to compare against it, render the
-  branch's own `styles/workspace.css` with its `WorkspaceView.tsx` markup instead.
+- **The rule is enforced at the KERNEL's two chokepoints**, `createObjectIn` and
+  `applyUpdateIn`, so every caller inherits it: the HTTP verbs, the whole-file
+  replace, the fixture seeder alike. A loop-created task DEFAULTS to
+  `createdByLoop`; a create with no creating loop is refused
+  (`WATCHER_REQUIRED`, 400). Deliberately NOT a DDL CHECK: the rule has a
+  defaulting half a constraint cannot express.
+- **Transfer stays, release is gone.** `watcher: null` is refused everywhere —
+  API, CLI (locally, before the round trip), and the UI cannot even express it.
+- **R-DUE is the other half** (`runQueue.tickDueTasks`, reason `due`,
+  `ids.dueRunId`): a watched task whose `follow_up` arrives wakes its watcher,
+  scoped `task:<id>`, level-triggered, idempotent per (loop, task, THAT follow-up
+  instant). **ENABLED production watchers only**: a disabled loop's due task fires
+  on the first scan after re-enable (nothing lost), while a deleted/dangling
+  watcher is logged and skipped without mutating the task.
+- **Pause / finish / delete WARN, never block, never cascade.**
+  `kernel/watchedTasks.ts` is the ONE author of both the count and the voice, and
+  each of the three verbs phrases its own consequence over the shared repair hint:
+  `editLoop` warns on the enabled true→false TRANSITION only (silent on a
+  re-asserted pause or a resume; previewed by `--dry-run`), `finishLoop` warns on
+  the completion that disables the loop, and DELETE warns BEFORE the choice
+  (`JobDetail.watchedTasks` carries the count so the confirm dialog can name it,
+  which a post-write warning cannot). **`store.deleteLoop` must never grow an
+  `objects` cascade** (pinned by `watchedTasks.integration.test.ts`): a dangling
+  watcher is legal, resolved as a tombstone, skipped by the due scan, repaired by
+  a transfer.
+- **What retired with the unclaimed state, and why it is ABSENT rather than
+  empty**: the `unclaimed` board column and list group, the `pool` graph node and
+  its `produces`/`adopts` edges, the `orphan`/`due-unwatched` inbox arms and
+  counters, and `task list --unwatched` / `watcher=none`. A permanently-zero
+  counter is not a reassuring fact — it teaches a distinction the kernel stopped
+  making. `inboxCounts` is now `{question, total}`; the union SHAPE (`reasons[]`,
+  `reasonRank`) is kept because the inbox is where a future human-attention branch
+  lands.
 
-## Real local execution on the rewrite line — landing unit 10
+## Task hierarchy — `objects.parent_id`
 
-The rewrite stopped being display-only: a local daemon claims kernel runs and a real
-agent executes them in the loop's own directory. Two captain rulings shape it
-(2026-08-04, amending design §8 / API spec §1.16, which predate them): **a loop BINDS a
-workdir like the shipping product does**, and **reuse the original daemon mechanics**
-rather than forking a second execution stack.
+- **By ID, never by slug**, through ONE write chokepoint — which is what
+  `feat/task-tree-v2` could not have (its parent was a front-matter SLUG with
+  files as the writers), so a write-time guard is possible at all and
+  slug-collision ambiguity is gone. Nullable, task-only
+  (`objects_parent_task_only`), partial index `objects_parent_idx`, and no FK: a
+  parent may be closed and tasks are never hard-deleted, so a dangling value means
+  bad input and is refused at the write chokepoint.
+- **The write-time cycle guard** is `applyTransition.ts` `parentIssue`, called at
+  BOTH chokepoints before any write, with the row locked FOR UPDATE first: the
+  parent must exist, be a TASK, be same-team, and not be inside this task's
+  subtree (bounded ancestor walk, `PARENT_MAX_HOPS` 64) — otherwise
+  `PARENT_CYCLE`, and nothing is written. A CLOSED parent is deliberately NOT
+  refused: there is **no roll-up in either direction**, so a parent is closed by
+  its watcher and never by its last child.
+- `parentId: null` is a legal move to root — the one place hierarchy and the
+  watcher rule differ. The artifact key is `parent:`, EMITTED by
+  `serializeKindArtifact` so `show --file` → re-upload preserves the hierarchy;
+  an absent key is a root. `parentId` is on `CONTENT_KEYS` and `expressedDiffs`
+  together, so a replay whose file names a different parent reports it.
+- `task show` prints BOTH directions: a `parent:` row (`—` for a root, printed
+  either way so "no parent" is never inferred from silence) and a
+  `children[N]{id,title,status,watcher}` block, each child naming its OWN watcher.
+  `task list` deliberately grew NO parent column. `views.ts` resolves a dangling
+  parent to `{missing: true}` — the same tombstone-not-null ruling `loopRefs.ts`
+  makes for a watcher — TEAM-SCOPED, so a foreign parent tombstones rather than
+  leaking a title.
 
-- **`objects.workdir` is a loop facet** — a real column with a `objects_workdir_loop_only`
-  CHECK (migration `0005`), on `LOOP_ONLY_FIELDS`, and a first-class `workdir:` key in
-  `KIND_KEYS.loop`. Deliberately NOT `payload.workdir`: the free zone is writable by a
-  charter, and WHERE a loop executes must sit behind the same governance gate as WHEN.
-  Absolute paths only — the claiming machine is unknown at write time, so "relative to
-  what?" has no answer the server could give.
-- **Moving it is governance, exactly like moving the cron.** `loop evolve` refuses a
-  differing `workdir:` with `APPROVAL_REQUIRED`; `governLoop` (`POST /api/loops/:id`)
-  now takes `cron` and/or `workdir` under the one approval gate, so that refusal names a
-  route that exists (the unit-6 F3 rule).
-- **No MACHINE is bound, and a machine that lacks the directory FAILS the run.** Prod
-  `mkdir -p`s a declared workdir, which is right when the loop was bound to one machine
-  at birth; here any machine of the team claims, so creating it would run the charter
-  against an empty lookalike of the repo it names. `runner.ts` `resolveWorkdir` takes
-  `requireExisting` (set from the claim's `execution.requireWorkdir`) and reports a
-  teaching failure naming the path, the host and "nothing was created". The legacy path
-  is byte-for-byte unchanged; the daemon's own scratch dir (no bound workdir at all) is
-  still created on demand.
-- **`gateway/enroll.ts` is the ONE machine-enrollment gate**, shared by production
-  `poll` and the dormant rewrite claim (`enrollDeviceForClaim`). The latter fixed the
-  S2 dual-transport stage; S3 daemons use production poll exclusively, while the old
-  claim symbol remains until S5 cleanup. The frozen machine-id derivation is shared.
-- **`routeSupport.ensureBooted()` is the rewrite line's boot entrance**, called first in
-  every rewrite route. `ensureServer()` used to be reachable only from a legacy server
-  fn, so a rewrite-only stack never migrated (a fresh pglite dir 500'd with `relation
-  "teams" does not exist`) and — worse — never started `RunQueueScheduler`, so no loop
-  ever fired.
-- **The kernel CLI attaches the device token only WITH run context** (`kernel-cli.ts`).
-  §2.6 answers a device credential and no run context with `NO_RUN_CONTEXT` on a DUAL
-  endpoint, so `loop show`/`loop list`/`task list` refused the owner on every machine the
-  daemon is registered on — the unit-4 review's B1, one layer out. `HUMAN_COMMANDS` stays
-  for the other direction (a human verb typed inside a run).
-- **`POST /api/loops/:id/run-now`** (`objectApi.runLoopNow`) is the manual fire, human
-  only like the lifecycle verbs. It reuses `queueKernelRun`'s `manual` reason and joins
-  the transactional open-run lookup (a second call reports `alreadyQueued`), then wakes
-  the matching claim transport so a parked poll does not wait out its ~20s hold.
-- **PAUSE GOVERNS THE CADENCE, NOT THE BUTTON** (captain ruling 2026-08-04, amending the
-  original unit-10/11 behaviour). A PAUSED loop accepts `run-now` exactly like an active
-  one: pause clears `next_fire` so the CLOCK can never select it, and a manual fire is an
-  explicit human act, not the clock. The old refusal conflated the two and made a parked
-  loop runnable only through a resume/fire/pause dance that leaves a real window in which
-  the cadence is live. **Firing does not resume** — status stays `paused`, `next_fire`
-  stays null, no `loop-resumed` event — so it is one run, then quiet again. RETIRED still
-  refuses (`RETIRED`, terminal, charter frozen). The claim path had to move with it:
-  `claimOnce` selects `inArray(objects.status, ["active","paused"])`, because an accepted
-  fire that no machine may claim is worse than an honest refusal; `tickRunClock` and
-  `armUnarmedLoops` still select `active` only, which is the whole of what pause means.
-  Pinned by `objectApi.integration.test.ts` (fires paused, does not resume, retired
-  refused) + `runQueue.integration.test.ts` ("a paused loop's manual run is claimable")
-  + `runNow.test.ts` (the UI path).
-- **A RUN LEASE is renewed only by ATTESTATION, and reclaim is the SCHEDULER's job**
-  (review F1, fixed 2026-08-04). The claim body carries `inFlight` — the run ids the
-  daemon says it is still executing (`daemon.ts` `buildClaimBody`, sent always, empty
-  included, so "I am running nothing" is sayable) — and `renewMachineLeasesIn` renews
-  only those. Renewing every lease of a live MACHINE substituted machine liveness for
-  run liveness, and a daemon that crashed mid-run defeated the substitution: it restarted
-  with an empty in-flight set and its own polls kept the orphan "running" forever. The
-  legacy line keys its sweep on per-run progress freshness for exactly this reason.
-  A daemon too old to attest therefore renews nothing and its runs are reclaimed after
-  the lease — the cure, not a regression (reclaim RE-QUEUES; only exhausted attempts
-  fail). The other half: `RunQueueScheduler.tick` now runs `reclaimExpired` after
-  `tickRunClock`, so reclaim no longer depends on some daemon happening to poll — before
-  this, `reclaimExpired` had NO production caller and a team whose only machine died
-  reclaimed nothing, ever. Both halves are pinned by `runQueue.integration.test.ts`
-  ("F1: only an ATTESTED run keeps its lease"), which fails on the pre-fix code.
+## Mirrors — the fourth kind, and why it is stateless
 
-## `Run now` on the Loops screen — landing unit 11
+A mirror is a pure POINTER to something outside the system, so a run reading a
+task can see which external items it must go and check. `kernel/mirrors.ts` owns
+the pure half (vocabulary, normalization, coords validation, the law);
+`kernel/mirrorApi.ts` owns the transactions. Read those headers.
 
-The workspace's Loops drawer gained the manual fire (`postRunNow` → the unit-10 route),
-so the rewrite matches the shipping dashboard's one UI-triggered run. Three rules, each
-the kind a later change breaks by being helpful:
+- **STATELESSNESS IS ENFORCED BY SCHEMA.** A mirror row has no `payload` and no
+  `body` — `objects_mirror_stateless` — so there is physically nowhere for
+  `state: merged` to land. The "cache the status just this once" commit cannot be
+  written, not merely discouraged. Welded at three altitudes and all three tested:
+  the DDL CHECK (proven by raw SQL that bypasses every application guard),
+  `types.ts` `statelessIssues`, and `patchMirror`'s by-name refusal of
+  `state`/`status`/`merged`/… — by NAME, because "unknown key" reads as a spelling
+  problem and this is a modelling one.
+- **One external thing is ONE mirror.** Id and key both derive from
+  `(team, kind, coords)`, so a second attach resolves to the existing row through
+  ordinary key-idempotency — there is no find-or-create branch. `attachedTo` is a
+  jsonb set on the MIRROR (GIN index); every `show` composes `mirrors[]` by
+  reverse lookup. A task carries no pointer column and is FOUND BY its mirrors.
+  Attachable kinds are task and doc.
+- **Coords are IDENTITY**, on `IMMUTABLE_FIELDS`, refused with the two-step
+  detach-and-attach teaching at the kernel, at `PATCH /api/mirrors/:id`, and
+  locally in the CLI.
+- **A mirror is NOT authored as a file** (`ARTIFACT_KINDS` excludes it), which is
+  what keeps it from growing a body. Its two creation doors are the flag one-liner
+  and an inline `mirrors:` block, which is a CONSTRUCTOR ARGUMENT and not a field:
+  create-only, refused by name on the replace path, and never emitted by
+  `serializeKindArtifact` — otherwise a whole-file update would silently detach
+  every mirror the file happened not to mention.
 
-- **The button is NEVER pre-hidden or disabled by status.** It fires a PAUSED loop for
-  real (the captain ruling above — one run, and the loop stays paused); a RETIRED loop is
-  refused by `runLoopNow` with a sentence AND a hint saying retirement is terminal.
-  Gating the button client-side would replace that teaching with silence and put a second
-  copy of the lifecycle rule where it can drift. The refusal renders through the shared
-  `Refusal` exactly as the CLI prints one. `runNow.test.ts` pins both halves — a paused
-  loop queues with no refusal on screen, and a retired one shows code/sentence/hint.
-- **It lives on the DRAWER, not the list row.** `ArtifactRow` IS a `<button>` (that is
-  what makes the whole row one keyboard target), so a control in its action slot would
-  be a button inside a button. Adding a row-level action means restructuring that shared
-  primitive for every screen, not just this one.
-- **Nothing waits for the run.** Queuing is the act; the run reaches `Recent runs`
-  because `run-queued` carries the loop's own object id, so the drawer's existing
-  `affectsLoop` refetch already covers it. The post-write `refresh()` only removes the
-  round trip's wait.
+## The directive, and why the UI has no direct close
 
-Verified in a browser on an isolated seeded stack (own port + `LOOPANY_DATA_DIR`, no
-daemon — a queued run is the proof): a fresh fire renders `Queued. Run run-…` and the
-run appears in the strip; a second fire on a loop that already had one queued reports
-that run instead of minting a twin; and an out-of-band `POST …/pause` moves the drawer to
-`PAUSED LOOP` over SSE with no user action. (The last leg of that walkthrough — firing a
-paused loop rendering a `PAUSED` refusal — is superseded by the captain ruling above:
-the fire now succeeds and the loop stays paused.)
+- `objectApi.leaveDirective` (`POST /api/tasks/:id/directive`, CLI `task tell`)
+  writes a human `directive-left` event on the task and queues one run for its
+  watcher, scoped to it. **Its OWN run reason (`directive`), not a subtype of
+  `answered`**: an answer replies to a question the agent framed, a directive
+  arrives unframed and the run's first job is to work out what it implies. A run
+  that could not tell them apart would read an order as a reply to a question it
+  never asked.
+- **`runs.trigger_event_id` is a pointer, never a copy**: delivery reads the note
+  back through it and puts the person's words in the work order VERBATIM, labelled
+  `directive:` or `answer:`. A pending question REFUSES a directive
+  (`OPEN_QUESTION`, pointing at `answer`); a closed task refuses it too.
+- **The UI drops direct close** (`board.ts` has no `canClose`, `api.ts` no
+  `postClose`, and `board.test.ts` asserts both ABSENCES so a re-add has to defeat
+  a named test): a human closing a task settles the kernel's record while the world
+  it describes carries on unchanged — the PR still open, the branch still there,
+  and the loop that would have cleaned them up now looking at a closed task it
+  will never act on again. What replaces it is `TellBox`, ONE composer in two modes
+  (`board.ts` `tellMode`): it ANSWERS while a question is pending and otherwise
+  leaves a DIRECTIVE. `loopany task close` remains the emergency hatch for a broken
+  watcher — "expect to reconcile external items yourself".
+
+## The DEV entry surface — the converged local workspace
+
+- `scripts/loopany-dev` selects `kernel-home.ts` with the presentation-only
+  `LOOPANY_DEV_HOME=1` and refuses non-loopback servers. There is no runtime
+  switch: server and daemon use the production poll path. Bare production
+  `loopany` keeps the production home.
+- The local home composes `/api/views/loops` (the production roster + shared run
+  strip) and `/api/inbox`; it stays a human/no-device-token surface and degrades
+  to a definitive exit-0 view. `dev-entry.test.ts` pins the boundary.
+- Global help signposts production `loops`/`show`/`new`/`edit` for loop ownership
+  and the event-sourced task/doc/mirror verbs for workspace work.
+- `packages/daemon/skill-dev/` is a separate, non-npm skill distribution teaching
+  this surface and the managed-stack contract: on-PATH `loopany-dev` only; never
+  bare `loopany`, never source the platform env script, never operate the stack
+  lifecycle; retry one unreachable read after ~30s, then stop.
 
 ### The isolated-stack recipe
 
-Use a fresh non-3000 port, data directory and `LOOPANY_HOME`; set them explicitly for
-the shell you control. Never point convergence work at the captain's demo stack and do
-not source `scripts/rewrite-local-run.env.sh`. S3 needs no runtime flag: server and
-daemon use the production poll path.
+Use a fresh non-3000 port, data directory and `LOOPANY_HOME`, set explicitly for
+the shell you control. Never point work at the captain's demo stack and do not
+source `scripts/rewrite-local-run.env.sh`.
 
 ```sh
 (cd packages/server && LOOPANY_PORT=$LOOPANY_PORT pnpm dev)          # terminal 1
@@ -983,461 +916,74 @@ daemon use the production poll path.
    ./node_modules/.bin/tsx src/cli.ts up --foreground)               # terminal 2
 ```
 
-- **`up --foreground` is the ONLY safe daemon launch here.** Plain `up` runs `ensure`,
-  which writes the REAL `~/.local/bin` shim and `~/.claude/settings.json` hooks
-  regardless of `LOOPANY_HOME`. `--foreground` classifies straight to `runDaemon`.
-- **`LOOPANY_ROOTS` must CONTAIN every workdir the stack's loops bind** (review F3). The
-  line above jails the daemon to `$LOOPANY_RW_BASE`, which covers the smoke loop and
-  nothing else — a loop bound to a real checkout (both twins are) fails every run with
-  `workdir <path> is outside this machine's allowed roots` until the checkout is named
-  too. The list is COMMA-separated (`daemon.ts` splits on `,`) and read once at daemon
-  start, so widening it means a restart. `scripts/rewrite-twins/README.md` carries the
-  release-time form; keep the jail narrow the rest of the time.
-- **A BOUND workdir is never created for you** — that is the whole point of
-  `requireWorkdir` — so the env script `mkdir -p`s the smoke loop's scratch dir
-  (`$LOOPANY_RW_SCRATCH`, review F4). `scripts/rewrite-smoke-loop.md` hard-codes the
-  DEFAULT base's path in its `workdir:`, so edit that key if you override
-  `LOOPANY_RW_BASE`.
-- **Registration is automatic and needs no separate step**: the first production poll enrolls the
-  machine from its `dk_`-shaped token (open mode ⇒ `team-shared`, which is also
+- **`up --foreground` is the ONLY safe daemon launch here.** Plain `up` runs
+  `ensure`, which writes the REAL `~/.local/bin` shim and `~/.claude/settings.json`
+  hooks regardless of `LOOPANY_HOME`. `--foreground` classifies straight to
+  `runDaemon`.
+- **`LOOPANY_ROOTS` must CONTAIN every workdir the stack's loops bind.** The list
+  is COMMA-separated and read once at daemon start, so widening it means a
+  restart. Keep the jail narrow.
+- **Registration is automatic**: the first production poll enrolls the machine
+  from its `dk_`-shaped token (open mode ⇒ `team-shared`, which is also
   `requestScope`'s open-mode team, so the human CLI and the daemon share a scope).
-- Create a loop through production `loopany new --json`, or converge a seeded kernel
-  loop with `kernel:converge-loops`; fire it through the workspace Run-now action and
-  read the result through production `loopany show` plus the loop drawer/event timeline.
-- State lives in exactly three places: the server's pglite dir (`LOOPANY_DATA_DIR`), the
-  daemon's `LOOPANY_HOME` (device token, server URL, pidfile, callback bin, scratch
-  dirs), and each loop's bound workdir. Stop with `pkill -f "up --foreground"` then the
-  dev server; a restart re-uses the same token, so the machine identity is stable.
-- `scripts/rewrite-smoke-loop.md` is the harmless read-only smoke loop that proves the
-  path end to end. `scripts/rewrite-twins/` holds the two Housekeeper twins — local dual
-  runs of the production loops, binding the SAME workdirs and the same `0 7 * * *`
-  cadence. Both carry outward effects (branch push + `gh pr create`; the superdesign one
-  also closes PRs and installs from the registry), so by captain decision they are
-  **created but held PAUSED**: a paused production loop has `enabled=false`, so it never fires on its
-  own and every run it ever does is one somebody asked for. That README carries the full
-  side-effect inventory and the fire/pause commands.
-- **A paused loop is AUTONOMOUSLY inert, which is what makes staging safe**: `pause`
-  clears `next_fire`, so the clock can never select it — nothing runs unless a human
-  presses `run-now`, and that fire leaves it paused (captain ruling above). Stage a risky
-  loop by creating it with the daemon DOWN and pausing in the same breath — that leaves
-  no window in which its birth-armed cadence could be claimed.
+- Create a loop through production `loopany new --json`, fire it through the
+  workspace Run-now action, and read the result through production `loopany show`
+  plus the loop drawer/event timeline.
+- State lives in exactly three places: the server's pglite dir
+  (`LOOPANY_DATA_DIR`), the daemon's `LOOPANY_HOME` (device token, server URL,
+  pidfile, callback bin, scratch dirs), and each loop's bound workdir. Stop the
+  daemon with the CLI's own `down` (or by the pidfile) and then the dev server; a
+  restart re-uses the same token, so machine identity is stable.
+- **A paused loop is AUTONOMOUSLY inert, which is what makes staging safe**:
+  `enabled=false` means the clock can never select it. Stage a risky loop by
+  creating it with the daemon DOWN and pausing in the same breath.
+- pglite is SINGLE-WRITER, so a raw schema probe against a stack's data dir must
+  wait until its dev server is stopped; opening a second PGlite on a live dir is
+  the corruption the fixture note above warns about.
 
-## The DEV entry surface — converged local workspace
+## Convergence — what the shape is now, and the two rules it leaves behind
 
-- `scripts/loopany-dev` selects `kernel-home.ts` with presentation-only
-  `LOOPANY_DEV_HOME=1` and refuses non-loopback servers. `LOOPANY_RUNS_V2` no longer
-  selects any runtime path. Bare production `loopany` keeps the production home.
-- The local home composes `/api/views/loops` (now the production roster + shared run
-  strip) and `/api/inbox`; it stays a human/no-device-token surface and degrades to a
-  definitive exit-0 view. `dev-entry.test.ts` pins the boundary.
-- Global help signposts production `loops`/`show`/`new`/`edit` for loop ownership and
-  the event-sourced task/doc/mirror verbs for workspace work. Old kernel `loop *`
-  commands return local `SURFACE_MOVED` teaching and perform no request.
-- `packages/daemon/skill-dev/` remains a separate, non-npm skill distribution. It
-  teaches this converged surface and the managed-stack contract: on-PATH
-  `loopany-dev` only; never bare `loopany`, never source the platform env script,
-  never operate the stack lifecycle; retry one unreachable read after ~30s, then stop.
+The rewrite line converged onto the shipping product in five stages (design:
+`data/rw-converge-s1/report.md`). The result, in one paragraph: **production
+`loops` are the only loops, the production poll/lease/sweep/report pipeline is the
+only run world, and `objects` holds task/doc/mirror hanging off loop ids.** The
+per-stage narration is gone with the code; what a future session needs is the
+shape above plus these two rules.
 
-## A task's WATCHER is never empty, and a due task WAKES it
+- **MIGRATIONS MINT 0010+ ON THIS CHAIN, and 0003–0009 are never renumbered** —
+  they are applied on the demo stack's pglite journal. The graph line and
+  `feat/task-tree-v2` each mint their own colliding `0003+` sets; reconciling them
+  is a deliberate chain-merge step, not something to pre-empt here.
+- **Migration `0010` carries the two DATA steps S5 owed**, before any drop, and
+  they are in SQL rather than application code because the code that used to do
+  them went away in the same change: it terminalizes every stranded kernel
+  queue-state row (`queued`/`claimed` → `phase: error`, keeping the historical
+  `ts`, plus the frozen derived `run-finished` event for a provenance-carrying
+  row), and it deletes the kernel loop OBJECT of every MIGRATED loop. An
+  UNCONVERGED kernel loop is deliberately left in place: it is the only record of
+  itself, and an inert row nothing reads beats silently destroying a loop nobody
+  migrated.
 
-Captain rulings, 2026-08-04. `watcher` named the loop that acts next but was allowed to
-be absent, and the system carried a pile of machinery whose only job was to notice that
-absence (an unclaimed pool, claim-from-pool, a 48h orphan floor, a due-unwatched inbox
-arm). Forbidding the absence DELETED the machinery. The reasoning lives in
-`kernel/types.ts` `WATCHER_HINT` — read that, not a summary here.
+## Artifact sync — a workspace is not a content home
 
-- **The rule is enforced at the KERNEL's two chokepoints**, `createObjectIn` and
-  `applyUpdateIn`, so every caller inherits it: the HTTP verbs, the whole-file replace,
-  the circuit breaker's auto-pause question and `workspace:seed` alike. A loop-created
-  task DEFAULTS to `createdByLoop`; a create with no creating loop is refused
-  (`WATCHER_REQUIRED`, 400). Deliberately NOT a DDL CHECK: the rule has a defaulting
-  half a constraint cannot express, and the migration would break any stack holding
-  pre-rule rows. The teaching altitude is the floor here.
-- **Transfer stays, release is gone.** `watcher: null` is refused everywhere — API,
-  CLI (locally, before the round trip, `loopIdRefusal`), and the UI cannot even express
-  it (`transferWatcher` takes a plain `string`). The drawer's picker also excludes the
-  loop already watching, since that write changes nothing.
-- **R-DUE is the other half** (`runQueue.tickDueTasks`, run reason `due`, `ids.dueRunId`):
-  a watched task whose `follow_up` arrives wakes its watcher, scoped `task:<id>`. Same
-  level-triggered clock as the cadence, so nothing is consumed and the fire is idempotent
-  per (loop, task, THAT follow-up instant) — one due instant queues exactly one run
-  however many passes see it, and a re-armed `follow_up` queues a fresh one. **Enabled
-  production watchers only** after S3: a paused loop's due task fires on the first scan
-  after re-enable (level trigger, nothing lost), while a deleted/dangling watcher is
-  logged and skipped without mutating the task. `runs.reason` is a TS-only drizzle enum,
-  so widening it needed no migration.
-- **Retire WARNS, never blocks.** `loopLifecycle` counts the open tasks the loop still
-  watches and returns a `warning` (`retirementWarning`); the CLI prints it as its own
-  `warning:` line above the detail block (a fact about what happened, not a hint about
-  what to do next — the repair goes in `help[]`), and the loop drawer confirms BEFORE
-  with the count it can see and renders the server's warning verbatim AFTER. Blocking,
-  force-transferring and cascading were all explicitly declined.
-- **What retired with the state, and why it is ABSENT rather than empty**: the
-  `unclaimed` board column and list group, the `pool` graph node and its
-  `produces`/`adopts` edges (which retired the old §8.3 adoption-detection deviation
-  with them), the `orphan`/`due-unwatched` inbox arms and counters, and
-  `task list --unwatched` / `watcher=none`. A permanently-zero counter or column is not
-  a reassuring fact — it teaches a distinction the kernel stopped making, and invites
-  someone to "fix" the emptiness by reintroducing the state. `inboxCounts` is now
-  `{question, total}`; the union SHAPE (`reasons[]`, `reasonRank`) is kept because the
-  inbox is where a future human-attention branch lands.
-- The loop drawer gained the operational lifecycle (pause/resume/retire) so the warning
-  has a UI home. Nothing there is pre-hidden or disabled by status — the same discipline
-  `Run now` keeps, pinned by `runNow.test.ts`: repeating a landed verb is a success with
-  `changed:false`, and a move out of `retired` is refused BY NAME, so a client-side gate
-  would only replace that teaching with silence.
-- Verified end to end on an isolated stack (own port/data dir/`LOOPANY_HOME`) with a real
-  daemon: a due task queued exactly one run, held at one across ~6 further ticks, was
-  claimed and EXECUTED to `success`, and a re-armed `follow_up` queued a second; paused
-  and retired watchers queued none, and the paused one fired after `resume`; retire warned
-  with the count and proceeded, leaving its tasks untouched; the workspace showed no
-  pool/orphan/unclaimed surface on any screen and every card named its watcher; zero
-  console errors, no page-level horizontal scroll.
+The daemon's folder watcher held one fd per watched FILE, and six repo-workdir
+loops warmed past macOS's `OPEN_MAX` — from that instant every
+`child_process.spawn` threw `spawn EBADF` and the daemon could no longer run the
+coding agent it exists to run. The diagnosis, the measured ceiling and the
+watch/sync contract live in the root `AGENTS.md` ("Artifacts / storage") and in
+`packages/daemon/src/watcher.ts`'s header; read those.
 
-## Intent, reality, state — landing unit 17 (mirrors, directives, no UI close)
-
-Captain-designed, 2026-08-04. Three changes over one principle: **the human
-expresses intent, agents reconcile reality, state follows.** Each is a rule that
-a later "helpful" commit breaks by softening it, so each is welded rather than
-documented.
-
-### `mirror` — the fourth object kind
-
-A pure POINTER to something outside the system, so a run reading a task can see
-which external items it must go and check. `kernel/mirrors.ts` owns the pure half
-(vocabulary, normalization, coords validation, the law); `kernel/mirrorApi.ts`
-owns the transactions. Read those headers, not a summary here.
-
-- **STATELESSNESS IS ENFORCED BY SCHEMA.** A mirror row has no `payload` (the
-  declared free zone) and no `body` — `objects_mirror_stateless` — so there is
-  physically nowhere for `state: merged` to land. The "cache the status just this
-  once" commit cannot be written, not merely discouraged. Welded at three
-  altitudes and all three are tested: the DDL CHECK (proven by raw SQL that
-  bypasses every application guard), `types.ts` `statelessIssues` (the teaching
-  refusal), and `patchMirror`'s by-name refusal of `state`/`status`/`merged`/… —
-  by NAME, because "unknown key" reads as a spelling problem and this is a
-  modelling one. The mirror's single status `current` is deliberately a
-  singleton for the same reason.
-- **One external thing is ONE mirror.** Id and key both derive from
-  `(team, kind, coords)` (`ids.mirrorObjectId`, `mirrors.mirrorKey`), so a second
-  attach resolves to the existing row through the kernel's ordinary
-  key-idempotency — there is no find-or-create branch. `attachedTo` is a jsonb
-  set on the MIRROR (`objects_mirror_attached_idx`, GIN); attach/detach are
-  ordinary `applyUpdateIn` writes of it, so their events land on the mirror's
-  timeline, and every `show` composes `mirrors[]` by reverse lookup
-  (`mirrorsFor`). A task carries no pointer column and is FOUND BY its mirrors.
-- **Coords are IDENTITY**, on `IMMUTABLE_FIELDS`, refused with the two-step
-  detach-and-attach teaching at the kernel, at `PATCH /api/mirrors/:id`, and
-  locally in the CLI's `unknownFlagRefusal` near-miss branch (a bare "unknown
-  flag --coords" would be true and teach nothing).
-- **A mirror is NOT authored as a file.** `types.ts` `ARTIFACT_KINDS` excludes it
-  and `KIND_KEYS` is keyed on `ArtifactKind`, which is also what keeps it from
-  growing a body. Its two creation doors are the flag one-liner and an inline
-  `mirrors:` block, which is a CONSTRUCTOR ARGUMENT and not a field:
-  create-only, refused by name on the replace path, and never emitted by
-  `serializeKindArtifact` — otherwise a whole-file update would silently detach
-  every mirror the file happened not to mention, and `show --file` would emit a
-  file its own re-upload duplicated.
-
-### Directive — the human speaks without a pending question
-
-`objectApi.leaveDirective` (`POST /api/tasks/:id/directive`, CLI `task tell`)
-writes a human `directive-left` event on the task and queues one run for its
-watcher, scoped to it. Same wire as the answer path, opposite entrance.
-
-- **Its OWN run reason (`directive`), not a subtype of `answered`.** An answer
-  replies to a question the agent framed; a directive arrives unframed and the
-  run's first job is to work out what it implies. A run that could not tell them
-  apart would read an order as a reply to a question it never asked.
-  `runs.reason` is a TS-only drizzle enum, so widening it needed no migration.
-- **`runs.trigger_event_id` is the new column, and it fixed the answered path
-  too.** Both reasons already DERIVED their run id from the human's event, so the
-  pointer existed but was unreadable; storing it lets `claimRun` read the note
-  back and put the person's words in the work order VERBATIM, labelled
-  `directive` or `answer` so an agent can never confuse the two. It is a
-  pointer, never a copy.
-- **A pending question REFUSES it** (`OPEN_QUESTION`, pointing at `answer`): the
-  person already has the floor, an answer is free text so any instruction fits in
-  one, and the run this would queue could not clear the question anyway.
-- It obeys the transactional open-run lookup like the verdict does — reports the open
-  run rather than stacking. Nothing is lost: the directive is on the task's timeline,
-  which that run reads when it claims.
-
-### The UI drops direct close
-
-The close action left the task drawer entirely (`board.ts` has no `canClose`,
-`api.ts` has no `postClose`, and `board.test.ts` asserts both ABSENCES so a
-re-add has to defeat a named test). The reasoning, which the code comments carry
-in full: a human closing a task settles the kernel's record while the world it
-describes carries on unchanged — the PR still open, the branch still there, and
-the loop that would have cleaned them up now looking at a closed task it will
-never act on again.
-
-- What replaces it is `TellBox`, ONE composer in two modes (`board.ts`
-  `tellMode`): it ANSWERS while a question is pending and otherwise leaves a
-  DIRECTIVE. One affordance, because from the person's side it is one write —
-  free text that queues one run for the watcher. The mode lives in `board.ts` so
-  the rule is testable without a DOM.
-- The drawer's surfaces are now the verbatim execution block, **External items**
-  (the attached mirrors: kind, coords as a link when `href` resolves, note — and
-  NO status, because there is none), the timeline, and the composer. `.task-actions`
-  owns its own top margin because two different things can precede it now.
-- `loopany task close` remains, documented in the skill as the emergency hatch
-  for a broken watcher: "when the watcher cannot act, this is the manual exit;
-  expect to reconcile external items yourself."
-
-### Verified end to end on an isolated stack (own port 3177, own data dir/HOME)
-
-Mirror lifecycle through the real CLI: inline front-matter create (two mirrors,
-one transaction), one-liner attach mid-run, `GitHub PR` → `github-pr`
-normalization collapsing onto one row, a second object SHARING that row with the
-note-kept notice, an unknown kind accepted, a known kind's coords refused,
-coords immutability taught, detach + free-retry detach, the three list filters,
-and `mirror kinds`. Directive with a real daemon: the run was claimed, and the
-claim body carried `reason: directive` plus the words verbatim. Both composer
-modes drove from the browser, the answer flipping the composer to directive mode
-with the confirmation outliving the form; zero console errors and no page-level
-horizontal scroll at 1440 or 760.
-
-**Two hazards worth not repeating.** (1) A live daemon EXECUTES what you tell it:
-a directive naming a real PR had a real agent claim it within seconds. Use
-harmless coords for a live directive drill, or read the claim body directly
-(`POST /api/agent/runs/claim`) — that IS the agent-side context, and it proves
-the same thing without spawning anything. (2) pglite is single-writer, so a raw
-schema probe against a stack's data dir must wait until its dev server is
-stopped; opening a second PGlite on a live dir is the corruption the workspace
-fixture note already warns about.
-
-## Convergence S1 — the watcher speaks prod (`kernel/loopRefs.ts` + `objects.parent_id`)
-
-Stage S1 of the convergence design (`data/rw-converge-s1/report.md` — read it, not a
-summary here) made the SHIPPING product's `loops` row THE loop that a kernel object can
-point at. It repointed references first; S2 repointed triggers and S3 made production
-loops authoritative. Hierarchy UI/CLI (S4) and cleanup (S5) remain later stages.
-
-- **`kernel/loopRefs.ts` is the ONE loop-reference resolver.** `objects.watcher` /
-  `created_by_loop` name production `loops` rows after S3, and every surface that turns
-  one into a NAME reads through here. Its four rulings live in that file's header; the two that a later
-  change breaks by softening: **production ids are used AS-IS** (no alias table — both
-  worlds are opaque `loop-` prefixed text, so every existing prefix check already passes),
-  and **resolution is not validation** — there is no FK and no existence check at the write
-  seam, because a prod loop can be hard-deleted while tasks still name it and the ruling is
-  warn-never-block-never-cascade.
-- **A dangling reference resolves to a TOMBSTONE, never to `null`.** `null` means "no
-  watcher", a state the watcher rule abolished; `source: "missing"` means "the loop is
-  gone", which is a fact. `components/workspace/loopLabel.ts` is the one render
-  (`deleted loop loop-…`, and not clickable) and every screen reads through it.
-- **Production wins an id collision, and `assignable` (not `status`) is the hand-off filter.**
-  The stack migration creates prod rows KEEPING the kernel loop id verbatim, so one id
-  names a row in both tables through S5; the kernel twin is history-only after S3.
-  A prod loop resolves ENABLED OR NOT (the `enabled` gate belongs to the due scan,
-  not to reading) — only a kernel `retired` loop and a COMPLETED prod loop are un-assignable.
-- **`views.ts` is production-authoritative after S3:** card/grouping refs, the hand-off
-  picker, system-graph nodes, Loops pane and loop page all read `loops`; the page renders
-  `taskFileContent`, while same-id kernel events remain its history.
-- **`tickDueTasks` resolves production watchers only.** It queues enabled watchers through
-  the shared run seam; disabled production watchers stay quiet and the level trigger fires
-  after re-enable.
-- **`objects.parent_id` + the write-time cycle guard landed here** (migration `0007`,
-  task-only CHECK + partial index; `applyTransition.ts` `parentIssue` at both chokepoints,
-  `PARENT_CYCLE`). Referencing by ID through one write chokepoint is what `feat/task-tree-v2`
-  could not have (its parent was a front-matter SLUG with files as the writers), so the guard
-  is possible at all and slug-collision ambiguity is gone. `parentId: null` is a legal move
-  to root — unlike `watcher: null`. A CLOSED parent is deliberately NOT refused: there is no
-  roll-up in either direction. S4 (below) opened the surfaces on top of it.
-- Migrations mint as **0007+ on the rewrite chain**; 0003–0006 are applied on the captain's
-  pglite journal and are never renumbered (the cross-line renumber stays a chain-merge step).
-- Verified end to end on an isolated stack (own port/data dir/`LOOPANY_HOME`, seeded before
-  boot — pglite is single-writer): grouping headers reading prod loop names, a tombstone
-  group for a deleted watcher, the picker offering a DISABLED prod loop, a real watcher
-  transfer onto it through the drawer, the prod loop page serving cadence/health/watched
-  tasks off the shared `runs` table, the graph drawing the hand-off edge, a live
-  `PARENT_CYCLE` refusal, kernel-watched tasks unchanged, zero console errors and no
-  page-level horizontal scroll at 1440 or 760.
-
-## Convergence S2 — one run world
-
-Stage S2 repointed every trigger to the shared `queueKernelRun` mint seam before S3 moved
-the roster and claim transport. The durable
-contract is pinned end to end by `src/kernel/convergenceS2.integration.test.ts` and the
-legacy runner environment case in `packages/daemon/src/runner.test.ts`.
-
-- `queueKernelRun` accepts either loop representation. Production rows use the real
-  loop `userId`/`machineId`, `phase: pending`, `role: exec`, and NULL `queueState`; kernel
-  rows retain their old lifecycle. Due tasks, verdict answers, directives, and both
-  run-now paths reuse the frozen derived-id seeds verbatim. Organic events still enter
-  through `appendOrganicEvent`; derived events still pass the collision-checked append
-  seam.
-- Migration `0008` drops `runs_one_queued_idx`. Queueing locks the authoritative loop
-  row and joins only a not-yet-executing run: kernel `queued`, production `pending`
-  with NULL `queueState`. A trigger arriving during execution queues separately; the
-  production poll holds it while a sibling is running, and sweep does not classify
-  that guard-held row as never claimed.
-- Cron supersede coalesces only provenance-free cadence rows; trigger rows survive.
-  A due instant's failed/canceled row re-arms with the SAME frozen id after the loop's
-  pending slot clears, while an open or completed row remains the idempotency floor.
-- The shipping scheduler's run-now is immediate even for a disabled loop: it clears any
-  deferred `nextRunAt`, queues one production run, and leaves `enabled` false. A second
-  fire while that run is still pending returns `alreadyQueued`; if it is already
-  executing, the new fire queues behind it. The retired deferred-fire-on-enable behavior
-  must not return.
-- Delivery resolves scoped task/event context for production rows, includes the human's
-  directive or answer verbatim as untrusted trigger data, and exports `LOOPANY_RUN_ID` on
-  the legacy daemon path. Rewrite API run context can authorize either kernel leases or
-  durable production run leases during the dual-transport stage.
-- Every terminal shipping path appends the frozen derived `run-finished` event for a
-  provenance-carrying row (including sweep/reclaim and the 7-day skipped backstop),
-  keeping workspace SSE/timelines live. Event append is best-effort-with-log and can
-  never block lease retirement. Ordinary production cron/edit/evolve history remains
-  event-silent.
-
-## Convergence S3 — the loops converge
-
-Stage S3 makes production loops and the production poll/report pipeline authoritative,
-while retaining kernel loop objects and dormant queue code until S5.
-
-- `kernel:converge-loops` (`kernel/convergeLoops.ts`) is the insert-only operator. It
-  requires exactly one stack machine, creates same-id production twins, maps title,
-  cadence/timezone, enablement and machine/team ownership, and exclusively materializes
-  `<workdir>/loopany-task.md` with the charter under `## Spec`. It never overwrites
-  different bytes. Tasks/docs/mirrors and existing events stay untouched; provenance is
-  appended only through `appendOrganicEvent`'s attempt rung. Dry-run first.
-- The daemon always polls `/api/machine/poll`; `LOOPANY_RUNS_V2` remains only as dormant
-  compatibility code until S5 and no longer selects runtime behavior. The local wrapper
-  uses `LOOPANY_DEV_HOME=1` only to select the converged home presentation.
-- Boot always starts `DueTaskScheduler`, independent of the retired flag. Kernel cadence,
-  claim and attestation/reclaim have no runtime producer after S3; prod scheduler +
-  progress-freshness sweep cover the live run world.
-- Trigger rows carry `runs.claimable_at` (migration `0009`): rows held behind a running
-  sibling begin their never-claimed timeout at the first eligible poll/sweep, not creation.
-  This closes the sibling-finished-to-next-poll reclaim race.
-- `kernel/views.ts`, `loopRefs.ts`, the workspace Loops pane and kernel home read production
-  loops. Every old kernel `loop *` CLI command is a local `SURFACE_MOVED` teaching pointer
-  to `loops`/`show`/`new`/`edit`; it performs no network call or mutation. The separate
-  `loopany-dev` skill teaches the same converged surface.
-- **The u16 watched-task warning moved to the PRODUCTION lifecycle**, since the kernel
-  loop's terminal `retired` state retires with the loop kind. `kernel/watchedTasks.ts` is
-  the ONE author of both the count and the voice — `objectApi`'s `retirementWarning` is now
-  a call into it — and the four verbs (`retire`, `pause`, `finish`, `delete`) each phrase
-  their own consequence over the shared repair hint. It **warns, never blocks, never
-  cascades**: `editLoop` warns on the enabled true→false TRANSITION only (silent on a
-  re-asserted pause or a resume; previewed by `--dry-run`), `finishLoop` warns on the
-  completion that disables the loop, and DELETE warns BEFORE the choice — `JobDetail.
-  watchedTasks` carries the count so the confirm dialog can name it, which a post-write
-  warning cannot. **`store.deleteLoop` must never grow an `objects` cascade** (pinned by
-  `watchedTasks.integration.test.ts`): a dangling watcher is legal, resolved as a tombstone
-  by `loopRefs.ts`, skipped by the due scan, and repaired by a transfer.
-- Regression anchors: `convergeLoops.integration.test.ts`, the shipped 17-case
-  `convergenceS2.verify.test.ts`, `watchedTasks.integration.test.ts`,
-  `runQueue.integration.test.ts`, `views.integration.test.ts`
-  and daemon `dev-entry`/`kernel-cli`/`skill-dev` tests. S4 hierarchy and S5 deletion of
-  kernel loop objects, queue/claim code and flag symbols are deliberately not part of S3.
-
-## Convergence S3.1 — the cutover boundary closes by construction
-
-S3 retired every producer, claimer and reclaimer of a kernel-lifecycle run row but did
-not dispose of the rows the retired mechanism still owned, so design §9.3's "at no stage
-is there a window where neither guard covers a claimed run" failed at exactly the cutover
-instant (cv-s3-review F1). S3.1 makes it hold by code rather than by runbook.
-
-- **`kernel/cutover.ts` `terminalizeStrandedQueueRows()` runs at BOOT, before the
-  scheduler starts** (`server/boot.ts`, best-effort try/catch — a wedged loop is bad, a
-  server that will not come up is worse). Boot is the chokepoint, not the converge
-  script: every S3+ stack boots on every start, whether or not an operator ever ran
-  `kernel:converge-loops`. Read that module's header for the full failure chain; the
-  short form is that `openRuns`/`pendingRunsForMachine` fence on `queue_state IS NULL`
-  while `hasRunningRun`/`openRunsForLoop` do NOT, so a row left `queue_state='claimed'`
-  keeps its converged twin permanently "running" — poll guard holds, sweep stands down,
-  scheduler ticks early-out, silently.
-- **It closes ONLY open kernel queue states** (`queued`/`claimed` → `queue_state='failure',
-  phase='error', outcome='error', lease_state=NULL` + `STRANDED_RUN_ERROR`), never a
-  `queue_state IS NULL` production row, and keeps the row's historical `ts` (a disposal,
-  not a fresh event). Idempotent by construction. Event discrimination reuses the S2 F4
-  hook `appendProductionRunFinished` verbatim: a provenance-carrying row closes its kernel
-  timeline, a provenance-free one stays event-silent like ordinary cron/edit/evolve history.
-- **`convergeKernelLoops` verifies the TWIN before counting an id converged** (F3): a
-  same-id production row whose `teamId`/`machineId` differ from the plan is a loud refusal,
-  never `existing += 1` — absorbing it would leave the kernel loop unconverged while its
-  watchers resolved against a stranger's team scoping, and report a clean pass.
-- Regression anchor: `convergenceS31.integration.test.ts` (the inversion of the review's
-  scratch suite — stranded claimed/queued rows terminalized, the converged loop then
-  claiming and reporting normally, provenance discrimination, boot ordering, and the F3
-  refusal). Verified on an isolated stack: a stranded `claimed` row planted pre-boot, the
-  loud terminalization at boot, then a real daemon claiming and completing fresh runs.
-## Convergence S3.2 — a workspace is not a content home
-
-S3 gave converged loops a task file at `<workdir>/loopany-task.md`, which pointed the
-daemon's folder watcher at whole REPOSITORIES. The consequence was not a slow sync but a
-dead daemon: the watcher held one fd per watched FILE, six repo-workdir loops warmed past
-macOS's `OPEN_MAX`, and from that instant every `child_process.spawn` threw `spawn EBADF`
-— the daemon could no longer run the coding agent it exists to run. The whole diagnosis,
-the measured ceiling and the watch/sync contract live in the root `AGENTS.md`
-("Artifacts / storage", the two S3.2 bullets) and in `packages/daemon/src/watcher.ts`'s
-header; read those, not a summary here.
-
-- **The server half**: an oversized manifest now fails honestly rather than stalling —
-  `SYNC_MAX_MANIFEST_ENTRIES` refuses over-cap manifests with a 413 that reconciles
-  nothing, and `store.blobsExisting` answers a whole manifest's hashes in one batched
-  query instead of two sequential lookups per file. Both pinned in `gateway/sync.test.ts`.
-- **The contract in one line**: a loop bound to a workspace syncs that folder's top-level
-  files only. Do not "fix" a converged loop's missing subtree by widening the scope — move
-  its task file into a dedicated folder, which is what restores full recursion.
-- Regression anchor: `packages/daemon/src/watcher.fdCeiling.test.ts`. Verified on an
-  isolated stack (own port/data dir/`LOOPANY_HOME`) reproducing the incident's shape — 10
-  loops watching 20,620 files across repo-scale workdirs held the daemon at 25 open fds
-  (4 REG; the live incident was 12,537/12,515), and three consecutive run-now cycles
-  (exec + evolve each) all spawned, 22 runs, zero EBADF, zero sync failures, zero 5xx.
-
-## Convergence S4 — hierarchy reaches the surfaces
-
-Stage S4 opened S1's `parent_id` to the CLI and the workspace. Nothing about the kernel
-changed: the guard, the task-only CHECK and the "no roll-up either way" ruling are all
-S1's, and every surface here is a door onto them.
-
-- **`parentId` joined `CONTENT_KEYS` and `expressedDiffs` together** (the S1 note's
-  instruction). A replay whose file names a different parent now reports `parentId` as a
-  differing field instead of silently reading as identical.
-- **The artifact key is `parent:`** (`KIND_KEYS.task`, second after `key`), a TASK id
-  checked for SHAPE at the seam and for reality at the write chokepoint. It is EMITTED by
-  `serializeKindArtifact`, so `show --file` → re-upload preserves the hierarchy; an absent
-  key is a root. Pinned by `artifactSeam.test.ts` + the round-trip case in
-  `taskParent.integration.test.ts`.
-- **`patchTask` accepts `parent`**, string-or-null, and **null is legal** — the one place
-  hierarchy and the watcher rule differ (a watcher is transferred and never cleared; a task
-  may stop being a sub-task). The CLI mirrors it: `--parent <task-id>` on `task create` and
-  `task update`, `--parent null` on update only, with `taskIdRefusal` catching a loop id
-  locally at exit 2 and teaching the parent/watcher distinction rather than the regex.
-- **`task show` prints BOTH directions**: a `parent:` row (`—` for a root, printed either
-  way so "no parent" is never inferred from silence) and a `children[N]{id,title,status,
-  watcher}` block, omitted when empty. Each child names its OWN watcher — hierarchy never
-  says who acts next. `task list` deliberately grew NO parent column: most tasks are roots,
-  and `show` is where the tree is read.
-- **`views.ts` carries the edge and the parent's NAME.** `taskRow` gained `parentId`; the
-  board payload adds a resolved `parent` ref via `parentIndex` (one extra query, page rows
-  consulted first, TEAM-SCOPED so a foreign parent tombstones rather than leaking a title);
-  the task page adds `parent` + `children`. A dangling parent resolves to
-  `{missing: true}`, the same tombstone-not-null ruling `loopRefs.ts` makes for a watcher.
-- **`components/workspace/taskList.ts` `treeRows` is the ONE tree assembly** — pure, and
-  tolerant as defence in depth (ported from `feat/task-tree-v2`): a self-parent, an unknown
-  parent and EVERY member of a cycle all surface as roots, the descent is depth-bounded, and
-  the test asserts totality + disjointness over trees/orphans/cycles together for the same
-  reason the grouping and board mappings do.
-- **Grouping did not change, because hierarchy is ORTHOGONAL to the watcher.** A child is
-  indented under its parent only WITHIN its watcher's group; a child watched by another loop
-  stays in ITS group and carries a `part of <title>` chip (`detached`), never re-parented
-  visually. **The BOARD nests nothing** — a column is a state predicate, so a card sits where
-  its own state puts it — and carries the same chip. The chip is TEXT on both surfaces, since
-  a row and a card are each one button; the navigable references live in the drawer (`part of`
-  in the meta grid, a `Sub-tasks` section rendered only when there are children, and no
-  progress count anywhere — a roll-up would imply a coupling the two statuses forbid).
-- Verified end to end on an isolated stack (own port 3186 / data dir / `LOOPANY_HOME`, seeded
-  then converged so watchers are production loops): a parent + two children + a grandchild
-  created through the real CLI's `--parent`; a human create with `--parent` and no `--watcher`
-  refused `WATCHER_REQUIRED` (a parent never implies a watcher); a nonexistent parent
-  `NOT_FOUND` and a loop id refused locally, both teaching; `A→B, B→A` and a self-parent both
-  `PARENT_CYCLE` with nothing written; the list showing depth 0/1/2 with the elbow, the
-  cross-watcher child chipped in FollowUp's group, board chips with zero nesting, and the
-  drawer walking up and down; zero console errors, no page-level horizontal scroll at 760.
+- **The contract in one line**: a loop bound to a workspace syncs that folder's
+  top-level files only. Do not "fix" a converged loop's missing subtree by
+  widening the scope — move its task file into a dedicated folder, which is what
+  restores full recursion.
+- **The server half**: `SYNC_MAX_MANIFEST_ENTRIES` refuses an over-cap manifest
+  with a 413 that reconciles nothing, and `store.blobsExisting` answers a whole
+  manifest's hashes in one batched query. Both pinned in `gateway/sync.test.ts`.
+- Regression anchor: `packages/daemon/src/watcher.fdCeiling.test.ts`.
+- Prod `loops.workdir` is LOAD-BEARING for this: the poll's watch set carries it
+  and `isWorkspaceRoot` keys on it. (The kernel's own `objects.workdir` facet
+  retired with the loop kind — different column, different fate.)
 
 ## Maintaining this file
 

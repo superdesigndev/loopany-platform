@@ -320,7 +320,7 @@ describe("cv-s2-verify: F5 - due dedup keys COMPLETED rows only", () => {
 
     expect(await queue.tickDueTasks(new Date())).toMatchObject({ queued: 1, replayed: 0 });
     const rearmed = await store.getRun(dueId);
-    expect(rearmed).toMatchObject({ id: dueId, phase: "pending", outcome: null, error: null, progress: null, attempts: 0 });
+    expect(rearmed).toMatchObject({ id: dueId, phase: "pending", outcome: null, error: null, progress: null });
     expect(await tokens.resolveLease(oldLease)).toBeUndefined();
   });
 

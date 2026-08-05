@@ -2,7 +2,8 @@
  * Convergence S3 — the u16 watched-task warning on the PRODUCTION lifecycle.
  *
  * Design report §1.4 (retire-freeze row) + §5: the kernel loop's terminal
- * `retired` state retires, and what survives is the WARNING. Pause, closed-loop
+ * `retired` state retired with the loop kind, and what survives is the WARNING
+ * it carried. Pause, closed-loop
  * finish and hard delete each stand a watcher down; each warns with the open
  * watched-task count, and none of them may block or cascade.
  *
@@ -135,7 +136,7 @@ describe("the count", () => {
   });
 
   it("phrases each verb's own consequence and always names the repair", async () => {
-    const verbs = ["retire", "pause", "finish", "delete"] as const;
+    const verbs = ["pause", "finish", "delete"] as const;
     const messages = verbs.map((v) => watched.watchedTasksWarning("loop-x", 2, v).message);
     expect(new Set(messages).size).toBe(verbs.length); // no verb reuses another's sentence
     for (const v of verbs) {

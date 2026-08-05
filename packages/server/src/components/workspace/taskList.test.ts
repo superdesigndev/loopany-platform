@@ -188,10 +188,29 @@ describe('treeRows — parent/child indentation inside one group', () => {
     expect(new Set(rows.map((row) => row.task.id)).size).toBe(tasks.length)
   })
 
-  it('bounds the descent, and the bound is the one the kernel guard uses', () => {
+  /**
+   * A CHAIN DEEPER THAN THE BOUND IS STILL TOTAL — the regression the shipped
+   * bound test could not see, because `not.toThrow()` is satisfied by a function
+   * that quietly returns fewer rows than it was given.
+   *
+   * The kernel's write guard allows 64 hops, so a 26+-deep chain is reachable
+   * through legal writes. `isRoot` classified the task at exactly
+   * `TREE_MAX_DEPTH + 1` as a NON-root (filing it as its parent's child) while
+   * the descent refused to emit at that depth — so it was in neither `roots` nor
+   * any emitted subtree and disappeared from the list. A layout that loses a
+   * task hides work.
+   */
+  it('bounds the classification walk WITHOUT losing a row from a deeper chain', () => {
     expect(TREE_MAX_DEPTH).toBeGreaterThan(12)
     const chain = Array.from({ length: 40 }, (_, i) => sub(`t-${i}`, i === 0 ? null : `t-${i - 1}`))
+    const rows = treeRows(chain)
     expect(() => treeRows(chain)).not.toThrow()
+    // TOTAL: every task, exactly once — including `t-25`, the one that used to
+    // vanish, and every task below it.
+    expect(rows).toHaveLength(chain.length)
+    expect(new Set(rows.map((row) => row.task.id)).size).toBe(chain.length)
+    expect(rows.map((row) => row.task.id)).toContain('t-25')
+    for (const task of chain) expect(rows.some((row) => row.task.id === task.id), task.id).toBe(true)
   })
 
   it('reads an empty list as an empty tree', () => {

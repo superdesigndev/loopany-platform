@@ -48,11 +48,9 @@ describe("parent: is a task id, checked for shape and round-tripped", () => {
     expect(!result.ok && result.error.issues).toMatchObject([{ path: "parent", expected: "task-<id>" }]);
   });
 
-  it("is task-only: a doc or a loop that names one gets the key-set refusal", () => {
-    for (const kind of ["doc", "loop"] as const) {
-      const result = parseKindArtifact(kind, "---\ntitle: x\nparent: task-7f3a91\n---\nbody\n", NOW);
-      expect(!result.ok && result.error.code).toBe("UNKNOWN_KEY");
-    }
+  it("is task-only: a doc that names one gets the key-set refusal", () => {
+    const result = parseKindArtifact("doc", "---\ntitle: x\nparent: task-7f3a91\n---\nbody\n", NOW);
+    expect(!result.ok && result.error.code).toBe("UNKNOWN_KEY");
   });
 
   /** `show --file` must emit a file its own re-upload preserves — otherwise a
@@ -66,9 +64,12 @@ describe("parent: is a task id, checked for shape and round-tripped", () => {
 });
 
 describe("the closed key sets are per kind, and the kind firewalls are named", () => {
-  it("keeps cron off a task and format off a task or loop", () => {
+  it("keeps cron off every authored kind and format off a task", () => {
+    // A cadence is the SHIPPING loop's and no kernel kind carries one, so it is
+    // an unknown key that teaches where a schedule actually lives.
     const cron = parseKindArtifact("task", "---\ncron: 0 6 * * 1\n---\nbody\n", NOW);
-    expect(!cron.ok && cron.error).toMatchObject({ code: "UNKNOWN_KEY", issues: [{ message: "a cadence belongs to a loop, not a task" }] });
+    expect(!cron.ok && cron.error).toMatchObject({ code: "UNKNOWN_KEY", issues: [{ message: "a cadence and a bound directory belong to a LOOP, not a task" }] });
+    expect(!cron.ok && cron.error.hint).toContain("loopany edit");
     // `format` on a task is an UNKNOWN_KEY refusal, not a value refusal: it is
     // simply not in the task key set (CLI spec §6.4). The teaching still names
     // the composition rule for a rich body.
@@ -110,42 +111,19 @@ describe("the closed key sets are per kind, and the kind firewalls are named", (
   });
 
   it("omits payload entirely when there is none, so an absent payload survives the round trip", () => {
-    const file = serializeKindArtifact("loop", { title: "Housekeeper", key: "housekeeper", body: "charter\n", payload: null, cron: "0 7 * * *" });
+    const file = serializeKindArtifact("doc", { title: "Report", key: "report", body: "text\n", payload: null });
     // `payload: {}` would re-parse to an empty mapping — a value, not an absence —
     // and every consumer diffing it against a null payload would report a change
     // the file never expressed (review F1).
     expect(file).not.toContain("payload");
-    const back = parseKindArtifact("loop", file, NOW);
+    const back = parseKindArtifact("doc", file, NOW);
     expect(back.ok && back.value.payload).toBeNull();
   });
 
-  it("carries a loop's BOUND workdir through the round trip", () => {
-    // Captain ruling 2026-08-04: a loop binds a directory like the shipping
-    // product does, so `workdir:` is a first-class loop key, not payload data.
-    const file = serializeKindArtifact("loop", { title: "Housekeeper (local)", key: "hk-local", body: "charter\n", payload: null, cron: "0 7 * * *", workdir: "/Users/me/Workspace/repo" });
-    expect(file).toContain("workdir: /Users/me/Workspace/repo");
-    const back = parseKindArtifact("loop", file, NOW);
-    expect(back.ok && back.value.workdir).toBe("/Users/me/Workspace/repo");
-  });
-
-  it("omits an absent workdir, so an unbound loop round-trips unbound", () => {
-    const file = serializeKindArtifact("loop", { title: "Nomad", key: "nomad", body: "charter\n", payload: null, cron: "0 7 * * *", workdir: null });
-    expect(file).not.toContain("workdir");
-    const back = parseKindArtifact("loop", file, NOW);
-    expect(back.ok && back.value.workdir).toBeNull();
-  });
-
-  it("refuses a relative workdir, because the claiming machine is unknown at write time", () => {
-    const rel = parseKindArtifact("loop", "---\nworkdir: ./repo\n---\ncharter\n", NOW);
-    expect(!rel.ok && rel.error).toMatchObject({ code: "SCHEMA_VIOLATION", issues: [{ path: "workdir", message: "must be an absolute path" }] });
-    const tilde = parseKindArtifact("loop", "---\nworkdir: ~/repo\n---\ncharter\n", NOW);
-    expect(!tilde.ok && tilde.error.code).toBe("SCHEMA_VIOLATION");
-  });
-
-  it("keeps workdir off a task and a doc — only a loop has an execution site", () => {
+  it("keeps workdir off every authored kind — a bound directory is the loop's", () => {
     for (const kind of ["task", "doc"] as const) {
       const result = parseKindArtifact(kind, "---\nworkdir: /Users/me/repo\n---\nbody\n", NOW);
-      expect(!result.ok && result.error).toMatchObject({ code: "UNKNOWN_KEY", issues: [{ message: `a bound working directory belongs to a loop, not a ${kind}` }] });
+      expect(!result.ok && result.error).toMatchObject({ code: "UNKNOWN_KEY", issues: [{ message: `a cadence and a bound directory belong to a LOOP, not a ${kind}` }] });
     }
   });
 

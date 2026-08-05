@@ -38,14 +38,20 @@ describe("the refusal catalogue", () => {
     expect(REFUSAL_STATUS.RATE_LIMITED).toBe(429);
   });
 
-  it("keeps ownership and human-only refusals on their own codes, not a bare FORBIDDEN", () => {
-    // A charter can say "if you see NOT_YOUR_LOOP you copied the wrong id" only
-    // because the guard has its own slug (CLI spec §3.3).
-    for (const code of ["NOT_YOUR_LOOP", "NOT_HUMAN", "NOT_YOUR_RUN", "NO_RUN_CONTEXT"] as const) {
+  it("keeps human-only refusals on their own codes, not a bare FORBIDDEN", () => {
+    // A charter can say "if you see NO_RUN_CONTEXT the daemon did not set
+    // LOOPANY_RUN_ID" only because the guard has its own slug (CLI spec §3.3).
+    for (const code of ["NOT_HUMAN", "NO_RUN_CONTEXT"] as const) {
       expect(REFUSAL_STATUS[code]).toBe(403);
     }
     const codes = new Set(REFUSAL_CODES as readonly string[]);
     expect(codes.has("FORBIDDEN")).toBe(false);
+    // The loop-governance vocabulary retired WITH the loop kind (convergence
+    // S5): no server path can answer one, and a catalogue entry nothing can
+    // produce teaches an agent a refusal it will never receive.
+    for (const gone of ["NOT_YOUR_LOOP", "APPROVAL_REQUIRED", "RETIRED", "BAD_CRON"]) {
+      expect(codes.has(gone), gone).toBe(false);
+    }
   });
 
   it("carries the subject into the message and keeps caller overrides", () => {

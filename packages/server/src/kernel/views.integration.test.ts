@@ -74,9 +74,9 @@ async function make(input: Record<string, unknown>) {
 
 async function insertRun(over: Record<string, unknown>) {
   await database.db.insert(legacySchema.runs).values({
-    id: "run-seed", loopId: housekeeper, userId: "u-owner", machineId: "m-1", phase: "done", role: "exec",
-    ts: ago(5), queueState: "success", scope: "routine", reason: "clock", startedAt: ago(5), finishedAt: ago(4),
-    costUsd: 0.4, attempts: 1, ...over,
+    id: "run-seed", loopId: housekeeper, userId: "u-owner", machineId: "m-1", phase: "done", outcome: "exec",
+    role: "exec", ts: ago(5), durationMs: 3_600_000, scope: "routine", reason: "clock",
+    costUsd: 0.4, ...over,
   } as never);
 }
 
@@ -86,10 +86,9 @@ async function insertRun(over: Record<string, unknown>) {
  * loop page something to be healthy about.
  */
 async function seed() {
-  housekeeper = (await make({ kind: "loop", title: "Housekeeper", cron: "0 7 * * *", body: "You are the Housekeeper.\n" })).id;
-  steward = (await make({ kind: "loop", title: "FollowUp", cron: "30 8 * * *", body: "You sweep the pool.\n" })).id;
-  // S3 keeps the kernel loop objects for history, but every workspace read is
-  // authoritative on the production twin minted by converge-loops.
+  // THE loop is the production row: `objects` holds task/doc/mirror only.
+  housekeeper = "loop-viewshk";
+  steward = "loop-viewsfu";
   await database.db.insert(legacySchema.loops).values([
     {
       id: housekeeper, userId: "u-owner", teamId: TEAM, machineId: "m-1", name: "Housekeeper",
@@ -136,8 +135,8 @@ async function seed() {
   await make({ kind: "doc", title: "Weekly board", format: "html", body: "<h1>Board</h1><script>parent.postMessage('x','*')</script>", createdByLoop: steward });
 
   await insertRun({});
-  await insertRun({ id: "run-old", ts: ago(29), startedAt: ago(29), finishedAt: ago(28), queueState: "failure", costUsd: 0.1 });
-  await insertRun({ id: "run-steward", loopId: steward, ts: ago(3), startedAt: ago(3), finishedAt: ago(3), queueState: "success", costUsd: 0.2 });
+  await insertRun({ id: "run-old", ts: ago(29), phase: "error", outcome: "error", costUsd: 0.1 });
+  await insertRun({ id: "run-steward", loopId: steward, ts: ago(3), costUsd: 0.2 });
 }
 
 const ok = <T,>(result: { ok: true; value: T } | { ok: false; error: { code: string; message: string } }): T => {
@@ -241,9 +240,23 @@ describe("GET /api/views/loop/:id", () => {
     expect((value.recentRuns as { id: string }[]).map((r) => r.id)).toEqual(["run-seed", "run-old"]);
   });
 
+  /** A converged loop's KERNEL EVENTS stay keyed to its verbatim id, so its
+   *  history is still readable after the loop object itself retired — that is
+   *  what makes the id-verbatim migration lossless. Nothing writes a
+   *  `charter-evolved` any more (a loop's brief lives in its task file), so
+   *  these are seeded as the historical rows they are. */
   it("shows evolve diffs in the charter history, and only body-touching ones", async () => {
-    await kernel.applyUpdate({ objectId: housekeeper, actor: { entrance: "agent", actorId: "run-evolve" }, now: ago(1), fields: { body: "You are the Housekeeper.\n\n## Lessons\n" }, eventKind: "charter-evolved" } as never);
-    await kernel.applyUpdate({ objectId: housekeeper, actor: human.actor, now: ago(1), fields: { title: "Housekeeper v2" }, eventKind: "loop-updated" } as never);
+    const store = await import("../db/kernelStore.js");
+    await store.appendEvent(undefined, {
+      id: "ev-hist00000001", teamId: TEAM, objectId: housekeeper, kind: "charter-evolved",
+      origin: "organic", entrance: "agent", actorId: "run-evolve",
+      diff: { body: { old: "You are the Housekeeper.\n", new: "You are the Housekeeper.\n\n## Lessons\n" } }, ts: ago(1),
+    } as never);
+    await store.appendEvent(undefined, {
+      id: "ev-hist00000002", teamId: TEAM, objectId: housekeeper, kind: "loop-updated",
+      origin: "organic", entrance: "human", actorId: "u-owner",
+      diff: { title: { old: "Housekeeper", new: "Housekeeper v2" } }, ts: ago(1),
+    } as never);
     const value = ok(await views.loopView(housekeeper, human, NOW)) as { charterHistory: { diff: Record<string, unknown> }[] };
     expect(value.charterHistory).toHaveLength(1);
     expect(value.charterHistory[0]!.diff.body).toMatchObject({ old: "You are the Housekeeper.\n" });
@@ -418,7 +431,8 @@ describe("GET /api/views/docs and /doc/:id", () => {
   });
 
   it("refuses a task id on the doc endpoint", async () => {
-    const result = await views.docView(housekeeper, human);
+    const board = (await views.tasksView(human, new URLSearchParams(), NOW)) as { ok: true; value: { columns: { tasks: { id: string }[] }[] } };
+    const result = await views.docView(board.value.columns.flatMap((c) => c.tasks)[0]!.id, human);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("WRONG_KIND");
   });
@@ -561,7 +575,7 @@ describe("convergence S1 — a watcher that names a production loop", () => {
     };
     expect(value.loop).toMatchObject({
       id: PROD_LOOP, title: "React Doctor", status: "active", cron: "0 6 * * *",
-      timezone: "Asia/Shanghai", source: "prod",
+      timezone: "Asia/Shanghai",
     });
     // The standing brief lives in the task file's `## Spec`, mirrored on the
     // loop row — that is what a prod loop has where a kernel loop has a charter.
@@ -570,7 +584,7 @@ describe("convergence S1 — a watcher that names a production loop", () => {
     // Runs are ONE table already, so health needs no bridging.
     await database.db.insert(legacySchema.runs).values({
       id: "run-prod", loopId: PROD_LOOP, userId: "u-owner", machineId: "m-1", phase: "done", role: "exec",
-      ts: ago(2), startedAt: ago(2), finishedAt: ago(2), costUsd: 0.3,
+      ts: ago(2), durationMs: 60_000, outcome: "exec", costUsd: 0.3,
     } as never);
     const withRun = ok(await views.loopView(PROD_LOOP, human, NOW)) as { health: { lastOutcome: string | null } };
     expect(withRun.health.lastOutcome).toBe("success");
@@ -578,8 +592,8 @@ describe("convergence S1 — a watcher that names a production loop", () => {
 
   it("keeps the production twin authoritative, and never crosses a team", async () => {
     await database.db.update(legacySchema.loops).set({ name: "A prod twin of the kernel id" }).where(eq(legacySchema.loops.id, housekeeper));
-    const value = ok(await views.loopView(housekeeper, human, NOW)) as { loop: { title: string; source: string } };
-    expect(value.loop).toMatchObject({ title: "A prod twin of the kernel id", source: "prod" });
+    const value = ok(await views.loopView(housekeeper, human, NOW)) as { loop: { title: string } };
+    expect(value.loop).toMatchObject({ title: "A prod twin of the kernel id" });
     await database.db.delete(legacySchema.loops);
     await insertProdLoop({ teamId: OTHER_TEAM });
     const foreign = await views.loopView(PROD_LOOP, human, NOW);

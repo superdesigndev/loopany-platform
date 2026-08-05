@@ -3,7 +3,7 @@ import { and, asc, count, desc, eq, gt, isNotNull, lte, ne, or } from "drizzle-o
 import { db } from "../db/index.js";
 import { events, objects, type KernelEvent, type KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
-import { loops as productionLoops, runs } from "../db/schema.js";
+import { loops as productionLoops, runs, type Loop } from "../db/schema.js";
 import { appendOrganicEvent, applyTransitionIn, applyUpdateIn, buildFieldDiff, createObjectIn, sameValue, type WritableFields } from "./applyTransition.js";
 import { MIRRORS_KEY, MIRRORS_UPDATE_HINT, parseDate, parseKindArtifact, serializeKindArtifact, type ArtifactProjection } from "./artifactSeam.js";
 import { derivedEventId } from "./ids.js";
@@ -11,17 +11,13 @@ import { attachMirrorIn, mirrorsFor } from "./mirrorApi.js";
 import {
   appendDerivedEvent,
   notifyProductionRunQueued,
-  notifyRunQueued,
   queueKernelRun,
   queueLoopTeamId,
   resolveQueueLoopIn,
-  type QueueLoop,
 } from "./runQueue.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
-import { nextOccurrenceAfter } from "./schedule.js";
-import { countOpenWatchedTasks, watchedTasksWarning } from "./watchedTasks.js";
 import type { ApiContext } from "./apiAuth.js";
-import { LOOP_STATUSES, isArtifactKind, type ArtifactKind, type EventDiff, type ObjectKind } from "./types.js";
+import { isArtifactKind, type ArtifactKind, type EventDiff, type ObjectKind } from "./types.js";
 
 export type ApiResult<T> = { ok: true; status?: number; value: T } | { ok: false; error: ApiRefusal };
 
@@ -33,37 +29,18 @@ export function objectShape(row: KernelObject): Record<string, unknown> {
   // echoing the empty defaults: the fields do not exist on the row (the DDL
   // forbids them), so printing `payload: {}` would advertise a free zone this
   // kind deliberately has not got.
-  if (row.kind === "mirror") {
-    const { payload: _p, body: _b, title, ...rest } = common;
-    return { ...rest, externalKind: row.mirrorKind, coords: row.mirrorCoords, note: title, attachedTo: row.attachedTo ?? [] };
-  }
-  return { ...common, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire, workdir: row.workdir };
+  const { payload: _p, body: _b, title, ...rest } = common;
+  return { ...rest, externalKind: row.mirrorKind, coords: row.mirrorCoords, note: title, attachedTo: row.attachedTo ?? [] };
 }
 
 export async function createFromArtifact(kind: ArtifactKind, raw: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
   const parsed = parseKindArtifact(kind, raw, now);
   if (!parsed.ok) return { ok: false, error: parsed.error };
   const p = parsed.value;
-  if (kind === "loop") {
-    // Creating a loop is GOVERNANCE (design §4): it mints a standing cadence and
-    // a new actor in the system, so it is the owner's act. Double-covered with the
-    // route's own `human` requirement — either alone is sufficient, both together
-    // leave no seam, and the refusal names the proposal path rather than a wall.
-    if (context.mode !== "human") {
-      return { ok: false, error: notHuman(context, "creating a loop is governance and is the owner's act", "propose it: `loopany task create --file <path> --needs-human \"create a loop that …\" --watcher <your-loop-id>`") };
-    }
-    // `createObjectIn` arms `next_fire` by CALLING croner, which throws on an
-    // unreadable expression. Validated here so a typo is a teaching 400 rather
-    // than a 500 from inside the transaction.
-    if (p.cron) {
-      try { nextOccurrenceAfter(p.cron, null, now); }
-      catch { return { ok: false, error: refusal("BAD_CRON", `cron ${JSON.stringify(p.cron)} is not a cron expression this server can read`, [{ path: "cron", message: "unreadable cron expression", got: p.cron, expected: "0 7 * * *" }], "five fields: minute hour day-of-month month day-of-week; omit cron entirely for a loop that only ever runs on demand") }; }
-    }
-  }
   const result = await createObjectInTransaction({ kind, p, context, now });
   if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
   const differingFields = result.created ? [] : expressedDiffs(result.object, p, kind);
-  const name = kind === "task" ? "task" : kind === "doc" ? "doc" : "loop";
+  const name = kind;
   return { ok: true, status: result.created ? 201 : 200, value: {
     created: result.created, ...(result.created ? {} : { contentDiffers: differingFields.length > 0, differingFields }),
     // An idempotent hit writes nothing, so it reports no event — the caller must
@@ -72,21 +49,8 @@ export async function createFromArtifact(kind: ArtifactKind, raw: string, contex
     // The `mirrors:` block, resolved. Echoed even when empty so a caller can see
     // that a block it wrote was read (and that a file with none has none).
     mirrors: result.mirrors,
-    ...(!result.created && differingFields.length ? { notice: { code: "KEY_EXISTS_CONTENT_DIFFERS", message: `key "${p.key}" already names ${result.object.id}; the submitted file differs from it and was not applied`, hint: applyDifferingHint(kind, result.object.id, name) } } : {}),
+    ...(!result.created && differingFields.length ? { notice: { code: "KEY_EXISTS_CONTENT_DIFFERS", message: `key "${p.key}" already names ${result.object.id}; the submitted file differs from it and was not applied`, hint: `to change it: PATCH /api/${name}s/${result.object.id} with the same file` } } : {}),
   } };
-}
-
-/**
- * A replay's "your file was not applied" notice must name a route that EXISTS.
- * Tasks and docs have the human whole-file PATCH; a loop does not — `PATCH
- * /api/loops/:id` is spec'd but unbuilt, and `POST /api/loops/:id/evolve` is
- * agent-only — so the loop hint teaches the two paths a charter change really
- * has today rather than a 404.
- */
-function applyDifferingHint(kind: ObjectKind, id: string, name: string): string {
-  return kind === "loop"
-    ? `a loop charter has no human edit route yet: a run of this loop applies it with POST /api/loops/${id}/evolve (agent-only, and a differing cron: or workdir: is refused APPROVAL_REQUIRED), or edit it on the loop page`
-    : `to change it: PATCH /api/${name}s/${id} with the same file`;
 }
 
 /**
@@ -107,7 +71,6 @@ async function createObjectInTransaction(input: { kind: ArtifactKind; p: ReturnT
       title: p.title, body: p.body, payload: p.payload,
       ...(kind === "task" ? { followUpAt: p.followUpAt, pendingQuestion: p.pendingQuestion, watcher: p.watcher, parentId: p.parentId } : {}),
       ...(kind === "doc" ? { format: p.format } : {}),
-      ...(kind === "loop" ? { cron: p.cron, workdir: p.workdir } : {}),
       createdByRun: context.run?.id ?? null, createdByLoop: context.run?.loopId ?? null,
     });
     if (!created.ok) return created;
@@ -131,7 +94,6 @@ function expressedDiffs(row: KernelObject, p: ArtifactProjection, kind: Artifact
   const pairs: [string, unknown, unknown][] = [["title", row.title, p.title], ["body", row.body ?? "", p.body], ["payload", row.payload ?? null, p.payload]];
   if (kind === "task") pairs.push(["followUpAt", row.followUpAt, p.followUpAt], ["watcher", row.watcher, p.watcher], ["parentId", row.parentId, p.parentId], ["pendingQuestion", row.pendingQuestion, p.pendingQuestion]);
   if (kind === "doc") pairs.push(["format", row.format ?? "markdown", p.format]);
-  if (kind === "loop") pairs.push(["cron", row.cron, p.cron], ["workdir", row.workdir, p.workdir]);
   return pairs.filter(([, a, b]) => !sameValue(a, b)).map(([key]) => key);
 }
 
@@ -179,7 +141,7 @@ export async function showObject(kind: ObjectKind, id: string, context: ApiConte
   // depend on, and where do I go to check it?"
   const value: Record<string, unknown> = { [kind]: objectShape(row), events: history.map(eventShape), mirrors: await mirrorsFor(undefined, context.teamId, id) };
   if (kind === "task") {
-    value.runs = await db.select({ id: runs.id, state: runs.queueState, scope: runs.scope, reason: runs.reason, finishedAt: runs.finishedAt }).from(runs).where(or(eq(runs.scope, `task:${id}`), eq(runs.id, row.createdByRun ?? ""))).orderBy(desc(runs.ts));
+    value.runs = await db.select({ id: runs.id, phase: runs.phase, scope: runs.scope, reason: runs.reason, ts: runs.ts, durationMs: runs.durationMs }).from(runs).where(or(eq(runs.scope, `task:${id}`), eq(runs.id, row.createdByRun ?? ""))).orderBy(desc(runs.ts));
     // BOTH DIRECTIONS of the hierarchy, because a run reading one task has to be
     // able to walk it: `parent` is on the row itself (a column), `children` is
     // the reverse lookup nothing else would give it. A missing parent row is
@@ -196,7 +158,7 @@ export async function showObject(kind: ObjectKind, id: string, context: ApiConte
 
 export function objectArtifact(row: KernelObject): string {
   if (!isArtifactKind(row.kind)) throw new Error(`${row.kind} is not authored as a file`);
-  return serializeKindArtifact(row.kind, { title: row.title, key: row.key, body: row.body ?? "", payload: row.payload, followUpAt: row.followUpAt, watcher: row.watcher, parentId: row.parentId, pendingQuestion: row.pendingQuestion, format: (row.format ?? "markdown") as "markdown" | "html", cron: row.cron, workdir: row.workdir });
+  return serializeKindArtifact(row.kind, { title: row.title, key: row.key, body: row.body ?? "", payload: row.payload, followUpAt: row.followUpAt, watcher: row.watcher, parentId: row.parentId, pendingQuestion: row.pendingQuestion, format: (row.format ?? "markdown") as "markdown" | "html" });
 }
 
 export async function replaceFromArtifact(kind: ArtifactKind, id: string, raw: string, context: ApiContext, now = new Date(), eventKind?: string): Promise<ApiResult<Record<string, unknown>>> {
@@ -214,17 +176,10 @@ export async function replaceFromArtifact(kind: ArtifactKind, id: string, raw: s
     const guard = scopedKindGuard(before, kind, context.teamId); if (guard) return guard;
     if (parsed.value.key !== null && parsed.value.key !== before!.key) return { ok: false, error: refusal("IMMUTABLE_KEY", "key cannot be changed", [{ path: "key", message: "fixed at creation", got: parsed.value.key, expected: before!.key ?? "(remove the key)" }], "restore the stored key or remove the line") };
     if (context.mode === "agent" && kind === "task" && before!.pendingQuestion && parsed.value.pendingQuestion !== before!.pendingQuestion) return { ok: false, error: refusal("NOT_HUMAN", "a run cannot clear or replace a pending question", [], "a human answers or withdraws it") };
-    if (kind === "loop" && context.run && context.run.loopId !== id) return { ok: false, error: notYourLoop(context, id) };
-    if (kind === "loop" && before!.status === "retired") return { ok: false, error: refusal("RETIRED", `${id} is retired and its charter is frozen`) };
-    if (kind === "loop" && parsed.value.cron !== before!.cron) return { ok: false, error: refusal("APPROVAL_REQUIRED", "changing this loop's cadence requires an approval key", [{ path: "cron", message: "changed on the free-zone endpoint" }], `use POST /api/loops/${id} with cron and a human answer event`) };
-    // WHERE a loop executes is governance exactly like WHEN it executes: moving
-    // the bound directory moves every future run's blast radius, so an evolve
-    // pass may not do it silently (captain ruling 2026-08-04).
-    if (kind === "loop" && parsed.value.workdir !== before!.workdir) return { ok: false, error: refusal("APPROVAL_REQUIRED", "changing this loop's bound working directory requires an approval key", [{ path: "workdir", message: "changed on the free-zone endpoint", got: parsed.value.workdir ?? "(none)", expected: before!.workdir ?? "(none)" }], `use POST /api/loops/${id} with workdir and a human answer event`) };
     const fields: WritableFields = { title: parsed.value.title, body: parsed.value.body, payload: parsed.value.payload };
     if (kind === "task") Object.assign(fields, { followUpAt: parsed.value.followUpAt, watcher: parsed.value.watcher, parentId: parsed.value.parentId, pendingQuestion: parsed.value.pendingQuestion });
     if (kind === "doc") fields.format = parsed.value.format;
-    const result = await applyUpdateIn(tx, { objectId: id, actor: context.actor, now: now.toISOString(), fields, eventKind: eventKind ?? (kind === "loop" ? "charter-evolved" : "object-updated") });
+    const result = await applyUpdateIn(tx, { objectId: id, actor: context.actor, now: now.toISOString(), fields, eventKind: eventKind ?? "object-updated" });
     return kernelUpdateResult(kind, result);
   });
 }
@@ -281,162 +236,6 @@ export async function closeTask(id: string, note: unknown, context: ApiContext, 
     if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
     return { ok: true, value: { changed: true, task: objectShape(result.object), event: result.event.id } };
   });
-}
-
-export async function governLoop(id: string, body: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  if (context.run?.loopId !== id) return { ok: false, error: notYourLoop(context, id) };
-  const allowed = ["cron", "workdir", "approval"]; if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: refusal("INVALID_BODY", "loop update requires a JSON object") };
-  const rec = body as Record<string, unknown>; const unknown = Object.keys(rec).find((k) => !allowed.includes(k)); if (unknown) return { ok: false, error: unknownJsonKey("loop update", unknown, allowed) };
-  // The two governed execution facets: WHEN a loop runs and WHERE it runs. Each
-  // is optional, one of them is required, and both ride the same approval gate.
-  if (rec.cron !== undefined && typeof rec.cron !== "string") return { ok: false, error: refusal("INVALID_BODY", "cron must be a cron expression string") };
-  if (rec.workdir !== undefined && rec.workdir !== null && typeof rec.workdir !== "string") return { ok: false, error: refusal("INVALID_BODY", "workdir must be an absolute path string or null") };
-  if (rec.cron === undefined && rec.workdir === undefined) return { ok: false, error: refusal("INVALID_BODY", "cron or workdir is required", [], "governance moves a loop's cadence, its bound directory, or both") };
-  const workdir = rec.workdir === undefined ? undefined : (rec.workdir as string | null);
-  if (typeof workdir === "string" && !workdir.startsWith("/")) return { ok: false, error: refusal("SCHEMA_VIOLATION", "workdir must be an absolute path", [{ path: "workdir", message: "must be an absolute path", got: workdir, expected: "/Users/you/Workspace/your-repo" }]) };
-  if (typeof rec.approval !== "string") return { ok: false, error: refusal("APPROVAL_REQUIRED", "changing this loop's cadence or bound directory requires an approval key", [{ path: "approval", message: "is required", expected: "ev-<id> of a human answer" }]) };
-  return db.transaction(async (rawTx) => {
-    const tx = rawTx as unknown as store.KernelExec; const loop = await store.getObjectForUpdate(tx, id);
-    const guard = scopedKindGuard(loop, "loop", context.teamId); if (guard) return guard;
-    if (loop!.status === "retired") return { ok: false, error: refusal("RETIRED", `${id} is retired`) };
-    const approval = await store.getEvent(tx, rec.approval as string);
-    if (!approval || approval.teamId !== loop!.teamId) return { ok: false, error: refusal("APPROVAL_UNKNOWN", `${rec.approval} is not an approval event in this team`) };
-    if (approval.entrance !== "human") return { ok: false, error: refusal("APPROVAL_NOT_HUMAN", `${approval.id} was not entered by a human`, [{ path: "approval", message: "entrance must be human", got: approval.entrance, expected: "human" }]) };
-    const task = approval.objectId ? await store.getObject(tx, approval.objectId) : undefined;
-    if (!task || task.teamId !== loop!.teamId || task.kind !== "task" || task.createdByLoop !== id) return { ok: false, error: refusal("APPROVAL_FOREIGN", `${approval.id} hangs on a task this loop did not create`, [{ path: "approval", message: "the approving task must have been created by this loop", got: task?.createdByLoop ?? "none", expected: id }]) };
-    const fields: WritableFields = {};
-    if (rec.cron !== undefined) {
-      const cron = rec.cron as string;
-      let computedNextFire: string; try { computedNextFire = nextOccurrenceAfter(cron, loop!.timezone, now); } catch { return { ok: false, error: refusal("BAD_CRON", `cron "${cron}" is not valid in this loop's timezone`) }; }
-      Object.assign(fields, { cron, nextFire: loop!.status === "active" ? computedNextFire : null });
-    }
-    if (workdir !== undefined) fields.workdir = workdir;
-    const approvalBlock = { event: approval.id, entrance: approval.entrance, actor: approval.actorId, task: task.id, ts: approval.ts };
-    const result = await applyUpdateIn(tx, { objectId: id, actor: context.actor, now: now.toISOString(), fields, eventKind: "loop-updated", eventPayload: { approval: approvalBlock } });
-    if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
-    return { ok: true, value: { changed: result.changed, loop: objectShape(result.object), event: result.event?.id ?? null, diff: result.event?.diff ?? {}, approval: approvalBlock, ...(loop!.status === "paused" ? { notice: { code: "LOOP_STILL_PAUSED", message: "the loop's governed settings changed but the loop remains paused", hint: "time never un-pauses a loop — a human resumes it" } } : {}) } };
-  });
-}
-
-// ---------------------------------------------------------------- loop CRUD
-
-/**
- * `GET /api/loops` — the loop roster.
- *
- * DUAL, like `task list`: a read, team-scoped, never ownership-checked. An agent
- * legitimately needs it to resolve the loop id it is about to name as a
- * `--watcher`, and `task list` already exposes those ids, so withholding the
- * roster would buy nothing.
- *
- * ONE filter, `status`, and it takes a VALUE rather than the boolean pair
- * `task list` uses: a loop has THREE states, so no two-flag form spans them
- * honestly. Absent ⇒ the whole roster, retired included — a team's loop count is
- * small by construction, so the useful default is "show me everything I own".
- */
-export async function listLoops(context: ApiContext, query: URLSearchParams): Promise<ApiResult<Record<string, unknown>>> {
-  const allowed = new Set(["status", "limit", "cursor"]);
-  const unknown = [...query.keys()].find((key) => !allowed.has(key));
-  if (unknown) return { ok: false, error: refusal("UNKNOWN_FILTER", `unknown loop filter "${unknown}"`, [{ path: unknown, message: "unknown filter", got: unknown }], `accepted filters: ${[...allowed].join(", ")}`) };
-  const status = query.get("status");
-  if (status && !(LOOP_STATUSES as readonly string[]).includes(status)) {
-    return { ok: false, error: refusal("UNKNOWN_FILTER", `"${status}" is not a loop status`, [{ path: "status", message: "unknown status", got: status, expected: LOOP_STATUSES.join("|") }], "a loop is active, paused or retired — loops never close, and retirement is the terminal state") };
-  }
-  const limit = Number(query.get("limit") ?? 50);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 200) return { ok: false, error: refusal("UNKNOWN_FILTER", "limit must be from 1 to 200") };
-  const conds = [eq(objects.teamId, context.teamId), eq(objects.kind, "loop")];
-  if (status) conds.push(eq(objects.status, status));
-  const cursor = query.get("cursor"); if (cursor) conds.push(gt(objects.id, cursor));
-  const rows = await db.select().from(objects).where(and(...conds)).orderBy(asc(objects.id)).limit(limit + 1);
-  const page = rows.slice(0, limit);
-  const truncated = rows.length > limit;
-  const total = truncated ? Number((await db.select({ n: count() }).from(objects).where(and(...conds)))[0]?.n ?? page.length) : page.length;
-  return { ok: true, value: { loops: page.map(loopListShape), total, nextCursor: truncated ? page.at(-1)?.id ?? null : null, truncated, viewerLoop: context.run?.loopId ?? null } };
-}
-
-/** The three operational verbs, as data: the CLI path segment → the kernel
- *  transition name → the status it lands on (`kernel/types.ts` TRANSITIONS is
- *  the authority for the from-states). `auto-pause` is deliberately absent: the
- *  circuit breaker is the system's, never a person's, and keeping it off this
- *  map is what makes the timeline's `pause` vs `auto-pause` distinction real. */
-export const LOOP_LIFECYCLE = { pause: "paused", resume: "active", retire: "retired" } as const;
-export type LoopLifecycleVerb = keyof typeof LOOP_LIFECYCLE;
-
-export function isLoopLifecycleVerb(value: string): value is LoopLifecycleVerb {
-  return Object.hasOwn(LOOP_LIFECYCLE, value);
-}
-
-/**
- * `POST /api/loops/:id/{pause,resume,retire}` — the operational lifecycle
- * (API spec §1.16, design §4 `active ⇄ paused → retired`).
- *
- * HUMAN ONLY. A run may evolve its own charter (the free zone) and may propose
- * anything else, but it never pauses or retires itself: that is the operational
- * decision the owner keeps.
- *
- * There is no hard delete anywhere in this surface, and that is not an omission:
- * the kernel is event-sourced, so `retire` IS the D in CRUD — terminal, charter
- * frozen (`replaceFromArtifact`/`governLoop` both refuse a retired loop), cadence
- * disarmed by the transition itself, and the whole record still readable.
- *
- * Repeating a verb that already landed is a SUCCESS with `changed: false`, the
- * same ruling `task close` carries: a retry after a dropped connection must be
- * free. Only a move OUT of `retired` is refused, and it is refused by name
- * (`RETIRED`) rather than as a bare illegal-from-state.
- *
- * **RETIRE WARNS, IT NEVER BLOCKS** (captain ruling 2026-08-04). A loop that
- * still watches open tasks may be retired, and the response carries a `warning`
- * naming the count. The three alternatives were all rejected: refusing makes the
- * owner's operational decision conditional on housekeeping they may not want to
- * do; force-transferring picks a new responsible loop on their behalf; and
- * cascading would close work that is genuinely unfinished. Retirement is
- * terminal, so those tasks keep a watcher that will never wake again — that is a
- * real consequence, and the honest response to a real consequence the owner
- * chose is to say it out loud, once, at the moment they choose it.
- */
-export async function loopLifecycle(id: string, verb: LoopLifecycleVerb, body: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  if (context.mode !== "human") {
-    return { ok: false, error: notHuman(context, `a loop's lifecycle is the owner's — a run does not ${verb} a loop`, `propose it: \`loopany task create --file <path> --needs-human "${verb} this loop because …" --watcher ${context.run?.loopId ?? "<your-loop-id>"}\``) };
-  }
-  let note: string | null = null;
-  if (body !== undefined && body !== null) {
-    if (typeof body !== "object" || Array.isArray(body)) return { ok: false, error: refusal("INVALID_BODY", `loop ${verb} takes an optional JSON object`, [], 'the only field is note: `{"note": "…"}`, or send no body at all') };
-    const rec = body as Record<string, unknown>;
-    const unknown = Object.keys(rec).find((key) => key !== "note");
-    if (unknown) return { ok: false, error: unknownJsonKey(`loop ${verb}`, unknown, ["note"]) };
-    if (rec.note !== undefined && rec.note !== null) {
-      if (typeof rec.note !== "string" || !rec.note.trim()) return { ok: false, error: refusal("SCHEMA_VIOLATION", "note must be non-empty text or absent", [{ path: "note", message: "must be non-empty text or absent" }]) };
-      note = rec.note;
-    }
-  }
-  return db.transaction(async (rawTx) => {
-    const tx = rawTx as unknown as store.KernelExec;
-    const before = await store.getObjectForUpdate(tx, id);
-    const guard = scopedKindGuard(before, "loop", context.teamId); if (guard) return guard;
-    const target = LOOP_LIFECYCLE[verb];
-    if (before!.status === "retired" && target !== "retired") {
-      return { ok: false, error: refusal("RETIRED", `${id} is retired and cannot be ${verb}d`, [{ path: "status", message: "retirement is terminal", got: "retired", expected: "active|paused" }], "there is no un-retire: the charter is frozen and the cadence is gone for good — create a new loop, or read this one's record, which is kept") };
-    }
-    if (before!.status === target) {
-      return { ok: true, value: { changed: false, loop: objectShape(before!), event: null, diff: {} } };
-    }
-    // Counted BEFORE the transition, because retiring changes nothing about the
-    // tasks — that is precisely what the warning is for.
-    const stranded = verb === "retire" ? await countOpenWatchedTasks(context.teamId, id, tx) : 0;
-    const result = await applyTransitionIn(tx, { objectId: id, transition: verb, actor: context.actor, now: now.toISOString(), note });
-    if (!result.ok) return { ok: false, error: refusal(result.code as never, result.message, result.issues, result.hint) };
-    return { ok: true, value: {
-      changed: true, loop: objectShape(result.object), event: result.event.id, diff: result.event.diff ?? {},
-      ...(stranded ? { warning: retirementWarning(id, stranded) } : {}),
-    } };
-  });
-}
-
-/** The retire warning is ONE case of the shared watched-task consequence
- *  (`kernel/watchedTasks.ts`); convergence S3 gave production pause/finish/delete
- *  the other three, and a second copy of the count or the voice here would be the
- *  drift that module exists to prevent. */
-export function retirementWarning(loopId: string, openTasks: number) {
-  return watchedTasksWarning(loopId, openTasks, "retire");
 }
 
 /**
@@ -674,12 +473,12 @@ export async function leaveDirective(id: string, directive: unknown, context: Ap
   return result;
 }
 
-function runQueueState(run: { queueState: string | null; phase: string }): string {
-  return run.queueState ?? (run.phase === "pending" ? "queued" : run.phase);
+function runQueueState(run: { phase: string }): string {
+  return run.phase === "pending" ? "queued" : run.phase;
 }
 
-function queueLoopShape(loop: QueueLoop): Record<string, unknown> {
-  if ("kind" in loop) return objectShape(loop);
+/** A PRODUCTION loop, in the shape the run-now response renders. */
+function queueLoopShape(loop: Loop): Record<string, unknown> {
   return {
     id: loop.id,
     kind: "loop",
@@ -700,8 +499,7 @@ async function wakeQueuedResult(result: ApiResult<Record<string, unknown>>): Pro
   if (!runShape || runShape.alreadyQueued === true || typeof runShape.id !== "string") return;
   const run = await store.getRunRow(undefined, runShape.id);
   if (!run) return;
-  if (run.queueState === "queued") notifyRunQueued();
-  else await notifyProductionRunQueued(run);
+  await notifyProductionRunQueued(run);
 }
 
 export async function eventsAfter(teamId: string, after: number, limit = 200): Promise<KernelEvent[]> {
@@ -726,10 +524,8 @@ function unknownJsonKey(where: string, key: string, allowed: string[]): ApiRefus
 function notHuman(context: ApiContext, message = "this question is waiting for a human", hint?: string): ApiRefusal {
   return refusal("NOT_HUMAN", message, context.run ? [{ path: "X-Loopany-Run", message: "a request carrying run context is an agent's", got: context.run.id }] : [], hint);
 }
-function notYourLoop(context: ApiContext, id: string): ApiRefusal { return refusal("NOT_YOUR_LOOP", `${context.run?.id ?? "this run"} belongs to ${context.run?.loopId ?? "another loop"} and may not write ${id}`, [{ path: "id", message: "must be the run's own loop", got: id, expected: context.run?.loopId ?? "" }], "a run evolves and governs only its own loop") }
 function mergePayload(before: Record<string, unknown> | null, patch: Record<string, unknown>) { const out = { ...(before ?? {}) }; for (const [key, value] of Object.entries(patch)) if (value === null) delete out[key]; else out[key] = value; return out; }
 export function taskListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, parentId: row.parentId, key: row.key, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
-export function loopListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, cron: row.cron, timezone: row.timezone, nextFire: row.nextFire, workdir: row.workdir, key: row.key, createdAt: row.createdAt, updatedAt: row.updatedAt }; }
 export function eventShape(row: KernelEvent) { return { id: row.id, seq: row.seq, objectId: row.objectId, kind: row.kind, entrance: row.entrance, actor: row.actorId, transition: row.transition, diff: row.diff, note: row.note, ts: row.ts }; }
 function lookbackDate(value: string, now: Date): string | undefined { const m = /^(\d+)(h|d)$/.exec(value); if (m) return new Date(now.getTime() - Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000)).toISOString(); return parseDate(value, now); }
 function reasonRank(reasons: string[]) { return reasons.includes("question") ? 0 : 1; }

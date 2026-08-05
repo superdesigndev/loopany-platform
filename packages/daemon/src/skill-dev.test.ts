@@ -123,7 +123,7 @@ describe("the shipped artifact", () => {
     expect(skill).toContain("Never production");
     expect(skill).toContain("scripts/loopany-dev");
     expect(skill).toContain("Never use bare `loopany`");
-    expect(skill).not.toContain("LOOPANY_RUNS_V2=1");
+    expect(skill).not.toContain("LOOPANY_RUNS_V2");
   });
 
   // Two 2026-08-04 sessions each self-hosted a stack — one from a wrapper hint,
@@ -170,7 +170,7 @@ describe("the shipped artifact", () => {
     expect(wrapper).toContain("refusing to run against");
     expect(wrapper).toContain("http://127.0.0.1:*");
     expect(wrapper).toContain("export LOOPANY_DEV_HOME=1");
-    expect(wrapper).not.toContain("export LOOPANY_RUNS_V2=1");
+    expect(wrapper).not.toContain("LOOPANY_RUNS_V2");
     // The env script prints a banner; it must go to stderr or it corrupts the
     // CLI's machine-readable TOON on stdout.
     expect(wrapper).toContain("rewrite-local-run.env.sh\" 1>&2");

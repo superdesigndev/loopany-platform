@@ -22,7 +22,6 @@
  * makes one).
  */
 import { authEnabled, currentUser, requestScope } from "../auth.js";
-import type { KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
 import * as legacyStore from "../db/store.js";
 import type { Loop, Machine, Run } from "../db/schema.js";
@@ -38,7 +37,7 @@ export interface ApiContext {
   mode: "agent" | "human";
   machine?: Machine;
   run?: Run;
-  loop?: KernelObject | Loop;
+  loop?: Loop;
 }
 
 export type ApiAuthResult = { ok: true; context: ApiContext } | { ok: false; error: ApiRefusal };
@@ -113,19 +112,10 @@ export async function resolveApiContext(
     if (!run || run.machineId !== machine.id) {
       return { ok: false, error: refusal("RUN_CONTEXT_UNKNOWN", `${runHeader} is not a run this machine is currently holding`, [{ path: "X-Loopany-Run", message: "unknown or not claimed by this machine", got: runHeader }], "the run may have finished or been reclaimed; stop and let the daemon claim a fresh one") };
     }
-    if (run.queueState !== null) {
-      const terminalRead = !mutation && run.leaseState === "terminal-grace";
-      if (!terminalRead && (run.queueState !== "claimed" || run.leaseState !== "active" || Date.parse(run.leaseExpiresAt ?? "") <= Date.now())) {
-        return { ok: false, error: refusal("LEASE_LOST", `${run.id} no longer holds its lease`, [], "stop work on it — the lease is the authority") };
-      }
-      const loop = await store.getObject(undefined, run.loopId);
-      if (!loop || loop.kind !== "loop") return { ok: false, error: refusal("RUN_CONTEXT_UNKNOWN", `${runHeader} has no live loop context`) };
-      return { ok: true, context: { teamId: loop.teamId, actor: { entrance: "agent", actorId: run.id }, mode: "agent", machine, run, loop } };
-    }
-
-    // Production run: authority lives in durable `run_leases`, not in the
-    // rewrite queue columns. A terminal-grace lease serves reads only, matching
-    // the kernel path's wake-report semantics.
+    // Authority lives in the durable `run_leases` row — the ONE run credential
+    // (the rewrite's parallel queue/lease columns retired in convergence S5). A
+    // terminal-grace lease serves reads only, so a woken machine can still read
+    // what it was working on while only its final report reconciles.
     const lease = await resolveRunContextLease(run.id, machine.id);
     if (!lease || (mutation && lease.state !== "active")) {
       return { ok: false, error: refusal("LEASE_LOST", `${run.id} no longer holds its lease`, [], "stop work on it — the lease is the authority") };

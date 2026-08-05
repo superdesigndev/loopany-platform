@@ -1,23 +1,23 @@
 /**
  * Rewrite kernel tables — `objects` + `events` (Drizzle, Postgres `pg-core`).
  *
- * ADDITIVE UNIT. These two tables stand alongside the shipping
- * machines/loops/runs schema and rewire nothing: no existing runtime path reads
- * or writes anything here, and the production-loop migration
- * (`kernel/loopMigration.ts`) COPIES loops in without touching `loops`. The HTTP
- * surface, the CLI, the verdict, the scheduler tick and the UI are later units.
+ * These two tables stand ALONGSIDE the shipping machines/loops/runs schema.
+ * After convergence they hold exactly three kinds — task, doc, mirror — and the
+ * `loop` kind is GONE: the shipping `loops` row is THE loop, and `watcher` /
+ * `created_by_loop` are plain text references to one, deliberately with no
+ * foreign key (`kernel/loopRefs.ts` is the one resolver; a dangling reference is
+ * a legal tombstone).
  *
  * Conventions match `db/schema.ts` exactly — text ids, ISO-string timestamps as
  * `text` with no db-side defaults, typed `jsonb().$type<>()` — so `store.ts`
  * stays single-sourced across the postgres-js and pglite driver tiers.
  *
  * Three invariants are enforced by the SCHEMA, not by callers:
- *   1. THE KIND FIREWALLS (design §4). A cadence and a bound workdir are loop
- *      facets, a question is a task facet, `format` is a doc facet — four
- *      CHECKs, so a `--cron` on a task cannot reach the disk even if every verb
- *      guard were removed. The
- *      verb guards in `kernel/types.ts` remain the teaching surface; these are
- *      the floor.
+ *   1. THE KIND FIREWALLS (design §4). A question and a parent are task facets,
+ *      `format` is a doc facet, and a mirror is stateless — CHECKs, so a
+ *      `needs_human:` on a doc cannot reach the disk even if every verb guard
+ *      were removed. The verb guards in `kernel/types.ts` remain the teaching
+ *      surface; these are the floor.
  *   2. PER-TEAM KEY UNIQUENESS — a partial UNIQUE index, so creation-time
  *      idempotency is an upsert conflict, never a read-then-write race (§4.1).
  *   3. PAYLOAD SUFFICIENCY (spec §5.2, carried from the graph line's captain
@@ -41,14 +41,12 @@ export const objects = pgTable(
     /** SHORT and kind-prefixed, server-issued (design §8): `task-7f3a91` /
      *  `doc-…` / `loop-…` — six lowercase hex when organic, twelve of sha256(seed)
      *  when the object is re-derivable (`kernel/ids.ts` owns both widths and the
-     *  reasoning). Migrated production loops keep their existing id verbatim
-     *  (§5.5) — already `loop-` prefixed, so run history and artifact paths keep
-     *  resolving. */
+     *  reasoning). */
     id: text("id").primaryKey(),
     /** Owning team — the scope everything is listed and authorized by. */
     teamId: text("team_id").notNull(),
     kind: text("kind", { enum: OBJECT_KINDS }).notNull(),
-    /** task: open|closed · loop: active|paused|retired · doc: current.
+    /** task: open|closed · doc: current · mirror: current.
      *  WRITES FLOW THROUGH `kernel/applyTransition.ts` — that module is the only
      *  place in the codebase that moves this column, and it writes the status and
      *  its event in ONE transaction. DB-level enforcement of that chokepoint
@@ -56,21 +54,6 @@ export const objects = pgTable(
      *  decision (design §2 invariant 2: "by convention in v1 — one code exit"). */
     status: text("status").notNull(),
     title: text("title"),
-
-    // ---- loop facets (CHECK: null on every other kind) ----
-    /** The cadence. A loop's body is its charter; this is when it runs. */
-    cron: text("cron"),
-    /** IANA tz the cron is read in. Null ⇒ server local. */
-    timezone: text("timezone"),
-    /** THE SCHEDULER'S CURSOR: the next instant this loop is due (ISO). The tick's
-     *  whole claim predicate is `next_fire <= now`, level-triggered, so downtime
-     *  owes exactly ONE catch-up fire (design §5 R-clock). Null ⇒ not armed. */
-    nextFire: text("next_fire"),
-    /** THE BOUND DIRECTORY the loop's runs execute in (absolute path). Captain
-     *  ruling 2026-08-04, amending design §8 / API spec §1.16: a loop binds a
-     *  workdir exactly as the shipping product does, and the claiming machine
-     *  launches the agent there. Null ⇒ the daemon's own per-loop scratch dir. */
-    workdir: text("workdir"),
 
     // ---- task facets (CHECK: null on every other kind) ----
     /** DATA, NOT A TIMER (design §6). "Due" is the query-time predicate
@@ -118,7 +101,7 @@ export const objects = pgTable(
     key: text("key"),
     /** The declared free zone — custom data, explicitly namespaced (design §7). */
     payload: jsonb("payload").$type<Record<string, unknown>>(),
-    /** Markdown (or HTML for a doc). A loop's body IS its charter (design §4). */
+    /** Markdown (or HTML for a doc). */
     body: text("body"),
 
     /** Provenance stamps, pinned at creation (design §10 principle 2). */
@@ -131,8 +114,6 @@ export const objects = pgTable(
   },
   (t) => [
     // ---- the kind firewalls, welded (design §4 rule 2) ----
-    check("objects_cron_loop_only", sql`${t.kind} = 'loop' OR (${t.cron} IS NULL AND ${t.timezone} IS NULL AND ${t.nextFire} IS NULL)`),
-    check("objects_workdir_loop_only", sql`${t.kind} = 'loop' OR ${t.workdir} IS NULL`),
     check(
       "objects_task_facets_only",
       sql`${t.kind} = 'task' OR (${t.followUpAt} IS NULL AND ${t.pendingQuestion} IS NULL AND ${t.watcher} IS NULL)`,
@@ -164,8 +145,6 @@ export const objects = pgTable(
     // ---- indexes, one per named standing query (spec §5.1) ----
     /** Key idempotency, per team. Partial: an object with no key costs nothing. */
     uniqueIndex("objects_key_idx").on(t.teamId, t.key).where(sql`${t.key} IS NOT NULL`),
-    /** The scheduler's claim scan; partial, so its size tracks LIVE cadences. */
-    index("objects_due_fire_idx").on(t.nextFire).where(sql`${t.kind} = 'loop' AND ${t.nextFire} IS NOT NULL`),
     /** Inbox branch 1: decisions (open tasks with a question waiting). */
     index("objects_question_idx")
       .on(t.teamId, t.createdAt)
@@ -174,12 +153,13 @@ export const objects = pgTable(
     index("objects_due_task_idx")
       .on(t.teamId, t.followUpAt)
       .where(sql`${t.kind} = 'task' AND ${t.status} = 'open' AND ${t.followUpAt} IS NOT NULL`),
-    /** The unwatched pool (`task list --unwatched`, inbox branches 2 and 3). */
+    /** The unwatched pool. Dead by construction since the watcher rule (a task
+     *  always names the loop that acts next), kept because dropping an index is
+     *  not this stage's business — see `kernel/types.ts` WATCHER_HINT. */
     index("objects_unwatched_idx")
       .on(t.teamId, t.createdAt)
       .where(sql`${t.kind} = 'task' AND ${t.status} = 'open' AND ${t.watcher} IS NULL`),
-    /** THE ORPHAN FLOOR: open + unwatched + no follow-up, oldest first — nothing
-     *  can lie down silently forever (design §6). */
+    /** THE ORPHAN FLOOR — same story as the pool above. */
     index("objects_orphan_idx")
       .on(t.teamId, t.createdAt)
       .where(sql`${t.kind} = 'task' AND ${t.status} = 'open' AND ${t.watcher} IS NULL AND ${t.followUpAt} IS NULL`),

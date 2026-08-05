@@ -150,11 +150,6 @@ const COMMANDS = new Set([
  */
 const HUMAN_COMMANDS = new Set(["inbox", "answer", "task tell", "loop create", "loop pause", "loop resume", "loop retire", "loop run-now"]);
 
-/** The three loop statuses, as the `--status` grammar. Duplicated from the
- *  server's `LOOP_STATUSES` on purpose: the flag VALUE set is the CLI's own
- *  surface, refused locally before any side effect, and the server re-validates. */
-const LOOP_STATUSES = ["active", "paused", "retired"];
-
 function commandOf(argv: string[]): string {
   const [noun, verb] = argv;
   if (noun === "inbox" || noun === "answer") return noun;
@@ -391,90 +386,6 @@ function plan(command: string, positional: string[], flags: Flags, argv: string[
       const raw_ = readArtifact(file, deps, out); if (typeof raw_ === "number") return raw_;
       return { path: `/api/docs/${encodeURIComponent(id)}`, method: "PATCH", headers: markdown(), body: raw_, render: (body) => renderUpdate("doc", "updated", body, now()) };
     }
-    case "loop list": return planLoopList(flags, out);
-    case "loop show": {
-      if (!id) return emit(out, missingArgument("loop show requires a loop id", "loopany loop show <loop-id>", ["Run `loopany loop list` — ids are printed by every create and every list row", "There is no `self`: your work order names your loop id on its first line"]), 2);
-      const bad = loopIdRefusal(id, "loop show"); if (bad) return emit(out, bad, 2);
-      return {
-        path: `/api/loops/${encodeURIComponent(id)}`,
-        headers: flags.file ? { Accept: "text/markdown" } : undefined,
-        render: (body) => renderShow("loop", body, flags.full === true, now()),
-      };
-    }
-    case "loop create": {
-      const file = requireFile("loop create", flags, out); if (typeof file === "number") return file;
-      const raw_ = readArtifact(file, deps, out); if (typeof raw_ === "number") return raw_;
-      return { path: "/api/loops", method: "POST", headers: markdown(), body: raw_, render: (body) => renderCreate("loop", body, now()) };
-    }
-    case "loop pause": case "loop resume": case "loop retire": {
-      const verb = command.slice("loop ".length);
-      if (!id) return emit(out, missingArgument(`loop ${verb} requires a loop id`, `loopany loop ${verb} <loop-id>`, ["Run `loopany loop list` to find it — the roster prints every loop's id and status"]), 2);
-      const bad = loopIdRefusal(id, `loop ${verb}`); if (bad) return emit(out, bad, 2);
-      if (flags.note !== undefined && (typeof flags.note !== "string" || !flags.note.trim())) {
-        return emit(out, missingArgument(`--note takes text`, `loopany loop ${verb} ${id} --note "…"`, ["The note lands on the lifecycle event and is the only record of why — or drop --note entirely, it is optional"]), 2);
-      }
-      return {
-        path: `/api/loops/${encodeURIComponent(id)}/${verb}`, method: "POST", headers: json(),
-        body: JSON.stringify(typeof flags.note === "string" ? { note: flags.note } : {}),
-        render: (body) => renderLifecycle(verb, body),
-      };
-    }
-    case "loop run-now": {
-      if (!id) return emit(out, missingArgument("loop run-now requires a loop id", "loopany loop run-now <loop-id>", ["Run `loopany loop list` to find it — the roster prints every loop's id and status"]), 2);
-      const bad = loopIdRefusal(id, "loop run-now"); if (bad) return emit(out, bad, 2);
-      // No body: the loop already says what it does, so an off-cadence run is a
-      // button, not a form (API spec §1.16).
-      return { path: `/api/loops/${encodeURIComponent(id)}/run-now`, method: "POST", headers: json(), body: "{}", render: (body) => renderRunNow(body) };
-    }
-    case "loop evolve": {
-      if (!id) return emit(out, missingArgument("loop evolve requires a loop id", "loopany loop evolve <loop-id> --file <path>", ["There is no `self` — every command takes an explicit id", "Your work order names your loop id on its first line"]), 2);
-      const bad = loopIdRefusal(id, "loop evolve"); if (bad) return emit(out, bad, 2);
-      const file = requireFile("loop evolve", flags, out, `loopany loop evolve ${id} --file <path>`); if (typeof file === "number") return file;
-      const raw_ = readArtifact(file, deps, out); if (typeof raw_ === "number") return raw_;
-      return { path: `/api/loops/${encodeURIComponent(id)}/evolve`, method: "POST", headers: markdown(), body: raw_, render: (body) => renderEvolve(body) };
-    }
-    case "loop update": {
-      if (!id) return emit(out, missingArgument("loop update requires a loop id", 'loopany loop update <loop-id> --cron "0 * * * *" --approval ev-<id>', ["Your work order names your loop id on its first line"]), 2);
-      const bad = loopIdRefusal(id, "loop update"); if (bad) return emit(out, bad, 2);
-      // The TWO governed execution facets: WHEN a loop runs and WHERE it runs.
-      // Either alone is a legal change, both ride the ONE approval gate — and the
-      // CLI must offer both, because `loop evolve` refuses a differing `workdir:`
-      // by naming this verb, and a refusal may only name a route that exists.
-      if (typeof flags.cron !== "string" && typeof flags.workdir !== "string") {
-        return emit(out, missingArgument("loop update requires --cron and/or --workdir", `loopany loop update ${id} --cron "0 * * * *" --approval ev-<id>`, ["Governance moves a loop's cadence, its bound directory, or both — the charter is the free zone (`loop evolve`)"]), 2);
-      }
-      if (typeof flags.workdir === "string" && !flags.workdir.startsWith("/")) {
-        return emit(out, errorEnvelope({
-          message: "--workdir takes an absolute path", code: "VALIDATION_ERROR", wrote: flags.workdir, expected: "/Users/you/Workspace/your-repo",
-          help: ["The claiming machine is unknown when this is written, so a relative or `~` path has nothing to resolve against", "The directory must already EXIST on the machine that runs this loop — a machine that lacks it fails the run rather than creating a lookalike"],
-        }), 2);
-      }
-      if (typeof flags.approval !== "string") {
-        const wrote = [typeof flags.cron === "string" ? `--cron ${flags.cron}` : "", typeof flags.workdir === "string" ? `--workdir ${flags.workdir}` : ""].filter(Boolean).join(" ");
-        // The one refusal where an agent cannot proceed without being told a
-        // whole protocol it has no other way to discover — so it prints all of it.
-        return emit(out, errorEnvelope({
-          message: "loop update requires --approval", code: "FORBIDDEN",
-          wrote: `loopany loop update ${id} ${wrote}`,
-          expected: `loopany loop update ${id} ${wrote} --approval ev-<id>`,
-          help: [
-            "Cadence and workdir are the keyed zone: an agent changes them only by presenting a human approval event",
-            `Step 1: \`loopany task create --file <path> --needs-human "propose this change: …" --watcher ${id}\``,
-            "Step 2: a human answers in the inbox; one run is queued for your loop with that task's scope",
-            "Step 3: that run reads the verdict event id with `loopany task show <id>` and passes it as --approval",
-          ],
-        }), 2);
-      }
-      return {
-        path: `/api/loops/${encodeURIComponent(id)}`, method: "POST", headers: json(),
-        body: JSON.stringify({
-          ...(typeof flags.cron === "string" ? { cron: flags.cron } : {}),
-          ...(typeof flags.workdir === "string" ? { workdir: flags.workdir } : {}),
-          approval: flags.approval,
-        }),
-        render: (body) => renderGovernance(body),
-      };
-    }
     case "inbox": {
       if (argv.length !== 1) return emit(out, errorEnvelope({ message: "inbox takes no arguments", code: "VALIDATION_ERROR", wrote: argv.join(" "), expected: "loopany inbox", help: ["The inbox is the safety floor — a filter could hide an arm of it, so there are none"] }), 2);
       return { path: "/api/inbox", render: (body) => renderInbox(body, now()) };
@@ -517,21 +428,6 @@ function planTaskList(flags: Flags, out: Emit, now: () => number): Plan | number
   return { path: `/api/tasks?${query}`, render: (body) => renderTaskList(body, echo, now()) };
 }
 
-function planLoopList(flags: Flags, out: Emit): Plan | number {
-  const status = flags.status;
-  if (status !== undefined && (typeof status !== "string" || !LOOP_STATUSES.includes(status))) {
-    return emit(out, errorEnvelope({
-      message: "--status takes one loop state", code: "VALIDATION_ERROR",
-      wrote: status === true ? ABSENT : status, expected: "active", allowed: LOOP_STATUSES,
-      help: [
-        "A loop is active, paused or retired — it never closes, because it is a standing cadence and not a unit of work",
-        "Run `loopany loop list` with no flag for the whole roster, retired loops included",
-      ],
-    }), 2);
-  }
-  const query = typeof status === "string" ? `?status=${encodeURIComponent(status)}` : "";
-  return { path: `/api/loops${query}`, render: (body) => renderLoopList(body, typeof status === "string" ? `--status ${status}` : "") };
-}
 
 function planTaskUpdate(id: string | undefined, flags: Flags, deps: KernelCliDeps, out: Emit, now: () => number): Plan | number {
   if (!id) return emit(out, missingArgument("task update requires a task id", "loopany task update <id> --follow-up +3d", ["Run `loopany task list --open` to find the id"]), 2);
@@ -902,110 +798,14 @@ function renderTaskList(body: Body, echo: string, now: number): string {
   return text + helpBlock(hints);
 }
 
-function renderLoopList(body: Body, echo: string): string {
-  const loops = (Array.isArray(body.loops) ? body.loops : []) as Body[];
-  const total = typeof body.total === "number" ? body.total : loops.length;
-  let text = countLine(loops.length, total);
-  text += typedList("loops", ["id", "title", "status", "cron", "next_fire"], loops.map((loop) => [loop.id, loop.title, loop.status, loop.cron, loop.nextFire]));
-  if (!loops.length) {
-    // The filter echo lets a caller seeing zero distinguish "my predicate was
-    // narrow" from "there are no loops at all" without a second call.
-    if (echo) text += `filter: ${cell(echo)}\n`;
-    return text + helpBlock([
-      echo ? "Run `loopany loop list` with no flag for the whole roster, retired loops included" : "Run `loopany loop create --file <path>` to make the first one — the file is the loop, and its body is the charter",
-      "An empty roster is a clean result, not an error",
-    ]);
-  }
-  const one = loops.length === 1 ? String(loops[0]!.id) : "<loop-id>";
-  const hints = [`Run \`loopany loop show ${one}\` to read one, with its charter and event tail`];
-  if (body.truncated) hints.unshift(`Showing the first ${loops.length} of ${total} — narrow with --status rather than paging`);
-  hints.push("A blank next_fire means the loop is paused, retired, or has no cadence — `loop show` names which");
-  hints.push("Retired loops stay listed on purpose: the kernel is event-sourced, so nothing is ever deleted");
-  return text + helpBlock(hints);
-}
 
-/**
- * pause / resume / retire. The lifecycle is the one place where "nothing
- * changed" is the COMMON answer (a retry after a dropped connection), so the
- * no-change case is stated in the ok: line rather than left to the empty diff.
- *
- * RETIRE WARNS, IT NEVER BLOCKS (captain ruling 2026-08-04): retiring a loop
- * that still watches open tasks succeeds, and the server returns a `warning`
- * naming the count. It prints on its OWN line above the detail block — not
- * folded into the help — because a hint is advice about what to do next, and
- * this is a fact about what just happened. `ok:` still leads: the retirement
- * did land, and a warning that read as a failure would be a lie.
- */
-function renderLifecycle(verb: string, body: Body): string {
-  const row = object(body) ?? {};
-  const id = String(row.id ?? ABSENT);
-  const changed = body.changed !== false;
-  const past = verb === "retire" ? "retired" : `${verb}d`;
-  const warning = body.warning as Body | undefined;
-  let text = `ok: ${past} ${id}${changed ? "" : ` (no change: already ${row.status ?? past})`}\n`;
-  if (warning) text += `warning: ${cell(warning.message)}\n`;
-  text += detailBlock("loop", [["id", row.id], ["title", row.title], ["status", row.status], ["cron", row.cron], ["next_fire", nextFireCell(row)]]);
-  text += changedBlock(body.diff as never);
-  text += eventLine(body.event);
-  if (!changed) return text + helpBlock([`Already ${row.status ?? past} — the lifecycle verbs are idempotent, so a retry after a dropped connection costs nothing`]);
-  const hints = lifecycleHints(verb, id);
-  if (warning && typeof warning.hint === "string") hints.unshift(warning.hint);
-  return text + helpBlock(hints);
-}
 
-/**
- * `loop run-now` — the MANUAL fire. Two things must be unmissable in the output,
- * because both are counter-intuitive from any other scheduler:
- *
- *   1. a PAUSED loop fires and STAYS paused (pause governs the cadence, not this
- *      button), so the render prints the status back and says the cadence was not
- *      touched — a caller must never read a successful fire as a resume;
- *   2. the queue is one-run-per-loop, so a second fire REPORTS the run already
- *      queued rather than minting a twin.
- */
-function renderRunNow(body: Body): string {
-  const row = object(body) ?? {};
-  const run = (body.run ?? {}) as Body;
-  const already = body.alreadyQueued === true;
-  const paused = row.status === "paused";
-  let text = `ok: ${already ? "already queued" : "queued"} ${cell(run.id)} for ${cell(row.id)}\n`;
-  text += detailBlock("loop", [["id", row.id], ["title", row.title], ["status", row.status], ["next_fire", nextFireCell(row)]]);
-  text += detailBlock("run", [["id", run.id], ["state", run.state], ["reason", run.reason]]);
-  const hints: string[] = [];
-  if (already) hints.push("This loop already had a run queued — one queued run per loop, so the fire joined it instead of minting a twin");
-  if (paused) hints.push(`${cell(row.id)} is PAUSED and stays paused: the fire does not resume the cadence, so it is one run and then quiet again`);
-  hints.push("A machine of this team claims it on its next poll; a loop bound to a workdir that machine lacks fails the run rather than running elsewhere");
-  hints.push(`Run \`loopany loop show ${cell(row.id)}\` to watch it land in the event tail`);
-  return text + helpBlock(hints);
-}
 
-function lifecycleHints(verb: string, id: string): string[] {
-  if (verb === "pause") {
-    return [
-      "Disarmed: next_fire is cleared and no run of this loop is claimed until it resumes",
-      `Time never un-pauses a loop — run \`loopany loop resume ${id}\` when you want it back`,
-      "Everything it created stays open and readable; pausing the loop does not close its tasks",
-    ];
-  }
-  if (verb === "resume") {
-    return [
-      "Re-armed to the NEXT occurrence — a week paused owes exactly one fire, not a week of them",
-      `Run \`loopany loop show ${id}\` to read the new next_fire`,
-      "This is also the only exit from a failure auto-pause",
-    ];
-  }
-  return [
-    "Retire is the delete: the kernel is event-sourced, so nothing is erased and there is no un-retire",
-    "Any task it still watches keeps naming it, and a retired loop is never woken again — this is warned about, never blocked",
-    "The charter is frozen from here — `loop evolve` and `loop update` are refused for this loop for good",
-    "Run `loopany loop list --status retired` to read the retired roster; every run and product it made is kept",
-  ];
-}
 
 /** §5.1's three key cases, all exit 0. Silent discard is forbidden: when the
  *  submitted content differs, the response says so AND names the command that
  *  would apply it. */
-function noticeLines(body: Body, applyWith: string): string {
+function noticeLines(body: Body): string {
   if (!body.contentDiffers) return "";
   const differs = (body.differingFields as string[] | undefined) ?? [];
   const notice = body.notice as Body | undefined;
@@ -1017,7 +817,7 @@ function renderCreate(kind: Kind, body: Body, now: number): string {
   const id = String(row.id ?? ABSENT);
   const replay = body.created === false;
   let text = `ok: created ${id}${replay ? " (idempotent: existing object returned)" : ""}\n`;
-  text += noticeLines(body, `loopany ${kind} update ${id} --file <path>`);
+  text += noticeLines(body);
   text += detailBlock(kind, kindRows(kind, row, now));
   const hints: string[] = [];
   if (replay && body.contentDiffers) {
@@ -1100,48 +900,14 @@ function renderClose(body: Body, now: number): string {
   const changed = body.changed !== false;
   let text = `ok: closed ${id}${changed ? "" : " (no change: already closed)"}\n`;
   text += detailBlock("task", taskRows(row, now));
-  text += noticeLines(body, "");
+  text += noticeLines(body);
   text += eventLine(body.event);
   return text + helpBlock(changed
     ? [`Run \`loopany task list --creator ${cell(row.createdByLoop)} --closed --since 14d\` to read your recent closures before proposing again`, "Run `loopany doc create --file <path>` to register this run's product, if you have not already"]
     : ["Close is idempotent — a retry after a dropped connection is free and costs nothing"]);
 }
 
-function renderEvolve(body: Body): string {
-  const row = object(body) ?? {};
-  const id = String(row.id ?? ABSENT);
-  const changed = body.changed !== false;
-  const charter = typeof row.body === "string" ? row.body : "";
-  let text = `ok: evolved ${id}${changed ? "" : " (no change)"}\n`;
-  text += detailBlock("loop", [["id", row.id], ["title", row.title], ["body", raw(`${charter.length} bytes`)]]);
-  text += changedBlock(body.diff as never);
-  text += eventLine(body.event);
-  return text + helpBlock([
-    "The diff renders on the loop page; your next run receives the new charter as its prompt",
-    `Cadence, retirement and creating other loops are governance: propose with \`loopany task create --file <path> --needs-human "…" --watcher ${id}\``,
-  ]);
-}
 
-function renderGovernance(body: Body): string {
-  const row = object(body) ?? {};
-  const id = String(row.id ?? ABSENT);
-  const approval = body.approval as Body | undefined;
-  let text = `ok: updated ${id}\n`;
-  text += detailBlock("loop", [["id", row.id], ["title", row.title], ["cron", row.cron], ["status", row.status], ["next_fire", row.nextFire ?? raw(`${ABSENT} (paused)`)]]);
-  text += changedBlock(body.diff as never);
-  if (approval) {
-    // The three-link audit chain — proposing run, human event, executing run —
-    // printed at the moment it is forged, which is the only place an agent or a
-    // transcript reader can see that the change was authorized and by what.
-    text += detailBlock("approval", [["key", approval.event], ["entrance", approval.entrance], ["answered", approval.ts], ["task", approval.task], ["actor", approval.actor]]);
-  }
-  const notice = body.notice as Body | undefined;
-  if (notice) text += `warning: ${cell(notice.message)}\n`;
-  text += eventLine(body.event);
-  const hints = [`Run \`loopany task close ${cell(approval?.task)} --note "cadence applied"\` to finish the proposal`, "A faster cadence does not stack runs: one queued run per loop, and a fire that finds one already queued records `clock-skipped`"];
-  if (notice) hints.unshift("Time never un-pauses a loop — a human does, on the loop page");
-  return text + helpBlock(hints);
-}
 
 function renderInbox(body: Body, now: number): string {
   const items = (Array.isArray(body.items) ? body.items : []) as { task?: Body; reasons?: string[]; askedAt?: string | null }[];

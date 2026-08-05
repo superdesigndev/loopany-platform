@@ -127,8 +127,9 @@ export interface TaskTreeRow {
   detached: boolean
 }
 
-/** The same bound the kernel's guard uses, for the same reason: a walk over
- *  hostile data must terminate. Deeper than this reads as a root. */
+/** How far the ROOT CLASSIFICATION walk climbs before it gives up and calls the
+ *  task a root. A bound is needed because the walk runs over data a reader must
+ *  not trust; it is deliberately NOT a bound on emission — see `walk`. */
 export const TREE_MAX_DEPTH = 24
 
 export function treeRows(tasks: TaskCard[]): TaskTreeRow[] {
@@ -169,8 +170,17 @@ export function treeRows(tasks: TaskCard[]): TaskTreeRow[] {
 
   const rows: TaskTreeRow[] = []
   const emitted = new Set<string>()
+  // TOTALITY BEATS THE BOUND. The descent used to stop at `depth >
+  // TREE_MAX_DEPTH`, which silently DROPPED the row at exactly that depth: it
+  // had classified as a non-root (so it was filed as somebody's child, never a
+  // rescued root) and then refused to emit — a task that vanished from the list,
+  // which is the one thing this module's header forbids. The bound belongs to
+  // `isRoot`'s walk over untrusted data, not here: `children` is a forest by
+  // construction (only a task whose chain reached a parentless root INSIDE the
+  // bound is filed as a child), and `emitted` terminates the descent regardless.
+  // The depth NUMBER stays true; the render clamps how far it indents.
   const walk = (task: TaskCard, depth: number, detached: boolean) => {
-    if (emitted.has(task.id) || depth > TREE_MAX_DEPTH) return
+    if (emitted.has(task.id)) return
     emitted.add(task.id)
     rows.push({ task, depth, detached })
     for (const child of children.get(task.id) ?? []) walk(child, depth + 1, false)

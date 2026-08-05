@@ -20,21 +20,20 @@ import {
   ORGANIC_HEX,
   ORGANIC_MINT_ATTEMPTS,
   answeredRunId,
-  autoPauseTaskId,
   canonicalJson,
-  clockRunId,
   contentHash,
   createdEventId,
   derivedEventId,
   derivedObjectId,
   derivedSuffix,
+  directiveRunId,
+  dueRunId,
   newObjectId,
   newRunId,
   organicEventId,
   organicSuffix,
   organicWidth,
   randomHex,
-  reportDocId,
 } from "./ids.js";
 
 /** Deterministic randomness: byte i is i, so a mint is reproducible in a test. */
@@ -79,8 +78,8 @@ describe("derived ids", () => {
 
   it("separate genuinely different facts", () => {
     expect(createdEventId("task-7f3a91")).not.toBe(createdEventId("task-2b8e04"));
-    expect(clockRunId("loop-4c1d77", "2026-08-03T07:00:00.000Z")).not.toBe(
-      clockRunId("loop-4c1d77", "2026-08-03T08:00:00.000Z"),
+    expect(dueRunId("loop-4c1d77", "task-7f3a91", "2026-08-03T07:00:00.000Z")).not.toBe(
+      dueRunId("loop-4c1d77", "task-7f3a91", "2026-08-03T08:00:00.000Z"),
     );
   });
 
@@ -92,27 +91,16 @@ describe("derived ids", () => {
     expect(derivedObjectId("doc", seed).slice(4)).toBe(derivedObjectId("task", seed).slice(5));
   });
 
-  it("derives the report doc from the run id alone, so a retried finish is a no-op", () => {
-    expect(reportDocId("run-4a19c2")).toBe(reportDocId("run-4a19c2"));
-    expect(reportDocId("run-4a19c2")).not.toBe(reportDocId("run-8b02de"));
-    expect(reportDocId("run-4a19c2")).toMatch(/^doc-[0-9a-f]{12}$/);
-  });
-
-  it("derives the auto-pause question from {loop, run}, so a retry raises ONE question", () => {
-    expect(autoPauseTaskId("loop-4c1d77", "run-4a19c2")).toBe(autoPauseTaskId("loop-4c1d77", "run-4a19c2"));
-    expect(autoPauseTaskId("loop-4c1d77", "run-4a19c2")).not.toBe(autoPauseTaskId("loop-2e70b8", "run-4a19c2"));
-    expect(autoPauseTaskId("loop-4c1d77", "run-4a19c2")).toMatch(/^task-[0-9a-f]{12}$/);
-  });
-
   it("derives an R-answer run from the verdict event, so a retried verdict queues one run", () => {
     expect(answeredRunId("ev-9c22d1")).toBe(answeredRunId("ev-9c22d1"));
     expect(answeredRunId("ev-9c22d1")).not.toBe(answeredRunId("ev-9c22d2"));
     expect(answeredRunId("ev-9c22d1")).toMatch(/^run-[0-9a-f]{12}$/);
   });
 
-  it("never lets a run id collide across the three birth paths for the same loop", () => {
-    // The seed discriminator ("clock" vs "answered") is what keeps these apart.
-    expect(clockRunId("loop-4c1d77", "ev-9c22d1")).not.toBe(answeredRunId("ev-9c22d1"));
+  it("never lets a run id collide across the trigger birth paths", () => {
+    // The seed discriminator ("directive" vs "answered") is what keeps these
+    // apart even when the SAME event id seeds both.
+    expect(directiveRunId("ev-9c22d1")).not.toBe(answeredRunId("ev-9c22d1"));
   });
 });
 
@@ -139,7 +127,7 @@ describe("derived id width (the collision posture)", () => {
 
   it("separates a large sample of distinct seeds with no truncation collision", () => {
     const seen = new Set<string>();
-    for (let i = 0; i < 20_000; i++) seen.add(reportDocId(`run-${i}`));
+    for (let i = 0; i < 20_000; i++) seen.add(answeredRunId(`ev-${i}`));
     expect(seen.size).toBe(20_000);
   });
 });
@@ -153,7 +141,7 @@ describe("organic ids", () => {
   it("carry the kind prefix and the designed six-hex shape", () => {
     expect(newObjectId("task")).toMatch(/^task-[0-9a-f]{6}$/);
     expect(newObjectId("doc")).toMatch(/^doc-[0-9a-f]{6}$/);
-    expect(newObjectId("loop")).toMatch(/^loop-[0-9a-f]{6}$/);
+    expect(newObjectId("mirror")).toMatch(/^mirror-[0-9a-f]{6}$/);
     expect(newRunId()).toMatch(/^run-[0-9a-f]{6}$/);
     expect(organicEventId()).toMatch(/^ev-[0-9a-f]{6}$/);
   });

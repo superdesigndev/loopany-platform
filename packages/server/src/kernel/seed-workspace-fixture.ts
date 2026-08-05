@@ -12,6 +12,10 @@
  * pglite is single-writer, so run this BEFORE starting the dev server against
  * the same `LOOPANY_DATA_DIR`.
  *
+ * The two LOOPS it seeds are PRODUCTION `loops` rows — the loop kind retired
+ * from `objects` at convergence S5, so a watcher names a shipping loop and the
+ * fixture writes one directly (there is no kernel verb that could).
+ *
  * Content covers: two loops, a task in each of the three archetypal lives, a
  * task HANDED OFF between the two loops (the one remaining graph edge), tasks
  * that are due and not-yet-due, the near misses that must stay OUT of the inbox
@@ -23,12 +27,13 @@
  * this is not a convention the fixture keeps by hand — it could not break it.
  */
 import { db, runMigrations } from "../db/index.js";
-import { runs } from "../db/schema.js";
+import { loops, runs } from "../db/schema.js";
 import { applyTransition, applyUpdate, createObject } from "./applyTransition.js";
-import * as store from "../db/kernelStore.js";
 import type { Actor } from "./types.js";
 
 const TEAM = process.env.LOOPANY_SEED_TEAM ?? "team-shared";
+const USER = "u-fixture";
+const MACHINE = "m-fixture";
 const HUMAN: Actor = { entrance: "human", actorId: "u-fixture" };
 const agent = (runId: string): Actor => ({ entrance: "agent", actorId: runId });
 
@@ -42,23 +47,31 @@ async function object(input: Record<string, unknown>): Promise<string> {
   return result.object.id;
 }
 
+/** A PRODUCTION loop row — the only kind of loop there is. */
+async function loop(id: string, name: string, cron: string, taskFileContent: string): Promise<string> {
+  await db
+    .insert(loops)
+    .values({
+      id, userId: USER, teamId: TEAM, machineId: MACHINE, name, cron, timezone: "UTC",
+      enabled: true, notify: "always", allowControl: true, agent: "claude-code",
+      taskFile: `/tmp/loopany-fixture/${id}/loopany-task.md`, taskFileContent,
+      createdAt: ago(200), updatedAt: ago(200),
+    } as never)
+    .onConflictDoNothing();
+  return id;
+}
+
 async function main() {
   await runMigrations();
 
-  const housekeeper = await object({
-    kind: "loop", key: "fixture-housekeeper", title: "Housekeeper", cron: "0 7 * * *",
-    body: "You are the Housekeeper.\n\nEach morning: sweep the repo, open one PR at a time, and file a task for anything you could not verify yourself.\n",
-  });
-  const steward = await object({
-    kind: "loop", key: "fixture-followup", title: "FollowUp", cron: "30 8 * * *",
-    body: "You are FollowUp — the loop other loops hand verification work to.\n\nWork the tasks you watch: verify the ones that have come due, close what is done, and ask when you cannot tell.\n",
-  });
-
-  // The charter history the loop page renders: one evolve pass, by a run.
-  await applyUpdate({
-    objectId: housekeeper, actor: agent("run-evolve-01"), now: ago(26), eventKind: "charter-evolved",
-    fields: { body: "You are the Housekeeper.\n\nEach morning: sweep the repo, open one PR at a time, and file a task for anything you could not verify yourself.\n\n## Lessons\n\n- Never stack a second PR while the first is unmerged.\n" },
-  } as never);
+  const housekeeper = await loop(
+    "loop-fixturehk", "Housekeeper", "0 7 * * *",
+    "# Housekeeper\n\n## Spec\n\nEach morning: sweep the repo, open one PR at a time, and file a task for anything you could not verify yourself.\n\n## Lessons\n\n- Never stack a second PR while the first is unmerged.\n",
+  );
+  const steward = await loop(
+    "loop-fixturefu", "FollowUp", "30 8 * * *",
+    "# FollowUp\n\n## Spec\n\nThe loop other loops hand verification work to. Work the tasks you watch: verify the ones that have come due, close what is done, and ask when you cannot tell.\n",
+  );
 
   // Life 1 — fully automatic: watched, due later, never asks.
   await object({
@@ -130,15 +143,16 @@ async function main() {
   ];
   for (const run of history) {
     await db.insert(runs).values({
-      id: run.id, loopId: run.loopId, userId: "u-fixture", machineId: "m-fixture",
-      phase: run.state === "success" ? "done" : "error", role: "exec", ts: ago(run.at),
-      queueState: run.state, scope: "routine", reason: "clock", entrance: "clock",
-      startedAt: ago(run.at), finishedAt: ago(run.at - 0.05), outcomeSummary: run.summary, costUsd: run.cost, attempts: 1,
+      id: run.id, loopId: run.loopId, userId: USER, machineId: MACHINE,
+      phase: run.state === "success" ? "done" : "error",
+      outcome: run.state === "success" ? "exec" : "error",
+      role: "exec", ts: ago(run.at), durationMs: 180_000,
+      scope: "routine", reason: "clock", entrance: "clock",
+      message: run.summary, costUsd: run.cost,
     } as never).onConflictDoNothing();
   }
 
-  const tail = await store.getObject(undefined, housekeeper);
-  console.log(`seeded team ${TEAM}: loops ${housekeeper} / ${steward} (charter updated ${tail?.updatedAt})`);
+  console.log(`seeded team ${TEAM}: production loops ${housekeeper} / ${steward}`);
   console.log("open http://127.0.0.1:3000/dev/workspace");
 }
 

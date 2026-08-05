@@ -14,8 +14,6 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "kernel:migrate-loops": "tsx src/kernel/migrate-loops-cli.ts",
-    "kernel:converge-loops": "tsx src/kernel/converge-loops-cli.ts",
     "workspace:seed": "tsx src/kernel/seed-workspace-fixture.ts"
   },
   "dependencies": {

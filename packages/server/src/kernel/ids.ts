@@ -172,23 +172,7 @@ export function derivedObjectId(kind: ObjectKind, seed: unknown): string {
   return `${kind}-${derivedSuffix(seed)}`;
 }
 
-/**
- * The doc a run's report becomes (spec §5.4, §4.5 step 2). Keyed off the run id,
- * which is fixed before the run starts, so the whole report-back path is
- * replay-safe by construction rather than by a "have I seen this run?" lookup.
- */
-export function reportDocId(runId: string): string {
-  return derivedObjectId("doc", { runId, seed: "report" });
-}
 
-/**
- * The circuit breaker's question (spec §5.4, §6.6). Derived from the loop, the
- * failing run and a fixed discriminator, so a retried `finish` re-derives it and
- * raises ONE question, not two.
- */
-export function autoPauseTaskId(loopId: string, runId: string): string {
-  return derivedObjectId("task", { loopId, runId, seed: "autopause" });
-}
 
 /**
  * A MIRROR's id — derived from `(team, kind, coords)`, because those three ARE
@@ -242,12 +226,6 @@ export function createdEventId(objectId: string): string {
 
 // ---- run ids ----
 
-/** A clock fire's run id — `{loopId, scheduledFor}` (spec §5.4). `scheduledFor`
- *  is the cron OCCURRENCE instant, never "now" at fire time: a crash between the
- *  fire commit and the cursor advance re-derives the same id on retry. */
-export function clockRunId(loopId: string, scheduledFor: string): string {
-  return `run-${derivedSuffix({ loopId, scheduledFor, seed: "clock" })}`;
-}
 
 /** An R-answer run's id — derived from the verdict event that woke it (§4.2), so
  *  a retried verdict transaction queues one run, not two. */

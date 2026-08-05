@@ -6,26 +6,20 @@ import { refusal, type ApiRefusal } from "./refusals.js";
 /**
  * The closed top-level key set per kind.
  *
- * `key` is on the LOOP set even though API spec §1.16 writes the create key set
- * as `title, cron, payload`: the same paragraph also promises "the same
- * key-idempotency rule as tasks", and that rule is unreachable without a `key`
- * to be idempotent on. Admitting it also makes `loop show --file` round-trip —
- * `serializeKindArtifact` emits `key:` for every kind, so a keyed loop would
- * otherwise serialize a file its own parser refuses.
- *
- * `mirrors` is on ALL THREE sets and is the one key here that is not a field of
- * the object: it is a CONSTRUCTOR argument, consumed at create and never stored
- * on the row. See `MIRRORS_KEY` below for why it is create-only and why
+ * `mirrors` is on BOTH sets and is the one key here that is not a field of the
+ * object: it is a CONSTRUCTOR argument, consumed at create and never stored on
+ * the row. See `MIRRORS_KEY` below for why it is create-only and why
  * `show --file` never emits it.
  *
  * There is no `mirror` entry, and there cannot be: a mirror is not authored as a
  * file (`types.ts` ARTIFACT_KINDS), which is also what keeps it from growing a
- * body somebody could cache external state in.
+ * body somebody could cache external state in. There is no `loop` entry either
+ * — the loop kind retired at convergence S5, and a loop is authored through the
+ * shipping `loopany new` / `loopany edit` surface.
  */
 export const KIND_KEYS = {
   task: ["title", "key", "parent", "follow_up", "watcher", "needs_human", "payload", "mirrors"],
   doc: ["title", "key", "format", "payload", "mirrors"],
-  loop: ["title", "key", "cron", "workdir", "payload", "mirrors"],
 } as const satisfies Record<ArtifactKind, readonly string[]>;
 
 /**
@@ -63,8 +57,6 @@ export interface ArtifactProjection {
   parentId?: string | null;
   pendingQuestion?: string | null;
   format?: "markdown" | "html";
-  cron?: string | null;
-  workdir?: string | null;
   /** The `mirrors:` block, normalized. Never a column — the create path attaches
    *  each one as its own object and then forgets this array. */
   mirrors?: NormalizedMirror[];
@@ -93,17 +85,15 @@ export function parseKindArtifact(kind: ArtifactKind, raw: string, now: Date): A
   for (const key of Object.keys(head)) {
     if ((allowed as readonly string[]).includes(key)) continue;
     const expected = suggestion(key, allowed);
-    const special = key === "cron" && kind !== "loop"
-      ? { message: "a cadence belongs to a loop, not a task", hint: "tasks have no cadence. A standing schedule is a loop; a resurface date is follow_up:" }
-      : key === "workdir"
-        ? { message: `a bound working directory belongs to a loop, not a ${kind}`, hint: `only a loop binds a directory — its runs execute there. A ${kind} carries no execution site.` }
-        : key === "kind"
-          ? { message: "kind is chosen by the verb, never by front matter", hint: "POST /api/tasks makes a task; POST /api/docs makes a doc; POST /api/loops makes a loop" }
-          : key === "format"
-            // `format` is doc-only by KEY SET, not by value check: a task or loop body
-            // is always Markdown because it feeds diffs and verdicts (design §7).
-            ? { message: "format is a doc-only body format key", hint: `a ${kind} body is always Markdown — it feeds diffs and verdicts. For a rich exhibit create a doc with format: html, then cite that doc id from the ${kind}.` }
-            : undefined;
+    const special = key === "cron" || key === "workdir"
+      ? { message: `a cadence and a bound directory belong to a LOOP, not a ${kind}`, hint: `a loop is the shipping product's — \`loopany new\` creates one and \`loopany edit <loop-id>\` changes its schedule. A ${kind} carries no cadence and no execution site; a resurface date is follow_up:` }
+      : key === "kind"
+        ? { message: "kind is chosen by the verb, never by front matter", hint: "POST /api/tasks makes a task; POST /api/docs makes a doc" }
+        : key === "format"
+          // `format` is doc-only by KEY SET, not by value check: a task body is
+          // always Markdown because it feeds diffs and verdicts (design §7).
+          ? { message: "format is a doc-only body format key", hint: `a ${kind} body is always Markdown — it feeds diffs and verdicts. For a rich exhibit create a doc with format: html, then cite that doc id from the ${kind}.` }
+          : undefined;
     return { ok: false, error: refusal(
       "UNKNOWN_KEY", `unknown key "${key}" in a ${kind} artifact`,
       [{ path: key, message: special?.message ?? "unknown key", got: key, ...(expected ? { expected } : {}) }],
@@ -130,17 +120,6 @@ export function parseKindArtifact(kind: ArtifactKind, raw: string, now: Date): A
   if (parent && !parent.startsWith("task-")) issues.push({ path: "parent", message: "must be a task id", got: parent, expected: "task-<id>" });
   const question = stringOrNull("needs_human");
   if (typeof question === "string" && !question.trim()) issues.push({ path: "needs_human", message: "must be non-empty text or null", got: question });
-  const cron = stringOrNull("cron");
-  // A workdir is a MACHINE-LOCAL absolute path. Refuse a relative or ~-form one
-  // here rather than at the daemon: the claiming machine is not known at write
-  // time, so "relative to what?" has no answer the server could ever give.
-  const workdir = stringOrNull("workdir");
-  if (typeof workdir === "string") {
-    if (!workdir.trim()) issues.push({ path: "workdir", message: "must be a non-empty absolute path or null", got: workdir });
-    else if (!workdir.startsWith("/")) {
-      issues.push({ path: "workdir", message: "must be an absolute path", got: workdir, expected: "/Users/you/Workspace/your-repo" });
-    }
-  }
   let followUpAt: string | null | undefined;
   if (Object.hasOwn(head, "follow_up")) {
     const value = stringOrNull("follow_up");
@@ -169,7 +148,6 @@ export function parseKindArtifact(kind: ArtifactKind, raw: string, now: Date): A
     title: title ?? null, key, body: parsed.value.body, payload, mirrors: mirrors.value,
     ...(kind === "task" ? { followUpAt: followUpAt ?? null, watcher: watcher ?? null, parentId: parent ?? null, pendingQuestion: question ?? null } : {}),
     ...(kind === "doc" ? { format: (head.format as "markdown" | "html" | undefined) ?? "markdown" } : {}),
-    ...(kind === "loop" ? { cron: cron ?? null, workdir: workdir ?? null } : {}),
   } };
 }
 
@@ -246,7 +224,6 @@ export function serializeKindArtifact(kind: ArtifactKind, object: ArtifactProjec
   const frontMatter: Record<string, unknown> = { title: object.title, key: object.key };
   if (kind === "task") Object.assign(frontMatter, { parent: object.parentId, follow_up: object.followUpAt, watcher: object.watcher, needs_human: object.pendingQuestion });
   if (kind === "doc") frontMatter.format = object.format ?? "markdown";
-  if (kind === "loop") Object.assign(frontMatter, { cron: object.cron, workdir: object.workdir });
   // NOT `?? {}`: an absent payload must serialize as an ABSENT key, or the file
   // this very function emits no longer round-trips. `{}` re-parses to an empty
   // mapping, which `expressedDiffs` reads as different from a null payload — so

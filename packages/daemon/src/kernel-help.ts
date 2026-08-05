@@ -24,7 +24,6 @@ export interface VerbSpec {
 
 const TASK_KEYS = "task front matter: title, key, parent, follow_up, watcher, needs_human, payload, mirrors (create-only)";
 const DOC_KEYS = "doc front matter: title, key, format, payload, mirrors (create-only)";
-const LOOP_KEYS = "loop front matter: title, key, cron, workdir, payload, mirrors (create-only) — body is the charter";
 const MIRROR_LAW = "a mirror tells you WHERE to look, never WHAT state it is in";
 const MIRROR_KINDS = "canonical kinds: github-pr, github-issue, url, gsc-property — free-form, kebab-cased on write; a KNOWN kind also has its coords shape checked";
 
@@ -177,107 +176,6 @@ export const VERBS: Record<string, VerbSpec> = {
       "run reports are immutable BY CONVENTION — the kernel accepts the write and says so",
     ],
     seeAlso: DOC_KEYS,
-  },
-  "loop create": {
-    usage: "loopany loop create --file <path>",
-    flags: [["--file <path>", "the artifact file IS the loop: front matter + the charter body; `-` reads stdin"]],
-    examples: ["loopany loop create --file housekeeper.md"],
-    notes: [
-      "a HUMAN verb: creating a loop mints a standing cadence and a new actor, which is governance",
-      "a run proposes one instead: `task create --needs-human \"create a loop that …\" --watcher <its own id>`",
-      "`cron:` arms the loop at birth — next_fire is the first occurrence after now; omit it for an on-demand loop",
-      "`workdir:` BINDS a directory (absolute path): every run of this loop executes there",
-      "no MACHINE is bound — any machine of the team claims, and one that lacks the workdir fails the run loudly rather than running somewhere else",
-    ],
-    seeAlso: LOOP_KEYS,
-  },
-  "loop list": {
-    usage: "loopany loop list [--status <state>]",
-    flags: [["--status <state>", "active | paused | retired; absent shows the whole roster"]],
-    examples: ["loopany loop list", "loopany loop list --status active", "loopany loop list --status retired"],
-    notes: [
-      "a loop has THREE states, so status takes a value — there is no two-flag form that spans them",
-      "the default is every loop including retired ones: a team's roster is small, and history is the point",
-    ],
-  },
-  "loop show": {
-    usage: "loopany loop show <loop-id> [flags]",
-    flags: [["--file", "emit the canonical loop artifact instead of the TOON view"], ["--full", "do not truncate the charter"]],
-    examples: ["loopany loop show loop-8e3311", "loopany loop show loop-8e3311 --file > charter.md"],
-    notes: ["--file output is a valid input file: read it, edit the charter, then `loop evolve <id> --file`"],
-    seeAlso: LOOP_KEYS,
-  },
-  "loop evolve": {
-    usage: "loopany loop evolve <loop-id> --file <path>",
-    flags: [["--file <path>", "the full replacement charter; the server computes the diff"]],
-    examples: ["loopany loop evolve loop-8e3311 --file charter.md"],
-    notes: [
-      "the free zone: no approval key, but the server checks the loop is your run's own",
-      "cadence is NOT here — it is governance, and needs a human approval key (`loop update`)",
-      "a retired loop's charter is frozen: evolve is refused for good, never queued",
-    ],
-    seeAlso: LOOP_KEYS,
-  },
-  "loop pause": {
-    usage: "loopany loop pause <loop-id> [--note <text>]",
-    flags: [["--note <text>", "why, recorded on the event; optional, one sentence"]],
-    examples: ['loopany loop pause loop-8e3311 --note "muted while the API migration lands"'],
-    notes: [
-      "a HUMAN verb: a run never pauses a loop, it proposes with `task create --needs-human`",
-      "pausing disarms the cadence (next_fire is cleared) and no run of it is claimed until it resumes",
-      "pausing an already-paused loop is a success that changed nothing — a retry is free",
-    ],
-  },
-  "loop resume": {
-    usage: "loopany loop resume <loop-id> [--note <text>]",
-    flags: [["--note <text>", "why, recorded on the event; optional, one sentence"]],
-    examples: ["loopany loop resume loop-8e3311"],
-    notes: [
-      "time never un-pauses a loop — this verb is the only exit, including from a failure auto-pause",
-      "re-arms to the NEXT occurrence: a week paused owes exactly one fire, not a week of them",
-      "a retired loop cannot be resumed; retirement is terminal",
-    ],
-  },
-  "loop retire": {
-    usage: "loopany loop retire <loop-id> [--note <text>]",
-    flags: [["--note <text>", "why, recorded on the event; optional but strongly advised"]],
-    examples: ['loopany loop retire loop-8e3311 --note "the outreach experiment is over"'],
-    notes: [
-      "retire IS the delete: the kernel is event-sourced, so nothing is ever erased and there is no `loop delete`",
-      "terminal — the charter freezes, the cadence is gone, and there is no un-retire",
-      "open tasks it still watches do NOT block it: retire warns with the count and proceeds, since nothing will wake them again",
-      "the loop, its runs and everything it created stay readable: `loop list --status retired`, `loop show <id>`",
-    ],
-  },
-  "loop run-now": {
-    usage: "loopany loop run-now <loop-id>",
-    flags: [],
-    examples: ["loopany loop run-now loop-8e3311"],
-    notes: [
-      "a HUMAN verb: firing a loop off its cadence is the owner's act, and a run that could wake itself is a loop with no cadence",
-      "a PAUSED loop DOES fire and stays paused — pause governs the clock, not this button, so it is one run and then quiet again",
-      "a RETIRED loop is refused: retirement is terminal, and the charter is frozen",
-      "one queued run per loop: a second fire reports the run already queued instead of minting a twin",
-      "no flags and no body — the loop already says what it does, so an off-cadence run is a button, not a form",
-    ],
-  },
-  "loop update": {
-    usage: "loopany loop update <loop-id> [--cron <expr>] [--workdir <path>] --approval <event-id>",
-    flags: [
-      ["--cron <expr>", "the new cadence, five fields: minute hour day-of-month month day-of-week"],
-      ["--workdir <path>", "the new bound directory: absolute, and it must exist on the executing machine"],
-      ["--approval <event-id>", "the verdict event id from a human's answer on a task this loop created"],
-    ],
-    examples: [
-      'loopany loop update loop-8e3311 --cron "0 * * * *" --approval ev-9c22d1',
-      "loopany loop update loop-8e3311 --workdir /Users/you/Workspace/your-repo --approval ev-9c22d1",
-    ],
-    notes: [
-      "the TWO governed execution facets are WHEN (cron) and WHERE (workdir); either alone is legal, both ride one approval",
-      "step 3 of four: propose with `task create --needs-human`, a human answers, then this, then `task close`",
-      "the kernel checks the key exists, is human, and hangs on your loop's task — not that it matches the change",
-      "a `cron:`/`workdir:` that differs is exactly what `loop evolve` refuses (APPROVAL_REQUIRED) — this verb is where it lands",
-    ],
   },
   "mirror attach": {
     usage: "loopany mirror attach <object-id> --kind <kind> --coords <coords> [--note <text>]",

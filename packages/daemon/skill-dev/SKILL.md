@@ -25,8 +25,7 @@ Never:
 
 - Never use bare `loopany`; it targets the real production service.
 - Never source `scripts/rewrite-local-run.env.sh` or set
-  `LOOPANY_SERVER_URL`, `LOOPANY_HOME`, `LOOPANY_DATA_DIR`, a port, or
-  `LOOPANY_RUNS_V2` yourself.
+  `LOOPANY_SERVER_URL`, `LOOPANY_HOME`, `LOOPANY_DATA_DIR` or a port yourself.
 - Never start a server or daemon. Never stop, restart, seed, migrate or otherwise
   operate them. The stack lifecycle belongs to its operator.
 

@@ -60,20 +60,19 @@ const ok = <T,>(r: { ok: true; value: T } | { ok: false; error: unknown }): T =>
 };
 const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? "OK" : r.error!.code);
 
+let loopSeq = 0;
 async function makeLoop(title = "Housekeeper") {
-  const result = await kernel.createObject({ teamId: TEAM, kind: "loop", actor: human.actor, now: T0, title, cron: "0 7 * * *", body: "Sweep the repo." });
-  if (!result.ok) throw new Error(result.message);
   return prodStore.createLoop({
-    id: result.object.id,
+    id: `loop-directive${loopSeq++}`,
     userId: "u-owner",
     teamId: TEAM,
     machineId: "m-directive",
     name: title,
-    cron: result.object.cron ?? "",
-    timezone: result.object.timezone,
+    cron: "0 7 * * *",
+    timezone: null,
     enabled: true,
     notify: "auto",
-    taskFileContent: `# ${title}\n\n## Spec\n\n${result.object.body ?? ""}`,
+    taskFileContent: `# ${title}\n\n## Spec\n\nSweep the repo.`,
   });
 }
 
@@ -113,7 +112,7 @@ describe("a directive wakes the watcher, carrying what was said", () => {
     const result = ok(await api.leaveDirective(task.id, TOLD, human, NOW));
     const row = (await database.db.select().from(legacySchema.runs).where(eq(legacySchema.runs.id, (result.run as { id: string }).id)))[0]!;
     expect(row.reason).toBe("directive");
-    expect(row.queueState).toBeNull();
+    expect(row.phase).toBe("pending");
     // The run's identity DERIVES from the directive event, so a retried
     // transaction queues one run rather than two.
     expect(row.id).toBe(ids.directiveRunId(result.event as string));

@@ -277,22 +277,16 @@ export const runs = pgTable(
      * had a claimable moment yet. */
     claimableAt: text("claimable_at"),
 
-    // ---- REWRITE QUEUE COLUMNS (additive; spec §5.3 / design §5) ----
+    // ---- TRIGGER PROVENANCE (additive; design §5) ----
     //
-    // The rewrite's run lifecycle is `queued → claimed → success | failure`, and
-    // the queued run row IS the dispatch record (the v3 directive table is
-    // deleted — agent execution is the only action kind). These columns land on
-    // the EXISTING runs table rather than a new one, so run history stays in one
-    // place; every one of them is NULLABLE and unset on legacy rows, and the
-    // legacy `phase`/`role`/`outcome` lifecycle is untouched. Unit 3 (scheduler
-    // tick + daemon claim) is what drives them; unit 2 only welds the invariant.
-    //
-    // NAMING DEVIATION, deliberate: spec §5.3 calls the lifecycle column `state`,
-    // but `runs.state` is TAKEN by the shipping per-run metrics jsonb above. The
-    // rewrite column is therefore `queue_state`. Everything else keeps its
-    // spec name.
-    /** queued | claimed | success | failure. NULL on every legacy run row. */
-    queueState: text("queue_state", { enum: ["queued", "claimed", "success", "failure"] }),
+    // A trigger run is an ORDINARY production run (`phase: pending`, `role:
+    // exec`, claimed by the poll, finalized by the report) that additionally
+    // records WHY it exists and WHAT it is about. The rewrite's own run
+    // lifecycle — `queue_state`, the attestation lease pair, the attempt
+    // counter, the report doc and the parallel cost/summary/timestamp columns —
+    // RETIRED at convergence S5 (migration `0010`); the production
+    // phase/outcome/message/costUsd/ts/durationMs columns above are the one
+    // run record.
     /** `routine` (the loop's own cadence) or `task:<object id>` (an express run
      *  born from an answer). Runs belong to LOOPS, never to tasks (design §5). */
     scope: text("scope"),
@@ -323,35 +317,17 @@ export const runs = pgTable(
     /** The agent instance holding the claim. */
     claimedBy: text("claimed_by"),
     claimedAt: text("claimed_at"),
-    /** THE LEASE IS THE AUTHORITY (design §5): the run row IS the lease record —
-     *  r1 removed per-run bearer tokens, so there is no token column and no token
-     *  table here. A zombie's late report is refused against these fields. */
-    leaseExpiresAt: text("lease_expires_at"),
-    leaseState: text("lease_state", { enum: ["active", "terminal-grace"] }),
-    /** Bounded, so a poison run stops being re-offered and becomes a visible failure. */
-    attempts: integer("attempts").notNull().default(0),
-    /** The doc row this run's report became (`objects.id`, kind=doc). */
-    reportDocId: text("report_doc_id"),
-    /** Rewrite protocol completion fields. Kept separate from the legacy
-     * message/cost columns because the new cost object is deliberately open. */
-    outcomeSummary: text("outcome_summary"),
-    runCost: jsonb("run_cost").$type<Record<string, unknown>>(),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
   },
   (t) => [
     index("runs_loop_idx").on(t.loopId),
     index("runs_phase_idx").on(t.phase),
     index("runs_loop_ts_idx").on(t.loopId, t.ts),
-    // ---- rewrite queue indexes (spec §5.3) ----
-    // `runs_one_queued_idx` retired in convergence S2. Trigger paths serialize
+    // `runs_one_queued_idx` retired in convergence S2, `runs_claim_idx` and
+    // `runs_lease_idx` with the kernel claim path in S5. Trigger paths serialize
     // on the owning loop row, then join only a not-yet-executing run; production
     // legitimately holds a pending trigger behind a running sibling.
-    /** The claim scan: queued rows, oldest first. */
-    index("runs_claim_idx").on(t.ts).where(sql`${t.queueState} = 'queued'`),
-    /** The lease-expiry sweep. */
-    index("runs_lease_idx").on(t.leaseExpiresAt).where(sql`${t.queueState} = 'claimed'`),
-    /** "Runs that cite this task". */
+    /** "Runs that cite this task" — the task page's run strip. It carries NO
+     *  queue predicate and never did, so it survives S5 unchanged. */
     index("runs_scope_idx").on(t.scope).where(sql`${t.scope} IS NOT NULL AND ${t.scope} <> 'routine'`),
   ],
 );

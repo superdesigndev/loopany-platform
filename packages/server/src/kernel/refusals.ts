@@ -27,13 +27,12 @@ export interface ApiRefusal {
 export const REFUSAL_CODES = [
   "UNKNOWN_KEY", "BAD_DATE", "UNSUPPORTED_FORMAT", "MISSING_FRONT_MATTER",
   "UNTERMINATED_FRONT_MATTER", "INVALID_YAML", "FRONT_MATTER_NOT_MAPPING",
-  "SCHEMA_VIOLATION", "BAD_CRON", "INVALID_BODY", "UNKNOWN_FILTER", "WATCHER_REQUIRED",
+  "SCHEMA_VIOLATION", "INVALID_BODY", "UNKNOWN_FILTER", "WATCHER_REQUIRED",
   "PARENT_CYCLE",
   "UNAUTHORIZED", "NOT_HUMAN", "NO_RUN_CONTEXT", "RUN_CONTEXT_UNKNOWN",
-  "NOT_YOUR_LOOP", "NOT_YOUR_RUN", "APPROVAL_REQUIRED", "APPROVAL_UNKNOWN",
-  "APPROVAL_NOT_HUMAN", "APPROVAL_FOREIGN", "NOT_FOUND", "OPEN_QUESTION",
+  "NOT_FOUND", "OPEN_QUESTION",
   "NO_OPEN_QUESTION", "WRONG_KIND", "KEY_KIND_MISMATCH", "IMMUTABLE_KEY",
-  "CLOSED", "PAUSED", "RETIRED", "QUEUED_ALREADY", "LEASE_LOST",
+  "CLOSED", "PAUSED", "QUEUED_ALREADY", "LEASE_LOST",
   "TOO_LARGE", "RATE_LIMITED", "ID_COLLISION",
   "IMMUTABLE_COORDS", "MIRROR_STATELESS",
 ] as const;
@@ -45,15 +44,13 @@ export type RefusalCode = (typeof REFUSAL_CODES)[number];
 export const REFUSAL_STATUS: Record<RefusalCode, number> = {
   UNKNOWN_KEY: 400, BAD_DATE: 400, UNSUPPORTED_FORMAT: 400,
   MISSING_FRONT_MATTER: 400, UNTERMINATED_FRONT_MATTER: 400, INVALID_YAML: 400,
-  FRONT_MATTER_NOT_MAPPING: 400, SCHEMA_VIOLATION: 400, BAD_CRON: 400,
+  FRONT_MATTER_NOT_MAPPING: 400, SCHEMA_VIOLATION: 400,
   INVALID_BODY: 400, UNKNOWN_FILTER: 400, WATCHER_REQUIRED: 400, PARENT_CYCLE: 409,
   UNAUTHORIZED: 401,
   NOT_HUMAN: 403, NO_RUN_CONTEXT: 403, RUN_CONTEXT_UNKNOWN: 403,
-  NOT_YOUR_LOOP: 403, NOT_YOUR_RUN: 403, APPROVAL_REQUIRED: 403,
-  APPROVAL_UNKNOWN: 403, APPROVAL_NOT_HUMAN: 403, APPROVAL_FOREIGN: 403,
   NOT_FOUND: 404, OPEN_QUESTION: 409, NO_OPEN_QUESTION: 409, WRONG_KIND: 409,
   KEY_KIND_MISMATCH: 409, IMMUTABLE_KEY: 409, CLOSED: 409, PAUSED: 409,
-  RETIRED: 409, QUEUED_ALREADY: 409, LEASE_LOST: 409, TOO_LARGE: 413,
+  QUEUED_ALREADY: 409, LEASE_LOST: 409, TOO_LARGE: 413,
   RATE_LIMITED: 429, ID_COLLISION: 409,
   IMMUTABLE_COORDS: 409, MIRROR_STATELESS: 400,
 };
@@ -103,10 +100,6 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
     message: `%s carries a known key with the wrong type`,
     hint: "every offending field is listed in issues; fix them all and retry",
   },
-  BAD_CRON: {
-    message: `%s is not a cron expression this loop's timezone can read`,
-    hint: "five fields: minute hour day-of-month month day-of-week",
-  },
   INVALID_BODY: {
     message: `%s could not be read as the request body this endpoint expects`,
     hint: "send a JSON object with exactly the documented fields",
@@ -139,30 +132,6 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
     message: `%s is not a run this machine is currently holding`,
     hint: "the run may have finished or been reclaimed; stop here — the daemon claims a fresh one",
   },
-  NOT_YOUR_LOOP: {
-    message: `%s is not this run's own loop`,
-    hint: "a run evolves and governs only its own loop; your work order names your loop id on its first line",
-  },
-  NOT_YOUR_RUN: {
-    message: `%s is not the run this request carries context for`,
-    hint: "report the run you were dispatched for; the path and the run context must name the same run",
-  },
-  APPROVAL_REQUIRED: {
-    message: `%s is governance and requires an approval key`,
-    hint: "create a task with needs_human describing the change and watcher: <this loop's id>; when a human answers, present that answer's event id as approval",
-  },
-  APPROVAL_UNKNOWN: {
-    message: `%s is not an approval event in this team`,
-    hint: "take the event id from the answer in the task's event tail — `task show <id>` prints it",
-  },
-  APPROVAL_NOT_HUMAN: {
-    message: `%s was not entered by a human`,
-    hint: "only a person's answer in the inbox can authorize a governance change",
-  },
-  APPROVAL_FOREIGN: {
-    message: `%s hangs on a task this loop did not create`,
-    hint: "propose the change from this loop's own run, then present that answer",
-  },
   NOT_FOUND: {
     message: `%s was not found`,
     hint: "ids are server-issued and printed by every create and every list row — copy, do not compose",
@@ -194,10 +163,6 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   PAUSED: {
     message: `%s is paused`,
     hint: "time never un-pauses a loop — a human resumes it on the loop page",
-  },
-  RETIRED: {
-    message: `%s is retired`,
-    hint: "retirement is terminal: a retired loop's charter is frozen and it never fires again",
   },
   QUEUED_ALREADY: {
     message: `%s already has a queued run`,

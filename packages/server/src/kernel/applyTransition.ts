@@ -10,14 +10,15 @@
  *
  *   `createObject`    — insert (or resolve a key collision) + `object-created`
  *   `applyUpdate`     — content/facet fields + `object-updated`, never `status`
- *   `applyTransition` — THE status write: close / pause / auto-pause / resume /
- *                       retire, each guarded by kind and from-state
+ *   `applyTransition` — THE status write (a task's `close`, the one transition
+ *                       left after the loop kind retired), guarded by kind and
+ *                       from-state
  *
- * WHAT THIS UNIT DELIBERATELY DOES NOT DO. There is no HTTP surface, no CLI, no
- * verdict, no scheduler tick and no claim loop — those are units 3 and 4. The
- * verdict's R-answer insertion (§4.2) and the failure backoff (§6.6) will COMPOSE
- * from here: both are one transaction that calls a transition plus a queue write,
- * which is why every function below also has an `…In(tx, …)` form.
+ * WHAT THIS MODULE DELIBERATELY DOES NOT DO. There is no HTTP surface and no
+ * CLI — those live in `objectApi.ts` / the daemon. The verdict's R-answer
+ * insertion (§4.2) COMPOSES from here: it is one transaction that calls an
+ * update plus a queue write, which is why every function below also has an
+ * `…In(tx, …)` form.
  *
  * OPERATIONAL DISCIPLINES honored here:
  *  - THE KERNEL NEVER READS A CLOCK. `now` is a required input on every call, read
@@ -50,7 +51,6 @@ import * as kernel from "../db/kernelStore.js";
 import type { KernelExec } from "../db/kernelStore.js";
 import { logger } from "../logger.js";
 import { ORGANIC_MINT_ATTEMPTS, createdEventId, derivedEventId, newObjectId, organicEventId } from "./ids.js";
-import { nextOccurrenceAfter } from "./schedule.js";
 import {
   INITIAL_STATUS,
   STATUSES_BY_KIND,
@@ -85,12 +85,6 @@ export interface WritableFields {
   title?: string | null;
   body?: string | null;
   payload?: Record<string, unknown> | null;
-  // loop facets
-  cron?: string | null;
-  timezone?: string | null;
-  nextFire?: string | null;
-  /** The bound directory a run executes in (absolute path, machine-local). */
-  workdir?: string | null;
   // task facets
   followUpAt?: string | null;
   pendingQuestion?: string | null;
@@ -114,10 +108,6 @@ const WRITABLE_KEYS = [
   "title",
   "body",
   "payload",
-  "cron",
-  "timezone",
-  "nextFire",
-  "workdir",
   "followUpAt",
   "pendingQuestion",
   "watcher",
@@ -144,16 +134,13 @@ const WRITABLE_KEYS = [
  * as "your file was not applied" would be false. The attach path adds the id
  * itself, right after this comparison runs.
  *
- * Review F6 (2026-08-04): `cron` and `format` used to be absent while `workdir`
- * — a loop facet under the SAME governance gate as cron — was present, which
- * made the omission read as a rule about cadence. It was not one. This function
- * is a pure READ that answers "was the submitted file applied?", and a replay
- * differing only in its cadence was not applied either; whether a run may CHANGE
- * that cadence is decided by `governLoop`/`loop evolve`, a different surface that
- * this comparison does not feed. Reporting less than the truth here only hid the
- * fact from a direct kernel caller.
+ * Review F6 (2026-08-04): `format` used to be absent, which made the omission
+ * read as a rule about which fields a replay is allowed to differ in. It was not
+ * one. This function is a pure READ that answers "was the submitted file
+ * applied?", and reporting less than the truth here only hid the fact from a
+ * direct kernel caller.
  */
-const CONTENT_KEYS = ["title", "body", "payload", "cron", "followUpAt", "watcher", "parentId", "pendingQuestion", "workdir", "format", "mirrorKind", "mirrorCoords"] as const;
+const CONTENT_KEYS = ["title", "body", "payload", "followUpAt", "watcher", "parentId", "pendingQuestion", "format", "mirrorKind", "mirrorCoords"] as const;
 
 // ---- results ----
 
@@ -212,11 +199,10 @@ export interface CreateObjectInput extends WritableFields {
    *  ⇒ an organic `<kind>-<6 hex>`, re-minted on a collision. */
   id?: string;
   /**
-   * Initial status, when it is not the kind's default. The ONLY caller is the
-   * production-loop migration, which imports loops that are already paused or
-   * retired — synthesizing an `active → paused` transition for them would write a
-   * fact that never happened. Validated against the kind's status set; the DDL's
-   * `objects_closed_pair` CHECK is the floor underneath it.
+   * Initial status, when it is not the kind's default — a fixture or an import
+   * that seeds an already-closed task rather than synthesizing an
+   * `open → closed` transition that never happened. Validated against the kind's
+   * status set; the DDL's `objects_closed_pair` CHECK is the floor underneath it.
    *
    * Creation is NOT a transition (the object has no prior state to guard), so
    * setting it here does not weaken "status CHANGES only through one code exit".
@@ -231,8 +217,8 @@ export interface ApplyUpdateInput {
   fields: WritableFields;
   /** Free text recorded on the event (an attestation, a reason). Never parsed. */
   note?: string | null;
-  /** Override the event kind — `question-withdrawn`, `charter-evolved`,
-   *  `loop-updated`. Defaults to `object-updated`. */
+  /** Override the event kind — `question-withdrawn`, `question-answered`.
+   *  Defaults to `object-updated`. */
   eventKind?: string;
   /** Extra event payload (a resolved approval block). */
   eventPayload?: Record<string, unknown>;
@@ -251,10 +237,9 @@ export interface ApplyTransitionInput {
    * event id becomes a pure function of the seed, so a second derivation collides
    * on the primary key and the whole transition is a no-op replay.
    *
-   * Omit it for an ORGANIC occurrence (a human pausing a loop, an agent closing a
-   * task): the event gets a fresh random id and is never deduplicated (a taken
-   * one is simply re-minted, `appendOrganicEvent`). A window is never a
-   * dedup key.
+   * Omit it for an ORGANIC occurrence (an agent closing a task): the event gets
+   * a fresh random id and is never deduplicated (a taken one is simply
+   * re-minted, `appendOrganicEvent`). A window is never a dedup key.
    */
   derivedFrom?: unknown;
 }
@@ -355,7 +340,7 @@ function presentFields(fields: WritableFields): Record<string, unknown> {
 }
 
 /** A facet that is being CLEARED (set to null) never trips the firewall — writing
- *  `cron: null` on a task is a no-op, not an attempt to give a task a cadence. */
+ *  `format: null` on a task is a no-op, not an attempt to give a task a doc's. */
 function assertedFields(fields: Record<string, unknown>): string[] {
   return Object.keys(fields).filter((k) => fields[k] !== null);
 }
@@ -452,9 +437,10 @@ export async function parentIssue(
  * stranger's event.
  *
  * EXPORTED so every organic append in the kernel goes through the one ladder:
- * `objectApi.runLoopNow`'s manual `run-queued` fact is an organic event written
- * outside this module, and minting it inline would silently opt that one fact
- * out of the retry (a taken id would be swallowed and the event lost).
+ * `objectApi.runLoopNow` and `runQueue.queueProductionManualRun` both write the
+ * manual `run-queued` fact outside this module, and minting it inline would
+ * silently opt that fact out of the retry (a taken id would be swallowed and the
+ * event lost).
  */
 export async function appendOrganicEvent(tx: KernelExec, row: Omit<NewKernelEvent, "id">): Promise<KernelEvent> {
   for (let attempt = 0; attempt < ORGANIC_MINT_ATTEMPTS; attempt++) {
@@ -524,8 +510,8 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
   }
 
   // THE WATCHER RULE (types.ts `WATCHER_HINT`), applied at the one create seam so
-  // no caller can mint an unwatched task — not the HTTP verbs, not the circuit
-  // breaker's auto-pause question, not the fixture seeder. A loop-created task
+  // no caller can mint an unwatched task — not the HTTP verbs, not the fixture
+  // seeder. A loop-created task
   // falls back to its CREATOR (the run that filed it is on the hook unless it
   // hands the task on); with no creating loop there is nobody to fall back to,
   // so it refuses rather than guessing who is responsible.
@@ -561,15 +547,6 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     kind,
     status,
     title: input.title ?? null,
-    cron: input.cron ?? null,
-    timezone: input.timezone ?? null,
-    workdir: input.workdir ?? null,
-    nextFire:
-      input.nextFire !== undefined
-        ? input.nextFire
-        : kind === "loop" && status === "active" && input.cron
-          ? nextOccurrenceAfter(input.cron, input.timezone ?? null, now)
-          : null,
     followUpAt: input.followUpAt ?? null,
     pendingQuestion: input.pendingQuestion ?? null,
     watcher,
@@ -763,7 +740,7 @@ export async function applyUpdateIn(tx: KernelExec, input: ApplyUpdateInput): Pr
         coords
           ? MIRROR_COORDS_IMMUTABLE_HINT
           : immutable.some((i) => i.path === "status")
-            ? "status moves through a transition: close a task, pause/resume/retire a loop"
+            ? "status moves through a transition: `loopany task close <id> --note \"…\"`"
             : "create a new object instead",
       ),
       where,
@@ -862,8 +839,7 @@ export async function applyTransition(input: ApplyTransitionInput): Promise<Appl
  *      checked before the from-state guard, or the first application's own status
  *      move would make the guard (correctly, but uselessly) refuse the replay,
  *      turning every retry into a spurious refusal;
- *   3. KIND FIREWALL — `close` refuses a loop by name, with the legal move
- *      (pause/retire) in the hint (design §4 rule 2);
+ *   3. KIND FIREWALL — `close` names the kind it applies to (design §4 rule 2);
  *   4. from-state;
  *   5. ATTESTED CLOSE — refused while `pending_question` is non-empty (§3.4);
  *   6. the event first, then the status, both in this transaction.
@@ -913,18 +889,16 @@ export async function applyTransitionIn(tx: KernelExec, input: ApplyTransitionIn
     }
   }
 
-  // KIND FIREWALL. A loop's lifecycle is operational — `close` does not apply to
-  // it, and saying so by name (with the legal move) is the whole point of the
-  // teaching refusal.
+  // KIND FIREWALL. A doc is rewritten in place and a mirror is detached, so
+  // saying by name which kind the transition belongs to is the whole point of
+  // the teaching refusal.
   if (before.kind !== spec.kind) {
     return fail(
       refuse(
         "WRONG_KIND",
         `${transition} applies to a ${spec.kind}, and ${objectId} is a ${before.kind}`,
         [{ path: "kind", message: `${transition} is a ${spec.kind} transition`, got: before.kind, expected: spec.kind }],
-        before.kind === "loop"
-          ? "loops do not close — pause or retire instead"
-          : `only a ${spec.kind} can be ${transition}d`,
+        `only a ${spec.kind} can be ${transition}d`,
       ),
       where,
     );
@@ -959,7 +933,7 @@ export async function applyTransitionIn(tx: KernelExec, input: ApplyTransitionIn
   }
 
   const diff: EventDiff = { status: { old: before.status, new: spec.to } };
-  const patch: { status: string; updatedAt: string; closedAt?: string | null; nextFire?: string | null } = {
+  const patch: { status: string; updatedAt: string; closedAt?: string | null } = {
     status: spec.to,
     updatedAt: now,
   };
@@ -968,16 +942,6 @@ export async function applyTransitionIn(tx: KernelExec, input: ApplyTransitionIn
     // not bookkeeping the caller could forget — an unpaired write cannot commit.
     patch.closedAt = spec.to === "closed" ? now : null;
     diff.closedAt = { old: before.closedAt ?? null, new: patch.closedAt };
-  }
-  if (before.kind === "loop" && spec.to !== "active" && before.nextFire !== null) {
-    // A paused or retired loop is DISARMED: the cursor is what makes a cadence
-    // live, so leaving it set would let the tick fire a loop the system stopped.
-    patch.nextFire = null;
-    diff.nextFire = { old: before.nextFire, new: null };
-  }
-  if (before.kind === "loop" && spec.to === "active" && before.cron) {
-    patch.nextFire = nextOccurrenceAfter(before.cron, before.timezone, now);
-    diff.nextFire = { old: before.nextFire, new: patch.nextFire };
   }
 
   // The event lands FIRST. The latch above catches the ordinary replay; this

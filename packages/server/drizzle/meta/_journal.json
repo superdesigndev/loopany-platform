@@ -71,6 +71,13 @@
       "when": 1785858472664,
       "tag": "0009_rapid_warhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785902654050,
+      "tag": "0010_bumpy_harry_osborn",
+      "breakpoints": true
     }
   ]
 }

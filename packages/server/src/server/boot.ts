@@ -23,7 +23,6 @@ import {
 } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
 import { DueTaskScheduler, setProductionRunDispatcher } from "../kernel/runQueue.js";
-import { terminalizeStrandedQueueRows } from "../kernel/cutover.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
@@ -54,19 +53,10 @@ export function ensureServer(): Promise<Booted> {
 }
 
 async function boot(): Promise<Booted> {
+  // Migration `0010` disposes of any run row the retired kernel queue still
+  // owned (S3.1's boot pass moved INTO the migration when its columns went), so
+  // by the time anything below runs there is one run world and one sweep.
   await runMigrations();
-
-  // Convergence S3.1: dispose of any kernel run-queue row left open at the
-  // cutover BEFORE the scheduler and sweep start. Neither guard covers such a
-  // row and a stranded `claimed` one wedges its converged loop forever — see
-  // kernel/cutover.ts. Best-effort: a failure here must never block boot (the
-  // wedge it prevents is worse than a retry on the next start, but a server
-  // that refuses to come up is worse than both).
-  try {
-    await terminalizeStrandedQueueRows();
-  } catch (err) {
-    logger.error({ err: String(err) }, "S3 cutover: stranded kernel run terminalization failed — continuing boot");
-  }
 
   const abort = new AbortController();
   // Drain the runtime postgres pool on clean shutdown (main.ts aborts on
@@ -89,9 +79,8 @@ async function boot(): Promise<Booted> {
   const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);
-  // Task follow-ups remain kernel facts after loop convergence, so their scan
-  // is always live. It must never be gated by LOOPANY_RUNS_V2: S3 turns that
-  // switch off when the daemon returns to the production poll path.
+  // Task follow-ups remain kernel facts after loop convergence, and nothing in
+  // the production scheduler knows about them, so their scan is always live.
   const dueTaskScheduler = new DueTaskScheduler();
   await dueTaskScheduler.start(abort.signal);
 

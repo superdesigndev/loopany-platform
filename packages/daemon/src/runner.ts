@@ -49,7 +49,6 @@ export interface Delivery {
   systemPrompt: string;
   task: string;
   /** Rewrite queue protocol. Absent means the shipping run-token/report path. */
-  runsV2?: { deviceToken: string; reportTitle?: string };
 }
 
 /** Claude-reported spend/usage for one run, lifted from the terminal `result`
@@ -341,9 +340,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       flushLoop(d.loop.id).catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
     ]);
-    return d.runsV2
-      ? reportV2(serverUrl, d.runsV2.deviceToken, body, d.runsV2.reportTitle)
-      : report(serverUrl, d.runToken, body);
+    return report(serverUrl, d.runToken, body);
   };
   // The LOCAL env jail (LOOPANY_ROOTS) always applies when set; server-sent
   // roots can only narrow it — a hostile server must not widen the jail.
@@ -424,9 +421,11 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       // Prepend the home bin dir so `loopany` resolves to our re-exec wrapper.
       PATH: `${CALLBACK_BIN_DIR}${path.delimiter}${process.env.PATH ?? ""}`,
       LOOPANY_SERVER_URL: serverUrl,
-      ...(d.runsV2
-        ? { LOOPANY_RUN_ID: d.runId, LOOPANY_TOKEN: d.runsV2.deviceToken }
-        : { LOOPANY_RUN_ID: d.runId, LOOPANY_RUN_TOKEN: d.runToken }),
+      // `LOOPANY_RUN_ID` is the INVISIBLE run context the kernel verbs
+      // authenticate with (`kernel/apiAuth.ts`); `LOOPANY_RUN_TOKEN` is the run
+      // lease the shipping callback carries. Both, always.
+      LOOPANY_RUN_ID: d.runId,
+      LOOPANY_RUN_TOKEN: d.runToken,
     };
     const task = workflowFailure
       ? buildWorkflowFallbackTask(d.task, workflowFailure, dateStamp(), d.loop.name, d.loop.id)
@@ -858,41 +857,3 @@ async function report(serverUrl: string, runToken: string, body: ReportBody): Pr
   }
 }
 
-/** Rewrite finish transport: the device credential is authority and the run id
- * is invisible request context, never a per-run bearer token. */
-async function reportV2(
-  serverUrl: string,
-  deviceToken: string,
-  body: ReportBody,
-  reportTitle?: string,
-): Promise<void> {
-  const summary = body.message ?? body.finalText ?? body.error ?? (body.ok ? "Run completed." : "Run failed.");
-  const payload = {
-    outcome: body.ok ? "success" : "failure",
-    summary,
-    report: { title: reportTitle, body: body.finalText ?? body.message ?? body.error ?? summary },
-    cost: body.cost,
-    durationMs: body.durationMs,
-  };
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await boundedFetch(`${serverUrl.replace(/\/$/, "")}/api/agent/runs/${encodeURIComponent(body.runId)}/finish`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${deviceToken}`,
-          "X-Loopany-Run": body.runId,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      }, REPORT_TIMEOUT_MS);
-      if (res.status === 409) {
-        logger.warn({ runId: body.runId, code: "LEASE_LOST" }, "finish: run lease was lost; late result refused");
-        return;
-      }
-      if (!res.ok) logger.warn({ runId: body.runId, status: res.status }, "finish: non-ok response");
-      return;
-    } catch {
-      // retry one transient transport failure; finish is derived-id safe
-    }
-  }
-}

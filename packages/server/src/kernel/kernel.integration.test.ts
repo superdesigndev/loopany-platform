@@ -86,19 +86,10 @@ async function task(over: Record<string, unknown> = {}) {
   return r.object;
 }
 
-/** An active loop with a cadence. */
-async function loop(over: Record<string, unknown> = {}) {
-  const r = await kernel.createObject({
-    teamId: TEAM,
-    kind: "loop",
-    actor: HUMAN,
-    now: T0,
-    title: "Housekeeper",
-    cron: "0 7 * * *",
-    nextFire: T1,
-    body: "the charter",
-    ...over,
-  });
+/** A doc — the non-task kind every kind-firewall case below is stated against
+ *  now that the loop kind has retired. */
+async function doc(over: Record<string, unknown> = {}) {
+  const r = await kernel.createObject({ teamId: TEAM, kind: "doc", actor: HUMAN, now: T0, title: "Report", body: "text", ...over });
   if (!r.ok) throw new Error(`fixture create failed: ${r.code} ${r.message}`);
   return r.object;
 }
@@ -120,7 +111,7 @@ describe("createObject", () => {
 
   it("kind-prefixes every id", async () => {
     expect((await task()).id).toMatch(/^task-/);
-    expect((await loop()).id).toMatch(/^loop-/);
+    expect((await doc()).id).toMatch(/^doc-/);
     const d = await kernel.createObject({ teamId: TEAM, kind: "doc", actor: AGENT, now: T0, format: "markdown" });
     expect(d.ok && d.object.id).toMatch(/^doc-/);
   });
@@ -192,66 +183,38 @@ describe("key idempotency (spec §4.1)", () => {
 // ---------------------------------------------------------- kind firewalls
 
 describe("kind firewalls (design §4 rule 2)", () => {
-  it("refuses a cadence on a task at the VERB, with teaching", async () => {
-    const r = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, cron: "0 7 * * *" });
-    expect(r.ok).toBe(false);
-    expect(!r.ok && r.code).toBe("WRONG_KIND");
-    expect(!r.ok && r.issues[0]!.path).toBe("cron");
-    expect(!r.ok && r.hint).toContain("follow_up");
-  });
-
-  it("refuses a cadence on a task at the DDL FLOOR, past the verb entirely", async () => {
-    await expectCheckViolation(
-      () =>
-        db.db.insert(schema.objects).values({
-          id: "task-raw",
-          teamId: TEAM,
-          kind: "task",
-          status: "open",
-          cron: "0 7 * * *",
-          createdAt: T0,
-          updatedAt: T0,
-        }),
-      "objects_cron_loop_only",
-    );
-  });
-
-  it("refuses a bound workdir on a task at BOTH altitudes", async () => {
-    // Only a loop has an execution site (captain ruling 2026-08-04), and the DDL
-    // is the floor: the verb guard could be refactored away, the CHECK cannot.
-    const viaVerb = await kernel.createObject({ teamId: TEAM, kind: "task", actor: AGENT, now: T0, title: "T", workdir: "/Users/me/repo" } as never);
+  it("refuses task facets on a doc, at both altitudes", async () => {
+    const d = await doc();
+    const viaVerb = await kernel.applyUpdate({ objectId: d.id, actor: AGENT, now: T1, fields: { watcher: "loop-x" } });
     expect(!viaVerb.ok && viaVerb.code).toBe("WRONG_KIND");
     await expectCheckViolation(
       () =>
         db.db.insert(schema.objects).values({
-          id: "task-workdir-raw",
+          id: "doc-raw",
           teamId: TEAM,
-          kind: "task",
-          status: "open",
-          workdir: "/Users/me/repo",
-          createdAt: T0,
-          updatedAt: T0,
-        }),
-      "objects_workdir_loop_only",
-    );
-  });
-
-  it("refuses task facets on a loop, at both altitudes", async () => {
-    const l = await loop();
-    const viaVerb = await kernel.applyUpdate({ objectId: l.id, actor: AGENT, now: T1, fields: { watcher: "loop-x" } });
-    expect(!viaVerb.ok && viaVerb.code).toBe("WRONG_KIND");
-    await expectCheckViolation(
-      () =>
-        db.db.insert(schema.objects).values({
-          id: "loop-raw",
-          teamId: TEAM,
-          kind: "loop",
-          status: "active",
+          kind: "doc",
+          status: "current",
           pendingQuestion: "?",
           createdAt: T0,
           updatedAt: T0,
         }),
       "objects_task_facets_only",
+    );
+  });
+
+  it("refuses a parent on a doc at the DDL floor — hierarchy is a TASK relation", async () => {
+    await expectCheckViolation(
+      () =>
+        db.db.insert(schema.objects).values({
+          id: "doc-parent-raw",
+          teamId: TEAM,
+          kind: "doc",
+          status: "current",
+          parentId: "task-7f3a91",
+          createdAt: T0,
+          updatedAt: T0,
+        }),
+      "objects_parent_task_only",
     );
   });
 
@@ -271,24 +234,18 @@ describe("kind firewalls (design §4 rule 2)", () => {
     );
   });
 
-  it("refuses `close` on a loop by name, and names the legal move", async () => {
-    const l = await loop();
-    const r = await kernel.applyTransition({ objectId: l.id, transition: "close", actor: HUMAN, now: T1 });
+  it("refuses `close` on a doc by name, and writes nothing", async () => {
+    const d = await doc();
+    const r = await kernel.applyTransition({ objectId: d.id, transition: "close", actor: HUMAN, now: T1 });
     expect(r.ok).toBe(false);
     expect(!r.ok && r.code).toBe("WRONG_KIND");
-    expect(!r.ok && r.hint).toBe("loops do not close — pause or retire instead");
-    expect((await kernelStore.getObject(undefined, l.id))!.status).toBe("active");
-  });
-
-  it("refuses a loop transition on a task", async () => {
-    const t = await task();
-    const r = await kernel.applyTransition({ objectId: t.id, transition: "pause", actor: HUMAN, now: T1 });
-    expect(!r.ok && r.code).toBe("WRONG_KIND");
+    expect(!r.ok && r.hint).toBe("only a task can be closed");
+    expect((await kernelStore.getObject(undefined, d.id))!.status).toBe("current");
   });
 
   it("CLEARING a foreign facet is a no-op, not a firewall breach", async () => {
     const t = await task();
-    const r = await kernel.applyUpdate({ objectId: t.id, actor: AGENT, now: T1, fields: { cron: null } });
+    const r = await kernel.applyUpdate({ objectId: t.id, actor: AGENT, now: T1, fields: { format: null } });
     expect(r.ok).toBe(true);
     expect(r.ok && r.changed).toBe(false);
   });
@@ -355,35 +312,12 @@ describe("applyTransition", () => {
     expect(!again.ok && again.code).toBe("ILLEGAL_FROM_STATE");
   });
 
-  it("DISARMS a loop it pauses — the cursor is what makes a cadence live", async () => {
-    const l = await loop();
-    expect(l.nextFire).toBe(T1);
-    const r = await kernel.applyTransition({ objectId: l.id, transition: "pause", actor: HUMAN, now: T1 });
-    expect(r.ok && r.object.status).toBe("paused");
-    expect(r.ok && r.object.nextFire).toBeNull();
-    expect(r.ok && r.event.diff).toMatchObject({ nextFire: { old: T1, new: null } });
-  });
-
-  it("keeps auto-pause distinguishable from a deliberate pause on the timeline", async () => {
-    const l = await loop();
-    const r = await kernel.applyTransition({
-      objectId: l.id,
-      transition: "auto-pause",
-      actor: { entrance: "agent", actorId: "run-9" },
-      now: T1,
-      derivedFrom: { runId: "run-9" },
-    });
-    expect(r.ok && r.event.transition).toBe("auto-pause");
-    expect(r.ok && r.event.kind).toBe("loop-paused");
-  });
-
-  it("resumes and retires a loop", async () => {
-    const l = await loop();
-    await kernel.applyTransition({ objectId: l.id, transition: "pause", actor: HUMAN, now: T1 });
-    const back = await kernel.applyTransition({ objectId: l.id, transition: "resume", actor: HUMAN, now: T1 });
-    expect(back.ok && back.object.status).toBe("active");
-    const gone = await kernel.applyTransition({ objectId: l.id, transition: "retire", actor: HUMAN, now: T1 });
-    expect(gone.ok && gone.object.status).toBe("retired");
+  it("PAIRS the closed stamp with the status, so the CHECK can never see them apart", async () => {
+    const t = await task();
+    const r = await kernel.applyTransition({ objectId: t.id, transition: "close", actor: HUMAN, now: T1, note: "done" });
+    expect(r.ok && r.object.status).toBe("closed");
+    expect(r.ok && r.object.closedAt).toBe(T1);
+    expect(r.ok && r.event.diff).toMatchObject({ closedAt: { old: null, new: T1 } });
   });
 
   it("refuses an unknown transition name arriving from the wire", async () => {
@@ -407,24 +341,28 @@ describe("applyTransition", () => {
 
 describe("event dedup — same derivation, one row (design §2 invariant 1)", () => {
   it("makes a re-derived transition a REPLAY that applies nothing twice", async () => {
-    const l = await loop();
-    const seed = { runId: "run-9", streak: 10 };
-    const first = await kernel.applyTransition({ objectId: l.id, transition: "auto-pause", actor: AGENT, now: T1, derivedFrom: seed });
-    const second = await kernel.applyTransition({ objectId: l.id, transition: "auto-pause", actor: AGENT, now: T1, derivedFrom: seed });
+    const t = await task();
+    const seed = { runId: "run-9" };
+    const first = await kernel.applyTransition({ objectId: t.id, transition: "close", actor: AGENT, now: T1, note: "done", derivedFrom: seed });
+    const second = await kernel.applyTransition({ objectId: t.id, transition: "close", actor: AGENT, now: T1, note: "done", derivedFrom: seed });
     expect(first.ok && first.replay).toBe(false);
     expect(second.ok && second.replay).toBe(true);
     expect(first.ok && second.ok && first.event.id).toBe(second.ok ? second.event.id : "");
-    // ONE loop-paused row, despite the second call.
-    const paused = (await kernelStore.listObjectEvents(undefined, l.id)).filter((e) => e.kind === "loop-paused");
-    expect(paused).toHaveLength(1);
+    // ONE task-closed row, despite the second call.
+    const closed = (await kernelStore.listObjectEvents(undefined, t.id)).filter((e) => e.kind === "task-closed");
+    expect(closed).toHaveLength(1);
   });
 
+  /** The latch is keyed on the SEED, never on the transition name: a different
+   *  seed is a different fact, so it must reach the ordinary guards rather than
+   *  being swallowed as a replay of the first one. */
   it("does NOT let the replay latch mask a genuinely different fact", async () => {
-    const l = await loop();
-    await kernel.applyTransition({ objectId: l.id, transition: "auto-pause", actor: AGENT, now: T1, derivedFrom: { runId: "run-9" } });
-    await kernel.applyTransition({ objectId: l.id, transition: "resume", actor: HUMAN, now: T1 });
-    const other = await kernel.applyTransition({ objectId: l.id, transition: "auto-pause", actor: AGENT, now: T1, derivedFrom: { runId: "run-10" } });
-    expect(other.ok && other.replay).toBe(false);
+    const t = await task();
+    await kernel.applyTransition({ objectId: t.id, transition: "close", actor: AGENT, now: T1, note: "done", derivedFrom: { runId: "run-9" } });
+    const other = await kernel.applyTransition({ objectId: t.id, transition: "close", actor: AGENT, now: T1, note: "done", derivedFrom: { runId: "run-10" } });
+    // Not latched: it went all the way to the from-state guard and refused there.
+    expect(other.ok).toBe(false);
+    expect(!other.ok && other.code).toBe("ILLEGAL_FROM_STATE");
   });
 
   it("never deduplicates an ORGANIC fact — two identical patches are two facts", async () => {
@@ -591,33 +529,33 @@ describe("applyUpdate", () => {
   });
 
   it("carries a custom event kind for the caller's own vocabulary", async () => {
-    const l = await loop();
+    const d = await doc();
     const r = await kernel.applyUpdate({
-      objectId: l.id, actor: AGENT, now: T1, fields: { body: "new charter" }, eventKind: "charter-evolved",
+      objectId: d.id, actor: AGENT, now: T1, fields: { body: "revised" }, eventKind: "question-withdrawn",
     });
-    expect(r.ok && r.event!.kind).toBe("charter-evolved");
-    expect(r.ok && r.event!.diff).toEqual({ body: { old: "the charter", new: "new charter" } });
+    expect(r.ok && r.event!.kind).toBe("question-withdrawn");
+    expect(r.ok && r.event!.diff).toEqual({ body: { old: "text", new: "revised" } });
   });
 });
 
 // --------------------------------------------------------- runs queue
 
-describe("transactional open-run join (convergence S2 queue discipline)", () => {
+describe("transactional open-run join (the queue discipline)", () => {
   const baseRun = { userId: "u_alice", machineId: "m_1", phase: "pending" as const, role: "exec" as const };
 
   it("admits the first queued run", async () => {
     const r = await kernelStore.queueRun(undefined, {
-      ...baseRun, id: "run-a", loopId: "loop-1", ts: T0, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id: "run-a", loopId: "loop-1", ts: T0, scope: "routine", reason: "due", entrance: "clock",
     });
     expect(r.outcome).toBe("queued");
   });
 
   it("REFUSES a second — a machine offline for two days owes one run, not forty-eight", async () => {
     await kernelStore.queueRun(undefined, {
-      ...baseRun, id: "run-a", loopId: "loop-1", ts: T0, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id: "run-a", loopId: "loop-1", ts: T0, scope: "routine", reason: "due", entrance: "clock",
     });
     const second = await kernelStore.queueRun(undefined, {
-      ...baseRun, id: "run-b", loopId: "loop-1", ts: T1, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id: "run-b", loopId: "loop-1", ts: T1, scope: "routine", reason: "due", entrance: "clock",
     });
     expect(second.outcome).toBe("loop-busy");
     expect(second.run!.id).toBe("run-a");
@@ -625,48 +563,48 @@ describe("transactional open-run join (convergence S2 queue discipline)", () => 
   });
 
   it("distinguishes a REPLAY (same derived id) from the queue skip", async () => {
-    const id = ids.clockRunId("loop-1", T0);
+    const id = ids.dueRunId("loop-1", "task-7f3a91", T0);
     await kernelStore.queueRun(undefined, {
-      ...baseRun, id, loopId: "loop-1", ts: T0, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id, loopId: "loop-1", ts: T0, scope: "task:task-7f3a91", reason: "due", entrance: "clock",
     });
     const replay = await kernelStore.queueRun(undefined, {
-      ...baseRun, id, loopId: "loop-1", ts: T1, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id, loopId: "loop-1", ts: T1, scope: "task:task-7f3a91", reason: "due", entrance: "clock",
     });
     expect(replay.outcome).toBe("replay");
   });
 
-  it("queues behind a claimed run because its delivery can no longer absorb a new trigger", async () => {
+  it("queues behind a RUNNING run because its delivery can no longer absorb a new trigger", async () => {
     await kernelStore.queueRun(undefined, {
-      ...baseRun, id: "run-a", loopId: "loop-1", ts: T0, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id: "run-a", loopId: "loop-1", ts: T0, scope: "routine", reason: "due", entrance: "clock",
     });
-    await db.db.update(runsTable).set({ queueState: "claimed" }).where((await import("drizzle-orm")).eq(runsTable.id, "run-a"));
+    await db.db.update(runsTable).set({ phase: "running" }).where((await import("drizzle-orm")).eq(runsTable.id, "run-a"));
     const next = await kernelStore.queueRun(undefined, {
-      ...baseRun, id: "run-b", loopId: "loop-1", ts: T1, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id: "run-b", loopId: "loop-1", ts: T1, scope: "routine", reason: "due", entrance: "clock",
     });
     expect(next.outcome).toBe("queued");
-    expect((await kernelStore.getRunRow(undefined, "run-b"))?.queueState).toBe("queued");
+    expect((await kernelStore.getRunRow(undefined, "run-b"))?.phase).toBe("pending");
   });
 
   it("bounds nothing ACROSS loops — two loops each get their own queued run", async () => {
     const a = await kernelStore.queueRun(undefined, {
-      ...baseRun, id: "run-a", loopId: "loop-1", ts: T0, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id: "run-a", loopId: "loop-1", ts: T0, scope: "routine", reason: "due", entrance: "clock",
     });
     const b = await kernelStore.queueRun(undefined, {
-      ...baseRun, id: "run-b", loopId: "loop-2", ts: T0, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id: "run-b", loopId: "loop-2", ts: T0, scope: "routine", reason: "due", entrance: "clock",
     });
     expect([a.outcome, b.outcome]).toEqual(["queued", "queued"]);
   });
 
-  it("is invisible to LEGACY run rows (queue_state NULL), so the shipping table is untouched", async () => {
-    await db.db.insert(runsTable).values([
-      { ...baseRun, id: "run-legacy-1", loopId: "loop-9", ts: T0 },
-      { ...baseRun, id: "run-legacy-2", loopId: "loop-9", ts: T1 },
-    ]);
+  /** ONE run world after convergence S5: a provenance-free cron row is an open
+   *  run exactly like a trigger row, so the join sees it and does not stack. */
+  it("joins an ordinary cron pending row rather than stacking beside it", async () => {
+    await db.db.insert(runsTable).values([{ ...baseRun, id: "run-cron", loopId: "loop-9", ts: T0 }]);
     const fresh = await kernelStore.queueRun(undefined, {
-      ...baseRun, id: "run-new", loopId: "loop-9", ts: T1, queueState: "queued", scope: "routine", reason: "clock", entrance: "clock",
+      ...baseRun, id: "run-new", loopId: "loop-9", ts: T1, scope: "routine", reason: "due", entrance: "clock",
     });
-    expect(fresh.outcome).toBe("queued");
-    expect((await kernelStore.queuedRunForLoop(undefined, "loop-9"))!.id).toBe("run-new");
+    expect(fresh.outcome).toBe("loop-busy");
+    expect(fresh.run!.id).toBe("run-cron");
+    expect((await kernelStore.openRunForLoop(undefined, "loop-9"))!.id).toBe("run-cron");
   });
 });
 

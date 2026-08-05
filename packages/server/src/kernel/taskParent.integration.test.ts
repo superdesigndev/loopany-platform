@@ -75,7 +75,7 @@ describe("parent_id — the column and its firewall", () => {
     expect(cleared.ok && cleared.changed).toBe(true);
   });
 
-  it("refuses a parent on a loop or a doc, by name, and the DDL is the floor", async () => {
+  it("refuses a parent on a doc, by name, and the DDL is the floor", async () => {
     const refused = refusalOf(await kernel.createObject({
       teamId: TEAM, kind: "doc", actor: HUMAN, now: T0, title: "notes", parentId: "task-abc123",
     }));
@@ -129,10 +129,10 @@ describe("the write-time cycle guard", () => {
   });
 
   it("refuses a parent that is not a task — hierarchy is a TASK relation", async () => {
-    const loop = await kernel.createObject({ teamId: TEAM, kind: "loop", actor: HUMAN, now: T0, title: "Housekeeper", cron: "0 7 * * *" });
-    if (!loop.ok) throw new Error("fixture");
+    const doc = await kernel.createObject({ teamId: TEAM, kind: "doc", actor: HUMAN, now: T0, title: "Report" });
+    if (!doc.ok) throw new Error("fixture");
     const child = await task({ title: "child" });
-    const refused = refusalOf(await kernel.applyUpdate({ objectId: child.id, actor: AGENT, now: T1, fields: { parentId: loop.object.id } }));
+    const refused = refusalOf(await kernel.applyUpdate({ objectId: child.id, actor: AGENT, now: T1, fields: { parentId: doc.object.id } }));
     expect(refused.code).toBe("WRONG_KIND");
     // The loop that acts next is the WATCHER; saying so is the whole point of a
     // teaching refusal over a bare "wrong kind".

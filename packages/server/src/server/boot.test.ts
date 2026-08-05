@@ -28,7 +28,8 @@ test("ensureServer migrates + boots the scheduler, idempotently", async () => {
   const b = await boot.ensureServer();
   expect(a).toBe(b); // single instance
   expect(a.scheduler).toBeDefined();
-  // Follow-up scanning survives the RUNS_V2 cutover and is always armed.
+  // Follow-up scanning is a kernel fact the production scheduler knows nothing
+  // about, so its scan is always armed — never behind a flag.
   expect(a.dueTaskScheduler).toBeDefined();
   // Migrations ran: the tables exist and are queryable.
   expect(await store.listLoops()).toEqual([]);

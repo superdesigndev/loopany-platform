@@ -101,37 +101,33 @@ A twin never fires on its own; firing it is one `run-now`, and it stays paused a
 Resolve its id first (ids are per-stack; the unit-10 stack's are recorded below):
 
 ```sh
-source scripts/rewrite-local-run.env.sh
-A=$(curl -sS "$LOOPANY_SERVER_URL/api/loops" | python3 -c \
-  'import json,sys;print(next(l["id"] for l in json.load(sys.stdin)["loops"] if l["title"].startswith("Housekeeper — loopany-platform")))')
-B=$(curl -sS "$LOOPANY_SERVER_URL/api/loops" | python3 -c \
-  'import json,sys;print(next(l["id"] for l in json.load(sys.stdin)["loops"] if l["title"].startswith("Housekeeper — superdesign-platform")))')
+# The roster is the PRODUCTION one (convergence retired the kernel loop surface).
+loopany-dev loops
 ```
 
-Then, for whichever twin the captain releases (`$A` or `$B`):
+Then, for whichever twin the captain releases (its id from that list):
 
 ```sh
 # FIRE one run, now. The twin is paused and STAYS paused: one run, then quiet again.
-curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/run-now"
+curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/<loop-id>/run-now"
 ```
 
-Resume only if you want the CADENCE back — that is a separate, bigger decision, since it
-arms the daily 07:00 fire with no further human act:
+Enable the loop only if you want the CADENCE back — that is a separate, bigger decision,
+since it arms the daily 07:00 fire with no further human act:
 
 ```sh
-# ARM the cadence — restores next_fire, so 07:00 fires by itself every day
-curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/resume"
+# ARM the cadence — the daily 07:00 fire runs by itself from here on
+loopany-dev edit <loop-id> --json '{"enabled":true}'
 
-# PARK it again — clears next_fire; the loop and its history are kept
-curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops/$A/pause" \
-  -H 'content-type: application/json' -d '{"note":"why it was parked"}'
+# PARK it again — the loop and its whole history are kept
+loopany-dev edit <loop-id> --json '{"enabled":false}'
 ```
 
 The daemon must be running for the fire to be claimed (`up --foreground`, see the recipe
 in `packages/server/AGENTS.md`). A second `run-now` while one run is still queued reports
-`alreadyQueued` rather than stacking a second. `pause`/`resume` are idempotent —
-repeating one is a success with `changed: false`. A RETIRED loop refuses `run-now`
-outright; retirement is terminal.
+`alreadyQueued` rather than stacking a second. Pausing and re-enabling are ordinary owner
+edits, and disabling a loop that still watches open tasks WARNS with the count (it never
+blocks and never cascades).
 
 **Widen `LOOPANY_ROOTS` before you fire a twin, or every run fails the jail.** The
 recipe starts the daemon with `LOOPANY_ROOTS="$LOOPANY_RW_BASE"` — the isolated stack's
@@ -178,26 +174,20 @@ Run them from a shell that has sourced the isolated stack (see
 ```sh
 source scripts/rewrite-local-run.env.sh
 
-# A — loopany-platform
-curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops" \
-  -H 'content-type: text/markdown' \
-  --data-binary @scripts/rewrite-twins/housekeeper-loopany-platform.local.md
-
-# B — superdesign-platform
-curl -sS -X POST "$LOOPANY_SERVER_URL/api/loops" \
-  -H 'content-type: text/markdown' \
-  --data-binary @scripts/rewrite-twins/housekeeper-superdesign-platform.local.md
+# A twin is an ORDINARY PRODUCTION LOOP: `loopany new` creates it, and the `.local.md`
+# file beside this README is the source of its standing brief — paste that file's body
+# under `## Spec` in the loop's task file.
+loopany-dev new --json '{
+  "name": "Housekeeper - loopany-platform (local twin)",
+  "cron": "0 7 * * *",
+  "enabled": false,
+  "taskFile": "<workdir>/loopany-task.md"
+}'
 ```
 
-Equivalently through the rewrite CLI, from `packages/daemon`:
-
-```sh
-./node_modules/.bin/tsx src/cli.ts loop create --file ../../scripts/rewrite-twins/housekeeper-loopany-platform.local.md
-./node_modules/.bin/tsx src/cli.ts loop create --file ../../scripts/rewrite-twins/housekeeper-superdesign-platform.local.md
-```
-
-Both carry a `key:`, so a repeated create is an idempotent replay, never a twin of a twin.
-Each is created ARMED (it has a `cron:`), which is why the staging recipe is create-then-
-pause in one breath, with the daemon down — that leaves no window in which a cadence could
-be claimed. Re-running these commands against a stack that already has the twins is a
-safe no-op replay; it does NOT un-pause them.
+Create each twin DISABLED (`"enabled": false`) and with the daemon DOWN. That is the whole
+staging discipline: a disabled loop is autonomously inert, so there is no window in which a
+birth-armed cadence could be claimed, and every run it ever does is one somebody asked for
+with `run-now`. `loopany new` is idempotent on a retried create (the daemon sends an
+idempotency key over the whole resolved body), so a repeat is a replay rather than a twin
+of a twin — and it never re-enables an already-parked loop.

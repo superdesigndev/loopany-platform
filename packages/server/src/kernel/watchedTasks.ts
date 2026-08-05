@@ -1,14 +1,13 @@
 /**
- * The u16 watched-task warning, ported to the PRODUCTION loop lifecycle
- * (convergence S3; design report §1.4 retire-freeze row + §5).
+ * The u16 watched-task warning, on the PRODUCTION loop lifecycle (design report
+ * §1.4 retire-freeze row + §5).
  *
- * A kernel task names its watcher by id and by nothing else. The kernel loop's
- * terminal `retired` state retires with the loop kind, so the three production
- * ways a watcher stops acting — pause, closed-loop finish, hard delete —
- * inherit the ruling retirement carried: **WARN with the count, never block,
- * never cascade.** Blocking would make a person's own operational call
- * unavailable because of a record the loop keeps about itself; cascading would
- * delete work nobody asked to delete.
+ * A kernel task names its watcher by id and by nothing else. The three ways a
+ * watcher stops acting — pause, closed-loop finish, hard delete — all inherit
+ * the ruling the kernel's retired `retire` carried: **WARN with the count,
+ * never block, never cascade.** Blocking would make a person's own operational
+ * call unavailable because of a record the loop keeps about itself; cascading
+ * would delete work nobody asked to delete.
  *
  * That is why `store.deleteLoop` deliberately does NOT grow an `objects`
  * cascade (pinned by a test). A deleted watcher DANGLES on purpose — there is
@@ -17,7 +16,7 @@
  * line and mutates nothing, and the repair is a transfer from the task drawer.
  *
  * Both halves live here so the count and the voice cannot drift between the
- * kernel's retire path and the four production surfaces that now share them.
+ * production surfaces that share them.
  */
 import { and, count, eq } from "drizzle-orm";
 
@@ -27,7 +26,7 @@ import type { KernelExec } from "../db/kernelStore.js";
 import type { WatchedTasksWarning } from "../types.js";
 
 /** Every lifecycle move that stops a watcher acting without touching its tasks. */
-export type WatchedTaskVerb = "retire" | "pause" | "finish" | "delete";
+export type WatchedTaskVerb = "pause" | "finish" | "delete";
 
 /** A `warning`, never a `notice`: the move DID happen, and this is its
  *  consequence. The shape lives in `types.ts` because the web surfaces carry it
@@ -52,7 +51,6 @@ export async function countOpenWatchedTasks(teamId: string | null, loopId: strin
 /** What each verb leaves behind. The hint is the SAME repair in every case — a
  *  transfer or a close — because that is the only move that actually clears it. */
 const CONSEQUENCE: Record<WatchedTaskVerb, (loopId: string, plural: string, them: string) => string> = {
-  retire: (id, s, them) => `${id} was retired while still watching {n} open task${s}; retirement is terminal, so nothing will wake ${them} again`,
   pause: (id, s, them) => `${id} was paused while still watching {n} open task${s}; ${them} wait${s ? "" : "s"} until it runs again or you transfer ${them}`,
   finish: (id, s, them) => `${id} finished while still watching {n} open task${s}; a completed loop is disabled, so ${them} wait${s ? "" : "s"} until you reopen it or transfer ${them}`,
   delete: (id, s, them) => `${id} was deleted while still watching {n} open task${s}; nothing will wake ${them} again, and each still names a loop that is gone`,

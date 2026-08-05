@@ -55,8 +55,8 @@ case "${LOOPANY_SERVER_URL:-}" in
 esac
 
 # Presentation only: bare `loopany-dev` renders the converged workspace home.
-# Execution is the ordinary production poll path; LOOPANY_RUNS_V2 is deliberately
-# absent after convergence S3.
+# Execution is the ordinary production poll path — there is no runtime switch,
+# and this is the ONE marker the CLI reads.
 export LOOPANY_DEV_HOME=1
 
 exec "$repo_root/packages/daemon/node_modules/.bin/tsx" "$repo_root/packages/daemon/src/cli.ts" "$@"

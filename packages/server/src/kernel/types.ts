@@ -12,8 +12,11 @@
 
 // ---- kinds and statuses ----
 
-/** Single-table inheritance: four kinds, one `objects` table (design §2). */
-export const OBJECT_KINDS = ["loop", "task", "doc", "mirror"] as const;
+/** Single-table inheritance: three kinds, one `objects` table (design §2).
+ *  The `loop` kind RETIRED at convergence S5 — the shipping product's `loops`
+ *  row is THE loop, and `watcher` / `created_by_loop` are plain references to
+ *  one (`kernel/loopRefs.ts`). */
+export const OBJECT_KINDS = ["task", "doc", "mirror"] as const;
 export type ObjectKind = (typeof OBJECT_KINDS)[number];
 
 /**
@@ -23,7 +26,7 @@ export type ObjectKind = (typeof OBJECT_KINDS)[number];
  * ceremony around a one-liner, and having no file path is what keeps a mirror
  * from growing a body somebody could cache external state in.
  */
-export const ARTIFACT_KINDS = ["loop", "task", "doc"] as const;
+export const ARTIFACT_KINDS = ["task", "doc"] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 
 export function isArtifactKind(kind: ObjectKind): kind is ArtifactKind {
@@ -33,8 +36,6 @@ export function isArtifactKind(kind: ObjectKind): kind is ArtifactKind {
 /** `open → closed`. Nothing else (design §3) — everything that feels like a
  *  state is a facet (`pending_question`, `follow_up_at`) or a run's lease. */
 export const TASK_STATUSES = ["open", "closed"] as const;
-/** Operational lifecycle. A loop never closes by finishing work (design §4). */
-export const LOOP_STATUSES = ["active", "paused", "retired"] as const;
 /** A doc has one state; `doc update` rewrites it in place (design §8). */
 export const DOC_STATUSES = ["current"] as const;
 /**
@@ -49,7 +50,6 @@ export const MIRROR_STATUSES = ["current"] as const;
 
 export const STATUSES_BY_KIND: Record<ObjectKind, readonly string[]> = {
   task: TASK_STATUSES,
-  loop: LOOP_STATUSES,
   doc: DOC_STATUSES,
   mirror: MIRROR_STATUSES,
 };
@@ -58,7 +58,6 @@ export const STATUSES_BY_KIND: Record<ObjectKind, readonly string[]> = {
  *  transition — the object has no prior state to guard (§4.1). */
 export const INITIAL_STATUS: Record<ObjectKind, string> = {
   task: "open",
-  loop: "active",
   doc: "current",
   mirror: "current",
 };
@@ -88,20 +87,18 @@ export interface Actor {
   actorId: string;
 }
 
-// ---- runs queue (the columns unit 3 drives; the vocabulary lives here) ----
-
-export const RUN_QUEUE_STATES = ["queued", "claimed", "success", "failure"] as const;
-export type RunQueueState = (typeof RUN_QUEUE_STATES)[number];
+// ---- trigger runs (the `runs.reason` / `runs.scope` vocabulary) ----
 
 /**
- * Why this run exists (§5.3). `clock` = R-clock (the loop's own cadence),
+ * Why this run exists (§5.3). `clock` = the loop's own production cadence,
  * `answered` = R-answer (a human answered a task this loop watches), `due` =
  * R-due (a task this loop watches reached its `follow_up`), `manual` = a person
  * pressed the button, `directive` = R-directive (a human told this loop
  * something about a task it watches, without being asked). `due` joined the set
  * under the 2026-08-04 watcher ruling: with every task watched, a follow-up date
  * is a real alarm on a named loop, so the same level-triggered clock that fires
- * cadences fires it.
+ * cadences fires it. `clock` is written by the production scheduler; the kernel
+ * seam mints the other four.
  *
  * `directive` is its OWN reason rather than a flavour of `answered`, and the
  * split is the point: the two are opposite conversations. `answered` means "you
@@ -115,11 +112,6 @@ export type RunQueueState = (typeof RUN_QUEUE_STATES)[number];
  */
 export const RUN_REASONS = ["clock", "answered", "due", "manual", "directive"] as const;
 export type RunReason = (typeof RUN_REASONS)[number];
-
-/** `active` until the lease expires; `terminal-grace` admits exactly ONE late
- *  reconciling report from a machine that woke up (§6.5). */
-export const RUN_LEASE_STATES = ["active", "terminal-grace"] as const;
-export type RunLeaseState = (typeof RUN_LEASE_STATES)[number];
 
 /** `routine` (the loop's own cadence) or `task:<object id>` (an express run). */
 export const ROUTINE_SCOPE = "routine";
@@ -136,20 +128,17 @@ export interface TransitionSpec {
 }
 
 /**
- * Every status change in the system. There are five, and there is no path to a
- * sixth without editing this table — which is design §10 principle 3 made
+ * Every status change in the system. There is exactly ONE, and there is no path
+ * to a second without editing this table — which is design §10 principle 3 made
  * mechanical.
  *
- * `auto-pause` is a separate NAME from `pause` on purpose: §6.6's circuit
- * breaker must be distinguishable from an owner's deliberate pause when reading
- * the timeline, and the transition name is the only field that carries it.
+ * The four loop transitions (`pause` / `auto-pause` / `resume` / `retire`)
+ * retired with the loop kind at convergence S5: a loop's operational lifecycle
+ * is the shipping product's (`enabled`, a closed loop's `completedAt`, delete),
+ * and two lifecycle vocabularies over one loop would be drift by construction.
  */
 export const TRANSITIONS = {
   close: { kind: "task", from: ["open"], to: "closed", eventKind: "task-closed" },
-  pause: { kind: "loop", from: ["active"], to: "paused", eventKind: "loop-paused" },
-  "auto-pause": { kind: "loop", from: ["active"], to: "paused", eventKind: "loop-paused" },
-  resume: { kind: "loop", from: ["paused"], to: "active", eventKind: "loop-resumed" },
-  retire: { kind: "loop", from: ["active", "paused"], to: "retired", eventKind: "loop-retired" },
 } as const satisfies Record<string, TransitionSpec>;
 
 export type TransitionName = keyof typeof TRANSITIONS;
@@ -160,10 +149,6 @@ export function isTransitionName(v: string): v is TransitionName {
 
 // ---- the kind firewalls (design §4, welded twice: here and in the DDL) ----
 
-/** A cadence and a bound workdir are loop facets. `--cron` on a task is refused
- *  (design §4 rule 2); `workdir` joined them under the 2026-08-04 captain ruling
- *  that a loop binds a directory the way the shipping product does. */
-export const LOOP_ONLY_FIELDS = ["cron", "timezone", "nextFire", "workdir"] as const;
 /** Question / resurface date / who-acts-next / the parent task are task facets.
  *  `parentId` is task-only because hierarchy is a TASK relation: a loop is not a
  *  bigger task and a doc is not a sub-anything. */
@@ -175,7 +160,6 @@ export const DOC_ONLY_FIELDS = ["format"] as const;
 export const MIRROR_ONLY_FIELDS = ["mirrorKind", "mirrorCoords", "attachedTo"] as const;
 
 const FACET_OWNER: Record<string, ObjectKind> = {
-  ...Object.fromEntries(LOOP_ONLY_FIELDS.map((f) => [f, "loop" as const])),
   ...Object.fromEntries(TASK_ONLY_FIELDS.map((f) => [f, "task" as const])),
   ...Object.fromEntries(DOC_ONLY_FIELDS.map((f) => [f, "doc" as const])),
   ...Object.fromEntries(MIRROR_ONLY_FIELDS.map((f) => [f, "mirror" as const])),
@@ -292,13 +276,9 @@ export function firewallIssues(kind: ObjectKind, fields: Iterable<string>): Kern
     issues.push({
       path: field,
       message:
-        field === "cron" || field === "timezone" || field === "nextFire"
-          ? "a cadence belongs to a loop, not a " + kind
-          : field === "workdir"
-            ? "a bound working directory belongs to a loop, not a " + kind
-            : field === "mirrorKind" || field === "mirrorCoords" || field === "attachedTo"
-              ? `${field} belongs to a mirror, not a ${kind} — a pointer to an external thing is its own object`
-              : `${field} is a ${owner} facet, not a ${kind} one`,
+        field === "mirrorKind" || field === "mirrorCoords" || field === "attachedTo"
+          ? `${field} belongs to a mirror, not a ${kind} — a pointer to an external thing is its own object`
+          : `${field} is a ${owner} facet, not a ${kind} one`,
       got: field,
     });
   }
@@ -308,11 +288,10 @@ export function firewallIssues(kind: ObjectKind, fields: Iterable<string>): Kern
 /** The one-line teaching hint for a firewall refusal on `kind`. */
 export function firewallHint(kind: ObjectKind): string {
   if (kind === "task") {
-    return "tasks have no cadence. A standing schedule is a loop; a resurface date is follow_up:";
+    return "tasks carry title, key, parent, follow_up, watcher, needs_human and payload. A standing schedule belongs to the loop that watches this task (`loopany edit <loop-id>`); a resurface date is follow_up:";
   }
-  if (kind === "doc") return "docs carry title, key, format and payload; a schedule is a loop's";
   if (kind === "mirror") return MIRROR_STATELESS_HINT;
-  return "loops carry title, cron, workdir and payload (body = the charter); questions and follow-ups are a task's";
+  return "docs carry title, key, format and payload; a schedule belongs to a loop (`loopany edit <loop-id>`)";
 }
 
 /**
@@ -410,7 +389,7 @@ export function hasOpenQuestion(pendingQuestion: string | null | undefined): boo
  * circuit breaker's auto-pause question and the local fixture alike.
  */
 export const WATCHER_HINT =
-  "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loop list` and `loopany loops` both print ids you can name — a watcher may be a kernel loop or one of this machine's production loops, and either id is used verbatim. A paused loop is still a legal watcher: it acts the next time it runs. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.";
+  "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loops` prints the ids you can name. A paused loop is still a legal watcher: it acts the next time it runs. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.";
 
 /** The teaching a parent that would close a loop gets. Named here so the kernel,
  *  the HTTP seam and the CLI all say the same sentence. */

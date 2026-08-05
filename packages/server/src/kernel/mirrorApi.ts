@@ -50,7 +50,7 @@ import { MIRROR_COORDS_IMMUTABLE_HINT, MIRROR_STATELESS_HINT, isArtifactKind, ty
 /** The kinds a mirror may hang on. A mirror never attaches to another MIRROR:
  *  a pointer to a pointer is not a dependency, it is an alias, and the coords
  *  already are the alias. */
-const ATTACHABLE_KINDS: readonly ObjectKind[] = ["task", "doc", "loop"];
+const ATTACHABLE_KINDS: readonly ObjectKind[] = ["task", "doc"];
 
 /** The wire shape of a mirror. `href` is resolved SERVER-side (the BFF rule) so
  *  no client re-derives an external URL, and it is null whenever the coords do

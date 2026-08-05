@@ -1,6 +1,6 @@
 /**
  * Rewrite kernel — the minimal data-access layer over `objects` / `events` and
- * the runs queue columns.
+ * the trigger-run insert seam.
  *
  * Same shape as `db/store.ts` (function-style, Drizzle not raw SQL, async
  * everywhere) with ONE addition, harvested from the graph line's `graphStore.ts`:
@@ -20,7 +20,7 @@
  * `setObjectStatus`, which exists solely for `applyTransition` to call. A content
  * write cannot smuggle a state change.
  */
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "./index.js";
 import {
@@ -173,15 +173,10 @@ export type QueueRunOutcome =
  * `queueKernelRun` locks the owning loop row before calling this function, so
  * the lookup and insert are one serialized transaction without relying on the
  * retired `runs_one_queued_idx`.
- *
- * The legacy NOT NULL columns (`userId`/`machineId`/`phase`/`role`/`ts`) are
- * supplied by the caller: this unit adds the queue columns to the shipping runs
- * table, so a rewrite run still has to fill the old ones. Unit 3 owns the
- * scheduler that calls this.
  */
 export async function queueRun(
   x: KernelExec | undefined,
-  row: NewRun & { queueState: "queued" | null },
+  row: NewRun,
 ): Promise<{ run?: Run; outcome: QueueRunOutcome }> {
   const exec = X(x);
   // Identity is the idempotency floor while a fire is open and after it
@@ -194,10 +189,10 @@ export async function queueRun(
     const retryableDue =
       row.reason === "due" &&
       byId.reason === "due" &&
-      (byId.phase === "error" || byId.phase === "canceled" || byId.queueState === "failure");
+      (byId.phase === "error" || byId.phase === "canceled");
     if (!retryableDue) return { run: byId, outcome: "replay" };
 
-    const open = await openRunForLoop(exec, row.loopId, row.queueState === "queued" ? "kernel" : "prod");
+    const open = await openRunForLoop(exec, row.loopId);
     if (open) return { run: open, outcome: "loop-busy" };
     // A shipping run reclaimed after claim can still have a terminal-grace
     // lease. Once this level trigger re-arms the same run identity, that old
@@ -224,14 +219,6 @@ export async function queueRun(
           claimableAt: row.claimableAt,
           claimedBy: null,
           claimedAt: null,
-          leaseExpiresAt: null,
-          leaseState: null,
-          attempts: 0,
-          reportDocId: null,
-          outcomeSummary: null,
-          runCost: null,
-          startedAt: null,
-          finishedAt: null,
         })
         .where(eq(runs.id, byId.id))
         .returning()
@@ -240,7 +227,7 @@ export async function queueRun(
     return { run: rearmed, outcome: "queued" };
   }
 
-  const open = await openRunForLoop(exec, row.loopId, row.queueState === "queued" ? "kernel" : "prod");
+  const open = await openRunForLoop(exec, row.loopId);
   if (open) return { run: open, outcome: "loop-busy" };
 
   const out = await exec.insert(runs).values(row).onConflictDoNothing().returning();
@@ -251,26 +238,19 @@ export async function queueRun(
   // a different loop is an identity collision — reporting it as a replay would
   // silently skip this loop's scheduled fire and hand back the other loop's run.
   if (racedById) return { run: racedById, outcome: racedById.loopId === row.loopId ? "replay" : "id-taken" };
-  const racedOpen = await openRunForLoop(exec, row.loopId, row.queueState === "queued" ? "kernel" : "prod");
+  const racedOpen = await openRunForLoop(exec, row.loopId);
   if (racedOpen) return { run: racedOpen, outcome: "loop-busy" };
   throw new Error(`run insert was swallowed but neither id nor open-run holder exists: ${row.id}`);
 }
 
 /** The transactional `alreadyQueued` join rule. Only not-yet-executing rows can
  * absorb a trigger: a claimed/running row already consumed its delivery. */
-export async function openRunForLoop(
-  x: KernelExec | undefined,
-  loopId: string,
-  world: "kernel" | "prod",
-): Promise<Run | undefined> {
-  const condition = world === "kernel"
-    ? eq(runs.queueState, "queued")
-    : and(isNull(runs.queueState), eq(runs.phase, "pending"));
+export async function openRunForLoop(x: KernelExec | undefined, loopId: string): Promise<Run | undefined> {
   return (
     await X(x)
       .select()
       .from(runs)
-      .where(and(eq(runs.loopId, loopId), condition))
+      .where(and(eq(runs.loopId, loopId), eq(runs.phase, "pending")))
       .orderBy(asc(runs.ts))
       .limit(1)
   )[0];
@@ -280,12 +260,3 @@ export async function getRunRow(x: KernelExec | undefined, id: string): Promise<
   return (await X(x).select().from(runs).where(eq(runs.id, id)))[0];
 }
 
-/** The loop's currently queued run, if any. */
-export async function queuedRunForLoop(x: KernelExec | undefined, loopId: string): Promise<Run | undefined> {
-  return (
-    await X(x)
-      .select()
-      .from(runs)
-      .where(and(eq(runs.loopId, loopId), eq(runs.queueState, "queued")))
-  )[0];
-}

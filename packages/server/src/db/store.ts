@@ -383,15 +383,11 @@ export async function execFailureStreak(loopId: string): Promise<number> {
   return Number(r?.n ?? 0);
 }
 
-/** Open runs (pending/running) — used by the timeout-reclaim sweep. */
+/** Open runs (pending/running) — used by the timeout-reclaim sweep. The
+ *  `queue_state IS NULL` fence retired with the column in convergence S5: there
+ *  is one run world now, so every open row is the shipping sweep's. */
 export async function openRuns(): Promise<Run[]> {
-  // Kernel queue rows share the table additively but have their own lease state
-  // machine. The shipping sweep owns queue_state NULL rows, including S2's
-  // prod-claimable task triggers; it must never touch kernel queue rows.
-  return db
-    .select()
-    .from(runs)
-    .where(and(inArray(runs.phase, ["pending", "running"]), isNull(runs.queueState)));
+  return db.select().from(runs).where(inArray(runs.phase, ["pending", "running"]));
 }
 
 /** Pending runs queued for ONE machine — the poll's claim query. Hot path (every
@@ -401,7 +397,7 @@ export async function pendingRunsForMachine(machineId: string): Promise<Run[]> {
   return db
     .select()
     .from(runs)
-    .where(and(eq(runs.machineId, machineId), eq(runs.phase, "pending"), isNull(runs.queueState)));
+    .where(and(eq(runs.machineId, machineId), eq(runs.phase, "pending")));
 }
 
 /** Claim-time overlap guard: a trigger may queue while another run is working,

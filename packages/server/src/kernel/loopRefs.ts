@@ -1,22 +1,19 @@
 /**
- * THE LOOP REFERENCE — one dual-read resolver for every `watcher` /
- * `created_by_loop` id in the system (convergence stage S1).
+ * THE LOOP REFERENCE — one resolver for every `watcher` / `created_by_loop` id
+ * in the system.
  *
- * Convergence makes the SHIPPING product's `loops` row THE loop: `objects.watcher`
- * and `objects.createdByLoop` are plain references to a loop id, and that id may
- * name a production `loops` row OR (still, until the loop kind retires in S3) a
- * kernel `objects` row of kind `loop`. Every surface that turns one of those ids
- * into a NAME reads through here, so there is exactly one place that knows the
- * reference used to span two tables. S3 narrows live resolution to production;
- * the kernel row remains only as same-id history until S5.
+ * Convergence made the SHIPPING product's `loops` row THE loop: `objects.watcher`
+ * and `objects.createdByLoop` are plain text references to one. Every surface
+ * that turns such an id into a NAME reads through here, so there is exactly one
+ * place that knows what a dangling reference means.
  *
- * Four rulings are welded in, and each is the kind a later "helpful" change
+ * Three rulings are welded in, and each is the kind a later "helpful" change
  * breaks by softening it:
  *
- *  1. **PRODUCTION IDS ARE USED AS-IS — there is no alias table.** A prod loop id
- *     (`loop-mqkxn6lq-4c81d1b2`) and a kernel one (`loop-605e39`) are both opaque
- *     `loop-` prefixed text, and every existing shape check is a prefix check, so
- *     a prod id is already a legal watcher. A second id namespace would be
+ *  1. **LOOP IDS ARE USED AS-IS — there is no alias table.** A loop minted by
+ *     the shipping product (`loop-mqkxn6lq-4c81d1b2`) and one a converged kernel
+ *     loop kept verbatim (`loop-605e39`) are both opaque `loop-` prefixed text,
+ *     and every shape check is a prefix check. A second id namespace would be
  *     permanent drift; the mixed world is paid for with a name-first RENDER
  *     instead (design report §6).
  *  2. **RESOLUTION IS NOT VALIDATION, and a dangling watcher is LEGAL.** There is
@@ -27,10 +24,7 @@
  *     it resolves to a TOMBSTONE ref (`source: "missing"`) that read surfaces
  *     render as `deleted loop loop-…`, never to `null` (which reads as "no
  *     watcher", a state the watcher rule abolished) and never to a refusal.
- *  3. **PRODUCTION WINS AN ID COLLISION.** The stack migration creates a prod row
- *     with the kernel id verbatim. The kernel twin is retained for history, but
- *     every live watcher and view resolves to the production actor in S3.
- *  4. **ENABLED OR NOT.** A paused/disabled/completed prod loop still resolves and
+ *  3. **ENABLED OR NOT.** A paused/disabled/completed prod loop still resolves and
  *     still renders its name — the `enabled` gate belongs to the DUE SCAN (report
  *     §1.2.5), not to reading. What enablement does change is `assignable`: a loop
  *     that can never act again is not offered as a hand-off target.
@@ -38,33 +32,29 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { objects, type KernelObject } from "../db/kernel-schema.js";
 import { loops, type Loop } from "../db/schema.js";
 
-/** Which table answered. `missing` is the tombstone — see ruling 2. */
-export type LoopSource = "kernel" | "prod" | "missing";
+/** Whether the roster answered. `missing` is the tombstone — see ruling 2. The
+ *  key is retained (rather than collapsing to a boolean) because every wire
+ *  consumer already renders on it. */
+export type LoopSource = "prod" | "missing";
 
 /** The resolved loop, as every consumer needs it. `status` is rendered, never
- *  branched on for authority: the kernel vocabulary (`active|paused|retired`) and
- *  the prod one (`active|paused|completed`) overlap but are not the same set, so
- *  the one decision a caller actually makes rides `assignable`. */
+ *  branched on for authority: the one decision a caller actually makes rides
+ *  `assignable`. */
 export interface LoopRecord {
   id: string;
   title: string | null;
   source: LoopSource;
   status: string;
   cron: string | null;
-  /** May a task be HANDED to this loop? False for a kernel `retired` loop (the
-   *  charter is frozen and it never fires again) and for a completed prod loop
-   *  (its goal is met and it is stamped done). A merely paused/disabled loop IS
-   *  assignable — it wakes on resume, which is the whole point of the level
-   *  trigger. */
+  /** May a task be HANDED to this loop? False for a COMPLETED loop (its goal is
+   *  met and it is stamped done). A merely paused/disabled loop IS assignable —
+   *  it wakes on resume, which is the whole point of the level trigger. */
   assignable: boolean;
 }
 
-/** The wire shape a card/row carries for its watcher or creator. `source` is
- *  additive over the pre-convergence `{id, title}`, so an old client keeps
- *  rendering `title ?? id` unchanged. */
+/** The wire shape a card/row carries for its watcher or creator. */
 export interface LoopRefWire {
   id: string;
   title: string | null;
@@ -74,17 +64,6 @@ export interface LoopRefWire {
 /** Every loop id in a team, resolved once. A Map, because every caller looks up
  *  a handful of ids out of a set it already had to load whole. */
 export type LoopIndex = Map<string, LoopRecord>;
-
-export function kernelLoopRecord(row: KernelObject): LoopRecord {
-  return {
-    id: row.id,
-    title: row.title,
-    source: "kernel",
-    status: row.status,
-    cron: row.cron,
-    assignable: row.status !== "retired",
-  };
-}
 
 /**
  * The prod row, in the kernel's vocabulary.
@@ -115,7 +94,7 @@ export function missingLoopRecord(id: string): LoopRecord {
   return { id, title: null, source: "missing", status: "missing", cron: null, assignable: false };
 }
 
-/** The production roster is authoritative after S3. */
+/** The production roster is the roster. */
 export async function loadTeamLoopIndex(teamId: string): Promise<LoopIndex> {
   const prodRows = await db.select().from(loops).where(eq(loops.teamId, teamId));
   const index: LoopIndex = new Map();
@@ -123,8 +102,7 @@ export async function loadTeamLoopIndex(teamId: string): Promise<LoopIndex> {
   return index;
 }
 
-/** One id, without loading the team. Used by the loop PAGE, which is handed an
- *  id and has to decide which world it lives in before it can compose anything. */
+/** One id, without loading the team. */
 export async function resolveLoopRecord(teamId: string, id: string): Promise<LoopRecord | undefined> {
   const prodRow = await getProdLoop(teamId, id);
   return prodRow ? prodLoopRecord(prodRow) : undefined;

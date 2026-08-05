@@ -27,16 +27,16 @@ describe("the state shape", () => {
     expect(STATUSES_BY_KIND.task).toEqual(["open", "closed"]);
   });
 
-  it("gives a loop an OPERATIONAL lifecycle that never closes", () => {
-    expect(STATUSES_BY_KIND.loop).toEqual(["active", "paused", "retired"]);
-    expect(STATUSES_BY_KIND.loop).not.toContain("closed");
+  it("gives a doc and a mirror ONE state each, so neither can cache a lifecycle", () => {
+    expect(STATUSES_BY_KIND.doc).toEqual(["current"]);
+    expect(STATUSES_BY_KIND.mirror).toEqual(["current"]);
   });
 
   it("starts each kind in a safe default", () => {
     // A MIRROR's single status is `current`, and the singleton is deliberate:
     // a second value here — `open`, `merged`, `stale` — would be exactly the
     // cached external state the kind exists to forbid (`kernel/mirrors.ts`).
-    expect(INITIAL_STATUS).toEqual({ task: "open", loop: "active", doc: "current", mirror: "current" });
+    expect(INITIAL_STATUS).toEqual({ task: "open", doc: "current", mirror: "current" });
     for (const kind of OBJECT_KINDS) expect(STATUSES_BY_KIND[kind]).toContain(INITIAL_STATUS[kind]);
   });
 
@@ -46,19 +46,16 @@ describe("the state shape", () => {
 });
 
 describe("the transition table", () => {
-  it("is the whole set of status changes — five, and no path to a sixth", () => {
-    expect(Object.keys(TRANSITIONS).sort()).toEqual(["auto-pause", "close", "pause", "resume", "retire"]);
+  it("is the whole set of status changes — one, and no path to a second", () => {
+    // ONE transition. The four loop moves retired with the loop kind: a loop's
+    // lifecycle is the shipping product's (`enabled` / `completedAt` / delete).
+    expect(Object.keys(TRANSITIONS).sort()).toEqual(["close"]);
   });
 
-  it("declares close as a TASK transition only (loops pause/retire instead)", () => {
+  it("declares close as a TASK transition only", () => {
     expect(TRANSITIONS.close.kind).toBe("task");
     expect(TRANSITIONS.close.from).toEqual(["open"]);
     expect(TRANSITIONS.close.to).toBe("closed");
-  });
-
-  it("keeps auto-pause a distinct NAME from pause, so the timeline can tell them apart", () => {
-    expect(TRANSITIONS["auto-pause"].to).toBe(TRANSITIONS.pause.to);
-    expect(Object.keys(TRANSITIONS)).toContain("auto-pause");
   });
 
   it("lands every transition inside its kind's declared status set", () => {
@@ -80,38 +77,37 @@ describe("the transition table", () => {
 });
 
 describe("the kind firewalls (design §4 rule 2)", () => {
-  it("refuses a cadence on a task and teaches where one lives", () => {
-    const issues = firewallIssues("task", ["cron"]);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]!.path).toBe("cron");
-    expect(issues[0]!.message).toContain("cadence belongs to a loop");
-    expect(firewallHint("task")).toContain("follow_up");
-  });
-
-  it("refuses timezone and next_fire on a task too — the whole cadence facet", () => {
-    expect(firewallIssues("task", ["timezone", "nextFire"]).map((i) => i.path)).toEqual(["timezone", "nextFire"]);
-  });
-
-  it("refuses task facets on a loop", () => {
-    expect(firewallIssues("loop", ["pendingQuestion", "watcher", "followUpAt"]).map((i) => i.path)).toEqual([
+  it("refuses task facets on a doc", () => {
+    expect(firewallIssues("doc", ["pendingQuestion", "watcher", "followUpAt", "parentId"]).map((i) => i.path)).toEqual([
       "pendingQuestion",
       "watcher",
       "followUpAt",
+      "parentId",
     ]);
   });
 
   it("refuses format on anything but a doc (design §7's narrow door)", () => {
     expect(firewallIssues("task", ["format"])).toHaveLength(1);
-    expect(firewallIssues("loop", ["format"])).toHaveLength(1);
+    expect(firewallIssues("mirror", ["format"])).toHaveLength(1);
     expect(firewallIssues("doc", ["format"])).toHaveLength(0);
+  });
+
+  it("refuses a mirror's own facets on every other kind", () => {
+    expect(firewallIssues("task", ["mirrorKind", "mirrorCoords"]).map((i) => i.path)).toEqual(["mirrorKind", "mirrorCoords"]);
+    expect(firewallIssues("mirror", ["mirrorKind", "mirrorCoords", "attachedTo"])).toHaveLength(0);
   });
 
   it("lets every kind carry the common fields", () => {
     for (const kind of OBJECT_KINDS) expect(firewallIssues(kind, ["title", "body", "payload"])).toHaveLength(0);
   });
 
-  it("lets a loop carry its own cadence and a task its own facets", () => {
-    expect(firewallIssues("loop", ["cron", "timezone", "nextFire"])).toHaveLength(0);
+  /** A cadence and a bound directory are the SHIPPING loop's, so they are not
+   *  kernel facets at all any more — they land as an unknown key at the artifact
+   *  seam, which teaches where a schedule actually lives. */
+  it("teaches where a cadence lives, on every kind's hint", () => {
+    expect(firewallHint("task")).toContain("follow_up");
+    expect(firewallHint("task")).toContain("loopany edit");
+    expect(firewallHint("doc")).toContain("loopany edit");
     expect(firewallIssues("task", ["followUpAt", "pendingQuestion", "watcher"])).toHaveLength(0);
   });
 });

@@ -73,18 +73,20 @@ describe("deriveGraphEdges — one branch per spec §8.3 row", () => {
 });
 
 const NOW = new Date("2026-08-08T12:00:00.000Z");
+/** A production run row: `ts` is when it started, `durationMs` how long it took,
+ *  `phase` the ONE lifecycle. The rewrite's parallel queue/lease/timestamp
+ *  columns retired in convergence S5. */
 const run = (over: Partial<Run>): Run => ({
   id: "run-1", loopId: "loop-a", userId: "u", machineId: "m", phase: "done", role: "exec",
-  ts: "2026-08-08T07:00:00.000Z", queueState: "success", startedAt: "2026-08-08T07:00:00.000Z",
-  finishedAt: "2026-08-08T07:03:00.000Z", costUsd: 0.42, attempts: 1,
+  ts: "2026-08-08T07:00:00.000Z", durationMs: 180_000, costUsd: 0.42,
   ...over,
 } as Run);
 
 describe("loopHealth — health from runs, never a stored field", () => {
   it("reads the newest run as the last outcome", () => {
     const health = loopHealth([
-      run({ id: "old", startedAt: "2026-08-01T07:00:00.000Z", queueState: "failure" }),
-      run({ id: "new", startedAt: "2026-08-08T07:00:00.000Z", queueState: "success" }),
+      run({ id: "old", ts: "2026-08-01T07:00:00.000Z", phase: "error" }),
+      run({ id: "new", ts: "2026-08-08T07:00:00.000Z", phase: "done" }),
     ], NOW);
     expect(health.lastOutcome).toBe("success");
     expect(health.lastRunAt).toBe("2026-08-08T07:03:00.000Z");
@@ -92,18 +94,18 @@ describe("loopHealth — health from runs, never a stored field", () => {
 
   it("counts a failure streak newest-first and stops at the first success", () => {
     const health = loopHealth([
-      run({ id: "c", startedAt: "2026-08-08T07:00:00.000Z", queueState: "failure" }),
-      run({ id: "b", startedAt: "2026-08-07T07:00:00.000Z", queueState: "failure" }),
-      run({ id: "a", startedAt: "2026-08-06T07:00:00.000Z", queueState: "success" }),
-      run({ id: "z", startedAt: "2026-08-05T07:00:00.000Z", queueState: "failure" }),
+      run({ id: "c", ts: "2026-08-08T07:00:00.000Z", phase: "error" }),
+      run({ id: "b", ts: "2026-08-07T07:00:00.000Z", phase: "error" }),
+      run({ id: "a", ts: "2026-08-06T07:00:00.000Z", phase: "done" }),
+      run({ id: "z", ts: "2026-08-05T07:00:00.000Z", phase: "error" }),
     ], NOW);
     expect(health.consecutiveFailures).toBe(2);
   });
 
   it("is transparent to a queued or running run — neither is an outcome", () => {
     const health = loopHealth([
-      run({ id: "live", startedAt: "2026-08-08T11:00:00.000Z", queueState: "claimed", finishedAt: null }),
-      run({ id: "bad", startedAt: "2026-08-08T07:00:00.000Z", queueState: "failure" }),
+      run({ id: "live", ts: "2026-08-08T11:00:00.000Z", phase: "running", durationMs: null }),
+      run({ id: "bad", ts: "2026-08-08T07:00:00.000Z", phase: "error" }),
     ], NOW);
     expect(health.lastOutcome).toBe("running");
     expect(health.consecutiveFailures).toBe(1);
@@ -111,9 +113,9 @@ describe("loopHealth — health from runs, never a stored field", () => {
 
   it("windows the 7-day tallies and sums cost across them", () => {
     const health = loopHealth([
-      run({ id: "in1", startedAt: "2026-08-08T07:00:00.000Z", finishedAt: "2026-08-08T07:03:00.000Z", queueState: "success", costUsd: 1 }),
-      run({ id: "in2", startedAt: "2026-08-05T07:00:00.000Z", finishedAt: "2026-08-05T07:03:00.000Z", queueState: "failure", costUsd: 0.5 }),
-      run({ id: "out", startedAt: "2026-06-01T07:00:00.000Z", finishedAt: "2026-06-01T07:03:00.000Z", queueState: "success", costUsd: 99 }),
+      run({ id: "in1", ts: "2026-08-08T07:00:00.000Z", phase: "done", costUsd: 1 }),
+      run({ id: "in2", ts: "2026-08-05T07:00:00.000Z", phase: "error", costUsd: 0.5 }),
+      run({ id: "out", ts: "2026-06-01T07:00:00.000Z", phase: "done", costUsd: 99 }),
     ], NOW);
     expect(health.runs7d).toEqual({ success: 1, failure: 1 });
     expect(health.costs7d.usd).toBe(1.5);
@@ -124,11 +126,15 @@ describe("loopHealth — health from runs, never a stored field", () => {
   });
 });
 
-describe("runDisplayState — the rewrite column wins, legacy rows still read", () => {
-  it("maps claimed to running", () => expect(runDisplayState({ queueState: "claimed", phase: "running" })).toBe("running"));
-  it("passes success and failure through", () => expect(runDisplayState({ queueState: "failure", phase: "error" })).toBe("failure"));
-  it("falls back to the legacy phase on a migrated loop's old run", () => {
-    expect(runDisplayState({ queueState: null, phase: "done" })).toBe("success");
-    expect(runDisplayState({ queueState: null, phase: "canceled" })).toBe("skipped");
+describe("runDisplayState — ONE lifecycle, read off the production phase", () => {
+  it("maps a running row to running and a pending one to queued", () => {
+    expect(runDisplayState({ phase: "running" })).toBe("running");
+    expect(runDisplayState({ phase: "pending" })).toBe("queued");
+  });
+  it("maps the terminal phases to the words the screens render", () => {
+    expect(runDisplayState({ phase: "done" })).toBe("success");
+    expect(runDisplayState({ phase: "error" })).toBe("failure");
+    // A superseded/deferred row is NEITHER success nor failure — quiet gray.
+    expect(runDisplayState({ phase: "canceled" })).toBe("skipped");
   });
 });

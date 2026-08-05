@@ -58,48 +58,45 @@ const GRAPH_WINDOW_DEFAULT_DAYS = 14;
 // ---------------------------------------------------------------- primitives
 
 /**
- * A loop reference on a card, resolved DUAL-READ through `loopRefs.ts`: the id
- * may name a kernel loop object or a production `loops` row, and an id that names
- * neither resolves to a tombstone rather than to `null`. Every `creator` /
- * `watcherLoop` key in this module goes through `loopRef`, so no screen has to
- * know the reference spans two tables.
+ * A loop reference on a card, resolved through `loopRefs.ts`: the id names a
+ * production `loops` row, and an id that names none resolves to a tombstone
+ * rather than to `null`. Every `creator` / `watcherLoop` key in this module goes
+ * through `loopRef`, so no screen resolves a loop id itself.
  */
 type LoopRef = LoopRefWire | null;
 
 const loopRef = (id: string | null | undefined, index: LoopIndex): LoopRef => loopRefOf(id, index);
 
-/** A run's lifecycle state for display. The rewrite's `queue_state` wins; a
- *  legacy row (queue_state NULL, migrated loops share their id with real run
- *  history) is mapped from the shipping `phase` so a migrated loop's page is not
- *  mysteriously blank. */
-export function runDisplayState(run: Pick<Run, "queueState" | "phase">): string {
-  if (run.queueState) return run.queueState === "claimed" ? "running" : run.queueState;
+/** A run's lifecycle state for display, mapped from the ONE run lifecycle the
+ *  system has left (the shipping `phase`). The rewrite's parallel `queue_state`
+ *  vocabulary retired with its queue in convergence S5. */
+export function runDisplayState(run: Pick<Run, "phase">): string {
   return { done: "success", error: "failure", running: "running", pending: "queued", canceled: "skipped" }[run.phase] ?? run.phase;
 }
 
-/** A run's USD cost: the real column first, then the rewrite's open cost object. */
-function runCostUsd(run: Run): number {
-  if (typeof run.costUsd === "number") return run.costUsd;
-  const usd = (run.runCost as { usd?: unknown } | null)?.usd;
-  return typeof usd === "number" && Number.isFinite(usd) ? usd : 0;
+/** When a run ENDED. Production records the start (`ts`) plus a measured
+ *  `durationMs`, so the end is derived rather than stored — a running or pending
+ *  row has no end at all, which is the honest answer. */
+function runFinishedAt(run: Run): string | null {
+  if (run.phase === "pending" || run.phase === "running") return null;
+  if (typeof run.durationMs !== "number") return run.ts;
+  return new Date(Date.parse(run.ts) + run.durationMs).toISOString();
 }
 
 function runShape(run: Run) {
   return {
     id: run.id, state: runDisplayState(run), scope: run.scope ?? "routine", reason: run.reason ?? null,
-    startedAt: run.startedAt ?? run.ts, finishedAt: run.finishedAt ?? null,
-    reportDoc: run.reportDocId ?? null, summary: run.outcomeSummary ?? run.message ?? null,
-    costUsd: runCostUsd(run) || null, attempts: run.attempts,
-    // S3's workspace is reading production runs, so keep their live heartbeat
-    // visible instead of flattening a running row to the word "running" only.
+    startedAt: run.ts, finishedAt: runFinishedAt(run),
+    summary: run.message ?? null,
+    costUsd: run.costUsd || null,
+    // The workspace reads production runs, so keep their live heartbeat visible
+    // instead of flattening a running row to the word "running" only.
     progress: run.progress ?? null,
   };
 }
 
-/**
- * THE production loops of a team. Kernel loop objects remain in `objects` only
- * so their event history stays addressable by the same verbatim id until S5.
- */
+/** THE production loops of a team. A converged loop's kernel EVENTS remain
+ *  addressable by the same verbatim id — the object row itself is gone. */
 async function teamLoops(teamId: string): Promise<Loop[]> {
   return db.select().from(productionLoops).where(eq(productionLoops.teamId, teamId)).orderBy(asc(productionLoops.name));
 }
@@ -129,22 +126,22 @@ export interface LoopHealth {
  * no outcome yet, and treating it as a reset would hide a real failure run).
  */
 export function loopHealth(rows: Run[], now: Date): LoopHealth {
-  const ordered = [...rows].sort((a, b) => (b.startedAt ?? b.ts).localeCompare(a.startedAt ?? a.ts));
+  const ordered = [...rows].sort((a, b) => b.ts.localeCompare(a.ts));
   const terminal = ordered.filter((r) => ["success", "failure"].includes(runDisplayState(r)));
   let consecutiveFailures = 0;
   for (const run of terminal) { if (runDisplayState(run) === "failure") consecutiveFailures += 1; else break; }
   const since = new Date(now.getTime() - 7 * 86_400_000).toISOString();
-  const window = ordered.filter((r) => (r.finishedAt ?? r.startedAt ?? r.ts) >= since);
+  const window = ordered.filter((r) => (runFinishedAt(r) ?? r.ts) >= since);
   const newest = ordered[0];
   return {
     lastOutcome: newest ? runDisplayState(newest) : null,
-    lastRunAt: newest ? newest.finishedAt ?? newest.startedAt ?? newest.ts : null,
+    lastRunAt: newest ? runFinishedAt(newest) ?? newest.ts : null,
     consecutiveFailures,
     runs7d: {
       success: window.filter((r) => runDisplayState(r) === "success").length,
       failure: window.filter((r) => runDisplayState(r) === "failure").length,
     },
-    costs7d: { usd: Number(window.reduce((sum, r) => sum + runCostUsd(r), 0).toFixed(4)) },
+    costs7d: { usd: Number(window.reduce((sum, r) => sum + (r.costUsd ?? 0), 0).toFixed(4)) },
   };
 }
 
@@ -229,38 +226,38 @@ export async function loopsView(context: ApiContext, now = new Date()): Promise<
   } };
 }
 
-/** The loop page's subject, from EITHER world (S1 dual-read). */
+/** The loop page's subject. */
 interface LoopPageSource {
   id: string; title: string | null; status: string; cron: string | null; timezone: string | null;
-  nextFire: string | null; workdir: string | null; body: string; payload: Record<string, unknown>;
-  createdAt: string; updatedAt: string; source: "kernel" | "prod";
+  nextFire: string | null; workdir: string | null; body: string;
+  createdAt: string; updatedAt: string;
 }
 
 /**
- * Resolve the loop page from THE production roster. The same-id kernel object
- * remains the event-history holder and is read below through `events.objectId`.
+ * Resolve the loop page from THE production roster. A converged loop's kernel
+ * EVENTS are still keyed to the same verbatim id and are read below through
+ * `events.objectId`; the object row is gone.
  *
- * The production row maps onto the same shape with two substitutions and no
- * invention: the loop's standing brief is its task file's `## Spec`, mirrored
- * server-side in `taskFileContent`, so THAT is the body the page renders where a
- * kernel loop shows its charter (design report §1.3); and the cadence cursor is
- * the one-shot override `nextRunAt`, the only "next fire" a prod row stores. The
- * free zone (`payload`) is empty because a prod loop has none — an empty object
- * rather than a fabricated one.
+ * The loop's standing brief is its task file's `## Spec`, mirrored server-side in
+ * `taskFileContent`, so THAT is the body the page renders (design report §1.3);
+ * and the cadence cursor is the one-shot override `nextRunAt`, the only "next
+ * fire" a prod row stores.
  */
 async function loopPageSource(id: string, teamId: string): Promise<LoopPageSource | { wrongKind: string } | undefined> {
   const prodRow = await getProdLoop(teamId, id);
   if (!prodRow) {
+    // A kernel object id handed to the loop page is a wrong-kind mistake worth
+    // naming, not a bare 404 — `task-…` on this route is a common typo.
     const kernelRow = await store.getObject(undefined, id);
-    if (kernelRow && kernelRow.teamId === teamId && kernelRow.kind !== "loop") return { wrongKind: kernelRow.kind };
+    if (kernelRow && kernelRow.teamId === teamId) return { wrongKind: kernelRow.kind };
     return undefined;
   }
   const record = prodLoopRecord(prodRow);
   return {
     id: prodRow.id, title: record.title, status: record.status, cron: prodRow.cron,
     timezone: prodRow.timezone, nextFire: prodRow.nextRunAt, workdir: prodRow.workdir,
-    body: prodRow.taskFileContent ?? "", payload: {},
-    createdAt: prodRow.createdAt, updatedAt: prodRow.updatedAt, source: "prod",
+    body: prodRow.taskFileContent ?? "",
+    createdAt: prodRow.createdAt, updatedAt: prodRow.updatedAt,
   };
 }
 
@@ -292,17 +289,12 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
     loop: {
       id: loop.id, title: loop.title, status: loop.status, cron: loop.cron, timezone: loop.timezone,
       cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextFire, workdir: loop.workdir, body: loop.body,
-      payload: loop.payload, createdAt: loop.createdAt, updatedAt: loop.updatedAt,
-      // WHICH WORLD this loop lives in. The page renders the same shape either
-      // way; a client that wants to hide a kernel-only affordance (evolve, the
-      // charter history) on a production loop keys on this rather than guessing
-      // from the id's shape.
-      source: loop.source,
+      payload: {}, createdAt: loop.createdAt, updatedAt: loop.updatedAt,
     },
     health: loopHealth(runRows, now),
-    // The audit window design §4 names: charter diffs land in events and render
-    // on the loop page. `loop-updated` is included only when it actually touched
-    // the body — a cadence-only governance write is not a charter change.
+    // The audit window design §4 names. A converged loop's brief lives in its
+    // task file, so nothing WRITES these events any more; the ones a kernel loop
+    // left behind are still its history and still render.
     charterHistory: tail
       .filter((e) => e.kind === "charter-evolved" || (e.kind === "loop-updated" && e.diff?.body))
       .slice(-RECENT_RUNS_CAP).reverse()
@@ -430,10 +422,8 @@ export async function tasksView(context: ApiContext, query: URLSearchParams, now
     columns: BOARD_COLUMNS.map((spec) => ({ ...spec, tasks: cards.filter((card) => card.column === spec.key) })),
     // The loops a card can be handed to. The board's claim control is a
     // `watcher` PATCH like any other, so it must name a real loop id — a picker,
-    // never a free-text field. DUAL-READ (S1): the roster spans the kernel's own
-    // loop objects AND the production `loops` rows, because a watcher may name
-    // either. `assignable` (not `status`) is the filter, so the two worlds'
-    // different terminal states are decided in one place.
+    // never a free-text field. `assignable` (not `status`) is the filter: a
+    // disabled loop is a legal target (it wakes on resume), a completed one is not.
     loops: assignableLoops(loops),
     counts: inboxCounts(inboxRows),
     truncated, now: stamp, cursorSeq: await eventTail(context.teamId),
@@ -601,10 +591,10 @@ export async function systemGraphView(context: ApiContext, query: URLSearchParam
   const since = new Date(now.getTime() - days * 86_400_000).toISOString();
   const stamp = now.toISOString();
 
-  // DUAL-READ (S1). The graph is a projection over `watcher` / `created_by_loop`,
-  // and those now name production loops too — so a prod-loop node has to EXIST or
-  // every edge into it is filtered out below and a real hand-off renders as
-  // nothing at all. `assignable` is the same live-actor filter the picker uses.
+  // The graph is a projection over `watcher` / `created_by_loop`, which name
+  // production loops — so a loop node has to EXIST or every edge into it is
+  // filtered out below and a real hand-off renders as nothing at all.
+  // `assignable` is the same live-actor filter the picker uses.
   const loops = [...(await loadTeamLoopIndex(context.teamId)).values()].filter((loop) => loop.assignable);
   const [runRows, counts, windowTasks, questionCount] = await Promise.all([
     runsForLoops(loops.map((l) => l.id)),
@@ -639,6 +629,6 @@ export async function systemGraphView(context: ApiContext, query: URLSearchParam
 }
 
 function loopOutcomeBadge(rows: Run[]) {
-  const newest = [...rows].sort((a, b) => (b.startedAt ?? b.ts).localeCompare(a.startedAt ?? a.ts))[0];
-  return { lastOutcome: newest ? runDisplayState(newest) : null, lastRunAt: newest ? newest.finishedAt ?? newest.startedAt ?? newest.ts : null };
+  const newest = [...rows].sort((a, b) => b.ts.localeCompare(a.ts))[0];
+  return { lastOutcome: newest ? runDisplayState(newest) : null, lastRunAt: newest ? runFinishedAt(newest) ?? newest.ts : null };
 }

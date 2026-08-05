@@ -6,7 +6,8 @@
  *   2. `loopany --help` never named the kernel verb family at all, so the whole
  *      surface was undiscoverable from the one screen a user looks at;
  * Everything here is driven through injected seams — no network, no ~/.loopany,
- * no subprocess. LOOPANY_RUNS_V2 no longer selects runtime behavior in S3.
+ * no subprocess. The retired `LOOPANY_RUNS_V2` switch is gone entirely (S5):
+ * `LOOPANY_DEV_HOME` is the ONE marker, and it is presentation-only.
  */
 import { describe, expect, test } from "vitest";
 
@@ -19,8 +20,8 @@ import { classify } from "./route.js";
 describe("bare `loopany` picks the local workspace home only from its presentation marker", () => {
   test("the production command keeps the production home, flag or no flag", () => {
     expect(classify([], {})).toEqual({ kind: "home" });
-    expect(classify([], { LOOPANY_RUNS_V2: "0" })).toEqual({ kind: "home" });
-    expect(classify([], { LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "home" });
+    // No env key other than LOOPANY_DEV_HOME can move it.
+    expect(classify([], { LOOPANY_DEV_HOME: "0" })).toEqual({ kind: "home" });
   });
 
   test("the loopany-dev presentation marker selects the converged workspace home", () => {
@@ -204,17 +205,9 @@ describe("`loopany --help` names the converged workspace family", () => {
   });
 });
 
-describe("the retired runtime flag cannot redirect production commands", () => {
-  test("flag one leaves bare loopany on the production home", () => {
-    expect(classify([], { LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "home" });
-  });
-
-  test("flag zero leaves bare loopany on the production home", () => {
-    expect(classify([], { LOOPANY_RUNS_V2: "0" })).toEqual({ kind: "home" });
-  });
-
+describe("the local marker cannot redirect production commands", () => {
   test("the loopany-dev marker is presentation-only", () => {
-    expect(classify(["loops"], { LOOPANY_DEV_HOME: "1", LOOPANY_RUNS_V2: "1" })).toEqual({ kind: "interactive", argv: ["loops"] });
+    expect(classify(["loops"], { LOOPANY_DEV_HOME: "1" })).toEqual({ kind: "interactive", argv: ["loops"] });
   });
 
   test("kernel loop commands remain teaching routes under the local marker", () => {

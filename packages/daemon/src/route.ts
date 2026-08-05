@@ -95,7 +95,7 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   if (verb !== undefined && FORWARD_VERBS.has(verb)) return { kind: "forward", argv };
   // Bare production `loopany` keeps the content-first machine home. The LOCAL
   // loopany-dev wrapper selects the converged workspace home with a presentation-
-  // only marker; execution no longer branches on LOOPANY_RUNS_V2 in S3.
+  // only marker, and it is presentation-only: execution never branches on it.
   if (argv.length === 0) return env.LOOPANY_DEV_HOME === "1" ? { kind: "kernel-home" } : { kind: "home" };
   return { kind: "unknown", verb: verb! };
 }

@@ -128,7 +128,6 @@ describe("S2 prod-claimable trigger rows", () => {
       machineId,
       phase: "pending",
       role: "exec",
-      queueState: null,
       reason: "due",
       scope: `task:${due.id}`,
     });
@@ -167,7 +166,7 @@ describe("S2 prod-claimable trigger rows", () => {
     const result = ok(await api.leaveDirective(watched.id, words, human, NOW));
     expect(result.run).toMatchObject({ reason: "directive", alreadyQueued: false });
     const row = (await database.db.select().from(schema.runs))[0]!;
-    expect(row).toMatchObject({ machineId, queueState: null, phase: "pending", triggerEventId: result.event });
+    expect(row).toMatchObject({ machineId, phase: "pending", triggerEventId: result.event });
 
     const built = await delivery.buildDelivery(loop, row.id, "rk_test", []);
     expect(built.task).toContain(`directive: ${words}`);
