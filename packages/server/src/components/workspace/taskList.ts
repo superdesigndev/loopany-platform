@@ -45,13 +45,8 @@ export interface TaskGroup {
   key: string
   kind: TaskGroupKind
   label: string
-  /** The one sentence the section header carries, like a board column's rule. */
-  note: string
   tasks: TaskCard[]
 }
-
-const CLOSED_NOTE = 'Closed is one-way — these are the record, not the worklist.'
-const loopNote = (count: number) => `Open work this loop is watching · ${count} task${count === 1 ? '' : 's'}`
 
 /**
  * The board's columns, flattened back to the tasks themselves.
@@ -91,9 +86,9 @@ export function groupTasks(tasks: TaskCard[]): TaskGroup[] {
 
   const groups: TaskGroup[] = []
   for (const [id, entry] of [...byLoop.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label) || a[0].localeCompare(b[0]))) {
-    groups.push({ key: id, kind: 'loop', label: entry.label, note: loopNote(entry.tasks.length), tasks: entry.tasks })
+    groups.push({ key: id, kind: 'loop', label: entry.label, tasks: entry.tasks })
   }
-  if (closed.length) groups.push({ key: 'closed', kind: 'closed', label: 'Closed', note: CLOSED_NOTE, tasks: closed })
+  if (closed.length) groups.push({ key: 'closed', kind: 'closed', label: 'Closed', tasks: closed })
   return groups
 }
 

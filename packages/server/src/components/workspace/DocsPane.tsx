@@ -36,7 +36,7 @@ export function DocsPane({ selected, onSelect, onOpenLoop }: { selected: string 
       <ViewHeader
         eyebrow="Docs"
         title="Docs"
-        description="One artifact format for everything: YAML front matter plus a body. The database columns are projections of that front matter."
+        description="Content your loops filed, plus every run report."
         meta={`${docs.length} doc${docs.length === 1 ? '' : 's'}`}
       />
 

@@ -4,7 +4,7 @@ import { fetchInbox, postVerdict, ViewError, type InboxItem } from './api'
 import { isDeletedLoop, loopLabel } from './loopLabel'
 import { ExecutionBlock, Markdown } from './Render'
 import {
-  ArtifactRow, BigState, CountStrip, Empty, Glyph, Loading, reasonLabel, reasonTone, Refusal, Section, Timeline, ViewHeader, When,
+  ArtifactRow, BigState, Empty, Glyph, Loading, reasonLabel, reasonTone, Refusal, Section, Timeline, ViewHeader, When,
 } from './parts'
 import { affectsTasks, useLiveView } from './useLiveView'
 
@@ -26,6 +26,13 @@ import { affectsTasks, useLiveView } from './useLiveView'
  * The floor lives inside ONE amber section card, because the reference's
  * temperature rule says what amber means: a queue of ordinary decisions, and
  * looking at it should feel like work rather than alarm.
+ *
+ * ONE COUNT PER FACT (captain direction, 2026-08-05). "How many questions are
+ * waiting" used to be stated three times on this page — the header meta, a
+ * full-width stat block under it, and the section heading — plus a fourth time
+ * in the rail. The header keeps it; the stat block is gone and the single
+ * section carries no count of its own, because a lone section's count IS the
+ * page count.
  *
  * Answering is deliberately plain. **The verdict is pure**: it records the
  * answer, clears the question, writes the event, and — if the task has a watcher
@@ -51,19 +58,18 @@ export function InboxPane({ onOpenTask, onOpenLoop }: { onOpenTask: (id: string)
       <ViewHeader
         eyebrow="Inbox"
         title="Inbox"
-        description="Everything waiting on a person. The system's default mode is zero human involvement — you are invited in by exception."
+        description="Questions your loops are holding for a person."
         meta={data.counts.total === 0 ? 'nothing waiting' : `${data.counts.total} waiting`}
       />
-      <CountStrip counts={data.counts} />
 
       {error && data && <Refusal error={error} />}
 
       {data.items.length === 0 ? (
-        <Section tone="plain" title="Needs you" count={0} note="Open obligations">
+        <Section tone="plain" title="Needs you">
           <Empty>Nothing is waiting on you. Loops are running; tasks are being handed off, verified and closed without you.</Empty>
         </Section>
       ) : (
-        <Section tone="needs" title="Needs you" count={data.items.length} note="Open tasks whose loop asked you a question">
+        <Section tone="needs" title="Needs you">
           <ul className="inbox-list">
             {data.items.map((item) => (
               <InboxItemRow key={item.task.id} item={item} onAnswered={refresh} onOpenTask={onOpenTask} onOpenLoop={onOpenLoop} />
@@ -74,6 +80,49 @@ export function InboxPane({ onOpenTask, onOpenLoop }: { onOpenTask: (id: string)
 
       {loading && <p className="ws-refreshing">refreshing…</p>}
     </div>
+  )
+}
+
+/**
+ * The one metadata line under a question, and what it is ALLOWED to say.
+ *
+ * It used to read `from <loop> next <loop> asked 2m ago`, where both loops were
+ * the same loop rendered twice (a loop that asks a question is normally the loop
+ * that will act on the answer) and the age was already on the row above it. The
+ * rule now: state only what the row cannot.
+ *
+ *  - the asking loop and the age are on the ROW (title / source / time), so they
+ *    are not repeated here;
+ *  - the WATCHER appears only when it differs from the asker, which is the case
+ *    where "who acts next" is genuinely a second fact;
+ *  - a follow-up date appears only when there is one;
+ *  - a second reason appears only when a future inbox arm produces one.
+ *
+ * With none of those true the line does not render at all, which is the common
+ * case and the point.
+ */
+function InboxMeta({ item, onOpenLoop }: { item: InboxItem; onOpenLoop: (id: string) => void }) {
+  const watcher = item.watcherLoop
+  const handedOn = Boolean(watcher && watcher.id !== item.creator?.id)
+  const extraReasons = item.reasons.slice(1)
+  if (!handedOn && !item.task.followUpAt && extraReasons.length === 0) return null
+  return (
+    <p className="inbox-meta">
+      {handedOn && (
+        <span>
+          next{' '}
+          {watcher && !isDeletedLoop(watcher) ? (
+            <button type="button" className="ws-link" onClick={() => onOpenLoop(watcher.id)}>
+              {loopLabel(watcher)}
+            </button>
+          ) : (
+            loopLabel(watcher, item.task.watcher)
+          )}
+        </span>
+      )}
+      {item.task.followUpAt && <When iso={item.task.followUpAt} prefix="follow-up" />}
+      {extraReasons.length > 0 && <span>also: {extraReasons.map(reasonLabel).join(' · ')}</span>}
+    </p>
   )
 }
 
@@ -134,12 +183,6 @@ function InboxItemRow({
       />
 
       <div className="inbox-body">
-        {item.reasons.length > 1 && (
-          <p className="inbox-meta">
-            <span>also: {item.reasons.slice(1).map(reasonLabel).join(' · ')}</span>
-          </p>
-        )}
-
         {asking ? (
           <p className="inbox-question">
             <Glyph name="question" />
@@ -151,30 +194,7 @@ function InboxItemRow({
           </p>
         )}
 
-        <p className="inbox-meta">
-          <span>
-            from{' '}
-            {item.creator && !isDeletedLoop(item.creator) ? (
-              <button type="button" className="ws-link" onClick={() => onOpenLoop(item.creator!.id)}>
-                {loopLabel(item.creator)}
-              </button>
-            ) : (
-              (item.creator ? loopLabel(item.creator) : 'you')
-            )}
-          </span>
-          <span>
-            next{' '}
-            {item.watcherLoop && !isDeletedLoop(item.watcherLoop) ? (
-              <button type="button" className="ws-link" onClick={() => onOpenLoop(item.watcherLoop!.id)}>
-                {loopLabel(item.watcherLoop)}
-              </button>
-            ) : (
-              (item.watcherLoop ? loopLabel(item.watcherLoop) : (item.task.watcher ?? 'unresolved'))
-            )}
-          </span>
-          {item.askedAt && <When iso={item.askedAt} prefix="asked" />}
-          {item.task.followUpAt && <When iso={item.task.followUpAt} prefix="follow-up" />}
-        </p>
+        <InboxMeta item={item} onOpenLoop={onOpenLoop} />
 
         {item.task.body.trim() && <Markdown>{item.task.body}</Markdown>}
 
@@ -214,8 +234,11 @@ function InboxItemRow({
                 {busy ? 'Sending…' : 'Send answer'}
               </button>
             </div>
-            <p className="answer-note">
-              Approve and Reject send exactly what is in the box — the platform never parses your words, only agents interpret them.
+            {/* One muted line, and the full sentence on hover. The rule it states
+                matters and never changes, so it does not need to hold a paragraph
+                of standing copy under every question on the page. */}
+            <p className="answer-note" title="Approve and Reject send exactly what is in the box — the platform never parses your words, only agents interpret them.">
+              Sent verbatim · only agents interpret it
             </p>
           </form>
         ) : null}

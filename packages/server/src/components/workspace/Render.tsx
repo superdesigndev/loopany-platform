@@ -84,15 +84,24 @@ export function SandboxedHtml({ html, title }: { html: string; title: string }) 
  * the payload in its own order: nothing here re-keys, groups, formats or
  * summarizes what the kernel stored. A design language may decorate this block;
  * it may never render its contents.
+ *
+ * COLLAPSED BY DEFAULT (captain direction, 2026-08-05), and that is a
+ * disclosure, not a hiding place. The block is an INTEGRITY surface — it exists
+ * so a person CAN check byte-for-byte what a run will execute — and a surface
+ * that must be checkable is not the same as one that must always be open. Open
+ * it and the bytes are unchanged and unsummarized; the labelled header names the
+ * block and says how many fields are inside, so nothing is discoverable only by
+ * accident. Native `<details>`, so it needs no JS, prints expanded and is
+ * findable by the browser's own in-page search.
  */
 export function ExecutionBlock({ payload }: { payload: Record<string, unknown> }) {
   const entries = Object.entries(payload ?? {})
   return (
-    <section className="execution-block" aria-label="Execution payload">
-      <header>
+    <details className="execution-block">
+      <summary aria-label="Execution payload">
         <b>Execution payload</b>
-        <span>rendered verbatim — this is what gets executed</span>
-      </header>
+        <span>{entries.length === 0 ? 'no structured fields' : `${entries.length} field${entries.length === 1 ? '' : 's'} · rendered verbatim`}</span>
+      </summary>
       {entries.length === 0 ? (
         <p className="ws-empty">No structured payload. This task carries narrative only.</p>
       ) : (
@@ -107,7 +116,7 @@ export function ExecutionBlock({ payload }: { payload: Record<string, unknown> }
           ))}
         </dl>
       )}
-    </section>
+    </details>
   )
 }
 

@@ -270,12 +270,16 @@ export default function SystemGraph() {
       <ViewHeader
         eyebrow="System"
         title="System"
-        description="A projection of live data — hand-offs from the loop that filed a task to the loop that watches it, and questions routed through you. Nothing here is configured."
+        description="Who hands work to whom, computed from what actually happened."
         meta={`${data.nodes.length} node${data.nodes.length === 1 ? '' : 's'} · ${data.edges.length} edge${data.edges.length === 1 ? '' : 's'}`}
       />
+      {/* The window is a FACT about what is drawn, so it stays. The sentence
+          explaining what an edge means moved onto the edge itself — the canvas
+          key already labels every kind, and the header already says the graph is
+          computed rather than drawn. */}
       <div className="system-note">
         <span>Last {data.window.days} days</span>
-        An edge is a COUNT of tasks that flowed that way, so this is a record of what happened — not a diagram anyone drew.
+        Each edge is a count of tasks that flowed that way.
       </div>
       <ReactFlowProvider>
         <Canvas nodes={data.nodes} edges={data.edges} />

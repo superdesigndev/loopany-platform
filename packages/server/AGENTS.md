@@ -769,7 +769,11 @@ own stylesheet (`styles/workspace.css`, every rule scoped under
   by reading the sources with comments stripped.
 - **`ExecutionBlock` renders the task payload VERBATIM** next to the answer box —
   the execution-integrity invariant (design §7). The view echoes `payload` as a
-  separate `execution` key precisely so the contract is visible at the wire.
+  separate `execution` key precisely so the contract is visible at the wire. It is
+  a native `<details>`, CLOSED by default (2026-08-05): the invariant is that a
+  person CAN check the bytes, which is not the same as the bytes always being
+  open. The labelled summary names the block and its field count, so it is never
+  discoverable only by accident, and nothing inside is summarized or re-keyed.
 - **The system graph is a projection** — `deriveGraphEdges` is pure (three kinds:
   `hands-off`, `asks`, `answers`) and `systemLayout.ts` is deterministic banded
   Dagre, so a refetch never reshuffles the canvas. `you` ALWAYS exists, even at
@@ -787,9 +791,37 @@ own stylesheet (`styles/workspace.css`, every rule scoped under
   single place that mapping lives.
 - **One shell, one detail surface.** Every screen is a centered `.document-view`
   with a `ViewHeader`, and ALL detail — task, loop, doc — opens in the shared
-  slide-in `Drawer`. **The counters have three homes and one source**
-  (`inboxCounts`): `CountStrip` on Inbox and Tasks, the rail's Inbox badge, and
-  the rail's bottom status line.
+  slide-in `Drawer`.
+- **SUBTRACTION AND ALIGNMENT (captain direction, 2026-08-05).** Four house rules,
+  all four pinned by `components/workspace/rowGrid.guard.test.ts`, which reads
+  `styles/workspace.css`. Break one and that test names it.
+  1. **ONE COUNT PER FACT.** A page header owns the page-level count; a section
+     counts only its own subset, and only when the page has more than one section
+     to tell apart. The standalone `CountStrip` stat block is GONE from both Inbox
+     and Tasks — the inbox total had four homes and now has two (the Inbox header
+     and the rail badge/status line, one source, `inboxCounts`). Do not re-add a
+     figure a neighbouring element already states.
+  2. **ONE ROW GRID.** `--ws-row-grid` is the single definition of `ArtifactRow`'s
+     five tracks, and the trailing three are FIXED widths — a grid is per-element,
+     so `auto` tracks size to each row's own content and the pill/age/action land
+     at a different x on every row. `.artifact-row` also carries `width: 100%`,
+     which is load-bearing: it is a `<button>`, and a button in a column flex
+     container is shrink-to-fit, which is what made the separators ragged. A
+     breakpoint re-declares the VARIABLE, never `grid-template-columns`; and it
+     drops cells BY POSITION (`> :nth-child(n)`), because `ArtifactRow` always
+     emits five children and renders an empty `<span/>` for a cell it has no
+     content for.
+  3. **ONE MEASURE.** `--ws-column` (max width) + `--ws-gutter`, deliberately two
+     values so a screen can hold the column with `width` (Inbox/Loops/Docs) or
+     with padding plus a centred child (Tasks and System, whose board and canvas
+     want the whole pane) and still land on the same left edge. `--ws-group-inset`
+     is the matching rule one level down: a tinted section card and a plain group
+     inset their contents equally, so rows align across them.
+  4. **WHITESPACE SEPARATES, A HAIRLINE DOES NOT.** No rule under the view header,
+     none under a group heading, none ending a list. A page header carries at most
+     ONE short muted line saying which screen it is — the object model is taught by
+     the skill (`skill/references/run.md` §4), never by a paragraph a person
+     re-reads on every visit.
 - **Local fixture**: `pnpm --filter @loopany/server workspace:seed` writes a full
   fixture THROUGH the kernel (real events, diffs, provenance) plus two PRODUCTION
   loops. pglite is single-writer, so seed BEFORE starting `pnpm dev` on the same

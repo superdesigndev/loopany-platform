@@ -77,8 +77,16 @@ describe('groupTasks — one group per loop, plus the record', () => {
     const groups = groupTasks([watched('t-1', 'loop-a'), watched('t-2', 'loop-b'), watched('t-3', 'loop-a')])
     const alpha = groups.find((group) => group.key === 'loop-a')!
     expect(alpha.tasks.map((task) => task.id)).toEqual(['t-1', 't-3'])
-    expect(alpha.note).toMatch(/2 tasks/)
-    expect(groups.find((group) => group.key === 'loop-b')!.note).toMatch(/1 task\b/)
+    expect(groups.find((group) => group.key === 'loop-b')!.tasks.map((task) => task.id)).toEqual(['t-2'])
+  })
+
+  // A group carries a LABEL and its tasks, and nothing else. The prose
+  // annotation it used to compute ("Open work this loop is watching · N tasks")
+  // restated the heading and the count the header already renders, so the count
+  // is now read straight off `tasks.length` at the one place it is shown.
+  it('carries no prose annotation to render beside the heading', () => {
+    const groups = groupTasks([watched('t-1', 'loop-a')])
+    expect(Object.keys(groups[0]!).sort()).toEqual(['key', 'kind', 'label', 'tasks'])
   })
 
   // A closed task's watcher is history: leaving it on the loop's desk would show

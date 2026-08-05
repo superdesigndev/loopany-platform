@@ -48,14 +48,14 @@ export function LoopsPane({ selected, onSelect, onOpenTask }: { selected: string
       <ViewHeader
         eyebrow="Loops"
         title="Loops"
-        description="Standing automation. Health comes from runs; cadence comes from cron; neither is a state anyone types."
+        description="Standing automation, with the health its runs reported."
         meta={`${loops.length} loop${loops.length === 1 ? '' : 's'}`}
       />
 
       {loops.length === 0 && <Empty>No loops in this team yet.</Empty>}
 
       {asking.length > 0 && (
-        <Section tone="needs" title="Blocked on you" count={asking.length} note="These loops are holding a question">
+        <Section tone="needs" title="Blocked on you" count={asking.length}>
           <div className="artifact-list attention-list">
             {asking.map((loop) => (
               <LoopRow key={loop.id} loop={loop} selected={loop.id === selected} onSelect={onSelect} />
@@ -189,7 +189,7 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
         {data.charterHistory.length ? <CharterHistory entries={data.charterHistory} /> : <Empty>This charter has not been evolved yet.</Empty>}
       </DrawerSection>
 
-      <DrawerSection title="Open work" note="A task can appear in more than one section — these are sections, not a partition.">
+      <DrawerSection title="Open work" note="Sections, not a partition — a task can appear in more than one.">
         <TaskGroup title="Watching" note="what this loop is on the hook for" rows={data.openTasks.watching} onOpenTask={onOpenTask} />
         <TaskGroup title="Created" note="what it has put into the world" rows={data.openTasks.created} onOpenTask={onOpenTask} />
         <TaskGroup title="Questions" note="what it is blocked on" rows={data.openTasks.questions} onOpenTask={onOpenTask} />
@@ -250,10 +250,7 @@ function RunNow({ id, onQueued }: { id: string; onQueued: () => void }) {
         <button type="button" className="verdict-button" onClick={fire} disabled={firing}>
           {firing ? 'queueing…' : 'Run now'}
         </button>
-        <p className="ws-note-line">
-          Fires this loop off its cadence. The run is queued here and starts when a machine of this team claims it.
-          A paused loop fires too — one run, and it stays paused.
-        </p>
+        <p className="ws-note-line">Fires this loop off its cadence — one run, even if it is paused.</p>
       </div>
       {result && (
         <p className="ws-queued" role="status">

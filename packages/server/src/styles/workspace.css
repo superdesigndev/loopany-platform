@@ -20,11 +20,21 @@
  *
  * TEMPERATURE, which is a rule and not a palette. Amber is a DECISION YOU OWE
  * (`.needs-section`, `.state-human`, `.verdict-button`); rose is a CONSEQUENCE
- * THAT DID NOT HAPPEN (`.attention-section`, `.attn-reason`); blue is a decision
- * already made and on its way out (`.effects-section`). The rewrite's three inbox
- * reasons map onto exactly that: a pending question is amber, and the two safety
- * floor routes — due-unwatched and the orphan floor — are rose, because both are
- * work nobody picked up.
+ * THAT DID NOT HAPPEN (`.attention-section`); blue is a decision already made and
+ * on its way out (`.effects-section`). The inbox has one arm today and it is
+ * amber — a pending question is exactly a decision you owe. The rose arms are
+ * kept in the vocabulary because that is where a future human-attention branch
+ * lands, not because anything renders them now.
+ *
+ * SUBTRACTION AND ALIGNMENT (captain direction, 2026-08-05). Four rules this
+ * sheet now holds, each written next to the declaration that carries it:
+ * whitespace separates, a hairline does not (the header rule, the group-heading
+ * rule and the counter strip's two rules all came off); every list row is laid
+ * out from the ONE `--ws-row-grid`, stretched to `width: 100%` so a shrink-to-fit
+ * `<button>` cannot ragged the separators; every screen holds its content in the
+ * ONE `--ws-column`, the Tasks screen included; and a responsive variant
+ * re-declares those VARIABLES rather than forking the rule. `rowGrid.guard.test.ts`
+ * pins all four by reading this file.
  */
 @import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap");
 
@@ -50,6 +60,30 @@
   --violet-soft: #f1eefb;
   --font: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  /* THE ROW GRID — one definition, every list on every screen.
+     The last three tracks are FIXED rather than `auto` because a grid is
+     per-element: with `auto`, each row sized its own pill / age / action to its
+     own content, so those three columns landed at a different x on every row and
+     in every group. Fixed widths put them on one column the whole page down.
+     The media queries below re-declare this variable rather than the rule, so
+     the row grammar stays in exactly one place. */
+  --ws-row-grid: 28px minmax(0, 1fr) auto 4.5rem 3.5rem;
+  /* THE MEASURE, shared by every screen so the workspace reads as one surface
+     rather than five. Also the answer to "why is there an acre of empty paper to
+     the right of the rows" — an unconstrained list is not a full-width layout,
+     it is a list nobody gave a measure.
+     A max WIDTH plus a GUTTER, deliberately two values: a screen may hold the
+     column with `width` (Inbox, Loops, Docs) or with `padding` plus a centred
+     child (Tasks, whose board wants the whole pane), and only in that form do
+     the two land on the same left edge at every breakpoint. */
+  --ws-column: 940px;
+  --ws-gutter: 36px;
+  /* How far a GROUP's contents sit inside the column — the same distance whether
+     the group is a tinted card or a plain heading with rows under it. Without
+     one shared value a card's own padding pushed its rows 20px right of every
+     other row on the same page, so `open ›` had two different x positions. */
+  --ws-group-inset: 12px;
 
   min-height: 100vh;
   display: grid;
@@ -109,49 +143,59 @@
   /* ---- the document column ---- */
 
   .main-content { min-width: 0; height: 100vh; overflow: auto; background: var(--paper); }
-  .document-view { width: min(940px, calc(100% - 72px)); margin: 0 auto; padding-bottom: 96px; }
-  .view-header { padding: 42px 0 30px; border-bottom: 1px solid var(--line); }
+  .document-view { width: min(var(--ws-column), calc(100% - 2 * var(--ws-gutter))); margin: 0 auto; padding-bottom: 96px; }
+  /* WHITESPACE, NOT A RULE. The header used to close with a full-width hairline
+     that ran straight into the next one; the space below it separates it just as
+     well and does not stack. */
+  .view-header { padding: 42px 0 8px; }
   .breadcrumb { display: flex; align-items: center; gap: 5px; color: var(--faint); font-size: .75rem; }
   .breadcrumb b { color: var(--muted); font-weight: 500; }
   .breadcrumb .glyph { font-size: .875rem; }
-  .title-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; margin-top: 28px; }
+  .title-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; margin-top: 24px; }
   .title-row h1 { margin: 0; font-size: 2.25rem; font-weight: 600; letter-spacing: -.045em; line-height: 1.08; }
-  .title-row p { max-width: 58ch; margin: 10px 0 0; color: var(--muted); font-size: .9375rem; line-height: 1.55; }
-  .view-meta { flex: none; padding-bottom: 2px; color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; }
-
-  /* THE COUNTER STRIP — the §6 safety-floor numbers, at a glance.
-     Typographically the preview drawer's `.preview-meta`: hairline-bounded,
-     uppercase micro-labels over tabular figures. Three separate figures rather
-     than one summary sentence, because each is a different route in. */
-  .count-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 18px; margin: 24px 0 0; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  .count-strip > div { min-width: 0; }
-  .count-strip dt { margin-bottom: 4px; color: var(--faint); font-size: .625rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
-  .count-strip dd { margin: 0; color: #3a3833; font-size: 1.375rem; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.02em; line-height: 1.1; }
-  .count-strip dd.is-zero { color: var(--faint); font-weight: 500; }
+  .title-row p { max-width: 58ch; margin: 8px 0 0; color: var(--muted); font-size: .875rem; line-height: 1.5; }
+  .view-meta { flex: none; padding-bottom: 4px; color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; }
 
   /* ---- section cards ---- */
 
-  .section-heading { min-height: 36px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
-  .section-heading > div { display: flex; align-items: center; gap: 8px; }
+  /* Title, and at most a small muted count, on ONE baseline. The dot is a
+     decoration rather than a word, so it centres against the title instead of
+     sitting on the baseline with it. */
+  .section-heading { min-height: 28px; display: flex; align-items: baseline; gap: 20px; }
+  .section-heading > div { display: flex; align-items: baseline; gap: 8px; }
   .section-heading h2 { margin: 0; font-size: .8125rem; font-weight: 600; letter-spacing: .01em; }
   .section-heading > div > span:not([class]) { color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; }
   .section-heading p { margin: 0; color: #94866a; font-size: .75rem; }
+  .attention-dot, .attn-dot, .effects-dot { align-self: center; }
   .attention-dot { width: 7px; height: 7px; border-radius: 50%; background: #d59a23; box-shadow: 0 0 0 3px rgba(213, 154, 35, .13); }
   .attn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 3px rgba(179, 70, 78, .13); }
   .effects-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 3px rgba(25, 88, 166, .13); }
 
-  .needs-section { margin-top: 36px; padding: 18px 20px 4px; border: 1px solid #eadfbe; border-radius: 10px; background: #fffaf0; }
-  .attention-section { margin-top: 28px; padding: 18px 20px 6px; border: 1px solid #eccfd1; border-radius: 10px; background: var(--red-soft); }
+  /* All three tinted cards and the plain group share `--ws-group-inset`, so a
+     row's icon, pill, age and action sit at the same x whether or not its group
+     happens to be tinted. */
+  .needs-section { margin-top: 34px; padding: 16px var(--ws-group-inset) 4px; border: 1px solid #eadfbe; border-radius: 10px; background: #fffaf0; }
+  .attention-section { margin-top: 28px; padding: 16px var(--ws-group-inset) 6px; border: 1px solid #eccfd1; border-radius: 10px; background: var(--red-soft); }
   .attention-section .section-heading p { color: #9d6d72; }
-  .effects-section { margin-top: 28px; padding: 18px 20px 6px; border: 1px solid #d8e4f2; border-radius: 10px; background: var(--blue-soft); }
+  .effects-section { margin-top: 28px; padding: 16px var(--ws-group-inset) 6px; border: 1px solid #d8e4f2; border-radius: 10px; background: var(--blue-soft); }
   .effects-section .section-heading p { color: #64789a; }
-  .library-group { margin-top: 38px; }
-  .library-group .section-heading { padding: 0 4px; border-bottom: 1px solid var(--line); }
+  /* A group is separated by SPACE and by its heading, not by a rule above its
+     own rows — that hairline sat directly under the header's and read as a
+     double line for no added meaning. */
+  .library-group { margin-top: 34px; padding-inline: var(--ws-group-inset); }
+  .library-group .section-heading { padding: 0 0 8px; }
 
   /* ---- the row list ---- */
 
   .artifact-list { display: flex; flex-direction: column; }
-  .artifact-row { min-width: 0; min-height: 62px; display: grid; grid-template-columns: 32px minmax(230px, 1fr) auto auto auto; align-items: center; gap: 12px; padding: 9px 8px; border: 0; border-bottom: 1px solid var(--line); border-radius: 4px; background: transparent; text-align: left; transition: background 140ms ease, box-shadow 180ms ease; }
+  /* `width: 100%` is load-bearing, not tidying. A `<button>` in a column flex
+     container does not stretch, so every row was shrink-to-fit: the separators
+     ended at a different x on every row (the "ragged dividers"), and the pill /
+     age / action columns drifted with the title length. */
+  .artifact-row { width: 100%; min-width: 0; min-height: 62px; display: grid; grid-template-columns: var(--ws-row-grid); align-items: center; gap: 12px; padding: 9px 8px; border: 0; border-bottom: 1px solid var(--line); border-radius: 4px; background: transparent; text-align: left; transition: background 140ms ease, box-shadow 180ms ease; }
+  /* A list never ends on a rule: the last separator has nothing to separate. */
+  .artifact-list > :last-child > .artifact-row,
+  .artifact-list > .artifact-row:last-child { border-bottom: 0; }
   .artifact-row:hover { background: #f4f2ee; }
   .artifact-row.is-previewable { cursor: pointer; }
   .artifact-row.is-previewable:active { background: #ebe8e2; }
@@ -182,8 +226,10 @@
   .artifact-main { min-width: 0; }
   .artifact-main h3 { overflow: hidden; margin: 0; color: #35332f; font-size: .875rem; font-weight: 500; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
   .artifact-main p { overflow: hidden; margin: 4px 0 0; color: var(--faint); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
-  .artifact-row time { color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .artifact-action { display: flex; align-items: center; justify-content: flex-end; gap: 3px; color: var(--muted); font-size: .75rem; font-weight: 500; }
+  /* Every right-hand cell hugs the RIGHT edge of its fixed track, so the age and
+     the action read as two straight columns down the whole list. */
+  .artifact-row time { justify-self: end; color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .artifact-action { justify-self: end; display: flex; align-items: center; justify-content: flex-end; gap: 3px; color: var(--muted); font-size: .75rem; font-weight: 500; }
 
   /* ---- the task tree, INSIDE one group ----
 
@@ -198,7 +244,7 @@
   .task-tree-row[data-nested='1']::before { left: calc(8px + (var(--tree-depth) - 1) * 22px + 14px); top: 0; height: 31px; width: 1px; }
   .task-tree-row[data-nested='1']::after { left: calc(8px + (var(--tree-depth) - 1) * 22px + 14px); top: 31px; width: 9px; height: 1px; }
 
-  .state-label { justify-self: start; padding: 3px 7px; border-radius: 999px; background: #efede9; color: #716e67; font-size: .6875rem; white-space: nowrap; }
+  .state-label { justify-self: end; padding: 3px 7px; border-radius: 999px; background: #efede9; color: #716e67; font-size: .6875rem; white-space: nowrap; }
   .state-human { background: #fff0c8; color: #86600d; }
   .state-floor { background: #f7e4e6; color: #8f4c53; }
   .state-ok { background: var(--green-soft); color: var(--green); }
@@ -247,12 +293,14 @@
   .inbox-item { border-bottom: 1px solid #eee4c9; }
   .inbox-item:last-child { border-bottom: 0; }
   .inbox-item .artifact-row { width: 100%; border-bottom: 0; }
-  .inbox-body { padding: 2px 8px 20px 52px; }
+  /* 48px = the row's own 8px padding + the 28px icon tile + the 12px gap, so the
+     body starts exactly under the title rather than near it. */
+  .inbox-body { padding: 2px 8px 20px 48px; }
   .inbox-question { display: flex; gap: 9px; margin: 0 0 14px; padding: 11px 13px; border: 1px solid #e6d5a6; border-radius: 8px; background: #fff3d2; color: #7a5a17; font-size: .875rem; line-height: 1.5; }
   .inbox-question .glyph { flex: none; color: #a37c1c; font-weight: 700; }
   .inbox-floor { margin: 0 0 14px; padding: 11px 13px; border: 1px solid #eccfd1; border-radius: 8px; background: var(--red-soft); color: #8a5c61; font-size: .8125rem; line-height: 1.5; }
   .inbox-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 14px; color: var(--muted); font-size: .75rem; }
-  .inbox-events { margin-top: 16px; padding-top: 12px; border-top: 1px solid #eee4c9; }
+  .inbox-events { margin-top: 20px; }
   .inbox-events summary { color: var(--muted); font-size: .75rem; cursor: pointer; }
   .inbox-events summary:hover { color: var(--ink); }
   .inbox-queued { display: flex; align-items: center; gap: 7px; margin: 12px 0 0; color: var(--green); font-size: .75rem; }
@@ -268,12 +316,21 @@
    * Deliberately the most machine-looking thing on the page — monospaced keys,
    * a hairline frame, no rich rendering — because what it shows is byte-for-byte
    * what gets executed. The design language decorates the frame; it never
-   * touches the values inside it. */
+   * touches the values inside it.
+   *
+   * A native `<details>`, closed by default: the labelled summary keeps the
+   * block announced and one click from the bytes, and only the OPEN state pays
+   * for the internal rules. */
 
   .execution-block { margin: 0 0 16px; border: 1px solid var(--line-strong); border-radius: 8px; background: #f7f5f1; }
-  .execution-block > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line); }
-  .execution-block > header b { color: var(--muted); font-size: .625rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-  .execution-block > header span { color: var(--faint); font-size: .6875rem; }
+  .execution-block > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; padding: 9px 14px; list-style: none; cursor: pointer; }
+  .execution-block > summary::-webkit-details-marker { display: none; }
+  .execution-block > summary::before { content: "›"; align-self: center; color: var(--faint); font-size: .875rem; line-height: 1; transition: transform 140ms ease; }
+  .execution-block[open] > summary::before { transform: rotate(90deg); }
+  .execution-block > summary:hover { background: #f2efea; border-radius: 7px 7px 0 0; }
+  .execution-block[open] > summary { border-bottom: 1px solid var(--line); }
+  .execution-block > summary b { color: var(--muted); font-size: .625rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+  .execution-block > summary span { color: var(--faint); font-size: .6875rem; }
   .execution-block dl { margin: 0; display: flex; flex-direction: column; }
   .execution-row { display: grid; grid-template-columns: minmax(96px, 168px) minmax(0, 1fr); gap: 14px; align-items: start; padding: 9px 14px; border-bottom: 1px solid #eceae5; }
   .execution-row:last-child { border-bottom: 0; }
@@ -289,13 +346,27 @@
    * row is the ONLY horizontal-scroll container on the surface, so a wide board
    * scrolls inside its own pane rather than widening the page. */
 
-  .board-view { min-width: 0; padding: 0 34px 30px; }
-  .board-view .view-header { padding: 34px 4px 22px; }
-  .board-view .title-row { margin-top: 18px; }
+  /* The Tasks screen's LIST CONTENT takes the same document column as every
+     other screen — it used to be an unconstrained full-bleed pane, which is why
+     its rows trailed off into an acre of empty paper while the Inbox next door
+     sat in a measured column. The measure goes on the CONTENT, not the pane, so
+     the BOARD still gets the whole width: a column list is reading matter and
+     wants a measure, a kanban is a workbench and wants room. The arithmetic
+     lands the header on exactly the Inbox's left edge, so toggling screens (or
+     List/Board) never shifts the title. */
+  .board-view { min-width: 0; padding: 0 var(--ws-gutter) 30px; }
+  .board-view > .view-header, .board-view > .tasks-list, .board-view > .ws-empty, .board-view > .ws-refreshing, .board-view > .ws-refusal {
+    width: min(var(--ws-column), 100%); margin-inline: auto;
+  }
+  .board-view .view-header { padding: 38px 0 8px; }
+  .board-view .title-row { margin-top: 20px; }
   .board-view .title-row h1 { font-size: 1.875rem; }
-  .board-view .count-strip { margin-inline: 4px; }
   .board { display: flex; gap: 14px; align-items: flex-start; min-width: 0; margin-top: 28px; padding-bottom: 16px; overflow-x: auto; }
-  .board-column { flex: 0 0 274px; width: 274px; min-width: 0; padding: 14px 12px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--sidebar); }
+  /* 264px so the four columns (`kernel/taskBoard.ts` BOARD_COLUMNS) fit the pane
+     at a normal desktop width. The board keeps its overflow — it is still the
+     one horizontal-scroll container here — but a board that scrolls by ten
+     pixels reads as clipped rather than as scrollable. */
+  .board-column { flex: 0 0 264px; width: 264px; min-width: 0; padding: 14px 12px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--sidebar); }
   .board-column .section-heading { min-height: 0; flex-direction: column; align-items: stretch; gap: 6px; }
   .board-column .section-heading p { color: var(--muted); line-height: 1.45; }
   .board-column-count { margin-left: auto; color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; }
@@ -319,7 +390,7 @@
    * the list is the shape that fits a narrow window, which is half of why it is
    * the default. */
 
-  .tasks-list { display: flex; flex-direction: column; gap: 18px; margin-top: 24px; }
+  .tasks-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
   .tasks-view-meta { display: inline-flex; align-items: center; gap: 12px; }
   .tasks-view-meta .doc-toggle { margin-left: 0; }
   .artifact-badges { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; }
@@ -449,14 +520,16 @@
   /* ---- run strip ---- */
 
   .run-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-  .run-row { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 10px 8px; border-bottom: 1px solid var(--line); border-radius: 4px; }
+  /* Same discipline as `--ws-row-grid`: the two trailing cells are fixed, so the
+     cost and the age line up down the strip instead of tracking each summary. */
+  .run-row { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) 3.5rem 4.5rem; align-items: center; gap: 12px; padding: 10px 8px; border-bottom: 1px solid var(--line); border-radius: 4px; }
   .run-row:last-child { border-bottom: 0; }
   .run-row:hover { background: #f4f2ee; }
-  .run-row time { color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .run-row time { justify-self: end; color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .run-main { min-width: 0; }
   .run-main h4 { overflow: hidden; margin: 0; color: #35332f; font-size: .8125rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
   .run-main p { overflow: hidden; margin: 4px 0 0; color: var(--faint); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
-  .run-cost { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+  .run-cost { justify-self: end; color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
 
   /* ---- the close-note dialog ---- */
 
@@ -469,8 +542,12 @@
 
   /* ---- the system canvas ---- */
 
-  .system-view { height: 100%; min-height: 680px; display: grid; grid-template-rows: auto auto minmax(0, 1fr); padding: 0 34px 30px; }
-  .system-view .view-header { padding: 34px 4px 22px; }
+  .system-view { height: 100%; min-height: 680px; display: grid; grid-template-rows: auto auto minmax(0, 1fr); padding: 0 var(--ws-gutter) 30px; }
+  /* Same split the Tasks screen makes: the header and the window note sit in the
+     shared column so every screen's title starts at the same x, while the canvas
+     itself takes the whole pane — a graph is not reading matter. */
+  .system-view > .view-header, .system-view > .system-note { width: min(var(--ws-column), 100%); margin-inline: auto; }
+  .system-view .view-header { padding: 38px 0 8px; }
   .system-view .title-row { margin-top: 18px; }
   .system-view .title-row h1 { font-size: 1.875rem; }
   .system-view .title-row p { margin-top: 6px; }
@@ -534,15 +611,19 @@
 }
 
 @media (max-width: 980px) {
-  .loopany-workspace { grid-template-columns: 196px minmax(0, 1fr); }
-  .loopany-workspace .document-view { width: min(100% - 40px, 900px); }
-  .loopany-workspace .artifact-row { grid-template-columns: 32px minmax(180px, 1fr) auto auto; }
-  .loopany-workspace .artifact-row time { display: none; }
-  .loopany-workspace .board-view, .loopany-workspace .system-view { padding-inline: 20px; }
+  /* The row grammar is re-declared through the VARIABLE, never the rule: a cell
+     dropped with `display: none` leaves its track behind as a dead gutter, so
+     the template has to lose the track in the same breath.
+     Cells are dropped BY POSITION, not by class. `ArtifactRow` always emits
+     exactly five children and renders an empty `<span/>` for a cell it has no
+     content for, so hiding `time` by element left that placeholder in flow and
+     pushed the action onto a second implicit row. */
+  .loopany-workspace { grid-template-columns: 196px minmax(0, 1fr); --ws-column: 900px; --ws-gutter: 20px; --ws-row-grid: 28px minmax(0, 1fr) auto 3.5rem; }
+  .loopany-workspace .artifact-row > :nth-child(4) { display: none; }
 }
 
 @media (max-width: 720px) {
-  .loopany-workspace { grid-template-columns: 68px minmax(0, 1fr); }
+  .loopany-workspace { grid-template-columns: 68px minmax(0, 1fr); --ws-column: 900px; --ws-gutter: 14px; --ws-row-grid: 28px minmax(0, 1fr) 3.5rem; }
   .loopany-workspace .sidebar { padding-inline: 10px; }
   .loopany-workspace .workspace-brand { justify-content: center; padding: 0; }
   .loopany-workspace .workspace-brand > div:last-child,
@@ -550,20 +631,15 @@
   .loopany-workspace .sidebar-status > div { display: none; }
   .loopany-workspace .sidebar nav button { grid-template-columns: 1fr auto; place-items: center; padding: 0 4px; }
   .loopany-workspace .sidebar-status { grid-template-columns: 1fr; justify-items: center; padding-inline: 0; }
-  .loopany-workspace .document-view { width: calc(100% - 28px); }
   .loopany-workspace .view-header { padding-top: 28px; }
   .loopany-workspace .title-row { align-items: flex-start; flex-direction: column; gap: 8px; }
   .loopany-workspace .title-row h1 { font-size: 1.875rem; }
-  .loopany-workspace .needs-section, .loopany-workspace .attention-section, .loopany-workspace .effects-section { padding-inline: 12px; }
-  .loopany-workspace .section-heading p { display: none; }
   .loopany-workspace .board-column .section-heading p { display: block; }
-  /* Both pill cells drop out together, so the row keeps exactly three tracks
+  /* The pill cell drops out with the age, so the row keeps exactly three tracks
      (a cell left in flow would wrap onto a second line). The icon still says
      whether a task is asking. */
-  .loopany-workspace .artifact-row .state-label, .loopany-workspace .artifact-row .artifact-badges { display: none; }
-  .loopany-workspace .artifact-row { grid-template-columns: 32px minmax(0, 1fr) auto; }
+  .loopany-workspace .artifact-row > :nth-child(3) { display: none; }
   .loopany-workspace .inbox-body { padding-left: 8px; }
-  .loopany-workspace .board-view, .loopany-workspace .system-view { padding: 0 12px 14px; }
   .loopany-workspace .canvas-key em { display: none; }
   .loopany-workspace .preview-scrim { padding: 6px; }
   .loopany-workspace .artifact-preview { width: calc(100vw - 12px); }

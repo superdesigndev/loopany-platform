@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 
-import type { EventShape, InboxCounts, RunRow } from './api'
+import type { EventShape, RunRow } from './api'
 import { ViewError } from './api'
 
 /**
@@ -58,14 +58,20 @@ export function When({ iso, prefix }: { iso: string | null | undefined; prefix?:
 }
 
 /**
- * THE VIEW HEADER — breadcrumb, one large tightly-tracked title, the sentence
- * that says what the screen is for, and a right-aligned count.
+ * THE VIEW HEADER — breadcrumb, one large tightly-tracked title, an optional
+ * short muted line saying what the screen is, and a right-aligned count.
  *
- * Lifted from the reference verbatim. It is what makes every screen read as a
- * DOCUMENT rather than a panel, which is the single strongest carrier of the
- * design language.
+ * `description` is DELIBERATELY short and optional (captain direction,
+ * 2026-08-05). A working page's header used to carry a paragraph arguing for the
+ * product's model — true prose, wrong surface: it pushed the actual work below
+ * the fold and had to be re-read on every visit to learn nothing new. The model
+ * is taught by the skill and the docs; a header says which screen you are on.
+ *
+ * The header carries the PAGE-LEVEL count, and that is the one place a page-wide
+ * fact is counted. A section under it counts only its own subset, and only when
+ * the page has more than one section to tell apart.
  */
-export function ViewHeader({ eyebrow, title, description, meta }: { eyebrow: string; title: string; description: string; meta?: ReactNode }) {
+export function ViewHeader({ eyebrow, title, description, meta }: { eyebrow: string; title: string; description?: string; meta?: ReactNode }) {
   return (
     <header className="view-header">
       <div className="breadcrumb">
@@ -76,37 +82,11 @@ export function ViewHeader({ eyebrow, title, description, meta }: { eyebrow: str
       <div className="title-row">
         <div>
           <h1>{title}</h1>
-          <p>{description}</p>
+          {description && <p>{description}</p>}
         </div>
         {meta !== undefined && <span className="view-meta">{meta}</span>}
       </div>
     </header>
-  )
-}
-
-/**
- * The §6 safety-floor counters, at a glance on every screen that has them.
- *
- * ONE figure now. It was three, and the other two — due-unwatched and the
- * orphan floor — counted rows that can no longer exist: both were predicated on
- * a task with no watcher, and the watcher rule (`kernel/types.ts` WATCHER_HINT)
- * removed that state. A counter permanently pinned at zero is not a reassuring
- * fact, it is a claim that the system still has a floor there.
- *
- * Zero renders quiet rather than absent — "nothing is waiting on you" is worth
- * seeing, and a disappearing row would make the strip jump.
- */
-export function CountStrip({ counts }: { counts: InboxCounts }) {
-  const cells: [string, number][] = [['questions waiting on you', counts.question]]
-  return (
-    <dl className="count-strip">
-      {cells.map(([label, value]) => (
-        <div key={label}>
-          <dt>{label}</dt>
-          <dd className={value === 0 ? 'is-zero' : undefined}>{value}</dd>
-        </div>
-      ))}
-    </dl>
   )
 }
 
@@ -131,8 +111,15 @@ const TONE_DOT: Record<Tone, string | null> = {
  * the reference sheet states and this surface keeps: amber is a decision you
  * owe, rose is a consequence that did not happen, blue is a decision already made
  * and on its way out, plain is content.
+ *
+ * A heading is TITLE plus, at most, a small muted count — one line, one baseline.
+ * The right-hand explanatory annotation it used to carry is gone (captain
+ * direction, 2026-08-05): it restated what the title and the count already said,
+ * and being right-aligned against a left-aligned title it never shared a
+ * baseline with anything. The board's columns keep their `rule` line, because a
+ * column name is a state predicate a person genuinely has to learn once.
  */
-export function Section({ tone = 'plain', title, count, note, children }: { tone?: Tone; title: string; count?: ReactNode; note?: string; children: ReactNode }) {
+export function Section({ tone = 'plain', title, count, children }: { tone?: Tone; title: string; count?: ReactNode; children: ReactNode }) {
   const dot = TONE_DOT[tone]
   return (
     <section className={TONE_CLASS[tone]}>
@@ -142,7 +129,6 @@ export function Section({ tone = 'plain', title, count, note, children }: { tone
           <h2>{title}</h2>
           {count !== undefined && <span>{count}</span>}
         </div>
-        {note && <p>{note}</p>}
       </div>
       {children}
     </section>
@@ -150,8 +136,15 @@ export function Section({ tone = 'plain', title, count, note, children }: { tone
 }
 
 /**
- * THE ROW — the reference's 62px five-track grid: an icon tile, the title over
- * its source line, a state pill, an age, and one action slot.
+ * THE ROW — the workspace's ONE row grid: an icon tile, the title over its
+ * source line, a state pill, an age, and one action slot.
+ *
+ * Every list on every screen renders this component, and `--ws-row-grid` in
+ * `styles/workspace.css` is the single definition of its five tracks. The last
+ * three are FIXED widths rather than `auto` (captain direction, 2026-08-05): a
+ * grid is per-element, so `auto` tracks size to each row's own content and the
+ * pill, the age and the `open ›` landed at a different x on every row and in
+ * every group. Fixed tracks put them on one column the whole page down.
  *
  * Rendered as a `<button>` when it opens something, so the whole row is one
  * keyboard-reachable target rather than a div with a click handler.

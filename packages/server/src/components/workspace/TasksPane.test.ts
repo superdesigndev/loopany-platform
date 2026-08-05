@@ -99,6 +99,10 @@ const taskView = (id: string): TaskView => {
 let calls: { method: string; url: string; body: unknown }[] = []
 let root: Root | null = null
 let host: HTMLElement | null = null
+/** What `/api/views/tasks` answers for THIS test. Defaults to the shared
+ *  fixture; a test that needs a different shape hands `mount` an override
+ *  rather than mutating the fixture other tests read. */
+let payload: TasksView = TASKS
 
 function render(selected: string | null, onSelect: (id: string | null) => void) {
   host = document.createElement('div')
@@ -137,12 +141,13 @@ const click = async (element: Element | null | undefined) => {
 
 beforeEach(() => {
   calls = []
+  payload = TASKS
   window.localStorage.clear()
   vi.stubGlobal('fetch', async (input: string, init?: RequestInit) => {
     const url = String(input)
     const method = init?.method ?? 'GET'
     calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined })
-    if (url.startsWith('/api/views/tasks')) return json(TASKS)
+    if (url.startsWith('/api/views/tasks')) return json(payload)
     if (url.startsWith('/api/views/task/')) return json(taskView(decodeURIComponent(url.split('/').pop()!)))
     if (url.endsWith('/verdict')) return json({ run: { id: 'run-1', alreadyQueued: false } })
     if (url.endsWith('/directive')) return json({ run: { id: 'run-2', alreadyQueued: false } })
@@ -162,7 +167,8 @@ function json(body: unknown) {
   return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response
 }
 
-async function mount(selected: string | null = null, onSelect: (id: string | null) => void = () => {}) {
+async function mount(selected: string | null = null, onSelect: (id: string | null) => void = () => {}, view?: TasksView) {
+  if (view) payload = view
   render(selected, onSelect)
   await act(async () => {})
 }
@@ -194,14 +200,60 @@ describe('the default view is a list, grouped by loop', () => {
     expect(badges).toContain('overdue')
   })
 
-  it('shows the safety-floor counter in BOTH views, and only the surviving branch', async () => {
+  /**
+   * ONE COUNT PER FACT (captain direction, 2026-08-05). This page's job is the
+   * worklist, so it counts TASKS, once, in its header — the "questions waiting
+   * on you" stat block it used to carry duplicated the Inbox's whole job on a
+   * screen that is not the Inbox, and the Inbox itself already said the same
+   * number three times.
+   */
+  it('counts the worklist ONCE, in the page header, in both views', async () => {
     await mount()
     for (const view of ['List', 'Board']) {
       await click(byText(view))
-      const strip = host!.querySelector('.count-strip')!.textContent ?? ''
-      expect(strip).toMatch(/questions waiting on you/)
-      expect(strip).not.toMatch(/orphan|unwatched/i)
+      expect(host!.querySelector('.count-strip')).toBeNull()
+      expect(text()).not.toMatch(/questions waiting on you/i)
+      expect(host!.querySelector('.view-meta')!.textContent).toMatch(/3 tasks/)
+      expect(text()).not.toMatch(/orphan|unwatched/i)
     }
+  })
+
+  /** A group heading is its loop's name plus a small muted count. The verbose
+   *  right-hand annotation restated both, and never shared their baseline. */
+  it('gives a loop group a heading and a count, and no prose annotation', async () => {
+    await mount()
+    const heading = host!.querySelector('.section-heading')!
+    expect(heading.querySelector('h2')!.textContent).toBe('Alpha watch')
+    expect(heading.querySelector('p')).toBeNull()
+    expect(text()).not.toMatch(/Open work this loop is watching/)
+  })
+
+  /**
+   * A group is a WATCHER's desk, so a row prints its CREATOR only when the two
+   * differ. Every fixture task is filed by the loop that watches it, so no row
+   * repeats its own group heading; a hand-off does still say where it came from.
+   */
+  it('prints no row source when a loop filed the work it watches', async () => {
+    await mount()
+    expect(host!.querySelectorAll('.task-tree-row .artifact-main p')).toHaveLength(0)
+  })
+
+  it('prints the source on a task handed over from another loop', async () => {
+    const handedOn = structuredClone(TASKS)
+    handedOn.columns[2]!.tasks[0]!.creator = { id: 'loop-a', title: 'Alpha watch' }
+    handedOn.columns[2]!.tasks[0]!.createdByLoop = 'loop-a'
+    await mount(null, undefined, handedOn)
+    const sources = [...host!.querySelectorAll('.task-tree-row .artifact-main p')].map((cell) => cell.textContent)
+    expect(sources).toEqual(['from Alpha watch'])
+  })
+
+  /** The page header says what the screen IS, in one short line. It is not the
+   *  place the product argues for its own object model. */
+  it('carries no manifesto paragraph in the header', async () => {
+    await mount()
+    const description = host!.querySelector('.title-row p')!.textContent ?? ''
+    expect(description.length).toBeLessThan(90)
+    expect(text()).not.toMatch(/Never a shadow of an external object/)
   })
 })
 

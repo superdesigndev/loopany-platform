@@ -9,7 +9,7 @@ import { flattenColumns, groupTasks, parentRef, readTasksView, treeRows, writeTa
 import { isDeletedLoop, loopLabel } from './loopLabel'
 import { ExecutionBlock, Markdown } from './Render'
 import {
-  ArtifactRow, BigState, CountStrip, Drawer, DrawerHead, DrawerSection, Empty, Glyph, Loading, Refusal, RunStrip, Section, Timeline, ViewHeader, When,
+  ArtifactRow, BigState, Drawer, DrawerHead, DrawerSection, Empty, Glyph, Loading, Refusal, RunStrip, Section, Timeline, ViewHeader, When,
 } from './parts'
 import { affectsObject, affectsTasks, useLiveView } from './useLiveView'
 
@@ -37,9 +37,11 @@ import { affectsObject, affectsTasks, useLiveView } from './useLiveView'
  *     a complete partition of the desks rather than a partition plus a leftover
  *     pile. Pure and total, for the same reason the board's column mapping is.
  *
- * Both views render the SAME `/api/views/tasks` payload, ride the same SSE bus,
- * and show the same safety-floor counters, so switching changes the shape of the
- * page and nothing about what is true. There is still no drag surface anywhere
+ * Both views render the SAME `/api/views/tasks` payload and ride the same SSE
+ * bus, so switching changes the shape of the page and nothing about what is
+ * true. The screen counts TASKS, once, in its header: the "questions waiting on
+ * you" stat block it used to carry duplicated the Inbox's whole job on a page
+ * whose job is the worklist. There is still no drag surface anywhere
  * (standing product decision) — and now there is no on-card control either, so
  * the only write path on this screen is the drawer.
  *
@@ -112,10 +114,9 @@ export function TasksPane({ selected, onSelect, onOpenLoop }: { selected: string
       <ViewHeader
         eyebrow="Tasks"
         title="Tasks"
-        description="Our own work items. Never a shadow of an external object — a PR lives on GitHub and enters here only as payload facts."
+        description="Work items your loops opened, grouped by the loop that acts next."
         meta={data ? <ViewToggle mode={mode} total={total} onChoose={choose} /> : undefined}
       />
-      {data && <CountStrip counts={data.counts} />}
 
       {!data && !error ? <Loading what="the board" /> : null}
       {failure && <Refusal error={failure} />}
@@ -196,14 +197,29 @@ function TaskGroupSection({ group, selected, onOpen }: { group: TaskGroup; selec
     <Section
       // A loop's desk and the closed record are both plain content — there is no
       // group here whose mere existence is a problem to flag.
+      //
+      // Title plus a small muted count, and nothing else: the right-hand
+      // "Open work this loop is watching · 1 task" annotation this used to carry
+      // said the same thing the heading and the count already said, twice.
       tone="plain"
       title={group.label}
       count={group.tasks.length}
-      note={group.note}
     >
       <div className="artifact-list">
         {rows.map((row) => (
-          <TaskRowEntry key={row.task.id} task={row.task} depth={row.depth} detached={row.detached} selected={row.task.id === selected} onOpen={onOpen} />
+          <TaskRowEntry
+            key={row.task.id}
+            task={row.task}
+            // The group is a WATCHER's desk and the row's source line is the
+            // CREATOR, which is usually the same loop — so under `Housekeeper`
+            // every row said "Housekeeper" again. Telling the row which desk it
+            // is on lets it print the creator only when that is a second fact.
+            groupWatcher={group.kind === 'loop' ? group.key : null}
+            depth={row.depth}
+            detached={row.detached}
+            selected={row.task.id === selected}
+            onOpen={onOpen}
+          />
         ))}
       </div>
     </Section>
@@ -235,9 +251,14 @@ function ParentChip({ parent }: { parent: TaskRef }) {
  * has arrived — plus, since S4, where this task sits in a tree when the indent
  * could not say it.
  */
-function TaskRowEntry({ task, depth, detached, selected, onOpen }: { task: TaskCard; depth: number; detached: boolean; selected: boolean; onOpen: (id: string, from?: HTMLElement | null) => void }) {
+function TaskRowEntry({ task, groupWatcher, depth, detached, selected, onOpen }: { task: TaskCard; groupWatcher: string | null; depth: number; detached: boolean; selected: boolean; onOpen: (id: string, from?: HTMLElement | null) => void }) {
   const asking = Boolean(task.pendingQuestion?.trim())
   const overdue = task.due && task.status === 'open'
+  // A loop filing its own work is the ordinary case, and repeating the group's
+  // name under every one of its rows says nothing. The line appears when the
+  // task came from SOMEWHERE ELSE, which is the case worth reading.
+  const creator = task.creator?.id ?? task.createdByLoop ?? null
+  const fromElsewhere = groupWatcher === null || creator !== groupWatcher
   return (
     <div
       className="task-tree-row"
@@ -249,7 +270,7 @@ function TaskRowEntry({ task, depth, detached, selected, onOpen }: { task: TaskC
         icon={asking ? 'question' : task.status === 'closed' ? 'close' : 'task'}
         iconTone={asking ? 'question' : 'task'}
         title={task.title ?? task.id}
-        source={<>{task.creator ? loopLabel(task.creator) : (task.createdByLoop ?? 'opened by you')}</>}
+        source={fromElsewhere ? <>from {task.creator ? loopLabel(task.creator) : (task.createdByLoop ?? 'you')}</> : undefined}
         badges={
           <>
             {asking && <span className="state-label state-human">question</span>}
@@ -343,7 +364,7 @@ function ExternalItems({ mirrors }: { mirrors: MirrorRef[] }) {
   return (
     <DrawerSection
       title="External items"
-      note="What this task depends on outside Loopany. A pointer, never a copy — the state lives over there, so go and look."
+      note="A pointer, never a copy — the state lives over there."
     >
       {mirrors.length === 0 ? (
         <Empty>Nothing external is attached. A run attaches one with `loopany mirror attach`.</Empty>
@@ -393,7 +414,7 @@ function SubTasks({ children, onOpenTask }: { children: TaskRow[]; onOpenTask: (
   return (
     <DrawerSection
       title="Sub-tasks"
-      note="Each keeps its OWN watcher, follow-up and ending. Closing them does not close this one, and closing this one does not close them."
+      note="Each keeps its own watcher and its own ending — closing one closes nothing else."
     >
       <div className="artifact-list">
         {children.map((child) => (
@@ -527,7 +548,7 @@ function TaskDetail({
         {data.runs.length ? <RunStrip runs={data.runs} /> : <Empty>No run has claimed or reported on this task.</Empty>}
       </DrawerSection>
 
-      <DrawerSection title="Timeline" note="Ordered by seq. Gaps are normal — a deduplicated re-derivation still consumes a sequence value.">
+      <DrawerSection title="Timeline" note="Ordered by seq; gaps are normal.">
         <Timeline events={data.timeline} />
       </DrawerSection>
     </article>
@@ -580,7 +601,7 @@ function TaskActions({
   return (
     <DrawerSection
       title="Actions"
-      note="The only write surface on this screen — rows and cards just open the task. A task ends when its watcher closes it, so telling the watcher is how you end one."
+      note="A task ends when its watcher closes it — telling the watcher is how you end one."
     >
       {canTell && <TellBox taskId={task.id} mode={mode} watcher={loopLabel(view.watcherLoop, task.watcher)} onSpoke={onSpoke} onQueued={setQueued} />}
       {queued && <p className="inbox-queued">{queued}</p>}
