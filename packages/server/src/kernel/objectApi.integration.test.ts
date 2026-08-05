@@ -151,27 +151,57 @@ describe("a task is never created without a loop watching it", () => {
   });
 });
 
-/** TRANSFER stays; RELEASE is gone. The `watcher` write has one legal shape. */
-describe("a task's watcher is handed on, never cleared", () => {
-  it("transfers to another loop through the field patch", async () => {
+/**
+ * NEITHER TRANSFER NOR RELEASE (captain ruling 2026-08-05). The watcher is
+ * chosen at CREATE and kept: there is no `watcher` write on an existing task at
+ * all, and both shapes an old caller might send are refused BY NAME rather than
+ * ignored, so a habit is corrected instead of silently doing nothing.
+ */
+describe("a task keeps the watcher it was created with", () => {
+  it("refuses a hand-off through the field patch, and teaches close-and-re-file", async () => {
     const loop = await makeLoop();
     const task = await makeTask({}, loop.id);
-    expect(ok(await api.patchTask(task.id, { watcher: "loop-steward" }, human, T1)).task).toMatchObject({ watcher: "loop-steward" });
+    const result = await api.patchTask(task.id, { watcher: "loop-steward" }, human, T1);
+    expect(code(result)).toBe("WATCHER_IMMUTABLE");
+    const error = (result as { error: { hint: string; issues: { path: string }[] } }).error;
+    expect(error.hint).toContain("a task keeps its watcher; hand-off is not a thing today");
+    expect(error.hint).toContain("file a fresh one");
+    expect(error.issues[0]!.path).toBe("watcher");
+    // Nothing was written: the stored watcher is untouched.
+    expect((await store.getObject(undefined, task.id))!.watcher).toBe(loop.id);
+  });
+
+  // Re-sending the watcher a task ALREADY has is the one shape that passes: the
+  // canonical show → edit → update roundtrip carries the line back verbatim, and
+  // refusing a byte nobody touched would break it.
+  it("accepts the watcher it already has — a roundtrip is not a hand-off", async () => {
+    const task = await makeTask();
+    expect(ok(await api.patchTask(task.id, { watcher: WATCHER, title: "Observe harder" }, human, T1)).task)
+      .toMatchObject({ watcher: WATCHER, title: "Observe harder" });
   });
 
   it("refuses `watcher: null` on the field patch, by name", async () => {
     const task = await makeTask();
     const result = await api.patchTask(task.id, { watcher: null }, human, T1);
-    expect(code(result)).toBe("WATCHER_REQUIRED");
-    expect((result as { error: { hint: string } }).error.hint).toContain("never cleared");
+    expect(code(result)).toBe("WATCHER_IMMUTABLE");
+    expect((result as { error: { hint: string } }).error.hint).toContain("hand-off is not a thing today");
     expect((await store.getObject(undefined, task.id))!.watcher).toBe(WATCHER);
   });
 
-  // A whole-file replace that omits `watcher:` is a clear in disguise: the file
-  // is the object, so an absent key would drop the watcher on record.
+  // The whole-file replace is a watcher surface too: the file IS the object, so
+  // an absent key would drop the watcher and a changed one would hand the task
+  // on without ever touching the patch path.
   it("refuses a whole-file replace that drops the watcher line", async () => {
     const task = await makeTask();
-    expect(code(await api.replaceFromArtifact("task", task.id, "---\ntitle: Observe the impact of PR #201\n---\n\nbody\n", human, T1))).toBe("WATCHER_REQUIRED");
+    expect(code(await api.replaceFromArtifact("task", task.id, "---\ntitle: Observe the impact of PR #201\n---\n\nbody\n", human, T1))).toBe("WATCHER_IMMUTABLE");
+    expect((await store.getObject(undefined, task.id))!.watcher).toBe(WATCHER);
+  });
+
+  it("refuses a whole-file replace that points the watcher at another loop", async () => {
+    const task = await makeTask();
+    const result = await api.replaceFromArtifact("task", task.id, "---\ntitle: Observe\nwatcher: loop-steward\n---\n\nbody\n", human, T1);
+    expect(code(result)).toBe("WATCHER_IMMUTABLE");
+    expect((result as { error: { hint: string } }).error.hint).toContain("hand-off is not a thing today");
     expect((await store.getObject(undefined, task.id))!.watcher).toBe(WATCHER);
   });
 

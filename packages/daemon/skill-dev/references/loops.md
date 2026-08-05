@@ -47,9 +47,11 @@ loopany edit loop-4c1d77 --json '{"enabled":false}'
 loopany edit loop-4c1d77 --json '{"enabled":true}'
 ```
 
-Pausing never clears, closes or transfers attached tasks. A completed goal loop
-is not a hand-off target. A deleted loop leaves a legal dangling watcher that the
-workspace renders as a tombstone; repair it by transferring the task.
+Pausing never clears or closes attached tasks — a paused loop's tasks wait for
+it and it acts on them the next time it runs. A deleted loop leaves a legal
+dangling watcher that the workspace renders as a tombstone; there is no way to
+re-point it, so close those tasks with a note and re-file the ones that still
+matter at a live loop.
 
 ## Manual Run now
 

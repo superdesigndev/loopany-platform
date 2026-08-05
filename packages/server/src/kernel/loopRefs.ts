@@ -26,8 +26,10 @@
  *     watcher", a state the watcher rule abolished) and never to a refusal.
  *  3. **ENABLED OR NOT.** A paused/disabled/completed prod loop still resolves and
  *     still renders its name — the `enabled` gate belongs to the DUE SCAN (report
- *     §1.2.5), not to reading. What enablement does change is `assignable`: a loop
- *     that can never act again is not offered as a hand-off target.
+ *     §1.2.5), not to reading. Enablement never gates resolution, and since the
+ *     hand-off surface was removed (captain ruling 2026-08-05) there is no
+ *     "assignable" notion left for it to gate either: every reference resolves,
+ *     and what a loop can still DO is the run queue's question, not this module's.
  */
 import { and, eq } from "drizzle-orm";
 
@@ -39,19 +41,14 @@ import { loops, type Loop } from "../db/schema.js";
  *  consumer already renders on it. */
 export type LoopSource = "prod" | "missing";
 
-/** The resolved loop, as every consumer needs it. `status` is rendered, never
- *  branched on for authority: the one decision a caller actually makes rides
- *  `assignable`. */
+/** The resolved loop, as every consumer needs it. `status` is RENDERED, never
+ *  branched on for authority — reading a reference makes no decision. */
 export interface LoopRecord {
   id: string;
   title: string | null;
   source: LoopSource;
   status: string;
   cron: string | null;
-  /** May a task be HANDED to this loop? False for a COMPLETED loop (its goal is
-   *  met and it is stamped done). A merely paused/disabled loop IS assignable —
-   *  it wakes on resume, which is the whole point of the level trigger. */
-  assignable: boolean;
 }
 
 /** The wire shape a card/row carries for its watcher or creator. */
@@ -69,9 +66,8 @@ export type LoopIndex = Map<string, LoopRecord>;
  * The prod row, in the kernel's vocabulary.
  *
  * `completedAt` is a CLOSED loop's finish line (`goal` met), not a retirement:
- * the charter is not frozen and the owner can reopen it by re-enabling. It is
- * still not a hand-off target, because handing work to a loop that has declared
- * itself done is how a task goes quiet forever.
+ * the charter is not frozen and the owner can reopen it by re-enabling, so it
+ * renders as `completed` rather than as anything terminal.
  */
 export function prodLoopRecord(row: Loop): LoopRecord {
   const completed = row.completedAt != null;
@@ -81,7 +77,6 @@ export function prodLoopRecord(row: Loop): LoopRecord {
     source: "prod",
     status: completed ? "completed" : row.enabled ? "active" : "paused",
     cron: row.cron,
-    assignable: !completed,
   };
 }
 
@@ -91,7 +86,7 @@ export function prodLoopRecord(row: Loop): LoopRecord {
  * fact is what makes "no FK, never cascade" honest rather than silently lossy.
  */
 export function missingLoopRecord(id: string): LoopRecord {
-  return { id, title: null, source: "missing", status: "missing", cron: null, assignable: false };
+  return { id, title: null, source: "missing", status: "missing", cron: null };
 }
 
 /** The production roster is the roster. */
@@ -126,10 +121,3 @@ export function loopRefOf(id: string | null | undefined, index: LoopIndex): Loop
   return { id: found.id, title: found.title, source: found.source };
 }
 
-/** The hand-off picker's roster, ordered by the label a person actually reads. */
-export function assignableLoops(index: LoopIndex): { id: string; title: string | null }[] {
-  return [...index.values()]
-    .filter((loop) => loop.assignable)
-    .sort((a, b) => (a.title ?? a.id).localeCompare(b.title ?? b.id) || a.id.localeCompare(b.id))
-    .map((loop) => ({ id: loop.id, title: loop.title }));
-}

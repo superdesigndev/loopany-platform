@@ -1,8 +1,8 @@
 import { useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 
 import {
-  fetchTask, fetchTasks, postDirective, postVerdict, transferWatcher, ViewError,
-  type BoardColumn, type MirrorRef, type TaskCard, type TaskRef, type TaskRow, type TaskView, type TasksView,
+  fetchTask, fetchTasks, postDirective, postVerdict, ViewError,
+  type BoardColumn, type MirrorRef, type TaskCard, type TaskRef, type TaskRow, type TaskView,
 } from './api'
 import { cardActions, hasActions, tellMode, type TellMode } from './board'
 import { flattenColumns, groupTasks, parentRef, readTasksView, treeRows, writeTasksView, type TaskGroup, type TasksViewMode } from './taskList'
@@ -20,8 +20,7 @@ import { affectsObject, affectsTasks, useLiveView } from './useLiveView'
  * Captain direction (2026-08-04) reshaped this screen on three points, and each
  * one is a rule rather than a preference:
  *
- *  1. **A card carries no action.** Every write — transfer, close, answer —
- *     moved into the drawer. A list is for reading; acting on a task means opening it,
+ *  1. **A card carries no action.** Every write moved into the drawer. A list is for reading; acting on a task means opening it,
  *     which is also where the payload, the timeline and the runs that touched it
  *     are, so a person decides with the whole record in front of them instead of
  *     from a two-line summary. Rows and cards are therefore pure entrances: one
@@ -62,15 +61,9 @@ import { affectsObject, affectsTasks, useLiveView } from './useLiveView'
  * external items, the timeline, and the composer.
  */
 
-/** What a write needs to know about its subject: the id it acts on and the
- *  title the confirmation names. Deliberately not a whole card — the drawer is
- *  reachable from screens that never had one. */
-type TaskTarget = { id: string; title: string | null }
-
 export function TasksPane({ selected, onSelect, onOpenLoop }: { selected: string | null; onSelect: (id: string | null) => void; onOpenLoop: (id: string) => void }) {
-  const { data, error, loading, refresh } = useLiveView('tasks:board', () => fetchTasks(), affectsTasks)
+  const { data, error, loading } = useLiveView('tasks:board', () => fetchTasks(), affectsTasks)
   const [mode, setMode] = useState<TasksViewMode>(() => readTasksView(typeof window === 'undefined' ? undefined : window.localStorage))
-  const [failure, setFailure] = useState<Error | undefined>(undefined)
   // The row that opened the drawer, so closing hands the keyboard back to where
   // it came from rather than dropping it on the document.
   const opener = useRef<HTMLElement | null>(null)
@@ -92,17 +85,6 @@ export function TasksPane({ selected, onSelect, onOpenLoop }: { selected: string
     if (row?.isConnected) row.focus()
   }
 
-  const run = async (write: () => Promise<unknown>) => {
-    setFailure(undefined)
-    try {
-      await write()
-      // The stream refetches on its own; this only removes the wait.
-      refresh()
-    } catch (cause) {
-      setFailure(cause instanceof Error ? cause : new Error(String(cause)))
-    }
-  }
-
   if (error && !data) {
     return <BigState title="The board is not answering">{error.message}</BigState>
   }
@@ -119,7 +101,6 @@ export function TasksPane({ selected, onSelect, onOpenLoop }: { selected: string
       />
 
       {!data && !error ? <Loading what="the board" /> : null}
-      {failure && <Refusal error={failure} />}
 
       {data && mode === 'list' && <TaskList columns={data.columns} selected={selected} onOpen={open} />}
       {data && mode === 'board' && (
@@ -141,13 +122,11 @@ export function TasksPane({ selected, onSelect, onOpenLoop }: { selected: string
         <Drawer kicker="Task" onClose={close}>
           <TaskDetail
             id={selected}
-            loops={data?.loops ?? []}
             onOpenLoop={onOpenLoop}
             // Walking the tree REPLACES the drawer's subject rather than stacking
             // a second one: the opener (the row that started this) is kept, so
             // closing after two hops still hands the keyboard back to the list.
             onOpenTask={(next) => onSelect(next)}
-            onTransfer={(target, loop) => run(() => transferWatcher(target.id, loop))}
           />
         </Drawer>
       )}
@@ -443,13 +422,11 @@ function SubTasks({ children, onOpenTask }: { children: TaskRow[]; onOpenTask: (
 }
 
 function TaskDetail({
-  id, loops, onOpenLoop, onOpenTask, onTransfer,
+  id, onOpenLoop, onOpenTask,
 }: {
   id: string
-  loops: TasksView['loops']
   onOpenLoop: (id: string) => void
   onOpenTask: (id: string) => void
-  onTransfer: (target: TaskTarget, loop: string) => void
 }) {
   const { data, error, refresh } = useLiveView(`task:${id}`, () => fetchTask(id), affectsObject(id))
   if (error && !data) {
@@ -534,7 +511,7 @@ function TaskDetail({
         </p>
       )}
 
-      <TaskActions view={data} loops={loops} onTransfer={onTransfer} onSpoke={refresh} />
+      <TaskActions view={data} onSpoke={refresh} />
 
       <ExecutionBlock payload={data.execution} />
 
@@ -562,17 +539,20 @@ function TaskDetail({
  * the buttons moved, and it is still an AFFORDANCE layer: the kernel re-decides
  * each one and its refusal is rendered verbatim.
  *
- * There are TWO, and close is not one of them (see the module header). The
+ * There is exactly ONE, and close is not it (see the module header). The
  * composer is always available on an open task, because talking to the watcher
- * is now the way every task ends: answer the question it asked, or tell it what
- * you want to happen and let it reconcile reality and then the record.
+ * is the way every task ends: answer the question it asked, or tell it what you
+ * want to happen and let it reconcile reality and then the record.
+ *
+ * The second control — a picker that handed the task to a different loop — was
+ * REMOVED (captain ruling 2026-08-05) along with the capability behind it: a
+ * task keeps the watcher it was created with, and the kernel now refuses a
+ * rewrite. Do not re-add a hand-off here without the ruling that asks for one.
  */
 function TaskActions({
-  view, loops, onTransfer, onSpoke,
+  view, onSpoke,
 }: {
   view: TaskView
-  loops: TasksView['loops']
-  onTransfer: (target: TaskTarget, loop: string) => void
   onSpoke: () => void
 }) {
   const task = view.task
@@ -585,8 +565,7 @@ function TaskActions({
   // to outlive the form that produced it.
   const [queued, setQueued] = useState<string | undefined>(undefined)
   const facts = { status: task.status, pendingQuestion: task.pendingQuestion }
-  const target: TaskTarget = { id: task.id, title: task.title }
-  const { canTell, canTransfer } = cardActions(facts)
+  const { canTell } = cardActions(facts)
   const mode = tellMode(facts)
 
   if (!hasActions(facts)) {
@@ -605,32 +584,6 @@ function TaskActions({
     >
       {canTell && <TellBox taskId={task.id} mode={mode} watcher={loopLabel(view.watcherLoop, task.watcher)} onSpoke={onSpoke} onQueued={setQueued} />}
       {queued && <p className="inbox-queued">{queued}</p>}
-      <div className="task-actions">
-        {canTransfer && (
-          <label className="task-action-claim">
-            <span className="ws-sr">hand this task to a loop</span>
-            <select
-              className="field-select"
-              name={`transfer-${task.id}`}
-              defaultValue=""
-              onChange={(event) => {
-                if (event.target.value) onTransfer(target, event.target.value)
-              }}
-            >
-              <option value="">hand off to…</option>
-              {loops
-                // The loop already watching it is not a hand-off; offering it
-                // would be a write that changes nothing.
-                .filter((loop) => loop.id !== task.watcher)
-                .map((loop) => (
-                  <option key={loop.id} value={loop.id}>
-                    {loop.title ?? loop.id}
-                  </option>
-                ))}
-            </select>
-          </label>
-        )}
-      </div>
     </DrawerSection>
   )
 }

@@ -409,34 +409,46 @@ describe("--parent, on create and on update", () => {
 
 describe("task update", () => {
   it("echoes the field-level diff the events table stores", async () => {
-    const { code, stdout } = await run(["task", "update", "task-52ff10", "--watcher", "loop-4c1d77", "--follow-up", "+3d"], {
+    const { code, stdout } = await run(["task", "update", "task-52ff10", "--parent", "task-7f3a91", "--follow-up", "+3d"], {
       changed: true, event: "ev-6b30a8",
-      // A watcher move is loop → loop: a HAND-OFF, never a claim out of nothing.
-      diff: { watcher: { old: "loop-8e3311", new: "loop-4c1d77" }, followUpAt: { old: null, new: "2026-08-06T09:00:00.000Z" } },
-      task: { id: "task-52ff10", kind: "task", title: "Observe", status: "open", followUpAt: "2026-08-06T09:00:00.000Z", watcher: "loop-4c1d77", pendingQuestion: null, key: null, payload: {} },
+      diff: { parentId: { old: null, new: "task-7f3a91" }, followUpAt: { old: null, new: "2026-08-06T09:00:00.000Z" } },
+      task: { id: "task-52ff10", kind: "task", title: "Observe", status: "open", followUpAt: "2026-08-06T09:00:00.000Z", watcher: "loop-4c1d77", parentId: "task-7f3a91", pendingQuestion: null, key: null, payload: {} },
     });
     expect(code).toBe(0);
     expect(stdout).toContain("ok: updated task-52ff10\n");
-    expect(stdout).toContain("changed[2]:\n  watcher: loop-8e3311 → loop-4c1d77\n");
+    expect(stdout).toContain("changed[2]:\n  parent_id: — → task-7f3a91\n");
     expect(stdout).toContain("event: ev-6b30a8\n");
   });
 
   /**
-   * TRANSFER ONLY. `--watcher null` released a task to the unclaimed pool until
-   * the watcher rule; the pool is gone, so the CLI refuses it LOCALLY — before a
-   * round trip — and names the reason rather than printing a bare "not a loop
-   * id", because an agent carrying the old habit needs the rule, not the regex.
+   * THERE IS NO HAND-OFF (captain ruling 2026-08-05). `--watcher` on an update
+   * used to re-point a task at another loop, and the whole surface is gone — so
+   * the flag is REFUSED rather than ignored, locally, before a round trip. An
+   * agent that silently had its flag dropped would go on believing the task
+   * moved, which is the failure this refusal exists to prevent.
    */
-  it("refuses --watcher null locally, and teaches the hand-off in its place", async () => {
-    const { code, stdout, request } = await run(["task", "update", "task-52ff10", "--watcher", "null"], {});
-    expect(code).toBe(2);
-    // Local refusal: the helper records every call through `fetchImpl`, so an
-    // undefined request is proof no round trip happened.
-    expect(request).toBeUndefined();
-    expect(stdout).toContain('error: "--watcher takes a loop id"');
-    expect(stdout).toContain("wrote:    null\n");
-    expect(stdout).toContain("never released");
-    expect(stdout).toContain("loopany loop list");
+  it("refuses --watcher on an update, and teaches close-and-re-file in its place", async () => {
+    for (const value of ["loop-4c1d77", "null"]) {
+      const { code, stdout, request } = await run(["task", "update", "task-52ff10", "--watcher", value], {});
+      expect(code).toBe(2);
+      // Local refusal: the helper records every call through `fetchImpl`, so an
+      // undefined request is proof no round trip happened.
+      expect(request).toBeUndefined();
+      expect(stdout).toContain('error: "a task keeps its watcher — there is no --watcher on an update"');
+      expect(stdout).toContain(`wrote:    --watcher ${value}\n`);
+      expect(stdout).toContain("hand-off is not a thing today");
+      expect(stdout).toContain("loopany task close task-52ff10 --note");
+      // The retired flag is never advertised as allowed.
+      expect(stdout).not.toContain("allowed[6]");
+      expect(stdout).toContain("allowed[5]: --follow-up, --parent, --needs-human, --payload-merge, --file");
+    }
+  });
+
+  // Retired, not unknown: a "did you mean --parent?" answer would teach the
+  // wrong thing about a flag that was deliberately removed.
+  it("does not answer --watcher with a typo suggestion", async () => {
+    const { stdout } = await run(["task", "update", "task-52ff10", "--watcher", "loop-4c1d77"], {});
+    expect(stdout).not.toContain("unknown flag");
   });
 
   it("still lets --follow-up be cleared with null — a date is not a watcher", async () => {
@@ -448,7 +460,7 @@ describe("task update", () => {
   });
 
   it("states plainly that a no-op wrote no event", async () => {
-    const { code, stdout } = await run(["task", "update", "task-52ff10", "--watcher", "loop-4c1d77"], {
+    const { code, stdout } = await run(["task", "update", "task-52ff10", "--follow-up", "+3d"], {
       changed: false, event: null, diff: {},
       task: { id: "task-52ff10", kind: "task", watcher: "loop-4c1d77", payload: {} },
     });
@@ -479,7 +491,7 @@ describe("task update", () => {
     const { code, stdout } = await run(["task", "update", "task-52ff10"], {});
     expect(code).toBe(2);
     expect(stdout).toContain('error: "task update requires at least one field"');
-    expect(stdout).toContain("allowed[6]: --follow-up, --watcher, --parent, --needs-human, --payload-merge, --file");
+    expect(stdout).toContain("allowed[5]: --follow-up, --parent, --needs-human, --payload-merge, --file");
   });
 
   it("prints the server's NOT_HUMAN teaching verbatim under its own slug", async () => {
@@ -641,7 +653,9 @@ describe("the human commands", () => {
     const { stdout } = await run(["answer", "task-52ff10", "drop it"], { event: "ev-1", task: { id: "task-52ff10", kind: "task", status: "open" }, run: null });
     expect(stdout).toContain("wake: — (the watching loop had no run to queue — the answer is on the record)\n");
     expect(stdout).toContain("most likely it is retired, which is terminal");
-    expect(stdout).toContain("--watcher <loop-id>");
+    // No hand-off to offer: the teaching is close-and-re-file, not a transfer.
+    expect(stdout).toContain("A task keeps its watcher");
+    expect(stdout).not.toContain("task update <task-id> --watcher");
   });
 
   it("explains that a second answer joins the queued run rather than stacking", async () => {

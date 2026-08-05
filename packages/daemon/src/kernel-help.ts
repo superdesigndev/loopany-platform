@@ -16,6 +16,14 @@ export interface VerbSpec {
   usage: string;
   /** `[flag-with-argument, one-line meaning]`. The first token is the flag name. */
   flags: [string, string][];
+  /**
+   * Flags a verb used to take and now REFUSES. They are not advertised (not in
+   * `--help`, not in an `allowed[N]:` line) but they are still RECOGNIZED, so
+   * the verb's own plan gets to answer with the teaching the retirement needs
+   * instead of a generic "unknown flag --x, did you mean --y". Retiring a flag
+   * with no entry here is how a removal turns into a typo suggestion.
+   */
+  retired?: string[];
   examples: string[];
   /** Guards that are about COMBINATIONS, so they are invisible in a flag list. */
   notes?: string[];
@@ -110,14 +118,14 @@ export const VERBS: Record<string, VerbSpec> = {
     usage: "loopany task update <id-or-key> [flags]",
     flags: [
       ["--follow-up <date>", "RFC 3339 with offset, or relative (+3d, +12h); `null` clears"],
-      ["--watcher <loop-id>", "HAND the task to another loop (e.g. loop-4c1d77); there is no release — `null` is refused"],
       ["--parent <task-id>", "move it under another task; `null` makes it a root again"],
       ["--needs-human <text>", "attach a question; the task enters the human inbox"],
       ["--payload-merge <json>", "one JSON object, shallow top-level merge; a `null` value deletes a key"],
       ["--file <path>", "replace front matter + body from an artifact file; `-` reads stdin"],
     ],
+    retired: ["--watcher"],
     examples: [
-      "loopany task update task-7f3a91 --watcher loop-4c1d77 --follow-up +3d",
+      "loopany task update task-7f3a91 --follow-up +3d",
       'loopany task update task-7f3a91 --needs-human "error rate doubled — (a) revert (b) one more day"',
       "loopany task update task-7f3a91 --parent task-4c1d77",
       "loopany task update task-7f3a91 --payload-merge '{\"merged_at\":\"2026-08-02T11:31:00+08:00\"}'",
@@ -125,7 +133,7 @@ export const VERBS: Record<string, VerbSpec> = {
     notes: [
       "a flag and a front-matter key supplying the same field is refused, never overridden",
       "only a human clears a pending question — a run may attach one, never empty or replace one",
-      "a watcher is transferred, never cleared: the loop that acts next is always named",
+      "there is NO --watcher here: a task keeps the watcher it was named with at create, so close it and re-file if the wrong loop is on the hook",
       "a parent CAN be cleared (`--parent null`): a task may stop being a sub-task, and a parent inside its own subtree is refused PARENT_CYCLE",
     ],
     seeAlso: TASK_KEYS,
@@ -273,6 +281,12 @@ export const VERBS: Record<string, VerbSpec> = {
  *  refusal, and the local grammar check, read from the same table as the help. */
 export function flagNames(command: string): string[] {
   return (VERBS[command]?.flags ?? []).map(([flag]) => flag.split(" ", 1)[0]!);
+}
+
+/** Flags this verb RECOGNIZES but refuses (`VerbSpec.retired`). Known enough to
+ *  reach the verb's own plan, never advertised as allowed. */
+export function retiredFlagNames(command: string): string[] {
+  return VERBS[command]?.retired ?? [];
 }
 
 export function verbHelp(command: string): string {

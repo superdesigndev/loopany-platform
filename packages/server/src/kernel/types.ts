@@ -380,16 +380,29 @@ export function hasOpenQuestion(pendingQuestion: string | null | undefined): boo
  *      creator loop to fall back to, and picking one for the person would be the
  *      platform guessing who is responsible. It refuses and teaches instead.
  *
- * TRANSFER stays (`watcher: <another loop>`); RELEASE — setting it back to
- * nothing — is gone from every surface, because there is no longer a state to
- * release into.
+ * Both halves are ASSIGNMENT, and assignment is all there is: the watcher is
+ * chosen once, when the task is created, and then it STAYS. RELEASE — setting it
+ * back to nothing — is gone because there is no state to release into; TRANSFER
+ * — moving a live task to another loop — is gone too (captain ruling
+ * 2026-08-05), because nobody could name a case that needed it. A task whose
+ * watcher is wrong is closed with a note and re-filed at the right loop, which
+ * leaves a record of the decision where a silent re-point left none.
  *
  * Enforced at the kernel's own chokepoints (`createObjectIn`, `applyUpdateIn`)
  * so every caller inherits it: the HTTP verbs, the whole-file replace, the
  * circuit breaker's auto-pause question and the local fixture alike.
  */
 export const WATCHER_HINT =
-  "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loops` prints the ids you can name. A paused loop is still a legal watcher: it acts the next time it runs. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.";
+  "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loops` prints the ids you can name. A paused loop is still a legal watcher: it acts the next time it runs. A task a run files defaults to that run's own loop, so name another loop only when that loop is the one that should act on it.";
+
+/**
+ * The teaching a WATCHER REWRITE gets — an existing task's watcher being pointed
+ * at a different loop. Named here so the kernel, the HTTP seam and the CLI all
+ * say the same sentence (captain ruling 2026-08-05: the hand-off surface is
+ * gone until somebody can name the scenario for it).
+ */
+export const WATCHER_KEPT_HINT =
+  "a task keeps its watcher; hand-off is not a thing today. The watcher is chosen when the task is created — a run's own loop by default, or the loop a human named — and it stays there for the life of the task. If the wrong loop is on the hook, close this task with a note saying why and file a fresh one with `--watcher <loop-id>`.";
 
 /** The teaching a parent that would close a loop gets. Named here so the kernel,
  *  the HTTP seam and the CLI all say the same sentence. */

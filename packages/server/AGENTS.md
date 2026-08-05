@@ -866,9 +866,11 @@ for both — a second shape for the same screen is the drift the BFF rule forbid
 - **`components/workspace/board.ts` says which ACTIONS a task offers** — pure,
   tested without a DOM. **There is NO drag-and-drop, by product decision**, and no
   on-row/on-card control: a row or card is one button that opens the drawer, and
-  `TasksPane`'s `TaskActions` is the only write surface. `cardActions`/`hasActions`
-  are an AFFORDANCE layer, never authority. `board.test.ts` pins the absence of
-  any drag wiring AND of any action on a row or card.
+  `TasksPane`'s `TaskActions` is the only write surface — and as of 2026-08-05 it
+  offers exactly ONE act, `tell` (answer a pending question, else leave a
+  directive). `cardActions`/`hasActions` are an AFFORDANCE layer, never authority.
+  `board.test.ts` pins the absence of any drag wiring, of any action on a row or
+  card, and of any watcher write helper at all.
 - **Hierarchy is ORTHOGONAL to the watcher.** A child is indented under its parent
   only WITHIN its watcher's group; a child watched by another loop stays in ITS
   group and carries a `part of <title>` chip, never re-parented visually. **The
@@ -876,9 +878,9 @@ for both — a second shape for the same screen is the drift the BFF rule forbid
   surfaces; the navigable references live in the drawer, with **no progress count
   anywhere** — a roll-up would imply a coupling the two statuses forbid.
 
-## A task's WATCHER is never empty, and a due task WAKES it
+## A task's WATCHER is never empty, never changes, and a due task WAKES it
 
-Captain rulings, 2026-08-04. `watcher` named the loop that acts next but was
+Captain rulings, 2026-08-04 and 2026-08-05. `watcher` named the loop that acts next but was
 allowed to be absent, and the system carried a pile of machinery whose only job
 was to notice that absence (an unclaimed pool, claim-from-pool, a 48h orphan
 floor, a due-unwatched inbox arm). Forbidding the absence DELETED the machinery.
@@ -890,8 +892,26 @@ The reasoning lives in `kernel/types.ts` `WATCHER_HINT` — read that.
   `createdByLoop`; a create with no creating loop is refused
   (`WATCHER_REQUIRED`, 400). Deliberately NOT a DDL CHECK: the rule has a
   defaulting half a constraint cannot express.
-- **Transfer stays, release is gone.** `watcher: null` is refused everywhere —
-  API, CLI (locally, before the round trip), and the UI cannot even express it.
+- **NEITHER TRANSFER NOR RELEASE — the watcher is settled at CREATE and kept**
+  (captain ruling 2026-08-05, `kernel/types.ts` `WATCHER_KEPT_HINT`). Assignment
+  is untouched: a run's task defaults to its own loop, a human create still
+  REQUIRES an explicit `--watcher`, and a run may name another loop at create
+  (that is what draws the graph's `hands-off` edge). What went is the HAND-OFF —
+  re-pointing a live task — because nobody could name a scenario for it. Three
+  surfaces enforce it, and the removal is real rather than cosmetic:
+  `objectApi.patchTask` refuses a CHANGED `watcher` with `WATCHER_IMMUTABLE`
+  (409) — re-sending the SAME value passes, so `show --file` → edit → `update
+  --file` stays a roundtrip; `replaceFromArtifact` refuses the same change from a
+  front-matter `watcher:` line (the file is the object, so it is a second watcher
+  surface); and `task update --watcher` is refused CLIENT-side by
+  `kernel-cli.planTaskUpdate` before any round trip, teaching close-and-re-file.
+  The flag is `VerbSpec.retired` in `kernel-help.ts` — RECOGNIZED by
+  `firstUnknownFlag` so the verb's own plan answers it, never advertised in
+  `--help` or an `allowed[N]:` line. Retiring any other flag goes through that
+  same list, or a removal degrades into a "did you mean" typo suggestion.
+  The workspace drawer's picker, the client `transferWatcher` helper, the tasks
+  view's `loops` roster and `loopRefs.assignableLoops` were all deleted with it —
+  do not re-add the data half without the ruling that asks for the feature.
 - **R-DUE is the other half** (`runQueue.tickDueTasks`, reason `due`,
   `ids.dueRunId`): a watched task whose `follow_up` arrives wakes its watcher,
   scoped `task:<id>`, level-triggered, idempotent per (loop, task, THAT follow-up
@@ -907,8 +927,9 @@ The reasoning lives in `kernel/types.ts` `WATCHER_HINT` — read that.
   (`JobDetail.watchedTasks` carries the count so the confirm dialog can name it,
   which a post-write warning cannot). **`store.deleteLoop` must never grow an
   `objects` cascade** (pinned by `watchedTasks.integration.test.ts`): a dangling
-  watcher is legal, resolved as a tombstone, skipped by the due scan, repaired by
-  a transfer.
+  watcher is legal, resolved as a tombstone, and skipped by the due scan. There
+  is no repair-by-transfer any more: close those tasks with a note and re-file
+  the ones that still matter at a live loop.
 - **What retired with the unclaimed state, and why it is ABSENT rather than
   empty**: the `unclaimed` board column and list group, the `pool` graph node and
   its `produces`/`adopts` edges, the `orphan`/`due-unwatched` inbox arms and

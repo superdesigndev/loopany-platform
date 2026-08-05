@@ -15,6 +15,9 @@ const task = (over: Partial<GraphTask>): GraphTask => ({
 });
 
 describe("deriveGraphEdges — one branch per spec §8.3 row", () => {
+  // The edge is a fact settled AT CREATE (the filing loop named another loop as
+  // the watcher). There is no re-pointing afterwards, so an edge can appear and
+  // can close, but never move.
   it("a watcher that is not the creator is a hand-off", () => {
     expect(deriveGraphEdges([task({ watcher: "loop-b" })])).toEqual([{ from: "loop-a", to: "loop-b", kind: "hands-off", count: 1 }]);
   });

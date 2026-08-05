@@ -371,9 +371,12 @@ describe("GET /api/views/tasks — the board, and /task/:id", () => {
     expect(value.counts).toEqual(inbox.counts);
   });
 
-  it("offers the loops a task can be handed to — a hand-off names a loop, never free text", async () => {
+  // THE ROSTER IS GONE with the hand-off picker it fed (captain ruling
+  // 2026-08-05). Pinned as an absence: shipping the data half of a removed
+  // feature invites somebody to rebuild the other half on it.
+  it("ships no loop roster — there is nothing on this screen to hand a task to", async () => {
     const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue;
-    expect(value.loops.map((l) => l.id).sort()).toEqual([housekeeper, steward].sort());
+    expect(value).not.toHaveProperty("loops");
   });
 
   it("narrows on state predicates only, and refuses a filter the board owns as a column", async () => {
@@ -506,8 +509,8 @@ describe("every view payload carries cursorSeq", () => {
  * The production id is used AS-IS (there is no alias table and no rewrite), so
  * these cases feed the real id shape a prod loop mints and assert the reference
  * resolves through the ONE resolver (`kernel/loopRefs.ts`) on each surface the
- * design report names: grouping/card labels, the hand-off picker, the system
- * graph's nodes and edges, and the loop page.
+ * design report names: grouping/card labels, the system graph's nodes and edges,
+ * and the loop page.
  *
  * The fourth case is the one the design deliberately keeps LEGAL rather than
  * refusing: a prod loop that was hard-deleted while a task still named it. There
@@ -541,17 +544,19 @@ describe("convergence S1 — a watcher that names a production loop", () => {
     expect(row.watcher).toBe(PROD_LOOP);
   });
 
-  it("offers it in the hand-off picker — enabled or not, since a paused loop still acts on resume", async () => {
+  // A PAUSED loop still resolves and still renders as a live actor — it acts the
+  // next time it runs. A COMPLETED one has declared itself done, so the system
+  // canvas leaves it out rather than drawing it as somebody still working.
+  it("draws a paused prod loop on the canvas, and leaves a completed one off it", async () => {
     await insertProdLoop({ enabled: false });
     await watchedByProd();
-    const value = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue & { loops: { id: string; title: string | null }[] };
-    expect(value.loops).toContainEqual({ id: PROD_LOOP, title: "React Doctor" });
-    // …but a COMPLETED loop has declared itself done; handing it work is how a
-    // task goes quiet forever, so it is not a target.
+    const value = ok(await views.systemGraphView(human, new URLSearchParams(), NOW)) as { nodes: { id: string; status: string }[] };
+    expect(value.nodes.find((n) => n.id === PROD_LOOP)).toMatchObject({ status: "paused" });
+
     await database.db.delete(legacySchema.loops);
     await insertProdLoop({ goal: "ship it", completedAt: ago(2) });
-    const after = ok(await views.tasksView(human, new URLSearchParams(), NOW)) as BoardValue & { loops: { id: string }[] };
-    expect(after.loops.some((l) => l.id === PROD_LOOP)).toBe(false);
+    const after = ok(await views.systemGraphView(human, new URLSearchParams(), NOW)) as { nodes: { id: string }[] };
+    expect(after.nodes.some((n) => n.id === PROD_LOOP)).toBe(false);
   });
 
   it("gives the system graph a node for it, so the hand-off edge is drawn", async () => {

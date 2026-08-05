@@ -66,7 +66,7 @@ export function InboxPane({ onOpenTask, onOpenLoop }: { onOpenTask: (id: string)
 
       {data.items.length === 0 ? (
         <Section tone="plain" title="Needs you">
-          <Empty>Nothing is waiting on you. Loops are running; tasks are being handed off, verified and closed without you.</Empty>
+          <Empty>Nothing is waiting on you. Loops are running; tasks are being picked up, verified and closed without you.</Empty>
         </Section>
       ) : (
         <Section tone="needs" title="Needs you">

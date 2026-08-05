@@ -113,11 +113,12 @@ async function main() {
   const closed = await object({ kind: "task", key: "fixture-closed", title: "Ship the docs typo fix", createdByLoop: housekeeper, now: ago(120), body: "One-line fix, merged.\n" });
   await applyTransition({ objectId: closed, transition: "close", actor: agent("run-hk-0729"), now: ago(100), note: "Merged as #197; nothing left to watch." } as never);
 
-  // A HAND-OFF: the Housekeeper filed it (so it started on its own desk) and a
-  // later run transferred it to FollowUp. Transfer is the surviving watcher
-  // write — release is gone — and it is what draws the graph's `hands-off` edge.
-  const handed = await object({ kind: "task", key: "fixture-handed-off", title: "Chase the flaky machine-poll test", createdByLoop: housekeeper, now: ago(34) });
-  await applyUpdate({ objectId: handed, actor: agent("run-fu-0803"), now: ago(24), fields: { watcher: steward, followUpAt: ahead(48) } } as never);
+  // A CROSS-LOOP FILING: the Housekeeper filed it and named FollowUp as the loop
+  // that acts on it, in one act at create. That is the only way one loop's work
+  // reaches another (there is no transfer — captain ruling 2026-08-05) and it is
+  // what draws the graph's `hands-off` edge.
+  const handed = await object({ kind: "task", key: "fixture-handed-off", title: "Chase the flaky machine-poll test", createdByLoop: housekeeper, watcher: steward, now: ago(34) });
+  await applyUpdate({ objectId: handed, actor: agent("run-fu-0803"), now: ago(24), fields: { followUpAt: ahead(48) } } as never);
 
   await object({
     kind: "doc", key: "fixture-report", title: "Housekeeper — daily report", format: "markdown", createdByLoop: housekeeper, createdByRun: "run-hk-0803", now: ago(3),
@@ -139,7 +140,7 @@ async function main() {
     { id: "run-hk-0803", loopId: housekeeper, at: 3, state: "success" as const, summary: "Handed off 2, closed 3, asked 1.", cost: 0.62 },
     { id: "run-hk-0802", loopId: housekeeper, at: 27, state: "failure" as const, summary: "gh auth expired mid-sweep", cost: 0.08 },
     { id: "run-hk-0801", loopId: housekeeper, at: 51, state: "success" as const, summary: "Opened PR #201.", cost: 0.71 },
-    { id: "run-fu-0803", loopId: steward, at: 24, state: "success" as const, summary: "Verified 1 hand-off, closed it.", cost: 0.19 },
+    { id: "run-fu-0803", loopId: steward, at: 24, state: "success" as const, summary: "Verified 1 cross-loop task, closed it.", cost: 0.19 },
   ];
   for (const run of history) {
     await db.insert(runs).values({

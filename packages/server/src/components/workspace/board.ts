@@ -5,13 +5,11 @@ import type { TaskCard } from './api'
  *
  * Both Tasks views are READ LAYOUTS. There is no drag-and-drop: a column (or a
  * loop section) is a rendering of a fact, not a control, and moving a card by
- * dropping it was never how a task changes — it changes because a person closes
- * it, hands it to a loop, or takes it back. Those are the three entrances the
- * kernel actually has for a human, and each is a button (product decision; a drop
- * also carries no note, no loop id and no date, so every interesting move needed
- * a form anyway).
+ * dropping it was never how a task changes — it changes because a person tells
+ * the loop that watches it what to do. A drop also carries no note, no loop id
+ * and no date, so every interesting move needed a form anyway.
  *
- * Captain direction (2026-08-04) moved those buttons OFF the row and the card and
+ * Captain direction (2026-08-04) moved the buttons OFF the row and the card and
  * into the task DRAWER — this module is unchanged by that, because it always
  * answered "which acts does this task offer", never "where do they render". A row
  * is now a pure entrance; `TasksPane`'s `TaskActions` is the one consumer.
@@ -21,12 +19,14 @@ import type { TaskCard } from './api'
  *     it leaves a DIRECTIVE (`POST /api/tasks/:id/directive`). Both queue one
  *     run for the watcher with the task in scope, so it is ONE affordance in two
  *     modes rather than two controls a person has to choose between.
- *   - **transfer** — the `watcher` facet, via `PATCH /api/tasks/:id` with a loop
- *     id. It names a loop, so it is a picker. It USED to be a pair, claim and
- *     release, because a task could have no watcher; under the watcher rule
- *     (`kernel/types.ts` WATCHER_HINT) one always does, so the only question left
- *     is WHICH loop — and `release` is gone rather than disabled, because the
- *     kernel refuses a null watcher outright.
+ *
+ * **THAT IS THE WHOLE LIST, and it is a list of one** (captain ruling
+ * 2026-08-05). The drawer used to carry a second control — a picker that handed
+ * the task to a different loop — and it is gone, along with the `watcher` PATCH
+ * behind it, because nobody could name the scenario that needed it. A task's
+ * watcher is now decided once, when the task is created, and kept: the kernel
+ * refuses a rewrite with `WATCHER_IMMUTABLE` and teaches close-and-re-file in its
+ * place, so removing the button removed the capability rather than hiding it.
  *
  * **CLOSE IS NOT HERE, and its absence is a rule** (captain direction
  * 2026-08-04). The expected end of a task is that its WATCHER closes it — from
@@ -53,21 +53,10 @@ export type CardActions = {
    * a conversation about one.
    */
   canTell: boolean
-  /**
-   * Hand the task to a DIFFERENT loop — a picker, because a loop must be named.
-   * Offered on a task with a question pending too: it is consequential there
-   * (the eventual answer wakes whichever loop is watching when it lands), but it
-   * is an explicit, labelled act on that one task, not a gesture.
-   */
-  canTransfer: boolean
 }
 
 export function cardActions(card: Pick<TaskCard, 'status' | 'pendingQuestion'>): CardActions {
-  const open = card.status !== 'closed'
-  return {
-    canTell: open,
-    canTransfer: open,
-  }
+  return { canTell: card.status !== 'closed' }
 }
 
 /**
@@ -88,6 +77,5 @@ export function tellMode(card: Pick<TaskCard, 'pendingQuestion'>): TellMode {
 /** Does this task offer anything at all? A closed task is a record: it offers
  *  nothing, and its drawer shows no empty action bar. */
 export function hasActions(card: Pick<TaskCard, 'status' | 'pendingQuestion'>): boolean {
-  const actions = cardActions(card)
-  return actions.canTell || actions.canTransfer
+  return cardActions(card).canTell
 }

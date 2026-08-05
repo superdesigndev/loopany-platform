@@ -30,7 +30,6 @@ import { loops as productionLoops, runs, type Loop, type Run } from "../db/schem
 import { cronText } from "../lib/format.js";
 import { eventShape, eventTail, inboxCounts, inboxUnion, objectShape, type ApiResult } from "./objectApi.js";
 import {
-  assignableLoops,
   getProdLoop,
   loadTeamLoopIndex,
   loopRefOf,
@@ -420,11 +419,11 @@ export async function tasksView(context: ApiContext, query: URLSearchParams, now
   const { rows: inboxRows } = await inboxUnion(context.teamId, now);
   return { ok: true, value: {
     columns: BOARD_COLUMNS.map((spec) => ({ ...spec, tasks: cards.filter((card) => card.column === spec.key) })),
-    // The loops a card can be handed to. The board's claim control is a
-    // `watcher` PATCH like any other, so it must name a real loop id — a picker,
-    // never a free-text field. `assignable` (not `status`) is the filter: a
-    // disabled loop is a legal target (it wakes on resume), a completed one is not.
-    loops: assignableLoops(loops),
+    // NB: this payload deliberately carries NO loop roster. It used to, to feed
+    // the drawer's hand-off picker; the picker and the capability behind it are
+    // gone (captain ruling 2026-08-05, `kernel/types.ts` WATCHER_KEPT_HINT), and
+    // shipping the roster anyway would leave the data half of a removed feature
+    // lying around for somebody to rebuild the other half on.
     counts: inboxCounts(inboxRows),
     truncated, now: stamp, cursorSeq: await eventTail(context.teamId),
   } };
@@ -552,8 +551,11 @@ export interface GraphTask {
  * the pool, and the watcher rule removed the pool: a task is watched from the
  * moment it exists, so it is never in transit between nobody and somebody. The
  * `pool` node went with them — see `systemGraphView`. What survives is the flow
- * that was always the real one: `hands-off`, a loop filing a task another loop
- * watches, which is now the ONLY way one loop's work reaches another.
+ * that was always the real one: `hands-off`, a loop FILING a task another loop
+ * watches, which is now the ONLY way one loop's work reaches another. Note the
+ * tense: the edge is drawn from `created_by_loop` ≠ `watcher`, a fact settled
+ * when the task was created. There is no re-pointing afterwards (captain ruling
+ * 2026-08-05), so an edge here can appear and can close, but never move.
  *
  * This also retires the spec §8.3 "adoption detection" deviation this function
  * used to carry: with no pool there is no adoption to detect, so the `adopted`
@@ -593,9 +595,10 @@ export async function systemGraphView(context: ApiContext, query: URLSearchParam
 
   // The graph is a projection over `watcher` / `created_by_loop`, which name
   // production loops — so a loop node has to EXIST or every edge into it is
-  // filtered out below and a real hand-off renders as nothing at all.
-  // `assignable` is the same live-actor filter the picker uses.
-  const loops = [...(await loadTeamLoopIndex(context.teamId)).values()].filter((loop) => loop.assignable);
+  // filtered out below and a real flow renders as nothing at all. A COMPLETED
+  // loop is left out: its goal is met and it is stamped done, so drawing it as a
+  // live actor would misread the canvas.
+  const loops = [...(await loadTeamLoopIndex(context.teamId)).values()].filter((loop) => loop.status !== "completed");
   const [runRows, counts, windowTasks, questionCount] = await Promise.all([
     runsForLoops(loops.map((l) => l.id)),
     taskCountsByWatcher(context.teamId),

@@ -23,7 +23,7 @@
 import fs from "node:fs";
 
 import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
-import { flagNames, loopSurfacePointer, verbHelp } from "./kernel-help.js";
+import { flagNames, loopSurfacePointer, retiredFlagNames, verbHelp } from "./kernel-help.js";
 import {
   ABSENT, bodyValue, cell, changedBlock, countLine, detailBlock, dueAnnotation,
   errorEnvelope, eventLine, exitForStatus, helpBlock, inlineArray, label,
@@ -426,16 +426,32 @@ function planTaskList(flags: Flags, out: Emit, now: () => number): Plan | number
 
 function planTaskUpdate(id: string | undefined, flags: Flags, deps: KernelCliDeps, out: Emit, now: () => number): Plan | number {
   if (!id) return emit(out, missingArgument("task update requires a task id", "loopany task update <id> --follow-up +3d", ["Run `loopany task list --open` to find the id"]), 2);
-  const fieldFlags = ["follow-up", "watcher", "parent", "needs-human", "payload-merge"].filter((key) => flags[key] !== undefined);
+  // THERE IS NO HAND-OFF (captain ruling 2026-08-05). `--watcher` on an update
+  // meant "point this task at a different loop", and the whole surface is gone:
+  // a task keeps the watcher it was created with. Refused HERE, client-side, so
+  // the habit is corrected before a round trip — and REFUSED rather than
+  // ignored, because silently dropping a flag an agent passed on purpose is how
+  // it goes on believing the task moved. The server refuses the same write with
+  // `WATCHER_IMMUTABLE`, so this is the teaching, never the boundary.
+  if (flags.watcher !== undefined) {
+    return emit(out, errorEnvelope({
+      message: "a task keeps its watcher — there is no --watcher on an update",
+      code: "VALIDATION_ERROR", wrote: `--watcher ${flags.watcher === true ? "" : String(flags.watcher)}`.trim(),
+      expected: `loopany task update ${id} --follow-up +3d`,
+      allowed: flagNames("task update"),
+      help: [
+        "A task keeps its watcher; hand-off is not a thing today — the watcher is chosen when the task is created and stays there",
+        `If the wrong loop is on the hook, close it with the reason and file a fresh one: \`loopany task close ${id} --note "wrong loop — re-filed"\` then \`loopany task create --file <path> --watcher <loop-id>\``,
+        "`--watcher` still exists on `task create` and on `task list`, where it ASSIGNS and FILTERS rather than moving anything",
+      ],
+    }), 2);
+  }
+  const fieldFlags = ["follow-up", "parent", "needs-human", "payload-merge"].filter((key) => flags[key] !== undefined);
   if (!flags.file && !fieldFlags.length) {
     return emit(out, errorEnvelope({ message: "task update requires at least one field", code: "VALIDATION_ERROR", expected: `loopany task update ${id} --follow-up +3d`, allowed: flagNames("task update"), help: [`Run \`loopany task show ${id}\` if you only wanted to read it`] }), 2);
   }
-  // TRANSFER ONLY: `--watcher null` used to release a task to the unclaimed
-  // pool, and the pool is gone (`kernel/types.ts` WATCHER_HINT). Refused HERE,
-  // client-side, so the release habit is corrected before a round trip.
-  if (typeof flags.watcher === "string") { const bad = loopIdRefusal(flags.watcher, "--watcher"); if (bad) return emit(out, bad, 2); }
-  // `null` IS allowed here, and that asymmetry with `--watcher` is the point: a
-  // task may stop being a sub-task, but it may never stop having a watcher.
+  // `null` IS allowed here, and that asymmetry with `task create --watcher` is
+  // the point: a task may stop being a sub-task, but it may never change hands.
   if (typeof flags.parent === "string") { const bad = taskIdRefusal(flags.parent, "--parent", true); if (bad) return emit(out, bad, 2); }
 
   if (typeof flags.file === "string") {
@@ -449,7 +465,6 @@ function planTaskUpdate(id: string | undefined, flags: Flags, deps: KernelCliDep
 
   const patch: Body = {};
   if (flags["follow-up"] !== undefined) patch.followUp = nullToken(flags["follow-up"]);
-  if (flags.watcher !== undefined) patch.watcher = flags.watcher;
   if (flags.parent !== undefined) patch.parent = nullToken(flags.parent);
   if (flags["needs-human"] !== undefined) patch.needsHuman = nullToken(flags["needs-human"]);
   let merged: string[] = []; let deleted: string[] = [];
@@ -487,7 +502,14 @@ function parseFlags(argv: string[]): Flags {
 }
 
 function firstUnknownFlag(command: string, flags: Flags): string | undefined {
-  const allowed = new Set([...flagNames(command).map((flag) => flag.slice(2)), ...(command === "task list" ? ["open", "closed", "due"] : [])]);
+  // RETIRED flags count as known HERE and nowhere else: a flag a verb dropped
+  // has to reach that verb's plan so the plan can say why it is gone, instead of
+  // being answered with "unknown flag --watcher, did you mean --parent".
+  const allowed = new Set([
+    ...flagNames(command).map((flag) => flag.slice(2)),
+    ...retiredFlagNames(command).map((flag) => flag.slice(2)),
+    ...(command === "task list" ? ["open", "closed", "due"] : []),
+  ]);
   return Object.keys(flags).find((key) => !allowed.has(key) && key !== "help");
 }
 
@@ -543,7 +565,7 @@ function loopIdRefusal(value: string, where: string): string | undefined {
       // `null` is the one wrong value worth naming: it was legal until the
       // watcher rule, so an agent carrying the old habit gets the reason rather
       // than a bare "not a loop id".
-      ...(value === "null" ? ["A task's watcher is never empty: it is HANDED to another loop, never released. `loopany loop list` and `loopany loops` both print ids you can name."] : []),
+      ...(value === "null" ? ["A task's watcher is never empty and never changes: it is named when the task is created and kept. `loopany loop list` and `loopany loops` both print ids you can name."] : []),
     ],
   });
 }
@@ -559,8 +581,7 @@ function loopIdRefusal(value: string, where: string): string | undefined {
  * the parent's watcher only — there is no roll-up in either direction.
  *
  * `null` is legal only where clearing is (`task update`): a task genuinely can
- * stop being a sub-task, unlike a watcher, which is transferred and never
- * released.
+ * stop being a sub-task, unlike a watcher, which is set once and then kept.
  */
 function taskIdRefusal(value: string, where: string, allowNull = false): string | undefined {
   if (value.startsWith("task-")) return undefined;
@@ -810,7 +831,7 @@ function renderCreate(kind: Kind, body: Body, now: number): string {
         // DEFAULTED to this run's own loop, and with no follow_up nothing wakes
         // it for this task.
         hints.push(
-          `${cell(row.watcher)} is watching it${row.watcher === row.createdByLoop ? " — the default: a task you file is yours unless you name another loop" : ""}`,
+          `${cell(row.watcher)} is watching it${row.watcher === row.createdByLoop ? " — the default: a task you file is yours unless you name another loop at create" : ""}`,
           `Run \`loopany task update ${id} --follow-up +3d\` to have that loop woken for it; with no follow_up it waits for the loop's own cadence`,
         );
       } else {
@@ -1033,5 +1054,5 @@ function renderAnswer(body: Body): string {
     ? (run.alreadyQueued
       ? [`${cell(run.loopId)} already had a run queued — it will pull both answered tasks when it claims; one run, not two`, "Run `loopany inbox` to see what is still waiting"]
       : [`One run is queued for ${cell(run.loopId)} — it will read your answer and act; nothing else is needed from you`, `Event ${cell(body.event)} is the approval key for this task, if the answer approved a governance change`, "Run `loopany inbox` to see what is still waiting"])
-    : ["Nothing is queued: the watching loop could not take a run — most likely it is retired, which is terminal", "Run `loopany task update <task-id> --watcher <loop-id>` to hand it to a live loop, or close it yourself in the web UI"]);
+    : ["Nothing is queued: the watching loop could not take a run — most likely it is retired, which is terminal", "A task keeps its watcher, so there is nothing to move it to: close it with the reason and file a fresh one watched by a live loop, or close it in the web UI"]);
 }

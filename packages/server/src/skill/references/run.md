@@ -133,7 +133,7 @@ goes and who is responsible for it afterwards.
 | Noun | What it is | The rule that defines it |
 | --- | --- | --- |
 | **loop** | the standing worker — *you*: a cadence, a charter (the task file is your memory), a machine to run on | created and governed by humans (`loopany new` / `loopany edit`); a run never authors a loop |
-| **task** | a thread you owe — work that is not finished yet | exactly ONE watcher loop, always named; the open tasks watched by you are your worklist |
+| **task** | a thread you owe — work that is not finished yet | exactly ONE watcher loop, named at creation and kept; the open tasks watched by you are your worklist |
 | **doc** | an authored product for humans — a card, a ledger, a living report | one stable `key`, rewritten in place, never deleted |
 | **mirror** | a signpost to work that lives elsewhere — a PR, an issue, a deploy | pure `kind` + `coords`; it says WHERE, never in what state |
 
@@ -142,9 +142,10 @@ How they relate:
 - **A task always names a watcher, and that watcher is a loop.** There is no unwatched
   pile. Three things wake the watcher for a run: a `follow_up` date coming due, a human
   answering a question the task asked, or a human leaving a directive on it. A task a
-  run files defaults to that run's own loop, so `--watcher <loop-id>` is only for a
-  hand-off. Tasks nest with `--parent <task-id>`, and a child keeps its own watcher and
-  its own ending — a parent is never closed by its last child.
+  run files defaults to that run's own loop, so `--watcher <loop-id>` at create names a
+  DIFFERENT loop as the one that should act on it. Tasks nest with `--parent <task-id>`,
+  and a child keeps its own watcher and its own ending — a parent is never closed by its
+  last child.
 - **A doc is a product, addressed by the key you chose.** An object id is fresh
   randomness and no run remembers it; the `key:` in the front matter is the handle that
   survives across runs, so the next run reads its own last product back by name.
@@ -188,9 +189,13 @@ rewrite of `weekly-summary`.
 
 - **Provenance is automatic.** Objects a run creates are stamped with the loop that
   created them; you never write provenance by hand and never claim someone else's.
-- **A watcher is transferred, never released.** Handing a task to another loop is
-  `loopany task update <id> --watcher <loop-id>`; clearing it is refused everywhere,
-  because a task with nobody to act on it is work that quietly stops.
+- **A task keeps the watcher it was created with.** The watcher is settled once, at
+  create — your own loop by default, or the loop you name with `--watcher <loop-id>` —
+  and there is no way to move it afterwards: `loopany task update --watcher` is refused,
+  and so is clearing it. If the wrong loop ends up on the hook, close the task with a
+  note saying so and file a fresh one at the right loop, so the decision is on the
+  record. Choosing the watcher is therefore a decision to make carefully at create, not
+  one to correct later.
 - **Another loop's charter is not yours — never edit it, not one character.** A loop's
   task file is that loop's memory and its owner's instrument. If a run learns something
   another loop needs, it files a task watched by that loop (`loopany task create --file

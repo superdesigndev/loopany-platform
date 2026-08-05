@@ -128,7 +128,6 @@ export interface BoardColumn {
 
 export interface TasksView extends ViewPayload {
   columns: BoardColumn[]
-  loops: { id: string; title: string | null }[]
   counts: InboxCounts
   truncated: boolean
   now: string
@@ -377,23 +376,17 @@ export async function postDirective(taskId: string, directive: string): Promise<
  * emergency hatch for a broken watcher, documented as one, where the person
  * running it can see they are taking on the reconciliation themselves.
  *
- * The board's remaining writes are `postVerdict`, `postDirective` and
- * `transferWatcher` — all three existing kernel endpoints called exactly as the
- * CLI calls them. There is no board-specific write path, and deliberately no
- * client guess about legality: the kernel decides what may HAPPEN and a refusal
- * is rendered verbatim.
+ * The board's remaining writes are `postVerdict` and `postDirective` — both
+ * existing kernel endpoints called exactly as the CLI calls them. There is no
+ * board-specific write path, and deliberately no client guess about legality:
+ * the kernel decides what may HAPPEN and a refusal is rendered verbatim.
+ *
+ * There WAS a third, a `watcher` facet PATCH that handed a task to another loop,
+ * and it is GONE (captain ruling 2026-08-05) — as is the kernel capability
+ * behind it, which now refuses a watcher rewrite with `WATCHER_IMMUTABLE`. A
+ * task's watcher is settled when the task is created; do not add a helper here
+ * for changing it without the ruling that asks for one.
  */
-
-/**
- * TRANSFER — a `watcher` facet PATCH, not a transition, and the only shape it
- * has: a loop id. `null` used to release a task to the unclaimed pool, and both
- * the pool and the call signature that reached it are gone (the kernel refuses
- * a null with `WATCHER_REQUIRED`). A task always names the loop that acts next;
- * the question this write answers is only ever "which one".
- */
-export async function transferWatcher(taskId: string, watcher: string): Promise<{ changed: boolean }> {
-  return write<{ changed: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}`, 'PATCH', { watcher }, 'the watcher change was refused')
-}
 
 /**
  * The loop page's one write: fire this loop off its cadence, now.

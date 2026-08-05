@@ -15,7 +15,7 @@
  * may NOT do is emit a code with no teaching at all: `refusal()` falls back to
  * the template, never to an empty string.
  */
-import type { KernelIssue } from "./types.js";
+import { WATCHER_KEPT_HINT, type KernelIssue } from "./types.js";
 
 export interface ApiRefusal {
   code: RefusalCode;
@@ -28,7 +28,7 @@ export const REFUSAL_CODES = [
   "UNKNOWN_KEY", "BAD_DATE", "UNSUPPORTED_FORMAT", "MISSING_FRONT_MATTER",
   "UNTERMINATED_FRONT_MATTER", "INVALID_YAML", "FRONT_MATTER_NOT_MAPPING",
   "SCHEMA_VIOLATION", "INVALID_BODY", "UNKNOWN_FILTER", "WATCHER_REQUIRED",
-  "PARENT_CYCLE",
+  "WATCHER_IMMUTABLE", "PARENT_CYCLE",
   "UNAUTHORIZED", "NOT_HUMAN", "NO_RUN_CONTEXT", "RUN_CONTEXT_UNKNOWN",
   "NOT_FOUND", "OPEN_QUESTION",
   "NO_OPEN_QUESTION", "WRONG_KIND", "KEY_KIND_MISMATCH", "IMMUTABLE_KEY",
@@ -45,7 +45,8 @@ export const REFUSAL_STATUS: Record<RefusalCode, number> = {
   UNKNOWN_KEY: 400, BAD_DATE: 400, UNSUPPORTED_FORMAT: 400,
   MISSING_FRONT_MATTER: 400, UNTERMINATED_FRONT_MATTER: 400, INVALID_YAML: 400,
   FRONT_MATTER_NOT_MAPPING: 400, SCHEMA_VIOLATION: 400,
-  INVALID_BODY: 400, UNKNOWN_FILTER: 400, WATCHER_REQUIRED: 400, PARENT_CYCLE: 409,
+  INVALID_BODY: 400, UNKNOWN_FILTER: 400, WATCHER_REQUIRED: 400,
+  WATCHER_IMMUTABLE: 409, PARENT_CYCLE: 409,
   UNAUTHORIZED: 401,
   NOT_HUMAN: 403, NO_RUN_CONTEXT: 403, RUN_CONTEXT_UNKNOWN: 403,
   NOT_FOUND: 404, OPEN_QUESTION: 409, NO_OPEN_QUESTION: 409, WRONG_KIND: 409,
@@ -111,6 +112,10 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   WATCHER_REQUIRED: {
     message: `%s would leave no loop watching it, and a task always names the loop that acts next`,
     hint: "name the loop that acts next: watcher: <loop-id> in the front matter, or --watcher <loop-id> on the CLI. `loopany loops` prints the ids you can name — a watcher is one of this machine's production loops, and the id is used verbatim. A paused loop is still a legal watcher: it acts the next time it runs. A task a run files defaults to that run's own loop, so only a hand-off needs the flag.",
+  },
+  WATCHER_IMMUTABLE: {
+    message: `%s already names the loop that acts next, and a task keeps the watcher it was created with`,
+    hint: WATCHER_KEPT_HINT,
   },
   PARENT_CYCLE: {
     message: `%s would sit inside its own subtree`,

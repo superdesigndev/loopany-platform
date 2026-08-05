@@ -5,9 +5,10 @@
 A task is a unit of work. Its lifecycle is `open → closed` — two states, no
 third, no reopen — plus three facets that decide when and by whom it is seen:
 
-- **`watcher`** — the loop that acts next. **Never empty.** A task you file is
-  watched by YOUR loop unless you name another one; a task a human files must
-  name one outright. It is handed on, never released.
+- **`watcher`** — the loop that acts next. **Never empty, and never changed.** A
+  task you file is watched by YOUR loop unless you name another one at create; a
+  task a human files must name one outright. After that it is settled for the
+  life of the task: there is no hand-off and no release.
 - **`follow_up`** — when it should resurface. Its arrival **wakes the watcher**:
   the scheduler queues one run for that loop, scoped to this task, on the same
   clock that fires cadences. Still a **schedule, not an obligation** — closing
@@ -39,9 +40,10 @@ loopany task create --file watch-err-rate.md                    # you watch it
 loopany task create --file reply.md --needs-human "Post this reply?" --watcher loop-8e3311
 ```
 
-**`--watcher` is a HAND-OFF, not a requirement.** Omit it and the task is yours,
-which is right for anything you intend to follow up. Name another loop only when
-that loop is genuinely the one that should act next.
+**`--watcher` is an ASSIGNMENT, and create is the only place it is made.** Omit
+it and the task is yours, which is right for anything you intend to follow up.
+Name another loop only when that loop is genuinely the one that should act next —
+and get it right here, because it cannot be changed afterwards.
 
 `title`, `key` and `payload` have **no flags** — they belong in the file, so a
 retry replays byte-identically. The three facet flags exist because a run often
@@ -53,14 +55,14 @@ loop.
 `payload` is machine-executed content: the verdict UI renders it **verbatim**, so
 put anything that will actually be executed or posted there, not in prose.
 
-### Reading and moving them
+### Reading and updating them
 
 ```sh
 loopany task list --watcher loop-4c1d77 --due             # what you owe, now
 loopany task list --watcher loop-4c1d77                   # everything you owe
 loopany task list --creator loop-4c1d77 --closed --since 14d
 loopany task show task-7f3a91
-loopany task update task-7f3a91 --watcher loop-4c1d77     # hand it to another loop
+loopany task update task-7f3a91 --follow-up +3d           # push the next check out
 loopany task update task-7f3a91 --payload-merge '{"merged_at":"2026-08-04T11:31:00+08:00"}'
 loopany task close task-7f3a91 --note "error rate back to baseline; no action needed"
 ```
@@ -77,8 +79,11 @@ loopany task close task-7f3a91 --note "error rate back to baseline; no action ne
   only record of why this closed. One sentence is enough.
 - There is **no `--mine`, no `self`**. `--watcher <id>` is what you owe;
   `--creator <id>` is what you made.
-- **There is no release.** `--watcher null` is refused: a task always names the
-  loop that acts next, so the only watcher write is a transfer to another loop.
+- **A task keeps its watcher.** There is no `--watcher` on `task update` at all —
+  neither a release nor a hand-off — and passing one is refused with the reason.
+  If the wrong loop is on the hook, `task close` it with a note saying so and
+  file a fresh task with the right `--watcher`. That leaves the decision on the
+  record, which a silent re-point never did.
 
 ## Mirrors — what a task depends on outside the system
 

@@ -176,6 +176,15 @@ export async function replaceFromArtifact(kind: ArtifactKind, id: string, raw: s
     const guard = scopedKindGuard(before, kind, context.teamId); if (guard) return guard;
     if (parsed.value.key !== null && parsed.value.key !== before!.key) return { ok: false, error: refusal("IMMUTABLE_KEY", "key cannot be changed", [{ path: "key", message: "fixed at creation", got: parsed.value.key, expected: before!.key ?? "(remove the key)" }], "restore the stored key or remove the line") };
     if (context.mode === "agent" && kind === "task" && before!.pendingQuestion && parsed.value.pendingQuestion !== before!.pendingQuestion) return { ok: false, error: refusal("NOT_HUMAN", "a run cannot clear or replace a pending question", [], "a human answers or withdraws it") };
+    // The whole-file replace is a WATCHER SURFACE too — `watcher:` is a task's
+    // front-matter key, so an edited file could hand the task on without ever
+    // touching the patch path. Refused for the same reason and with the same
+    // teaching; an UNCHANGED `watcher:` line passes, so the canonical
+    // `task show --file > f.md` → edit → `task update --file f.md` roundtrip is
+    // untouched.
+    if (kind === "task" && parsed.value.watcher !== before!.watcher) {
+      return { ok: false, error: refusal("WATCHER_IMMUTABLE", `${id} is watched by ${before!.watcher ?? "no loop"}, and a task keeps the watcher it was created with`, [{ path: "watcher", message: "set at creation, never changed", got: parsed.value.watcher ?? "(absent)", expected: before!.watcher ?? "(the stored watcher)" }]) };
+    }
     const fields: WritableFields = { title: parsed.value.title, body: parsed.value.body, payload: parsed.value.payload };
     if (kind === "task") Object.assign(fields, { followUpAt: parsed.value.followUpAt, watcher: parsed.value.watcher, parentId: parsed.value.parentId, pendingQuestion: parsed.value.pendingQuestion });
     if (kind === "doc") fields.format = parsed.value.format;
@@ -194,11 +203,17 @@ export async function patchTask(id: string, body: unknown, context: ApiContext, 
     const guard = scopedKindGuard(before, "task", context.teamId); if (guard) return guard;
     const fields: WritableFields = {};
     if (Object.hasOwn(rec, "followUp")) { if (rec.followUp === null) fields.followUpAt = null; else if (typeof rec.followUp === "string") { const d = parseDate(rec.followUp, now); if (!d) return { ok: false, error: refusal("BAD_DATE", "followUp is not a date this server accepts") }; fields.followUpAt = d; } else return { ok: false, error: refusal("SCHEMA_VIOLATION", "followUp must be a string or null") }; }
-    // TRANSFER ONLY. `watcher: null` used to release a task back to the
-    // unclaimed pool; there is no pool any more, so a null here is the release
-    // gesture arriving at a surface that no longer has one — refused by name
-    // rather than silently coerced (captain ruling 2026-08-04, types.ts).
-    if (Object.hasOwn(rec, "watcher")) { if (typeof rec.watcher !== "string" || !rec.watcher.startsWith("loop-")) return { ok: false, error: refusal("WATCHER_REQUIRED", "watcher must name the loop that acts next", [{ path: "watcher", message: "must be a loop id", got: rec.watcher === null ? "null" : JSON.stringify(rec.watcher), expected: "loop-<id>" }], "a watcher is TRANSFERRED to another loop, never cleared — `loopany loops` prints the ids") }; fields.watcher = rec.watcher; }
+    // NEITHER TRANSFER NOR RELEASE. `watcher` is chosen at CREATE and kept for
+    // the life of the task (captain ruling 2026-08-05, types.ts): the release
+    // gesture went with the unclaimed pool, and the hand-off went with it a day
+    // later, because nobody could name the scenario that needed one. The key is
+    // refused BY NAME rather than dropped, so the habit is corrected instead of
+    // silently doing nothing. Re-sending the watcher a task already has is the
+    // one shape that passes — a `show`-edit-`update` roundtrip must stay a
+    // no-op, not a refusal for a byte nobody touched.
+    if (Object.hasOwn(rec, "watcher") && rec.watcher !== before!.watcher) {
+      return { ok: false, error: refusal("WATCHER_IMMUTABLE", `${id} is watched by ${before!.watcher ?? "no loop"}, and a task keeps the watcher it was created with`, [{ path: "watcher", message: "set at creation, never changed", got: rec.watcher === null ? "null" : JSON.stringify(rec.watcher), expected: before!.watcher ?? "(the stored watcher)" }]) };
+    }
     // MOVE, or MOVE TO ROOT. `parent: null` is a legal write — a task genuinely
     // can stop being a sub-task — which is the one place hierarchy and the
     // watcher rule differ: a watcher is transferred and never cleared, a parent

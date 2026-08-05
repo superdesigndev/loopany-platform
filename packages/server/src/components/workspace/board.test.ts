@@ -58,7 +58,7 @@ describe('close is not an action this screen offers', () => {
   it('exposes no close affordance, under any name', () => {
     const source = readFileSync(fileURLToPath(new URL('./board.ts', import.meta.url)), 'utf8')
     expect(source).not.toMatch(/canClose/)
-    expect(Object.keys(cardActions(card()))).toEqual(['canTell', 'canTransfer'])
+    expect(Object.keys(cardActions(card()))).toEqual(['canTell'])
   })
 
   it('is not reachable from the data layer either — there is no postClose', () => {
@@ -70,30 +70,30 @@ describe('close is not an action this screen offers', () => {
   })
 })
 
-describe('transfer — the watcher facet, one direction only', () => {
-  it('is offered on any open task, because every task already has a watcher', () => {
-    expect(cardActions(card({ column: 'watched', watcher: 'loop-a' })).canTransfer).toBe(true)
-    expect(cardActions(card({ column: 'due', watcher: 'loop-a' })).canTransfer).toBe(true)
-  })
-
-  // Consequential (the eventual answer wakes whichever loop is watching when it
-  // lands) but deliberate: a labelled picker on one named task, not a gesture
-  // that can be made by accident. There is no drag surface to green-light it.
-  it('is offered on a waiting task too — an explicit act, not a spatial one', () => {
-    expect(cardActions(card({ column: 'waiting', watcher: 'loop-a', pendingQuestion: 'revert or wait?' })).canTransfer).toBe(true)
+/**
+ * THE WATCHER IS NOT AN ACTION (captain ruling 2026-08-05). The drawer used to
+ * carry a picker that handed a task to a different loop, and the whole surface
+ * is gone — not disabled, not hidden — along with the kernel capability behind
+ * it. What is asserted here is the ABSENCE, structurally, because the failure
+ * mode is somebody re-deriving a picker from the shape of the module.
+ */
+describe('the watcher facet is not an action at all', () => {
+  it('offers only `tell`, on any open task', () => {
+    expect(cardActions(card({ column: 'watched', watcher: 'loop-a' }))).toEqual({ canTell: true })
+    expect(cardActions(card({ column: 'due', watcher: 'loop-a' }))).toEqual({ canTell: true })
+    expect(cardActions(card({ column: 'waiting', watcher: 'loop-a', pendingQuestion: 'revert or wait?' }))).toEqual({ canTell: true })
   })
 
   it('offers nothing on a closed card — it is a record', () => {
-    const closed = cardActions(card({ column: 'closed', status: 'closed', watcher: 'loop-a' }))
-    expect(closed).toEqual({ canTell: false, canTransfer: false })
+    expect(cardActions(card({ column: 'closed', status: 'closed', watcher: 'loop-a' }))).toEqual({ canTell: false })
   })
 
-  // RELEASE IS GONE, not merely unused: `watcher: null` is a kernel refusal
-  // (WATCHER_REQUIRED), so an affordance for it would advertise a write that
-  // cannot succeed.
-  it('has no release affordance anywhere in the module', () => {
+  // TRANSFER AND RELEASE ARE BOTH GONE: the kernel refuses a watcher rewrite
+  // (WATCHER_IMMUTABLE) and a null watcher (WATCHER_REQUIRED), so an affordance
+  // for either would advertise a write that cannot succeed.
+  it('has no transfer, claim or release affordance anywhere in the module', () => {
     const source = readFileSync(fileURLToPath(new URL('./board.ts', import.meta.url)), 'utf8')
-    expect(source).not.toMatch(/canRelease|canClaim/)
+    expect(source).not.toMatch(/canRelease|canClaim|canTransfer/)
   })
 })
 
@@ -137,11 +137,11 @@ describe('the screen invents no write path', () => {
     const pane = read('./TasksPane.tsx')
     expect(pane).not.toMatch(/board-card-actions/)
     const card = pane.slice(pane.indexOf('function BoardCard'), pane.indexOf('function ExternalItems'))
-    expect(card).not.toMatch(/onTransfer|transferWatcher|postDirective|postVerdict/)
+    expect(card).not.toMatch(/postDirective|postVerdict/)
     const row = pane.slice(pane.indexOf('function TaskRowEntry'), pane.indexOf('function Column'))
-    expect(row).not.toMatch(/onTransfer|transferWatcher|postDirective|postVerdict/)
+    expect(row).not.toMatch(/postDirective|postVerdict/)
     const actions = pane.slice(pane.indexOf('function TaskActions'))
-    for (const act of ['onTransfer', 'TellBox']) expect(actions).toMatch(new RegExp(act))
+    expect(actions).toMatch(/TellBox/)
   })
 
   /**
@@ -167,15 +167,17 @@ describe('the screen invents no write path', () => {
   })
 
   /**
-   * The watcher rule at the wire: the data layer can no longer EXPRESS a
-   * release. `transferWatcher` takes a plain `string`, so a null watcher is a
-   * type error at every call site rather than a request the kernel refuses.
+   * The watcher rule at the wire: the data layer cannot EXPRESS a watcher write
+   * of any kind — not a transfer, not a release. The removal is real rather than
+   * cosmetic, so there is no helper for the drawer to call back into.
    */
-  it('cannot send a null watcher — transfer is the only shape the client has', () => {
+  it('has no watcher write helper at all — hand-off is not a thing today', () => {
     const source = read('./api.ts')
-    expect(source).toMatch(/export async function transferWatcher\(taskId: string, watcher: string\)/)
-    expect(source).not.toMatch(/patchWatcher/)
+    expect(source).not.toMatch(/transferWatcher|patchWatcher/)
+    // No PATCH to a task from this client either: the watcher facet was its only
+    // caller, so a new one would be a new capability, not a reuse.
+    expect(source).not.toMatch(/'PATCH'/)
     const pane = read('./TasksPane.tsx')
-    expect(pane).not.toMatch(/transferWatcher\([^)]*null/)
+    expect(pane).not.toMatch(/transferWatcher|hand off/i)
   })
 })

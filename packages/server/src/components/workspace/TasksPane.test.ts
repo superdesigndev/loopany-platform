@@ -29,7 +29,6 @@ const TASKS: TasksView = {
   now: '2026-08-04T09:00:00.000Z',
   truncated: false,
   counts: { question: 1, total: 1 },
-  loops: [{ id: 'loop-a', title: 'Alpha watch' }, { id: 'loop-b', title: 'Beta watch' }],
   columns: [
     {
       key: 'waiting', label: 'Waiting on you', rule: 'A question is pending.',
@@ -384,24 +383,20 @@ describe('rows and cards are entrances — nothing else', () => {
 describe('the drawer is the one write surface', () => {
   const wrote = (method: string, match: RegExp) => calls.find((call) => call.method === method && match.test(call.url))
 
-  it('hands a task to another loop through the picker — never back to nothing', async () => {
-    await mount('task-held')
-    const select = host!.querySelector<HTMLSelectElement>('.task-actions select')!
-    // The loop already watching it is not offered: that write changes nothing.
-    expect([...select.options].map((option) => option.value)).toEqual(['', 'loop-a'])
-    await act(async () => {
-      select.value = 'loop-a'
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(wrote('PATCH', /\/api\/tasks\/task-held$/)!.body).toEqual({ watcher: 'loop-a' })
-  })
-
-  // RELEASE IS GONE. `watcher: null` is a kernel refusal, so an affordance for
-  // it would advertise a write that cannot succeed.
-  it('offers no release, and sends no null watcher', async () => {
-    await mount('task-held')
-    expect(byText('release')).toBeUndefined()
-    expect(calls.some((call) => call.method === 'PATCH')).toBe(false)
+  /**
+   * THE HAND-OFF IS GONE (captain ruling 2026-08-05). The drawer carried a
+   * picker that re-pointed a task's watcher at another loop; the control and the
+   * kernel capability behind it were both removed, so the drawer offers no
+   * watcher control of any kind and the screen never PATCHes a task.
+   */
+  it('offers no hand-off picker, and never patches a watcher', async () => {
+    for (const id of ['task-held', 'task-ask']) {
+      await mount(id)
+      expect(host!.querySelector('select')).toBeNull()
+      expect(byText('hand off to…')).toBeUndefined()
+      expect(byText('release')).toBeUndefined()
+      expect(calls.some((call) => call.method === 'PATCH')).toBe(false)
+    }
   })
 
   /**
