@@ -1071,6 +1071,26 @@ Traced through `runner.ts` (the child env), `spawn.ts` `execEnv`/`allowlistEnv` 
   workflows bake `--build-arg GIT_SHA`/`BUILT_AT` into the image; `/api/health` returns
   `{ok, sha, builtAt}` (baked ENV, `"unknown"` in local dev) and a post-deploy smoke
   step asserts the served `sha` == the pushed `github.sha`.
+- **`loopany-testing` keeps a PERSISTENT DB across branch deploys, so two divergent
+  migration lines BRICK it.** The app runs the embedded pglite tier on the mounted
+  `loopany_data` volume (`fly.toml` `LOOPANY_DB=pglite` + `/data`), so
+  `drizzle.__drizzle_migrations` survives every deploy and is LAST-WRITER-WINS across
+  branches - `deploy.yml` is `workflow_dispatch`-able on any branch. drizzle applies
+  every journal entry whose `when` postdates the newest applied row, keying on the
+  TIMESTAMP, not the index: two branches that both generated a `0003` simply stack, and
+  the later-`when` line's `CREATE TABLE` (drizzle emits no `IF NOT EXISTS`) hits the
+  earlier line's table and THROWS. `runMigrations()` is the first await in
+  `server/boot.ts` `boot()`, so that throw is a hard boot failure, not a degraded start.
+  **Before dispatching a feature-branch deploy, compare the branch's
+  `drizzle/meta/_journal.json` against what the volume actually holds** (read it from a
+  COPY of `/data/pgdata`, never the live dir - see below); a shared 0000-000N prefix plus
+  divergent tails means the deploy cannot land without reconciling the DB first.
+- **Reading the testing DB is a load hazard.** The machine is `shared-cpu-1x`/512MB and
+  the live server holds pglite open, so `cp -a /data/pgdata /tmp/... && node` a second
+  PGlite over the copy can push the machine past its memory ceiling and drop it out of
+  the load balancer ("no known healthy instances"). Recovery is
+  `flyctl machine restart <id> -a loopany-testing` (container reboot only, volume and
+  data untouched). Take ONE reading, write the answer to a file, and get out.
 - `deploy-prod.yml`: **auto-promotes after a GREEN staging deploy** -> `loopany-prod` /
   loopany.ai, `--ha=false` single machine (single-scheduler invariant). It triggers on
   `workflow_run` of "Deploy (Fly)" and the job `if:` gates on
