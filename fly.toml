@@ -60,4 +60,10 @@ primary_region = "nrt"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  # 1024mb, matching fly.prod.toml. NOT optional at 512mb: booting the pglite
+  # tier against an EMPTY volume runs initdb (WASM), which OOM-kills node before
+  # it ever binds :3000 - the machine then crash-loops to its restart cap and the
+  # deploy fails on health checks. An already-initialized volume never re-runs
+  # initdb, so 512mb survived for as long as the volume did; the failure only
+  # surfaces on a fresh/reset volume.
+  memory = "1024mb"
