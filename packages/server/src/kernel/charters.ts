@@ -10,7 +10,9 @@ import { and, eq } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import * as store from "../db/kernelStore.js";
+import { createLoopIn } from "../db/store.js";
 import { loops } from "../db/schema.js";
+import type { Loop, NewLoop } from "../db/schema.js";
 import type { KernelObject } from "../db/kernel-schema.js";
 import { appendOrganicEvent, applyUpdateIn, createObjectIn } from "./applyTransition.js";
 import { charterDocId, charterKey } from "./ids.js";
@@ -32,6 +34,19 @@ export interface CharterSnapshot {
 }
 
 export type CharterResult<T> = { ok: true; value: T } | { ok: false; error: ApiRefusal };
+
+interface CreateLoopWithCharterInput {
+  loop: Omit<NewLoop, "id" | "createdAt" | "updatedAt" | "teamId"> & { id?: string; teamId: string };
+  body: string;
+  actor: Actor;
+  now: string;
+}
+
+class AtomicCharterCreateRefusal extends Error {
+  constructor(readonly refusal: ApiRefusal) {
+    super(refusal.message);
+  }
+}
 
 interface CharterIdentity {
   teamId: string;
@@ -119,6 +134,34 @@ export async function ensureCharter(input: EnsureCharterInput): Promise<CharterR
   const oversized = tooLarge(input.body);
   if (oversized) return { ok: false, error: oversized };
   return db.transaction(async (rawTx) => ensureCharterIn(rawTx as unknown as store.KernelExec, input));
+}
+
+/** Create the production loop row and its attached charter in one transaction. */
+export async function createLoopWithCharter(
+  input: CreateLoopWithCharterInput,
+): Promise<CharterResult<{ loop: Loop; charter: CharterSnapshot }>> {
+  const oversized = tooLarge(input.body);
+  if (oversized) return { ok: false, error: oversized };
+  try {
+    const value = await db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as store.KernelExec;
+      const loop = await createLoopIn(tx, input.loop, input.now);
+      const made = await ensureCharterIn(tx, {
+        teamId: input.loop.teamId,
+        loopId: loop.id,
+        loopName: loop.name,
+        body: input.body,
+        actor: input.actor,
+        now: input.now,
+      });
+      if (!made.ok) throw new AtomicCharterCreateRefusal(made.error);
+      return { loop, charter: made.value.charter };
+    });
+    return { ok: true, value };
+  } catch (cause) {
+    if (cause instanceof AtomicCharterCreateRefusal) return { ok: false, error: cause.refusal };
+    throw cause;
+  }
 }
 
 /** Transactional form used by atomic loop creation and legacy report seeding. */

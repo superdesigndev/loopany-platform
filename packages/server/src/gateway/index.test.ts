@@ -10,6 +10,7 @@ let gatewayMod: typeof import("./index.js");
 let cliMod: typeof import("./cli.js");
 let tokens: typeof import("./tokens.js");
 let notifyMod: typeof import("./notify.js");
+let charters: typeof import("../kernel/charters.js");
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-gateway-"));
@@ -23,6 +24,7 @@ beforeAll(async () => {
   cliMod = await import("./cli.js");
   tokens = await import("./tokens.js");
   notifyMod = await import("./notify.js");
+  charters = await import("../kernel/charters.js");
 });
 
 afterAll(() => {
@@ -385,6 +387,39 @@ test("createLoop persists a valid IANA timezone and rejects a bogus one", async 
   }));
   expect(bad.status).toBe(400);
   expect((bad.body as any).error).toMatch(/invalid timezone/);
+});
+
+test("createLoop atomically creates an attached charter and exposes workdir validation/capability", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", teamId: "team-1", name: "M", tokenHash: tokens.sha256(token), online: true });
+
+  expect(((await gateway().status(token)).body as any).capabilities).toContain("charter-doc-v1");
+  const made = await gateway().createLoop(token, { name: "Attached", cron: "0 8 * * *", workdir: "/srv/project", charter: "# Charter\n" });
+  expect(made.status).toBe(200);
+  const loop = await store.getLoop((made.body as any).id);
+  expect(loop?.workdir).toBe("/srv/project");
+  const charter = await charters.readCharter(loop!.teamId!, loop!.id);
+  expect(charter.ok && charter.value?.body).toBe("# Charter\n");
+
+  const before = (await store.loopsForMachine(machineId)).length;
+  const oversized = await gateway().createLoop(token, { cron: "0 8 * * *", charter: "x".repeat(512 * 1024 + 1) });
+  expect(oversized.status).toBe(413);
+  expect((await store.loopsForMachine(machineId))).toHaveLength(before);
+  const relative = await gateway().createLoop(token, { cron: "0 8 * * *", charter: "# C", workdir: "relative/project" });
+  expect(relative.status).toBe(400);
+});
+
+test("editLoop exposes workdir and rejects relative paths", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const created = await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "legacy.md" });
+  const id = (created.body as any).id;
+  expect((await gateway().editLoop(token, id, { workdir: "/srv/new" })).status).toBe(200);
+  expect((await store.getLoop(id))?.workdir).toBe("/srv/new");
+  expect((await gateway().editLoop(token, id, { workdir: "relative" })).status).toBe(400);
+  expect((await store.getLoop(id))?.workdir).toBe("/srv/new");
 });
 
 test("createLoop records the coding agent: codex when declared, claude-code by default, and degrades an unknown value", async () => {
@@ -2338,7 +2373,7 @@ test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op
   const env = JSON.parse((show.body as { text: string }).text) as Record<string, unknown>;
   // Keyed EXACTLY as edit --json accepts: id + every EDITABLE_LOOP_FIELDS key.
   expect(Object.keys(env).sort()).toEqual(
-    ["agent", "allowControl", "cron", "enabled", "goal", "id", "model", "name", "notify", "runAt", "stateSchema", "taskFile", "timezone", "ui", "workflow"].sort(),
+    ["agent", "allowControl", "cron", "enabled", "goal", "id", "model", "name", "notify", "runAt", "stateSchema", "taskFile", "timezone", "ui", "workdir", "workflow"].sort(),
   );
   // The agent edited to a non-default value roundtrips through the envelope.
   expect(env.agent).toBe("codex");

@@ -4,6 +4,7 @@ import * as store from "../db/store.js";
 import type { Loop, NewLoop } from "../db/schema.js";
 import { watchedTasksWarningFor } from "../kernel/watchedTasks.js";
 import { coerceCodingAgent, type JobPayload, type MutationResult } from "../types.js";
+import { validateWorkdir } from "../lib/workdir.js";
 
 export type OwnerLoopPatch = JobPayload & { timezone?: string | null };
 
@@ -51,6 +52,9 @@ export async function applyOwnerLoopPatch(
   if (patch.timezone !== undefined && (patch.timezone?.trim().length ?? 0) > 100) return { error: "timezone is too long (max 100 characters)" };
   if (patch.model !== undefined && (patch.model?.trim().length ?? 0) > 200) return { error: "model is too long (max 200 characters)" };
   if (patch.notify !== undefined && !["auto", "always", "never"].includes(patch.notify)) return { error: "notify must be auto, always, or never" };
+  const workdirInput = (patch as OwnerLoopPatch & { workdir?: unknown }).workdir;
+  const workdir = workdirInput !== undefined ? validateWorkdir(workdirInput) : undefined;
+  if (workdir && !workdir.ok) return { error: workdir.error };
 
   const timezone = patch.timezone !== undefined ? patch.timezone?.trim() || null : current.timezone;
   const cron = patch.cron !== undefined ? patch.cron.trim() : current.cron;
@@ -75,6 +79,7 @@ export async function applyOwnerLoopPatch(
     ...(agent ? { agent } : {}),
     ...(patch.goal !== undefined ? { goal: patch.goal?.trim() || null } : {}),
     ...(patch.taskFile !== undefined ? { taskFile: patch.taskFile.trim() || null } : {}),
+    ...(workdir?.ok ? { workdir: workdir.value } : {}),
     ...(patch.workflow !== undefined ? { workflow: patch.workflow.trim() || null } : {}),
     ...(patch.stateSchema !== undefined ? { stateSchema: store.coerceStateSchema(patch.stateSchema) ?? null } : {}),
     ...(patch.ui !== undefined ? { ui: store.coerceUi(patch.ui) ?? null } : {}),

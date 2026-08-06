@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printTextOrTooOld } from "./cli-client.js";
+import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
 
 type Flags = Record<string, string | boolean>;
 
@@ -65,7 +66,7 @@ function readFileFlag(flags: Flags, flag: string): string | undefined {
  *  with a single `--json '<obj>'` patch, and push development-artifact content
  *  (workflow JS / UI HTML / schema JSON) via the file flags. `dry-run` is a mode,
  *  `server-url`/`api-key` are global daemon flags — allowed here, not patch keys. */
-const EDIT_FLAGS = new Set(["json", "workflow-file", "ui-file", "schema-file", "dry-run", "server-url", "api-key"]);
+const EDIT_FLAGS = new Set(["json", "workflow-file", "ui-file", "schema-file", "charter-file", "dry-run", "server-url", "api-key"]);
 
 /** The flags `loopany loops` accepts: `--fields <set>`, the `--json` escape hatch,
  *  `--help`, plus the global daemon flags (consumed separately). An unknown flag is a
@@ -118,6 +119,7 @@ const USAGE =
   "  --workflow-file <path>      set the deterministic pre-stage JS from a file\n" +
   "  --ui-file <path>            set the dashboard HTML from a file\n" +
   "  --schema-file <path.json>   set the metric schema (JSON array) from a file\n" +
+  "  --charter-file <path.md>    replace the attached charter using version-safe compare-and-swap\n" +
   "  --dry-run                   validate + preview before/after, change nothing\n" +
   "  the server validates every field; unknown keys are rejected.\n";
 
@@ -186,8 +188,60 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     // (or any explicit input flag that resolves to an empty patch) is a VALID no-op:
     // forward it so the server reports "nothing to change" + the allowed-key list (F8),
     // instead of short-circuiting to the usage screen client-side.
-    const gaveInput = flags["json"] !== undefined || flags["workflow-file"] !== undefined || flags["ui-file"] !== undefined || flags["schema-file"] !== undefined;
+    const gaveInput = flags["json"] !== undefined || flags["workflow-file"] !== undefined || flags["ui-file"] !== undefined || flags["schema-file"] !== undefined || flags["charter-file"] !== undefined;
     if (!gaveInput) return err(USAGE), 2;
+
+    // Charter edits are clients of the HTTP CAS seam. Resolve the current version
+    // inside this command, then replace against exactly that version. A concurrent
+    // change is a named refusal; callers re-read before deciding how to reapply.
+    if (typeof flags["charter-file"] === "string") {
+      let charterBody: string;
+      try {
+        charterBody = readFileSync(flags["charter-file"], "utf8");
+      } catch (cause) {
+        return err(`loopany: cannot read --charter-file: ${cause instanceof Error ? cause.message : String(cause)}\n`), 1;
+      }
+      const server = injected.server ?? resolveServerUrl(typeof flags["server-url"] === "string" ? flags["server-url"] : undefined);
+      const token = injected.token ?? readStored(DEVICE_FILE);
+      if (!server || !token) return notConnected(), 2;
+      const fetchImpl = injected.fetchImpl ?? fetch;
+      try {
+        const current = await fetchImpl(`${server}/api/loops/${encodeURIComponent(id)}/charter`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+        });
+        const currentValue = await current.json().catch(() => ({})) as { charter?: { version?: number }; code?: string; message?: string; error?: string };
+        const version = currentValue.charter?.version;
+        if (!current.ok || !Number.isSafeInteger(version)) {
+          return err(`loopany: ${currentValue.message ?? currentValue.error ?? `cannot read charter (${current.status})`}\n`), 1;
+        }
+        if (dryRun) {
+          out(`dry-run: charter would replace version ${version} with ${Buffer.byteLength(charterBody, "utf8")} bytes\n`);
+        } else {
+          const replaced = await fetchImpl(`${server}/api/loops/${encodeURIComponent(id)}/charter`, {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/json",
+              "Content-Type": "text/markdown; charset=utf-8",
+              "If-Match": `"${version}"`,
+            },
+            body: charterBody,
+          });
+          const value = await replaced.json().catch(() => ({})) as { charter?: { version?: number }; code?: string; message?: string; error?: string };
+          if (!replaced.ok) {
+            if (value.code === "VERSION_CONFLICT") {
+              return err(`loopany: CHARTER_VERSION_CONFLICT — ${value.message ?? "the charter changed"}; re-read with \`loopany show ${id} --charter\` and reapply\n`), 1;
+            }
+            return err(`loopany: ${value.message ?? value.error ?? `charter update failed (${replaced.status})`}\n`), 1;
+          }
+          out(`charter updated: ${id} (version ${value.charter?.version ?? "unknown"})\n`);
+        }
+      } catch (cause) {
+        return err(`loopany: ${cause instanceof Error ? cause.message : String(cause)}\n`), 1;
+      }
+    }
+    const hasConfigPatch = flags["json"] !== undefined || flags["workflow-file"] !== undefined || flags["ui-file"] !== undefined || flags["schema-file"] !== undefined;
+    if (!hasConfigPatch) return 0;
     // The whole edit travels as one unified verb: `edit <id> --json <patch> [--dry-run]`.
     const cliArgv = ["edit", id, "--json", JSON.stringify(patch), ...(dryRun ? ["--dry-run"] : [])];
     // Legacy fallback: PATCH /api/machine/loop with the {id, patch, dryRun} body the

@@ -26,11 +26,12 @@ function cfgJson(cfg: object): string {
   return JSON.stringify(cfg);
 }
 
-/** An absolute path under a fresh temp dir that does NOT yet exist — so a test can
- *  prove the installer's cwd is created before the install spawns (the ENOENT fix). */
+/** An existing absolute machine-local directory suitable for binding a loop. */
 function tmpWorkdir(): string {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-workdir-"));
-  return path.join(base, "loop", "run");
+  const workdir = path.join(base, "loop", "run");
+  fs.mkdirSync(workdir, { recursive: true });
+  return workdir;
 }
 
 describe("cronLooksValid (local pre-check only — the server/croner is the sole validator)", () => {
@@ -135,6 +136,39 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(installed).toEqual([{ global: true }]);
   });
 
+  test("--charter-file negotiates support before sending exact charter bytes", async () => {
+    const dir = tmpWorkdir();
+    const charterFile = path.join(dir, "charter.md");
+    fs.writeFileSync(charterFile, "# Charter\n\nKeep this newline.\n");
+    const calls: Array<{ url: string; body?: any }> = [];
+    const code = await runCreate(["--json", cfgJson({ cron: "0 8 * * *", workdir: dir }), "--charter-file", charterFile, "--server-url", "http://test"], {
+      fetchImpl: (async (url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (String(url).endsWith("/api/machine/status")) return okResponse({ capabilities: ["charter-doc-v1"] });
+        return okResponse({ text: "created: Charter loop (loop-1)", exitCode: 0 });
+      }) as typeof fetch,
+      installer: async () => ({ ok: true, line: "" }),
+      stdout: () => {},
+    });
+    expect(code).toBe(0);
+    const config = JSON.parse(calls[1]!.body.argv[2]);
+    expect(config.charter).toBe("# Charter\n\nKeep this newline.\n");
+    expect(config.workdir).toBe(path.resolve(dir));
+  });
+
+  test("--charter-file refuses an old server before posting create", async () => {
+    const dir = tmpWorkdir();
+    const charterFile = path.join(dir, "charter.md");
+    fs.writeFileSync(charterFile, "# Charter\n");
+    const calls: string[] = [];
+    const code = await runCreate(["--json", cfgJson({ cron: "0 8 * * *", workdir: dir }), "--charter-file", charterFile, "--server-url", "http://test"], {
+      fetchImpl: (async (url: string) => { calls.push(String(url)); return okResponse({ online: true }); }) as typeof fetch,
+      stdout: () => {},
+    });
+    expect(code).toBe(1);
+    expect(calls).toEqual(["http://test/api/machine/status"]);
+  });
+
   test("a successful create with no workdir + no returned id STILL installs (user scope needs neither)", async () => {
     const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "loopany/x/README.md" }); // no workdir
     const installed: InstallOpts[] = [];
@@ -236,7 +270,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
     });
     expect(code).toBe(0);
     expect(installed).toBe(false); // dry-run never creates → never installs
-    expect(fs.existsSync(workdir)).toBe(false); // touches nothing
+    expect(fs.existsSync(workdir)).toBe(true); // validation does not mutate it
     expect(out.join("")).toBe(toon + "\n"); // the server preview, verbatim
   });
 

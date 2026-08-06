@@ -14,6 +14,7 @@ import { db } from "./index.js";
 import { user } from "./auth-schema.js";
 import { events, objects } from "./kernel-schema.js";
 import { charterDocId, charterKey } from "../kernel/ids.js";
+import type { KernelExec } from "./kernelStore.js";
 import {
   loops,
   machines,
@@ -114,10 +115,17 @@ export async function loopsForMachine(machineId: string): Promise<Loop[]> {
   return db.select().from(loops).where(eq(loops.machineId, machineId));
 }
 
-export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "updatedAt"> & { id?: string }): Promise<Loop> {
-  const ts = nowIso();
+export async function createLoopIn(
+  tx: KernelExec,
+  input: Omit<NewLoop, "id" | "createdAt" | "updatedAt"> & { id?: string },
+  ts = nowIso(),
+): Promise<Loop> {
   const row: NewLoop = { ...input, id: input.id ?? newLoopId(), createdAt: ts, updatedAt: ts };
-  return (await db.insert(loops).values(row).returning())[0]!;
+  return (await tx.insert(loops).values(row).returning())[0]!;
+}
+
+export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "updatedAt"> & { id?: string }): Promise<Loop> {
+  return createLoopIn(db as unknown as KernelExec, input);
 }
 
 /**

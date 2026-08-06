@@ -14,6 +14,7 @@ import path from "node:path";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printTextOrTooOld } from "./cli-client.js";
+import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
 import { type LoopRow, renderResolveError, resolveLoopId } from "./log.js";
 
 export type ShowDeps = {
@@ -32,15 +33,17 @@ const SHOW_VALUE_FLAGS = new Set(["server-url", "api-key"]);
 /** Bare boolean `--json`/`--full` → true; the known value-taking flags (e.g.
  *  `--server-url <url>`) CONSUME their following token so it is never mistaken for the
  *  positional loop id; everything else is positional. An unknown `--flag` is surfaced. */
-function parseArgs(args: string[]): { positional: string[]; json: boolean; full: boolean; unknown: string[] } {
+function parseArgs(args: string[]): { positional: string[]; json: boolean; full: boolean; charter: boolean; unknown: string[] } {
   const positional: string[] = [];
   const unknown: string[] = [];
   let json = false;
   let full = false;
+  let charter = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "--json") json = true;
     else if (a === "--full") full = true;
+    else if (a === "--charter") charter = true;
     else if (a === "--help") { /* allowlisted (no client-side help surface yet) — never an unknown flag */ }
     else if (a.startsWith("--")) {
       const key = a.slice(2).split("=")[0]!;
@@ -50,7 +53,7 @@ function parseArgs(args: string[]): { positional: string[]; json: boolean; full:
       } else unknown.push(key);
     } else positional.push(a);
   }
-  return { positional, json, full, unknown };
+  return { positional, json, full, charter, unknown };
 }
 
 export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<number> {
@@ -68,7 +71,7 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
     ...("token" in injected ? { deviceToken: injected.token } : {}),
   };
 
-  const { positional, json, full, unknown } = parseArgs(argv);
+  const { positional, json, full, charter, unknown } = parseArgs(argv);
   if (unknown.length) return err(`loopany: unknown flag --${unknown[0]} — try \`loopany show --help\`\n`), 2;
   const notConnected = () =>
     err("loopany: this machine isn't connected yet — start the daemon once with `loopany up`\n");
@@ -90,6 +93,23 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   }
   const resolved = resolveLoopId(listData.loops, positional[0], path.resolve(cwd()));
   if ("error" in resolved) return renderResolveError(resolved, out, err);
+
+  if (charter) {
+    const server = injected.server ?? resolveServerUrl(flagServer);
+    const token = injected.token ?? readStored(DEVICE_FILE);
+    if (!server || !token) return notConnected(), 2;
+    try {
+      const res = await (injected.fetchFn ?? fetch)(`${server}/api/loops/${encodeURIComponent(resolved.id)}/charter`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+      const value = await res.json().catch(() => ({})) as { charter?: { body?: string; version?: number }; message?: string; error?: string };
+      if (!res.ok || !value.charter) return err(`loopany: ${value.message ?? value.error ?? `cannot read charter (${res.status})`}\n`), 1;
+      out(`charter: ${resolved.id}\nversion: ${value.charter.version ?? "unknown"}\n\n${value.charter.body ?? ""}${value.charter.body?.endsWith("\n") ? "" : "\n"}`);
+      return 0;
+    } catch (cause) {
+      return err(`loopany: ${cause instanceof Error ? cause.message : String(cause)}\n`), 1;
+    }
+  }
 
   // 2. Forward `show <id> [--json] [--full]` — the server renders the envelope TOON
   //    (or the JSON envelope under --json). Old server (no /api/machine/cli): there is

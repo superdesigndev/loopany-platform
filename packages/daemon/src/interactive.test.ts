@@ -225,6 +225,37 @@ describe("runInteractive — edit no-op (F8) + input-required guard", () => {
   });
 });
 
+describe("runInteractive — attached charter CAS", () => {
+  test("reads the current version and PATCHes the complete file with If-Match", async () => {
+    const file = path.join(tmp(), "charter.md");
+    writeFileSync(file, "# Revised\n");
+    const calls: Array<{ url: string; init: any }> = [];
+    const fetchImpl = (async (url: string, init: any = {}) => {
+      calls.push({ url: String(url), init });
+      if (!init.method) return { ok: true, status: 200, json: async () => ({ charter: { version: 4 } }) };
+      return { ok: true, status: 200, json: async () => ({ charter: { version: 5 } }) };
+    }) as typeof fetch;
+    const cap = capture({ fetchImpl });
+    expect(await runInteractive(["edit", "loop-1", "--charter-file", file], cap)).toBe(0);
+    expect(calls[1]!.init.headers["If-Match"]).toBe('"4"');
+    expect(calls[1]!.init.body).toBe("# Revised\n");
+    expect(cap.stdout()).toContain("version 5");
+  });
+
+  test("names a CAS conflict and teaches a re-read", async () => {
+    const file = path.join(tmp(), "charter.md");
+    writeFileSync(file, "# Stale\n");
+    let n = 0;
+    const fetchImpl = (async () => ++n === 1
+      ? { ok: true, status: 200, json: async () => ({ charter: { version: 4 } }) }
+      : { ok: false, status: 409, json: async () => ({ code: "VERSION_CONFLICT", message: "now at 5" }) }) as typeof fetch;
+    const cap = capture({ fetchImpl });
+    expect(await runInteractive(["edit", "loop-1", "--charter-file", file], cap)).toBe(1);
+    expect(cap.stderr()).toContain("CHARTER_VERSION_CONFLICT");
+    expect(cap.stderr()).toContain("show loop-1 --charter");
+  });
+});
+
 describe("runInteractive — legacy fallback (old server 404s the unified dispatch)", () => {
   test("loops falls back to GET /api/machine/loop, text-sinking its rendered `text`", async () => {
     // A batch-1+ legacy endpoint renders `text` (its methods do), so the daemon prints

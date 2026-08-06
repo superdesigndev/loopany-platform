@@ -7,7 +7,7 @@ import * as store from "../db/store.js";
 import { ensureServer } from "../server/boot.js";
 import { applyOwnerLoopPatch, type OwnerLoopPatch } from "../server/loopMutations.js";
 
-const KEYS = ["name", "cron", "timezone", "notify", "channelId", "model", "agent"] as const;
+const KEYS = ["name", "cron", "timezone", "notify", "channelId", "model", "agent", "workdir"] as const;
 
 function configOf(loop: NonNullable<Awaited<ReturnType<typeof store.getLoop>>>) {
   return {
@@ -18,6 +18,7 @@ function configOf(loop: NonNullable<Awaited<ReturnType<typeof store.getLoop>>>) 
     channelId: loop.channelId,
     model: loop.model,
     agent: loop.agent,
+    workdir: loop.workdir,
   };
 }
 

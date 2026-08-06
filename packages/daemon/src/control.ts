@@ -18,7 +18,7 @@ import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { PID_FILE, readPidFile, clearPidFile, isAlive, processStartTime, verifiedRunningPid, type PidRecord } from "./pidfile.js";
 
-export type MachineStatus = { online: boolean; name: string | null };
+export type MachineStatus = { online: boolean; name: string | null; capabilities?: string[] };
 
 /** Best-effort server view of this machine (`/api/machine/status`) — shared by
  *  `status`'s connection line and `loopany up`'s readiness probe. Bounded (3s)

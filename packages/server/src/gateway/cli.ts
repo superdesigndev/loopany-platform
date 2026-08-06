@@ -59,6 +59,7 @@ import {
 } from "./index.js";
 import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
 import { nowIso, stripNul, type HttpResult } from "./http.js";
+import { readCharter, type CharterSnapshot } from "../kernel/charters.js";
 
 export class CliGateway {
   constructor(
@@ -564,7 +565,9 @@ export class CliGateway {
     // The most recent exec run (newest-first) anchors the `runs:` tally's last-outcome.
     const recent = (await store.listRuns(loop.id, LOG_RUNS_DEFAULT)).slice().reverse();
     const lastExec = recent.find((r) => r.role === "exec") ?? null;
-    return renderShowText(loop, loopEnvelope(loop), await store.countRuns(loop.id), lastExec, opts);
+    const attached = loop.teamId ? await readCharter(loop.teamId, loop.id) : null;
+    const charter = attached?.ok ? attached.value : null;
+    return renderShowText(loop, loopEnvelope(loop), await store.countRuns(loop.id), lastExec, charter, opts);
   }
 
   /**
@@ -940,6 +943,7 @@ function loopEnvelope(loop: Loop): Record<string, unknown> {
     model: loop.model ?? null,
     agent: loop.agent,
     allowControl: loop.allowControl,
+    workdir: loop.workdir ?? null,
     taskFile: loop.taskFile ?? null,
     enabled: loop.enabled,
     runAt: loop.nextRunAt ?? null,
@@ -993,6 +997,7 @@ function renderShowText(
   env: Record<string, unknown>,
   totalRuns: number,
   lastExec: { phase: string; outcome: string | null; status: string | null; ts: string } | null,
+  charter: CharterSnapshot | null,
   opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {},
 ): string {
   const full = opts.full === true;
@@ -1006,7 +1011,11 @@ function renderShowText(
     ["model", env.model as Scalar],
     ["agent", env.agent as Scalar],
     ["allowControl", env.allowControl as Scalar],
+    ["workdir", env.workdir as Scalar],
     ["taskFile", env.taskFile as Scalar],
+    ["charter", charter ? "present" : "absent"],
+    ["charterVersion", charter?.version ?? null],
+    ["charterUpdatedAt", charter?.updatedAt ?? null],
     ["enabled", env.enabled as Scalar],
     ["runAt", env.runAt as Scalar],
     // The setpoint: a value ⇒ CLOSED loop (finishable); em-dash ⇒ OPEN (monitor).
@@ -1085,16 +1094,14 @@ function expandHome(p: string, home: string | null): string {
   return home && p.startsWith("~/") ? path.join(home, p.slice(2)) : p;
 }
 
-/** A loop's folder on the daemon machine — mirrors the daemon's `resolveLoopDir`
- *  (dirname(taskFile) → workdir), minus the scratch fallback (which never matches a
- *  real cwd). Returns null when neither path is known (⇒ never "here"). */
+/** A loop's folder on the daemon machine. First-class workdir wins; taskFile is
+ *  consulted only for an unseeded legacy row during the additive migration. */
 function scopeLoopDir(workdir: string | null, taskFile: string | null, home: string | null): string | null {
+  if (workdir) return path.resolve(expandHome(workdir, home));
   if (taskFile) {
     const tf = expandHome(taskFile, home);
     if (path.isAbsolute(tf)) return path.dirname(path.resolve(tf));
-    if (workdir) return path.dirname(path.resolve(expandHome(workdir, home), tf));
   }
-  if (workdir) return path.resolve(expandHome(workdir, home));
   return null;
 }
 

@@ -59,6 +59,9 @@ import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
 import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 import { appendProductionRunFinished } from "../kernel/runQueue.js";
 import { watchedTasksWarningFor, type WatchedTasksWarning } from "../kernel/watchedTasks.js";
+import { createLoopWithCharter } from "../kernel/charters.js";
+import { REFUSAL_STATUS } from "../kernel/refusals.js";
+import { validateWorkdir } from "../lib/workdir.js";
 
 const log = logger.child({ mod: "gateway" });
 
@@ -95,6 +98,7 @@ export const EDITABLE_LOOP_FIELDS = new Set([
   "notify",
   "model",
   "allowControl",
+  "workdir",
   "taskFile",
   "enabled",
   "runAt",
@@ -603,9 +607,9 @@ export class MachineGateway {
     const machine = resolved.ok ? resolved.machine : undefined;
     // Unknown token ⇒ not connected yet (the daemon self-registers on first poll),
     // so report offline rather than erroring — keeps the skill's check uniform.
-    if (!machine) return { status: 200, body: { online: false, name: null, lastSeen: null } };
+    if (!machine) return { status: 200, body: { online: false, name: null, lastSeen: null, capabilities: ["charter-doc-v1"] } };
     const fresh = !!machine.lastSeen && Date.now() - Date.parse(machine.lastSeen) < ONLINE_TTL_MS;
-    return { status: 200, body: { online: !!machine.online && fresh, name: machine.name || null, lastSeen: machine.lastSeen ?? null } };
+    return { status: 200, body: { online: !!machine.online && fresh, name: machine.name || null, lastSeen: machine.lastSeen ?? null, capabilities: ["charter-doc-v1"] } };
   }
 
   // ---- POST /api/machine/loop ----
@@ -623,6 +627,7 @@ export class MachineGateway {
       cron?: unknown;
       timezone?: unknown;
       workflow?: unknown;
+      charter?: unknown;
       workdir?: unknown;
       taskFile?: unknown;
       stateSchema?: unknown;
@@ -688,7 +693,14 @@ export class MachineGateway {
     if (!wf.ok) return { status: 400, body: { error: wf.detail } };
     const workflow = wf.value;
     const taskFile = str(body.taskFile);
-    if (!workflow && !taskFile) return { status: 400, body: { error: "provide a workflow (JS) or a taskFile (path to the loop's Spec)" } };
+    if (body.charter !== undefined && typeof body.charter !== "string") {
+      return { status: 400, body: { error: "charter must be a complete markdown string" } };
+    }
+    const charter = typeof body.charter === "string" ? body.charter : undefined;
+    if (!workflow && !taskFile && charter === undefined) return { status: 400, body: { error: "provide a charter, workflow (JS), or legacy taskFile" } };
+    const workdirResult = validateWorkdir(body.workdir);
+    if (!workdirResult.ok) return { status: 400, body: { error: workdirResult.error } };
+    const workdir = workdirResult.value;
     // Optional setpoint (clipped one-liner); absent/blank ⇒ open loop.
     const goal = str(body.goal)?.slice(0, GOAL_CAP) ?? null;
 
@@ -701,7 +713,7 @@ export class MachineGateway {
     }
     const enabled = body.enabled !== false;
 
-    const notify = body.notify === "always" || body.notify === "never" ? body.notify : "auto";
+    const notify: "auto" | "always" | "never" = body.notify === "always" || body.notify === "never" ? body.notify : "auto";
     // Recorded coding agent: trust the daemon's resolved value when it's a known
     // agent, else default to claude-code (older daemons omit it; an unrecognized /
     // "unknown" value also degrades to the default rather than rejecting the loop).
@@ -729,7 +741,8 @@ export class MachineGateway {
         cron,
         timezone: timezone ?? null,
         taskFile: taskFile ?? null,
-        workdir: str(body.workdir) ?? null,
+        workdir,
+        charter: charter !== undefined || (!taskFile && !!workflow),
         // The workflow JS body can be large — report presence, not the source.
         workflow: workflow != null,
         // Ditto for the dashboard HTML — presence flag, not the markup.
@@ -817,7 +830,7 @@ export class MachineGateway {
     // newest-first) so a freshly-added Feishu/Telegram channel auto-applies to new
     // loops — computed against the RESOLVED team so it routes to that team's channel.
     const channelId = await store.defaultChannelId(teamId);
-    const loop = await store.createLoop({
+    const loopInput = {
       userId: machine.userId ?? "shared",
       teamId,
       channelId,
@@ -826,7 +839,7 @@ export class MachineGateway {
       cron,
       timezone,
       workflow,
-      workdir: str(body.workdir),
+      workdir,
       taskFile,
       stateSchema,
       ui,
@@ -834,7 +847,21 @@ export class MachineGateway {
       goal,
       agent,
       enabled,
-    });
+    };
+    // New protocol creates always attach a charter. A workflow-only request from
+    // an older daemon receives an empty charter; legacy taskFile requests remain
+    // charterless until their first new-daemon report seeds the dual-read row.
+    const shouldAttachCharter = charter !== undefined || (!taskFile && !!workflow);
+    const created = shouldAttachCharter
+      ? await createLoopWithCharter({
+          loop: loopInput,
+          body: charter ?? "",
+          actor: { entrance: "human", actorId: machine.userId },
+          now: nowIso(),
+        })
+      : { ok: true as const, value: { loop: await store.createLoop(loopInput) } };
+    if (!created.ok) return { status: REFUSAL_STATUS[created.error.code], body: { error: created.error.message, code: created.error.code } };
+    const loop = created.value.loop;
     // `addLoop` registers the cron only when the loop is enabled, so a paused
     // create is AUTONOMOUSLY INERT from its first instant: the clock can never
     // select it.
@@ -1058,6 +1085,7 @@ export class MachineGateway {
       model?: unknown;
       allowControl?: unknown;
       taskFile?: unknown;
+      workdir?: unknown;
       enabled?: unknown;
       runAt?: unknown;
       workflow?: unknown;
@@ -1218,6 +1246,11 @@ export class MachineGateway {
     }
     if (p.name !== undefined) set("name", str(p.name), loop.name);
     if (p.model !== undefined) set("model", str(p.model), loop.model);
+    if (p.workdir !== undefined) {
+      const workdir = validateWorkdir(p.workdir);
+      if (!workdir.ok) rejections.push({ key: "workdir", reason: workdir.error });
+      else set("workdir", workdir.value, loop.workdir);
+    }
     if (p.taskFile !== undefined) set("taskFile", str(p.taskFile), loop.taskFile);
     if (p.notify !== undefined) {
       const v = p.notify;
@@ -1885,7 +1918,7 @@ function renderReplayText(name: string, loopId: string, goal: string | null): st
 
 /** `loopany new --dry-run` — the normalized config + fire preview (no persistence). */
 function renderCreateDryRunText(
-  config: { name: string | null; cron: string; timezone: string | null; taskFile: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string; enabled: boolean },
+  config: { name: string | null; cron: string; timezone: string | null; taskFile: string | null; workdir: string | null; charter: boolean; workflow: boolean; ui: boolean; goal: string | null; notify: string; enabled: boolean },
   nextRuns: string[],
   warning: string | undefined,
 ): string {
@@ -1895,6 +1928,8 @@ function renderCreateDryRunText(
       ["cron", config.cron],
       ["timezone", config.timezone],
       ["taskFile", config.taskFile],
+      ["workdir", config.workdir],
+      ["charter", config.charter ? "present" : "legacy fallback"],
       ["workflow", config.workflow ? "present" : "absent"],
       ["ui", config.ui ? "present" : "absent"],
       ["goal", config.goal],

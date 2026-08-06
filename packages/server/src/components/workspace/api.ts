@@ -511,6 +511,7 @@ export interface LoopConfigPatch {
   channelId?: string | null
   model?: string | null
   agent?: 'claude-code' | 'codex' | 'grok'
+  workdir?: string | null
 }
 
 export interface LoopConfigResult {
@@ -523,6 +524,7 @@ export interface LoopConfigResult {
     channelId: string | null
     model: string | null
     agent: 'claude-code' | 'codex' | 'grok'
+    workdir: string | null
   }
 }
 

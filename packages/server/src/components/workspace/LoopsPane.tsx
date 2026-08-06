@@ -319,6 +319,7 @@ function ConfigEditor({ data, refresh, onDone }: { data: LoopView; refresh: () =
     channelId: loop.channelId ?? '',
     model: loop.model ?? '',
     agent: loop.agent ?? 'claude-code',
+    workdir: loop.workdir ?? '',
   })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -336,6 +337,7 @@ function ConfigEditor({ data, refresh, onDone }: { data: LoopView; refresh: () =
       channelId: form.channelId || null,
       model: form.model || null,
       agent: form.agent as LoopConfigPatch['agent'],
+      workdir: form.workdir || null,
     }
     try {
       await patchLoopConfig(loop.id, patch)
@@ -364,6 +366,7 @@ function ConfigEditor({ data, refresh, onDone }: { data: LoopView; refresh: () =
           <option value="claude-code">Claude Code</option><option value="codex">Codex</option><option value="grok">Grok Build</option>
         </select></label>
         <label className="ws-form-wide">Model<input name="model" className="field-input" placeholder="agent default" value={form.model} onChange={(event) => set('model', event.target.value)} /></label>
+        <label className="ws-form-wide">Workdir<input name="workdir" className="field-input ws-mono-input" placeholder="daemon scratch when blank" value={form.workdir} onChange={(event) => set('workdir', event.target.value)} /></label>
       </div>
       <div className="note-actions">
         {saved && <span className="ws-saved" role="status">Saved.</span>}

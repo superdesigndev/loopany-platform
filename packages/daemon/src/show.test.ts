@@ -50,6 +50,17 @@ describe("runShow", () => {
     expect(calls[1]!.argv).toEqual(["show", "loop-x", "--json", "--full"]);
   });
 
+  test("--charter reads the HTTP seam and prints version plus exact body", async () => {
+    const { fetchFn } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }], () => ({ ok: true, body: {} }));
+    const charterFetch = (async (url: string, init: any) => {
+      if (String(url).includes("/api/loops/loop-x/charter")) return { ok: true, status: 200, json: async () => ({ charter: { version: 7, body: "# Charter\n" } }) };
+      return fetchFn(url, init);
+    }) as typeof fetch;
+    const cap = capture({ fetchFn: charterFetch });
+    expect(await runShow(["loop-x", "--charter"], cap.deps)).toBe(0);
+    expect(cap.stdout()).toBe("charter: loop-x\nversion: 7\n\n# Charter\n");
+  });
+
   test("resolves the cwd loop when no id is given", async () => {
     const { fetchFn, calls } = stub([{ id: "loop-here", name: "Here", workdir: "/work/here", taskFile: null }], () => ({ ok: true, body: { ok: true, text: "loop:\n  id: loop-here", exitCode: 0 } }));
     const cap = capture({ fetchFn, cwd: () => "/work/here" });

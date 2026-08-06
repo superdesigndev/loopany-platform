@@ -21,16 +21,15 @@ export function expandTilde(p: string): string {
   return p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
 }
 
-/** The folder a loop lives in: dirname(taskFile) → workdir → daemon scratch dir.
- *  Mirrors the runner's workdir fallbacks; always returns an absolute path. */
+/** The folder a loop lives in. First-class workdir wins; taskFile is consulted
+ *  only for an unseeded legacy loop during the additive migration. */
 export function resolveLoopDir(spec: LoopDirSpec): string {
+  if (spec.workdir) return path.resolve(expandTilde(spec.workdir));
   if (spec.taskFile) {
     const tf = expandTilde(spec.taskFile);
     // resolve() even when already absolute: a server-sent path may carry `..`
     // segments, and the jail checks downstream compare normalized paths.
     if (path.isAbsolute(tf)) return path.dirname(path.resolve(tf));
-    if (spec.workdir) return path.dirname(path.resolve(expandTilde(spec.workdir), tf));
   }
-  if (spec.workdir) return path.resolve(expandTilde(spec.workdir));
   return path.join(LOOPANY_DIR, "work", spec.loopId);
 }

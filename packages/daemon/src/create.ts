@@ -14,11 +14,32 @@
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 
 import type { CliResponse, LegacyFallback } from "./cli-client.js";
 import { postCli, printTextOrTooOld } from "./cli-client.js";
 import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
 import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
+import { expandTilde } from "./loopdir.js";
+import { isWithinRoots } from "./roots.js";
+
+const CHARTER_MAX_BYTES = 512 * 1024;
+
+/** Validate machine-local path facts before a create can bind the loop. */
+export function validateLocalWorkdir(value: unknown, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") throw new Error("workdir must be an absolute path, ~/ path, or null");
+  const raw = value.replace(/\0/g, "").trim();
+  if (!raw || (!path.isAbsolute(expandTilde(raw)) && !raw.startsWith("~/"))) {
+    throw new Error("workdir must be absolute (or start with ~/); relative paths are not accepted");
+  }
+  const abs = path.resolve(expandTilde(raw));
+  const roots = (env.LOOPANY_ROOTS ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+  if (roots.length && !isWithinRoots(abs, roots)) throw new Error(`workdir ${abs} is outside this machine's allowed roots`);
+  if (!fs.existsSync(abs)) throw new Error(`workdir ${abs} does not exist on this machine`);
+  if (!fs.statSync(abs).isDirectory()) throw new Error(`workdir ${abs} is not a directory`);
+  return abs;
+}
 
 /**
  * Best-effort IANA zone for THIS machine. `Intl` is the portable primary (works
@@ -153,9 +174,10 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   // replacing the old `--config <file>` temp-file ritual (batch 2). `--dry-run`
   // validates + previews without creating anything.
   const jsonArg = flag(args, "json");
+  const charterFile = flag(args, "charter-file");
   const dryRun = args.includes("--dry-run");
   if (jsonArg === undefined) {
-    process.stderr.write("loopany: usage: loopany new --json '<config>' [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex|grok]\n");
+    process.stderr.write("loopany: usage: loopany new --json '<config>' --charter-file <path> [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex|grok]\n");
     return 2;
   }
 
@@ -194,11 +216,29 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     process.stderr.write('loopany: config needs a "cron" expression (e.g. "0 8 * * *")\n');
     return 2;
   }
-  // The `task` column is gone (batch 2): a loop's brief lives in its task file, so a
-  // loop needs a "workflow" (JS) OR a "taskFile" (path to the Spec) to work from.
-  if (!config.workflow && !config.taskFile) {
-    process.stderr.write('loopany: config needs a "workflow" (JS) or a "taskFile" (path to the loop\'s Spec)\n');
+  if (!config.workflow && !config.taskFile && !charterFile) {
+    process.stderr.write('loopany: config needs --charter-file, a "workflow" (JS), or a legacy "taskFile"\n');
     return 2;
+  }
+
+  try {
+    const workdir = validateLocalWorkdir(config.workdir);
+    if (workdir) config.workdir = workdir;
+  } catch (cause) {
+    process.stderr.write(`loopany: ${cause instanceof Error ? cause.message : String(cause)}\n`);
+    return 2;
+  }
+
+  if (charterFile) {
+    try {
+      const charter = fs.readFileSync(charterFile, "utf8");
+      const bytes = Buffer.byteLength(charter, "utf8");
+      if (bytes > CHARTER_MAX_BYTES) throw new Error(`charter is ${bytes} bytes; maximum is ${CHARTER_MAX_BYTES}`);
+      config.charter = charter;
+    } catch (cause) {
+      process.stderr.write(`loopany: cannot read --charter-file: ${cause instanceof Error ? cause.message : String(cause)}\n`);
+      return 1;
+    }
   }
 
   // The CLI owns the fixed envelope: timezone (so "8am" means the user's 8am),
@@ -216,6 +256,21 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   if (agent) body.agent = agent;
   else delete body.agent;
   if (connectKey) body.claim = connectKey;
+  // Protocol negotiation prevents an old server from silently ignoring a charter
+  // while accepting the workflow half of the same create.
+  if (charterFile) {
+    try {
+      const status = await fetchImpl(`${server}/api/machine/status`, { headers: { Authorization: `Bearer ${token}` } });
+      const view = status.ok ? await status.json() as { capabilities?: unknown } : {};
+      if (!Array.isArray(view.capabilities) || !view.capabilities.includes("charter-doc-v1")) {
+        process.stderr.write("loopany: SERVER_TOO_OLD — this server cannot create attached charter documents yet\n");
+        return 1;
+      }
+    } catch (cause) {
+      process.stderr.write(`loopany: could not verify charter support: ${cause instanceof Error ? cause.message : String(cause)}\n`);
+      return 1;
+    }
+  }
   // Idempotency (F8): stamp a content-hash key on real creates so a timed-out retry
   // replays the existing loop instead of making a twin. A dry-run creates nothing, so
   // it carries no key. Hashed over the ENTIRE resolved body (config + timezone +
