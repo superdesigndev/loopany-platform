@@ -59,7 +59,7 @@ import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
 import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 import { appendProductionRunFinished } from "../kernel/runQueue.js";
 import { watchedTasksWarningFor, type WatchedTasksWarning } from "../kernel/watchedTasks.js";
-import { createLoopWithCharter } from "../kernel/charters.js";
+import { applyCharterCarry, createLoopWithCharter } from "../kernel/charters.js";
 import { REFUSAL_STATUS } from "../kernel/refusals.js";
 import { validateWorkdir } from "../lib/workdir.js";
 
@@ -1321,6 +1321,50 @@ export class MachineGateway {
     return readClaim(token);
   }
 
+  /** Apply additive migration fields before a terminal report retires its lease. */
+  private async carryReportedCharter(
+    lease: RunLease,
+    body: { charterUpdate?: unknown; resolvedWorkdir?: unknown; taskFileContent?: unknown },
+  ): Promise<string | undefined> {
+    const loop = await store.getLoop(lease.loopId);
+    if (!loop) return "charter carry skipped: loop no longer exists";
+
+    if (loop.workdir == null && body.resolvedWorkdir !== undefined) {
+      const workdir = validateWorkdir(body.resolvedWorkdir);
+      if (workdir.ok && workdir.value) await store.setLoopWorkdirIfNull(loop.id, workdir.value);
+      else if (!workdir.ok) log.warn({ runId: lease.runId, error: workdir.error }, "report: refused resolvedWorkdir");
+    }
+
+    let candidate: { baseVersion: number | null; content: string } | undefined;
+    if (body.charterUpdate && typeof body.charterUpdate === "object" && !Array.isArray(body.charterUpdate)) {
+      const raw = body.charterUpdate as Record<string, unknown>;
+      const base = raw.baseVersion;
+      if (typeof raw.content === "string" && (base === null || (Number.isSafeInteger(base) && Number(base) >= 0))) {
+        candidate = { baseVersion: base as number | null, content: raw.content };
+      } else {
+        log.warn({ runId: lease.runId }, "report: malformed charterUpdate ignored");
+      }
+    }
+    if (!loop.teamId) return candidate || body.taskFileContent ? "charter carry skipped: loop has no team" : undefined;
+    const carried = await applyCharterCarry({
+      teamId: loop.teamId,
+      loopId: loop.id,
+      loopName: loop.name,
+      runId: lease.runId,
+      candidate,
+      legacyContent: typeof body.taskFileContent === "string" ? body.taskFileContent : null,
+      storedLegacyContent: loop.taskFileContent,
+      now: nowIso(),
+    });
+    if (!carried.ok) {
+      const warning = `charter carry refused: ${carried.error.code} ${carried.error.message}`;
+      log.warn({ runId: lease.runId, code: carried.error.code }, warning);
+      return warning;
+    }
+    if (carried.value.warning) log.warn({ runId: lease.runId }, carried.value.warning);
+    return carried.value.warning;
+  }
+
   // ---- POST /machine/report ----
 
   async report(
@@ -1335,6 +1379,10 @@ export class MachineGateway {
       transcript?: unknown;
       /** Latest content of the loop's task file (durable context+log doc). */
       taskFileContent?: unknown;
+      /** New daemon's changed per-run charter file; complete body, never a tail. */
+      charterUpdate?: unknown;
+      /** Migration-only local dirname of a legacy taskFile. */
+      resolvedWorkdir?: unknown;
       error?: string;
       finalText?: string;
       /** "direct"/"silent" (workflow), "exec" (claude), or "evolve". Defaults by role. */
@@ -1378,6 +1426,7 @@ export class MachineGateway {
     // snapshot (finish did all of that). Then retire the lease: finish deliberately
     // left it active for exactly this one enriching report.
     if (run?.phase === "done") {
+      const charterWarning = await this.carryReportedCharter(lease, body);
       const enrichArtifacts = coerceArtifacts(body.artifacts);
       const enrichTranscript = coerceTranscript(body.transcript);
       await store.updateRun(lease.runId, {
@@ -1397,7 +1446,7 @@ export class MachineGateway {
       await appendProductionRunFinished(run, "success", nowIso(), run.message);
       await retireLease(runToken);
       log.info({ runId: lease.runId }, "report: enriched a finished run (durationMs/sessionId)");
-      return { status: 200, body: { ok: true } };
+      return { status: 200, body: { ok: true, ...(charterWarning ? { warnings: [charterWarning] } : {}) } };
     }
 
     // ── Late wake-report for a sweep-RECLAIMED run ─────────────────────────────
@@ -1409,6 +1458,7 @@ export class MachineGateway {
     // (like the finish→enrich handshake). Recognized by the lease's terminal-grace
     // state — set ONLY by `reclaimRun` (via `terminalizeLease`).
     if (run?.phase === "error" && lease.state === "terminal-grace") {
+      const charterWarning = await this.carryReportedCharter(lease, body);
       const artifacts = coerceArtifacts(body.artifacts);
       const transcript = coerceTranscript(body.transcript);
       const rawMessage = body.message !== undefined ? body.message : body.finalText;
@@ -1475,8 +1525,10 @@ export class MachineGateway {
         { runId: lease.runId, ok, reclaimed: true },
         ok ? "report: reconciled a reclaimed run to done (machine woke)" : "report: recorded a reclaimed run's real error",
       );
-      return { status: 200, body: { ok: true, reconciled: true } };
+      return { status: 200, body: { ok: true, reconciled: true, ...(charterWarning ? { warnings: [charterWarning] } : {}) } };
     }
+
+    const charterWarning = await this.carryReportedCharter(lease, body);
 
     // Persist the workflow cursor (free-form), if any — bounded by serialized size
     // so a runaway cursor can't bloat the loop row; an over-cap cursor is dropped
@@ -1569,7 +1621,7 @@ export class MachineGateway {
       }
     }
     log.info({ runId: lease.runId, ok }, "report: finalized");
-    return { status: 200, body: { ok: true } };
+    return { status: 200, body: { ok: true, ...(charterWarning ? { warnings: [charterWarning] } : {}) } };
   }
 
   /**

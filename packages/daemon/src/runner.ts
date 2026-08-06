@@ -39,6 +39,15 @@ export interface Delivery {
     agent?: CodingAgent;
   };
   prevState: unknown;
+  /** Absent from old servers; null marks a new-server legacy loop awaiting seed. */
+  charter?: null | {
+    docId: string;
+    key: string;
+    docKind: "charter";
+    format: "markdown";
+    body: string;
+    version: number;
+  };
   /** Server-configured workdir jail — may only NARROW the daemon's local env
    *  LOOPANY_ROOTS jail, never widen it (see roots.effectiveRoots). */
   roots?: string[];
@@ -82,6 +91,8 @@ interface ReportBody {
   transcript?: TranscriptStep[];
   /** Latest content of the loop's task file (the durable context+log doc). */
   taskFileContent?: string;
+  charterUpdate?: { baseVersion: number | null; content: string };
+  resolvedWorkdir?: string;
   error?: string;
   finalText?: string;
 }
@@ -89,6 +100,8 @@ interface ReportBody {
 /** Daemon-side cap on the task-file body carried in the report — it's a growing
  *  log doc, so a huge one is tailed (recent entries are what the detail view is for). */
 const TASKFILE_CAP = 256 * 1024;
+const CHARTER_CAP = 512 * 1024;
+const CHARTER_RUN_DIRS_TO_KEEP = 5;
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
 
@@ -315,16 +328,74 @@ export function costFromResult(j: ClaudeJson): RunCost | undefined {
 
 export async function runDelivery(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<void> {
   const start = Date.now();
-  // The ONE channel out of a run: the report payload (message/metrics/artifacts
-  // and the task file's latest bytes). Durable products the agent files itself
-  // through the object verbs. Nothing on disk travels on its own.
-  const reportRun = (body: ReportBody): Promise<void> => report(serverUrl, d.runToken, body);
   // The LOCAL env jail (LOOPANY_ROOTS) always applies when set; server-sent
   // roots can only narrow it — a hostile server must not widen the jail.
   const jail = effectiveRoots(roots, d.roots);
-  let workdir: string;
+  const charterProtocol = Object.prototype.hasOwnProperty.call(d, "charter");
+  let workdir: string | undefined;
+  let resolvedWorkdir: string | undefined;
+  let charterFile: string | undefined;
+  let deliveredCharter = "";
+  let charterBaseVersion: number | null = null;
+  let seedCharter = false;
+
+  // Every terminal path uses this one report wrapper. It carries edits from the
+  // per-run daemon-home file on clean, failed and interrupted runs alike.
+  const reportRun = async (body: ReportBody): Promise<void> => {
+    const outgoing: ReportBody = { ...body };
+    if (charterProtocol) {
+      if (resolvedWorkdir) outgoing.resolvedWorkdir = resolvedWorkdir;
+      if (charterFile) {
+        try {
+          const content = fs.readFileSync(charterFile, "utf8");
+          const bytes = Buffer.byteLength(content, "utf8");
+          if (bytes > CHARTER_CAP) {
+            logger.warn({ runId: d.runId, bytes }, "charter carry omitted: complete file exceeds size limit");
+          } else if (seedCharter || content !== deliveredCharter) {
+            outgoing.charterUpdate = { baseVersion: charterBaseVersion, content };
+          }
+        } catch (cause) {
+          logger.warn({ runId: d.runId, error: msg(cause) }, "charter carry omitted: per-run file could not be read");
+        }
+      }
+    } else if (workdir) {
+      // Old-server compatibility: preserve the pre-charter task-file report.
+      outgoing.taskFileContent = readTaskFile(workdir, d.loop.taskFile, roots);
+    }
+    await report(serverUrl, d.runToken, outgoing);
+    if (charterFile) pruneCharterRunDirs(d.loop.id, d.runId);
+  };
+
   try {
-    workdir = resolveWorkdir(d.loop.workdir, d.loop.id, jail, d.requireWorkdir === true);
+    if (charterProtocol && d.charter === null && !d.loop.workdir && d.loop.taskFile) {
+      const legacyFile = resolveLegacyTaskFile(d.loop.taskFile, jail);
+      workdir = path.dirname(legacyFile);
+      resolvedWorkdir = workdir;
+    } else {
+      workdir = resolveWorkdir(
+        d.loop.workdir,
+        d.loop.id,
+        jail,
+        d.requireWorkdir === true || (charterProtocol && d.loop.workdir !== null),
+      );
+    }
+
+    if (charterProtocol) {
+      if (d.charter) {
+        deliveredCharter = d.charter.body;
+        charterBaseVersion = d.charter.version;
+      } else if (d.loop.taskFile) {
+        const legacyFile = resolveLegacyTaskFile(d.loop.taskFile, jail, workdir);
+        deliveredCharter = readCompleteCharter(legacyFile);
+        seedCharter = true;
+      } else if (d.loop.workflow) {
+        deliveredCharter = "";
+        seedCharter = true;
+      } else {
+        throw new Error("this loop has no attached charter or readable legacy task file; no agent was launched");
+      }
+      charterFile = materializeCharter(d.loop.id, d.runId, deliveredCharter);
+    }
   } catch (err) {
     return reportRun({ runId: d.runId, ok: false, durationMs: Date.now() - start, error: msg(err) });
   }
@@ -336,7 +407,13 @@ export async function runDelivery(d: Delivery, serverUrl: string, roots: string[
   let escalation = "";
   let workflowFailure: { error: string; source: string } | undefined;
   if (d.role === "exec" && d.loop.workflow) {
-    const wf = await runWorkflow(d.loop.workflow, d.prevState, workdir, signal);
+    const wf = await runWorkflow(
+      d.loop.workflow,
+      d.prevState,
+      workdir,
+      signal,
+      charterFile ? { LOOPANY_CHARTER_FILE: charterFile } : {},
+    );
     if (!wf.ok) {
       // A failed workflow (thrown JS, a failed tools.call, a timeout) no longer just
       // reports a failed run. Instead we FALL BACK to the agent: it first completes
@@ -358,7 +435,6 @@ export async function runDelivery(d: Delivery, serverUrl: string, roots: string[
           runId: d.runId, ok: true, durationMs: Date.now() - start,
           outcome: wf.result!.message ? "direct" : "silent",
           message: wf.result!.message, cursor,
-          taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
         });
       }
       // Escalation: fold the workflow's signals into claude's task.
@@ -403,6 +479,7 @@ export async function runDelivery(d: Delivery, serverUrl: string, roots: string[
       // lease the shipping callback carries. Both, always.
       LOOPANY_RUN_ID: d.runId,
       LOOPANY_RUN_TOKEN: d.runToken,
+      ...(charterFile ? { LOOPANY_CHARTER_FILE: charterFile } : {}),
     };
     const task = workflowFailure
       ? buildWorkflowFallbackTask(d.task, workflowFailure, dateStamp(), d.loop.name, d.loop.id)
@@ -514,7 +591,6 @@ export async function runDelivery(d: Delivery, serverUrl: string, roots: string[
     ...(attempts > 1 ? { attempts } : {}),
     artifacts,
     transcript,
-    taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
     error,
     // Every role sends finalText: the server only uses it as a message FALLBACK
     // when the run didn't `loopany report --message` itself, and evolve/edit are
@@ -669,6 +745,71 @@ function readTaskFile(workdir: string, taskFile: string | null, localRoots: stri
     return `… (truncated — last ${Math.round(TASKFILE_CAP / 1024)}KB of ${Math.round(raw.length / 1024)}KB)\n\n` + raw.slice(-TASKFILE_CAP);
   } catch {
     return undefined;
+  }
+}
+
+/** Resolve the migration-only legacy source without mutating it. */
+function resolveLegacyTaskFile(taskFile: string, roots: string[], workdir?: string): string {
+  const expanded = expandTilde(taskFile);
+  const file = path.resolve(workdir ?? process.cwd(), expanded);
+  if (roots.length && !isWithinRoots(file, [...roots, ...(workdir ? [workdir] : [])])) {
+    throw new Error(`legacy task file ${file} is outside this machine's allowed roots`);
+  }
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    throw new Error(`legacy task file ${file} does not exist on this machine`);
+  }
+  return file;
+}
+
+function readCompleteCharter(file: string): string {
+  const body = fs.readFileSync(file, "utf8");
+  const bytes = Buffer.byteLength(body, "utf8");
+  if (bytes > CHARTER_CAP) {
+    throw new Error(`legacy charter ${file} is ${bytes} bytes; complete-body limit is ${CHARTER_CAP}`);
+  }
+  return body;
+}
+
+function safeRunSegment(value: string, label: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(value) || value === "." || value === "..") {
+    throw new Error(`${label} is not safe for daemon-home materialization`);
+  }
+  return value;
+}
+
+/** Atomic per-run materialization under daemon home, never under the project cwd. */
+export function materializeCharter(loopId: string, runId: string, body: string): string {
+  const loopPart = safeRunSegment(loopId, "loop id");
+  const runPart = safeRunSegment(runId, "run id");
+  const daemonHome = process.env.LOOPANY_HOME || LOOPANY_DIR;
+  const dir = path.join(daemonHome, "work", loopPart, `run-${runPart}`);
+  fs.mkdirSync(dir, { recursive: true });
+  const target = path.join(dir, "README.md");
+  const temp = path.join(dir, `.README.md.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(temp, body, "utf8");
+    fs.renameSync(temp, target);
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+  return target;
+}
+
+/** Best-effort bounded retention for daemon-owned per-run charter directories. */
+export function pruneCharterRunDirs(loopId: string, currentRunId: string): void {
+  try {
+    const daemonHome = process.env.LOOPANY_HOME || LOOPANY_DIR;
+    const parent = path.join(daemonHome, "work", safeRunSegment(loopId, "loop id"));
+    const current = `run-${safeRunSegment(currentRunId, "run id")}`;
+    const dirs = fs.readdirSync(parent, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("run-") && /^[A-Za-z0-9._-]+$/.test(entry.name))
+      .map((entry) => ({ name: entry.name, mtime: fs.statSync(path.join(parent, entry.name)).mtimeMs }))
+      .sort((a, b) => (a.name === current ? -1 : b.name === current ? 1 : b.mtime - a.mtime));
+    for (const stale of dirs.slice(CHARTER_RUN_DIRS_TO_KEEP)) {
+      fs.rmSync(path.join(parent, stale.name), { recursive: true, force: true });
+    }
+  } catch {
+    /* retention must never break a report */
   }
 }
 
@@ -834,4 +975,3 @@ async function report(serverUrl: string, runToken: string, body: ReportBody): Pr
     }
   }
 }
-

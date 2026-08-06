@@ -17,7 +17,7 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { addCost, buildAgentSpawn, buildResumeTask, buildWorkflowFallbackTask, classifyFailure, costFromResult, dateStamp, foldEscalation, makeStreamConsumer, runDelivery, type Delivery } from "./runner.js";
+import { addCost, buildAgentSpawn, buildResumeTask, buildWorkflowFallbackTask, classifyFailure, costFromResult, dateStamp, foldEscalation, makeStreamConsumer, materializeCharter, pruneCharterRunDirs, runDelivery, type Delivery } from "./runner.js";
 
 describe("dateStamp", () => {
   test("formats YYYY-MM-DD (UTC)", () => {
@@ -368,10 +368,12 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-runner-"));
   workdir = path.join(root, "work");
   fs.mkdirSync(workdir, { recursive: true });
+  process.env.LOOPANY_HOME = path.join(root, "daemon-home");
 });
 afterEach(() => {
   delete process.env.LOOPANY_CLAUDE_BIN;
   delete process.env.LOOPANY_MCP_BRIDGE;
+  delete process.env.LOOPANY_HOME;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -434,6 +436,88 @@ describe("runDelivery — workflow failure falls back to the agent", () => {
     );
     expect(fs.existsSync(path.join(workdir, "captured-task.txt"))).toBe(false);
   }, 20000);
+});
+
+describe("runDelivery — per-run attached charter materialization", () => {
+  async function captureReport(d: Delivery): Promise<any> {
+    const reports: any[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => { reports.push(JSON.parse(body)); res.end("{}"); });
+    });
+    await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+    try {
+      await runDelivery(d, `http://127.0.0.1:${(srv.address() as AddressInfo).port}`, []);
+    } finally {
+      srv.close();
+    }
+    return reports.at(-1);
+  }
+
+  test("materializes before workflow under daemon home and exports only the absolute file path", async () => {
+    const report = await captureReport(delivery({
+      charter: { docId: "doc-1", key: "loop-charter:loop-1", docKind: "charter", format: "markdown", body: "# Canonical\n", version: 3 },
+      loop: {
+        ...delivery().loop,
+        workflow: `const { readFileSync } = await import("node:fs"); return { message: readFileSync(process.env.LOOPANY_CHARTER_FILE, "utf8") };`,
+      },
+    }));
+    const expected = path.join(process.env.LOOPANY_HOME!, "work", "loop-1", "run-run-1", "README.md");
+    expect(fs.readFileSync(expected, "utf8")).toBe("# Canonical\n");
+    expect(expected.startsWith(workdir + path.sep)).toBe(false);
+    expect(report.message).toBe("# Canonical\n");
+    expect(report.charterUpdate).toBeUndefined();
+    expect(report).not.toHaveProperty("taskFileContent");
+  }, 20000);
+
+  test("carries edits even when the coding-agent process fails", async () => {
+    const bin = path.join(root, "edit-then-fail.sh");
+    fs.writeFileSync(bin, [
+      "#!/bin/sh",
+      'printf "%s" "$LOOPANY_CHARTER_FILE" > charter-path.txt',
+      'printf "# Revised after failure\\n" > "$LOOPANY_CHARTER_FILE"',
+      "exit 1",
+      "",
+    ].join("\n"), "utf8");
+    fs.chmodSync(bin, 0o755);
+    process.env.LOOPANY_CLAUDE_BIN = bin;
+    fs.writeFileSync(path.join(workdir, "README.md"), "repository readme", "utf8");
+    const report = await captureReport(delivery({
+      charter: { docId: "doc-1", key: "loop-charter:loop-1", docKind: "charter", format: "markdown", body: "# Canonical\n", version: 8 },
+      loop: { ...delivery().loop, workflow: null },
+    }));
+    const expected = path.join(process.env.LOOPANY_HOME!, "work", "loop-1", "run-run-1", "README.md");
+    expect(fs.readFileSync(path.join(workdir, "charter-path.txt"), "utf8")).toBe(expected);
+    expect(report.ok).toBe(false);
+    expect(report.charterUpdate).toEqual({ baseVersion: 8, content: "# Revised after failure\n" });
+    expect(fs.readFileSync(path.join(workdir, "README.md"), "utf8")).toBe("repository readme");
+  }, 20000);
+
+  test("derives an unseeded legacy workdir once and carries a complete seed", async () => {
+    process.env.LOOPANY_CLAUDE_BIN = writeFakeClaude();
+    const legacyDir = path.join(root, "legacy-project");
+    fs.mkdirSync(legacyDir);
+    const legacyFile = path.join(legacyDir, "TASK.md");
+    fs.writeFileSync(legacyFile, "# Legacy charter\n", "utf8");
+    const report = await captureReport(delivery({
+      charter: null,
+      loop: { ...delivery().loop, workdir: null, taskFile: legacyFile, workflow: null },
+    }));
+    expect(report.resolvedWorkdir).toBe(legacyDir);
+    expect(report.charterUpdate).toEqual({ baseVersion: null, content: "# Legacy charter\n" });
+    expect(fs.readFileSync(path.join(process.env.LOOPANY_HOME!, "work", "loop-1", "run-run-1", "README.md"), "utf8")).toBe("# Legacy charter\n");
+    expect(fs.readFileSync(legacyFile, "utf8")).toBe("# Legacy charter\n");
+  }, 20000);
+
+  test("prunes old daemon-home run directories to a bounded set", () => {
+    for (let n = 1; n <= 8; n++) materializeCharter("loop-prune", `run-${n}`, `# ${n}\n`);
+    pruneCharterRunDirs("loop-prune", "run-8");
+    const parent = path.join(process.env.LOOPANY_HOME!, "work", "loop-prune");
+    const dirs = fs.readdirSync(parent).filter((name) => name.startsWith("run-"));
+    expect(dirs).toHaveLength(5);
+    expect(dirs).toContain("run-run-8");
+  });
 });
 
 describe("runDelivery — a timed-out run keeps its session pointer", () => {

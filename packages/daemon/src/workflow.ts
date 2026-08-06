@@ -110,7 +110,13 @@ __run(prev)
 `;
 }
 
-export async function runWorkflow(body: string, prevState: unknown, cwd: string, signal?: AbortSignal): Promise<WorkflowRun> {
+export async function runWorkflow(
+  body: string,
+  prevState: unknown,
+  cwd: string,
+  signal?: AbortSignal,
+  runEnv: { LOOPANY_CHARTER_FILE?: string } = {},
+): Promise<WorkflowRun> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "loopany-workflow-"));
   const scriptPath = path.join(dir, "workflow.mjs");
   const outPath = path.join(dir, "out.json");
@@ -129,6 +135,7 @@ export async function runWorkflow(body: string, prevState: unknown, cwd: string,
         ...allowlistEnv({ keys: passthroughEnvKeys(), prefixes: ["LOOPANY_WORKFLOW_"] }),
         LOOPANY_WORKFLOW_OUT: outPath,
         LOOPANY_MCP_BRIDGE: mcpBridgeUrl(),
+        ...runEnv,
       },
       signal,
       timeoutMs: TIMEOUT_MS,

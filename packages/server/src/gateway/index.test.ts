@@ -322,6 +322,34 @@ test("report syncs the machine's task file content onto the loop", async () => {
   expect(stored?.taskFileSyncedAt).toBeTruthy();
 });
 
+test("report carries a changed charter with CAS, refuses stale bytes, and still finalizes", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", teamId: "team-carry", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({ userId: "u1", teamId: "team-carry", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
+  const initial = (await charters.ensureCharter({ teamId: "team-carry", loopId: loop.id, body: "delivered", actor: { entrance: "human", actorId: "u1" }, now: new Date().toISOString() }));
+  if (!initial.ok) throw new Error(initial.error.message);
+  const deliveredVersion = initial.value.charter.version;
+  const owner = await charters.replaceCharter({ teamId: "team-carry", loopId: loop.id, body: "newest", expectedVersion: deliveredVersion, actor: { entrance: "human", actorId: "u1" }, now: new Date().toISOString(), source: "owner-edit" });
+  expect(owner.ok).toBe(true);
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const lease = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+  const result = await gateway().report(lease, {
+    ok: false,
+    error: "agent crashed after edit",
+    charterUpdate: { baseVersion: deliveredVersion, content: "stale file edit" },
+    resolvedWorkdir: "/srv/project",
+  });
+  expect(result.status).toBe(200);
+  expect((result.body as any).warnings[0]).toMatch(/refused/);
+  expect((await store.getRun(run.id))?.phase).toBe("error");
+  expect((await store.getLoop(loop.id))?.workdir).toBe("/srv/project");
+  const current = await charters.readCharter("team-carry", loop.id);
+  expect(current.ok && current.value?.body).toBe("newest");
+  const kernelSchema = await import("../db/kernel-schema.js");
+  expect((await db.db.select().from(kernelSchema.events)).some((event) => event.kind === "charter-update-conflict" && event.objectId === loop.id)).toBe(true);
+});
+
 test("report strips NUL (U+0000) from wire text so the Postgres write can't throw", async () => {
   // Postgres text/jsonb columns REJECT U+0000 (SQLite tolerated it). A daemon-supplied
   // transcript/message/taskFileContent/cursor carrying a NUL must persist with the byte

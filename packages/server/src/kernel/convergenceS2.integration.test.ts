@@ -175,6 +175,23 @@ describe("S2 prod-claimable trigger rows", () => {
     expect(built.task).toContain("KEEP <this> byte-for-byte");
     expect(built.task).toContain(`Task: ${watched.id} — Verify the prod path`);
     expect(built.task).toMatch(/Task payload \(verbatim JSON\):/);
+    expect(built.charter).toBeNull();
+  });
+
+  it("delivers the canonical attached charter body and event version", async () => {
+    const { loop } = await fixtures();
+    const charters = await import("./charters.js");
+    const attached = ok(await charters.ensureCharter({ teamId: TEAM, loopId: loop.id, body: "# Canonical\n", actor: human.actor, now: NOW.toISOString() })).charter;
+    const run = await store.addRun({ loopId: loop.id, userId: USER, machineId: loop.machineId, role: "exec", phase: "pending", ts: NOW.toISOString() });
+    const built = await delivery.buildDelivery(loop, run.id, "rk_test", []);
+    expect(built.charter).toEqual({
+      docId: attached.id,
+      key: attached.key,
+      docKind: "charter",
+      format: "markdown",
+      body: "# Canonical\n",
+      version: attached.version,
+    });
   });
 
   it("joins a second directive to the open prod run instead of stacking", async () => {

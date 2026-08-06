@@ -7,6 +7,7 @@ import type { CodingAgent, Loop } from "../db/schema.js";
 import * as store from "../db/store.js";
 import * as kernelStore from "../db/kernelStore.js";
 import { mirrorsFor } from "../kernel/mirrorApi.js";
+import { readCharter } from "../kernel/charters.js";
 import {
   buildEditPrompt,
   buildEditTask,
@@ -33,6 +34,15 @@ export interface Delivery {
     /** Coding agent to EXECUTE this loop with (the daemon branches spawn +
      *  credentials on this — claude-code | codex | grok). */
     agent: CodingAgent;
+  };
+  /** Absent on an old server; null is an unseeded legacy loop. */
+  charter: null | {
+    docId: string;
+    key: string;
+    docKind: "charter";
+    format: "markdown";
+    body: string;
+    version: number;
   };
   /** Cursor (prev state) for the workflow gate. */
   prevState: unknown;
@@ -63,6 +73,9 @@ export async function buildDelivery(loop: Loop, runId: string, runToken: string,
       systemPrompt = buildLoopSystemPrompt(loop);
       task = buildExecTask(loop, run ? await scopedTrigger(loop, run) : null);
   }
+  const attached = loop.teamId ? await readCharter(loop.teamId, loop.id) : null;
+  if (attached && !attached.ok) throw new Error(`cannot deliver charter for ${loop.id}: ${attached.error.code} ${attached.error.message}`);
+  const charter = attached?.ok ? attached.value : null;
   return {
     runId,
     runToken,
@@ -81,6 +94,14 @@ export async function buildDelivery(loop: Loop, runId: string, runToken: string,
     prevState: loop.state ?? null,
     systemPrompt,
     task,
+    charter: charter ? {
+      docId: charter.id,
+      key: charter.key,
+      docKind: charter.docKind,
+      format: charter.format,
+      body: charter.body,
+      version: charter.version,
+    } : null,
   };
 }
 

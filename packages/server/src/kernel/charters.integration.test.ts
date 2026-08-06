@@ -96,6 +96,42 @@ describe("attached charter identity and compare-and-swap", () => {
     expect(history[1]).toMatchObject({ entrance: "agent", actorId: "run-charter", kind: "charter-updated", payload: { loopId: LOOP, source: "report-fallback" } });
   });
 
+  it("applies file carries under the delivered version and records stale carries on the loop stream", async () => {
+    const made = value(await charters.ensureCharter({ teamId: TEAM, loopId: LOOP, body: "one", actor: owner, now: T0 })).charter;
+    const carried = value(await charters.applyCharterCarry({
+      teamId: TEAM, loopId: LOOP, runId: "run-one", now: T1,
+      candidate: { baseVersion: made.version, content: "two" },
+    }));
+    expect(carried).toMatchObject({ changed: true, seeded: false, charter: { body: "two" } });
+
+    const ownerEdit = value(await charters.replaceCharter({
+      teamId: TEAM, loopId: LOOP, body: "newest", expectedVersion: carried.charter!.version,
+      actor: owner, now: T2, source: "owner-edit",
+    })).charter;
+    const stale = value(await charters.applyCharterCarry({
+      teamId: TEAM, loopId: LOOP, runId: "run-stale", now: T2,
+      candidate: { baseVersion: carried.charter!.version, content: "stale bytes" },
+    }));
+    expect(stale.warning).toMatch(/refused/);
+    expect(stale.charter).toMatchObject({ body: "newest", version: ownerEdit.version });
+    const conflict = (await database.db.select().from(kernelSchema.events)).find((event) => event.kind === "charter-update-conflict");
+    expect(conflict).toMatchObject({ objectId: LOOP, entrance: "agent", actorId: "run-stale", payload: { expectedVersion: carried.charter!.version, currentVersion: ownerEdit.version } });
+  });
+
+  it("seeds unseeded legacy loops from complete candidates and never from a truncated tail", async () => {
+    const skipped = value(await charters.applyCharterCarry({
+      teamId: TEAM, loopId: LOOP, runId: "run-old", now: T0,
+      legacyContent: "… (truncated — last 256KB of 600KB)\n\npartial",
+    }));
+    expect(skipped.charter).toBeNull();
+    const seeded = value(await charters.applyCharterCarry({
+      teamId: TEAM, loopId: LOOP, runId: "run-new", now: T1,
+      candidate: { baseVersion: null, content: "# Complete\n" },
+      legacyContent: "older",
+    }));
+    expect(seeded).toMatchObject({ seeded: true, changed: true, charter: { body: "# Complete\n" } });
+  });
+
   it("refuses reserved product keys and detects a derived-id collision", async () => {
     const product = await kernel.createObject({ teamId: TEAM, kind: "doc", key: ids.charterKey(LOOP), body: "squat", actor: owner, now: T0 });
     expect(product.ok ? "OK" : product.code).toBe("RESERVED_KEY");

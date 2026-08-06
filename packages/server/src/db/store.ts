@@ -166,6 +166,14 @@ export async function updateLoop(id: string, patch: Partial<NewLoop>): Promise<L
   });
 }
 
+/** Migration backfill: a machine-resolved legacy cwd may fill only a still-null row. */
+export async function setLoopWorkdirIfNull(id: string, workdir: string): Promise<Loop | undefined> {
+  return (await db.update(loops)
+    .set({ workdir, updatedAt: nowIso() })
+    .where(and(eq(loops.id, id), isNull(loops.workdir)))
+    .returning())[0];
+}
+
 export async function deleteLoop(id: string): Promise<boolean> {
   return db.transaction(async (tx) => {
     const deleted = await tx.delete(loops).where(eq(loops.id, id)).returning({ id: loops.id, teamId: loops.teamId });

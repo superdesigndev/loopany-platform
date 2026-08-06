@@ -69,6 +69,22 @@ interface ReplaceCharterInput extends CharterIdentity {
   source: "owner-edit" | "http" | "report-fallback";
 }
 
+export interface CharterCarryInput extends CharterIdentity {
+  loopName?: string | null;
+  runId: string;
+  candidate?: { baseVersion: number | null; content: string };
+  legacyContent?: string | null;
+  storedLegacyContent?: string | null;
+  now: string;
+}
+
+export interface CharterCarryResult {
+  charter: CharterSnapshot | null;
+  changed: boolean;
+  seeded: boolean;
+  warning?: string;
+}
+
 function tooLarge(body: string): ApiRefusal | undefined {
   const bytes = Buffer.byteLength(body, "utf8");
   if (bytes <= CHARTER_MAX_BYTES) return undefined;
@@ -77,6 +93,16 @@ function tooLarge(body: string): ApiRefusal | undefined {
     `charter body is ${bytes} bytes; the complete-body limit is ${CHARTER_MAX_BYTES}`,
     [{ path: "body", message: "complete charter exceeds limit", got: String(bytes), expected: `<= ${CHARTER_MAX_BYTES}` }],
     "shorten the charter and retry; Loopany never truncates a charter into a valid-looking partial document",
+  );
+}
+
+function invalidCharterBody(body: string): ApiRefusal | undefined {
+  if (!body.includes("\0")) return tooLarge(body);
+  return refusal(
+    "INVALID_BODY",
+    "charter body contains a NUL byte, which cannot be stored as PostgreSQL text",
+    [{ path: "body", message: "remove the NUL byte" }],
+    "save the charter as ordinary UTF-8 markdown and retry",
   );
 }
 
@@ -131,8 +157,8 @@ export async function readCharter(teamId: string, loopId: string): Promise<Chart
 }
 
 export async function ensureCharter(input: EnsureCharterInput): Promise<CharterResult<{ charter: CharterSnapshot; created: boolean }>> {
-  const oversized = tooLarge(input.body);
-  if (oversized) return { ok: false, error: oversized };
+  const invalid = invalidCharterBody(input.body);
+  if (invalid) return { ok: false, error: invalid };
   return db.transaction(async (rawTx) => ensureCharterIn(rawTx as unknown as store.KernelExec, input));
 }
 
@@ -140,8 +166,8 @@ export async function ensureCharter(input: EnsureCharterInput): Promise<CharterR
 export async function createLoopWithCharter(
   input: CreateLoopWithCharterInput,
 ): Promise<CharterResult<{ loop: Loop; charter: CharterSnapshot }>> {
-  const oversized = tooLarge(input.body);
-  if (oversized) return { ok: false, error: oversized };
+  const invalid = invalidCharterBody(input.body);
+  if (invalid) return { ok: false, error: invalid };
   try {
     const value = await db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as store.KernelExec;
@@ -169,8 +195,8 @@ export async function ensureCharterIn(
   tx: store.KernelExec,
   input: EnsureCharterInput,
 ): Promise<CharterResult<{ charter: CharterSnapshot; created: boolean }>> {
-  const oversized = tooLarge(input.body);
-  if (oversized) return { ok: false, error: oversized };
+  const invalid = invalidCharterBody(input.body);
+  if (invalid) return { ok: false, error: invalid };
   if (!(await loopInTeam(tx, input.teamId, input.loopId))) {
     return { ok: false, error: refusal("NOT_FOUND", `${input.loopId} was not found`) };
   }
@@ -197,8 +223,8 @@ export async function ensureCharterIn(
 }
 
 export async function replaceCharter(input: ReplaceCharterInput): Promise<CharterResult<{ charter: CharterSnapshot; changed: boolean }>> {
-  const oversized = tooLarge(input.body);
-  if (oversized) return { ok: false, error: oversized };
+  const invalid = invalidCharterBody(input.body);
+  if (invalid) return { ok: false, error: invalid };
   return db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec;
     if (!(await loopInTeam(tx, input.teamId, input.loopId))) {
@@ -231,6 +257,106 @@ export async function replaceCharter(input: ReplaceCharterInput): Promise<Charte
     });
     if (!updated.ok) return { ok: false, error: refusal(updated.code as never, updated.message, updated.issues, updated.hint) };
     return { ok: true, value: { charter: await snapshot(tx, updated.object, input.loopId), changed: updated.changed } };
+  });
+}
+
+function partialLegacyContent(body: string): boolean {
+  return /^… \(truncated — last \d+KB of \d+KB\)/.test(body);
+}
+
+async function appendCarryConflictIn(tx: store.KernelExec, input: CharterIdentity & {
+  expectedVersion: number | null;
+  currentVersion: number;
+  runId: string;
+  now: string;
+}): Promise<void> {
+  await appendOrganicEvent(tx, {
+    teamId: input.teamId,
+    objectId: input.loopId,
+    kind: "charter-update-conflict",
+    origin: "organic",
+    entrance: "agent",
+    actorId: input.runId,
+    transition: null,
+    diff: null,
+    note: null,
+    payload: {
+      loopId: input.loopId,
+      charterDocId: charterDocId(input.teamId, input.loopId),
+      expectedVersion: input.expectedVersion,
+      currentVersion: input.currentVersion,
+    },
+    ts: input.now,
+  });
+}
+
+/** Apply an end-of-run file carry. Conflicts are visible refusals, not run failures. */
+export async function applyCharterCarry(input: CharterCarryInput): Promise<CharterResult<CharterCarryResult>> {
+  const candidateInvalid = input.candidate ? invalidCharterBody(input.candidate.content) : undefined;
+  if (candidateInvalid) return { ok: true, value: { charter: null, changed: false, seeded: false, warning: candidateInvalid.message } };
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as store.KernelExec;
+    if (!(await loopInTeam(tx, input.teamId, input.loopId))) {
+      return { ok: false, error: refusal("NOT_FOUND", `${input.loopId} was not found`) };
+    }
+    const id = charterDocId(input.teamId, input.loopId);
+    const before = await store.getObjectForUpdate(tx, id);
+    if (!before) {
+      const candidate = input.candidate?.baseVersion === null ? input.candidate.content : undefined;
+      const legacy = input.legacyContent && !partialLegacyContent(input.legacyContent) ? input.legacyContent : undefined;
+      const stored = input.storedLegacyContent && !partialLegacyContent(input.storedLegacyContent) ? input.storedLegacyContent : undefined;
+      const seed = candidate ?? legacy ?? stored;
+      if (seed === undefined) {
+        return { ok: true, value: { charter: null, changed: false, seeded: false } };
+      }
+      const made = await ensureCharterIn(tx, {
+        teamId: input.teamId,
+        loopId: input.loopId,
+        loopName: input.loopName,
+        body: seed,
+        actor: { entrance: "agent", actorId: input.runId },
+        createdByRun: input.runId,
+        now: input.now,
+      });
+      if (!made.ok) return made;
+      if (!made.value.created && made.value.charter.body !== seed) {
+        await appendCarryConflictIn(tx, { ...input, expectedVersion: null, currentVersion: made.value.charter.version });
+        return { ok: true, value: { charter: made.value.charter, changed: false, seeded: false, warning: `charter carry refused: current version is ${made.value.charter.version}; the run started unseeded` } };
+      }
+      return { ok: true, value: { charter: made.value.charter, changed: made.value.created, seeded: made.value.created } };
+    }
+    const bad = identityError(before, input);
+    if (bad) return { ok: false, error: bad };
+    const current = await snapshot(tx, before, input.loopId);
+    if (!input.candidate || current.body === input.candidate.content) {
+      return { ok: true, value: { charter: current, changed: false, seeded: false } };
+    }
+    if (input.candidate.baseVersion !== current.version) {
+      await appendCarryConflictIn(tx, {
+        ...input,
+        expectedVersion: input.candidate.baseVersion,
+        currentVersion: current.version,
+      });
+      return {
+        ok: true,
+        value: {
+          charter: current,
+          changed: false,
+          seeded: false,
+          warning: `charter carry refused: current version ${current.version} replaced delivered version ${input.candidate.baseVersion ?? "unseeded"}; re-read before applying the run's edit`,
+        },
+      };
+    }
+    const updated = await applyUpdateIn(tx, {
+      objectId: id,
+      actor: { entrance: "agent", actorId: input.runId },
+      now: input.now,
+      fields: { body: input.candidate.content },
+      eventKind: "charter-updated",
+      eventPayload: { loopId: input.loopId, source: "report-fallback" },
+    });
+    if (!updated.ok) return { ok: false, error: refusal(updated.code as never, updated.message, updated.issues, updated.hint) };
+    return { ok: true, value: { charter: await snapshot(tx, updated.object, input.loopId), changed: updated.changed, seeded: false } };
   });
 }
 
@@ -277,23 +403,13 @@ export async function recordCharterCarryConflict(input: CharterIdentity & {
 }): Promise<void> {
   await db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec;
-    await appendOrganicEvent(tx, {
+    await appendCarryConflictIn(tx, {
       teamId: input.teamId,
-      objectId: input.loopId,
-      kind: "charter-update-conflict",
-      origin: "organic",
-      entrance: input.actor.entrance,
-      actorId: input.actor.actorId,
-      transition: null,
-      diff: null,
-      note: null,
-      payload: {
-        loopId: input.loopId,
-        charterDocId: charterDocId(input.teamId, input.loopId),
-        expectedVersion: input.expectedVersion,
-        currentVersion: input.currentVersion,
-      },
-      ts: input.now,
+      loopId: input.loopId,
+      expectedVersion: input.expectedVersion,
+      currentVersion: input.currentVersion,
+      runId: input.actor.actorId,
+      now: input.now,
     });
   });
 }
