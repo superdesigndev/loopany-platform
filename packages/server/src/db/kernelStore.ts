@@ -20,7 +20,7 @@
  * `setObjectStatus`, which exists solely for `applyTransition` to call. A content
  * write cannot smuggle a state change.
  */
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "./index.js";
 import {
@@ -163,6 +163,11 @@ export async function listObjectEvents(x: KernelExec | undefined, objectId: stri
   return X(x).select().from(events).where(eq(events.objectId, objectId)).orderBy(asc(events.seq));
 }
 
+/** Latest event cursor for optimistic concurrency on whole-document writes. */
+export async function latestObjectEvent(x: KernelExec | undefined, objectId: string): Promise<KernelEvent | undefined> {
+  return (await X(x).select().from(events).where(eq(events.objectId, objectId)).orderBy(desc(events.seq)).limit(1))[0];
+}
+
 /** How many rows carry this exact id (0 or 1 — the dedup probe asserts it). */
 export async function countEventsById(x: KernelExec | undefined, id: string): Promise<number> {
   const r = (await X(x).select({ n: sql<number>`count(*)` }).from(events).where(eq(events.id, id)))[0];
@@ -282,4 +287,3 @@ export async function openRunForLoop(x: KernelExec | undefined, loopId: string):
 export async function getRunRow(x: KernelExec | undefined, id: string): Promise<Run | undefined> {
   return (await X(x).select().from(runs).where(eq(runs.id, id)))[0];
 }
-

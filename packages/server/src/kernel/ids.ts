@@ -172,6 +172,15 @@ export function derivedObjectId(kind: ObjectKind, seed: unknown): string {
   return `${kind}-${derivedSuffix(seed)}`;
 }
 
+/** Reserved stable attachment identity for a production loop's charter doc. */
+export function charterKey(loopId: string): string {
+  return `loop-charter:${loopId}`;
+}
+
+export function charterDocId(teamId: string, loopId: string): string {
+  return derivedObjectId("doc", { teamId, loopId, role: "loop-charter" });
+}
+
 
 
 /**

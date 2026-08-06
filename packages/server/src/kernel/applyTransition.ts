@@ -93,6 +93,8 @@ export interface WritableFields {
   parentId?: string | null;
   // doc facet
   format?: string | null;
+  /** Immutable doc classification. Generic authored docs default to product. */
+  docKind?: "product" | "charter" | null;
   // mirror facets
   /** The external kind. IMMUTABLE after creation — present here only so the
    *  create path can set it through the one field surface. */
@@ -113,6 +115,7 @@ const WRITABLE_KEYS = [
   "watcher",
   "parentId",
   "format",
+  "docKind",
   "mirrorKind",
   "mirrorCoords",
   "attachedTo",
@@ -140,7 +143,7 @@ const WRITABLE_KEYS = [
  * applied?", and reporting less than the truth here only hid the fact from a
  * direct kernel caller.
  */
-const CONTENT_KEYS = ["title", "body", "payload", "followUpAt", "watcher", "parentId", "pendingQuestion", "format", "mirrorKind", "mirrorCoords"] as const;
+const CONTENT_KEYS = ["title", "body", "payload", "followUpAt", "watcher", "parentId", "pendingQuestion", "format", "docKind", "mirrorKind", "mirrorCoords"] as const;
 
 // ---- results ----
 
@@ -474,6 +477,17 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
   const where = { teamId, kind, key: input.key ?? null };
 
   const fields = presentFields(input);
+  if (input.key?.startsWith("loop-charter:") && !(kind === "doc" && input.docKind === "charter")) {
+    return fail(
+      refuse(
+        "RESERVED_KEY",
+        `${input.key} is reserved for the charter attached to that loop`,
+        [{ path: "key", message: "reserved namespace", got: input.key, expected: "a product key outside loop-charter:" }],
+        "choose another key; loop charters are created and replaced through loop CRUD",
+      ),
+      where,
+    );
+  }
   const issues = firewallIssues(kind, assertedFields(fields));
   if (issues.length) {
     return fail(
@@ -558,6 +572,7 @@ export async function createObjectIn(tx: KernelExec, input: CreateObjectInput): 
     watcher,
     parentId: input.parentId ?? null,
     format: input.format ?? null,
+    docKind: kind === "doc" ? (input.docKind ?? "product") : null,
     mirrorKind: input.mirrorKind ?? null,
     mirrorCoords: input.mirrorCoords ?? null,
     attachedTo: input.attachedTo ?? null,

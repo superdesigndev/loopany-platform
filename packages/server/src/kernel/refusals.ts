@@ -34,7 +34,8 @@ export const REFUSAL_CODES = [
   "NO_OPEN_QUESTION", "WRONG_KIND", "KEY_KIND_MISMATCH", "IMMUTABLE_KEY",
   "CLOSED", "PAUSED", "QUEUED_ALREADY", "LEASE_LOST",
   "TOO_LARGE", "RATE_LIMITED", "ID_COLLISION",
-  "IMMUTABLE_COORDS", "MIRROR_STATELESS",
+  "IMMUTABLE_COORDS", "MIRROR_STATELESS", "RESERVED_KEY", "CHARTER_ONLY",
+  "VERSION_CONFLICT", "EXPECTED_VERSION_REQUIRED", "NOT_YOUR_CHARTER",
 ] as const;
 
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
@@ -54,6 +55,9 @@ export const REFUSAL_STATUS: Record<RefusalCode, number> = {
   QUEUED_ALREADY: 409, LEASE_LOST: 409, TOO_LARGE: 413,
   RATE_LIMITED: 429, ID_COLLISION: 409,
   IMMUTABLE_COORDS: 409, MIRROR_STATELESS: 400,
+  RESERVED_KEY: 409,
+  CHARTER_ONLY: 409, VERSION_CONFLICT: 409, EXPECTED_VERSION_REQUIRED: 428,
+  NOT_YOUR_CHARTER: 403,
 };
 
 interface RefusalTemplate {
@@ -196,6 +200,26 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
   MIRROR_STATELESS: {
     message: `%s would give a mirror somewhere to record external state, and a mirror has nowhere by design`,
     hint: "a mirror tells you WHERE to look, never WHAT state it is in — record what you found on the task that owns the work, and let the next run go and look.",
+  },
+  RESERVED_KEY: {
+    message: `%s is reserved for an attached loop charter`,
+    hint: "choose another product key; charters are created and replaced through loop CRUD",
+  },
+  CHARTER_ONLY: {
+    message: `%s is an attached loop charter, not a product doc`,
+    hint: "read or replace it through `loopany show <loop-id> --charter` or `loopany edit <loop-id> --charter-file <path>`",
+  },
+  VERSION_CONFLICT: {
+    message: `%s changed after the version this write read`,
+    hint: "re-read the charter, reapply the intended edit to the newest body, and retry",
+  },
+  EXPECTED_VERSION_REQUIRED: {
+    message: `%s requires an expected charter version`,
+    hint: "send the ETag from the latest GET as If-Match; an unguarded whole-document replacement is refused",
+  },
+  NOT_YOUR_CHARTER: {
+    message: `%s is outside this run lease's loop scope`,
+    hint: "a run lease may read and write only objects owned by its own loop",
   },
 };
 

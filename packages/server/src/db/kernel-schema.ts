@@ -31,7 +31,7 @@
 import { sql } from "drizzle-orm";
 import { pgTable, text, bigint, jsonb, index, uniqueIndex, check } from "drizzle-orm/pg-core";
 
-import { ENTRANCES, EVENT_ORIGINS, OBJECT_KINDS, type EventDiff } from "../kernel/types.js";
+import { DOC_KINDS, ENTRANCES, EVENT_ORIGINS, OBJECT_KINDS, type EventDiff } from "../kernel/types.js";
 
 // ---- objects: loops, tasks and docs in one table (design §2) ----
 
@@ -78,6 +78,8 @@ export const objects = pgTable(
     parentId: text("parent_id"),
 
     // ---- doc facets (CHECK: null on every other kind) ----
+    /** Product output or the single charter configuration doc owned by a loop. */
+    docKind: text("doc_kind", { enum: DOC_KINDS }),
     /** `markdown` | `html`. HTML is a doc-only narrow door, always sandbox
      *  rendered — task and loop bodies stay Markdown (design §7). */
     format: text("format"),
@@ -119,7 +121,12 @@ export const objects = pgTable(
       sql`${t.kind} = 'task' OR (${t.followUpAt} IS NULL AND ${t.pendingQuestion} IS NULL AND ${t.watcher} IS NULL)`,
     ),
     check("objects_parent_task_only", sql`${t.kind} = 'task' OR ${t.parentId} IS NULL`),
-    check("objects_format_doc_only", sql`${t.kind} = 'doc' OR ${t.format} IS NULL`),
+    check("objects_format_doc_only", sql`${t.kind} = 'doc' OR (${t.format} IS NULL AND ${t.docKind} IS NULL)`),
+    check("objects_doc_kind_required", sql`${t.kind} <> 'doc' OR (${t.docKind} IS NOT NULL AND ${t.docKind} IN ('product', 'charter'))`),
+    check(
+      "objects_charter_shape",
+      sql`${t.docKind} <> 'charter' OR (${t.kind} = 'doc' AND ${t.format} = 'markdown' AND ${t.key} IS NOT NULL AND ${t.createdByLoop} IS NOT NULL)`,
+    ),
     check(
       "objects_mirror_facets_only",
       sql`${t.kind} = 'mirror' OR (${t.mirrorKind} IS NULL AND ${t.mirrorCoords} IS NULL AND ${t.attachedTo} IS NULL)`,
@@ -145,6 +152,9 @@ export const objects = pgTable(
     // ---- indexes, one per named standing query (spec §5.1) ----
     /** Key idempotency, per team. Partial: an object with no key costs nothing. */
     uniqueIndex("objects_key_idx").on(t.teamId, t.key).where(sql`${t.key} IS NOT NULL`),
+    uniqueIndex("objects_one_charter_per_loop_idx")
+      .on(t.teamId, t.createdByLoop)
+      .where(sql`${t.kind} = 'doc' AND ${t.docKind} = 'charter'`),
     /** Inbox branch 1: decisions (open tasks with a question waiting). */
     index("objects_question_idx")
       .on(t.teamId, t.createdAt)

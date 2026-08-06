@@ -12,6 +12,8 @@ import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray,
 
 import { db } from "./index.js";
 import { user } from "./auth-schema.js";
+import { events, objects } from "./kernel-schema.js";
+import { charterDocId, charterKey } from "../kernel/ids.js";
 import {
   loops,
   machines,
@@ -158,8 +160,24 @@ export async function updateLoop(id: string, patch: Partial<NewLoop>): Promise<L
 
 export async function deleteLoop(id: string): Promise<boolean> {
   return db.transaction(async (tx) => {
-    const deleted = await tx.delete(loops).where(eq(loops.id, id)).returning({ id: loops.id });
+    const deleted = await tx.delete(loops).where(eq(loops.id, id)).returning({ id: loops.id, teamId: loops.teamId });
     if (deleted.length > 0) {
+      // A charter is owned loop configuration, unlike every other kernel object.
+      // Delete only the exact deterministic attachment; tasks, product docs and
+      // mirrors deliberately survive even when their provenance names this loop.
+      const teamId = deleted[0]!.teamId;
+      const charter = teamId ? (await tx
+        .delete(objects)
+        .where(and(
+          eq(objects.teamId, teamId),
+          eq(objects.id, charterDocId(teamId, id)),
+          eq(objects.kind, "doc"),
+          eq(objects.docKind, "charter"),
+          eq(objects.createdByLoop, id),
+          eq(objects.key, charterKey(id)),
+        ))
+        .returning({ id: objects.id }))[0] : undefined;
+      if (charter) await tx.delete(events).where(eq(events.objectId, charter.id));
       // Cascade the loop's execution + artifact metadata. Leaving these rows behind
       // would pin their blob hashes in the GC keep-set FOREVER (liveBlobRefs unions
       // every artifact_files hash + every retained snapshot manifest), so a deleted

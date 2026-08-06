@@ -1,0 +1,221 @@
+/**
+ * The one attached-charter resolver and mutator.
+ *
+ * A charter is stored in the kernel doc engine but is loop configuration, not
+ * product output. Its identity is fully derived from (team, loop), and every
+ * resolver verifies every stored facet before returning bytes. Whole-body
+ * changes compare-and-swap on the latest event seq.
+ */
+import { and, eq } from "drizzle-orm";
+
+import { db } from "../db/index.js";
+import * as store from "../db/kernelStore.js";
+import { loops } from "../db/schema.js";
+import type { KernelObject } from "../db/kernel-schema.js";
+import { appendOrganicEvent, applyUpdateIn, createObjectIn } from "./applyTransition.js";
+import { charterDocId, charterKey } from "./ids.js";
+import { refusal, type ApiRefusal } from "./refusals.js";
+import type { Actor } from "./types.js";
+
+export const CHARTER_MAX_BYTES = 512 * 1024;
+
+export interface CharterSnapshot {
+  id: string;
+  loopId: string;
+  key: string;
+  docKind: "charter";
+  format: "markdown";
+  body: string;
+  version: number;
+  updatedAt: string;
+}
+
+export type CharterResult<T> = { ok: true; value: T } | { ok: false; error: ApiRefusal };
+
+interface CharterIdentity {
+  teamId: string;
+  loopId: string;
+}
+
+interface EnsureCharterInput extends CharterIdentity {
+  loopName?: string | null;
+  body: string;
+  actor: Actor;
+  now: string;
+  createdByRun?: string | null;
+}
+
+interface ReplaceCharterInput extends CharterIdentity {
+  body: string;
+  expectedVersion: number;
+  actor: Actor;
+  now: string;
+  source: "owner-edit" | "http" | "report-fallback";
+}
+
+function tooLarge(body: string): ApiRefusal | undefined {
+  const bytes = Buffer.byteLength(body, "utf8");
+  if (bytes <= CHARTER_MAX_BYTES) return undefined;
+  return refusal(
+    "TOO_LARGE",
+    `charter body is ${bytes} bytes; the complete-body limit is ${CHARTER_MAX_BYTES}`,
+    [{ path: "body", message: "complete charter exceeds limit", got: String(bytes), expected: `<= ${CHARTER_MAX_BYTES}` }],
+    "shorten the charter and retry; Loopany never truncates a charter into a valid-looking partial document",
+  );
+}
+
+function identityError(row: KernelObject, { teamId, loopId }: CharterIdentity): ApiRefusal | undefined {
+  const id = charterDocId(teamId, loopId);
+  const key = charterKey(loopId);
+  if (
+    row.id === id &&
+    row.teamId === teamId &&
+    row.kind === "doc" &&
+    row.docKind === "charter" &&
+    row.key === key &&
+    row.createdByLoop === loopId &&
+    row.format === "markdown"
+  ) return undefined;
+  return refusal(
+    "ID_COLLISION",
+    `${id} does not have the complete identity of ${loopId}'s charter`,
+    [{ path: "id", message: "derived charter identity resolved to incompatible stored facets", got: row.id, expected: id }],
+    "nothing was written; this is an integrity fault and must be investigated rather than worked around",
+  );
+}
+
+async function loopInTeam(tx: store.KernelExec, teamId: string, loopId: string) {
+  return (await tx.select().from(loops).where(and(eq(loops.id, loopId), eq(loops.teamId, teamId))).limit(1))[0];
+}
+
+async function snapshot(tx: store.KernelExec, row: KernelObject, loopId: string): Promise<CharterSnapshot> {
+  const event = await store.latestObjectEvent(tx, row.id);
+  if (!event) throw new Error(`charter ${row.id} has no event version`);
+  return {
+    id: row.id,
+    loopId,
+    key: row.key!,
+    docKind: "charter",
+    format: "markdown",
+    body: row.body ?? "",
+    version: event.seq,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** Resolve the deterministic attachment. Missing is a normal dual-read state. */
+export async function readCharter(teamId: string, loopId: string): Promise<CharterResult<CharterSnapshot | null>> {
+  const loop = await loopInTeam(db as unknown as store.KernelExec, teamId, loopId);
+  if (!loop) return { ok: false, error: refusal("NOT_FOUND", `${loopId} was not found`) };
+  const row = await store.getObject(undefined, charterDocId(teamId, loopId));
+  if (!row) return { ok: true, value: null };
+  const bad = identityError(row, { teamId, loopId });
+  if (bad) return { ok: false, error: bad };
+  return { ok: true, value: await snapshot(db as unknown as store.KernelExec, row, loopId) };
+}
+
+export async function ensureCharter(input: EnsureCharterInput): Promise<CharterResult<{ charter: CharterSnapshot; created: boolean }>> {
+  const oversized = tooLarge(input.body);
+  if (oversized) return { ok: false, error: oversized };
+  return db.transaction(async (rawTx) => ensureCharterIn(rawTx as unknown as store.KernelExec, input));
+}
+
+/** Transactional form used by atomic loop creation and legacy report seeding. */
+export async function ensureCharterIn(
+  tx: store.KernelExec,
+  input: EnsureCharterInput,
+): Promise<CharterResult<{ charter: CharterSnapshot; created: boolean }>> {
+  const oversized = tooLarge(input.body);
+  if (oversized) return { ok: false, error: oversized };
+  if (!(await loopInTeam(tx, input.teamId, input.loopId))) {
+    return { ok: false, error: refusal("NOT_FOUND", `${input.loopId} was not found`) };
+  }
+  const made = await createObjectIn(tx, {
+    id: charterDocId(input.teamId, input.loopId),
+    teamId: input.teamId,
+    kind: "doc",
+    docKind: "charter",
+    status: "current",
+    key: charterKey(input.loopId),
+    format: "markdown",
+    title: `${input.loopName ?? input.loopId} charter`,
+    body: input.body,
+    payload: null,
+    createdByLoop: input.loopId,
+    createdByRun: input.createdByRun ?? null,
+    actor: input.actor,
+    now: input.now,
+  });
+  if (!made.ok) return { ok: false, error: refusal(made.code as never, made.message, made.issues, made.hint) };
+  const bad = identityError(made.object, input);
+  if (bad) return { ok: false, error: bad };
+  return { ok: true, value: { charter: await snapshot(tx, made.object, input.loopId), created: made.created } };
+}
+
+export async function replaceCharter(input: ReplaceCharterInput): Promise<CharterResult<{ charter: CharterSnapshot; changed: boolean }>> {
+  const oversized = tooLarge(input.body);
+  if (oversized) return { ok: false, error: oversized };
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as store.KernelExec;
+    if (!(await loopInTeam(tx, input.teamId, input.loopId))) {
+      return { ok: false, error: refusal("NOT_FOUND", `${input.loopId} was not found`) };
+    }
+    const id = charterDocId(input.teamId, input.loopId);
+    const before = await store.getObjectForUpdate(tx, id);
+    if (!before) return { ok: false, error: refusal("NOT_FOUND", `${input.loopId} has no charter yet`) };
+    const bad = identityError(before, input);
+    if (bad) return { ok: false, error: bad };
+    const current = await snapshot(tx, before, input.loopId);
+    if ((before.body ?? "") === input.body) return { ok: true, value: { charter: current, changed: false } };
+    if (input.expectedVersion !== current.version) {
+      return {
+        ok: false,
+        error: refusal(
+          "VERSION_CONFLICT",
+          `${input.loopId}'s charter is at version ${current.version}, not ${input.expectedVersion}`,
+          [{ path: "If-Match", message: "stale charter version", got: String(input.expectedVersion), expected: String(current.version) }],
+        ),
+      };
+    }
+    const updated = await applyUpdateIn(tx, {
+      objectId: id,
+      actor: input.actor,
+      now: input.now,
+      fields: { body: input.body },
+      eventKind: "charter-updated",
+      eventPayload: { loopId: input.loopId, source: input.source },
+    });
+    if (!updated.ok) return { ok: false, error: refusal(updated.code as never, updated.message, updated.issues, updated.hint) };
+    return { ok: true, value: { charter: await snapshot(tx, updated.object, input.loopId), changed: updated.changed } };
+  });
+}
+
+/** Visible operational event for a stale end-of-run carry; the run still finalizes. */
+export async function recordCharterCarryConflict(input: CharterIdentity & {
+  expectedVersion: number | null;
+  currentVersion: number;
+  actor: Actor;
+  now: string;
+}): Promise<void> {
+  await db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as store.KernelExec;
+    await appendOrganicEvent(tx, {
+      teamId: input.teamId,
+      objectId: input.loopId,
+      kind: "charter-update-conflict",
+      origin: "organic",
+      entrance: input.actor.entrance,
+      actorId: input.actor.actorId,
+      transition: null,
+      diff: null,
+      note: null,
+      payload: {
+        loopId: input.loopId,
+        charterDocId: charterDocId(input.teamId, input.loopId),
+        expectedVersion: input.expectedVersion,
+        currentVersion: input.currentVersion,
+      },
+      ts: input.now,
+    });
+  });
+}

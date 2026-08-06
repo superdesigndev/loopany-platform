@@ -38,6 +38,10 @@ export function isArtifactKind(kind: ObjectKind): kind is ArtifactKind {
 export const TASK_STATUSES = ["open", "closed"] as const;
 /** A doc has one state; `doc update` rewrites it in place (design §8). */
 export const DOC_STATUSES = ["current"] as const;
+/** Product docs are authored output. A charter doc is the one attached,
+ * event-sourced configuration document owned by a production loop. */
+export const DOC_KINDS = ["product", "charter"] as const;
+export type DocKind = (typeof DOC_KINDS)[number];
 /**
  * A mirror has ONE state, and the single value is load-bearing rather than a
  * placeholder: `current` says "this row is the current record" and says NOTHING
@@ -154,7 +158,7 @@ export function isTransitionName(v: string): v is TransitionName {
  *  bigger task and a doc is not a sub-anything. */
 export const TASK_ONLY_FIELDS = ["followUpAt", "pendingQuestion", "watcher", "parentId"] as const;
 /** `format: html` is a doc narrow door (design §7). */
-export const DOC_ONLY_FIELDS = ["format"] as const;
+export const DOC_ONLY_FIELDS = ["format", "docKind"] as const;
 /** The external pointer, its immutable identity, and the objects it hangs on.
  *  See `kernel/mirrors.ts` for why the set stops exactly there. */
 export const MIRROR_ONLY_FIELDS = ["mirrorKind", "mirrorCoords", "attachedTo"] as const;
@@ -186,7 +190,7 @@ export const MIRROR_FORBIDDEN_FIELDS = ["payload", "body"] as const;
 /** Never writable after creation — identity and the guarded state column.
  *  `mirrorKind`/`mirrorCoords` are here because coords ARE the external thing's
  *  identity: a different PR is a different mirror, never the same row repointed. */
-export const IMMUTABLE_FIELDS = ["id", "kind", "key", "status", "teamId", "createdAt", "mirrorKind", "mirrorCoords"] as const;
+export const IMMUTABLE_FIELDS = ["id", "kind", "key", "status", "teamId", "createdAt", "docKind", "mirrorKind", "mirrorCoords"] as const;
 
 // ---- the refusal envelope (server contract §3.1) ----
 
@@ -224,6 +228,7 @@ export type KernelErrorCode =
    *  unknown: a mirror is a pointer and deliberately has nowhere to cache state
    *  (`kernel/mirrors.ts` MIRROR_LAW). */
   | "MIRROR_STATELESS"
+  | "RESERVED_KEY"
   /** A task was created or updated with no loop watching it. Its own code
    *  because "who acts next" is the one task facet that may never be empty
    *  (captain ruling 2026-08-04) — see `WATCHER_RULE` below. */
