@@ -938,6 +938,36 @@ export class MachineGateway {
     return { status: 200, body: { ok: true, loops, text } };
   }
 
+  /** Owner lifecycle aliases used by the rewrite argv transport. */
+  async runLoopNow(deviceToken: string, id: unknown): Promise<HttpResult> {
+    const resolved = await authenticateEnrolledMachine(deviceToken);
+    if (!resolved.ok) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const loop = typeof id === "string" ? await store.getLoop(id) : undefined;
+    if (!loop || loop.machineId !== resolved.machine.id) return { status: 404, body: { error: "no such loop on this machine" } };
+    await this.scheduler.runNow(loop.id);
+    return { status: 200, body: { text: `queued: ${loop.id}` } };
+  }
+
+  async evolveLoop(deviceToken: string, id: unknown): Promise<HttpResult> {
+    const resolved = await authenticateEnrolledMachine(deviceToken);
+    if (!resolved.ok) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const loop = typeof id === "string" ? await store.getLoop(id) : undefined;
+    if (!loop || loop.machineId !== resolved.machine.id) return { status: 404, body: { error: "no such loop on this machine" } };
+    if (!store.canEvolve(loop)) return { status: 400, body: { error: "nothing to evolve — add metrics or a workflow first" } };
+    if (!(await this.scheduler.evolveNow(loop.id))) return { status: 409, body: { error: "failed to schedule evolution" } };
+    return { status: 200, body: { text: `queued evolve: ${loop.id}` } };
+  }
+
+  async retireLoop(deviceToken: string, id: unknown): Promise<HttpResult> {
+    const resolved = await authenticateEnrolledMachine(deviceToken);
+    if (!resolved.ok) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const loop = typeof id === "string" ? await store.getLoop(id) : undefined;
+    if (!loop || loop.machineId !== resolved.machine.id) return { status: 404, body: { error: "no such loop on this machine" } };
+    this.scheduler.removeLoop(loop.id);
+    await store.deleteLoop(loop.id);
+    return { status: 200, body: { text: `retired: ${loop.id}` } };
+  }
+
   /**
    * Recent run execution logs (transcripts) for a loop, for the on-machine agent
    * (`loopany log`). The device-facing twin of the web-only `getTranscript`:

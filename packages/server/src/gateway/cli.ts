@@ -24,6 +24,7 @@ import { machinePresence, type MachinePresence } from "../lib/machinePresence.js
 import { selfCronFloorMinutes, selfRescheduleFloorMinutes } from "../env.js";
 import { resolveLease, type RunLease } from "./tokens.js";
 import { authenticateEnrolledMachine } from "./enroll.js";
+import { dispatchDeviceKernelCli } from "../kernel/deviceCli.js";
 import {
   ABSENT,
   codeForStatus,
@@ -123,6 +124,33 @@ export class CliGateway {
     }
     if (!resolved.ok) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     const machineId = resolved.machine.id;
+
+    // Rewrite spellings are aliases over the production loop surface. Keep
+    // them on the same authenticated device branch instead of maintaining a
+    // second credential allowlist.
+    if (verb === "loop") {
+      const action = argv[1] ?? "";
+      const rest = argv.slice(2);
+      const id = rest[0] && !rest[0]!.startsWith("--") ? rest[0] : undefined;
+      switch (action) {
+        case "list": return this.deviceCli(deviceToken, ["loops", ...rest]);
+        case "show": return this.deviceCli(deviceToken, ["show", ...rest]);
+        case "create": return this.deviceCli(deviceToken, ["new", ...rest]);
+        case "update": return this.deviceCli(deviceToken, ["edit", ...rest]);
+        case "pause": return this.gateway.editLoop(deviceToken, id, { enabled: false });
+        case "resume": return this.gateway.editLoop(deviceToken, id, { enabled: true });
+        case "run-now": return this.gateway.runLoopNow(deviceToken, id);
+        case "evolve": return this.gateway.evolveLoop(deviceToken, id);
+        case "retire": return this.gateway.retireLoop(deviceToken, id);
+      }
+    }
+
+    // The argv transport is only another entrance to the kernel. Once the full
+    // device credential has resolved, object verbs use the same handlers as the
+    // REST routes instead of being rejected by the legacy owner-verb switch.
+    const kernel = await dispatchDeviceKernelCli(resolved.machine, argv);
+    if (kernel) return kernel;
+
     const flags = parseFlags(argv.slice(1));
     const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
 

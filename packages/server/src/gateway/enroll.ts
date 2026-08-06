@@ -55,8 +55,12 @@ export async function authenticateEnrolledMachine(deviceToken: string): Promise<
   if (!existing) return { ok: false, reason: "not-connected" };
   const expectedHash = sha256(deviceToken);
   if (existing.tokenHash !== expectedHash) {
-    if (existing.token !== deviceToken) return { ok: false, reason: "token-mismatch" };
-    const repaired = await store.updateMachine(existing.id, { tokenHash: expectedHash });
+    // Pre-unification rows carried both values. Accept only a byte-for-byte raw
+    // credential proof, whether it is in the plaintext column or in the legacy
+    // swapped slot, then normalize the row so every later request takes the one
+    // canonical hash branch. A row carrying neither exact value remains a 401.
+    if (existing.token !== deviceToken && existing.tokenHash !== deviceToken) return { ok: false, reason: "token-mismatch" };
+    const repaired = await store.updateMachine(existing.id, { tokenHash: expectedHash, token: deviceToken });
     if (!repaired) return { ok: false, reason: "not-connected" };
     log.warn({ machineId }, "repaired stale device-token hash from matching enrolled credential");
     return { ok: true, machine: repaired, enrolled: false };

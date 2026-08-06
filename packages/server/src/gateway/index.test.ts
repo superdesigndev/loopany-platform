@@ -2141,6 +2141,25 @@ test("cli device credential: new/edit/loops/log/show route to the existing gatew
   expect((show.body as { text: string }).text).toContain('cron: "0 9 * * *"');
 });
 
+test("cli device credential: rewrite nouns route to the kernel instead of the legacy allowlist", async () => {
+  const { deviceToken, loop } = await seededCli();
+  const taskList = await gateway().cli(deviceToken, ["task", "list"]);
+  expect(taskList.status).toBe(200);
+  expect(textOf(taskList)).toContain('"tasks"');
+
+  const mirrors = await gateway().cli(deviceToken, ["mirror", "list"]);
+  expect(mirrors.status).toBe(200);
+  expect(textOf(mirrors)).toContain('"mirrors"');
+
+  const inbox = await gateway().cli(deviceToken, ["inbox"]);
+  expect(inbox.status).toBe(200);
+  expect(textOf(inbox)).toContain('"items"');
+
+  const loopList = await gateway().cli(deviceToken, ["loop", "list"]);
+  expect(loopList.status).toBe(200);
+  expect((loopList.body as { loops: Array<{ id: string }> }).loops.map((row) => row.id)).toContain(loop.id);
+});
+
 test("cli device credential: edit honors --dry-run (validate-only, no persistence)", async () => {
   const { deviceToken, loop } = (await seededCli());
   const before = (await store.getLoop(loop.id))!.cron;

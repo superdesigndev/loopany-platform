@@ -72,7 +72,7 @@ describe("routing and the invisible run context", () => {
   });
 
   it("sends the enrolled device credential on the formerly human-gated verbs", async () => {
-    for (const argv of [["inbox"], ["answer", "task-7f3a91", "yes"]]) {
+    for (const argv of [["inbox"], ["answer", "task-7f3a91", "yes"], ["task", "tell", "task-7f3a91", "ship it"]]) {
       const { request } = await run(argv, { items: [], counts: { total: 0 }, task: { id: "task-7f3a91", kind: "task" }, run: null });
       expect(request!.headers.get("authorization"), argv[0]).toBe("Bearer dk_test");
     }
@@ -98,13 +98,27 @@ describe("routing and the invisible run context", () => {
     }
   });
 
-  it("carries the human session cookie when one is set", async () => {
+  it("an explicit human session wins over the device fallback", async () => {
     let request: Request | undefined;
     await runKernelCli(["inbox"], {
       server: "https://example.test", token: "dk_test", env: { LOOPANY_SESSION: "sess-abc" }, out: () => {},
       fetchImpl: async (input, init) => { request = new Request(input, init); return reply({ items: [], counts: { total: 0 } }); },
     });
     expect(request!.headers.get("cookie")).toBe("better-auth.session_token=sess-abc");
+    expect(request!.headers.get("authorization")).toBeNull();
+  });
+
+  it("the run lease still wins when a session is also present", async () => {
+    let request: Request | undefined;
+    await runKernelCli(["task", "list"], {
+      server: "https://example.test",
+      env: { LOOPANY_RUN_ID: "run-3f8a20", LOOPANY_RUN_TOKEN: "rk_lease", LOOPANY_SESSION: "sess-abc", LOOPANY_TOKEN: "dk_device" },
+      out: () => {},
+      fetchImpl: async (input, init) => { request = new Request(input, init); return reply({ tasks: [], total: 0 }); },
+    });
+    expect(request!.headers.get("authorization")).toBe("Bearer rk_lease");
+    expect(request!.headers.get("cookie")).toBeNull();
+    expect(request!.headers.get("x-loopany-run")).toBe("run-3f8a20");
   });
 
   it("maps the HTTP status to the four exit codes without parsing prose", async () => {

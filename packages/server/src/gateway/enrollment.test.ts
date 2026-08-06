@@ -139,6 +139,29 @@ test("gated mode: poll and cli agree when a device credential is foreign", async
   expect((await cli.cli(foreign, ["loops"])).status).toBe(401);
 });
 
+test("a machine row written by the pre-383ba84 createMachine path still verifies", async () => {
+  enableGate();
+  const { core, cli } = gateways();
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+
+  // Exact persisted shape from 383ba84^:machineFns.createMachine — both the
+  // plaintext reconnect credential and its SHA-256 were stored on the row.
+  await store.createMachine({
+    id: machineId,
+    userId: "u1",
+    teamId: "team-u1",
+    name: "",
+    tokenHash: tokens.sha256(token),
+    token,
+    online: false,
+  });
+
+  expect((await core.poll(token)).status).toBe(200);
+  expect((await cli.cli(token, ["loops"])).status).toBe(200);
+  expect((await store.getMachine(machineId))?.tokenHash).toBe(tokens.sha256(token));
+});
+
 test("an exact stored device token repairs a stale redundant hash without widening identity", async () => {
   enableGate();
   const { core, cli } = gateways();
@@ -149,6 +172,18 @@ test("an exact stored device token repairs a stale redundant hash without wideni
   expect((await core.poll(token)).status).toBe(200);
   expect((await cli.cli(token, ["loops"])).status).toBe(200);
   expect((await store.getMachine(machineId))?.tokenHash).toBe(tokens.sha256(token));
+});
+
+test("a legacy row with the raw credential in the hash slot is normalized on first use", async () => {
+  enableGate();
+  const { core, cli } = gateways();
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: token, token: tokens.sha256(token), online: false });
+
+  expect((await core.poll(token)).status).toBe(200);
+  expect((await cli.cli(token, ["task", "list"])).status).toBe(200);
+  expect(await store.getMachine(machineId)).toMatchObject({ tokenHash: tokens.sha256(token), token });
 });
 
 test("gated mode: an EXPIRED connect-key does not enroll", async () => {

@@ -544,10 +544,15 @@ the convergence design is `data/rw-converge-s1/report.md`.
   resolver.** `machineIdFromToken` is only the row index; the full SHA-256 token
   hash is the authority. Poll, unified CLI, legacy owner verbs, kernel auth and
   long-poll waiter registration must agree on that resolver. A legacy row whose
-  redundant hash drifted may self-repair only when its stored plaintext token is
+  redundant hash drifted may self-repair only when a stored raw-token slot is
   byte-for-byte equal; a hash mismatch without that proof stays a hard 401. This
   prevents the live failure where CLI accepted an id-derived row while poll
   rejected the same credential forever.
+- **The unified argv transport carries the full device-owner surface.** After
+  full-token resolution, `gateway/cli.ts` sends `task`/`doc`/`mirror`/`inbox`/
+  `answer` through `kernel/deviceCli.ts` to the same object operations as the
+  REST routes; rewrite `loop` spellings alias the production loop methods. The
+  daemon credential order is run lease → explicit session → device fallback.
 - **Run authority is the durable `run_leases` row**, the ONE run credential — the
   kernel's parallel queue/lease columns retired at S5. A terminal-grace lease
   serves READS only, so a woken machine can still read what it was working on

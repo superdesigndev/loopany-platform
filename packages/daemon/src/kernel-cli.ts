@@ -83,28 +83,25 @@ export async function runKernelCli(argv: string[], deps: KernelCliDeps = {}): Pr
 
   const server = (deps.server ?? resolveServerUrl(undefined)).replace(/\/$/, "");
   if (!server) return emit(out, errorEnvelope({ message: "this machine is not configured for a Loopany server", code: "ERROR", help: ["Run `loopany up` to register the machine, then retry"] }), 1);
-  // INSIDE A RUN THE CREDENTIAL IS THE RUN'S OWN LEASE, not the device token.
-  //
-  // The device token lives in a FILE under `LOOPANY_HOME`, and the daemon hands
-  // the coding agent an allowlisted env that carries neither `LOOPANY_HOME` nor
-  // the token — so a stack with a relocated home (every dev/demo stack) had this
-  // read resolve to `~/.loopany` and post some OTHER server's token, and every
-  // kernel verb in the delivery came back `UNAUTHORIZED`. `LOOPANY_RUN_TOKEN` is
-  // set on every run, is the authority the server already checks, and is
-  // narrower than a machine-wide credential. The device token stays the
-  // fallback so an old server (device-only) keeps working.
-  const token = deps.token ?? (env.LOOPANY_RUN_ID ? env.LOOPANY_RUN_TOKEN : undefined) ?? env.LOOPANY_TOKEN ?? readStored(DEVICE_FILE);
+  // Credential precedence is one actor at a time: a delivery's narrow run lease,
+  // then an explicit human session, then the enrolled device as owner authority.
+  // The device fallback makes every out-of-run verb work from the operator's
+  // terminal without another login; it is deliberately withheld when a session
+  // was explicitly selected.
+  const token = env.LOOPANY_RUN_ID && env.LOOPANY_RUN_TOKEN
+    ? env.LOOPANY_RUN_TOKEN
+    : env.LOOPANY_SESSION
+      ? undefined
+      : deps.token ?? env.LOOPANY_TOKEN ?? readStored(DEVICE_FILE);
 
   const headers: Record<string, string> = { ...built.headers };
-  // The enrolled device is the owner's terminal authority, so every out-of-run
-  // kernel request carries it. Inside a delivery `token` is the narrower run
-  // lease; the run header remains the positive agent classifier and keeps the
-  // human-only refusals intact.
+  // The run header remains the positive agent classifier. Without it, either the
+  // selected session cookie or the enrolled device represents the human owner.
   if (token) headers.Authorization = `Bearer ${token}`;
   // The run context is INVISIBLE: read from the environment the daemon set,
   // attached as a header, never surfaced as an argument the agent could edit.
   if (env.LOOPANY_RUN_ID) headers["X-Loopany-Run"] = env.LOOPANY_RUN_ID;
-  if (env.LOOPANY_SESSION) headers.Cookie = env.LOOPANY_SESSION.includes("=") ? env.LOOPANY_SESSION : `better-auth.session_token=${env.LOOPANY_SESSION}`;
+  if (!env.LOOPANY_RUN_ID && env.LOOPANY_SESSION) headers.Cookie = env.LOOPANY_SESSION.includes("=") ? env.LOOPANY_SESSION : `better-auth.session_token=${env.LOOPANY_SESSION}`;
 
   let status: number;
   let payload: Body = {};

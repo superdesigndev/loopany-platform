@@ -433,8 +433,9 @@ folder reaches nobody.
 - **Unified CLI dispatch `POST /api/machine/cli`** (`gateway/cli.ts`
   `CliGateway.cli(token, argv)`, over the injected core `MachineGateway`) is a
   ROUTER in front of the existing gateway logic, keying authority on CREDENTIAL TYPE
-  first: a `dk_`-prefixed **device** token → owner verbs (`new`→createLoop,
-  `loops`→listLoops, `edit`→editLoop, `log`→loopLog, `show`→describe, `home`→homeDevice —
+  first: a `dk_`-prefixed **device** token → full owner authority (`new`/`loops`/
+  `edit`/`log`/`show`/`home`, the kernel `task`/`doc`/`mirror`/`inbox`/`answer`
+  nouns, and rewrite `loop` aliases over the production loop surface —
   bare `loopany`'s content-first home, handled BEFORE the unknown-machine 401 guard so an
   unregistered machine renders a DEFINITIVE not-connected state, never a 401/empty;
   `report`/`finish` are run-only → 403); a **run** credential (an `rk_`-prefixed run lease,
