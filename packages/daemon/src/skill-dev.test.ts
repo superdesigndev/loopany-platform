@@ -138,7 +138,7 @@ describe("the shipped artifact", () => {
     expect(contract).toMatch(/never start a server|Never start a server/);
     expect(contract).toMatch(/seed/);
     expect(contract).toMatch(/30s/); // retry once, then stop
-    expect(contract).toMatch(/tell the human/i);
+    expect(contract).toMatch(/tell the stack owner/i);
   });
 
   test("the env script warns that it is for platform development, not for USING a stack", () => {

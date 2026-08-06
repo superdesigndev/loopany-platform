@@ -166,13 +166,13 @@ describe("attached charter identity and compare-and-swap", () => {
 
   it("fences a run lease to its own loop and keeps charters out of product surfaces", async () => {
     const made = value(await charters.ensureCharter({ teamId: TEAM, loopId: LOOP, body: "charter", actor: owner, now: T0 })).charter;
-    const ownLease = { teamId: TEAM, mode: "agent", actor: run, loop: { id: LOOP }, run: { id: run.actorId } } as never;
-    const otherLease = { teamId: TEAM, mode: "agent", actor: run, loop: { id: "loop-other" }, run: { id: run.actorId } } as never;
+    const ownLease = { teamId: TEAM, mode: "lease", actor: run, loop: { id: LOOP }, run: { id: run.actorId } } as never;
+    const otherLease = { teamId: TEAM, mode: "lease", actor: run, loop: { id: "loop-other" }, run: { id: run.actorId } } as never;
     expect(code(await charters.readCharterForContext(LOOP, ownLease))).toBe("OK");
     expect(code(await charters.readCharterForContext(LOOP, otherLease))).toBe("NOT_YOUR_CHARTER");
     expect(code(await charters.replaceCharterForContext(LOOP, "changed", made.version, otherLease, new Date(T1)))).toBe("NOT_YOUR_CHARTER");
 
-    const ownerContext = { teamId: TEAM, mode: "human", actor: owner } as never;
+    const ownerContext = { teamId: TEAM, mode: "owner", actor: owner } as never;
     expect(code(await objectApi.showObject("doc", made.id, ownerContext))).toBe("CHARTER_ONLY");
     expect(code(await objectApi.replaceFromArtifact("doc", made.id, "---\ntitle: squat\n---\n\nbody\n", ownerContext))).toBe("CHARTER_ONLY");
     expect(code(await mirrorApi.attachMirror({ objectId: made.id, kind: "url", coords: "https://example.com" }, ownerContext))).toBe("CHARTER_ONLY");

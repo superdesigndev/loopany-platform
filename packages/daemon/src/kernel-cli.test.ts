@@ -71,7 +71,7 @@ describe("routing and the invisible run context", () => {
     expect(await send({ LOOPANY_RUN_TOKEN: "rk_lease", LOOPANY_TOKEN: "dk_device" })).toBe("Bearer dk_device");
   });
 
-  it("sends the enrolled device credential on the formerly human-gated verbs", async () => {
+  it("sends the enrolled device credential on owner-authority verbs", async () => {
     for (const argv of [["inbox"], ["answer", "task-7f3a91", "yes"], ["task", "tell", "task-7f3a91", "ship it"]]) {
       const { request } = await run(argv, { items: [], counts: { total: 0 }, task: { id: "task-7f3a91", kind: "task" }, run: null });
       expect(request!.headers.get("authorization"), argv[0]).toBe("Bearer dk_test");
@@ -275,7 +275,7 @@ describe("task create", () => {
       created: true, event: "ev-1",
       task: { id: "task-0b19ac", kind: "task", title: "Reddit reply", status: "open", followUpAt: null, watcher: "loop-8e3311", pendingQuestion: "Post this reply?", key: null, payload: {} },
     }, 201, { readStdin: () => "---\ntitle: Reddit reply\n---\n\nbody\n" });
-    expect(stdout).toContain("This task is in the human inbox now; `loopany task close` is refused until it is answered");
+    expect(stdout).toContain("This task is in the owner inbox now; `loopany task close` is refused until it is answered");
     expect(stdout).toContain("On answer, one run is queued for loop-8e3311 with scope task-0b19ac");
   });
 
@@ -607,7 +607,7 @@ describe("S3 kernel loop commands are teaching pointers only", () => {
   });
 });
 
-describe("the human commands", () => {
+describe("the owner-authority commands", () => {
   it("renders the inbox with the question as the title on a question row", async () => {
     const { code, stdout } = await run(["inbox"], {
       counts: { question: 2, total: 2 }, now: "2026-08-03T09:00:00.000Z",
@@ -887,7 +887,7 @@ describe("mirror — the pointer verbs", () => {
  * loop asking you, `tell` is you speaking first, and collapsing them would make
  * the two conversations indistinguishable in a transcript.
  */
-describe("task tell — the human speaking first", () => {
+describe("task tell — owner authority speaking first", () => {
   const RESPONSE = {
     task: { id: "task-7f3a91", kind: "task", title: "Seed article bet", status: "open" },
     event: "ev-9c22d1", directive: "Drop this bet — close the PR, then close the task.",

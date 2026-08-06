@@ -31,7 +31,7 @@ const TEAM = "team-v";
 const USER = "u-v";
 const TOKEN = "dk_verify_device_token";
 const NOW = new Date("2026-08-04T12:00:00.000Z");
-const human = { teamId: TEAM, actor: { entrance: "human", actorId: USER }, mode: "human" } as const;
+const human = { teamId: TEAM, actor: { entrance: "human", actorId: USER }, mode: "owner" } as const;
 
 beforeAll(async () => {
   temp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-cv-s2-verify-"));
@@ -149,7 +149,7 @@ describe("cv-s2-verify: F1 - trigger rows survive cron supersede", () => {
     expect(await queue.tickDueTasks(NOW)).toMatchObject({ replayed: 1, queued: 0 });
   });
 
-  it("F1b: a DIRECTIVE trigger row also survives the cron tick (the human's words are never dropped)", async () => {
+  it("F1b: a DIRECTIVE trigger row also survives the cron tick (the owner's words are never dropped)", async () => {
     const { loop } = await fixtures();
     const watched = await task(loop.id);
     const result = ok(await api.leaveDirective(watched.id, "Survive the cron fire.", human, NOW));
@@ -249,7 +249,7 @@ describe("cv-s2-verify: F3 - trigger during EXECUTION queues fresh and eventuall
     expect(((await gw.poll(TOKEN)).body as { deliveries: unknown[] }).deliveries).toHaveLength(0);
 
     // Sibling finishes -> the deferred trigger row is claimed and its delivery
-    // carries the human's words (the context IS eventually delivered - the
+    // carries the owner's words (the context IS eventually delivered - the
     // exact loss the review proved).
     await store.updateRun(executing.id, { phase: "done", outcome: "exec" });
     const polled = await gw.poll(TOKEN);

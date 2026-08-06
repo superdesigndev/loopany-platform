@@ -6,7 +6,9 @@ The production `loops` row is the live loop. A migrated kernel loop keeps the
 same id verbatim, so task watchers, creators, mirrors and loop-keyed events need
 no alias or rewrite. Its old kernel object remains only for history until S5.
 
-The standing brief is a real file in the loop's workdir:
+The standing brief is an attached charter object. During a run, the daemon
+materializes it at an absolute per-run path and exposes that path only through
+`LOOPANY_CHARTER_FILE`:
 
 ```md
 # Housekeeper
@@ -17,22 +19,24 @@ Each run: inspect the repository, do one valuable chore, and report only what
 changed. Nothing found is a clean stop.
 ```
 
-The production daemon watches this directory and syncs the file and small
-artifacts. Keep checkouts, worktrees, dependencies, build output and caches
-outside the loop folder.
+The materialization is not in the workdir and is not a product artifact. Edit it
+inside the run when standing knowledge changes; the daemon carries the change
+back at finalization with conflict protection.
 
 ## Read, create and edit
 
 ```sh
 loopany loops
 loopany show loop-4c1d77
-loopany new --json '<validated production loop config>'
+loopany new --json '<validated production loop config>' --charter-file <path>
 loopany edit loop-4c1d77 --json '{"cron":"30 7 * * *"}'
+loopany edit loop-4c1d77 --charter-file <path>
 ```
 
 `loops` and `show` read production rows. `new` and `edit` use the production
 owner API and preserve its validators, machine binding and schedule semantics.
-Edit the task file's `## Spec` for standing-brief changes; do not call the old
+Use `show --charter` and `edit --charter-file` for owner-authority charter reads
+and replacements; do not call the old
 kernel `loop create|evolve|update` verbs. Those commands intentionally return a
 teaching pointer and write nothing.
 
@@ -66,7 +70,7 @@ work reports it as already queued rather than stacking a duplicate.
 
 ## Machine and workdir
 
-The loop is bound to one production machine and its task file determines the
+The loop is bound to one production machine and has an explicit workdir as its
 content home. The daemon's configured `LOOPANY_ROOTS` must contain the workdir.
 If the directory is unavailable or outside the jail, fail loudly; never run the
 brief in an empty lookalike directory.

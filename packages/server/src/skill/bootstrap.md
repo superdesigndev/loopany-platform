@@ -60,8 +60,8 @@ The skill isn't on disk yet, so fetch it over HTTP from the **server-url**:
 
 Follow it from its §1: it decides *what* loop to build (the task already in this
 session, or — if the session is empty — brainstorming loops for this project and
-letting the user pick), settles the cadence and per-run output, authors the loop's
-task file and config, and runs `loopany new`. Pass the **connect-key** as
+letting the user pick), settles the cadence and per-run output, verifies the workdir,
+authors the attached charter and config, and runs `loopany new --charter-file`. Pass the **connect-key** as
 `--connect-key` so the created loop resolves back to the web dialog, and declare
 which coding agent you are with `--agent claude-code` (or `--agent codex` / `--agent grok`).
 create.md carries the flow through to telling the user it's live — you don't need

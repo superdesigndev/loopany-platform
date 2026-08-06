@@ -83,10 +83,14 @@ computes pure functions. Run instructions: `README.md`.
   write chokepoint `store.updateLoop`, which also runs lifecycle side effects for
   every caller: `goal:null` clears completion stamps; `enabled:true` on a completed
   loop is a reopen; `enabled:false` is a plain pause.
-- A loop's standing brief lives ONLY in its task file's `## Spec` (there is no
-  `task` column). The exec run's instructions live ENTIRELY in the first user turn
+- A loop's standing brief is the attached charter doc (`kernel/charters.ts`), with
+  stable derived identity and CAS versioning. New loops create it atomically with
+  `loopany new --charter-file`; owner edits use `edit --charter-file`, and
+  `show --charter` reads it. Legacy `taskFile` rows remain dual-read inputs during
+  the additive rollout only. The exec run's instructions live ENTIRELY in the first user turn
   (`buildExecTask` ← `skill/run/exec-core.md`): the self-sufficient CORE (identity +
-  untrusted-data guard + the non-negotiable fallback core - read task file first, do
+  untrusted-data guard + the non-negotiable fallback core - read the absolute
+  `$LOOPANY_CHARTER_FILE` first, do
   the work / surface only what changed, end with exactly ONE `loopany report`/`finish`,
   `{{stateLine}}` report grammar, one pass then stop + per-run trigger + a pointer to
   the installable loopany skill for the deep protocol). `buildLoopSystemPrompt` returns
@@ -144,7 +148,7 @@ computes pure functions. Run instructions: `README.md`.
 - `references/evolve.md` doubles as the evolve RUN prompt (same `?raw` import), so
   skill and run-dispatch cannot drift. `references/run.md` is the PUBLIC runtime
   protocol (dual-audience: in-run enrichment + owner docs) - the depth extracted
-  from `run/exec-loop.md` §1-§4 (task-file discipline, report/finish grammar + finish
+  from `run/exec-loop.md` §1-§4 (charter discipline, report/finish grammar + finish
   bar, schedule levers, front-matter conventions); the server-injected exec CORE stays
   authoritative and self-sufficient, so run.md is enrichment, never a dependency.
 - **HARD GUARDRAIL**: `packages/daemon/scripts/sync-skill.mjs` is a SELECTIVE
@@ -165,7 +169,7 @@ computes pure functions. Run instructions: `README.md`.
   from a template card (`ComposeModal` appends `description` under the connect-key config;
   the agent fetches `/api/bootstrap` and builds from it). **Division of responsibility:**
   `bootstrap.md` + `references/create.md` own the GENERAL loop-building mechanism —
-  propose-then-confirm cadence, config, task-file + dashboard authoring, the
+  propose-then-confirm cadence, config, charter + dashboard authoring, the
   zero-exec/worktree/front-matter disciplines — identical for every loop; the template
   `description` owns THIS loop's SPECIFICS — the per-run workflow, the hard rules, the
   boundaries and quality gates that make it actually work well. **Spell the specifics out
@@ -298,7 +302,7 @@ computes pure functions. Run instructions: `README.md`.
 - **A template `description` SHOULD spell out the specifics that make the loop work** —
   the per-run workflow, the hard rules, the boundaries and quality gates — as a guided
   multi-step setup conversation (`## Step` headers, confirm-each-step-before-creating),
-  and, where the loop keeps a task file, **embed the task-file skeleton to author** (with
+  and **embed the charter skeleton to author** (with
   `<placeholders>` the create flow fills). Don't leave the specifics to create.md, and
   don't settle for a tight one-paragraph blurb; some older short-paragraph templates
   predate this and are lighter. English only. `templates.test.ts` pins the full name list
@@ -306,7 +310,7 @@ computes pure functions. Run instructions: `README.md`.
 - **New-template SOP — TWO required pieces plus four optional ones:**
   (1) `meta.json` — the paste-prompt `description`: a guided multi-step setup conversation
   (verify-before-create gates → the loop's rules / boundaries / quality gates → optionally
-  the task-file skeleton to author). (2) membership in exactly one `skill/bundles/*`
+  the charter skeleton to author). (2) membership in exactly one `skill/bundles/*`
   meta + an entry in `server/templateRatings.ts` (without either the template ships
   invisible / fails its shape test). (3) OPTIONAL `reference.md` — bulky detail fetched on
   demand: the artifact contract, the REAL metrics dashboard layout markup (`loop-chart`/
@@ -356,7 +360,7 @@ computes pure functions. Run instructions: `README.md`.
 **A run's products travel as OBJECTS, never as files off a disk.** The daemon
 watches nothing; the server has no byte ingress. What a run sends home is exactly
 two things: its `report()` payload (message, metrics, the session-derived
-`RunArtifact[]`, and the task file's latest bytes) and whatever it FILES through
+`RunArtifact[]`, and any charter diff-carry candidate) and whatever it FILES through
 the object verbs (`loopany doc|task|mirror`). A file a run merely writes into its
 folder reaches nobody.
 
@@ -377,12 +381,13 @@ folder reaches nobody.
   UI that could only ever go stale — the run page's "Changes" diff, which needs two
   manifests to compare — was retired honestly and replaced by a **Files** card
   sourced from the report's own `RunArtifact[]`.
-- **The task file is the ONE channel still keeping a server-side copy of something
-  on disk**, and it rides the run REPORT (`daemon/src/runner.ts` `readTaskFile` →
-  `taskFileContent` → `gateway/index.ts` `report()` → `loops.taskFileContent`). So a
-  charter is fresh as of the loop's last FINISHED run — an evolve's rewrite shows up
-  when that evolve reports, not before. `kernel/views.ts` renders it for the Loops
-  pane; `LoopFilesPanel` pins it as the task row.
+- **Charter runtime files live outside the workdir** at
+  `<LOOPANY_HOME>/work/<loopId>/run-<runId>/README.md` (`daemon/src/runner.ts`). The
+  daemon materializes before workflow/agent execution, exports only the absolute
+  `LOOPANY_CHARTER_FILE`, and diff-carries the complete body at every final report,
+  including failed runs. Server apply is CAS under the delivered base version;
+  conflict emits a loop-stream warning while the run still finalizes. The old
+  `taskFileContent` report path remains only for old-server compatibility.
 - Bytes still live in R2 (`LOOPANY_R2_*`; in-memory store when unset — the test/dev
   default) behind `server/boot.ts` `getBlobStore()`, the ONE shared store. Its only
   writer left is the GC's delete.
@@ -528,7 +533,7 @@ folder reaches nobody.
   against a vanished machine is the SERVER's inactivity-based sweep: poll writes a
   freshness stamp into run progress; a run is reclaimed only after `RUN_TIMEOUT_MS`
   of silence. A canceled run's late `report()`
-  is ignored BEFORE any loop-level write (never advances cursor/taskFileContent).
+  is ignored BEFORE any loop-level write (never advances cursor or applies a charter carry).
 - **The run credential is a RUN LEASE (`tokens.ts`, Batch 6)**, not a mint→revoke
   token: the per-run caps (`runId/loopId/machineId/role/allowControl/canSet*/canFinish`
   — the old `RunSlot` fields, now `RunLeaseCaps`) PLUS a tiny state machine `state:
@@ -855,8 +860,8 @@ folder reaches nobody.
   self-contained prompt (`lib/editPrompt.ts` `buildEditPrompt`, a PURE + unit-tested
   helper) for the owner to paste into their OWN local coding-agent session and adjust
   the loop conversationally (no dispatch, no credits). The hint names WHERE to run it,
-  deriving the loop's on-disk dir from `job.taskFile` via `loopDir` (degrades to a
-  generic instruction, never a fabricated path). Generic operation copy is
+  naming the loop's explicit `workdir` when available (degrades to a generic
+  instruction, never a fabricated path). Generic operation copy is
   **agent-neutral** ("your coding agent"), NOT "Claude Code" - Loopany runs more than
   one agent (claude-code, codex, grok, more later); the only "Claude Code"/"Codex" survivors
   are the `AGENT_LABEL` chip (the loop's ACTUAL recorded agent, a factual label).
@@ -881,9 +886,9 @@ folder reaches nobody.
   isAnimationActive={false}>` (the position tween causes a transient page scrollbar
   flash). Testing: Recharts v3 mounts via effects - use a client render under `act`
   plus a jsdom ResizeObserver stub that fires a real contentRect on `observe`.
-- Files panel: the task file IS the loop folder's README and appears EXACTLY ONCE
-  (`lib/fileEntries.ts` dedup on normalized paths); the task row renders
-  `taskFileContent` from the loop record, not the blob fetch.
+- Loop detail reads attached charter body/version/history separately from product
+  Docs. Legacy task-file artifacts remain readable during the dual-read window but
+  are not the canonical standing brief.
 - Dashboard refresh is fetch-then-set, never `router.invalidate` (its loader re-run
   throws on a transient blip; keep stale data instead).
 - **Artifact viewer** (`components/artifactView.tsx` `ArtifactBody`, used by

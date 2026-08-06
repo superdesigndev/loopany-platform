@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 /**
- * THE DIRECTIVE — the human speaking to a watcher without being asked.
+ * THE DIRECTIVE — owner authority speaking to a watcher without being asked.
  *
  * The inbox is an AGENT-initiated conversation: a run asks, a person answers.
  * This is the other direction, and the tests below pin the four rulings that
@@ -35,7 +35,7 @@ let delivery: typeof import("../gateway/delivery.js");
 const TEAM = "team-directive";
 const T0 = "2026-08-04T00:00:00.000Z";
 const NOW = new Date("2026-08-04T01:00:00.000Z");
-const human = { teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" }, mode: "human" } as const;
+const human = { teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" }, mode: "owner" } as const;
 
 beforeAll(async () => {
   temp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-directive-"));
@@ -175,7 +175,7 @@ describe("the two conversations stay legible", () => {
     const loop = await makeLoop();
     const task = await makeTask(loop.id);
     expect(code(await api.leaveDirective(task.id, "   ", human, NOW))).toBe("INVALID_BODY");
-    const agent = { teamId: TEAM, actor: { entrance: "agent", actorId: "run-1" }, mode: "agent", run: { id: "run-1", loopId: loop.id } } as never;
+    const agent = { teamId: TEAM, actor: { entrance: "agent", actorId: "run-1" }, mode: "lease", run: { id: "run-1", loopId: loop.id } } as never;
     expect(code(await api.leaveDirective(task.id, TOLD, agent, NOW))).toBe("NOT_HUMAN");
   });
 

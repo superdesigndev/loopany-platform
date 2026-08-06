@@ -181,11 +181,11 @@ export function loopHealth(rows: Run[], now: Date): LoopHealth {
 
 const notFound = (id: string) => refusal("NOT_FOUND", `${id} was not found`);
 
-/** Every view is a human surface: the screens read production content and the
- *  run's own read surface is `task list`, which teaches better hints. */
-function humanOnly(context: ApiContext) {
-  if (context.mode === "human") return undefined;
-  return { ok: false as const, error: refusal("NOT_HUMAN", "view endpoints compose a human screen", [], "a run reads `task list` / `task show`, which carry the next-step hints an agent needs") };
+/** Every view is an owner surface: screens read production content while a run
+ *  lease uses `task list`, which teaches scope-appropriate hints. */
+function ownerOnly(context: ApiContext) {
+  if (context.mode === "owner") return undefined;
+  return { ok: false as const, error: refusal("NOT_HUMAN", "view endpoints require owner authority", [], "a run lease reads `task list` / `task show`, which carry its next-step hints") };
 }
 
 // ------------------------------------------------------------------- inbox
@@ -193,20 +193,20 @@ function humanOnly(context: ApiContext) {
 /**
  * `GET /api/views/inbox` — THE PRODUCT'S FRONT DOOR.
  *
- * A superset of `GET /api/inbox`: the raw endpoint serves the human CLI, this
+ * A superset of `GET /api/inbox`: the raw endpoint serves the owner CLI, this
  * one serves the screen, and keeping them apart lets the screen payload grow
  * without changing what `loopany inbox` prints.
  *
  * `execution` is the task's `payload`, echoed under a name the UI is CONTRACTED
  * to render verbatim in an execution block. That is the execution-integrity
  * invariant: machine-executed content lives in structured payload fields, the
- * verdict UI renders those fields verbatim, the body is human narrative, and
+ * verdict UI renders those fields verbatim, the body is owner-authored narrative, and
  * presentation may decorate but can never substitute what is actually approved
  * and executed (design §7). It is a separate key rather than "just read
  * `payload`" so the contract is visible at the wire and testable.
  */
 export async function inboxView(context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  const guard = humanOnly(context); if (guard) return guard;
+  const guard = ownerOnly(context); if (guard) return guard;
   const { rows, stamp } = await inboxUnion(context.teamId, now);
   const loops = await loadTeamLoopIndex(context.teamId);
   const items = await Promise.all(rows.map(async ({ task, reasons, askedAt, askedByRun }) => {
@@ -242,7 +242,7 @@ export async function inboxView(context: ApiContext, now = new Date()): Promise<
  * There is still no runs ENDPOINT; this is a field on a screen's payload.
  */
 export async function loopsView(context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  const guard = humanOnly(context); if (guard) return guard;
+  const guard = ownerOnly(context); if (guard) return guard;
   const loops = await teamLoops(context.teamId);
   const runRows = await runsForLoops(loops.map((l) => l.id));
   const counts = await taskCountsByWatcher(context.teamId);
@@ -309,7 +309,7 @@ async function loopPageSource(id: string, teamId: string): Promise<LoopPageSourc
  * partition (spec §8.2).
  */
 export async function loopView(id: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  const guard = humanOnly(context); if (guard) return guard;
+  const guard = ownerOnly(context); if (guard) return guard;
   const loop = await loopPageSource(id, context.teamId);
   if (!loop) return { ok: false, error: notFound(id) };
   if ("wrongKind" in loop) return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${loop.wrongKind}, not a loop`) };
@@ -371,7 +371,7 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
 
 /** `GET /api/views/run/:id` — one run's complete execution record. */
 export async function runView(id: string, context: ApiContext): Promise<ApiResult<Record<string, unknown>>> {
-  const guard = humanOnly(context); if (guard) return guard;
+  const guard = ownerOnly(context); if (guard) return guard;
   const run = await legacyStore.getRun(id);
   if (!run) return { ok: false, error: notFound(id) };
   const loop = await getProdLoop(context.teamId, run.loopId);
@@ -459,7 +459,7 @@ const CLOSED_COLUMN_CAP = 25;
  * at a glance from the screen where work is actually moved.
  */
 export async function tasksView(context: ApiContext, query: URLSearchParams, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  const guard = humanOnly(context); if (guard) return guard;
+  const guard = ownerOnly(context); if (guard) return guard;
   const allowed = new Set(["watcher", "creator", "limit"]);
   const unknown = [...query.keys()].find((key) => !allowed.has(key));
   if (unknown) return { ok: false, error: refusal("UNKNOWN_FILTER", `unknown task filter "${unknown}"`, [{ path: unknown, message: "unknown filter", got: unknown }], `the board owns status, question and due as COLUMNS; accepted narrowing filters: ${[...allowed].join(", ")}`) };
@@ -510,7 +510,7 @@ export async function tasksView(context: ApiContext, query: URLSearchParams, now
 /** `GET /api/views/task/:id` — the task page: the artifact, its execution
  *  payload, the event timeline ordered by seq, and the runs that touched it. */
 export async function taskView(id: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  const guard = humanOnly(context); if (guard) return guard;
+  const guard = ownerOnly(context); if (guard) return guard;
   const task = await store.getObject(undefined, id);
   if (!task || task.teamId !== context.teamId) return { ok: false, error: notFound(id) };
   if (task.kind !== "task") return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${task.kind}, not a task`) };
@@ -559,7 +559,7 @@ export async function taskView(id: string, context: ApiContext, now = new Date()
 /** `GET /api/views/docs` — the doc library. Bodies are NOT inlined here: a
  *  library is a list, and one 4 MB report would dominate the payload. */
 export async function docsView(context: ApiContext): Promise<ApiResult<Record<string, unknown>>> {
-  const guard = humanOnly(context); if (guard) return guard;
+  const guard = ownerOnly(context); if (guard) return guard;
   const rows = await db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "doc"), eq(objects.docKind, "product"))).orderBy(desc(objects.createdAt)).limit(LIST_CAP);
   const loops = await loadTeamLoopIndex(context.teamId);
   return { ok: true, value: {
@@ -583,7 +583,7 @@ export async function docsView(context: ApiContext): Promise<ApiResult<Record<st
  * a doc's script can never read the app's session (design §7).
  */
 export async function docView(id: string, context: ApiContext): Promise<ApiResult<Record<string, unknown>>> {
-  const guard = humanOnly(context); if (guard) return guard;
+  const guard = ownerOnly(context); if (guard) return guard;
   const doc = await store.getObject(undefined, id);
   if (!doc || doc.teamId !== context.teamId) return { ok: false, error: notFound(id) };
   if (doc.kind !== "doc") return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${doc.kind}, not a doc`) };
@@ -648,7 +648,7 @@ export function deriveGraphEdges(tasks: GraphTask[]): { from: string; to: string
     if (existing) existing.count += 1; else tally.set(key, { from, to, kind, count: 1 });
   };
   for (const task of tasks) {
-    // A human-created task has no creating loop; "you" is its source.
+    // An owner-created task has no creating loop; "you" is its source.
     const creator = task.createdByLoop ?? "you";
     if (task.pendingQuestion?.trim()) {
       add(creator, "you", "asks");
@@ -665,7 +665,7 @@ export function deriveGraphEdges(tasks: GraphTask[]): { from: string; to: string
 
 /** `GET /api/views/system-graph` — the System tab's projection (spec §8.3). */
 export async function systemGraphView(context: ApiContext, query: URLSearchParams, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  const guard = humanOnly(context); if (guard) return guard;
+  const guard = ownerOnly(context); if (guard) return guard;
   const raw = query.get("days");
   const days = raw === null ? GRAPH_WINDOW_DEFAULT_DAYS : Number(raw);
   if (!Number.isInteger(days) || days < 1 || days > 90) return { ok: false, error: refusal("UNKNOWN_FILTER", "days must be a whole number from 1 to 90", [{ path: "days", message: "out of range", got: raw ?? "", expected: "1–90" }]) };

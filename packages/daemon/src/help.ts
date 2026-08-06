@@ -34,8 +34,9 @@ Setup
                           (idempotent; refreshes the loopany skill, the SessionStart
                           hook, and the \`loopany\` PATH shim). --foreground runs the
                           poll loop attached in this terminal instead of detached.
-  new --json '<config>'   Create a loop from an inline JSON config (--json - reads
-    [--dry-run]           stdin). --dry-run validates + previews, creates nothing.
+  new --json '<config>'   Create a loop and attached charter atomically (--json - reads
+    --charter-file <path> stdin). --dry-run validates + previews, creates nothing.
+    [--dry-run]
   setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
                           view as ambient context each session (--remove uninstalls).
   skill [status|install]  Manage the loopany agent skill install (user scope by
@@ -49,7 +50,8 @@ Setup
 Management
   status                  Is this machine's daemon running? Show pid + connection.
   down                    Stop the detached daemon this machine started with up.
-  show [<id>]             Show a loop's full editable config + recent state (the
+  show [<id>] [--charter] Show a loop's full editable config + recent state, or the
+                          attached charter body and version with --charter (the
                           device credential inspects any loop on this machine).
   log [<loop>]            Show a loop's recent runs (concise: status + metrics +
     [--transcript]        session id; --transcript/--full adds the transcript).
@@ -77,10 +79,11 @@ no round trip, before any side effect).
 Interactive (edit loops from your own agent session, using the stored device token)
   loops [--fields a,b]    List your loops (--json emits the raw JSON array).
     [--json]              Default columns are id/name/cron/enabled/nextFire;
-                          --fields adds any of timezone,notify,model,goal,
-                          taskFile,runs,lastOutcome.
+                          --fields adds any of timezone,notify,model,goal,workdir,
+                          charter,taskFile,runs,lastOutcome.
   edit <id> --json '<obj>'  Edit a loop (JSON-only + --workflow-file/--ui-file/
-    [--dry-run]           --schema-file; --dry-run previews before/after).
+    [--charter-file <p>]  --schema-file/--charter-file; --dry-run previews).
+    [--dry-run]
 
   -h, --help              Show this help.
   -v, --version           Print the daemon version and exit.
@@ -96,23 +99,23 @@ Interactive (edit loops from your own agent session, using the stored device tok
  */
 const VERB_USAGE: Record<string, string> = {
   up: "loopany up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  loopany skill, the SessionStart hook, and the PATH shim). --foreground runs the\n  poll loop attached in this terminal instead of detached.",
-  new: "loopany new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing. Add \"enabled\": false to the config to\n  create the loop paused — no cadence and no first run until you run it or\n  re-enable it.",
+  new: "loopany new --json '<config>' --charter-file <path> [--dry-run]\n  Create a loop and attached charter atomically. --json - reads config from stdin.\n  --dry-run validates + previews, creating nothing. Add \"enabled\": false to the\n  config to create the loop paused — no cadence and no first run until enabled.",
   skill: "loopany skill [status|install] [--project] [--dev]\n  Manage the loopany agent skill install (user scope by default; --project installs\n  into the current directory). --dev installs the separate `loopany-dev` skill (the\n  local convergence flow) alongside — a different name, so a different directory: it\n  never overwrites or shadows the production `loopany` skill.",
   setup: "loopany setup hooks [--remove]\n  Install/refresh (or --remove) the SessionStart hook that lands the home view as\n  ambient context each session.",
   update: "loopany update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.",
   status: "loopany status\n  Report whether this machine's daemon is running (local pid) + its connection state.",
   down: "loopany down\n  Stop the detached daemon this machine started with `up`.",
   log: "loopany log [<loop>] [--transcript|--full] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
-  show: "loopany show [<id>] [--full] [--json]\n  Show a loop's full editable config + recent state (the device credential inspects\n  any loop on this machine).",
+  show: "loopany show [<id>] [--charter] [--full] [--json]\n  Show a loop's full editable config + recent state. --charter prints the attached\n  charter body and version. The device credential inspects any loop on this machine.",
   progress: "loopany progress <step> --connect-key <key>\n  Best-effort: report a loop-creation milestone (reading|inspecting|configuring|\n  authoring|creating) to the web wizard's live checklist. Never blocks; no key/server → no-op.",
   loops: "loopany loops [--fields a,b] [--json]\n  List your loops (--json emits the raw JSON array). Default columns are\n  id/name/cron/enabled/nextFire.",
-  edit: "loopany edit <id> --json '<obj>' [--dry-run] [--workflow-file|--ui-file|--schema-file <path>]\n  Edit a loop (JSON-only + content-file trio). --dry-run previews before/after.",
+  edit: "loopany edit <id> [--json '<obj>'] [--charter-file <path>] [--dry-run]\n  Edit loop config and/or replace its attached charter. Charter replacement reads the\n  current version and uses conflict protection; a conflict requires re-reading it.",
   report: "loopany report ...\n  In-run only: the running agent reports progress/results. Outside a run this is rejected.",
   finish: "loopany finish ...\n  In-run only: the running agent marks a closed loop's goal met. Outside a run this is rejected.",
   complete: "loopany complete ...\n  In-run only alias of `finish`. Outside a run this is rejected.",
 };
 
-/** `loopany <version>` for humans, or a plain fallback when it's unreadable. */
+/** `loopany <version>` for display, or a plain fallback when it's unreadable. */
 function versionLabel(version: string | undefined): string {
   return version ? `loopany v${version}` : "loopany";
 }

@@ -243,10 +243,11 @@ describe('template registry', () => {
     expect(l).toContain('cannibalization')
     expect(l).toContain('cta test')
     expect(l).toContain('fact-check')
-    // Sunset is a proposal; the marker-gate workflow footgun is named.
+    // Sunset is a proposal; the marker gate reads the delivered charter env path.
     expect(l).toContain('sunset')
     expect(l).toContain('proposal')
-    expect(l).toContain('task constant')
+    expect(l).toContain('process.env.loopany_charter_file')
+    expect(l).toContain('never hard-code')
     expect(t.description).toContain('/api/skill/references/templates/seo-scale-keywords/reference.md')
   })
 })

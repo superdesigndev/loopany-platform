@@ -116,7 +116,7 @@ export interface AttachInput {
  * file-shaped. There is no separate "create" verb, because a mirror attached to
  * nothing points from nowhere and would be a row nobody could ever find.
  *
- * DUAL: a run attaches what it just made, and a person attaches what they were
+ * DUAL: a run attaches what it just made, and an owner credential attaches what it was
  * already tracking. Neither is governance — a pointer changes nothing.
  */
 export async function attachMirror(input: AttachInput, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {

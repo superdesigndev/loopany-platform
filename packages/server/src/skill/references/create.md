@@ -15,7 +15,7 @@ watches it light up — reusing that same connect-key:
 
 Milestones, in order (skip any that don't apply): `reading` (reading these
 instructions), `inspecting` (looking at the project), `configuring` (settling the
-schedule/config in §2/§4), `authoring` (writing the task file + dashboard in §3),
+schedule/config in §2/§4), `authoring` (writing the charter + dashboard in §3),
 `creating` (running `loopany new` in §5). This is **best-effort only** — it never
 blocks or fails the real work; if the command isn't there or errors, carry on. With no
 connect-key (a non-capture create), skip reporting entirely.
@@ -75,28 +75,30 @@ suite is green — sound good?"* — so the user confirms in one reply. (This pa
 §1: no task → ask first; loose parameters → propose and confirm. Quick check-ins,
 not an interview.)
 
-## 3 · Create the loop's folder and task file
+## 3 · Choose the workdir and author the charter
 
-Every loop gets its **own folder** under the project: `<project>/loopany/<slug>/`
-(make it if needed; pick a short `<slug>` from the loop name). Its task file lives
-there, and it is the loop's local scratch space on this machine.
+Choose and verify the explicit **workdir** independently of the charter. It must be an
+existing absolute directory (or `~/…`) on this machine and inside any
+`LOOPANY_ROOTS` jail. This is where workflows and coding-agent processes execute; it
+may be a real repository. A blank workdir deliberately selects daemon-owned scratch.
 
-**Nothing in that folder reaches the server by itself.** The only file the server ever
-sees is the task file, whose latest content rides each run's report. Durable products
+**Nothing in the workdir reaches the server by itself.** Durable products
 travel as **objects** — a doc, a task, a mirror (see the `## Products` step below) —
 so a run that writes a report to disk and stops has produced nothing anybody can read.
 
-**The folder is not a scratch workspace either.** It is often a real repository, so
+**The workdir is not a scratch dump either.** It is often a real repository, so
 heavy work products MUST live elsewhere: when a run needs to clone a repo, open a git
 worktree, install `node_modules`, or produce build output or caches, it does that work
-**outside** the loop folder (a sibling directory or a temp dir) and cleans up after
+**outside** the workdir (a sibling directory or a temp dir) and cleans up after
 itself. Author the Spec so runs naturally keep bulk out — e.g. *"do the fix in a git
-worktree created outside this loop folder"*, never inside it.
+worktree created outside this workdir"*, never inside it.
 
-Write the **task file** at `<project>/loopany/<slug>/README.md` — the loop's durable
-brief and running memory. Each scheduled run reads it for context and maintains it
-(see `evolve.md`). Fill it from what we ACTUALLY just did — real URLs, paths,
-commands, thresholds:
+Write the **charter** in a temporary local authoring file such as
+`$(mktemp)/README.md`. The CLI uploads its complete bytes and the server stores the
+canonical attached charter. Each run receives a unique daemon-home materialization at
+the absolute path in `$LOOPANY_CHARTER_FILE`; it never lands in or pollutes the
+workdir. Fill it from what we ACTUALLY just did — real URLs, paths, commands,
+thresholds:
 
 ```markdown
 # <Loop name>
@@ -142,7 +144,7 @@ answer every run. So settle it here, at create time, in three short lines:
   attached to the task or doc that owns it. A mirror is a pointer (`kind` + `coords`) and
   never records status — a later run goes and looks.
 
-Keep the absolute path to `README.md` — it goes in the config as `taskFile`.
+Keep the authoring file path only long enough to pass it as `--charter-file` in §5.
 
 ## 4 · Author the loop config
 
@@ -158,8 +160,7 @@ A loop fires on a cron schedule. Each run is **either**:
   reading a value, or computing a digest.
 - **the coding agent**: for runs that need reasoning, code, or file work. It
   runs via your loop's host coding agent in `workdir`, driven by a server-composed trigger that points
-  it at your **task file** — no per-run instruction to write; the brief lives
-  entirely in the task file's `## Spec`.
+  it at `$LOOPANY_CHARTER_FILE`; the brief lives in the attached charter's `## Spec`.
 
 ### Workflow syntax contract — read this before writing one
 
@@ -203,7 +204,6 @@ file to write. Only the loop's real intent goes in it; the CLI fills the envelop
   "workflow": "<JS function body>",
   "goal": "<one-line checkable finish line — omit for a monitor loop>",
   "workdir": "<absolute project dir>",
-  "taskFile": "<absolute path to the task file above>",
   "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
   "ui": "<small dashboard HTML — optional; see 'Dashboard at create' below>",
   "notify": "auto"
@@ -211,10 +211,10 @@ file to write. Only the loop's real intent goes in it; the CLI fills the envelop
 ```
 
 Rules:
-- Include **`workflow` or `taskFile`** (or both, if the workflow escalates to the
-  agent). There is no `task` field — the agent's brief is the task file, so set
-  `workdir` + `taskFile` for any agent loop. Make any `workflow` self-contained and
-  defensive (handle fetch failures).
+- Every new loop carries the `--charter-file` authored above. There is no `task` field
+  and new configs do not use `taskFile`; that field remains only for legacy rollout.
+  Make any `workflow` self-contained and defensive (handle fetch failures). Workflows
+  that need the standing brief read `process.env.LOOPANY_CHARTER_FILE`.
 - **`goal` makes the loop closed**: with a goal set, each run judges it and calls
   `loopany finish` when met, ending the loop. Omit `goal` for a monitor/digest loop
   that runs indefinitely (§2).
@@ -257,7 +257,7 @@ normalized envelope, detected timezone, the next 3 fire times, and the open/clos
 classification, persisting nothing:
 
 ```bash
-<loopany-cli> new --json '<config>' --dry-run
+<loopany-cli> new --json '<config>' --charter-file <charter-authoring-file> --dry-run
 ```
 
 Check the classification matches your intent (a `goal` → `closed: will self-finish`;
@@ -270,6 +270,7 @@ learns the loop was created, and declare which coding agent you are:
 ```bash
 <loopany-cli> new \
   --json '<config>' \
+  --charter-file <charter-authoring-file> \
   --connect-key <connect-key> \
   --agent claude-code          # which coding agent you are (claude-code | codex | grok); omit to auto-detect
 ```

@@ -11,7 +11,7 @@ import { applyOwnerLoopPatch } from "../server/loopMutations.js";
 /** Pause/resume the production loop. Pausing returns u16's warning, never a block. */
 export const Route = createFileRoute("/api/loops/$loopId/$verb")({ server: { handlers: { POST: async ({ request, params }: { request: Request; params: { loopId: string; verb: string } }) => {
   const booted = await ensureServer();
-  const auth = await resolveApiContext(request, { human: "loop-governance" }, true);
+  const auth = await resolveApiContext(request, { owner: "loop-governance" }, true);
   if (!auth.ok) return authFailure(auth.error);
   if (params.verb !== "pause" && params.verb !== "resume") {
     return apiResponse({ ok: false, error: refusal("UNKNOWN_KEY", `${params.verb} is not a loop lifecycle action here`, [], "use pause or resume") });

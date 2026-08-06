@@ -154,12 +154,12 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('loopany mirror attach')
     expect(body).toContain('--needs-human')
     // Boundaries: the live-validation violation this section exists to forbid.
-    expect(body).toContain("Another loop's charter is not yours — never edit it, not one character")
+    expect(body).toContain("Another loop's charter is outside this lease — never edit it, not one character")
     // The hand-off surface was REMOVED (captain ruling 2026-08-05), so the
     // public runtime protocol must teach the watcher as settled-at-create.
     expect(body).toContain('A task keeps the watcher it was created with')
     expect(body).not.toContain('transferred, never released')
-    expect(body).toContain('Your own charter changes on an evolve pass')
+    expect(body).toContain("Your own charter's Spec changes on an evolve pass")
     // Lifecycle: close is reconciliation, docs are rewritten, a mirror outlives completion.
     expect(body).toContain('A task ends when a run reconciles reality, not by fiat')
     expect(body).toContain('Docs are rewritten, never deleted')

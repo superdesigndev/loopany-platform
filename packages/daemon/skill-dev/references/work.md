@@ -1,4 +1,4 @@
-# Tasks, docs, and the human inbox
+# Tasks, docs, and the owner inbox
 
 ## Tasks
 
@@ -13,7 +13,7 @@ third, no reopen — plus three facets that decide when and by whom it is seen:
   the scheduler queues one run for that loop, scoped to this task, on the same
   clock that fires cadences. Still a **schedule, not an obligation** — closing
   before it is legal.
-- **`needs_human`** — a question. Attaching one puts the task in the human inbox
+- **`needs_human`** — a compatibility-wire question field. Attaching one puts the task in the owner inbox
   and **blocks `task close` until it is answered**.
 
 ### Creating one
@@ -186,21 +186,22 @@ anywhere an id does (`doc show`, `doc update`, `task show`, `task update`,
 ## The inbox and `answer`
 
 The inbox is the **safety floor**: it has no filters, because a filter could hide
-an arm of it. One arm today — an open task carrying `needs_human`.
+an arm of it. One arm today — an open task carrying an owner question
+(`needs_human` on the compatibility wire format).
 
 It used to have three. The other two caught work with no loop on the hook
 (a due task nobody watched; an unwatched task older than 48h). Neither can happen
 now: every task names a watcher, and a due one **wakes that watcher** instead of
-being escalated to a person. Bringing a question to a human is the only thing
-left that genuinely needs one.
+being escalated. Bringing a question to an owner-authority credential is the
+only remaining arm.
 
 ```sh
 loopany inbox
 loopany answer task-7f3a91 "(b) give it one more day, check tomorrow night"
 ```
 
-Both are **human-only** and are refused inside a run — a run's worklist is
-`task list --watcher <your-loop-id> --due`.
+Both require an **owner-authority credential** and are refused to a run lease —
+the lease's worklist is `task list --watcher <your-loop-id> --due`.
 
 The answer is **free text**. Approve, reject and instructions are all just the
 answer; the kernel parses nothing. A reason is what lets the loop converge next
@@ -221,7 +222,7 @@ instruction on any open task, without waiting to be asked.
 loopany task tell task-7f3a91 "Drop this bet — close the PR, delete the branch, then close the task."
 ```
 
-It writes a human event on the task and queues one run for its watcher, exactly
+It writes an owner directive event on the task and queues one run for its watcher, exactly
 like an answer does, with your words verbatim in the work order. Two things make
 it a different verb rather than a flag on `answer`:
 
@@ -256,7 +257,7 @@ will.
 
 1. Read your worklist: `task list --watcher <your-loop-id> --due`. A run woken by
    a due task, an answer or a **directive** is told which one in its work order —
-   start there. If a human's words are in your work order, **do what they say,
+   start there. If an owner directive is in your work order, **do what it says,
    against the outside world first**; the kernel's records are the last step.
 2. Do the work in the loop's bound `workdir`. `task show` lists the **external
    items** the task depends on — go and check them; they are pointers, and none
@@ -269,10 +270,11 @@ will.
    date is what wakes you for it again, so a task with no `follow_up` waits for
    your cadence instead.
 5. Need a decision? `task update <id> --needs-human "…"` — then **stop on that
-   task**. Your job on it is done until a human replies.
-6. Learned something the standing brief should carry? Update the task file's
-   `## Spec`. Production loop cadence, workdir, lifecycle and creating other
-   loops remain owner configuration — propose those changes.
+   task**. Your job on it is done until an owner-authority answer arrives.
+6. Learned something the standing brief should carry? Edit the file at the
+   absolute `LOOPANY_CHARTER_FILE` path. The daemon carries it back at run
+   finalization. Production loop cadence, workdir, lifecycle and creating other
+   loops require owner authority — propose those changes.
 
 **Nothing found is a clean result.** An empty list is an answer; never
 manufacture work to have something to report.

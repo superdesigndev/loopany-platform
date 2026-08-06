@@ -1,5 +1,5 @@
 /**
- * THE REWRITE CLI — `loopany task|doc|loop …`, plus the two human verbs.
+ * THE REWRITE CLI — `loopany task|doc|loop …`, plus the two owner-authority verbs.
  *
  * A THIN SHELL over the HTTP API (CLI spec §2.3). It does exactly four local
  * jobs: attach the device credential and, when present, the invisible run
@@ -96,7 +96,7 @@ export async function runKernelCli(argv: string[], deps: KernelCliDeps = {}): Pr
 
   const headers: Record<string, string> = { ...built.headers };
   // The run header remains the positive agent classifier. Without it, either the
-  // selected session cookie or the enrolled device represents the human owner.
+  // selected session cookie or enrolled device carries team-owner authority.
   if (token) headers.Authorization = `Bearer ${token}`;
   // The run context is INVISIBLE: read from the environment the daemon set,
   // attached as a header, never surfaced as an argument the agent could edit.
@@ -797,7 +797,7 @@ function renderCreate(kind: Kind, body: Body, now: number): string {
     hints.push(`Run \`loopany ${kind} show ${id}\` to read it back`);
     if (kind === "task") {
       if (row.pendingQuestion) {
-        hints.push("This task is in the human inbox now; `loopany task close` is refused until it is answered", `On answer, one run is queued for ${cell(row.watcher)} with scope ${id} — read the answer with \`loopany task show ${id}\``);
+        hints.push("This task is in the owner inbox now; `loopany task close` is refused until it is answered", `On answer, one run is queued for ${cell(row.watcher)} with scope ${id} — read the answer with \`loopany task show ${id}\``);
       } else if (!row.followUpAt) {
         // Every safe default has a CONSEQUENCE; printing it at creation is how
         // the agent learns what omitting a field actually did. Here: the watcher
@@ -838,7 +838,7 @@ function renderUpdate(kind: "task" | "doc", verb: string, body: Body, now: numbe
     : ["Round-tripped without change — the file is the canonical form of the object"];
   if (changed && kind === "task" && row.pendingQuestion) {
     hints.length = 0;
-    hints.push("This task is in the human inbox now; `loopany task close` is refused until it is answered", `On answer, one run is queued for ${cell(row.watcher)} with scope ${id}`, "Stop here — your job on this task is done until a human replies");
+    hints.push("This task is in the owner inbox now; `loopany task close` is refused until it is answered", `On answer, one run is queued for ${cell(row.watcher)} with scope ${id}`, "Stop here — your job on this task is done until an owner-authority answer arrives");
   }
   return text + helpBlock(hints);
 }
@@ -875,7 +875,7 @@ function renderInbox(body: Body, now: number): string {
 }
 
 /**
- * `task tell` — the human speaking first.
+ * `task tell` — owner authority speaking first.
  *
  * It renders like `answer` on purpose: they are the same wire and the same
  * consequence (one run for the watcher, the task in scope), and printing them

@@ -19,7 +19,7 @@
  * be driven against a seeded fixture with no configuration.
  *
  * This is NOT the security boundary. Every `/api/views/*` handler gates itself
- * through `resolveApiContext(request, "human")`, so a page that somehow rendered
+ * through `resolveApiContext(request, "owner")`, so a page that somehow rendered
  * would still have no data. Two independent checks, neither relying on the other.
  */
 
@@ -40,7 +40,7 @@ export function rewriteWorkspaceEnabled(env: NodeJS.ProcessEnv = process.env): b
   return rewriteWorkspaceLocalDev(env) || truthy(env.LOOPANY_REWRITE_UI);
 }
 
-/** Must the visitor be a signed-in human? Everywhere except local dev. */
+/** Must the visitor have a signed-in owner session? Everywhere except local dev. */
 export function rewriteWorkspaceRequiresLogin(env: NodeJS.ProcessEnv = process.env): boolean {
   return !rewriteWorkspaceLocalDev(env);
 }

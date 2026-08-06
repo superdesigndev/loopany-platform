@@ -43,8 +43,8 @@ export function loopSurfacePointer(command: string, id?: string): string {
   const help: Record<string, string[]> = {
     "loop list": ["Run `loopany loops` — production loops are now the only roster."],
     "loop show": [`Run \`loopany show ${loopId}\` for the production loop's full editable envelope and recent runs.`],
-    "loop create": ["Create through the production flow: run `loopany new --json '<config>'`, or use the installed loopany skill for guided setup."],
-    "loop evolve": [`Edit the production loop with \`loopany edit ${loopId} --json '<patch>'\`; its standing brief lives in the task file's \`## Spec\`.`],
+    "loop create": ["Create through the production flow: run `loopany new --json '<config>' --charter-file <path>`, or use the installed loopany skill for guided setup."],
+    "loop evolve": [`Read it with \`loopany show ${loopId} --charter\`, then replace it with \`loopany edit ${loopId} --charter-file <path>\`.`],
     "loop update": [`Edit the production loop with \`loopany edit ${loopId} --json '<patch>'\`; owner edits are the schedule/config authority.`],
     "loop pause": [`Pause it with \`loopany edit ${loopId} --json '{"enabled":false}'\`.`],
     "loop resume": [`Resume it with \`loopany edit ${loopId} --json '{"enabled":true}'\`.`],
@@ -96,7 +96,7 @@ export const VERBS: Record<string, VerbSpec> = {
     usage: "loopany task create --file <path> [flags]",
     flags: [
       ["--file <path>", "the artifact file IS the object; `-` reads stdin"],
-      ["--needs-human <text>", "attach a question; the task enters the human inbox"],
+      ["--needs-human <text>", "attach a question; the task enters the owner inbox"],
       ["--watcher <loop-id>", "the loop that acts next; DEFAULTS to your own loop, so pass it only to hand the task on"],
       ["--parent <task-id>", "file this under a bigger task (e.g. task-7f3a91); it keeps its own watcher and its own ending"],
       ["--follow-up <date>", "RFC 3339 with offset, or relative (+3d, +12h); its arrival WAKES the watcher"],
@@ -119,7 +119,7 @@ export const VERBS: Record<string, VerbSpec> = {
     flags: [
       ["--follow-up <date>", "RFC 3339 with offset, or relative (+3d, +12h); `null` clears"],
       ["--parent <task-id>", "move it under another task; `null` makes it a root again"],
-      ["--needs-human <text>", "attach a question; the task enters the human inbox"],
+      ["--needs-human <text>", "attach a question; the task enters the owner inbox"],
       ["--payload-merge <json>", "one JSON object, shallow top-level merge; a `null` value deletes a key"],
       ["--file <path>", "replace front matter + body from an artifact file; `-` reads stdin"],
     ],
@@ -253,7 +253,7 @@ export const VERBS: Record<string, VerbSpec> = {
   },
   "mirror update": {
     usage: 'loopany mirror update <mirror-id> --note "<text>"',
-    flags: [["--note <text>", "the human label; `null` clears it"]],
+    flags: [["--note <text>", "the owner-authored label; `null` clears it"]],
     examples: ['loopany mirror update mirror-3f9a21c04b7e --note "the fix PR, not the seed one"'],
     notes: [
       "the note is the ONLY editable field: kind and coords are the external thing's identity and are refused by name",

@@ -103,8 +103,8 @@ export async function resolveLoopRecord(teamId: string, id: string): Promise<Loo
   return prodRow ? prodLoopRecord(prodRow) : undefined;
 }
 
-/** The raw production row — the loop page needs its cadence, its bound directory
- *  and its task file, none of which fit the reference shape. Team-scoped, so a
+/** The raw production row — the loop page needs cadence, bound workdir, charter
+ *  metadata and legacy migration path, none of which fit the reference shape. Team-scoped, so a
  *  cross-team id is indistinguishable from a missing one. */
 export async function getProdLoop(teamId: string, id: string): Promise<Loop | undefined> {
   return (await db.select().from(loops).where(and(eq(loops.teamId, teamId), eq(loops.id, id))))[0];
@@ -120,4 +120,3 @@ export function loopRefOf(id: string | null | undefined, index: LoopIndex): Loop
   const found = index.get(id) ?? missingLoopRecord(id);
   return { id: found.id, title: found.title, source: found.source };
 }
-

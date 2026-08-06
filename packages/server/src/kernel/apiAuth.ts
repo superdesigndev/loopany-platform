@@ -1,38 +1,33 @@
 /**
  * THE AUTH SEAM for the rewrite's object endpoints.
  *
- * Two credentials, two caller modes: an enrolled device credential acts with
- * its owner's authority, while a request with run context is an AGENT and is
+ * Two credential scopes: an enrolled device credential or signed-in session
+ * acts with team-owner authority, while a request with run context is
  * constrained by that run's lease.
  *
- * THE LOAD-BEARING RULE: **what separates an agent from a human is the presence
- * of RUN CONTEXT, not the presence of a credential.** It is a positive test for
- * `X-Loopany-Run`, never a negative test for a token (CLI spec §2.2). This
- * matters because the ordinary human runs the CLI on the SAME machine the daemon
- * is registered on, so a stored device credential is present on every connected
- * machine — keying the guard on the token would make `loopany inbox`/`answer`
- * refuse `NOT_HUMAN` for exactly the person the endpoint exists to serve, and the
- * refusal's teaching ("use the human CLI outside a run") would be wrong: they ARE
- * outside a run.
+ * THE LOAD-BEARING RULE: authority is determined by credential and run context.
+ * `X-Loopany-Run` positively selects lease scope; without it, an enrolled device
+ * credential or signed-in session has owner scope. The CLI surface is identical
+ * in both cases, while the allowed operations differ by scope.
  *
  * With no run context, a valid device credential is the enrolled owner's
  * terminal authority. It resolves only to the machine's own team. A foreign or
  * stale token resolves to no machine and remains unauthorized; anonymous
  * requests are still refused when the login gate is enabled.
  *
- * WHICH CREDENTIAL AUTHENTICATES AN AGENT: either the machine's device token OR
+ * WHICH CREDENTIAL AUTHENTICATES A RUN: either the machine's device token OR
  * **the run's own lease token** — and the lease is the one a delivery is
  * guaranteed to carry. The device token is a FILE on the machine's disk under
  * `LOOPANY_HOME`, and the daemon does not put `LOOPANY_HOME` (or the token) into
- * the coding agent's allowlisted child env, so a stack whose home is relocated —
+ * the run's allowlisted child env, so a stack whose home is relocated —
  * which every dev/demo stack's is — had the in-run CLI read `~/.loopany`, send
  * some OTHER server's token, and get `UNAUTHORIZED` on every kernel verb. A run
  * could not file its own products. The lease is env-carried (`LOOPANY_RUN_TOKEN`),
  * per-run, already the authority this seam checks two lines further down, and
  * narrower than the machine-wide device token, so accepting it is the fix at the
  * authoritative spot. It authenticates ONLY the run it was minted for: a lease
- * naming another run is refused, and a lease with NO run context is not an agent
- * at all (it falls through to the human branch like any unknown token).
+ * naming another run is refused, and a lease with no run context carries no
+ * owner authority (it falls through like any unknown token).
  */
 import { authEnabled, currentUser, requestScope } from "../auth.js";
 import * as store from "../db/kernelStore.js";
@@ -47,7 +42,7 @@ import type { Actor } from "./types.js";
 export interface ApiContext {
   teamId: string;
   actor: Actor;
-  mode: "agent" | "human";
+  mode: "lease" | "owner";
   machine?: Machine;
   run?: Run;
   loop?: Loop;
@@ -56,24 +51,24 @@ export interface ApiContext {
 export type ApiAuthResult = { ok: true; context: ApiContext } | { ok: false; error: ApiRefusal };
 
 /**
- * WHICH human surface a human-only endpoint is, so the run-context refusal
+ * WHICH owner surface an owner-only endpoint is, so the run-context refusal
  * teaches the path that run actually has.
  *
  * The route guard answers FIRST — before any kernel function runs — so a hint
  * that only exists in the kernel (`createFromArtifact`/`loopLifecycle` both
  * write one) is unreachable at the wire. Rather than let the inbox voice speak
- * for every human-only endpoint, each route names its surface and the two
+ * for every owner-only endpoint, each route names its surface and the two
  * altitudes teach the same thing.
  */
-export type HumanSurface = "inbox" | "loop-governance";
+export type OwnerSurface = "inbox" | "loop-governance";
 
-/** `"human"` keeps the default inbox voice; the object form names the surface. */
-export type ApiRequirement = "dual" | "agent" | "human" | { human: HumanSurface };
+/** `"owner"` keeps the default inbox voice; the object form names the surface. */
+export type ApiRequirement = "dual" | "lease" | "owner" | { owner: OwnerSurface };
 
-const NOT_HUMAN_TEACHING: Record<HumanSurface, { message: string; hint: string }> = {
+const LEASE_SCOPE_TEACHING: Record<OwnerSurface, { message: string; hint: string }> = {
   inbox: {
-    message: "this operation is waiting for a human",
-    hint: "a run cannot answer or read the human inbox — its worklist is `task list --watcher <your-loop-id> --due`",
+    message: "this operation requires owner authority",
+    hint: "a run lease cannot answer or read the owner inbox — its worklist is `task list --watcher <your-loop-id> --due`",
   },
   "loop-governance": {
     message: "creating a loop and moving its lifecycle are governance and are the owner's act",
@@ -130,8 +125,8 @@ export async function resolveApiContext(
   mutation = false,
   session: SessionSeam = REAL_SESSION,
 ): Promise<ApiAuthResult> {
-  const requirement = typeof need === "string" ? need : "human";
-  const humanSurface: HumanSurface = typeof need === "string" ? "inbox" : need.human;
+  const requirement = typeof need === "string" ? need : "owner";
+  const ownerSurface: OwnerSurface = typeof need === "string" ? "inbox" : need.owner;
   const runHeader = request.headers.get("x-loopany-run")?.trim();
   const auth = request.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
@@ -139,14 +134,14 @@ export async function resolveApiContext(
     return { ok: false, error: refusal("RATE_LIMITED", "rate limited — slow down", [], "retry after one second") };
   }
 
-  // ---- the agent class: run context present ----
+  // ---- lease scope: run context present ----
   if (runHeader) {
-    if (requirement === "human") {
-      const teaching = NOT_HUMAN_TEACHING[humanSurface];
+    if (requirement === "owner") {
+      const teaching = LEASE_SCOPE_TEACHING[ownerSurface];
       return { ok: false, error: refusal(
         "NOT_HUMAN",
         teaching.message,
-        [{ path: "X-Loopany-Run", message: "a request carrying run context is an agent's", got: runHeader }],
+        [{ path: "X-Loopany-Run", message: "run context selects lease scope", got: runHeader }],
         teaching.hint,
       ) };
     }
@@ -169,18 +164,18 @@ export async function resolveApiContext(
     }
     const loop = await legacyStore.getLoop(run.loopId);
     if (!loop) return { ok: false, error: refusal("RUN_CONTEXT_UNKNOWN", `${runHeader} has no live loop context`) };
-    return { ok: true, context: { teamId: loop.teamId ?? machine.teamId ?? `team-${loop.userId}`, actor: { entrance: "agent", actorId: run.id }, mode: "agent", machine, run, loop } };
+    return { ok: true, context: { teamId: loop.teamId ?? machine.teamId ?? `team-${loop.userId}`, actor: { entrance: "agent", actorId: run.id }, mode: "lease", machine, run, loop } };
   }
 
   // ---- no run context ----
-  if (requirement === "agent") {
-    return { ok: false, error: refusal("NO_RUN_CONTEXT", "this endpoint needs a run context and the request carried none", [], "ownership is resolved from the calling run; a human session has no run to resolve — edit the charter on the loop page instead") };
+  if (requirement === "lease") {
+    return { ok: false, error: refusal("NO_RUN_CONTEXT", "this endpoint needs a run context and the request carried none", [], "ownership is resolved from the run lease; an owner credential has no run to resolve — edit the charter on the loop page instead") };
   }
 
   const user = await session.currentUser();
   if (user) {
     const scope = await session.requestScope();
-    return { ok: true, context: { teamId: scope.teamId, actor: { entrance: "human", actorId: user.id }, mode: "human" } };
+    return { ok: true, context: { teamId: scope.teamId, actor: { entrance: "human", actorId: user.id }, mode: "owner" } };
   }
 
   // The enrolled device is the owner at the terminal. Authenticate the WHOLE
@@ -193,7 +188,7 @@ export async function resolveApiContext(
       context: {
         teamId: machine.teamId ?? legacyStore.teamIdForUser(machine.userId),
         actor: { entrance: "human", actorId: machine.userId },
-        mode: "human",
+        mode: "owner",
         machine,
       },
     };
@@ -203,5 +198,5 @@ export async function resolveApiContext(
   }
 
   const scope = await session.requestScope();
-  return { ok: true, context: { teamId: scope.teamId, actor: { entrance: "human", actorId: "human:open-mode" }, mode: "human" } };
+  return { ok: true, context: { teamId: scope.teamId, actor: { entrance: "human", actorId: "human:open-mode" }, mode: "owner" } };
 }

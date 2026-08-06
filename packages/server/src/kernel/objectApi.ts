@@ -177,7 +177,7 @@ export async function replaceFromArtifact(kind: ArtifactKind, id: string, raw: s
     const guard = scopedKindGuard(before, kind, context.teamId); if (guard) return guard;
     if (kind === "doc" && before!.docKind === "charter") return { ok: false, error: refusal("CHARTER_ONLY", `${id} is an attached loop charter, not a product doc`) };
     if (parsed.value.key !== null && parsed.value.key !== before!.key) return { ok: false, error: refusal("IMMUTABLE_KEY", "key cannot be changed", [{ path: "key", message: "fixed at creation", got: parsed.value.key, expected: before!.key ?? "(remove the key)" }], "restore the stored key or remove the line") };
-    if (context.mode === "agent" && kind === "task" && before!.pendingQuestion && parsed.value.pendingQuestion !== before!.pendingQuestion) return { ok: false, error: refusal("NOT_HUMAN", "a run cannot clear or replace a pending question", [], "a human answers or withdraws it") };
+    if (context.mode === "lease" && kind === "task" && before!.pendingQuestion && parsed.value.pendingQuestion !== before!.pendingQuestion) return { ok: false, error: refusal("NOT_HUMAN", "a run lease cannot clear or replace a pending question", [], "an owner-authority credential answers or withdraws it") };
     // The whole-file replace is a WATCHER SURFACE too — `watcher:` is a task's
     // front-matter key, so an edited file could hand the task on without ever
     // touching the patch path. Refused for the same reason and with the same
@@ -228,11 +228,11 @@ export async function patchTask(id: string, body: unknown, context: ApiContext, 
       }
       fields.parentId = rec.parent as string | null;
     }
-    if (Object.hasOwn(rec, "needsHuman")) { if (rec.needsHuman !== null && (typeof rec.needsHuman !== "string" || !rec.needsHuman.trim())) return { ok: false, error: refusal("SCHEMA_VIOLATION", "needsHuman must be non-empty text or null") }; if (context.mode === "agent" && before!.pendingQuestion && rec.needsHuman !== before!.pendingQuestion) return { ok: false, error: refusal("NOT_HUMAN", "a run cannot clear or replace a pending question", [], "a human answers it in the inbox") }; fields.pendingQuestion = rec.needsHuman as string | null; }
+    if (Object.hasOwn(rec, "needsHuman")) { if (rec.needsHuman !== null && (typeof rec.needsHuman !== "string" || !rec.needsHuman.trim())) return { ok: false, error: refusal("SCHEMA_VIOLATION", "needsHuman must be non-empty text or null") }; if (context.mode === "lease" && before!.pendingQuestion && rec.needsHuman !== before!.pendingQuestion) return { ok: false, error: refusal("NOT_HUMAN", "a run lease cannot clear or replace a pending question", [], "an owner-authority credential answers it in the inbox") }; fields.pendingQuestion = rec.needsHuman as string | null; }
     if (Object.hasOwn(rec, "title")) { if (typeof rec.title !== "string") return { ok: false, error: refusal("SCHEMA_VIOLATION", "title must be text") }; fields.title = rec.title; }
     if (Object.hasOwn(rec, "body")) { if (typeof rec.body !== "string") return { ok: false, error: refusal("SCHEMA_VIOLATION", "body must be text") }; fields.body = rec.body; }
     if (Object.hasOwn(rec, "payloadMerge")) { if (!rec.payloadMerge || typeof rec.payloadMerge !== "object" || Array.isArray(rec.payloadMerge)) return { ok: false, error: refusal("SCHEMA_VIOLATION", "payloadMerge must be one JSON object") }; fields.payload = mergePayload(before!.payload, rec.payloadMerge as Record<string, unknown>); }
-    const withdrawing = context.mode === "human" && before!.pendingQuestion && fields.pendingQuestion === null;
+    const withdrawing = context.mode === "owner" && before!.pendingQuestion && fields.pendingQuestion === null;
     const result = await applyUpdateIn(tx, { objectId: id, actor: context.actor, now: now.toISOString(), fields, ...(withdrawing ? { eventKind: "question-withdrawn" } : {}) });
     return kernelUpdateResult("task", result);
   });
@@ -243,7 +243,7 @@ export async function closeTask(id: string, note: unknown, context: ApiContext, 
   return db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec; const before = await store.getObjectForUpdate(tx, id);
     const guard = scopedKindGuard(before, "task", context.teamId); if (guard) return guard;
-    if (before!.pendingQuestion?.trim()) return { ok: false, error: refusal("OPEN_QUESTION", `${id} cannot be closed while a question is waiting for a human`, [{ path: "pendingQuestion", message: "must be empty to close", got: before!.pendingQuestion }], `a human answers it at POST /api/tasks/${id}/verdict`) };
+    if (before!.pendingQuestion?.trim()) return { ok: false, error: refusal("OPEN_QUESTION", `${id} cannot be closed while a question is waiting for owner authority`, [{ path: "pendingQuestion", message: "must be empty to close", got: before!.pendingQuestion }], `an owner credential answers it at POST /api/tasks/${id}/verdict`) };
     if (before!.status === "closed") {
       const original = [...await store.listObjectEvents(tx, id)].reverse().find((event) => event.kind === "task-closed")?.note ?? null;
       const differs = original !== note;
@@ -258,7 +258,7 @@ export async function closeTask(id: string, note: unknown, context: ApiContext, 
 /**
  * `POST /api/loops/:id/run-now` — the MANUAL fire (API spec §1.16).
  *
- * HUMAN-ONLY, like the lifecycle verbs: firing a loop off-cadence is an
+ * OWNER-SCOPE, like the lifecycle verbs: firing a loop off-cadence is an
  * operational act the owner keeps, and a run that could wake itself would be a
  * loop with no cadence at all. It reuses `queueKernelRun`'s `manual` reason, so
  * a manual run is claimed, leased, reported and retried by exactly the machinery
@@ -271,15 +271,15 @@ export async function closeTask(id: string, note: unknown, context: ApiContext, 
  *
  * **A PAUSED production loop accepts a manual fire** (captain ruling
  * 2026-08-04). Pause governs the CADENCE (`enabled=false`), and a manual fire
- * is an explicit human act, not the clock. Refusing it
+ * is an explicit owner-authority act, not the clock. Refusing it
  * conflated the two and made the only way to run a parked loop once a
  * resume/fire/pause dance that leaves a real window in which the cadence is live.
  * Firing does NOT resume: `enabled` stays false, the status stays `paused`,
  * and the loop is quiet again the moment the run finishes.
  */
 export async function runLoopNow(id: string, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  if (context.mode !== "human") {
-    return { ok: false, error: notHuman(context, "firing a loop off its cadence is the owner's act", `propose it: \`loopany task create --file <path> --needs-human "run this loop now because …" --watcher ${context.run?.loopId ?? "<your-loop-id>"}\``) };
+  if (context.mode !== "owner") {
+    return { ok: false, error: leaseScopeForbidden(context, "firing a loop off its cadence is the owner's act", `propose it: \`loopany task create --file <path> --needs-human "run this loop now because …" --watcher ${context.run?.loopId ?? "<your-loop-id>"}\``) };
   }
   const result = await db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec;
@@ -319,12 +319,12 @@ export interface InboxUnionRow {
 }
 
 /**
- * THE §6 SAFETY FLOOR, single-sourced. Both the raw `GET /api/inbox` (the human
+ * THE §6 SAFETY FLOOR, single-sourced. Both the raw `GET /api/inbox` (the owner
  * CLI's surface) and the composed `GET /api/views/inbox` (the screen's) read it,
  * so the floor cannot mean two different things depending on which one you are
  * looking at. It returns ROWS, not a payload shape — each caller shapes.
  *
- * IT IS NOW ONE BRANCH: an open task with a question waiting for a human.
+ * IT IS NOW ONE BRANCH: an open task with a question waiting for owner authority.
  *
  * It used to be three. The other two — a due task nobody watched, and the
  * 48-hour orphan floor for a task with neither watcher nor follow-up — were both
@@ -336,7 +336,7 @@ export interface InboxUnionRow {
  * due one WAKES that loop (`tickDueTasks`) instead of waiting to be noticed.
  *
  * The union shape (`reasons` as an array, `reasonRank`) is deliberately kept:
- * it costs nothing, and the inbox is exactly where a future human-attention
+ * it costs nothing, and the inbox is exactly where a future owner-attention
  * branch would land.
  */
 export async function inboxUnion(teamId: string, now: Date): Promise<{ rows: InboxUnionRow[]; stamp: string }> {
@@ -361,20 +361,18 @@ export function inboxCounts(rows: InboxUnionRow[]) {
 }
 
 export async function inbox(context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  // The inbox routes HUMAN attention. An agent learns nothing here that
+  // The inbox routes owner attention. A run lease learns nothing here that
   // `task list` does not already give it (spec §1.14).
-  if (context.mode !== "human") return { ok: false, error: notHuman(context, "the inbox is a human surface", "a run's worklist is `task list --watcher <your-loop-id> --due`") };
+  if (context.mode !== "owner") return { ok: false, error: leaseScopeForbidden(context, "the inbox requires owner authority", "a run lease's worklist is `task list --watcher <your-loop-id> --due`") };
   const { rows, stamp } = await inboxUnion(context.teamId, now);
   const items = rows.map(({ task, reasons, askedAt }) => ({ task: taskListShape(task), reasons, askedAt }));
   return { ok: true, value: { items, counts: inboxCounts(rows), now: stamp } };
 }
 
 export async function verdict(id: string, answer: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  // Double-covered with the route's own human-only gate. The guard is on the
-  // PRESENCE of run context, not on a credential class: a request that names a
-  // run is by construction an agent's, and the answer belongs to a person
-  // (spec §4.2) — including on a task the run's own loop created.
-  if (context.mode !== "human") return { ok: false, error: notHuman(context) };
+  // Double-covered with the route's owner-scope gate. Run context selects lease
+  // scope, which cannot answer even on a task its own loop created.
+  if (context.mode !== "owner") return { ok: false, error: leaseScopeForbidden(context) };
   if (typeof answer !== "string" || !answer.trim()) return { ok: false, error: refusal("INVALID_BODY", "answer must be non-empty text", [{ path: "answer", message: "required" }], "free text — approve, reject and instructions are all just the answer; a reason is what lets the loop converge next time") };
   const result: ApiResult<Record<string, unknown>> = await db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as store.KernelExec; const task = await store.getObjectForUpdate(tx, id);
@@ -391,9 +389,9 @@ export async function verdict(id: string, answer: unknown, context: ApiContext, 
     let queued: Awaited<ReturnType<typeof queueKernelRun>>["run"] | undefined;
     // R-answer JOINS rather than stacks. The one-queued-run-per-loop index is the
     // queue discipline (spec §6.1), so a second answer for the same watcher does
-    // not refuse the human and does not mint a twin: it reports the run already
+    // not refuse the owner action and does not mint a twin: it reports the run already
     // queued, which will pull both answered tasks when it claims. Refusing here
-    // would make a person's answer fail for a reason that is not about them.
+    // would make an owner answer fail for a reason unrelated to its authority.
     if (watcherLoop) {
       const q = await queueKernelRun(tx, { loop: watcherLoop, now: now.toISOString(), reason: "answered", scope: `task:${id}`, verdictEventId: updated.event.id });
       queued = q.run;
@@ -409,22 +407,22 @@ export async function verdict(id: string, answer: unknown, context: ApiContext, 
 }
 
 /**
- * `POST /api/tasks/:id/directive` — THE HUMAN SPEAKS FIRST.
+ * `POST /api/tasks/:id/directive` — OWNER AUTHORITY SPEAKS FIRST.
  *
- * The inbox is an AGENT-initiated conversation: a run asks, a person answers.
- * This is the other direction — a person tells the watching loop something about
+ * The inbox is run-initiated: a run asks, an owner-authority caller answers.
+ * This is the other direction — the owner tells the watching loop something about
  * a task it holds, without having been asked, and the loop wakes to act on it.
  * Same wire as the answer path, opposite entrance.
  *
  * FOUR rulings are worth keeping:
  *
  *  1. **It is its own run reason (`directive`), not a flavour of `answered`.**
- *     An answer replies to a question the agent framed; a directive arrives
+ *     An answer replies to a question the run framed; a directive arrives
  *     unframed and the run's first job is to work out what it implies against
  *     external reality. A run that could not tell them apart would read the
  *     directive as an answer to a question it never asked. `types.ts`
  *     RUN_REASONS carries the reasoning.
- *  2. **A pending question REFUSES it.** With a question open the person already
+ *  2. **A pending question REFUSES it.** With a question open owner authority already
  *     has the floor and the wire for it, and the run this would queue could not
  *     clear the question anyway. Two open conversations on one task is precisely
  *     the ambiguity keeping the verbs distinct is meant to avoid.
@@ -434,15 +432,14 @@ export async function verdict(id: string, answer: unknown, context: ApiContext, 
  *     so the queued run reads it when it claims.
  *  4. **The run carries the words VERBATIM.** `triggerEventId` points at the
  *     directive event, and `claimRun` reads the note through it into the work
- *     order — the agent is told what it was asked, not merely that something
+ *     order — the run is told what it was asked, not merely that something
  *     changed.
  */
 export async function leaveDirective(id: string, directive: unknown, context: ApiContext, now = new Date()): Promise<ApiResult<Record<string, unknown>>> {
-  // Human-only, on the same positive test for run context the verdict uses: a
-  // request naming a run is an agent's, and a loop instructing itself is a loop
-  // with no cadence at all.
-  if (context.mode !== "human") {
-    return { ok: false, error: notHuman(context, "a directive is a person telling a loop what to do, so it is entered by a person", "a run that wants another loop to act files a task for it: `loopany task create --file <path> --watcher <that-loop-id>`") };
+  // Owner-scope, on the same positive run-context test the verdict uses. A loop
+  // instructing itself would be a loop with no cadence at all.
+  if (context.mode !== "owner") {
+    return { ok: false, error: leaseScopeForbidden(context, "a directive requires owner authority", "a run lease that wants another loop to act files a task for it: `loopany task create --file <path> --watcher <that-loop-id>`") };
   }
   if (typeof directive !== "string" || !directive.trim()) {
     return { ok: false, error: refusal("INVALID_BODY", "a directive is non-empty text", [{ path: "directive", message: "required" }], "say what you want done and why — the run executes the INTENT against reality, so \"drop this bet\" means close the PR and clean up, not just close the task") };
@@ -461,7 +458,7 @@ export async function leaveDirective(id: string, directive: unknown, context: Ap
     const watcherLoop = task!.watcher ? await resolveQueueLoopIn(tx, context.teamId, task!.watcher) : undefined;
 
     // The directive lands on the TASK's timeline: it is a fact about this task,
-    // entered by a human, and it stays readable there whether or not a run was
+    // entered with owner authority, and it stays readable there whether or not a run was
     // queued for it. Organic — two directives a week apart are two real facts.
     const event = await appendOrganicEvent(tx, {
       teamId: task!.teamId, objectId: task!.id, kind: "directive-left", origin: "organic",
@@ -538,8 +535,8 @@ function kernelUpdateResult(kind: ObjectKind, result: Awaited<ReturnType<typeof 
 }
 
 function unknownJsonKey(where: string, key: string, allowed: string[]): ApiRefusal { return refusal("UNKNOWN_KEY", `unknown key "${key}" in ${where}`, [{ path: key, message: "unknown key", got: key }], `${where} accepts: ${allowed.join(", ")}`); }
-function notHuman(context: ApiContext, message = "this question is waiting for a human", hint?: string): ApiRefusal {
-  return refusal("NOT_HUMAN", message, context.run ? [{ path: "X-Loopany-Run", message: "a request carrying run context is an agent's", got: context.run.id }] : [], hint);
+function leaseScopeForbidden(context: ApiContext, message = "this question requires owner authority", hint?: string): ApiRefusal {
+  return refusal("NOT_HUMAN", message, context.run ? [{ path: "X-Loopany-Run", message: "run context selects lease scope", got: context.run.id }] : [], hint);
 }
 function mergePayload(before: Record<string, unknown> | null, patch: Record<string, unknown>) { const out = { ...(before ?? {}) }; for (const [key, value] of Object.entries(patch)) if (value === null) delete out[key]; else out[key] = value; return out; }
 export function taskListShape(row: KernelObject): Record<string, unknown> { return { id: row.id, kind: row.kind, status: row.status, title: row.title, followUpAt: row.followUpAt, pendingQuestion: row.pendingQuestion, watcher: row.watcher, parentId: row.parentId, key: row.key, createdByLoop: row.createdByLoop, createdAt: row.createdAt, updatedAt: row.updatedAt }; }

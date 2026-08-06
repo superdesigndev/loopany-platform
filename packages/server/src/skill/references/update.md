@@ -1,6 +1,7 @@
 # Edit an existing loop
 
-A loop lives in two places, and you change each where it lives. Use the same
+A loop's config and attached charter both live on the server; `workdir` names where it
+executes on this machine. Use the same
 **loopany-cli** prefix as for create (default `npx @crewlet/loopany@latest`); it
 reuses this machine's persisted device token, so no `--server-url`/`--connect-key`
 or other auth is needed.
@@ -8,13 +9,15 @@ or other auth is needed.
 - **Schedule / delivery envelope + goal** (cadence, name, timezone, notify, model,
   pause, goal, …) — the server owns it. Change it with `loopany edit` (below), which
   is **JSON-only**: one `--json '<patch>'` of just the fields that change.
-- **What the loop does** (its instructions, context, log) — the loop's **task file
-  (`loopany/<slug>/README.md`) on this machine**. Edit it directly in the repo,
-  keeping its `## Spec` / `## Current understanding` / `## Timeline` structure; the
-  server's copy refreshes when the loop's next run reports. (How a run maintains it:
-  `evolve.md`.) To point the loop at a *different* task file, patch the path:
-  `--json '{"taskFile":"…"}'` (the server records the path only; move/create the
-  file yourself).
+- **What the loop does** (its instructions, context, log) — the attached **charter**.
+  Read it with `<loopany-cli> show <loop-id> --charter`, save the revised complete
+  markdown to a local file, then replace it with
+  `<loopany-cli> edit <loop-id> --charter-file <path>`. The command reads the current
+  server version and applies a CAS update; on `CHARTER_VERSION_CONFLICT`, re-read and
+  deliberately reapply. Inside a run there is no charter command: the run edits its
+  `$LOOPANY_CHARTER_FILE` and daemon carry persists it at run end.
+- **Where it executes** — `workdir`. Change it with `--json '{"workdir":"/abs/path"}'`.
+  Moving execution does not move or rewrite the charter.
 - **Dashboard / metric schema / workflow** — the loop normally shapes these itself
   during its **evolution pass** (see `evolve.md`); leave them to it unless the user
   explicitly asks. Then push them with the content-file flags (below); the server
@@ -30,7 +33,7 @@ First find the loop id (only loops bound to THIS machine are listed):
 ```
 
 The default columns are `id`/`name`/`cron`/`enabled`/`nextFire`; add more with
-`--fields` (comma-separated, from `timezone`,`notify`,`model`,`goal`,`taskFile`,
+`--fields` (comma-separated, from `timezone`,`notify`,`model`,`goal`,`workdir`,`taskFile`,
 `runs`,`lastOutcome`) — an unknown field fails loud. `--json` emits the full records
 as a raw JSON array (every field, `runs`/`lastOutcome` always computed) when you need
 to parse the list instead of read it.
@@ -67,7 +70,8 @@ The whitelist — every key `--json` accepts:
 | `allowControl` | boolean                        | `false` = **pin** the schedule (runs can't self-adjust) |
 | `enabled`      | boolean                        | `false` pauses; `true` resumes — or **reopens** a completed loop (clears its completion stamps; goal survives) |
 | `runAt`        | `2h` / ISO                     | one extra run soon, then resume cadence |
-| `taskFile`     | absolute path                  | repoint at a different task-file README |
+| `workdir`      | absolute / `~/` path, or `null` | relocate execution; null selects daemon scratch |
+| `taskFile`     | legacy path                    | compatibility only during additive rollout; do not use for new loops |
 | `goal`         | string, or `null`             | set/change the finish line, or clear it (clearing also drops completion) |
 | `workflow`     | JS string                      | usually via `--workflow-file` instead |
 | `ui`           | HTML string                    | usually via `--ui-file` instead |
@@ -90,6 +94,7 @@ run-time `set-*` verbs — because multi-line JS/HTML/JSON is awkward to embed i
 <loopany-cli> edit <loop-id> --workflow-file wf.js      # replace the deterministic pre-stage JS
 <loopany-cli> edit <loop-id> --ui-file dash.html        # replace the dashboard HTML
 <loopany-cli> edit <loop-id> --schema-file schema.json  # replace the metric schema (JSON array)
+<loopany-cli> edit <loop-id> --charter-file charter.md  # replace attached charter with CAS
 ```
 
 A `--workflow-file` body must obey the workflow syntax contract — a plain statement

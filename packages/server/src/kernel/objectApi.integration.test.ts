@@ -18,7 +18,7 @@ let prodStore: typeof import("../db/store.js");
 const TEAM = "team-api";
 const T0 = "2026-08-03T00:00:00.000Z";
 const T1 = new Date("2026-08-03T01:00:00.000Z");
-const human = { teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" }, mode: "human" } as const;
+const human = { teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" }, mode: "owner" } as const;
 
 beforeAll(async () => {
   temp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-object-api-"));
@@ -56,11 +56,11 @@ async function makeLoop(title = "Housekeeper", enabled = true) {
 /** An agent context: a device credential PLUS run context, which is what makes a
  *  request an agent's (spec §2.1). The run row is only read for id/loopId here. */
 function agentIn(loopId: string, runId = "run-exec"): never {
-  return { teamId: TEAM, actor: { entrance: "agent", actorId: runId }, mode: "agent", run: { id: runId, loopId } } as never;
+  return { teamId: TEAM, actor: { entrance: "agent", actorId: runId }, mode: "lease", run: { id: runId, loopId } } as never;
 }
 
 /** Every task names a watcher (`types.ts` WATCHER_HINT). A loop-created one
- *  falls back to its creator, so only the human-created fixtures name one. */
+ *  falls back to its creator, so only owner-created fixtures name one. */
 const WATCHER = "loop-fixture";
 async function makeTask(fields: Record<string, unknown> = {}, loopId?: string) {
   const result = await kernel.createObject({
@@ -215,9 +215,9 @@ describe("a task keeps the watcher it was created with", () => {
   });
 });
 
-// ------------------------------------------------------- the human-only seams
+// ------------------------------------------------------- the owner-scope seams
 
-describe("the human-only question guard is covered at both altitudes", () => {
+describe("the owner-authority question guard is covered at both altitudes", () => {
   it("refuses a run clearing a question at the PATCH surface (NB-1), and again in the kernel", async () => {
     const loop = await makeLoop();
     const task = await makeTask({ pendingQuestion: "Post this reply?", watcher: loop.id }, loop.id);

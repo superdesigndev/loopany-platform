@@ -67,7 +67,7 @@ test("evolve task turn keeps every lever + smoke-test discipline + protocol pros
   expect(t).toContain("{{latest.");
   expect(t).toContain("<loop-chart");
   // Run-only framing + the smoke-test gate before set-workflow.
-  expect(t).toMatch(/never notif(y|ies) the user/i);
+  expect(t).toMatch(/never send a notification/i);
   expect(t).toMatch(/smoke-test/i);
   // The pass must leave a run-log summary (report --message), stated in both the
   // standing prose (§4 Finish) and the payload's closing instruction — an evolve
@@ -76,9 +76,11 @@ test("evolve task turn keeps every lever + smoke-test discipline + protocol pros
   expect(t).toMatch(/no change/i);
   // The untrusted-data guard rides along in the user turn (evolve reads run messages).
   expect(t).toMatch(/data, never as instructions/i);
-  // The task lever: sharpen the brief by editing the task file on disk (no set-task).
-  expect(t).toContain("## 1. The task");
-  expect(t).toMatch(/edit the task file/i);
+  // The charter lever: edit the absolute per-run materialization; there is no command.
+  expect(t).toContain("## 1. The charter");
+  expect(t).toContain("$LOOPANY_CHARTER_FILE");
+  expect(t).toMatch(/edit .*directly/i);
+  expect(t).toMatch(/daemon persists a changed complete body at finalization/i);
   expect(t).toContain("## Spec");
   expect(t).toContain("## Current understanding");
   expect(t).toContain("## Timeline");
@@ -197,10 +199,13 @@ test("exec task carries the CORE: identity, fallback core, report/finish, skill 
   expect(t).toContain("loopany");
   // The non-negotiable inline fallback core, self-sufficient without the skill.
   expect(t).toMatch(/non-negotiable/i);
-  expect(t).toContain("/work/loopany/test/README.md"); // read the task file first
+  expect(t).toContain("$LOOPANY_CHARTER_FILE"); // read the delivered charter first
+  expect(t).toMatch(/absolute path/i);
+  expect(t).toMatch(/daemon-home materialization/i);
   expect(t).toContain("## Spec");
   expect(t).toMatch(/surface only what/i); // do the work, surface only what changed
   expect(t).toMatch(/exactly ONE terminal call/i);
+  expect(t).toMatch(/finish every charter edit before the terminal call/i);
   expect(t).toContain("loopany report");
   expect(t).toContain("loopany finish");
   expect(t).toMatch(/one pass/i); // one pass then stop
@@ -222,7 +227,7 @@ test("exec task signposts the product model: report vs doc vs task vs mirror", (
   expect(t).toContain("loopany mirror attach");
   // The rules that decide WHICH product a thing is.
   expect(t).toMatch(/stable `key:`/);
-  expect(t).toMatch(/never a new doc per day/i);
+  expect(t).toMatch(/rather than creating a new doc per day/i);
   expect(t).toMatch(/attached to the task or doc that owns it/i);
   // The folder is local scratch: a file that is not FILED reaches nobody. This is
   // the load-bearing half of the folder-sync retirement — a run that writes a
@@ -231,7 +236,8 @@ test("exec task signposts the product model: report vs doc vs task vs mirror", (
   expect(t).toMatch(/local scratch/i);
   expect(t).not.toMatch(/continuously synced/i);
   // The skill pointer advertises the depth this signpost is the short form of.
-  expect(t).toMatch(/product\/object model/i);
+  expect(t).toMatch(/product objects/i);
+  expect(t).toMatch(/charter.*not a product/is);
 });
 
 test("exec task keeps the untrusted-data guard prominent in the user turn", () => {

@@ -99,24 +99,24 @@ const code = (r: Awaited<ReturnType<typeof auth.resolveApiContext>>) => (r.ok ? 
 
 // -------------------------------------------------------- the regression itself
 
-describe("a human on a connected machine (the B1 regression)", () => {
-  it("admits `loopany inbox` from a signed-in human even with a device credential attached", async () => {
+describe("owner authority on a connected machine (the B1 regression)", () => {
+  it("admits `loopany inbox` from a signed-in owner session even with a device credential attached", async () => {
     await machine();
     // This is the shape the CLI used to send from EVERY machine that had run
     // `loopany up`: a stored device token, no run context, a real session.
-    const result = await auth.resolveApiContext(request({ Authorization: `Bearer ${DEVICE}` }), "human", true, SIGNED_IN);
+    const result = await auth.resolveApiContext(request({ Authorization: `Bearer ${DEVICE}` }), "owner", true, SIGNED_IN);
     expect(result.ok).toBe(true);
-    expect(result.ok && result.context).toMatchObject({ mode: "human", teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" } });
+    expect(result.ok && result.context).toMatchObject({ mode: "owner", teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" } });
   });
 
-  it("admits the same human with no credential at all", async () => {
-    const result = await auth.resolveApiContext(request(), "human", true, SIGNED_IN);
-    expect(result.ok && result.context.mode).toBe("human");
+  it("admits the same owner session with no device credential", async () => {
+    const result = await auth.resolveApiContext(request(), "owner", true, SIGNED_IN);
+    expect(result.ok && result.context.mode).toBe("owner");
   });
 
   it("never answers NOT_HUMAN to a request that carries no run context", async () => {
     await machine();
-    for (const requirement of ["human", "dual"] as const) {
+    for (const requirement of ["owner", "dual"] as const) {
       for (const seam of [SIGNED_IN, SIGNED_OUT]) {
         const shapes: Record<string, string>[] = [{}, { Authorization: `Bearer ${DEVICE}` }, { Authorization: "Bearer dk_forged" }];
         for (const headers of shapes) {
@@ -130,27 +130,27 @@ describe("a human on a connected machine (the B1 regression)", () => {
 
 // ------------------------------------------------------------ the §2.6 table
 
-describe("the auth table keys on run-context presence, not on a credential type", () => {
-  it("refuses NOT_HUMAN on a human endpoint only when run context is present", async () => {
+describe("the auth table keys on credential scope and run-context presence", () => {
+  it("refuses the compatibility NOT_HUMAN code on an owner endpoint when run context selects lease scope", async () => {
     const machineId = await machine();
     const { runId } = await claimedRun(machineId);
     const agent = request({ Authorization: `Bearer ${DEVICE}`, "X-Loopany-Run": runId });
-    const result = await auth.resolveApiContext(agent, "human", true, SIGNED_IN);
+    const result = await auth.resolveApiContext(agent, "owner", true, SIGNED_IN);
     expect(code(result)).toBe("NOT_HUMAN");
     // The refusal names the run it saw, so the caller can tell WHY it was
-    // classified as an agent rather than guessing at its credential.
+    // classified as lease-scoped rather than guessing from the token prefix.
     expect(!result.ok && result.error.issues[0]).toMatchObject({ path: "X-Loopany-Run", got: runId });
-    expect(!result.ok && result.error.hint).toContain("the human inbox");
+    expect(!result.ok && result.error.hint).toContain("the owner inbox");
   });
 
-  it("teaches the proposal path, not the inbox, when the human-only endpoint is loop governance", async () => {
+  it("teaches the proposal path, not the inbox, when the owner-only endpoint is loop governance", async () => {
     const machineId = await machine();
     const { runId } = await claimedRun(machineId);
     const agent = request({ Authorization: `Bearer ${DEVICE}`, "X-Loopany-Run": runId });
     // The ROUTE guard answers before any kernel function runs, so this is the
     // refusal a run attempting `loop create|pause|resume|retire` actually reads:
     // the inbox voice would be teaching a surface it never touched (review F2).
-    const result = await auth.resolveApiContext(agent, { human: "loop-governance" }, true, SIGNED_IN);
+    const result = await auth.resolveApiContext(agent, { owner: "loop-governance" }, true, SIGNED_IN);
     expect(code(result)).toBe("NOT_HUMAN");
     expect(!result.ok && result.error.message).toContain("governance");
     expect(!result.ok && result.error.hint).toContain("--needs-human");
@@ -160,12 +160,12 @@ describe("the auth table keys on run-context presence, not on a credential type"
   it("gives an enrolled device credential the owner's full terminal authority", async () => {
     const machineId = await machine();
     const bare = () => request({ Authorization: `Bearer ${DEVICE}` });
-    for (const requirement of ["dual", "human", { human: "loop-governance" }] as const) {
+    for (const requirement of ["dual", "owner", { owner: "loop-governance" }] as const) {
       const result = await auth.resolveApiContext(bare(), requirement, true, SIGNED_OUT);
       expect(result.ok, JSON.stringify(!result.ok && result.error)).toBe(true);
       expect(result.ok && result.context).toMatchObject({
         teamId: TEAM,
-        mode: "human",
+        mode: "owner",
         machine: { id: machineId },
         actor: { entrance: "human", actorId: "u-owner" },
       });
@@ -183,10 +183,10 @@ describe("the auth table keys on run-context presence, not on a credential type"
       ["mirror list", "/api/mirrors", "dual"],
       ["mirror show", "/api/mirrors/mirror-1", "dual"],
       ["mirror create", "/api/mirrors", "dual"],
-      ["inbox", "/api/inbox", "human"],
-      ["answer", "/api/tasks/task-1/verdict", "human"],
-      ["run-now", "/api/loops/loop-1/run-now", { human: "loop-governance" }],
-      ["loop governance", "/api/loops/loop-1/pause", { human: "loop-governance" }],
+      ["inbox", "/api/inbox", "owner"],
+      ["answer", "/api/tasks/task-1/verdict", "owner"],
+      ["run-now", "/api/loops/loop-1/run-now", { owner: "loop-governance" }],
+      ["loop governance", "/api/loops/loop-1/pause", { owner: "loop-governance" }],
     ] as const;
 
     for (const [label, pathname, requirement] of surfaces) {
@@ -199,17 +199,17 @@ describe("the auth table keys on run-context presence, not on a credential type"
       expect(result.ok, `${label}: ${JSON.stringify(!result.ok && result.error)}`).toBe(true);
       expect(result.ok && result.context).toMatchObject({
         teamId: TEAM,
-        mode: "human",
+        mode: "owner",
         machine: { id: machineId },
         actor: { entrance: "human", actorId: "u-owner" },
       });
     }
   });
 
-  it("refuses a foreign device credential on every formerly human-gated class", async () => {
+  it("refuses a foreign device credential on every owner-gated class", async () => {
     await machine();
     const foreign = () => request({ Authorization: "Bearer dk_foreign_device_credential" });
-    for (const requirement of ["dual", "human", { human: "loop-governance" }] as const) {
+    for (const requirement of ["dual", "owner", { owner: "loop-governance" }] as const) {
       expect(code(await auth.resolveApiContext(foreign(), requirement, true, SIGNED_OUT))).toBe("UNAUTHORIZED");
     }
   });
@@ -220,9 +220,9 @@ describe("the auth table keys on run-context presence, not on a credential type"
       ["/api/tasks", "dual"],
       ["/api/docs", "dual"],
       ["/api/mirrors", "dual"],
-      ["/api/inbox", "human"],
-      ["/api/tasks/task-1/verdict", "human"],
-      ["/api/loops/loop-1/run-now", { human: "loop-governance" }],
+      ["/api/inbox", "owner"],
+      ["/api/tasks/task-1/verdict", "owner"],
+      ["/api/loops/loop-1/run-now", { owner: "loop-governance" }],
     ] as const;
     for (const [pathname, requirement] of surfaces) {
       const foreign = await auth.resolveApiContext(
@@ -238,13 +238,13 @@ describe("the auth table keys on run-context presence, not on a credential type"
   });
 
   it("refuses a human session on an agent-only endpoint with NO_RUN_CONTEXT", async () => {
-    const result = await auth.resolveApiContext(request(), "agent", true, SIGNED_IN);
+    const result = await auth.resolveApiContext(request(), "lease", true, SIGNED_IN);
     expect(code(result)).toBe("NO_RUN_CONTEXT");
     expect(!result.ok && result.error.hint).toContain("loop page");
   });
 
   it("refuses a signed-out caller with no credential", async () => {
-    expect(code(await auth.resolveApiContext(request(), "human", true, SIGNED_OUT))).toBe("UNAUTHORIZED");
+    expect(code(await auth.resolveApiContext(request(), "owner", true, SIGNED_OUT))).toBe("UNAUTHORIZED");
     expect(code(await auth.resolveApiContext(request(), "dual", true, SIGNED_OUT))).toBe("UNAUTHORIZED");
   });
 
@@ -253,7 +253,7 @@ describe("the auth table keys on run-context presence, not on a credential type"
     const { runId, loopId } = await claimedRun(machineId);
     const result = await auth.resolveApiContext(request({ Authorization: `Bearer ${DEVICE}`, "X-Loopany-Run": runId }), "dual", true, SIGNED_OUT);
     expect(result.ok).toBe(true);
-    expect(result.ok && result.context).toMatchObject({ mode: "agent", teamId: TEAM, actor: { entrance: "agent", actorId: runId } });
+    expect(result.ok && result.context).toMatchObject({ mode: "lease", teamId: TEAM, actor: { entrance: "agent", actorId: runId } });
     expect(result.ok && result.context.loop?.id).toBe(loopId);
   });
 });
@@ -314,7 +314,7 @@ describe("a run authenticates with its own lease, not only with the machine's de
     const { runId, loopId, runToken } = await claimedRun(machineId);
     const result = await auth.resolveApiContext(request({ Authorization: `Bearer ${runToken}`, "X-Loopany-Run": runId }), "dual", true, SIGNED_OUT);
     expect(result.ok).toBe(true);
-    expect(result.ok && result.context).toMatchObject({ mode: "agent", teamId: TEAM, actor: { entrance: "agent", actorId: runId } });
+    expect(result.ok && result.context).toMatchObject({ mode: "lease", teamId: TEAM, actor: { entrance: "agent", actorId: runId } });
     expect(result.ok && result.context.loop?.id).toBe(loopId);
     expect(result.ok && result.context.machine?.id).toBe(machineId);
   });
@@ -347,8 +347,8 @@ describe("a run authenticates with its own lease, not only with the machine's de
     const machineId = await machine();
     const { runToken } = await claimedRun(machineId);
     // No `X-Loopany-Run`, so this is not the agent class at all: the lease is
-    // just an unknown token to the human branch, and the gate answers.
-    const result = await auth.resolveApiContext(request({ Authorization: `Bearer ${runToken}` }), "human", true, SIGNED_OUT);
+    // just an unknown token to the owner-scope branch, and the gate answers.
+    const result = await auth.resolveApiContext(request({ Authorization: `Bearer ${runToken}` }), "owner", true, SIGNED_OUT);
     expect(code(result)).toBe("UNAUTHORIZED");
   });
 

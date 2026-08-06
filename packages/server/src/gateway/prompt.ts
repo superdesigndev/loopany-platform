@@ -110,13 +110,13 @@ export function buildLoopSystemPrompt(_loop: Loop): string {
  */
 export function buildExecTask(loop: Loop, trigger?: ScopedTrigger | null): string {
   const name = loop.name || loop.id;
-  const taskFile = loop.taskFile ?? "(none — this loop has no task file yet; create one to hold its Spec)";
+  const workdir = loop.workdir ?? "the daemon-owned scratch workdir";
   const goalLine = loop.goal ? `Goal (finish line): ${loop.goal}` : "";
   const stateLine = stateReportLine(loop);
   const triggerBlock = trigger ? renderScopedTrigger(trigger) : "";
   // The banner names the SERVING HOST on a developer stack and is EMPTY on
   // production, so production prompt bytes are unchanged (lib/envTarget.ts).
-  return fillVars(loadPrompt("exec-core"), { name, taskFile, goalLine, stateLine, triggerBlock, viaHost: viaHostSuffix() });
+  return fillVars(loadPrompt("exec-core"), { name, workdir, goalLine, stateLine, triggerBlock, viaHost: viaHostSuffix() });
 }
 
 /** A trigger is DATA, not a second prompt. The task payload is serialized whole
@@ -174,7 +174,8 @@ export function buildEditTask(loop: Loop, instruction: string): string {
     `[loop edit · ${loop.name || loop.id}]`,
     `Loop id: ${loop.id}`,
     `Current schedule: ${where}`,
-    `Task file: ${loop.taskFile ?? "(none yet)"}`,
+    "Charter file: $LOOPANY_CHARTER_FILE (absolute per-run daemon-home path)",
+    `Workdir: ${loop.workdir ?? "daemon scratch"}`,
   ];
   if (loop.stateSchema?.length) {
     parts.push("Current metric schema: " + formatSchemaFields(loop.stateSchema));
@@ -250,11 +251,12 @@ export function buildEvolveTask(loop: Loop, runs: Run[]): string {
   return [
     loadPrompt("evolve"),
     `[loop evolution · ${loop.name || loop.id}]`,
-    `Task file: ${loop.taskFile ?? "(none)"}`,
+    "Charter file: $LOOPANY_CHARTER_FILE (absolute per-run daemon-home path)",
+    `Workdir: ${loop.workdir ?? "daemon scratch"}`,
     `Metric schema: ${schema}`,
     "Current ui:\n" + (loop.ui ? "```html\n" + loop.ui + "\n```" : "(none yet — author one if the data warrants it)"),
     "Current workflow:\n" + (loop.workflow ? "```js\n" + loop.workflow + "\n```" : "(none)"),
     renderRecentRuns(runs),
-    "Evolve this loop per your instructions: review the recent runs' log to sharpen AND distill the task file, distil/refine the workflow, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `loopany report --message '<one line: which levers you pulled and why, or \"no change\" and why>'` — an internal run-log line; evolution never notifies the user.",
+    "Evolve this loop per your instructions: review the recent runs' log to sharpen AND distill the materialized charter, distil/refine the workflow, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `loopany report --message '<one line: which levers you pulled and why, or \"no change\" and why>'` — an internal run-log line; evolution never sends a notification.",
   ].join("\n\n");
 }

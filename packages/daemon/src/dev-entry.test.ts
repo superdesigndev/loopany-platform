@@ -80,11 +80,13 @@ describe("the kernel home render", () => {
     expect(text).not.toContain(String.fromCharCode(0));
   });
 
-  test("an empty stack teaches the production creation flow and task-file rule", () => {
+  test("an empty stack teaches atomic production creation and the attached charter", () => {
     const text = renderKernelHome({ bin: null, server: "http://127.0.0.1:3155", loops: { loops: [], recentRuns: [] }, inbox: inboxOk({ total: 0 }) });
     expect(text).toContain("loops: []");
     expect(text).toContain("loopany new --json");
-    expect(text).toContain("task file's `## Spec`");
+    expect(text).toContain("--charter-file <path>");
+    expect(text).toContain("standing brief is its attached charter");
+    expect(text).toContain("show <loop-id> --charter");
   });
 
   test("a failed inbox read is SAID, never rendered as a reassuring zero", () => {

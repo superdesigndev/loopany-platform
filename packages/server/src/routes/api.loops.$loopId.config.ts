@@ -25,7 +25,7 @@ function configOf(loop: NonNullable<Awaited<ReturnType<typeof store.getLoop>>>) 
 /** Workspace basic settings, through the same mutation seam as `patchJob`. */
 export const Route = createFileRoute("/api/loops/$loopId/config")({ server: { handlers: { PATCH: async ({ request, params }: { request: Request; params: { loopId: string } }) => {
   const booted = await ensureServer();
-  const auth = await resolveApiContext(request, { human: "loop-governance" }, true);
+  const auth = await resolveApiContext(request, { owner: "loop-governance" }, true);
   if (!auth.ok) return authFailure(auth.error);
   const parsed = await jsonBody(request); if (!parsed.ok) return parsed.response;
   if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)) {

@@ -48,8 +48,8 @@ Setup
                           (idempotent; refreshes the loopany skill, the SessionStart
                           hook, and the `loopany` PATH shim). --foreground runs the
                           poll loop attached in this terminal instead of detached.
-  new --json '<config>'   Create a loop from an inline JSON config (--json - reads
-                          stdin). --dry-run validates + previews, creates nothing.
+  new --json '<config>'   Create a loop and attached charter atomically.
+    --charter-file <path> --dry-run validates + previews, creates nothing.
   setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
                           view as ambient context each session (--remove uninstalls).
   skill [status|install]  Manage the loopany agent skill install (user scope by
@@ -62,7 +62,8 @@ Setup
 Management
   status                  Is the daemon running? Show pid + server connection.
   down                    Stop the detached daemon started with `up`.
-  show [<id>]             Show a loop's full editable config + recent state (the
+  show [<id>] [--charter] Show a loop's full editable config + recent state, or its
+                          attached charter body and version with --charter (the
                           device credential inspects any loop on this machine).
   log [<loop>]            Show a loop's recent runs (status, metrics, session id).
                           --transcript/--full inlines transcripts; --json for machines.
@@ -70,9 +71,9 @@ Management
 Interactive
   loops [--fields a,b]    List your loops (default columns id/name/cron/enabled/
                           nextFire; --fields adds timezone/notify/model/goal/
-                          taskFile/runs/lastOutcome; --json for machines).
-  edit <id> --json '<obj>'  Edit a loop (JSON-only + --workflow-file/--ui-file/
-                          --schema-file; --dry-run previews before/after).
+                          workdir/charter/taskFile/runs/lastOutcome; --json for machines).
+  edit <id> [--json '<obj>'] Edit config and/or replace the attached charter with
+    [--charter-file <path>] --charter-file; --dry-run previews before/after.
 ```
 
 Run `loopany --help` for the full usage text, or `loopany <verb> --help` for a

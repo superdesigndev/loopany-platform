@@ -7,6 +7,6 @@ import { systemGraphView } from "../kernel/views.js";
  *  and badge is computed live from `objects` + `runs`. There is no topology
  *  table and no way to wire two loops. */
 export const Route = createFileRoute("/api/views/system-graph")({ server: { handlers: { GET: async ({ request }: { request: Request }) => {
-  await ensureBooted(); const auth = await resolveApiContext(request, "human"); if (!auth.ok) return authFailure(auth.error);
+  await ensureBooted(); const auth = await resolveApiContext(request, "owner"); if (!auth.ok) return authFailure(auth.error);
   return apiResponse(await systemGraphView(auth.context, new URL(request.url).searchParams));
 } } } });

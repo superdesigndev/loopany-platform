@@ -723,8 +723,8 @@ export async function applyUpdateIn(tx: KernelExec, input: ApplyUpdateInput): Pr
   const before = await kernel.getObjectForUpdate(tx, objectId);
   if (!before) return fail(refuse("NOT_FOUND", `no object ${objectId}`, []), where);
 
-  // Double-cover the human-only question-clear at the kernel boundary. Replacing
-  // a live question is a clear in disguise: it discards what a person may be
+  // Double-cover the owner-authority question-clear at the kernel boundary.
+  // Replacing a live question is a clear in disguise: it discards what an owner may be
   // reading. The HTTP seam performs the same early guard for a richer refusal.
   if (
     before.kind === "task" &&

@@ -13,9 +13,10 @@
  * unrestricted — the bind-time UI is where a user would normally set this).
  *
  * The daemon watches NOTHING on disk. A run's products reach the server through
- * the object verbs (`loopany doc|task|mirror`) and its report payload; a loop's
- * folder is local scratch plus the home of its task file, and nothing in it
- * travels by itself.
+ * the object verbs (`loopany doc|task|mirror`) and its report payload. The
+ * attached charter is materialized in daemon home for each run and carried back
+ * with its report; the workdir remains local scratch and nothing in it travels
+ * by itself.
  */
 import os from "node:os";
 

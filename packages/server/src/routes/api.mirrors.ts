@@ -6,7 +6,7 @@ import { apiResponse, authFailure, ensureBooted, jsonBody } from "../kernel/rout
 /**
  * MIRRORS — pointers to things outside this system.
  *
- * Both verbs are DUAL: a run attaches the PR it just opened, a person attaches
+ * Both verbs are DUAL: a run attaches the PR it just opened, an owner credential attaches
  * the property they were already tracking, and neither is governance because a
  * pointer changes nothing. There is no `create` separate from `attach`: a mirror
  * attached to nothing points from nowhere.

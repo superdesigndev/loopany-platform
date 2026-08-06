@@ -1146,10 +1146,11 @@ KEPT as read-only history, and the open follow-up are in the root `AGENTS.md`
 ("Artifacts / storage — the folder watcher is RETIRED"); read that rather than
 re-deriving it here. Three consequences that bite in this package:
 
-- **`loops.taskFileContent` has exactly ONE writer: `report()`.** The sync-time
-  mirror (`refreshTaskFileContent`) went with `gateway/sync.ts`, so a charter is
-  fresh as of the loop's last FINISHED run — never mid-run, never on an idle-time
-  human edit. `kernel/views.ts` and `LoopFilesPanel` both render that column.
+- **Attached charter docs are canonical; `loops.taskFileContent` is legacy.** The
+  daemon reports a complete charter candidate under its delivered base version;
+  `gateway/index.ts` applies it with `kernel/charters.ts` CAS even for failed runs.
+  A stale carry emits the charter conflict warning and never blocks finalization.
+  `taskFileContent` remains only for the additive old-server compatibility window.
 - **`blobs` / `artifact_files` / `run_snapshots` are read-only history.** No
   migration dropped them (the ruling said keep stored history readable). The GC in
   `gateway/retention.ts` is still live — a deleted loop cascades its rows and frees

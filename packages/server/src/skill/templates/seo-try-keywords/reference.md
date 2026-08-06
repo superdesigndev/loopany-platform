@@ -2,8 +2,8 @@
 
 On-demand reference for the seo-try-keywords template. Fetched by the setup agent at
 `<server-url>/api/skill/references/templates/seo-try-keywords/reference.md` — it does
-NOT ride in the paste prompt. This is the full task-file TEMPLATE to author the loop's
-README from: copy it into the loop folder, fill every `<FILL: …>`, delete the SETUP
+NOT ride in the paste prompt. This is the full charter TEMPLATE to use as the loop's
+attached charter: save a local authoring copy, fill every `<FILL: …>`, delete the SETUP
 block once every box is ticked, then enable.
 
 ---
@@ -18,14 +18,14 @@ Distilled 2026-07-29 from two live production loops (a weekly scout running sinc
 
 ## SETUP — delete this whole block once every box is ticked
 
-- Copy this folder to `<your-repo>/loopany/<your-slug>/` and point taskFile at it.
-- If you attach a pre-run workflow, repoint its TASK constant at YOUR README by absolute path — a clone that skips this reads the template master forever (the engine template's known footgun; same fix: edit TASK, `loopany set-workflow`).
+- Choose and verify the loop's explicit workdir; keep this charter authoring copy outside it.
+- If you attach a pre-run workflow, read `process.env.LOOPANY_CHARTER_FILE`, the absolute per-run charter path. Never hard-code this template or an authoring-copy path.
 - GSC access works. A script returns query-dim, page-dim, and date-dim rows for `sc-domain:<FILL: yourdomain.com>`. The date dimension is non-negotiable — this loop's whole scoring doctrine is the daily series. Run it once by hand before enabling.
 - Create the bet ledger at `<FILL: path, e.g. campaigns/content-plan/keyword-targets.md>` — one line per bet: term · one-line thesis · opened date · seed PR · verdict · verdict date. This file is the single source of truth the engine template's earn-the-engine gate reads.
 - Name your winning archetypes and proven losers from ≥90 days of GSC page data (§Current understanding). No GSC history yet? Then you have no archetypes: leave the list empty and route EVERY candidate through the approval lane until real click data exists. Do not invent archetypes from theory.
 - Name the funnel. The reader's next step after any seed article is `<FILL: course, signup, newsletter, community>`. Without this the CTA test can't run.
-- Set the open-bet cap — default 2. More open bets than your human can merge seed PRs for is batch-crank.
-- Pick the cadence — weekly, firing before the human's weekly review (`<FILL: cron, e.g. Mon 08:00 before a ~09:00 briefing>`) so the scorecard is fresh when they read it.
+- Set the open-bet cap — default 2. More open bets than the owner can merge seed PRs for is batch-crank.
+- Pick the cadence — weekly, firing before the owner's weekly review (`<FILL: cron, e.g. Mon 08:00 before a ~09:00 briefing>`) so the scorecard is fresh when they read it.
 - Replace every remaining `<FILL: …>`.
 
 Copy-drift is the accepted price (same rule as the engine template): doctrine changes to the master do NOT propagate. At ≤3 live clones, hand back-port the day a change lands.
@@ -88,7 +88,7 @@ Strict run order: SCORE first, MINE second. The verdicts and the open-bet count 
 
 - Open bets ≥ `<FILL: cap, default 2>`.
 - Any open bet is inside its day-7 window with no verdict yet (you owe a verdict before you owe a new bet).
-- ≥ `<FILL: 2>` seed PRs from this loop sit unmerged (drafting onto a blocked queue is batch-crank — the bottleneck is the human merge gate, not production).
+- ≥ `<FILL: 2>` seed PRs from this loop sit unmerged (drafting onto a blocked queue is batch-crank — the bottleneck is the owner merge gate, not production).
 
 **B1. Pick angles adaptively.** 4-6 research angles from what moved in `<FILL: your space>` this week — never the same angles as last run. React to the news.
 
@@ -103,7 +103,7 @@ Strict run order: SCORE first, MINE second. The verdicts and the open-bet count 
 
 - GSC: are impressions already appearing on related queries?
 - SERP: is a dedicated, well-optimized article already ranking? Drop it.
-- Cannibalization: grep your own content AND live GSC page data — several "emerging" terms are usually already owned as ranking pages. Covered → it's refresh territory (route the finding to enrichment / the human), and a new article would split your own equity.
+- Cannibalization: grep your own content AND live GSC page data — several "emerging" terms are usually already owned as ranking pages. Covered → it's refresh territory (route the finding to enrichment / owner review), and a new article would split your own equity.
 - Archetype: does it fit a proven winning archetype (§Current understanding)? And is it shaped like a proven loser (news/announcement, generic comparison)? Losers fail here no matter how emerging + rankable — that's GSC confirming the CTA test empirically.
 
 **B5. The CTA test — hard gate, in writing.** "What will the reader DO after this?" If the honest answer is "close the tab," the keyword fails regardless of everything else. The searcher must be mid-workflow (setting up, building, adopting) with a native next step into `<FILL: your funnel>` — not a news consumer. Record the answer in the report and PR body.
@@ -111,7 +111,7 @@ Strict run order: SCORE first, MINE second. The verdicts and the open-bet count 
 **B6. Ship ONE seed, two lanes:**
 
 - Archetype lane (autonomous): fits a proven archetype AND passes the CTA test → write the full article (`<FILL: your content skill/conventions>`; title leads with the bare noun phrase people actually type, not your internal framing), branch off `origin/main`, never commit to main, open the PR. PR body: the keyword, emergence evidence with numbers, SERP assessment, GSC data, the written CTA answer.
-- Approval lane (everything else, and ALL bets while you have no proven archetypes): write the article to `drafts/<slug>.md` with front-matter `type: draft-pending-approval`, message the human with the pitch + path, and wait. At the start of every run check `drafts/`: approved → open the PR now; rejected → delete and log why.
+- Approval lane (everything else, and ALL bets while you have no proven archetypes): write the article to `drafts/<slug>.md` with front-matter `type: draft-pending-approval`, message the owner with the pitch + path, and wait. At the start of every run check `drafts/`: approved → open the PR now; rejected → delete and log why.
 
 Then register the bet in the ledger: term · one-line thesis (what you expect the day-7 read to show — a bet without a thesis can't be verdicted) · opened date · seed PR.
 
@@ -119,11 +119,11 @@ Then register the bet in the ledger: term · one-line thesis (what you expect th
 
 ## HARD RULES
 
-- Never write the human's dashboard/inbox file (`<FILL: e.g. Inbox.md>` — it may be open in an editor that autosaves; a write silently destroys their unsaved notes). Reports go ONLY to this loop's `reports/`; the briefing inlines them from there.
+- Never write the owner's dashboard/inbox file (`<FILL: e.g. Inbox.md>` — it may be open in an editor that autosaves; a write silently destroys their unsaved notes). Reports go ONLY to this loop's `reports/`; the briefing inlines them from there.
 - Never edit a tracked term's pages. The only content this loop ships is the seed article of a NEW bet. Everything after the seed belongs to an engine or enrichment.
 - Never score on a trailing window. Never write 0 for a failed read. A missing number is reported as missing.
 - Never scale, kill, or extend silently — every verdict lands in the ledger with the numbers that made it.
-- Never spawn, pause, or retire an engine yourself. You recommend; the human ticks.
+- Never spawn, pause, or retire an engine yourself. You recommend; an owner-authority decision acts.
 - One seed per week max; zero is valid. Do not force a weak article — thin seeds pollute the archetype evidence every future bet is judged against.
 - Never fabricate a metric. Never commit to main.
 - Keep heavy work OUT of the loop folder — worktrees, clones, build output go to a temp dir; only reports and drafts land here.

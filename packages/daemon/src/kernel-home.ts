@@ -138,8 +138,8 @@ function inboxLine(inbox: Fetched | { error: string }): string {
 function homeHints(loops: Row[], shownLoops: number, runCount: number, shownRuns: number): string[] {
   if (!loops.length) {
     return [
-      "No production loops on this stack yet — run `loopany new --json '<config>'`, or use the installed loopany skill for guided setup",
-      "A loop's standing brief lives in its task file's `## Spec`; the production daemon watches that directory",
+      "No production loops on this stack yet — run `loopany new --json '<config>' --charter-file <path>`, or use the installed loopany skill for guided setup",
+      "A loop's standing brief is its attached charter; use `loopany show <loop-id> --charter` to read it",
       "Run `loopany --help` for every command",
     ];
   }
@@ -165,7 +165,7 @@ function notConnectedHome(bin: string | null): string {
       // MANAGED. Guessing an address or connecting a daemon here is how a
       // session ends up creating objects nobody can see (2026-08-04).
       "Invoke the on-PATH `loopany-dev` command — it already carries this stack's address; do not set LOOPANY_SERVER_URL or start a server yourself",
-      "If `loopany-dev` also reports no stack, STOP and tell the human — a missing stack is an operator matter",
+      "If `loopany-dev` also reports no stack, STOP and tell the stack owner — a missing stack is an operator matter",
       "Run `loopany --help` to see every command",
     ])
   );
@@ -181,7 +181,7 @@ function degradedHome(bin: string | null, server: string, reason: string): strin
       // NEVER tell the reader to start a server: the dev stack is MANAGED, and
       // two 2026-08-04 sessions read that hint as license to self-host, landing
       // their objects in a data dir the real environment never reads.
-      "Wait ~30s and run `loopany` again; if it is still unreachable, STOP and tell the human — a down stack is an operator matter, not yours to start",
+      "Wait ~30s and run `loopany` again; if it is still unreachable, STOP and tell the stack owner — a down stack is an operator matter, not yours to start",
       "Do not start a server or daemon, and do not point this CLI at another port — objects created on another stack are invisible here",
     ])
   );
@@ -199,7 +199,7 @@ function refusedHome(bin: string | null, server: string, read: Fetched): string 
     `code: ${typeof read.body.code === "string" ? read.body.code : "ERROR"}\n` +
     helpBlock([
       ...(hint ? [hint] : []),
-      "The home reads the human surfaces, so it needs a signed-in session — set LOOPANY_SESSION=<session cookie> for the CLI, or sign in on this machine",
+      "The home reads owner surfaces, so it needs an owner session — set LOOPANY_SESSION=<session cookie> for the CLI, or sign in on this machine",
       "Run `loopany --help` to see every command",
     ])
   );

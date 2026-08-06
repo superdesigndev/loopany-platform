@@ -62,13 +62,13 @@ describe('the html doc sandbox is opaque-origin', () => {
 })
 
 describe('every view endpoint is owner-only', () => {
-  it('resolves its context with the non-run "human" requirement', () => {
+  it('resolves its context with the owner-authority requirement', () => {
     const routes = fileURLToPath(new URL('../../routes/', import.meta.url))
     const files = readdirSync(routes).filter((name) => name.startsWith('api.views.'))
     expect(files.length).toBeGreaterThanOrEqual(8)
     for (const file of files) {
       const source = readFileSync(`${routes}${file}`, 'utf8')
-      expect(source, `${file} must gate on owner authority`).toMatch(/resolveApiContext\(request, "human"\)/)
+      expect(source, `${file} must gate on owner authority`).toMatch(/resolveApiContext\(request, "owner"\)/)
     }
   })
 })

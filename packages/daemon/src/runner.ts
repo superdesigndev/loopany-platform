@@ -89,7 +89,7 @@ interface ReportBody {
   artifacts?: RunArtifact[];
   /** Slimmed execution trace (text/tool/result steps) for the run-detail view. */
   transcript?: TranscriptStep[];
-  /** Latest content of the loop's task file (the durable context+log doc). */
+  /** Legacy task-file carry retained during the additive migration window. */
   taskFileContent?: string;
   charterUpdate?: { baseVersion: number | null; content: string };
   resolvedWorkdir?: string;
@@ -97,8 +97,7 @@ interface ReportBody {
   finalText?: string;
 }
 
-/** Daemon-side cap on the task-file body carried in the report — it's a growing
- *  log doc, so a huge one is tailed (recent entries are what the detail view is for). */
+/** Daemon-side cap for the migration-only legacy task-file carry. */
 const TASKFILE_CAP = 256 * 1024;
 const CHARTER_CAP = 512 * 1024;
 const CHARTER_RUN_DIRS_TO_KEEP = 5;
@@ -429,8 +428,8 @@ export async function runDelivery(d: Delivery, serverUrl: string, roots: string[
     } else {
       cursor = wf.result!.state;
       if (wf.result!.agentCalls.length === 0) {
-        // Pure workflow: direct message (or silent). No claude — but still carry
-        // the task file if the loop maintains one (the workflow may write it).
+        // Pure workflow: direct message (or silent). Still diff-carry the
+        // materialized charter because the workflow may have edited it.
         return reportRun({
           runId: d.runId, ok: true, durationMs: Date.now() - start,
           outcome: wf.result!.message ? "direct" : "silent",
@@ -724,11 +723,10 @@ export function foldEscalation(calls: AgentCall[]): string {
     .join("\n\n");
 }
 
-/** Best-effort read of the loop's task file to carry in the run report — the ONE
- *  channel that keeps the server's charter copy fresh. The path may be absolute,
+/** Best-effort read for the pre-charter report protocol only. The path may be absolute,
  *  ~-rooted, or relative to the run's workdir. Never throws — a missing/unreadable
  *  file just carries nothing (the report must still go out).
- *  taskFile is SERVER-SENT: under a local LOOPANY_ROOTS jail a path outside both
+ *  taskFile is legacy SERVER-SENT data: under a local LOOPANY_ROOTS jail a path outside both
  *  the (already-jailed) workdir and the local roots is never read. */
 function readTaskFile(workdir: string, taskFile: string | null, localRoots: string[]): string | undefined {
   if (!taskFile) return undefined;

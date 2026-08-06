@@ -18,14 +18,14 @@ Read the reference for the job (they live on disk next to this file, under
 `references/`):
 
 - **Creating a loop** (the common case — you just did a task and want it scheduled):
-  **`references/create.md`**. It decides what to build, authors the loop's folder +
-  task file and an inline config (with an optional goal), and runs `loopany new`.
+  **`references/create.md`**. It decides what to build, verifies the workdir, authors
+  the attached charter and inline config (with an optional goal), and runs `loopany new`.
 - **Editing an existing loop** (reschedule, rename, pause, set/clear a goal, or
   change what it does): **`references/update.md`**.
 - **How a loop stays coherent and improves over time** (the evolution pass that
   sharpens its **task** and **workflow** from its own run history, then fits its
   dashboard to the data): **`references/evolve.md`**.
-- **How a loop behaves each time it runs** (the runtime protocol: the task file as
+- **How a loop behaves each time it runs** (the runtime protocol: the attached charter as
   memory, surfacing only what changed, the report/finish grammar and finish bar, the
   schedule levers, and front-matter product conventions): **`references/run.md`**.
 

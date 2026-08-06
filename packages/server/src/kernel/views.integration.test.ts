@@ -41,8 +41,8 @@ const NOW = new Date("2026-08-08T12:00:00.000Z");
 const ago = (hours: number) => new Date(NOW.getTime() - hours * 3_600_000).toISOString();
 const ahead = (hours: number) => new Date(NOW.getTime() + hours * 3_600_000).toISOString();
 
-const human = { teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" }, mode: "human" } as const;
-const agentContext = { teamId: TEAM, actor: { entrance: "agent", actorId: "run-x" }, mode: "agent", run: { id: "run-x", loopId: "loop-x" } } as never;
+const human = { teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" }, mode: "owner" } as const;
+const agentContext = { teamId: TEAM, actor: { entrance: "agent", actorId: "run-x" }, mode: "lease", run: { id: "run-x", loopId: "loop-x" } } as never;
 
 let housekeeper: string;
 let steward: string;

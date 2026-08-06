@@ -25,7 +25,7 @@ const TEAM = "team-s2";
 const USER = "u-s2";
 const TOKEN = "dk_s2_device_token";
 const NOW = new Date("2026-08-04T12:00:00.000Z");
-const human = { teamId: TEAM, actor: { entrance: "human", actorId: USER }, mode: "human" } as const;
+const human = { teamId: TEAM, actor: { entrance: "human", actorId: USER }, mode: "owner" } as const;
 
 beforeAll(async () => {
   temp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-convergence-s2-"));
@@ -372,7 +372,7 @@ describe("S2 manual, claim, auth and finalize", () => {
       headers: { Authorization: `Bearer ${TOKEN}`, "X-Loopany-Run": claimed.runId },
     });
     const context = await auth.resolveApiContext(request, "dual", true, signedOut);
-    expect(context.ok && context.context).toMatchObject({ teamId: TEAM, mode: "agent", loop: { id: loop.id } });
+    expect(context.ok && context.context).toMatchObject({ teamId: TEAM, mode: "lease", loop: { id: loop.id } });
 
     expect((await gw.report(claimed.runToken, { ok: true, durationMs: 4, message: "done" })).status).toBe(200);
     const finished = await database.db.select().from(kernelSchema.events).where(eq(kernelSchema.events.kind, "run-finished"));

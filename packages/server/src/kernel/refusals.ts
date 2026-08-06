@@ -130,12 +130,12 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
     hint: "inside a run the run's own credential authenticates the call and the CLI attaches it; outside one it is the machine's device credential. If neither is recognized, re-register the machine with `loopany up`, then retry.",
   },
   NOT_HUMAN: {
-    message: `%s is waiting for a human`,
-    hint: "a run cannot answer or withdraw a pending question, including one its own loop asked; it appears in the owner's inbox",
+    message: `%s requires owner authority`,
+    hint: "a run lease cannot answer or withdraw a pending question, including one its own loop asked; it appears in the owner's inbox",
   },
   NO_RUN_CONTEXT: {
     message: `%s needs a run context and the request carried none`,
-    hint: "agent calls run inside a run: the daemon sets LOOPANY_RUN_ID and the CLI attaches it. Outside a run, use the web UI or the human CLI.",
+    hint: "lease-scoped calls run inside a run: the daemon sets LOOPANY_RUN_ID and the CLI attaches it. Outside a run, use an owner session or device credential.",
   },
   RUN_CONTEXT_UNKNOWN: {
     message: `%s is not a run this machine is currently holding`,
@@ -146,8 +146,8 @@ export const REFUSAL_TEMPLATES: Record<RefusalCode, RefusalTemplate> = {
     hint: "ids are server-issued and printed by every create and every list row — copy, do not compose",
   },
   OPEN_QUESTION: {
-    message: `%s cannot be closed while a question is waiting for a human`,
-    hint: "a human answers it in the inbox; after that the task closes normally",
+    message: `%s cannot be closed while a question is waiting for owner authority`,
+    hint: "an owner-authority credential answers it in the inbox; after that the task closes normally",
   },
   NO_OPEN_QUESTION: {
     message: `%s has no open question to answer`,

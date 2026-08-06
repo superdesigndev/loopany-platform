@@ -41,7 +41,7 @@ describe("the refusal catalogue", () => {
     expect(REFUSAL_STATUS.RATE_LIMITED).toBe(429);
   });
 
-  it("keeps human-only refusals on their own codes, not a bare FORBIDDEN", () => {
+  it("keeps owner-scope refusals on their compatibility codes, not a bare FORBIDDEN", () => {
     // A charter can say "if you see NO_RUN_CONTEXT the daemon did not set
     // LOOPANY_RUN_ID" only because the guard has its own slug (CLI spec §3.3).
     for (const code of ["NOT_HUMAN", "NO_RUN_CONTEXT"] as const) {

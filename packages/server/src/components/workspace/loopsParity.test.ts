@@ -176,6 +176,7 @@ describe('workspace loop management parity', () => {
       url: `/api/loops/${ID}/config`, method: 'PATCH', body: {
         name: 'Backup steward daily', cron: '15 9 * * *', timezone: 'Asia/Singapore',
         notify: 'never', channelId: 'channel-1', model: 'gpt-5.6-codex', agent: 'codex',
+        workdir: '/srv/backups',
       },
     })
   })

@@ -75,7 +75,7 @@ export async function dispatchDeviceKernelCli(machine: Machine, argv: string[]):
   const context: ApiContext = {
     teamId: machine.teamId ?? teamIdForUser(machine.userId),
     actor: { entrance: "human", actorId: machine.userId },
-    mode: "human",
+    mode: "owner",
     machine,
   };
   const verb = noun === "inbox" || noun === "answer" ? noun : argv[1];

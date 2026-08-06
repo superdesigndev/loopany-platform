@@ -312,12 +312,12 @@ describe("cv-s4 F2 — the cycle guard serializes hierarchy writes for its team"
     const a = await makeTask("a");
     const b = await makeTask("b");
     const moved = await kernel.applyUpdate({
-      teamId: TEAM, objectId: b, fields: { parentId: a }, actor: human, now: NOW.toISOString(), mode: "human",
+      teamId: TEAM, objectId: b, fields: { parentId: a }, actor: human, now: NOW.toISOString(), mode: "owner",
     } as never);
     expect(moved.ok).toBe(true);
 
     const cycle = await kernel.applyUpdate({
-      teamId: TEAM, objectId: a, fields: { parentId: b }, actor: human, now: NOW.toISOString(), mode: "human",
+      teamId: TEAM, objectId: a, fields: { parentId: b }, actor: human, now: NOW.toISOString(), mode: "owner",
     } as never);
     expect(cycle).toMatchObject({ ok: false, code: "PARENT_CYCLE" });
   });

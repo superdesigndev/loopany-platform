@@ -361,7 +361,7 @@ export async function applyCharterCarry(input: CharterCarryInput): Promise<Chart
 }
 
 function leaseScopeGuard(loopId: string, context: ApiContext): ApiRefusal | undefined {
-  if (context.mode !== "agent" || context.loop?.id === loopId) return undefined;
+  if (context.mode !== "lease" || context.loop?.id === loopId) return undefined;
   return refusal(
     "NOT_YOUR_CHARTER",
     `${loopId}'s charter is outside run ${context.run?.id ?? "(unknown)"}'s lease scope`,

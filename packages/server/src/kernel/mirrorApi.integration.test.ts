@@ -31,7 +31,7 @@ const TEAM = "team-mirror";
 const OTHER_TEAM = "team-elsewhere";
 const T0 = "2026-08-04T00:00:00.000Z";
 const NOW = new Date("2026-08-04T01:00:00.000Z");
-const human = { teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" }, mode: "human" } as const;
+const human = { teamId: TEAM, actor: { entrance: "human", actorId: "u-owner" }, mode: "owner" } as const;
 
 beforeAll(async () => {
   temp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-mirror-"));

@@ -1,6 +1,6 @@
 ---
 name: loopany-dev
-description: "Drive a managed LOCAL Loopany convergence stack: inspect and edit production loops, work event-sourced tasks/docs/mirrors, answer the human inbox, and test run delivery. Use only through the on-PATH loopany-dev command; never use it for the production Loopany service or to operate the dev stack lifecycle."
+description: "Drive a managed LOCAL Loopany convergence stack: inspect and edit production loops, work event-sourced tasks/docs/mirrors, answer the owner inbox, and test run delivery. Use only through the on-PATH loopany-dev command; never use it for the production Loopany service or to operate the dev stack lifecycle."
 ---
 
 # Loopany converged dev flow
@@ -19,7 +19,7 @@ Always:
 - Invoke the on-PATH `loopany-dev` command. Examples below shorten it to
   `loopany`; type `loopany-dev` on this stack.
 - If the stack is unreachable, wait about 30s, retry once, then stop and
-  tell the human.
+  tell the stack owner.
 
 Never:
 
@@ -33,8 +33,7 @@ Never:
 
 - A **loop** is a production loop: machine-bound, scheduled by the production
   scheduler, delivered through `/api/machine/poll`, and reported through the
-  production run-token pipeline. Its standing brief lives in its task file's
-  `## Spec`.
+  production run-token pipeline. Its standing brief is the attached charter.
 - A **task** is event-sourced work with an always-present `watcher`, an optional
   `follow_up` that wakes that production loop, and an optional human question.
 - A **doc** is an authored product, addressed by id or by its creation `key`,
@@ -53,7 +52,7 @@ Use the production owner surface for loops:
 ```sh
 loopany loops
 loopany show <loop-id>
-loopany new --json '<config>'
+loopany new --json '<config>' --charter-file <path>
 loopany edit <loop-id> --json '<patch>'
 ```
 
@@ -77,7 +76,7 @@ the named legal move once; do not route around them.
 
 For details, read only the reference relevant to the work:
 
-- [references/loops.md](references/loops.md) — production loop/task-file,
+- [references/loops.md](references/loops.md) — production loop/charter,
   schedule, pause and manual-run semantics.
 - [references/work.md](references/work.md) — task, doc, mirror, inbox and run
   discipline.

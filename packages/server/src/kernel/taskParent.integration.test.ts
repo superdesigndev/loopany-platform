@@ -32,7 +32,7 @@ const HUMAN = { entrance: "human", actorId: "u_alice" } as const;
 const T0 = "2026-08-03T07:00:00.000Z";
 const T1 = "2026-08-03T08:00:00.000Z";
 const WATCHER = "loop-fixture";
-const HUMAN_CTX = { teamId: TEAM, actor: HUMAN, mode: "human" } as never;
+const HUMAN_CTX = { teamId: TEAM, actor: HUMAN, mode: "owner" } as never;
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-parent-"));
@@ -86,7 +86,7 @@ describe("parent_id — the column and its firewall", () => {
     let caught: unknown;
     try {
       await db.db.insert(schema.objects).values({
-        id: "doc-raw01", teamId: TEAM, kind: "doc", status: "current", parentId: "task-abc123",
+        id: "doc-raw01", teamId: TEAM, kind: "doc", docKind: "product", status: "current", parentId: "task-abc123",
         createdAt: T0, updatedAt: T0,
       } as never);
     } catch (e) { caught = e; }

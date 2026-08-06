@@ -2,8 +2,8 @@
 
 On-demand reference for the seo-scale-keywords template. Fetched by the setup agent at
 `<server-url>/api/skill/references/templates/seo-scale-keywords/reference.md` — it does
-NOT ride in the paste prompt. This is the full task-file TEMPLATE to author the loop's
-README from: copy it into the loop folder, fill every `<FILL: …>`, delete the SETUP
+NOT ride in the paste prompt. This is the full charter TEMPLATE to use as the loop's
+attached charter: save a local authoring copy, fill every `<FILL: …>`, delete the SETUP
 block once every box is ticked, then enable.
 
 ---
@@ -16,9 +16,9 @@ Distilled from two live production fleets (running since 2026-07-05). Updated 20
 
 ## SETUP — delete this whole block once every box is ticked
 
-- **Earn the engine before you clone it.** An engine exists per bet, and a bet must be proven first: it cleared the qualifying bar of your bet-manager loop (clone of the companion seo-try-keywords template — clone that one FIRST on a new site), entered the bet ledger with a one-line thesis, and got a day-7 SCALE verdict on the daily series. No SCALE verdict → no engine; the bet stays with the bet manager. This is the gate that keeps engine count flat — the fleet's bottleneck is the human merge gate, so never spawn a producer an unproven bet doesn't pay for.
-- Copy this folder to `<your-repo>/loopany/<your-slug>/` and point taskFile at it.
-- **Repoint the workflow at YOUR README.** The pre-run workflow reads the task file by absolute path, held in a TASK constant at the top of its body — nothing passes it the loop's taskFile. A clone that skips this reads the template master forever: the gate blocks on the master's unfilled markers no matter how complete your own file is. Fix: edit TASK, then `loopany set-workflow --file <path>`. The gate message prints the path it read, so check it against your clone's README on run 1.
+- **Earn the engine before you clone it.** An engine exists per bet, and a bet must be proven first: it cleared the qualifying bar of your bet-manager loop (clone of the companion seo-try-keywords template — clone that one FIRST on a new site), entered the bet ledger with a one-line thesis, and got a day-7 SCALE verdict on the daily series. No SCALE verdict → no engine; the bet stays with the bet manager. This is the gate that keeps engine count flat — the fleet's bottleneck is the owner merge gate, so never spawn a producer an unproven bet doesn't pay for.
+- Choose and verify the loop's explicit workdir; keep this charter authoring copy outside it.
+- **Read the delivered charter path.** The pre-run workflow reads `process.env.LOOPANY_CHARTER_FILE`, which points at the absolute per-run materialization. Never hard-code this template or an authoring-copy path. The gate message prints the path it read, so check that it is the delivered run charter on run 1.
 - GSC access works. You have a script that returns query-dim and page-dim rows for `sc-domain:<FILL: yourdomain.com>`. Run it once by hand before enabling.
 - Pick the regime (§Regime below). Delete the branch you are not in.
 - Name your breadwinner — the page earning ≥30% of clicks. If you don't know it, you are not ready; run your bet-manager loop for a week first.
@@ -27,7 +27,7 @@ Distilled from two live production fleets (running since 2026-07-05). Updated 20
 - Decide the ship lane — PR-only (start here) or auto-apply (earn it later, §10).
 - Replace every remaining `<FILL: …>`. The workflow will tell you how many are left.
 
-Copy-drift is the accepted price. This template is copy-based: doctrine changes to the master do NOT propagate to clones. At ≤3 live engines, hand back-port the change to each clone the day it lands — that is cheaper than any retro/collector machinery. If the fleet ever grows past 3 live engines, revisit; not before.
+Copy-drift is the accepted price. This template is copy-based: doctrine changes to the master do NOT propagate to attached charters. At ≤3 live engines, hand back-port the change to each charter the day it lands — that is cheaper than any retro/collector machinery. If the fleet ever grows past 3 live engines, revisit; not before.
 
 ## Spec
 
@@ -65,7 +65,7 @@ Keywords have lifecycles: scout bet → day-7 SCALE → land-grab → flip gate 
 - Propose your own closing when either holds:
   - Flatline: the KPI has been flat for 21+ consecutive daily reads with zero unmerged PRs pending (unmerged PRs make flat EXPECTED — §2b — so they suspend the clock, not the engine), OR
   - Migration: the daily series shows demand visibly moving to a successor term — your family's impressions decaying while a sibling phrasing's grow.
-- The proposal is a flagged run report, not an action: name the trigger with the numbers, the successor term if one is visible, and the recommended disposition of your pages. Never pause yourself, never stop shipping while the proposal is open — the human ticks it.
+- The proposal is a flagged run report, not an action: name the trigger with the numbers, the successor term if one is visible, and the recommended disposition of your pages. Never pause yourself, never stop shipping while the proposal is open — an owner-authority decision resolves it.
 - On the ticked close: the loop is paused, its pages fold into the enrichment loop's scope (update the enrichment carve-out list the same day), the ledger records the verdict and the successor, and the successor term goes back to the scout as a brand new bet — it does not inherit this engine.
 
 ## ⚠️ Carve-out — query families that score zero BY DESIGN. Do NOT optimize these away.
@@ -99,7 +99,7 @@ Standing coordination check, before editing ANY page: grep `../<FILL: sibling>/r
 
 Position is read on the DAILY series — never a trailing window. Score head-term position as a 3-day median of daily values against alert bands (ok / watch / slipping / critical). A 7d or 21d blend once reported "SCALE confirmed" while the head term slid from pos 1.4 to 7.06 across those same seven days — trailing averages hide slides by construction. Two GSC gotchas when reading the daily series: zero-impression days report position 0 (exclude them, never average them in), and the most recent 1-2 days are preliminary and noisy — treat them as provisional, don't band-trip on them alone.
 
-**2b. Check deployment.** Count THIS loop's unmerged PRs (`prs_unmerged`). An unmerged article is not live — it cannot rank or pass link equity. While any are unmerged, a flat position is EXPECTED, not failure, and not grounds for a strategy change. Always surface the count; merging is the human's call, never the loop's. And merged is not live either. For anything merged since the last run, verify the production URL serves 200 before counting it shipped. Only `<FILL: the production deploy check that matters>` decides; a pending-then-failed deploy is usually transient infra — reproduce the build locally before blaming the content.
+**2b. Check deployment.** Count THIS loop's unmerged PRs (`prs_unmerged`). An unmerged article is not live — it cannot rank or pass link equity. While any are unmerged, a flat position is EXPECTED, not failure, and not grounds for a strategy change. Always surface the count; merging is owner authority's call, never the loop's. And merged is not live either. For anything merged since the last run, verify the production URL serves 200 before counting it shipped. Only `<FILL: the production deploy check that matters>` decides; a pending-then-failed deploy is usually transient infra — reproduce the build locally before blaming the content.
 
 **2c. Canary + cooldowns — a winning page is production.** The breadwinner is `<FILL: slug>`, currently `<FILL: %>` of clicks (any page ≥30% qualifies).
 
@@ -149,7 +149,7 @@ Repo-hygiene variant — pick the one that matches reality:
 
 ## HARD RULES
 
-- Never auto-publish `<FILL: long-form / anything human-gated>`. Never commit to main.
+- Never auto-publish `<FILL: long-form / anything requiring owner approval>`. Never commit to main.
 - Never fabricate a metric, quote, or testimonial — use `[NEED: …]` placeholders.
 - Never date-bump without a real change (artificial freshness is a ranking risk). But DO bump `dateModified` when the change IS real — Google defines it as the date the article was last genuinely modified.
 - Never target a head term one of your own pages already ranks pos <15 for.
