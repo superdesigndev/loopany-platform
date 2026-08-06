@@ -268,13 +268,20 @@ export interface LoopView extends ViewPayload {
     /** The BOUND directory every run of this loop executes in; null ⇒ the
      *  claiming daemon's own per-loop scratch dir. */
     workdir: string | null
-    body: string
     payload: Record<string, unknown>
     createdAt: string
     updatedAt: string
     /** S3 resolves every live loop from the production roster. `kernel` remains
      *  in the transitional wire union only until the S5 cleanup. */
     source: 'kernel' | 'prod'
+  }
+  charter: {
+    docId: string
+    key: string
+    body: string
+    version: number
+    updatedAt: string
+    seeded: boolean
   }
   health: LoopHealth
   runCount: number
@@ -521,6 +528,22 @@ export interface LoopConfigResult {
 
 export async function patchLoopConfig(loopId: string, patch: LoopConfigPatch): Promise<LoopConfigResult> {
   return write<LoopConfigResult>(`/api/loops/${encodeURIComponent(loopId)}/config`, 'PATCH', patch, 'the loop config was refused')
+}
+
+export async function patchCharter(loopId: string, body: string, version: number): Promise<{ charter: LoopView['charter'] }> {
+  const response = await fetch(`/api/loops/${encodeURIComponent(loopId)}/charter`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'text/markdown', accept: 'application/json', 'if-match': `"${version}"` },
+    credentials: 'same-origin',
+    body,
+  })
+  const text = await response.text()
+  const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {}
+  if (!response.ok) {
+    const error = (parsed.error ?? parsed) as { code?: string; message?: string; hint?: string }
+    throw new ViewError(error.code ?? `HTTP_${response.status}`, error.message ?? 'the charter replacement was refused', error.hint)
+  }
+  return parsed as { charter: LoopView['charter'] }
 }
 
 async function write<T>(path: string, method: string, body: unknown, fallback: string): Promise<T> {

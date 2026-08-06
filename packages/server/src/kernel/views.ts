@@ -31,6 +31,8 @@ import * as legacyStore from "../db/store.js";
 import { loops as productionLoops, runs, type Loop, type Run } from "../db/schema.js";
 import { cronText } from "../lib/format.js";
 import { eventShape, eventTail, inboxCounts, inboxUnion, objectShape, type ApiResult } from "./objectApi.js";
+import { readCharter } from "./charters.js";
+import { charterDocId, charterKey } from "./ids.js";
 import {
   getProdLoop,
   loadTeamLoopIndex,
@@ -261,7 +263,7 @@ export async function loopsView(context: ApiContext, now = new Date()): Promise<
 /** The loop page's subject. */
 interface LoopPageSource {
   id: string; title: string | null; status: string; cron: string | null; timezone: string | null;
-  nextFire: string | null; workdir: string | null; body: string;
+  nextFire: string | null; workdir: string | null; legacyCharterBody: string;
   enabled: boolean; notify: Loop["notify"]; channelId: string | null; model: string | null;
   agent: Loop["agent"]; allowControl: boolean; ui: string | null; stateSchema: NonNullable<Loop["stateSchema"]>;
   hasWorkflow: boolean;
@@ -273,10 +275,8 @@ interface LoopPageSource {
  * EVENTS are still keyed to the same verbatim id and are read below through
  * `events.objectId`; the object row is gone.
  *
- * The loop's standing brief is its task file's `## Spec`, mirrored server-side in
- * `taskFileContent`, so THAT is the body the page renders (design report §1.3);
- * and the cadence cursor is the one-shot override `nextRunAt`, the only "next
- * fire" a prod row stores.
+ * During the additive migration window, `taskFileContent` is retained only as
+ * the fallback body for loops whose attached charter doc has not been seeded.
  */
 async function loopPageSource(id: string, teamId: string): Promise<LoopPageSource | { wrongKind: string } | undefined> {
   const prodRow = await getProdLoop(teamId, id);
@@ -291,7 +291,7 @@ async function loopPageSource(id: string, teamId: string): Promise<LoopPageSourc
   return {
     id: prodRow.id, title: record.title, status: record.status, cron: prodRow.cron,
     timezone: prodRow.timezone, nextFire: loopNextFire(prodRow), workdir: prodRow.workdir,
-    body: prodRow.taskFileContent ?? "",
+    legacyCharterBody: prodRow.taskFileContent ?? "",
     enabled: prodRow.enabled, notify: prodRow.notify, channelId: prodRow.channelId, model: prodRow.model,
     agent: prodRow.agent, allowControl: prodRow.allowControl, ui: prodRow.ui, stateSchema: prodRow.stateSchema ?? [],
     hasWorkflow: Boolean(prodRow.workflow),
@@ -314,8 +314,22 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
   if (!loop) return { ok: false, error: notFound(id) };
   if ("wrongKind" in loop) return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${loop.wrongKind}, not a loop`) };
 
-  const [tail, runRows, watching, created, runCount, totalCostUsd, channels] = await Promise.all([
+  const charterRead = await readCharter(context.teamId, id);
+  if (!charterRead.ok) return charterRead;
+  const charter = charterRead.value ?? {
+    id: charterDocId(context.teamId, id),
+    loopId: id,
+    key: charterKey(id),
+    docKind: "charter" as const,
+    format: "markdown" as const,
+    body: loop.legacyCharterBody,
+    version: 0,
+    updatedAt: loop.updatedAt,
+  };
+
+  const [tail, charterTail, runRows, watching, created, runCount, totalCostUsd, channels] = await Promise.all([
     store.listObjectEvents(undefined, id),
+    charterRead.value ? store.listObjectEvents(undefined, charter.id) : Promise.resolve([]),
     db.select().from(runs).where(eq(runs.loopId, id)).orderBy(desc(runs.ts)).limit(RECENT_RUNS_CAP * 4),
     db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.status, "open"), eq(objects.watcher, id))).orderBy(asc(objects.followUpAt)),
     db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.status, "open"), eq(objects.createdByLoop, id))).orderBy(desc(objects.createdAt)),
@@ -329,19 +343,17 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
   return { ok: true, value: {
     loop: {
       id: loop.id, title: loop.title, status: loop.status, cron: loop.cron, timezone: loop.timezone,
-      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextFire, workdir: loop.workdir, body: loop.body,
+      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextFire, workdir: loop.workdir,
       enabled: loop.enabled, notify: loop.notify, channelId: loop.channelId, model: loop.model, agent: loop.agent,
       allowControl: loop.allowControl, ui: loop.ui, stateSchema: loop.stateSchema, hasWorkflow: loop.hasWorkflow,
       payload: {}, createdAt: loop.createdAt, updatedAt: loop.updatedAt, source: loop.source,
     },
+    charter: { docId: charter.id, key: charter.key, body: charter.body, version: charter.version, updatedAt: charter.updatedAt, seeded: Boolean(charterRead.value) },
     health: loopHealth(runRows, now),
     runCount,
     totalCostUsd,
-    // The audit window design §4 names. A converged loop's brief lives in its
-    // task file, so nothing WRITES these events any more; the ones a kernel loop
-    // left behind are still its history and still render.
-    charterHistory: tail
-      .filter((e) => e.kind === "charter-evolved" || (e.kind === "loop-updated" && e.diff?.body))
+    charterHistory: charterTail
+      .filter((e) => e.kind === "charter-updated")
       .slice(-RECENT_RUNS_CAP).reverse()
       .map((e) => ({ event: e.id, seq: e.seq, ts: e.ts, actor: e.actorId, entrance: e.entrance, diff: e.diff ?? {} })),
     openTasks: {
@@ -548,7 +560,7 @@ export async function taskView(id: string, context: ApiContext, now = new Date()
  *  library is a list, and one 4 MB report would dominate the payload. */
 export async function docsView(context: ApiContext): Promise<ApiResult<Record<string, unknown>>> {
   const guard = humanOnly(context); if (guard) return guard;
-  const rows = await db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "doc"))).orderBy(desc(objects.createdAt)).limit(LIST_CAP);
+  const rows = await db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "doc"), eq(objects.docKind, "product"))).orderBy(desc(objects.createdAt)).limit(LIST_CAP);
   const loops = await loadTeamLoopIndex(context.teamId);
   return { ok: true, value: {
     docs: rows.map((doc) => ({
@@ -575,6 +587,7 @@ export async function docView(id: string, context: ApiContext): Promise<ApiResul
   const doc = await store.getObject(undefined, id);
   if (!doc || doc.teamId !== context.teamId) return { ok: false, error: notFound(id) };
   if (doc.kind !== "doc") return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${doc.kind}, not a doc`) };
+  if (doc.docKind === "charter") return { ok: false, error: refusal("CHARTER_ONLY", `${id} is an attached loop charter, not a product doc`) };
   const loops = await loadTeamLoopIndex(context.teamId);
   return { ok: true, value: {
     doc: { ...objectShape(doc), format: doc.format ?? "markdown" },

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import {
-  fetchLoop, fetchLoops, patchLoopConfig, postLifecycle, postRunNow,
+  fetchLoop, fetchLoops, patchCharter, patchLoopConfig, postLifecycle, postRunNow,
   type CharterDiff, type LoopConfigPatch, type LoopListRow, type LoopView, type RunNowResult, type TaskRow,
 } from './api'
 import { LoopDashboard, MetricTrends } from './LoopDashboard'
@@ -193,13 +193,9 @@ function LoopDetail({ id, onOpenTask, onOpenRun }: { id: string; onOpenTask: (id
 
       <DrawerSection
         title="Charter"
-        note={
-          loop.source === 'prod'
-            ? "A production loop's standing brief is its task file — this is the `## Spec` the machine last synced."
-            : "The loop's body IS its prompt. A run may rewrite it in the free zone; the cadence is the keyed zone."
-        }
+        note={data.charter.seeded ? `Attached doc · version ${data.charter.version}` : 'Legacy fallback · the next charter-capable run will seed the attached doc.'}
       >
-        <div className="charter-body">{loop.body.trim() ? <Markdown>{loop.body}</Markdown> : <Empty>No charter recorded.</Empty>}</div>
+        <CharterEditor loopId={loop.id} charter={data.charter} refresh={refresh} />
       </DrawerSection>
 
       <DrawerSection title="Charter history">
@@ -216,6 +212,52 @@ function LoopDetail({ id, onOpenTask, onOpenRun }: { id: string; onOpenTask: (id
         <Timeline events={data.events} emptyNote="No events on this loop yet." />
       </DrawerSection>
     </article>
+  )
+}
+
+function CharterEditor({ loopId, charter, refresh }: { loopId: string; charter: LoopView['charter']; refresh: () => void }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(charter.body)
+  const [saving, setSaving] = useState(false)
+  const [failure, setFailure] = useState<Error | undefined>(undefined)
+
+  useEffect(() => {
+    if (!editing) setDraft(charter.body)
+  }, [charter.body, editing])
+
+  if (!editing) return (
+    <>
+      <div className="charter-body">{charter.body.trim() ? <Markdown>{charter.body}</Markdown> : <Empty>No charter recorded.</Empty>}</div>
+      {charter.seeded && <button type="button" className="attn-button is-quiet" onClick={() => setEditing(true)}>Edit charter</button>}
+    </>
+  )
+
+  const save = async () => {
+    setSaving(true)
+    setFailure(undefined)
+    try {
+      await patchCharter(loopId, draft, charter.version)
+      setEditing(false)
+      refresh()
+    } catch (cause) {
+      // The draft intentionally stays in state on VERSION_CONFLICT. The caller
+      // can copy it or re-read before deciding how to reapply it.
+      setFailure(cause instanceof Error ? cause : new Error(String(cause)))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form className="answer-box" onSubmit={(event) => { event.preventDefault(); void save() }}>
+      <label htmlFor={`charter-${loopId}`}>Charter Markdown</label>
+      <textarea id={`charter-${loopId}`} className="field-text" rows={16} value={draft} onChange={(event) => setDraft(event.target.value)} />
+      {failure && <Refusal error={failure} />}
+      <div className="answer-actions">
+        <button type="button" className="attn-button is-quiet" onClick={() => setEditing(false)} disabled={saving}>Cancel</button>
+        <button type="submit" className="solid-button" disabled={saving}>{saving ? 'Saving…' : 'Save charter'}</button>
+      </div>
+    </form>
   )
 }
 

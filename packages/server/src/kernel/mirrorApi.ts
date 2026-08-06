@@ -134,6 +134,9 @@ export async function attachMirror(input: AttachInput, context: ApiContext, now 
     const tx = rawTx as unknown as store.KernelExec;
     const host = await store.getObject(tx, objectId);
     if (!host || host.teamId !== context.teamId) return { ok: false as const, error: refusal("NOT_FOUND", `${objectId} was not found`) };
+    if (host.kind === "doc" && host.docKind === "charter") {
+      return { ok: false as const, error: refusal("CHARTER_ONLY", `${objectId} is an attached loop charter and cannot own mirrors`) };
+    }
     if (!ATTACHABLE_KINDS.includes(host.kind as ObjectKind)) {
       return { ok: false as const, error: refusal("WRONG_KIND", `${objectId} is a ${host.kind}, and a mirror attaches to a task, a doc or a loop`, [{ path: "objectId", message: "not attachable", got: host.kind, expected: ATTACHABLE_KINDS.join("|") }], "a pointer to a pointer is an alias, not a dependency — attach the mirror to the work item instead") };
     }

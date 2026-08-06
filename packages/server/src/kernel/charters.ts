@@ -16,6 +16,7 @@ import { appendOrganicEvent, applyUpdateIn, createObjectIn } from "./applyTransi
 import { charterDocId, charterKey } from "./ids.js";
 import { refusal, type ApiRefusal } from "./refusals.js";
 import type { Actor } from "./types.js";
+import type { ApiContext } from "./apiAuth.js";
 
 export const CHARTER_MAX_BYTES = 512 * 1024;
 
@@ -187,6 +188,40 @@ export async function replaceCharter(input: ReplaceCharterInput): Promise<Charte
     });
     if (!updated.ok) return { ok: false, error: refusal(updated.code as never, updated.message, updated.issues, updated.hint) };
     return { ok: true, value: { charter: await snapshot(tx, updated.object, input.loopId), changed: updated.changed } };
+  });
+}
+
+function leaseScopeGuard(loopId: string, context: ApiContext): ApiRefusal | undefined {
+  if (context.mode !== "agent" || context.loop?.id === loopId) return undefined;
+  return refusal(
+    "NOT_YOUR_CHARTER",
+    `${loopId}'s charter is outside run ${context.run?.id ?? "(unknown)"}'s lease scope`,
+    [{ path: "loopId", message: "must equal the lease's loop", got: loopId, expected: context.loop?.id ?? "the leased loop" }],
+  );
+}
+
+export async function readCharterForContext(loopId: string, context: ApiContext): Promise<CharterResult<CharterSnapshot | null>> {
+  const guard = leaseScopeGuard(loopId, context);
+  return guard ? { ok: false, error: guard } : readCharter(context.teamId, loopId);
+}
+
+export async function replaceCharterForContext(
+  loopId: string,
+  body: string,
+  expectedVersion: number,
+  context: ApiContext,
+  now = new Date(),
+): Promise<CharterResult<{ charter: CharterSnapshot; changed: boolean }>> {
+  const guard = leaseScopeGuard(loopId, context);
+  if (guard) return { ok: false, error: guard };
+  return replaceCharter({
+    teamId: context.teamId,
+    loopId,
+    body,
+    expectedVersion,
+    actor: context.actor,
+    now: now.toISOString(),
+    source: "http",
   });
 }
 

@@ -33,6 +33,7 @@ let views: typeof import("./views.js");
 let objectApi: typeof import("./objectApi.js");
 let legacyStore: typeof import("../db/store.js");
 let loopMutations: typeof import("../server/loopMutations.js");
+let charters: typeof import("./charters.js");
 
 const TEAM = "team-views";
 const OTHER_TEAM = "team-elsewhere";
@@ -59,6 +60,7 @@ beforeAll(async () => {
   objectApi = await import("./objectApi.js");
   legacyStore = await import("../db/store.js");
   loopMutations = await import("../server/loopMutations.js");
+  charters = await import("./charters.js");
 });
 afterAll(() => fs.rmSync(temp, { recursive: true, force: true }));
 
@@ -229,11 +231,11 @@ describe("GET /api/views/inbox — the §6 union, exactly", () => {
 describe("GET /api/views/loop/:id", () => {
   it("composes the charter, health, the three task sections and the run strip", async () => {
     const value = ok(await views.loopView(housekeeper, human, NOW)) as Record<string, unknown>;
-    expect(Object.keys(value).sort()).toEqual(["channels", "charterHistory", "cursorSeq", "events", "health", "loop", "mirrors", "openTasks", "recentRuns", "runCount", "totalCostUsd"]);
+    expect(Object.keys(value).sort()).toEqual(["channels", "charter", "charterHistory", "cursorSeq", "events", "health", "loop", "mirrors", "openTasks", "recentRuns", "runCount", "totalCostUsd"]);
     const loop = value.loop as Record<string, unknown>;
     expect(loop.cronText).toBe("daily 07:00");
     expect(loop).toMatchObject({ notify: "auto", agent: "claude-code", stateSchema: [], ui: null, hasWorkflow: false, source: "prod" });
-    expect(loop.body).toBe("# Housekeeper\n\n## Spec\n\nYou are the Housekeeper.\n");
+    expect(value.charter).toMatchObject({ body: "# Housekeeper\n\n## Spec\n\nYou are the Housekeeper.\n", version: 0, seeded: false });
     expect(value.health).toMatchObject({ lastOutcome: "success", consecutiveFailures: 0, runs7d: { success: 1, failure: 1 } });
     const open = value.openTasks as { watching: { title: string }[]; created: { title: string }[]; questions: { title: string }[] };
     // Everything it filed and did not hand on — the default put them here.
@@ -290,23 +292,11 @@ describe("GET /api/views/loop/:id", () => {
     expect(paused.warning).toMatchObject({ code: "TASKS_STILL_WATCHED", openTasks: 5 });
   });
 
-  /** A converged loop's KERNEL EVENTS stay keyed to its verbatim id, so its
-   *  history is still readable after the loop object itself retired — that is
-   *  what makes the id-verbatim migration lossless. Nothing writes a
-   *  `charter-evolved` any more (a loop's brief lives in its task file), so
-   *  these are seeded as the historical rows they are. */
-  it("shows evolve diffs in the charter history, and only body-touching ones", async () => {
-    const store = await import("../db/kernelStore.js");
-    await store.appendEvent(undefined, {
-      id: "ev-hist00000001", teamId: TEAM, objectId: housekeeper, kind: "charter-evolved",
-      origin: "organic", entrance: "agent", actorId: "run-evolve",
-      diff: { body: { old: "You are the Housekeeper.\n", new: "You are the Housekeeper.\n\n## Lessons\n" } }, ts: ago(1),
-    } as never);
-    await store.appendEvent(undefined, {
-      id: "ev-hist00000002", teamId: TEAM, objectId: housekeeper, kind: "loop-updated",
-      origin: "organic", entrance: "human", actorId: "u-owner",
-      diff: { title: { old: "Housekeeper", new: "Housekeeper v2" } }, ts: ago(1),
-    } as never);
+  it("shows attached charter doc updates in charter history", async () => {
+    const made = await charters.ensureCharter({ teamId: TEAM, loopId: housekeeper, loopName: "Housekeeper", body: "You are the Housekeeper.\n", actor: human.actor, now: ago(2) });
+    if (!made.ok) throw new Error(made.error.message);
+    const changed = await charters.replaceCharter({ teamId: TEAM, loopId: housekeeper, body: "You are the Housekeeper.\n\n## Lessons\n", expectedVersion: made.value.charter.version, actor: { entrance: "agent", actorId: "run-evolve" }, now: ago(1), source: "report-fallback" });
+    if (!changed.ok) throw new Error(changed.error.message);
     const value = ok(await views.loopView(housekeeper, human, NOW)) as { charterHistory: { diff: Record<string, unknown> }[] };
     expect(value.charterHistory).toHaveLength(1);
     expect(value.charterHistory[0]!.diff.body).toMatchObject({ old: "You are the Housekeeper.\n" });
@@ -632,9 +622,7 @@ describe("convergence S1 — a watcher that names a production loop", () => {
       id: PROD_LOOP, title: "React Doctor", status: "active", cron: "0 6 * * *",
       timezone: "Asia/Shanghai",
     });
-    // The standing brief lives in the task file's `## Spec`, mirrored on the
-    // loop row — that is what a prod loop has where a kernel loop has a charter.
-    expect(value.loop.body).toContain("Triage react-doctor findings.");
+    expect((value as unknown as { charter: { body: string; seeded: boolean } }).charter).toMatchObject({ body: expect.stringContaining("Triage react-doctor findings."), seeded: false });
     expect(value.openTasks.watching.map((t) => t.title)).toEqual(["Prod-watched work"]);
     // Runs are ONE table already, so health needs no bridging.
     await database.db.insert(legacySchema.runs).values({

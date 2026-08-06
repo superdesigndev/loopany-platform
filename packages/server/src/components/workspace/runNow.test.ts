@@ -57,7 +57,8 @@ const loopRow = (over: Record<string, unknown> = {}) => ({
 
 const loopView = (over: Record<string, unknown> = {}) => ({
   cursorSeq: 12,
-  loop: { ...loopRow(over), workdir: '/srv/backups', body: 'Check the backup ran.', payload: {} },
+  loop: { ...loopRow(over), workdir: '/srv/backups', payload: {} },
+  charter: { docId: 'doc-charter', key: 'loop-charter:loop-7f3a91', body: 'Check the backup ran.', version: 3, updatedAt: '2026-08-01T00:00:00.000Z', seeded: true },
   health: loopRow().health,
   charterHistory: [],
   openTasks: { watching: [], created: [], questions: [] },

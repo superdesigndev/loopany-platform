@@ -132,6 +132,7 @@ export async function showObject(kind: ObjectKind, id: string, context: ApiConte
   const row = await store.getObject(undefined, id);
   if (!row || row.teamId !== context.teamId) return { ok: false, error: refusal("NOT_FOUND", `${id} was not found`) };
   if (row.kind !== kind) return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${row.kind}, not a ${kind}`, [{ path: "id", message: "wrong kind", got: id, expected: `${kind}-<id>` }], `use the ${row.kind} verb`) };
+  if (kind === "doc" && row.docKind === "charter") return { ok: false, error: refusal("CHARTER_ONLY", `${id} is an attached loop charter, not a product doc`) };
   const normalizedLimit = Math.max(0, Math.min(200, eventLimit));
   const allEvents = await store.listObjectEvents(undefined, id);
   const history = normalizedLimit === 0 ? [] : allEvents.slice(-normalizedLimit);
@@ -174,6 +175,7 @@ export async function replaceFromArtifact(kind: ArtifactKind, id: string, raw: s
     const tx = rawTx as unknown as store.KernelExec;
     const before = await store.getObjectForUpdate(tx, id);
     const guard = scopedKindGuard(before, kind, context.teamId); if (guard) return guard;
+    if (kind === "doc" && before!.docKind === "charter") return { ok: false, error: refusal("CHARTER_ONLY", `${id} is an attached loop charter, not a product doc`) };
     if (parsed.value.key !== null && parsed.value.key !== before!.key) return { ok: false, error: refusal("IMMUTABLE_KEY", "key cannot be changed", [{ path: "key", message: "fixed at creation", got: parsed.value.key, expected: before!.key ?? "(remove the key)" }], "restore the stored key or remove the line") };
     if (context.mode === "agent" && kind === "task" && before!.pendingQuestion && parsed.value.pendingQuestion !== before!.pendingQuestion) return { ok: false, error: refusal("NOT_HUMAN", "a run cannot clear or replace a pending question", [], "a human answers or withdraws it") };
     // The whole-file replace is a WATCHER SURFACE too — `watcher:` is a task's

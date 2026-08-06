@@ -11,6 +11,9 @@ let prodStore: typeof import("../db/store.js");
 let charters: typeof import("./charters.js");
 let kernel: typeof import("./applyTransition.js");
 let ids: typeof import("./ids.js");
+let objectApi: typeof import("./objectApi.js");
+let mirrorApi: typeof import("./mirrorApi.js");
+let views: typeof import("./views.js");
 
 const TEAM = "team-charters";
 const LOOP = "loop-charters";
@@ -32,6 +35,9 @@ beforeAll(async () => {
   charters = await import("./charters.js");
   kernel = await import("./applyTransition.js");
   ids = await import("./ids.js");
+  objectApi = await import("./objectApi.js");
+  mirrorApi = await import("./mirrorApi.js");
+  views = await import("./views.js");
 });
 
 afterAll(() => fs.rmSync(temp, { recursive: true, force: true }));
@@ -120,5 +126,20 @@ describe("attached charter identity and compare-and-swap", () => {
     expect(remaining.map((row) => row.id)).not.toContain(charter.id);
     expect(remaining).toHaveLength(2);
     expect((await database.db.select().from(kernelSchema.events)).some((event) => event.objectId === charter.id)).toBe(false);
+  });
+
+  it("fences a run lease to its own loop and keeps charters out of product surfaces", async () => {
+    const made = value(await charters.ensureCharter({ teamId: TEAM, loopId: LOOP, body: "charter", actor: owner, now: T0 })).charter;
+    const ownLease = { teamId: TEAM, mode: "agent", actor: run, loop: { id: LOOP }, run: { id: run.actorId } } as never;
+    const otherLease = { teamId: TEAM, mode: "agent", actor: run, loop: { id: "loop-other" }, run: { id: run.actorId } } as never;
+    expect(code(await charters.readCharterForContext(LOOP, ownLease))).toBe("OK");
+    expect(code(await charters.readCharterForContext(LOOP, otherLease))).toBe("NOT_YOUR_CHARTER");
+    expect(code(await charters.replaceCharterForContext(LOOP, "changed", made.version, otherLease, new Date(T1)))).toBe("NOT_YOUR_CHARTER");
+
+    const ownerContext = { teamId: TEAM, mode: "human", actor: owner } as never;
+    expect(code(await objectApi.showObject("doc", made.id, ownerContext))).toBe("CHARTER_ONLY");
+    expect(code(await objectApi.replaceFromArtifact("doc", made.id, "---\ntitle: squat\n---\n\nbody\n", ownerContext))).toBe("CHARTER_ONLY");
+    expect(code(await mirrorApi.attachMirror({ objectId: made.id, kind: "url", coords: "https://example.com" }, ownerContext))).toBe("CHARTER_ONLY");
+    expect(value(await views.docsView(ownerContext)).docs).toEqual([]);
   });
 });
