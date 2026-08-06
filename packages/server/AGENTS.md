@@ -534,9 +534,20 @@ the convergence design is `data/rw-converge-s1/report.md`.
   This is load-bearing: the ordinary human runs the CLI on the SAME machine the
   daemon is registered on, so keying on the token made `loopany inbox`/`answer`
   refuse `NOT_HUMAN` for exactly the person the endpoint serves. With no run
-  context a device credential is the DAEMON class: `NO_RUN_CONTEXT` on a dual
-  endpoint, `UNAUTHORIZED` on a human-only one. The CLI belts-and-braces it by not
-  attaching the token on `inbox`/`answer` (`HUMAN_COMMANDS` in `kernel-cli.ts`).
+  context an enrolled device credential is the OWNER's terminal authority: it
+  resolves to `mode: human` in that machine's home-team scope and may use every
+  surface a signed-in owner can (objects, inbox/answer, run-now and governance).
+  `kernel-cli.ts` and the composed kernel home attach it to every out-of-run
+  request. Anonymous/foreign credentials still get `UNAUTHORIZED` when the login
+  gate is enabled; a run context still makes human-only verbs refuse the run.
+- **Every device surface authenticates through `gateway/enroll.ts`'s full-token
+  resolver.** `machineIdFromToken` is only the row index; the full SHA-256 token
+  hash is the authority. Poll, unified CLI, legacy owner verbs, kernel auth and
+  long-poll waiter registration must agree on that resolver. A legacy row whose
+  redundant hash drifted may self-repair only when its stored plaintext token is
+  byte-for-byte equal; a hash mismatch without that proof stays a hard 401. This
+  prevents the live failure where CLI accepted an id-derived row while poll
+  rejected the same credential forever.
 - **Run authority is the durable `run_leases` row**, the ONE run credential — the
   kernel's parallel queue/lease columns retired at S5. A terminal-grace lease
   serves READS only, so a woken machine can still read what it was working on
@@ -557,7 +568,7 @@ the convergence design is `data/rw-converge-s1/report.md`.
   `authenticateRunCaller` accepts a lease FOR THE RUN THE HEADER NAMES — a lease
   naming another run is a loud `UNAUTHORIZED`, and a lease with no run context is
   not an agent at all. Nothing else widened: run context is still the positive
-  test, every downstream lease/state guard is unchanged, and the human-only verbs
+  test, every downstream lease/state guard is unchanged, and owner-only verbs
   still refuse a run with their own teaching. **Do not "simplify" this by putting
   the device token or `LOOPANY_HOME` into the agent's child env** — that hands the
   coding agent a machine-wide credential to buy back a narrower one it already has.

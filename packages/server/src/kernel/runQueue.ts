@@ -34,7 +34,7 @@ import { objects } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
 import * as legacyStore from "../db/store.js";
 import { loops, runs, type Loop, type Machine, type Run } from "../db/schema.js";
-import { machineIdFromToken, isDeviceTokenShape, sha256 } from "../gateway/tokens.js";
+import { authenticateEnrolledMachine } from "../gateway/enroll.js";
 import { logger } from "../logger.js";
 import { appendOrganicEvent } from "./applyTransition.js";
 import {
@@ -427,10 +427,8 @@ export async function resolveQueueLoopIn(
  * (production `poll`, through the shared `gateway/enroll.ts` gate).
  */
 export async function authenticateDevice(token: string): Promise<Machine | undefined> {
-  if (!isDeviceTokenShape(token)) return undefined;
-  const machine = await legacyStore.getMachine(machineIdFromToken(token));
-  if (!machine || machine.tokenHash !== sha256(token)) return undefined;
-  return machine;
+  const resolved = await authenticateEnrolledMachine(token);
+  return resolved.ok ? resolved.machine : undefined;
 }
 
 /** THE KERNEL'S ONE REMAINING CLOCK. A loop's cadence belongs to the production

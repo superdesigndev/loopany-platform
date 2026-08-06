@@ -9,11 +9,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
  * This file exists because of a blocking review finding: the 47 CLI goldens stub
  * `fetchImpl` and the object-API integration tests hand-construct `ApiContext`
  * objects, so NOTHING exercised `resolveApiContext` itself — and the guard was
- * keying on credential presence rather than run-context presence, which made
- * `loopany inbox`/`answer` refuse NOT_HUMAN on every machine that had ever run
- * `loopany up`. The class of bug is "the branch nobody drove", so these tests
- * drive the branch: real device tokens, real run rows, real leases, real
- * `Request` objects, one case per cell of the spec §2.6 auth table.
+ * keying on credential presence rather than run-context presence. The enrolled
+ * device is now also the owner's full terminal authority. The class of bug is
+ * "the branch nobody drove", so these tests drive the branch: real device
+ * tokens, real run rows, real leases, real `Request` objects, one case per cell
+ * of the spec §2.6 auth table and every owner surface class.
  *
  * Only the SESSION half is injected (`SessionSeam`) — it is bound to the
  * framework's request-scoped context, not to anything this seam decides.
@@ -63,8 +63,8 @@ const SIGNED_OUT: import("./apiAuth.js").SessionSeam = {
   authEnabled: true,
 };
 
-function request(headers: Record<string, string> = {}): Request {
-  return new Request("https://example.test/api/inbox", { headers });
+function request(headers: Record<string, string> = {}, pathname = "/api/inbox"): Request {
+  return new Request(`https://example.test${pathname}`, { headers });
 }
 
 async function machine(): Promise<string> {
@@ -157,13 +157,84 @@ describe("the auth table keys on run-context presence, not on a credential type"
     expect(!result.ok && result.error.hint).not.toContain("inbox");
   });
 
-  it("gives a bare device credential the DAEMON answers: NO_RUN_CONTEXT on dual, UNAUTHORIZED on human-only", async () => {
-    await machine();
+  it("gives an enrolled device credential the owner's full terminal authority", async () => {
+    const machineId = await machine();
     const bare = () => request({ Authorization: `Bearer ${DEVICE}` });
-    expect(code(await auth.resolveApiContext(bare(), "dual", true, SIGNED_OUT))).toBe("NO_RUN_CONTEXT");
-    const humanOnly = await auth.resolveApiContext(bare(), "human", true, SIGNED_OUT);
-    expect(code(humanOnly)).toBe("UNAUTHORIZED");
-    expect(!humanOnly.ok && humanOnly.error.issues[0]).toMatchObject({ message: "a device credential is a machine's, not a person's" });
+    for (const requirement of ["dual", "human", { human: "loop-governance" }] as const) {
+      const result = await auth.resolveApiContext(bare(), requirement, true, SIGNED_OUT);
+      expect(result.ok, JSON.stringify(!result.ok && result.error)).toBe(true);
+      expect(result.ok && result.context).toMatchObject({
+        teamId: TEAM,
+        mode: "human",
+        machine: { id: machineId },
+        actor: { entrance: "human", actorId: "u-owner" },
+      });
+    }
+  });
+
+  it("admits the enrolled device across every formerly session-gated owner verb", async () => {
+    const machineId = await machine();
+    const surfaces = [
+      ["task list", "/api/tasks", "dual"],
+      ["task show", "/api/tasks/task-1", "dual"],
+      ["task create", "/api/tasks", "dual"],
+      ["doc show", "/api/docs/doc-1", "dual"],
+      ["doc create", "/api/docs", "dual"],
+      ["mirror list", "/api/mirrors", "dual"],
+      ["mirror show", "/api/mirrors/mirror-1", "dual"],
+      ["mirror create", "/api/mirrors", "dual"],
+      ["inbox", "/api/inbox", "human"],
+      ["answer", "/api/tasks/task-1/verdict", "human"],
+      ["run-now", "/api/loops/loop-1/run-now", { human: "loop-governance" }],
+      ["loop governance", "/api/loops/loop-1/pause", { human: "loop-governance" }],
+    ] as const;
+
+    for (const [label, pathname, requirement] of surfaces) {
+      const result = await auth.resolveApiContext(
+        request({ Authorization: `Bearer ${DEVICE}` }, pathname),
+        requirement,
+        true,
+        SIGNED_OUT,
+      );
+      expect(result.ok, `${label}: ${JSON.stringify(!result.ok && result.error)}`).toBe(true);
+      expect(result.ok && result.context).toMatchObject({
+        teamId: TEAM,
+        mode: "human",
+        machine: { id: machineId },
+        actor: { entrance: "human", actorId: "u-owner" },
+      });
+    }
+  });
+
+  it("refuses a foreign device credential on every formerly human-gated class", async () => {
+    await machine();
+    const foreign = () => request({ Authorization: "Bearer dk_foreign_device_credential" });
+    for (const requirement of ["dual", "human", { human: "loop-governance" }] as const) {
+      expect(code(await auth.resolveApiContext(foreign(), requirement, true, SIGNED_OUT))).toBe("UNAUTHORIZED");
+    }
+  });
+
+  it("refuses foreign and anonymous callers across the named owner surfaces", async () => {
+    await machine();
+    const surfaces = [
+      ["/api/tasks", "dual"],
+      ["/api/docs", "dual"],
+      ["/api/mirrors", "dual"],
+      ["/api/inbox", "human"],
+      ["/api/tasks/task-1/verdict", "human"],
+      ["/api/loops/loop-1/run-now", { human: "loop-governance" }],
+    ] as const;
+    for (const [pathname, requirement] of surfaces) {
+      const foreign = await auth.resolveApiContext(
+        request({ Authorization: "Bearer dk_foreign_device_credential" }, pathname),
+        requirement,
+        true,
+        SIGNED_OUT,
+      );
+      const anonymous = await auth.resolveApiContext(request({}, pathname), requirement, true, SIGNED_OUT);
+      expect(code(foreign), `foreign ${pathname}`).toBe("UNAUTHORIZED");
+      expect(code(anonymous), `anonymous ${pathname}`).toBe("UNAUTHORIZED");
+    }
   });
 
   it("refuses a human session on an agent-only endpoint with NO_RUN_CONTEXT", async () => {

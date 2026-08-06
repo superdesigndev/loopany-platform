@@ -1,9 +1,9 @@
 /**
  * THE AUTH SEAM for the rewrite's object endpoints.
  *
- * Two credentials, three classes (API spec §2.1): a machine's device credential,
- * a human's team session, and — the third "class" — a device credential PLUS run
- * context, which is what makes a request an AGENT's.
+ * Two credentials, two caller modes: an enrolled device credential acts with
+ * its owner's authority, while a request with run context is an AGENT and is
+ * constrained by that run's lease.
  *
  * THE LOAD-BEARING RULE: **what separates an agent from a human is the presence
  * of RUN CONTEXT, not the presence of a credential.** It is a positive test for
@@ -15,11 +15,10 @@
  * refusal's teaching ("use the human CLI outside a run") would be wrong: they ARE
  * outside a run.
  *
- * With no run context the device credential is the DAEMON class, and §2.6 gives
- * it two different answers: `NO_RUN_CONTEXT` on a dual object endpoint (the
- * machine must say which run it speaks for) and `UNAUTHORIZED` on a human-only
- * one (a machine's credential is not a person's, and no widening of it ever
- * makes one).
+ * With no run context, a valid device credential is the enrolled owner's
+ * terminal authority. It resolves only to the machine's own team. A foreign or
+ * stale token resolves to no machine and remains unauthorized; anonymous
+ * requests are still refused when the login gate is enabled.
  *
  * WHICH CREDENTIAL AUTHENTICATES AN AGENT: either the machine's device token OR
  * **the run's own lease token** — and the lease is the one a delivery is
@@ -179,18 +178,30 @@ export async function resolveApiContext(
   }
 
   const user = await session.currentUser();
-  if (!user) {
-    // No session. A device credential here is the DAEMON class, and it gets a
-    // different answer per endpoint class (§2.6) — never NOT_HUMAN, which would
-    // misname the caller and mis-teach the fix.
-    if (token && (await authenticateDevice(token))) {
-      return requirement === "dual"
-        ? { ok: false, error: refusal("NO_RUN_CONTEXT", "this endpoint needs a run context and the request carried none", [], "agent calls run inside a run: the daemon sets LOOPANY_RUN_ID and the CLI attaches it. Outside a run, use the web UI or the human CLI.") }
-        : { ok: false, error: refusal("UNAUTHORIZED", "a signed-in human session is required", [{ path: "Authorization", message: "a device credential is a machine's, not a person's" }], "sign in on this machine — the inbox and the verdict are human surfaces, so a machine credential never stands in for one") };
-    }
-    if (session.authEnabled) return { ok: false, error: refusal("UNAUTHORIZED", "a signed-in human session is required", [], "sign in, then retry") };
+  if (user) {
+    const scope = await session.requestScope();
+    return { ok: true, context: { teamId: scope.teamId, actor: { entrance: "human", actorId: user.id }, mode: "human" } };
+  }
+
+  // The enrolled device is the owner at the terminal. Authenticate the WHOLE
+  // credential (derived id + full hash) and bind it to only the machine's home
+  // team; no active-team cookie or caller-supplied scope participates here.
+  const machine = token ? await authenticateDevice(token) : undefined;
+  if (machine) {
+    return {
+      ok: true,
+      context: {
+        teamId: machine.teamId ?? legacyStore.teamIdForUser(machine.userId),
+        actor: { entrance: "human", actorId: machine.userId },
+        mode: "human",
+        machine,
+      },
+    };
+  }
+  if (session.authEnabled) {
+    return { ok: false, error: refusal("UNAUTHORIZED", "an enrolled device credential or signed-in session is required", [], "connect this machine with `loopany up`, or sign in and retry") };
   }
 
   const scope = await session.requestScope();
-  return { ok: true, context: { teamId: scope.teamId, actor: { entrance: "human", actorId: user?.id ?? "human:open-mode" }, mode: "human" } };
+  return { ok: true, context: { teamId: scope.teamId, actor: { entrance: "human", actorId: "human:open-mode" }, mode: "human" } };
 }

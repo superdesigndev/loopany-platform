@@ -16,17 +16,15 @@
  * own TOON grammar (`kernel-render.ts`), so the home reads exactly like every
  * other `loopany …` answer on this stack.
  *
- * A HUMAN surface, so the device credential is deliberately NOT attached (the
- * same rule `kernel-cli.ts` HUMAN_COMMANDS encodes: with no run context a device
- * token names the machine, and `apiAuth` answers a human-only endpoint
- * `UNAUTHORIZED` for it). A `LOOPANY_SESSION` cookie rides along when set,
- * exactly as it does for `loopany inbox`.
+ * An OWNER surface: the enrolled device credential is attached just like every
+ * out-of-run kernel CLI request. A `LOOPANY_SESSION` cookie also rides along
+ * when set, preserving browser-session development flows.
  *
  * NEVER EMPTY, NEVER ALARMING (P5/P8): this runs on the SessionStart hot path, so
  * every failure — no server configured, an unreachable/hung one, a refusal —
  * degrades to a DEFINITIVE home that names the state and the fix, and exits 0.
  */
-import { resolveServerUrl } from "./config.js";
+import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { binLine } from "./home.js";
 import { ABSENT, cell, helpBlock, nextFireCell, typedList } from "./kernel-render.js";
@@ -67,7 +65,8 @@ export async function runKernelHome(deps: KernelHomeDeps = {}): Promise<number> 
 
   const doFetch = deps.fetchImpl ?? ((url: string, init?: RequestInit) => boundedFetch(String(url), init ?? {}, HOME_TIMEOUT_MS));
   const headers: Record<string, string> = {};
-  // A human surface: the session cookie is the only credential that belongs here.
+  const token = env.LOOPANY_TOKEN ?? readStored(DEVICE_FILE);
+  if (token) headers.Authorization = `Bearer ${token}`;
   if (env.LOOPANY_SESSION) headers.Cookie = env.LOOPANY_SESSION.includes("=") ? env.LOOPANY_SESSION : `better-auth.session_token=${env.LOOPANY_SESSION}`;
 
   const read = async (path: string): Promise<Fetched | { error: string }> => {

@@ -94,8 +94,8 @@ describe("the kernel home render", () => {
   });
 
   test("a refused inbox read carries the kernel's own sentence", () => {
-    const text = renderKernelHome({ bin: null, server: "s", loops: LOOPS_BODY, inbox: { status: 401, body: { message: "a signed-in human session is required" } } });
-    expect(text).toContain("inbox: — (unavailable: a signed-in human session is required)");
+    const text = renderKernelHome({ bin: null, server: "s", loops: LOOPS_BODY, inbox: { status: 401, body: { message: "an enrolled device credential or signed-in human session is required" } } });
+    expect(text).toContain("inbox: — (unavailable: an enrolled device credential or signed-in human session is required)");
   });
 });
 
@@ -113,7 +113,7 @@ function homeDeps(handler: (url: string, init?: RequestInit) => { status: number
 }
 
 describe("runKernelHome — the reads and the degraded paths", () => {
-  test("reads BOTH kernel surfaces and never attaches the device credential", async () => {
+  test("reads BOTH kernel surfaces with the enrolled device credential", async () => {
     const h = homeDeps((url) => (url.endsWith("/api/inbox") ? { status: 200, body: { counts: { total: 0 } } } : { status: 200, body: LOOPS_BODY }));
     const code = await runKernelHome({ ...h.deps, server: "http://127.0.0.1:3155/", env: { LOOPANY_TOKEN: "dk_secret" } });
     expect(code).toBe(0);
@@ -121,11 +121,8 @@ describe("runKernelHome — the reads and the degraded paths", () => {
       "http://127.0.0.1:3155/api/inbox",
       "http://127.0.0.1:3155/api/views/loops",
     ]);
-    // The home is a HUMAN surface: a device token here names the machine, and the
-    // kernel answers a human-only endpoint UNAUTHORIZED for it.
     for (const r of h.seen) {
-      expect(JSON.stringify(r.init?.headers ?? {})).not.toContain("dk_secret");
-      expect(Object.keys((r.init?.headers ?? {}) as object)).not.toContain("Authorization");
+      expect((r.init?.headers as Record<string, string>).Authorization).toBe("Bearer dk_secret");
     }
     expect(h.out()).toContain("loops[3]");
   });
@@ -157,11 +154,11 @@ describe("runKernelHome — the reads and the degraded paths", () => {
   });
 
   test("a refusal keeps the home SHAPE and prints the kernel's teaching verbatim", async () => {
-    const h = homeDeps(() => ({ status: 401, body: { message: "a signed-in human session is required", code: "UNAUTHORIZED", hint: "sign in on this machine" } }));
+    const h = homeDeps(() => ({ status: 401, body: { message: "an enrolled device credential or signed-in human session is required", code: "UNAUTHORIZED", hint: "connect this machine or sign in" } }));
     const code = await runKernelHome({ ...h.deps, server: "http://127.0.0.1:3155", env: {} });
     expect(code).toBe(0);
     expect(h.out()).toContain("code: UNAUTHORIZED");
-    expect(h.out()).toContain("sign in on this machine");
+    expect(h.out()).toContain("connect this machine or sign in");
     expect(h.out()).toContain("LOOPANY_SESSION");
   });
 });

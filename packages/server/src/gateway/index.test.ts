@@ -1537,8 +1537,9 @@ test("execFailureStreak counts only consecutive trailing exec errors, ignoring e
 // ---- loopLog (device-token-scoped run-log read for `loopany log`) ----
 
 /** A machine + a loop on it, with `count` exec runs (newest ts last). */
-async function seededLoopWithRuns(machineId: string, count: number) {
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h-" + machineId, online: true }));
+async function seededLoopWithRuns(token: string, count: number) {
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   for (let i = 0; i < count; i++) {
     (await store.addRun({
@@ -1562,8 +1563,7 @@ async function seededLoopWithRuns(machineId: string, count: number) {
 
 test("loopLog returns the loop's recent runs newest-first with transcript text", async () => {
   const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  const loop = (await seededLoopWithRuns(machineId, 3));
+  const loop = (await seededLoopWithRuns(token, 3));
 
   const res = (await gateway().loopLog(token, loop.id));
   expect(res.status).toBe(200);
@@ -1587,8 +1587,7 @@ test("loopLog returns the loop's recent runs newest-first with transcript text",
 
 test("loopLog honors and caps the run limit", async () => {
   const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  const loop = (await seededLoopWithRuns(machineId, 5));
+  const loop = (await seededLoopWithRuns(token, 5));
 
   expect(((await gateway().loopLog(token, loop.id, 2)).body as { runs: any[] }).runs).toHaveLength(2);
   // Limit is clamped to the max (20), so a huge value just returns everything.
@@ -1600,7 +1599,7 @@ test("loopLog honors and caps the run limit", async () => {
 test("loopLog truncates an over-cap transcript and flags it", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true }));
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   (await store.addRun({
     loopId: loop.id,
@@ -1618,13 +1617,12 @@ test("loopLog truncates an over-cap transcript and flags it", async () => {
 
 test("loopLog refuses a token whose machine does not own the loop (cross-device)", async () => {
   const tokenA = tokens.mintDeviceToken();
-  const machineA = tokens.machineIdFromToken(tokenA);
-  const loop = (await seededLoopWithRuns(machineA, 2));
+  const loop = (await seededLoopWithRuns(tokenA, 2));
 
   // A different device with its own token cannot read machine A's loop's runs.
   const tokenB = tokens.mintDeviceToken();
   const machineB = tokens.machineIdFromToken(tokenB);
-  (await store.createMachine({ id: machineB, userId: "u2", name: "MB", tokenHash: "hb", online: true }));
+  (await store.createMachine({ id: machineB, userId: "u2", name: "MB", tokenHash: tokens.sha256(tokenB), online: true }));
   const res = (await gateway().loopLog(tokenB, loop.id));
   expect(res.status).toBe(404);
 });
@@ -1632,7 +1630,7 @@ test("loopLog refuses a token whose machine does not own the loop (cross-device)
 test("loopLog rejects an unknown loop id and an unregistered token", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true }));
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   // Loop that doesn't exist → 404 (existence never leaks).
   expect((await gateway().loopLog(token, "loop-nope")).status).toBe(404);
   // Missing loop id → 400.

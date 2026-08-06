@@ -1,12 +1,11 @@
 /**
  * MACHINE ENROLLMENT — the one place a device token becomes a `machines` row.
  *
- * Extracted from `MachineGateway.poll` so the rewrite line's own claim endpoint
- * enrolled exactly the way the production poll does — two enrollment policies
- * would be an audit hole, not a convenience. That second transport RETIRED at
- * convergence S5, so `poll` is once again the only caller; the module stays
- * because the gate rules below are worth having in one named place rather than
- * inlined in the poll hot path.
+ * Extracted from `MachineGateway.poll` so every device-token surface resolves
+ * the credential exactly the way production poll does — two authentication
+ * policies would be an audit hole, not a convenience. Poll remains the only
+ * surface that may enroll on first contact; owner/kernel/CLI callers use the
+ * already-enrolled resolver below.
  *
  * The gate rules it carries, verbatim from the poll path (audit H-01 / M2):
  *   - malformed tokens are filtered by SHAPE before any DB work (cheap filter,
@@ -40,17 +39,36 @@ export type EnrollResult =
   | { ok: true; machine: Machine; enrolled: boolean }
   | { ok: false; reason: "malformed" | "token-mismatch" | "not-connected" };
 
-/** Resolve (and on first contact create) the machine behind a device token. */
-export async function enrollMachine(deviceToken: string, info?: MachineInfo): Promise<EnrollResult> {
+/**
+ * Authenticate an ALREADY-enrolled machine by the whole device credential.
+ *
+ * Every device surface uses this resolver. A derived machine id is only an
+ * index; the full token hash is the authority. Older rows also retain the
+ * plaintext token for the owner-facing reconnect UI. If that exact token still
+ * matches but the redundant hash drifted, repair the hash in place and admit
+ * the credential. A row with no matching plaintext remains a hard mismatch.
+ */
+export async function authenticateEnrolledMachine(deviceToken: string): Promise<EnrollResult> {
   if (!isDeviceTokenShape(deviceToken)) return { ok: false, reason: "malformed" };
   const machineId = machineIdFromToken(deviceToken);
   const existing = await store.getMachine(machineId);
-  if (existing) {
-    if (existing.tokenHash && existing.tokenHash !== sha256(deviceToken)) {
-      return { ok: false, reason: "token-mismatch" };
-    }
-    return { ok: true, machine: existing, enrolled: false };
+  if (!existing) return { ok: false, reason: "not-connected" };
+  const expectedHash = sha256(deviceToken);
+  if (existing.tokenHash !== expectedHash) {
+    if (existing.token !== deviceToken) return { ok: false, reason: "token-mismatch" };
+    const repaired = await store.updateMachine(existing.id, { tokenHash: expectedHash });
+    if (!repaired) return { ok: false, reason: "not-connected" };
+    log.warn({ machineId }, "repaired stale device-token hash from matching enrolled credential");
+    return { ok: true, machine: repaired, enrolled: false };
   }
+  return { ok: true, machine: existing, enrolled: false };
+}
+
+/** Resolve (and on first contact create) the machine behind a device token. */
+export async function enrollMachine(deviceToken: string, info?: MachineInfo): Promise<EnrollResult> {
+  const enrolled = await authenticateEnrolledMachine(deviceToken);
+  if (enrolled.ok || enrolled.reason !== "not-connected") return enrolled;
+  const machineId = machineIdFromToken(deviceToken);
 
   const owner = await getDeviceOwner(machineId);
   if (loginGateEnabled() && owner == null) return { ok: false, reason: "not-connected" };

@@ -18,6 +18,7 @@ let tmp: string;
 let db: typeof import("../db/index.js");
 let store: typeof import("../db/store.js");
 let gatewayMod: typeof import("./index.js");
+let cliMod: typeof import("./cli.js");
 let tokens: typeof import("./tokens.js");
 
 beforeAll(async () => {
@@ -29,6 +30,7 @@ beforeAll(async () => {
   await db.runMigrations();
   store = await import("../db/store.js");
   gatewayMod = await import("./index.js");
+  cliMod = await import("./cli.js");
   tokens = await import("./tokens.js");
 });
 
@@ -66,6 +68,11 @@ function gateway() {
   );
 }
 
+function gateways() {
+  const core = gateway();
+  return { core, cli: new cliMod.CliGateway(core) };
+}
+
 // ---- gated mode: forged tokens are rejected (the audit's H-01 reproduction) ----
 
 test("gated mode: a forged bearer token cannot self-register via poll", async () => {
@@ -94,7 +101,7 @@ test("gated mode: a forged token cannot create a loop (no machine exists)", asyn
 
 test("gated mode: a live connect-key registers, polls, and creates a loop", async () => {
   enableGate();
-  const gw = gateway();
+  const { core: gw, cli } = gateways();
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
   // The owner ran the web/AI-First connect flow, binding this token to their team.
@@ -115,6 +122,33 @@ test("gated mode: a live connect-key registers, polls, and creates a loop", asyn
 
   const poll2 = await gw.poll(deviceToken);
   expect(poll2.status).toBe(200);
+  // The unified CLI and the daemon poll resolve the exact same enrolled
+  // credential; neither is allowed to stop at a derived machine-id match.
+  expect((await cli.cli(deviceToken, ["loops"])).status).toBe(200);
+});
+
+test("gated mode: poll and cli agree when a device credential is foreign", async () => {
+  enableGate();
+  const { core, cli } = gateways();
+  const enrolled = tokens.mintDeviceToken();
+  await tokens.rememberConnectKey(enrolled, { userId: "u1", teamId: store.teamIdForUser("u1") });
+  expect((await core.poll(enrolled)).status).toBe(200);
+
+  const foreign = tokens.mintDeviceToken();
+  expect((await core.poll(foreign)).status).toBe(401);
+  expect((await cli.cli(foreign, ["loops"])).status).toBe(401);
+});
+
+test("an exact stored device token repairs a stale redundant hash without widening identity", async () => {
+  enableGate();
+  const { core, cli } = gateways();
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: "stale-hash", token, online: false });
+
+  expect((await core.poll(token)).status).toBe(200);
+  expect((await cli.cli(token, ["loops"])).status).toBe(200);
+  expect((await store.getMachine(machineId))?.tokenHash).toBe(tokens.sha256(token));
 });
 
 test("gated mode: an EXPIRED connect-key does not enroll", async () => {
@@ -129,6 +163,7 @@ test("gated mode: an EXPIRED connect-key does not enroll", async () => {
   const res = await gw.poll(deviceToken, { host: "late" });
   expect(res.status).toBe(401);
   expect(await store.getMachine(tokens.machineIdFromToken(deviceToken))).toBeUndefined();
+  expect((await new cliMod.CliGateway(gw).cli(deviceToken, ["loops"])).status).toBe(401);
 });
 
 // ---- dk_ shape validation (both modes) ----
@@ -157,7 +192,7 @@ test("open mode: an unknown dk_ token still self-registers into the shared works
 // ---- token-hash binding: a machine-id collision can't impersonate ----
 
 test("a token whose id collides with a registered machine but whose hash differs is rejected", async () => {
-  const gw = gateway();
+  const { core: gw, cli } = gateways();
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   // A pre-existing machine on that id, but registered under a DIFFERENT token hash.
@@ -165,4 +200,11 @@ test("a token whose id collides with a registered machine but whose hash differs
   const res = await gw.poll(token, { host: "x" });
   expect(res.status).toBe(401);
   expect((res.body as { error: string }).error).toMatch(/mismatch/);
+  expect((await gw.pollWait(token, { host: "x" }, [], { wait: true, waitMs: 1 })).status).toBe(401);
+  expect((await cli.cli(token, ["loops"])).status).toBe(401);
+  // `home` keeps its non-error UX but must not disclose the collided row.
+  const home = await cli.cli(token, ["home"]);
+  expect(home.status).toBe(200);
+  expect((home.body as { text: string }).text).toContain("not connected");
+  expect((home.body as { text: string }).text).not.toContain("name: M");
 });

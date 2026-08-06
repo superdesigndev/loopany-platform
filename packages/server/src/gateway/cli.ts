@@ -22,7 +22,8 @@ import * as store from "../db/store.js";
 import type { ControlAction, Loop, NotifyPolicy, RunRole, RunStatus, StateField } from "../db/schema.js";
 import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
 import { selfCronFloorMinutes, selfRescheduleFloorMinutes } from "../env.js";
-import { machineIdFromToken, resolveLease, type RunLease } from "./tokens.js";
+import { resolveLease, type RunLease } from "./tokens.js";
+import { authenticateEnrolledMachine } from "./enroll.js";
 import {
   ABSENT,
   codeForStatus,
@@ -108,14 +109,20 @@ export class CliGateway {
 
   /** DEVICE-credential branch of the unified CLI. */
   private async deviceCli(deviceToken: string, argv: string[]): Promise<HttpResult> {
-    const machineId = machineIdFromToken(deviceToken);
     const verb = argv[0] ?? "";
+    const resolved = await authenticateEnrolledMachine(deviceToken);
     // The content-first home (P8): bare `loopany` posts `["home"]`. It renders a
     // DEFINITIVE state for an unregistered machine ("not connected — run `loopany
     // up`") rather than a 401, so the ambient dashboard is never an error/empty —
     // handled BEFORE the unknown-machine guard the other verbs sit behind.
-    if (verb === "home") return { status: 200, body: { ok: true, text: await this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (verb === "home") {
+      // Preserve the definitive not-connected home without letting an invalid
+      // credential address a real row through the derived-id index alone.
+      const machineId = resolved.ok ? resolved.machine.id : "";
+      return { status: 200, body: { ok: true, text: await this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
+    }
+    if (!resolved.ok) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const machineId = resolved.machine.id;
     const flags = parseFlags(argv.slice(1));
     const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
 

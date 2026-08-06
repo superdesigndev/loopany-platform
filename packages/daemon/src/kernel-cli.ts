@@ -93,24 +93,14 @@ export async function runKernelCli(argv: string[], deps: KernelCliDeps = {}): Pr
   // set on every run, is the authority the server already checks, and is
   // narrower than a machine-wide credential. The device token stays the
   // fallback so an old server (device-only) keeps working.
-  const token = deps.token ?? env.LOOPANY_RUN_TOKEN ?? env.LOOPANY_TOKEN ?? readStored(DEVICE_FILE);
+  const token = deps.token ?? (env.LOOPANY_RUN_ID ? env.LOOPANY_RUN_TOKEN : undefined) ?? env.LOOPANY_TOKEN ?? readStored(DEVICE_FILE);
 
   const headers: Record<string, string> = { ...built.headers };
-  // THE CREDENTIAL TRAVELS WITH THE RUN CONTEXT, never on its own.
-  //
-  // What makes a caller an agent is the presence of run context (CLI spec §2.2),
-  // and the daemon sets the credential and `LOOPANY_RUN_ID` together. Outside a
-  // run the person at the keyboard is the caller, and the device token is merely
-  // a readable file on their disk — attaching it names the wrong actor. It also
-  // BREAKS the DUAL reads: §2.6 answers a device credential with no run context
-  // `NO_RUN_CONTEXT`, so `loop show` / `loop list` / `task list` refused exactly
-  // the owner they exist to serve, on every machine the daemon is registered on
-  // (the same shape as the unit-4 review's B1, one layer out).
-  //
-  // HUMAN_COMMANDS stays as belt and braces for the other direction: a human
-  // verb typed INSIDE a run still carries the run header, and the server refuses
-  // it by run context before the credential is ever read.
-  if (token && env.LOOPANY_RUN_ID && !HUMAN_COMMANDS.has(command)) headers.Authorization = `Bearer ${token}`;
+  // The enrolled device is the owner's terminal authority, so every out-of-run
+  // kernel request carries it. Inside a delivery `token` is the narrower run
+  // lease; the run header remains the positive agent classifier and keeps the
+  // human-only refusals intact.
+  if (token) headers.Authorization = `Bearer ${token}`;
   // The run context is INVISIBLE: read from the environment the daemon set,
   // attached as a header, never surfaced as an argument the agent could edit.
   if (env.LOOPANY_RUN_ID) headers["X-Loopany-Run"] = env.LOOPANY_RUN_ID;
@@ -148,20 +138,6 @@ const COMMANDS = new Set([
   "mirror attach", "mirror detach", "mirror list", "mirror kinds", "mirror show", "mirror update",
   "inbox", "answer",
 ]);
-/**
- * The HUMAN verbs (CLI spec §7 plus unit 6's loop CRUD): a signed-in person on
- * this machine, so the machine's credential is deliberately NOT attached — a
- * device token on a human surface names the wrong actor.
- *
- * `loop create` and the three lifecycle verbs are here because both are the
- * owner's: creating a loop mints a standing cadence and a new actor, and pausing
- * or retiring one is the operational decision the owner keeps. A run proposes
- * either through `task create --needs-human`. Note the run header still rides
- * along when one is set, so a human who typed this inside a run is refused too —
- * correctly, since the actor stamped on the event would be wrong.
- */
-const HUMAN_COMMANDS = new Set(["inbox", "answer", "task tell", "loop create", "loop pause", "loop resume", "loop retire", "loop run-now"]);
-
 function commandOf(argv: string[]): string {
   const [noun, verb] = argv;
   if (noun === "inbox" || noun === "answer") return noun;

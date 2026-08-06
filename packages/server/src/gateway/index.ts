@@ -27,9 +27,8 @@ import { autopauseMessage, completionMessage, deferredMessage, dispatchNotificat
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { machinePresence } from "../lib/machinePresence.js";
-import { enrollMachine, stampMachineContact, type EnrollResult } from "./enroll.js";
+import { authenticateEnrolledMachine, enrollMachine, stampMachineContact, type EnrollResult } from "./enroll.js";
 import {
-  machineIdFromToken,
   readClaimIntent,
   registerRunLease,
   resolveLease,
@@ -565,7 +564,13 @@ export class MachineGateway {
     opts?: { wait?: boolean; waitMs?: number },
   ): Promise<HttpResult> {
     if (!opts?.wait) return this.poll(deviceToken, info, progress);
-    const machineId = machineIdFromToken(deviceToken);
+    // Authenticate before keying the waiter map. The derived id is only an
+    // index: a hash-mismatched credential must not replace or wake the real
+    // machine's outstanding long poll. `poll()` repeats this cheap check while
+    // applying enrollment/contact/progress side effects.
+    const enrolled = await enrollMachine(deviceToken, info);
+    if (!enrolled.ok) return { status: 401, body: { error: ENROLL_REFUSAL[enrolled.reason] } };
+    const machineId = enrolled.machine.id;
     const waitMs = Math.min(Math.max(opts.waitMs ?? LONG_POLL_WAIT_MS, 0), LONG_POLL_WAIT_MS);
     const waiter = this.armPollWaiter(machineId, waitMs);
     try {
@@ -594,8 +599,8 @@ export class MachineGateway {
    * the poll TTL, not just the stored flag.
    */
   async status(deviceToken: string): Promise<HttpResult> {
-    const machineId = machineIdFromToken(deviceToken);
-    const machine = await store.getMachine(machineId);
+    const resolved = await authenticateEnrolledMachine(deviceToken);
+    const machine = resolved.ok ? resolved.machine : undefined;
     // Unknown token ⇒ not connected yet (the daemon self-registers on first poll),
     // so report offline rather than erroring — keeps the skill's check uniform.
     if (!machine) return { status: 200, body: { online: false, name: null, lastSeen: null } };
@@ -652,9 +657,10 @@ export class MachineGateway {
       idempotencyKey?: unknown;
     },
   ): Promise<HttpResult> {
-    const machineId = machineIdFromToken(deviceToken);
-    const machine = await store.getMachine(machineId);
+    const resolved = await authenticateEnrolledMachine(deviceToken);
+    const machine = resolved.ok ? resolved.machine : undefined;
     if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const machineId = machine.id;
 
     const cron = str(body.cron);
     if (!cron) return { status: 400, body: { error: "cron required (5-field, e.g. \"0 8 * * *\")" } };
@@ -870,8 +876,9 @@ export class MachineGateway {
    *  `--json` (OQ4) is the escape hatch: the full structured records as real JSON
    *  (first byte `[`), mirroring `show --json` — the daemon prints `text` either way. */
   async listLoops(deviceToken: string, fieldsFlag?: string, json?: boolean): Promise<HttpResult> {
-    const machineId = machineIdFromToken(deviceToken);
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const resolved = await authenticateEnrolledMachine(deviceToken);
+    if (!resolved.ok) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const machineId = resolved.machine.id;
 
     // --fields extends the default columns with any of the optional set; an unknown
     // field fails loud (exit 1) listing what IS available (matches gh-axi's shape).
@@ -943,8 +950,9 @@ export class MachineGateway {
    * actually went before reshaping the loop.
    */
   async loopLog(deviceToken: string, loopId: unknown, limit?: unknown): Promise<HttpResult> {
-    const machineId = machineIdFromToken(deviceToken);
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const resolved = await authenticateEnrolledMachine(deviceToken);
+    if (!resolved.ok) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const machineId = resolved.machine.id;
     return this.renderLoopLog(machineId, loopId, limit);
   }
 
@@ -1032,8 +1040,9 @@ export class MachineGateway {
      *  preview + rejections, persist NOTHING. */
     dryRun = false,
   ): Promise<HttpResult> {
-    const machineId = machineIdFromToken(deviceToken);
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const resolved = await authenticateEnrolledMachine(deviceToken);
+    if (!resolved.ok) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const machineId = resolved.machine.id;
     if (typeof id !== "string" || !id) return { status: 400, body: { error: "loop id required" } };
     const loop = await store.getLoop(id);
     if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };

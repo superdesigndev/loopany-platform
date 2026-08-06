@@ -47,7 +47,7 @@ export function InboxPane({ onOpenTask, onOpenLoop }: { onOpenTask: (id: string)
   if (error && !data) {
     return (
       <BigState title="The inbox is not answering">
-        {error.message} The view endpoints are human-only — a signed-in session is what they gate on.
+        {error.message} The view endpoints are owner-only — use a signed-in session or an enrolled device credential.
       </BigState>
     )
   }

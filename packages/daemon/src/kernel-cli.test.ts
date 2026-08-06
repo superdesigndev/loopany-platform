@@ -67,28 +67,20 @@ describe("routing and the invisible run context", () => {
     // No lease in the env (an older daemon's delivery) ⇒ the device token still
     // authenticates, so this is not a flag day.
     expect(await send({ LOOPANY_RUN_ID: "run-3f8a20", LOOPANY_TOKEN: "dk_device" })).toBe("Bearer dk_device");
-    // …and outside a run neither credential is attached at all.
-    expect(await send({ LOOPANY_RUN_TOKEN: "rk_lease", LOOPANY_TOKEN: "dk_device" })).toBeNull();
+    // Outside a run, the enrolled device is the owner's terminal authority.
+    expect(await send({ LOOPANY_RUN_TOKEN: "rk_lease", LOOPANY_TOKEN: "dk_device" })).toBe("Bearer dk_device");
   });
 
-  it("never sends the machine's credential on the two HUMAN verbs", async () => {
-    // The ordinary human runs this CLI on the same machine the daemon is
-    // registered on, so the device token is always on disk. Sending it names the
-    // wrong actor on a surface that belongs to a person.
+  it("sends the enrolled device credential on the formerly human-gated verbs", async () => {
     for (const argv of [["inbox"], ["answer", "task-7f3a91", "yes"]]) {
       const { request } = await run(argv, { items: [], counts: { total: 0 }, task: { id: "task-7f3a91", kind: "task" }, run: null });
-      expect(request!.headers.get("authorization"), argv[0]).toBeNull();
+      expect(request!.headers.get("authorization"), argv[0]).toBe("Bearer dk_test");
     }
-    // …and still sends it on every agent verb.
     const { request } = await run(["task", "list"], { tasks: [], total: 0 });
     expect(request!.headers.get("authorization")).toBe("Bearer dk_test");
   });
 
-  it("never sends the machine's credential OUTSIDE a run, on any verb", async () => {
-    // The credential travels with the run context. Outside a run the caller is
-    // the person at the keyboard, and a device token there is answered
-    // `NO_RUN_CONTEXT` on every DUAL read (§2.6) — which refused `loop show`,
-    // `loop list` and `task list` for exactly the owner they serve.
+  it("sends the enrolled device credential OUTSIDE a run on every network verb", async () => {
     for (const argv of [["task", "list"], ["loop", "list"], ["loop", "show", "loop-8e3311"], ["doc", "show", "doc-1"]]) {
       let request: Request | undefined;
       await runKernelCli(argv, {
@@ -101,7 +93,7 @@ describe("routing and the invisible run context", () => {
         expect(request, argv.join(" ")).toBeUndefined();
         continue;
       }
-      expect(request!.headers.get("authorization"), argv.join(" ")).toBeNull();
+      expect(request!.headers.get("authorization"), argv.join(" ")).toBe("Bearer dk_test");
       expect(request!.headers.get("x-loopany-run"), argv.join(" ")).toBeNull();
     }
   });
@@ -900,9 +892,9 @@ describe("task tell — the human speaking first", () => {
     expect(stdout).toContain("acts on the INTENT against external reality first");
   });
 
-  it("is a HUMAN verb, so the machine credential never rides along", async () => {
+  it("carries the enrolled owner's device credential", async () => {
     const { request } = await run(["task", "tell", "task-7f3a91", "Ship it."], RESPONSE);
-    expect(request!.headers.get("authorization")).toBeNull();
+    expect(request!.headers.get("authorization")).toBe("Bearer dk_test");
   });
 
   it("says the directive is not lost when the loop already had a run queued", async () => {
