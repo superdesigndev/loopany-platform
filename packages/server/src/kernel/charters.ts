@@ -290,7 +290,12 @@ async function appendCarryConflictIn(tx: store.KernelExec, input: CharterIdentit
   });
 }
 
-/** Apply an end-of-run file carry. Conflicts are visible refusals, not run failures. */
+/**
+ * Apply an end-of-run file carry. Conflicts are visible refusals, not run failures.
+ * A legacy daemon has no delivered charter version, so its previously stored task
+ * file body is the compare-and-swap base: apply only while the canonical charter
+ * still equals that body; otherwise append a conflict instead of losing divergence.
+ */
 export async function applyCharterCarry(input: CharterCarryInput): Promise<CharterResult<CharterCarryResult>> {
   const candidateInvalid = input.candidate ? invalidCharterBody(input.candidate.content) : undefined;
   if (candidateInvalid) return { ok: true, value: { charter: null, changed: false, seeded: false, warning: candidateInvalid.message } };
@@ -328,6 +333,38 @@ export async function applyCharterCarry(input: CharterCarryInput): Promise<Chart
     const bad = identityError(before, input);
     if (bad) return { ok: false, error: bad };
     const current = await snapshot(tx, before, input.loopId);
+    if (!input.candidate && input.legacyContent != null && current.body !== input.legacyContent) {
+      const legacyInvalid = partialLegacyContent(input.legacyContent)
+        ? "legacy task-file carry is truncated"
+        : invalidCharterBody(input.legacyContent)?.message;
+      const stored = input.storedLegacyContent != null && !partialLegacyContent(input.storedLegacyContent)
+        ? input.storedLegacyContent
+        : undefined;
+      if (legacyInvalid || stored === undefined || current.body !== stored) {
+        await appendCarryConflictIn(tx, { ...input, expectedVersion: null, currentVersion: current.version });
+        return {
+          ok: true,
+          value: {
+            charter: current,
+            changed: false,
+            seeded: false,
+            warning: legacyInvalid
+              ? `charter carry refused: ${legacyInvalid}`
+              : `charter carry refused: current version ${current.version} changed since the legacy task file was last delivered`,
+          },
+        };
+      }
+      const updated = await applyUpdateIn(tx, {
+        objectId: id,
+        actor: { entrance: "agent", actorId: input.runId },
+        now: input.now,
+        fields: { body: input.legacyContent },
+        eventKind: "charter-updated",
+        eventPayload: { loopId: input.loopId, source: "legacy-report-fallback" },
+      });
+      if (!updated.ok) return { ok: false, error: refusal(updated.code as never, updated.message, updated.issues, updated.hint) };
+      return { ok: true, value: { charter: await snapshot(tx, updated.object, input.loopId), changed: updated.changed, seeded: false } };
+    }
     if (!input.candidate || current.body === input.candidate.content) {
       return { ok: true, value: { charter: current, changed: false, seeded: false } };
     }

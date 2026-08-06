@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { isOutdated } from "./semver.js";
+import { isOutdated, isVersionAtLeast } from "./semver.js";
 
 describe("isOutdated", () => {
   test("older across each version position → true", () => {
@@ -33,5 +33,16 @@ describe("isOutdated", () => {
     // Same numeric core: a pre-release is behind its release.
     expect(isOutdated("0.9.0-rc.1", "0.9.0")).toBe(true);
     expect(isOutdated("0.9.0", "0.9.0-rc.1")).toBe(false);
+  });
+});
+
+describe("isVersionAtLeast", () => {
+  test("gates protocol capabilities and fails closed on unknown versions", () => {
+    expect(isVersionAtLeast("0.16.9", "0.17.0")).toBe(false);
+    expect(isVersionAtLeast("0.17.0-rc.1", "0.17.0")).toBe(false);
+    expect(isVersionAtLeast("0.17.0", "0.17.0")).toBe(true);
+    expect(isVersionAtLeast("0.18.0", "0.17.0")).toBe(true);
+    expect(isVersionAtLeast(undefined, "0.17.0")).toBe(false);
+    expect(isVersionAtLeast("development", "0.17.0")).toBe(false);
   });
 });

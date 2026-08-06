@@ -216,6 +216,14 @@ test("exec task carries the CORE: identity, fallback core, report/finish, skill 
   expect(t).not.toMatch(/\{\{\w+\}\}/);
 });
 
+test("legacy exec task points at the task file and never references the charter environment", () => {
+  const t = buildExecTask(loop(), null, false);
+  expect(t).toContain("**Read the task file first** (/work/loopany/test/README.md)");
+  expect(t).not.toContain("$LOOPANY_CHARTER_FILE");
+  expect(t).not.toMatch(/daemon-home materialization/i);
+  expect(t).not.toMatch(/\{\{\w+\}\}/);
+});
+
 // The product signpost: every converged loop learns the object model from the
 // PLATFORM, not from its own charter. exec-core stays lean — it names the three
 // object verbs and points at the skill for the depth (references/run.md §4).

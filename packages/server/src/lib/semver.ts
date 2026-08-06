@@ -37,3 +37,19 @@ export function isOutdated(current: string | null | undefined, latest: string | 
   // Equal numeric core: a pre-release current is behind a release latest.
   return isPre(current) && !isPre(latest);
 }
+
+/** `true` only when both versions parse and `current` is at least `minimum`.
+ * Unknown versions fail closed for wire-protocol capability gates. */
+export function isVersionAtLeast(current: string | null | undefined, minimum: string | null | undefined): boolean {
+  if (!current || !minimum) return false;
+  const a = core(current);
+  const b = core(minimum);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) {
+    const ai = a[i]!;
+    const bi = b[i]!;
+    if (ai > bi) return true;
+    if (ai < bi) return false;
+  }
+  return !isPre(current) || isPre(minimum);
+}

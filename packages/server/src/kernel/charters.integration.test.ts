@@ -132,6 +132,37 @@ describe("attached charter identity and compare-and-swap", () => {
     expect(seeded).toMatchObject({ seeded: true, changed: true, charter: { body: "# Complete\n" } });
   });
 
+  it("applies a legacy carry against its last delivered body, no-ops unchanged bytes, and exposes conflicts", async () => {
+    const made = value(await charters.ensureCharter({ teamId: TEAM, loopId: LOOP, body: "seed", actor: owner, now: T0 })).charter;
+    const carried = value(await charters.applyCharterCarry({
+      teamId: TEAM, loopId: LOOP, runId: "run-legacy-clean", now: T1,
+      legacyContent: "legacy edit", storedLegacyContent: "seed",
+    }));
+    expect(carried).toMatchObject({ changed: true, seeded: false, charter: { body: "legacy edit" } });
+
+    const beforeNoopEvents = (await database.db.select().from(kernelSchema.events)).length;
+    const unchanged = value(await charters.applyCharterCarry({
+      teamId: TEAM, loopId: LOOP, runId: "run-legacy-unchanged", now: T1,
+      legacyContent: "legacy edit", storedLegacyContent: "legacy edit",
+    }));
+    expect(unchanged).toMatchObject({ changed: false, seeded: false, charter: { body: "legacy edit" } });
+    expect(await database.db.select().from(kernelSchema.events)).toHaveLength(beforeNoopEvents);
+
+    const ownerEdit = value(await charters.replaceCharter({
+      teamId: TEAM, loopId: LOOP, body: "owner edit", expectedVersion: carried.charter!.version,
+      actor: owner, now: T2, source: "owner-edit",
+    })).charter;
+    const conflicted = value(await charters.applyCharterCarry({
+      teamId: TEAM, loopId: LOOP, runId: "run-legacy-stale", now: T2,
+      legacyContent: "stale legacy edit", storedLegacyContent: "legacy edit",
+    }));
+    expect(conflicted).toMatchObject({ changed: false, charter: { body: "owner edit", version: ownerEdit.version } });
+    expect(conflicted.warning).toMatch(/refused/);
+    const conflict = (await database.db.select().from(kernelSchema.events)).find((event) => event.kind === "charter-update-conflict");
+    expect(conflict).toMatchObject({ objectId: LOOP, actorId: "run-legacy-stale", payload: { expectedVersion: null, currentVersion: ownerEdit.version } });
+    expect(made.body).toBe("seed");
+  });
+
   it("refuses reserved product keys and detects a derived-id collision", async () => {
     const product = await kernel.createObject({ teamId: TEAM, kind: "doc", key: ids.charterKey(LOOP), body: "squat", actor: owner, now: T0 });
     expect(product.ok ? "OK" : product.code).toBe("RESERVED_KEY");

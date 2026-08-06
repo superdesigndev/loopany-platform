@@ -170,7 +170,7 @@ describe("S2 prod-claimable trigger rows", () => {
     const row = (await database.db.select().from(schema.runs))[0]!;
     expect(row).toMatchObject({ machineId, phase: "pending", triggerEventId: result.event });
 
-    const built = await delivery.buildDelivery(loop, row.id, "rk_test", []);
+    const built = await delivery.buildDelivery(loop, row.id, "rk_test", [], "0.17.0");
     expect(built.task).toContain(`directive: ${words}`);
     expect(built.task).toContain("KEEP <this> byte-for-byte");
     expect(built.task).toContain(`Task: ${watched.id} — Verify the prod path`);
@@ -183,7 +183,7 @@ describe("S2 prod-claimable trigger rows", () => {
     const charters = await import("./charters.js");
     const attached = ok(await charters.ensureCharter({ teamId: TEAM, loopId: loop.id, body: "# Canonical\n", actor: human.actor, now: NOW.toISOString() })).charter;
     const run = await store.addRun({ loopId: loop.id, userId: USER, machineId: loop.machineId, role: "exec", phase: "pending", ts: NOW.toISOString() });
-    const built = await delivery.buildDelivery(loop, run.id, "rk_test", []);
+    const built = await delivery.buildDelivery(loop, run.id, "rk_test", [], "0.17.0");
     expect(built.charter).toEqual({
       docId: attached.id,
       key: attached.key,
@@ -192,6 +192,18 @@ describe("S2 prod-claimable trigger rows", () => {
       body: "# Canonical\n",
       version: attached.version,
     });
+  });
+
+  it("selects the exec brief instruction from the claiming daemon version", async () => {
+    const { loop } = await fixtures();
+    const run = await store.addRun({ loopId: loop.id, userId: USER, machineId: loop.machineId, role: "exec", phase: "pending", ts: NOW.toISOString() });
+    const legacy = await delivery.buildDelivery(loop, run.id, "rk_legacy", [], "0.16.9");
+    expect(legacy.task).toContain(`**Read the task file first** (${loop.taskFile})`);
+    expect(legacy.task).not.toContain("$LOOPANY_CHARTER_FILE");
+
+    const current = await delivery.buildDelivery(loop, run.id, "rk_current", [], "0.17.0");
+    expect(current.task).toContain("**Read the charter first**");
+    expect(current.task).toContain("$LOOPANY_CHARTER_FILE");
   });
 
   it("joins a second directive to the open prod run instead of stacking", async () => {

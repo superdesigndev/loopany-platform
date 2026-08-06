@@ -8,6 +8,7 @@ import * as store from "../db/store.js";
 import * as kernelStore from "../db/kernelStore.js";
 import { mirrorsFor } from "../kernel/mirrorApi.js";
 import { readCharter } from "../kernel/charters.js";
+import { isVersionAtLeast } from "../lib/semver.js";
 import {
   buildEditPrompt,
   buildEditTask,
@@ -52,7 +53,15 @@ export interface Delivery {
   task: string;
 }
 
-export async function buildDelivery(loop: Loop, runId: string, runToken: string, roots: string[]): Promise<Delivery> {
+const CHARTER_DAEMON_VERSION = "0.17.0";
+
+export async function buildDelivery(
+  loop: Loop,
+  runId: string,
+  runToken: string,
+  roots: string[],
+  daemonVersion: string | null | undefined,
+): Promise<Delivery> {
   const run = await store.getRun(runId);
   const raw = run?.role;
   const role: Delivery["role"] = raw === "evolve" ? "evolve" : raw === "edit" ? "edit" : "exec";
@@ -71,7 +80,11 @@ export async function buildDelivery(loop: Loop, runId: string, runToken: string,
       break;
     default:
       systemPrompt = buildLoopSystemPrompt(loop);
-      task = buildExecTask(loop, run ? await scopedTrigger(loop, run) : null);
+      task = buildExecTask(
+        loop,
+        run ? await scopedTrigger(loop, run) : null,
+        isVersionAtLeast(daemonVersion, CHARTER_DAEMON_VERSION),
+      );
   }
   const attached = loop.teamId ? await readCharter(loop.teamId, loop.id) : null;
   if (attached && !attached.ok) throw new Error(`cannot deliver charter for ${loop.id}: ${attached.error.code} ${attached.error.message}`);

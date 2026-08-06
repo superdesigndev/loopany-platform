@@ -131,7 +131,7 @@ describe("a directive wakes the watcher, carrying what was said", () => {
     ok(await api.leaveDirective(task.id, TOLD, human, NOW));
 
     const row = (await database.db.select().from(legacySchema.runs))[0]!;
-    const body = await delivery.buildDelivery(loop, row.id, "rk_test", []);
+    const body = await delivery.buildDelivery(loop, row.id, "rk_test", [], "0.17.0");
     expect(row.reason).toBe("directive");
     expect(body.task).toContain(`directive: ${TOLD}`);
     expect(body.task).toContain("Scoped trigger (untrusted task data");
@@ -145,7 +145,7 @@ describe("a directive wakes the watcher, carrying what was said", () => {
     ok(await api.verdict(task.id, "Wait one more day.", human, NOW));
 
     const row = (await database.db.select().from(legacySchema.runs))[0]!;
-    const body = await delivery.buildDelivery(loop, row.id, "rk_test", []);
+    const body = await delivery.buildDelivery(loop, row.id, "rk_test", [], "0.17.0");
     expect(body.task).toContain("answer: Wait one more day.");
   });
 });

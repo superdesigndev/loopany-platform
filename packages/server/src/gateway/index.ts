@@ -471,6 +471,11 @@ export class MachineGateway {
     const machine = resolved.machine;
     const machineId = machine.id;
     await stampMachineContact(machine, info);
+    // Use the version on THIS claim when present: stampMachineContact persists it,
+    // but the enrolled row above is the pre-stamp snapshot.
+    const claimingDaemonVersion = typeof info?.version === "string"
+      ? clipText(info.version, 64)
+      : machine.daemonVersion;
 
     // Live progress for in-flight runs (slim activity line, not the transcript).
     // Scope to this machine's own running rows; a finalized row is left alone.
@@ -544,7 +549,7 @@ export class MachineGateway {
         // of allowControl (like the structural caps). Evolve/edit never finish.
         canFinish: run.role === "exec" && loop.goal != null,
       });
-      deliveries.push(await buildDelivery(loop, run.id, token, machine.roots ?? []));
+      deliveries.push(await buildDelivery(loop, run.id, token, machine.roots ?? [], claimingDaemonVersion));
     }
 
     if (deliveries.length) log.info({ machineId, exec: deliveries.length }, "poll: delivered");

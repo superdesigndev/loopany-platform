@@ -50,11 +50,13 @@ export interface ScopedTrigger {
 // so the `*.md` source files don't exist under .output and poll() threw ENOENT.
 // `?raw` resolves identically from skill/run/ as it did from scheduler/prompts/.
 import execCore from "../skill/run/exec-core.md?raw";
+import execCoreLegacy from "../skill/run/exec-core-legacy.md?raw";
 import evolve from "../skill/references/evolve.md?raw";
 import edit from "../skill/run/edit.md?raw";
 
 const PROMPTS: Record<string, string> = {
   "exec-core": execCore,
+  "exec-core-legacy": execCoreLegacy,
   evolve,
   edit,
 };
@@ -108,15 +110,24 @@ export function buildLoopSystemPrompt(_loop: Loop): string {
  * prompt-injected so it wins over the file per the trust hierarchy; an open loop
  * leaves that line blank. `{{stateLine}}` carries the schema-derived report grammar.
  */
-export function buildExecTask(loop: Loop, trigger?: ScopedTrigger | null): string {
+export function buildExecTask(loop: Loop, trigger?: ScopedTrigger | null, charterCapable = true): string {
   const name = loop.name || loop.id;
+  const taskFile = loop.taskFile ?? "(none — this loop has no task file yet; create one to hold its Spec)";
   const workdir = loop.workdir ?? "the daemon-owned scratch workdir";
   const goalLine = loop.goal ? `Goal (finish line): ${loop.goal}` : "";
   const stateLine = stateReportLine(loop);
   const triggerBlock = trigger ? renderScopedTrigger(trigger) : "";
   // The banner names the SERVING HOST on a developer stack and is EMPTY on
   // production, so production prompt bytes are unchanged (lib/envTarget.ts).
-  return fillVars(loadPrompt("exec-core"), { name, workdir, goalLine, stateLine, triggerBlock, viaHost: viaHostSuffix() });
+  return fillVars(loadPrompt(charterCapable ? "exec-core" : "exec-core-legacy"), {
+    name,
+    taskFile,
+    workdir,
+    goalLine,
+    stateLine,
+    triggerBlock,
+    viaHost: viaHostSuffix(),
+  });
 }
 
 /** A trigger is DATA, not a second prompt. The task payload is serialized whole
