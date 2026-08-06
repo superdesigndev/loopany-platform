@@ -28,13 +28,13 @@ import type {
   TranscriptResult,
   TranscriptStep,
 } from '../types'
-import { coerceCodingAgent } from '../types'
 import type { FirstRunState } from '../lib/firstRun.js'
 import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
 import { watchedTasksWarningFor } from '../kernel/watchedTasks.js'
+import { applyOwnerLoopPatch } from './loopMutations.js'
 import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
 import {
@@ -325,43 +325,8 @@ export const patchJob = createServerFn({ method: 'POST' })
     const { scheduler } = await backend()
     const owned = await ownedLoop(data.id)
     if (!owned) return { error: 'not found' }
-    const { enforce } = owned
-    const p = data.patch
-    // A chosen channel must belong to the LOOP's team — not the requester's active
-    // team (an admin patching from another team's view, or the All-teams aggregate,
-    // would otherwise reject the loop's own valid channels / accept foreign ones).
-    if (p.channelId && enforce && (await store.getChannel(p.channelId))?.teamId !== owned.loop.teamId) {
-      return { error: 'channel not found' }
-    }
-    // Enforce the SAME agent enum as the gateway/CLI edit surface via the shared
-    // validator: coerce once (null when absent or unrecognized) and only write a
-    // known value, so the web surface can't persist an arbitrary agent string.
-    const agent = coerceCodingAgent(p.agent)
-    const loop = await store.updateLoop(data.id, {
-      ...(p.name !== undefined ? { name: p.name.trim() || null } : {}),
-      ...(p.cron !== undefined ? { cron: p.cron } : {}),
-      ...(p.notify !== undefined ? { notify: p.notify as 'auto' | 'always' | 'never' } : {}),
-      ...(p.channelId !== undefined ? { channelId: p.channelId || null } : {}),
-      ...(p.enabled !== undefined ? { enabled: !!p.enabled } : {}),
-      ...(agent ? { agent } : {}),
-      // Goal set/clear (store.updateLoop enforces the completion-stamp lifecycle:
-      // clearing goal or reopening via enabled:true drops the terminal stamps).
-      ...(p.goal !== undefined ? { goal: p.goal?.trim() || null } : {}),
-      ...(p.taskFile !== undefined ? { taskFile: p.taskFile.trim() || null } : {}),
-      ...(p.workflow !== undefined ? { workflow: p.workflow.trim() || null } : {}),
-      ...(p.stateSchema !== undefined ? { stateSchema: store.coerceStateSchema(p.stateSchema) ?? null } : {}),
-      ...(p.ui !== undefined ? { ui: store.coerceUi(p.ui) ?? null } : {}),
-      ...(p.exec?.workdir !== undefined ? { workdir: p.exec.workdir.trim() || null } : {}),
-      ...(p.exec?.model !== undefined ? { model: p.exec.model.trim() || null } : {}),
-      ...(p.exec?.allowControl !== undefined ? { allowControl: !!p.exec.allowControl } : {}),
-    })
-    if (!loop) return { error: 'not found' }
-    scheduler.addLoop(loop)
-    // Pausing is a watcher standing down (design §5): say what it left behind,
-    // never refuse it. Only on the transition — re-asserting a pause is silent.
-    const paused = p.enabled === false && owned.loop.enabled
-    const warning = paused ? await watchedTasksWarningFor(loop.teamId, loop.id, 'pause') : undefined
-    return { ok: true, ...(warning ? { warning } : {}) }
+    const result = await applyOwnerLoopPatch(owned.loop, data.patch, scheduler)
+    return result.error ? { error: result.error } : { ok: true, ...(result.warning ? { warning: result.warning } : {}) }
   })
 
 export const deleteJob = createServerFn({ method: 'POST' })

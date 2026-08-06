@@ -441,6 +441,9 @@
   .preview-actions { margin: -18px 0 34px; }
   .preview-actions-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
   .preview-actions-row .ws-note-line { flex: 1 1 24ch; margin: 0; }
+  .ws-loop-actions .preview-actions-row { align-items: flex-start; }
+  .ws-action-block { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .ws-action-block .ws-queued, .ws-action-block .inbox-floor, .ws-action-block .ws-refusal { max-width: 52ch; margin: 0; }
   .ws-queued { margin: 12px 0 0; padding: 9px 12px; border: 1px solid #dbe0d4; border-radius: 8px; background: #f4f6f0; color: #4d4a45; font-size: .8125rem; line-height: 1.55; }
   .preview-actions .ws-refusal { margin: 12px 0 0; }
   /* Retire's confirm. INLINE rather than a scrim dialog: it sits under the
@@ -455,6 +458,48 @@
   .preview-section > h2 { margin: 0 0 4px; color: var(--muted); font-size: .6875rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
   .preview-section > h3 { margin: 18px 0 4px; font-size: .8125rem; font-weight: 600; }
   .preview-section > h3 small { margin-left: 8px; color: var(--faint); font-weight: 400; }
+
+  /* ---- loop ownership: compact basic settings, advanced fields stay CLI ---- */
+
+  .ws-loop-form { margin-top: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: #f8f6f2; }
+  .ws-form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+  .ws-form-grid label { min-width: 0; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: .6875rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+  .ws-form-grid .field-input, .ws-form-grid .field-select { width: 100%; min-width: 0; text-transform: none; letter-spacing: 0; }
+  .ws-form-wide { grid-column: 1 / -1; }
+  .ws-mono-input { font-family: var(--mono); }
+  .ws-loop-form .note-actions { align-items: center; }
+  .ws-saved { margin-right: auto; color: var(--green); font-size: .75rem; font-weight: 600; }
+  .ws-cli-pointer { margin: 12px 0 0; color: var(--muted); font-size: .75rem; line-height: 1.5; }
+  .ws-cli-pointer code { padding: 2px 5px; border-radius: 4px; background: #eeece7; color: #55514a; font-size: .6875rem; }
+
+  /* ---- state-schema charts + sanitized custom dashboard ---- */
+
+  .ws-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; margin-top: 12px; }
+  .ws-metric-chart { min-width: 0; margin: 0; padding: 13px 14px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+  .ws-metric-chart figcaption { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: var(--muted); font-size: .75rem; }
+  .ws-metric-chart figcaption strong { color: var(--ink); font-family: var(--mono); font-size: .875rem; font-weight: 500; }
+  .ws-metric-chart svg { display: block; width: 100%; height: 132px; margin-top: 7px; overflow: visible; }
+  .ws-metric-chart svg line { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .ws-metric-chart svg path { fill: none; stroke-width: 1.75; vector-effect: non-scaling-stroke; }
+  .ws-chart-range { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; color: var(--faint); font-size: .625rem; font-variant-numeric: tabular-nums; }
+  .ws-chart-range time:last-child { text-align: right; }
+  .ws-chart-empty { min-height: 132px; display: grid; place-items: center; margin: 7px 0 0; color: var(--faint); font-size: .75rem; text-align: center; }
+  .ws-dashboard { min-width: 0; margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 12px; color: #44413b; font-size: .8125rem; line-height: 1.55; }
+  .ws-dashboard > h1, .ws-dashboard > h2, .ws-dashboard > h3, .ws-dashboard > p, .ws-dashboard > header, .ws-dashboard > footer, .ws-dashboard > table, .ws-dashboard > pre, .ws-dashboard > ul, .ws-dashboard > ol, .ws-dashboard > hr, .ws-dashboard > .ws-metric-grid { grid-column: 1 / -1; }
+  .ws-dashboard > div, .ws-dashboard > section, .ws-dashboard > figure { min-width: 0; }
+  .ws-dashboard h1, .ws-dashboard h2, .ws-dashboard h3, .ws-dashboard h4 { margin: 0 0 8px; color: var(--ink); font-size: .875rem; font-weight: 600; }
+  .ws-dashboard p { margin: 0 0 8px; }
+  .ws-dashboard ul, .ws-dashboard ol { margin: 4px 0 10px; padding-left: 20px; }
+  .ws-dashboard table { width: 100%; display: block; overflow-x: auto; border-collapse: collapse; }
+  .ws-dashboard th, .ws-dashboard td { padding: 6px 9px; border-bottom: 1px solid var(--line); text-align: left; }
+  .ws-dashboard pre { max-width: 100%; margin: 0; padding: 10px 12px; overflow: auto; border-radius: 6px; background: #f5f3ef; font-size: .6875rem; white-space: pre-wrap; }
+  .ws-retired-panel { min-width: 0; padding: 14px; border: 1px dashed #d8c9aa; border-radius: 8px; background: #fbf7ef; }
+  .ws-retired-panel strong { color: #80642d; font-family: var(--mono); font-size: .6875rem; }
+  .ws-retired-panel p { margin: 6px 0 0; color: #766c59; font-size: .75rem; }
+  .ws-dashboard-tabs { grid-column: 1 / -1; min-width: 0; }
+  .ws-dashboard-tabs > [role="tablist"] { display: flex; gap: 4px; margin-bottom: 10px; }
+  .ws-dashboard-tabs [role="tab"] { min-height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--muted); font-size: .6875rem; cursor: pointer; }
+  .ws-dashboard-tabs [role="tab"][aria-selected="true"] { border-color: var(--line-strong); background: #eeece7; color: var(--ink); }
 
   /* ---- prose: the reference's document body ---- */
 
@@ -520,16 +565,57 @@
   /* ---- run strip ---- */
 
   .run-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .run-list > li { min-width: 0; }
   /* Same discipline as `--ws-row-grid`: the two trailing cells are fixed, so the
      cost and the age line up down the strip instead of tracking each summary. */
-  .run-row { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) 3.5rem 4.5rem; align-items: center; gap: 12px; padding: 10px 8px; border-bottom: 1px solid var(--line); border-radius: 4px; }
-  .run-row:last-child { border-bottom: 0; }
-  .run-row:hover { background: #f4f2ee; }
+  .run-row { width: 100%; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) 3.5rem 4.5rem; align-items: center; gap: 12px; padding: 10px 8px; border: 0; border-bottom: 1px solid var(--line); border-radius: 4px; background: transparent; text-align: left; }
+  .run-list > li:last-of-type .run-row { border-bottom: 0; }
+  .run-row:not(:disabled) { cursor: pointer; }
+  .run-row:not(:disabled):hover { background: #f4f2ee; }
+  .run-row:disabled { color: inherit; opacity: 1; }
   .run-row time { justify-self: end; color: var(--faint); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .run-main { min-width: 0; }
   .run-main h4 { overflow: hidden; margin: 0; color: #35332f; font-size: .8125rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
   .run-main p { overflow: hidden; margin: 4px 0 0; color: var(--faint); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
   .run-cost { justify-self: end; color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+  .run-remainder { padding: 9px 8px 0; color: var(--faint); font-size: .6875rem; }
+
+  /* ---- one run inside the loop drawer ---- */
+
+  .ws-live-activity { display: flex; align-items: flex-start; gap: 10px; margin: -18px 0 32px; padding: 11px 13px; border: 1px solid #d8e4f2; border-radius: 8px; background: var(--blue-soft); }
+  .ws-live-activity > span { width: 7px; height: 7px; flex: none; margin-top: 5px; border-radius: 50%; background: var(--blue); }
+  .ws-live-activity b { font-size: .75rem; }
+  .ws-live-activity p { margin: 2px 0 0; color: var(--muted); font-size: .75rem; }
+  .ws-run-report { padding: 13px 14px; border: 1px solid var(--line); border-radius: 8px; background: #f8f6f2; color: #403e39; font-size: .875rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .ws-run-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin: 10px 0 0; }
+  .ws-run-metrics > div { min-width: 0; padding: 10px 11px; border-radius: 7px; background: #f5f3ef; }
+  .ws-run-metrics dt { overflow: hidden; color: var(--faint); font-size: .625rem; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-run-metrics dd { overflow: hidden; margin: 5px 0 0; color: var(--ink); font-family: var(--mono); font-size: .8125rem; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-trace { list-style: none; margin: 12px 0 0 7px; padding: 0 0 0 18px; border-left: 1px solid var(--line-strong); }
+  .ws-trace > li { position: relative; min-width: 0; padding: 0 0 22px 8px; }
+  .ws-trace-marker { position: absolute; top: 1px; left: -27px; width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface-strong); color: var(--blue); font-size: .625rem; }
+  .ws-trace-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; }
+  .ws-trace-title code { padding: 2px 7px; border-radius: 999px; background: #eeece7; color: var(--ink); font-size: .6875rem; }
+  .ws-trace-title span { min-width: 0; overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: .6875rem; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-trace details { margin-top: 7px; }
+  .ws-trace summary { color: var(--muted); font-size: .6875rem; cursor: pointer; }
+  .ws-trace pre { max-height: 280px; margin: 6px 0 0; padding: 9px 11px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #f7f5f1; font-family: var(--mono); font-size: .6875rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  .ws-run-artifacts, .ws-control-list { list-style: none; margin: 10px 0 0; padding: 0; }
+  .ws-run-artifacts li { min-width: 0; display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .ws-run-artifacts li:last-child { border-bottom: 0; }
+  .ws-run-artifacts span { color: var(--muted); font-size: .6875rem; }
+  .ws-run-artifacts code { overflow-wrap: anywhere; color: #45423c; font-size: .75rem; }
+  .ws-detail-list { margin: 10px 0 0; }
+  .ws-detail-list > div { min-width: 0; display: grid; grid-template-columns: 6rem minmax(0, 1fr); gap: 12px; padding: 7px 0; }
+  .ws-detail-list dt { color: var(--faint); font-size: .6875rem; }
+  .ws-detail-list dd { min-width: 0; margin: 0; color: #4d4a45; font-size: .75rem; overflow-wrap: anywhere; }
+  .ws-session-copy { max-width: 100%; display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+  .ws-session-copy code { overflow: hidden; color: var(--muted); font-size: .6875rem; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-session-copy span { flex: none; color: var(--blue); font-size: .625rem; }
+  .ws-control-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 7px 0; }
+  .ws-control-list code { color: var(--ink); font-size: .6875rem; }
+  .ws-control-list span { color: var(--green); font-size: .75rem; }
+  .ws-control-list small { color: var(--faint); font-size: .6875rem; }
 
   /* ---- the close-note dialog ---- */
 
@@ -645,4 +731,8 @@
   .loopany-workspace .artifact-preview { width: calc(100vw - 12px); }
   .loopany-workspace .preview-document { width: calc(100% - 40px); padding-top: 34px; }
   .loopany-workspace .charter-diff { grid-template-columns: minmax(0, 1fr); }
+  .loopany-workspace .ws-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .loopany-workspace .ws-form-wide { grid-column: auto; }
+  .loopany-workspace .run-row { grid-template-columns: auto minmax(0, 1fr) 3.5rem; }
+  .loopany-workspace .run-row > time { display: none; }
 }

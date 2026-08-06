@@ -136,6 +136,10 @@ export interface TasksView extends ViewPayload {
 export interface RunRow {
   id: string
   state: string
+  /** Rich loop rows add these; task-linked run rows may omit them. */
+  status?: string | null
+  outcome?: string | null
+  role?: string
   scope: string
   reason: string | null
   startedAt: string | null
@@ -145,6 +149,29 @@ export interface RunRow {
   costUsd: number | null
   attempts: number
   progress: { step: number; label: string; at?: string } | null
+}
+
+export interface LoopRunRow extends RunRow {
+  role: 'exec' | 'evolve' | 'edit' | string
+  outcome: string | null
+  status: string | null
+  durationMs: number | null
+  error: string | null
+  metrics: Record<string, number | string> | null
+  sessionId: string | null
+  artifacts: Array<{ path: string; kind: 'created' | 'edited' }> | null
+}
+
+export interface LoopStateField {
+  key: string
+  label?: string
+  unit?: string
+}
+
+export interface LoopChannel {
+  id: string
+  type: string
+  name: string
 }
 
 /**
@@ -229,6 +256,15 @@ export interface LoopView extends ViewPayload {
     timezone: string | null
     cronText: string | null
     nextFire: string | null
+    enabled: boolean
+    notify: 'auto' | 'always' | 'never'
+    channelId: string | null
+    model: string | null
+    agent: 'claude-code' | 'codex' | 'grok'
+    allowControl: boolean
+    ui: string | null
+    stateSchema: LoopStateField[]
+    hasWorkflow: boolean
     /** The BOUND directory every run of this loop executes in; null ⇒ the
      *  claiming daemon's own per-loop scratch dir. */
     workdir: string | null
@@ -241,11 +277,36 @@ export interface LoopView extends ViewPayload {
     source: 'kernel' | 'prod'
   }
   health: LoopHealth
+  runCount: number
+  totalCostUsd: number | null
   charterHistory: CharterDiff[]
   openTasks: { watching: TaskRow[]; created: TaskRow[]; questions: TaskRow[] }
-  recentRuns: RunRow[]
+  recentRuns: LoopRunRow[]
+  channels: LoopChannel[]
   mirrors: MirrorRef[]
   events: EventShape[]
+}
+
+export interface TranscriptStep {
+  kind: 'text' | 'tool' | 'result'
+  text?: string
+  name?: string
+  input?: string
+}
+
+export interface LoopRunView extends ViewPayload {
+  loop: { id: string; title: string | null }
+  run: LoopRunRow & {
+    usage: {
+      inputTokens?: number
+      outputTokens?: number
+      cacheReadTokens?: number
+      cacheCreationTokens?: number
+      numTurns?: number
+    } | null
+    control: Array<{ command: string; args: unknown; result: string; detail?: string }> | null
+    transcript: TranscriptStep[]
+  }
 }
 
 export interface DocRow {
@@ -328,6 +389,7 @@ async function get<T>(path: string): Promise<T> {
 export const fetchInbox = () => get<InboxView>('/api/views/inbox')
 export const fetchLoops = () => get<LoopsView>('/api/views/loops')
 export const fetchLoop = (id: string) => get<LoopView>(`/api/views/loop/${encodeURIComponent(id)}`)
+export const fetchLoopRun = (id: string) => get<LoopRunView>(`/api/views/run/${encodeURIComponent(id)}`)
 export const fetchTasks = (query: Record<string, string> = {}) =>
   get<TasksView>(`/api/views/tasks${Object.keys(query).length ? `?${new URLSearchParams(query)}` : ''}`)
 export const fetchTask = (id: string) => get<TaskView>(`/api/views/task/${encodeURIComponent(id)}`)
@@ -426,17 +488,39 @@ export interface LifecycleResult {
 }
 
 /**
- * `pause` / `resume` / `retire` — the operational lifecycle, human-only, and the
- * loop page's other writes.
- *
- * RETIRE WARNS, IT NEVER BLOCKS (captain ruling 2026-08-04). The server retires
- * the loop and reports what that cost; the screen's job is to confirm BEFORE —
- * because retirement is terminal — and then to show the warning it got back,
- * not to pre-empt it with a rule of its own. Repeating a verb that already
- * landed is a success with `changed: false`, so a retry costs nothing.
+ * `pause` / `resume` — the operational lifecycle, human-only. A pause may
+ * return u16's watched-task consequence; that is a successful write carrying a
+ * warning, never a client-side precondition.
  */
-export async function postLifecycle(loopId: string, verb: 'pause' | 'resume' | 'retire'): Promise<LifecycleResult> {
+export async function postLifecycle(loopId: string, verb: 'pause' | 'resume'): Promise<LifecycleResult> {
   return write<LifecycleResult>(`/api/loops/${encodeURIComponent(loopId)}/${verb}`, 'POST', {}, `the ${verb} was refused`)
+}
+
+export interface LoopConfigPatch {
+  name?: string
+  cron?: string
+  timezone?: string | null
+  notify?: 'auto' | 'always' | 'never'
+  channelId?: string | null
+  model?: string | null
+  agent?: 'claude-code' | 'codex' | 'grok'
+}
+
+export interface LoopConfigResult {
+  changed: boolean
+  config: {
+    name: string
+    cron: string
+    timezone: string | null
+    notify: 'auto' | 'always' | 'never'
+    channelId: string | null
+    model: string | null
+    agent: 'claude-code' | 'codex' | 'grok'
+  }
+}
+
+export async function patchLoopConfig(loopId: string, patch: LoopConfigPatch): Promise<LoopConfigResult> {
+  return write<LoopConfigResult>(`/api/loops/${encodeURIComponent(loopId)}/config`, 'PATCH', patch, 'the loop config was refused')
 }
 
 async function write<T>(path: string, method: string, body: unknown, fallback: string): Promise<T> {

@@ -22,10 +22,12 @@
  * loops never wire to loops — they meet at the instance layer (design §10.6).
  */
 import { and, asc, desc, eq, gte, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
+import { Cron } from "croner";
 
 import { db } from "../db/index.js";
 import { objects, type KernelObject } from "../db/kernel-schema.js";
 import * as store from "../db/kernelStore.js";
+import * as legacyStore from "../db/store.js";
 import { loops as productionLoops, runs, type Loop, type Run } from "../db/schema.js";
 import { cronText } from "../lib/format.js";
 import { eventShape, eventTail, inboxCounts, inboxUnion, objectShape, type ApiResult } from "./objectApi.js";
@@ -92,6 +94,37 @@ function runShape(run: Run) {
     // instead of flattening a running row to the word "running" only.
     progress: run.progress ?? null,
   };
+}
+
+/** The loop drawer's richer row. Transcript/usage stay on the per-run view. */
+function loopRunShape(run: Run) {
+  return {
+    ...runShape(run),
+    role: run.role,
+    outcome: run.outcome ?? null,
+    status: run.status ?? null,
+    durationMs: run.durationMs ?? null,
+    error: run.error ?? null,
+    metrics: run.state ?? null,
+    sessionId: run.sessionId ?? null,
+    artifacts: run.artifacts ?? null,
+    attempts: 1,
+    reportDoc: null,
+  };
+}
+
+/** Cron-derived fire unless a one-shot override is pinned; paused/completed is inert. */
+function loopNextFire(loop: Loop): string | null {
+  if (!loop.enabled || loop.completedAt) return null;
+  if (loop.nextRunAt) return loop.nextRunAt;
+  try {
+    const probe = new Cron(loop.cron, { paused: true, ...(loop.timezone ? { timezone: loop.timezone } : {}) });
+    const next = probe.nextRun()?.toISOString() ?? null;
+    probe.stop();
+    return next;
+  } catch {
+    return null;
+  }
 }
 
 /** THE production loops of a team. A converged loop's kernel EVENTS remain
@@ -214,7 +247,7 @@ export async function loopsView(context: ApiContext, now = new Date()): Promise<
   return { ok: true, value: {
     loops: loops.map((loop) => ({
       id: loop.id, title: loop.name, status: prodLoopRecord(loop).status, cron: loop.cron, timezone: loop.timezone,
-      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextRunAt,
+      cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loopNextFire(loop),
       createdAt: loop.createdAt, updatedAt: loop.updatedAt,
       health: loopHealth(runRows.filter((r) => r.loopId === loop.id), now),
       openTasks: counts.open.get(loop.id) ?? 0,
@@ -229,7 +262,10 @@ export async function loopsView(context: ApiContext, now = new Date()): Promise<
 interface LoopPageSource {
   id: string; title: string | null; status: string; cron: string | null; timezone: string | null;
   nextFire: string | null; workdir: string | null; body: string;
-  createdAt: string; updatedAt: string;
+  enabled: boolean; notify: Loop["notify"]; channelId: string | null; model: string | null;
+  agent: Loop["agent"]; allowControl: boolean; ui: string | null; stateSchema: NonNullable<Loop["stateSchema"]>;
+  hasWorkflow: boolean;
+  createdAt: string; updatedAt: string; source: "prod";
 }
 
 /**
@@ -254,9 +290,12 @@ async function loopPageSource(id: string, teamId: string): Promise<LoopPageSourc
   const record = prodLoopRecord(prodRow);
   return {
     id: prodRow.id, title: record.title, status: record.status, cron: prodRow.cron,
-    timezone: prodRow.timezone, nextFire: prodRow.nextRunAt, workdir: prodRow.workdir,
+    timezone: prodRow.timezone, nextFire: loopNextFire(prodRow), workdir: prodRow.workdir,
     body: prodRow.taskFileContent ?? "",
-    createdAt: prodRow.createdAt, updatedAt: prodRow.updatedAt,
+    enabled: prodRow.enabled, notify: prodRow.notify, channelId: prodRow.channelId, model: prodRow.model,
+    agent: prodRow.agent, allowControl: prodRow.allowControl, ui: prodRow.ui, stateSchema: prodRow.stateSchema ?? [],
+    hasWorkflow: Boolean(prodRow.workflow),
+    createdAt: prodRow.createdAt, updatedAt: prodRow.updatedAt, source: "prod",
   };
 }
 
@@ -275,11 +314,14 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
   if (!loop) return { ok: false, error: notFound(id) };
   if ("wrongKind" in loop) return { ok: false, error: refusal("WRONG_KIND", `${id} is a ${loop.wrongKind}, not a loop`) };
 
-  const [tail, runRows, watching, created] = await Promise.all([
+  const [tail, runRows, watching, created, runCount, totalCostUsd, channels] = await Promise.all([
     store.listObjectEvents(undefined, id),
     db.select().from(runs).where(eq(runs.loopId, id)).orderBy(desc(runs.ts)).limit(RECENT_RUNS_CAP * 4),
     db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.status, "open"), eq(objects.watcher, id))).orderBy(asc(objects.followUpAt)),
     db.select().from(objects).where(and(eq(objects.teamId, context.teamId), eq(objects.kind, "task"), eq(objects.status, "open"), eq(objects.createdByLoop, id))).orderBy(desc(objects.createdAt)),
+    legacyStore.countRuns(id),
+    legacyStore.sumRunCost(id),
+    legacyStore.listChannels(context.teamId),
   ]);
   const stamp = now.toISOString();
   const questions = [...new Map([...watching, ...created].filter((t) => t.pendingQuestion?.trim()).map((t) => [t.id, t])).values()];
@@ -288,9 +330,13 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
     loop: {
       id: loop.id, title: loop.title, status: loop.status, cron: loop.cron, timezone: loop.timezone,
       cronText: loop.cron ? cronText(loop.cron) : null, nextFire: loop.nextFire, workdir: loop.workdir, body: loop.body,
-      payload: {}, createdAt: loop.createdAt, updatedAt: loop.updatedAt,
+      enabled: loop.enabled, notify: loop.notify, channelId: loop.channelId, model: loop.model, agent: loop.agent,
+      allowControl: loop.allowControl, ui: loop.ui, stateSchema: loop.stateSchema, hasWorkflow: loop.hasWorkflow,
+      payload: {}, createdAt: loop.createdAt, updatedAt: loop.updatedAt, source: loop.source,
     },
     health: loopHealth(runRows, now),
+    runCount,
+    totalCostUsd,
     // The audit window design §4 names. A converged loop's brief lives in its
     // task file, so nothing WRITES these events any more; the ones a kernel loop
     // left behind are still its history and still render.
@@ -303,9 +349,29 @@ export async function loopView(id: string, context: ApiContext, now = new Date()
       created: created.map((t) => taskRow(t, stamp)),
       questions: questions.map((t) => taskRow(t, stamp)),
     },
-    recentRuns: runRows.slice(0, RECENT_RUNS_CAP).map(runShape),
+    recentRuns: runRows.map(loopRunShape),
+    channels: channels.map((channel) => ({ id: channel.id, type: channel.type, name: channel.name })),
     mirrors: await mirrorsFor(undefined, context.teamId, id),
     events: tail.slice(-TIMELINE_CAP).reverse().map(eventShape),
+    cursorSeq: await eventTail(context.teamId),
+  } };
+}
+
+/** `GET /api/views/run/:id` — one run's complete execution record. */
+export async function runView(id: string, context: ApiContext): Promise<ApiResult<Record<string, unknown>>> {
+  const guard = humanOnly(context); if (guard) return guard;
+  const run = await legacyStore.getRun(id);
+  if (!run) return { ok: false, error: notFound(id) };
+  const loop = await getProdLoop(context.teamId, run.loopId);
+  if (!loop) return { ok: false, error: notFound(id) };
+  return { ok: true, value: {
+    loop: { id: loop.id, title: loop.name },
+    run: {
+      ...loopRunShape(run),
+      usage: run.usage ?? null,
+      control: run.control ?? null,
+      transcript: run.transcript ?? [],
+    },
     cursorSeq: await eventTail(context.teamId),
   } };
 }

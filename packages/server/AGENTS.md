@@ -736,7 +736,7 @@ own stylesheet (`styles/workspace.css`, every rule scoped under
 `.loopany-workspace`), no import from any shipping surface.
 
 - **`kernel/views.ts` is the BFF layer**: one composed, READ-ONLY endpoint per
-  screen (`/api/views/{inbox,tasks,task/:id,loops,loop/:id,docs,doc/:id,system-graph}`),
+  screen (`/api/views/{inbox,tasks,task/:id,loops,loop/:id,run/:id,docs,doc/:id,system-graph}`),
   each gated `resolveApiContext(request, "human")`. Every payload carries
   `cursorSeq` (the `events.seq` it was assembled at); the client skips a refetch
   for any stream message at or below it, which is what keeps a refetch from racing
@@ -755,6 +755,15 @@ own stylesheet (`styles/workspace.css`, every rule scoped under
   words the screens show. A run's end is DERIVED (`ts` + `durationMs`), because
   production stores the start and the measured duration; a running or pending row
   has no end at all, which is the honest answer.
+- **The workspace loop drawer is the owner-management surface, but it does not
+  fork production semantics.** Basic edits and pause/resume route through
+  `server/loopMutations.ts` `applyOwnerLoopPatch`, shared with `patchJob`; the
+  u16 watched-task warning is returned after a successful pause and never becomes
+  a client precondition. `components/workspace/LoopDashboard.tsx` reuses the
+  shipping dashboard sanitizer, but renders `<loop-embed>`, `<loop-calendar>` and
+  `<loop-kanban>` as retired-data placeholders until the held artifact-to-docs
+  decision is made. Run transcript and usage live only on `/api/views/run/:id`,
+  not on every loop-drawer payload.
 - **Freshness** (`components/workspace/live.ts`): ONE team-scoped `EventSource`,
   explicit resume at `?since=<highest seq seen>`, `event: reset` → full refetch,
   two errors inside 60s → 30s polling while the stream keeps retrying. Every

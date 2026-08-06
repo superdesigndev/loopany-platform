@@ -31,6 +31,8 @@ let legacySchema: typeof import("../db/schema.js");
 let kernel: typeof import("./applyTransition.js");
 let views: typeof import("./views.js");
 let objectApi: typeof import("./objectApi.js");
+let legacyStore: typeof import("../db/store.js");
+let loopMutations: typeof import("../server/loopMutations.js");
 
 const TEAM = "team-views";
 const OTHER_TEAM = "team-elsewhere";
@@ -55,6 +57,8 @@ beforeAll(async () => {
   kernel = await import("./applyTransition.js");
   views = await import("./views.js");
   objectApi = await import("./objectApi.js");
+  legacyStore = await import("../db/store.js");
+  loopMutations = await import("../server/loopMutations.js");
 });
 afterAll(() => fs.rmSync(temp, { recursive: true, force: true }));
 
@@ -225,9 +229,10 @@ describe("GET /api/views/inbox — the §6 union, exactly", () => {
 describe("GET /api/views/loop/:id", () => {
   it("composes the charter, health, the three task sections and the run strip", async () => {
     const value = ok(await views.loopView(housekeeper, human, NOW)) as Record<string, unknown>;
-    expect(Object.keys(value).sort()).toEqual(["charterHistory", "cursorSeq", "events", "health", "loop", "mirrors", "openTasks", "recentRuns"]);
+    expect(Object.keys(value).sort()).toEqual(["channels", "charterHistory", "cursorSeq", "events", "health", "loop", "mirrors", "openTasks", "recentRuns", "runCount", "totalCostUsd"]);
     const loop = value.loop as Record<string, unknown>;
     expect(loop.cronText).toBe("daily 07:00");
+    expect(loop).toMatchObject({ notify: "auto", agent: "claude-code", stateSchema: [], ui: null, hasWorkflow: false, source: "prod" });
     expect(loop.body).toBe("# Housekeeper\n\n## Spec\n\nYou are the Housekeeper.\n");
     expect(value.health).toMatchObject({ lastOutcome: "success", consecutiveFailures: 0, runs7d: { success: 1, failure: 1 } });
     const open = value.openTasks as { watching: { title: string }[]; created: { title: string }[]; questions: { title: string }[] };
@@ -238,6 +243,51 @@ describe("GET /api/views/loop/:id", () => {
     expect(open.created.length).toBeGreaterThan(4);
     expect(open.questions.map((t) => t.title).sort()).toEqual(["Reddit reply to r/selfhosted", "Watch the error rate"]);
     expect((value.recentRuns as { id: string }[]).map((r) => r.id)).toEqual(["run-seed", "run-old"]);
+    expect(value).toMatchObject({ runCount: 2, totalCostUsd: 0.5, channels: [] });
+  });
+
+  it("serves a complete run detail without putting the transcript on the loop payload", async () => {
+    await database.db.update(legacySchema.runs).set({
+      state: { score: 8, verdict: "ship" }, sessionId: "session-run-seed", usage: { inputTokens: 120, outputTokens: 30 },
+      artifacts: [{ path: "report.md", kind: "created" }], transcript: [{ kind: "tool", name: "Read", input: '{"path":"README.md"}' }, { kind: "result", text: "ok" }],
+    }).where(eq(legacySchema.runs.id, "run-seed"));
+    const loopValue = ok(await views.loopView(housekeeper, human, NOW)) as { recentRuns: Record<string, unknown>[] };
+    expect(loopValue.recentRuns[0]).toMatchObject({ metrics: { score: 8, verdict: "ship" }, sessionId: "session-run-seed" });
+    expect(loopValue.recentRuns[0]).not.toHaveProperty("transcript");
+
+    const value = ok(await views.runView("run-seed", human)) as { loop: { id: string }; run: Record<string, unknown>; cursorSeq: number };
+    expect(value.loop.id).toBe(housekeeper);
+    expect(value.run).toMatchObject({
+      id: "run-seed", metrics: { score: 8, verdict: "ship" }, sessionId: "session-run-seed",
+      usage: { inputTokens: 120, outputTokens: 30 }, artifacts: [{ path: "report.md", kind: "created" }],
+      transcript: [{ kind: "tool", name: "Read" }, { kind: "result", text: "ok" }],
+    });
+    expect(typeof value.cursorSeq).toBe("number");
+  });
+
+  it("round-trips owner config and pauses with the shared u16 warning", async () => {
+    const scheduled: string[] = [];
+    const scheduler = { addLoop: (loop: { id: string }) => scheduled.push(loop.id) };
+    const current = await legacyStore.getLoop(housekeeper);
+    expect(current).toBeTruthy();
+
+    const edited = await loopMutations.applyOwnerLoopPatch(current!, {
+      name: "Housekeeper daily", cron: "15 9 * * *", timezone: "Asia/Singapore",
+      notify: "never", agent: "codex", model: "gpt-5.6-codex",
+    }, scheduler as never);
+    expect(edited).toMatchObject({ ok: true, changed: true });
+    expect(scheduled).toEqual([housekeeper]);
+
+    const view = ok(await views.loopView(housekeeper, human, NOW)) as { loop: Record<string, unknown> };
+    expect(view.loop).toMatchObject({
+      title: "Housekeeper daily", cron: "15 9 * * *", timezone: "Asia/Singapore",
+      notify: "never", agent: "codex", model: "gpt-5.6-codex",
+    });
+
+    const fresh = await legacyStore.getLoop(housekeeper);
+    const paused = await loopMutations.applyOwnerLoopPatch(fresh!, { enabled: false }, scheduler as never);
+    expect(paused).toMatchObject({ ok: true, changed: true, loop: { enabled: false } });
+    expect(paused.warning).toMatchObject({ code: "TASKS_STILL_WATCHED", openTasks: 5 });
   });
 
   /** A converged loop's KERNEL EVENTS stay keyed to its verbatim id, so its

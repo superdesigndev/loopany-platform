@@ -1,9 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
-import { fetchLoop, fetchLoops, postRunNow, type CharterDiff, type LoopListRow, type RunNowResult, type TaskRow } from './api'
+import {
+  fetchLoop, fetchLoops, patchLoopConfig, postLifecycle, postRunNow,
+  type CharterDiff, type LoopConfigPatch, type LoopListRow, type LoopView, type RunNowResult, type TaskRow,
+} from './api'
+import { LoopDashboard, MetricTrends } from './LoopDashboard'
+import { LoopRunDetail } from './LoopRunDetail'
 import { Markdown } from './Render'
 import {
-  ArtifactRow, BigState, Drawer, DrawerHead, DrawerSection, Empty, Loading, Refusal, RunStrip, Section, StateChip, Timeline, ViewHeader, When,
+  ArtifactRow, BigState, Drawer, DrawerHead, DrawerSection, Empty, Loading, Refusal, RunStrip, Section, shortId, StateChip, Timeline, ViewHeader, When,
 } from './parts'
 import { affectsLoop, useLiveView } from './useLiveView'
 
@@ -21,20 +26,14 @@ import { affectsLoop, useLiveView } from './useLiveView'
  * to structure, and the reason a paused-and-asking loop cannot hide in a long
  * list.
  *
- * UNIT 11: the drawer gained the screen's ONE write — `Run now`, the manual fire
- * the shipping dashboard has always offered. It lives on the detail surface and
- * not on the list row for a structural reason, not a taste one: `ArtifactRow` IS
- * a button (that is what makes the whole row one keyboard target), so a control
- * in its action slot would be a button inside a button — invalid markup with a
- * genuinely ambiguous click target. The row keeps its quiet `open ›` affordance
- * and the act itself is one click deeper, next to the cadence and health it
- * overrides.
- *
- * Schedule and pause edits point to the production owner surface. Run now stays
- * here because D1 deliberately ports the paused-loop one-shot behavior.
+ * Management remains detail-only: rows open the drawer, while run, pause/resume
+ * and basic edits sit beside the health facts they change. Run detail replaces
+ * the drawer body and backs up to the loop without adding a second modal.
  */
 export function LoopsPane({ selected, onSelect, onOpenTask }: { selected: string | null; onSelect: (id: string | null) => void; onOpenTask: (id: string) => void }) {
   const { data, error, loading } = useLiveView('loops', fetchLoops)
+  const [runId, setRunId] = useState<string | null>(null)
+  useEffect(() => setRunId(null), [selected])
 
   if (error && !data) return <BigState title="Loops are not answering">{error.message}</BigState>
   if (!data && !error) return <Loading what="loops" />
@@ -77,8 +76,15 @@ export function LoopsPane({ selected, onSelect, onOpenTask }: { selected: string
       {loading && data && <p className="ws-refreshing">refreshing…</p>}
 
       {selected && (
-        <Drawer kicker="Loop" onClose={() => onSelect(null)}>
-          <LoopDetail id={selected} onOpenTask={onOpenTask} />
+        <Drawer
+          kicker={runId ? 'Run' : 'Loop'}
+          onClose={() => onSelect(null)}
+          onBack={runId ? () => setRunId(null) : undefined}
+          backLabel={runId ? 'Loop' : 'Back'}
+        >
+          {runId
+            ? <LoopRunDetail id={runId} loopId={selected} />
+            : <LoopDetail id={selected} onOpenTask={onOpenTask} onOpenRun={setRunId} />}
         </Drawer>
       )}
     </div>
@@ -101,7 +107,7 @@ function LoopRow({ loop, selected, onSelect }: { loop: LoopListRow; selected: bo
       stateTone={
         loop.questionsWaiting > 0
           ? 'human'
-          : loop.health.lastOutcome === 'ok'
+          : loop.health.lastOutcome === 'ok' || loop.health.lastOutcome === 'success'
             ? 'ok'
             : loop.health.lastOutcome === 'failure'
               ? 'floor'
@@ -116,7 +122,7 @@ function LoopRow({ loop, selected, onSelect }: { loop: LoopListRow; selected: bo
   )
 }
 
-function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) => void }) {
+function LoopDetail({ id, onOpenTask, onOpenRun }: { id: string; onOpenTask: (id: string) => void; onOpenRun: (id: string) => void }) {
   const { data, error, refresh } = useLiveView(`loop:${id}`, () => fetchLoop(id), affectsLoop(id))
   if (error && !data) {
     return (
@@ -143,7 +149,7 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
           <>
             <span className={`state-label ${loop.status === 'active' ? 'state-ok' : ''}`}>{loop.status}</span>
             <StateChip state={health.lastOutcome} />
-            <code className="ws-id">{loop.id}</code>
+            <code className="ws-id" title={loop.id}>{shortId(loop.id)}</code>
           </>
         }
         meta={[
@@ -153,25 +159,36 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
           ['workdir', loop.workdir ?? '— (the daemon\'s scratch dir)'],
           ['next fire', <When iso={loop.nextFire} />],
           ['last run', <When iso={health.lastRunAt} />],
+          ['runs', String(data.runCount ?? data.recentRuns.length)],
           ['7d ok / fail', `${health.runs7d.success} / ${health.runs7d.failure}`],
           ['7d cost', `$${health.costs7d.usd.toFixed(2)}`],
           ['failure streak', String(health.consecutiveFailures)],
+          ['notify', `${loop.notify ?? 'auto'}${loop.channelId ? ` · ${(data.channels ?? []).find((channel) => channel.id === loop.channelId)?.name ?? 'channel'}` : ' · dashboard only'}`],
         ]}
       />
 
-      <RunNow id={loop.id} onQueued={refresh} />
-
-      {loop.source === 'prod' && (
-        <p className="inbox-floor">
-          This is the machine&apos;s production loop. Its schedule and pause state are edited on the shipping loop surface;
-          this workspace keeps the task, mirror and event history attached to the same id.
-        </p>
-      )}
+      <LoopActions data={data} refresh={refresh} />
 
       {health.consecutiveFailures > 0 && (
         <p className="inbox-floor">
           Consecutive failures auto-pause a loop and raise a question here. Time never un-pauses a loop — a human does.
         </p>
+      )}
+
+      <DrawerSection title={`Run history · ${data.runCount ?? data.recentRuns.length}`} note={data.totalCostUsd == null ? undefined : `$${data.totalCostUsd.toFixed(2)} lifetime reported cost`}>
+        <RunStrip runs={data.recentRuns} total={data.runCount} onOpen={(run) => onOpenRun(run.id)} />
+      </DrawerSection>
+
+      {(loop.stateSchema ?? []).length > 0 && (
+        <DrawerSection title="Metric trends" note="Numeric report state, plotted from oldest to newest.">
+          <MetricTrends fields={loop.stateSchema ?? []} runs={data.recentRuns} />
+        </DrawerSection>
+      )}
+
+      {loop.ui?.trim() && (
+        <DrawerSection title="Dashboard">
+          <LoopDashboard html={loop.ui} runs={data.recentRuns} />
+        </DrawerSection>
       )}
 
       <DrawerSection
@@ -195,10 +212,6 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
         <TaskGroup title="Questions" note="what it is blocked on" rows={data.openTasks.questions} onOpenTask={onOpenTask} />
       </DrawerSection>
 
-      <DrawerSection title="Recent runs">
-        <RunStrip runs={data.recentRuns} />
-      </DrawerSection>
-
       <DrawerSection title="Timeline">
         <Timeline events={data.events} emptyNote="No events on this loop yet." />
       </DrawerSection>
@@ -206,8 +219,123 @@ function LoopDetail({ id, onOpenTask }: { id: string; onOpenTask: (id: string) =
   )
 }
 
+function LoopActions({ data, refresh }: { data: LoopView; refresh: () => void }) {
+  const [editing, setEditing] = useState(false)
+  return (
+    <div className="preview-actions ws-loop-actions">
+      <div className="preview-actions-row">
+        <RunNow id={data.loop.id} onQueued={refresh} />
+        <Lifecycle loop={data.loop} refresh={refresh} />
+        <button type="button" className="attn-button is-quiet" onClick={() => setEditing((open) => !open)} aria-expanded={editing}>
+          {editing ? 'Close settings' : 'Edit settings'}
+        </button>
+      </div>
+      <p className="ws-note-line">Run once, govern the cadence, or change the owner-managed basics.</p>
+      {editing && <ConfigEditor data={data} refresh={refresh} onDone={() => setEditing(false)} />}
+    </div>
+  )
+}
+
+function Lifecycle({ loop, refresh }: { loop: LoopView['loop']; refresh: () => void }) {
+  const [pending, setPending] = useState(false)
+  const [warning, setWarning] = useState<string | null>(null)
+  const [failure, setFailure] = useState<Error | undefined>(undefined)
+  const paused = loop.status !== 'active'
+  const verb = paused ? 'resume' : 'pause'
+  const act = async () => {
+    setPending(true)
+    setFailure(undefined)
+    setWarning(null)
+    try {
+      const result = await postLifecycle(loop.id, verb)
+      setWarning(result.warning ? `${result.warning.message} ${result.warning.hint}` : null)
+      refresh()
+    } catch (cause) {
+      setFailure(cause instanceof Error ? cause : new Error(String(cause)))
+    } finally {
+      setPending(false)
+    }
+  }
+  return (
+    <div className="ws-action-block">
+      <button type="button" className="attn-button is-quiet" onClick={act} disabled={pending}>
+        {pending ? `${verb}…` : paused ? 'Resume' : 'Pause'}
+      </button>
+      {warning && <p className="inbox-floor" role="status">{warning}</p>}
+      {failure && <Refusal error={failure} />}
+    </div>
+  )
+}
+
+function ConfigEditor({ data, refresh, onDone }: { data: LoopView; refresh: () => void; onDone: () => void }) {
+  const loop = data.loop
+  const [form, setForm] = useState({
+    name: loop.title ?? loop.id,
+    cron: loop.cron ?? '',
+    timezone: loop.timezone ?? '',
+    notify: loop.notify ?? 'auto',
+    channelId: loop.channelId ?? '',
+    model: loop.model ?? '',
+    agent: loop.agent ?? 'claude-code',
+  })
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [failure, setFailure] = useState<Error | undefined>(undefined)
+  const set = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }))
+  const save = async () => {
+    setSaving(true)
+    setFailure(undefined)
+    setSaved(false)
+    const patch: LoopConfigPatch = {
+      name: form.name,
+      cron: form.cron,
+      timezone: form.timezone || null,
+      notify: form.notify as LoopConfigPatch['notify'],
+      channelId: form.channelId || null,
+      model: form.model || null,
+      agent: form.agent as LoopConfigPatch['agent'],
+    }
+    try {
+      await patchLoopConfig(loop.id, patch)
+      setSaved(true)
+      refresh()
+    } catch (cause) {
+      setFailure(cause instanceof Error ? cause : new Error(String(cause)))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <form className="ws-loop-form" onSubmit={(event) => { event.preventDefault(); void save() }}>
+      <div className="ws-form-grid">
+        <label>Name<input name="name" className="field-input" value={form.name} onChange={(event) => set('name', event.target.value)} /></label>
+        <label>Schedule<input name="cron" className="field-input ws-mono-input" value={form.cron} onChange={(event) => set('cron', event.target.value)} /></label>
+        <label>Timezone<input name="timezone" className="field-input" placeholder="server local" value={form.timezone} onChange={(event) => set('timezone', event.target.value)} /></label>
+        <label>Notify<select name="notify" className="field-select" value={form.notify} onChange={(event) => set('notify', event.target.value)}>
+          <option value="auto">auto · only when there is news</option><option value="always">always</option><option value="never">never</option>
+        </select></label>
+        <label>Push channel<select name="channelId" className="field-select" value={form.channelId} onChange={(event) => set('channelId', event.target.value)}>
+          <option value="">dashboard only</option>
+          {(data.channels ?? []).map((channel) => <option key={channel.id} value={channel.id}>{channel.name} · {channel.type}</option>)}
+        </select></label>
+        <label>Coding agent<select name="agent" className="field-select" value={form.agent} onChange={(event) => set('agent', event.target.value)}>
+          <option value="claude-code">Claude Code</option><option value="codex">Codex</option><option value="grok">Grok Build</option>
+        </select></label>
+        <label className="ws-form-wide">Model<input name="model" className="field-input" placeholder="agent default" value={form.model} onChange={(event) => set('model', event.target.value)} /></label>
+      </div>
+      <div className="note-actions">
+        {saved && <span className="ws-saved" role="status">Saved.</span>}
+        <button type="button" className="attn-button is-quiet" onClick={onDone}>Cancel</button>
+        <button type="submit" className="solid-button" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
+      </div>
+      {failure && <Refusal error={failure} />}
+      <p className="ws-cli-pointer">Workflow, dashboard source, and state schema remain advanced: use <code>loopany edit &lt;loop-id&gt; --json …</code>.</p>
+    </form>
+  )
+}
+
 /**
- * RUN NOW — the manual fire, and the one write this screen performs.
+ * RUN NOW — the manual fire.
  *
  * Three rules it keeps, in descending order of how easy they are to break:
  *
@@ -245,19 +373,16 @@ function RunNow({ id, onQueued }: { id: string; onQueued: () => void }) {
   }
 
   return (
-    <div className="preview-actions">
-      <div className="preview-actions-row">
-        <button type="button" className="verdict-button" onClick={fire} disabled={firing}>
-          {firing ? 'queueing…' : 'Run now'}
-        </button>
-        <p className="ws-note-line">Fires this loop off its cadence — one run, even if it is paused.</p>
-      </div>
+    <div className="ws-action-block">
+      <button type="button" className="solid-button" onClick={fire} disabled={firing}>
+        {firing ? 'Queueing…' : 'Run now'}
+      </button>
       {result && (
         <p className="ws-queued" role="status">
           {result.alreadyQueued
             ? 'This loop already had a run queued — one queued run per loop, so that run will carry this fire.'
             : 'Queued.'}
-          {result.run && <> Run <code className="ws-id">{result.run.id}</code>.</>}
+          {result.run && <> Run <code className="ws-id" title={result.run.id}>{shortId(result.run.id)}</code>.</>}
         </p>
       )}
       {failure && <Refusal error={failure} />}

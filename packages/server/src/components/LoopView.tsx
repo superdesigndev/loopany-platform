@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import DOMPurify, { type Config } from 'dompurify'
 import parse, { domToReact, Element, type DOMNode, type HTMLReactParserOptions } from 'html-react-parser'
 import type { ArtifactSummary, RunSummary } from '../types'
-import { buildBindingContext, parseSeries, resolveBindings } from '../lib/binding'
+import { parseSeries } from '../lib/binding'
+import { sanitizeLoopUi } from '../lib/loopUi'
 import { numericSeries } from '../lib/stats'
 import { getArtifacts } from '../server/loopApi'
 import { LoopChart } from './LoopChart'
@@ -32,41 +32,8 @@ import { LoopTabs } from './LoopTabs'
  * allowlist and the skill prose must never drift apart.
  */
 
-const LOOP_TAGS = ['loop-chart', 'loop-embed', 'loop-calendar', 'loop-kanban', 'loop-tabs']
-
-/** Data-bearing attributes on the loop-* primitives (all parsed by us, never markup). */
-const LOOP_ATTRS = ['series', 'file', 'match', 'full', 'columns', 'tabs']
-
 const ARTIFACT_RETRY_MAX = 3
 const ARTIFACT_RETRY_MS = 4000
-
-const SANITIZE_CONFIG: Config = {
-  ALLOWED_TAGS: [
-    'h1', 'h2', 'h3', 'h4', 'h5', 'p', 'b', 'strong', 'i', 'em', 'u', 's', 'span', 'div',
-    'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'code', 'pre', 'br',
-    'hr', 'small', 'section', 'header', 'footer', 'a', 'figure', 'figcaption', 'mark',
-    ...LOOP_TAGS,
-  ],
-  ALLOWED_ATTR: ['style', 'class', 'href', 'title', 'target', 'rel', ...LOOP_ATTRS],
-  ADD_TAGS: LOOP_TAGS,
-  CUSTOM_ELEMENT_HANDLING: {
-    tagNameCheck: new RegExp(`^(?:${LOOP_TAGS.join('|')})$`),
-    attributeNameCheck: new RegExp(`^(?:${LOOP_ATTRS.join('|')})$`),
-    allowCustomizedBuiltInElements: false,
-  },
-}
-
-// `series="cpu:CPU:℃, inlet:进风口:℃"` and `match="reports/digest-*.md"` carry
-// colons/commas/globs/unicode that DOMPurify otherwise strips from the attribute
-// value (leaving an empty <loop-*> that renders nothing). These attrs hold only
-// data we parse ourselves — no markup — so force-keep them on loop-* elements.
-// Registered once at module load.
-DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
-  const tag = node.nodeName?.toLowerCase()
-  if (tag && LOOP_TAGS.includes(tag) && LOOP_ATTRS.includes(data.attrName)) {
-    data.forceKeepAttr = true
-  }
-})
 
 export function LoopView({
   html,
@@ -80,10 +47,7 @@ export function LoopView({
   /** The loop's task-file path - lets <loop-embed>/<loop-calendar>/<loop-kanban> exclude the spec from match results / the default product set. */
   taskFile?: string
 }) {
-  const clean = useMemo(() => {
-    const ctx = buildBindingContext(runs)
-    return DOMPurify.sanitize(resolveBindings(html, ctx), SANITIZE_CONFIG)
-  }, [html, runs])
+  const clean = useMemo(() => sanitizeLoopUi(html, runs), [html, runs])
 
   // One numeric-series pass shared by every loop-chart in the template.
   const data = useMemo(() => numericSeries(runs), [runs])

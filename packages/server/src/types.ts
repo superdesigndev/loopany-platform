@@ -363,6 +363,8 @@ export interface ExecPayload {
 export interface JobPayload {
   name?: string
   cron?: string
+  /** IANA timezone for the cron; null/empty clears to server-local time. */
+  timezone?: string | null
   taskFile?: string
   notify?: 'auto' | 'always' | 'never' | string
   /** Set (non-empty) / clear (null|'') the closed-loop goal. Clearing also drops
@@ -377,6 +379,8 @@ export interface JobPayload {
   /** Coding agent this loop executes with (claude-code | codex | grok). Editable —
    *  the next run picks up the new agent. */
   agent?: CodingAgent
+  /** Workspace's compact basic editor writes the model without rebuilding exec. */
+  model?: string | null
   exec?: ExecPayload
   owner?: OwnerRef
 }

@@ -174,9 +174,8 @@ describe('the screen invents no write path', () => {
   it('has no watcher write helper at all — hand-off is not a thing today', () => {
     const source = read('./api.ts')
     expect(source).not.toMatch(/transferWatcher|patchWatcher/)
-    // No PATCH to a task from this client either: the watcher facet was its only
-    // caller, so a new one would be a new capability, not a reuse.
-    expect(source).not.toMatch(/'PATCH'/)
+    // Loop ownership now legitimately has a PATCH; no TASK URL may use it.
+    expect(source).not.toMatch(/write<[^>]+>\(`\/api\/tasks\/[^`]+`,\s*'PATCH'/)
     const pane = read('./TasksPane.tsx')
     expect(pane).not.toMatch(/transferWatcher|hand off/i)
   })

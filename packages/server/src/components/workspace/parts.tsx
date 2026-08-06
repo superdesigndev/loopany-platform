@@ -211,7 +211,7 @@ export function ArtifactRow({
  * `aria-modal` is a promise, and the scrim closes on a click that started on the
  * scrim itself — never on a drag that merely ended there.
  */
-export function Drawer({ kicker, onClose, children }: { kicker: string; onClose: () => void; children: ReactNode }) {
+export function Drawer({ kicker, onClose, onBack = onClose, backLabel = 'Back', children }: { kicker: string; onClose: () => void; onBack?: () => void; backLabel?: string; children: ReactNode }) {
   const panel = useRef<HTMLDivElement>(null)
   const scrimDown = useRef(false)
 
@@ -245,9 +245,9 @@ export function Drawer({ kicker, onClose, children }: { kicker: string; onClose:
     >
       <div className="artifact-preview" ref={panel} role="dialog" aria-modal="true" aria-label={kicker} onKeyDown={onTab}>
         <div className="preview-toolbar">
-          <button type="button" className="preview-back" onClick={onClose}>
+          <button type="button" className="preview-back" onClick={onBack}>
             <Glyph name="back" />
-            Back
+            {backLabel}
           </button>
           <span>{kicker}</span>
           <button type="button" className="preview-close" onClick={onClose} aria-label="Close">
@@ -376,26 +376,34 @@ export function Timeline({ events, emptyNote }: { events: EventShape[]; emptyNot
   )
 }
 
-export function RunStrip({ runs }: { runs: RunRow[] }) {
+export function RunStrip({ runs, total, onOpen }: { runs: RunRow[]; total?: number; onOpen?: (run: RunRow) => void }) {
   if (!runs.length) return <Empty>No runs recorded for this loop yet.</Empty>
   return (
     <ul className="run-list">
       {runs.map((run) => (
-        <li key={run.id} className="run-row">
-          <StateChip state={run.state} />
-          <div className="run-main">
-            <h4>{run.summary ?? run.reason ?? run.scope}</h4>
-            <p>
-              <code className="ws-id">{run.id}</code> · {run.scope}
-              {run.attempts > 1 ? ` · ${run.attempts} attempts` : ''}
-            </p>
-          </div>
-          {run.costUsd != null ? <span className="run-cost">${run.costUsd.toFixed(2)}</span> : <span />}
-          <When iso={run.finishedAt ?? run.startedAt} />
+        <li key={run.id}>
+          <button type="button" className="run-row" onClick={() => onOpen?.(run)} disabled={!onOpen} aria-label={onOpen ? `Open run ${run.id}` : undefined}>
+            <StateChip state={run.status ?? run.state} />
+            <div className="run-main">
+              <h4>{run.summary ?? run.reason ?? run.scope}</h4>
+              <p>
+                <code className="ws-id" title={run.id}>{shortId(run.id)}</code> · {run.role ?? run.scope}
+                {run.outcome ? ` · ${run.outcome}` : ''}
+                {run.attempts > 1 ? ` · ${run.attempts} attempts` : ''}
+              </p>
+            </div>
+            {run.costUsd != null ? <span className="run-cost">${run.costUsd.toFixed(2)}</span> : <span />}
+            <When iso={run.finishedAt ?? run.startedAt} />
+          </button>
         </li>
       ))}
+      {total != null && total > runs.length && <li className="run-remainder">Showing latest {runs.length} of {total}</li>}
     </ul>
   )
+}
+
+export function shortId(id: string): string {
+  return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id
 }
 
 function preview(value: unknown): string {

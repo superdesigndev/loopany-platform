@@ -217,7 +217,7 @@ describe('a server refusal stays visible and the action remains retryable', () =
   })
 })
 
-describe('the production lifecycle rule is not duplicated in this client', () => {
+describe('the production lifecycle stays server-authored', () => {
   const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
   /** Bounded to each function: the file holds several, and a slice running to
    *  EOF would sweep in whatever was appended after it. */
@@ -232,10 +232,14 @@ describe('the production lifecycle rule is not duplicated in this client', () =>
     expect(fn(read('./LoopsPane.tsx'), 'RunNow')).not.toMatch(/status\s*[!=]==?\s*['"](active|paused|retired)['"]/)
   })
 
-  it('does not expose the retired kernel lifecycle controls after S3', () => {
+  it('ports pause/resume without counting watched tasks in the client', () => {
     const pane = read('./LoopsPane.tsx')
-    expect(pane).not.toMatch(/function Lifecycle\(/)
-    expect(pane).not.toContain('postLifecycle')
-    expect(pane).toContain('shipping loop surface')
+    const lifecycle = fn(pane, 'Lifecycle')
+    expect(lifecycle).toContain('postLifecycle')
+    expect(lifecycle).not.toMatch(/openTasks\s*[><=]/)
+
+    const api = read('./api.ts')
+    expect(api).toMatch(/'pause'\s*\|\s*'resume'/)
+    expect(api).toContain('/api/loops/${encodeURIComponent(loopId)}/${verb}')
   })
 })
