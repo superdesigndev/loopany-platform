@@ -63,22 +63,6 @@ business. Set it via `loopany set-ui`.
   <p style="margin:0 0 12px;color:#666">{{One-line blurb: cadence, what auto-sends vs what waits for a human.}}</p>
 
   <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start">
-    <div style="flex:2 1 36rem;min-width:0">
-      <loop-tabs tabs="Tickets,Product Signal,Eng fix">
-        <section>
-          <p style="margin:0 0 4px;color:#94a3b8;font-size:12px">Cards mirror the ticket notes; a card moves when a run changes the ticket's status.</p>
-          <loop-kanban columns="needs_human,needs_followup,resolved" match="SUP-*.md"></loop-kanban>
-        </section>
-        <section>
-          <p style="margin:0 0 4px;color:#94a3b8;font-size:12px">Recurring themes, frequency in the title. open = accruing; mitigated = fix in place, still watching.</p>
-          <loop-kanban columns="open,mitigated,resolved" match="FB-*.md"></loop-kanban>
-        </section>
-        <section>
-          <p style="margin:0 0 4px;color:#94a3b8;font-size:12px">Bugs the loop filed; fix agents open PRs, humans merge.</p>
-          <loop-kanban columns="open,pr-open,shipped" match="ENG-*.md"></loop-kanban>
-        </section>
-      </loop-tabs>
-    </div>
     <div style="flex:1 1 20rem;min-width:0">
       <p style="margin:0 0 8px;font-weight:600">Run metrics</p>
       <div style="display:flex;gap:10px;margin:0 0 12px">
@@ -91,8 +75,6 @@ business. Set it via `loopany set-ui`.
     </div>
   </div>
 
-  <p style="margin:12px 0 4px;font-weight:600">Latest run report</p>
-  <loop-embed match="report-*.md"></loop-embed>
 </div>
 ```
 

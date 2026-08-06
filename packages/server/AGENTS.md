@@ -776,9 +776,8 @@ own stylesheet (`styles/workspace.css`, every rule scoped under
   `server/loopMutations.ts` `applyOwnerLoopPatch`, shared with `patchJob`; the
   u16 watched-task warning is returned after a successful pause and never becomes
   a client precondition. `components/workspace/LoopDashboard.tsx` reuses the
-  shipping dashboard sanitizer, but renders `<loop-embed>`, `<loop-calendar>` and
-  `<loop-kanban>` as retired-data placeholders until the held artifact-to-docs
-  decision is made. Run transcript and usage live only on `/api/views/run/:id`,
+  shipping metrics-dashboard sanitizer; retired artifact tags are stripped silently
+  and never fetch `artifact_files`. Run transcript and usage live only on `/api/views/run/:id`,
   not on every loop-drawer payload.
 - **Freshness** (`components/workspace/live.ts`): ONE team-scoped `EventSource`,
   explicit resume at `?since=<highest seq seen>`, `event: reset` → full refetch,

@@ -2,17 +2,9 @@
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { LoopView } from './LoopView'
-import { getArtifacts } from '../server/loopApi'
 import type { RunSummary } from '../types'
-
-// The artifact-list fetch resolves empty so mounted embed/calendar tests can
-// observe the post-fetch state without a server.
-vi.mock('../server/loopApi', () => ({
-  getArtifacts: vi.fn(async () => []),
-  getArtifact: vi.fn(async () => ({ text: 'digest body' })),
-}))
 
 // jsdom has no ResizeObserver and no layout, so Recharts' ResponsiveContainer
 // would measure 0×0 and render nothing. This stub reports a fixed 640×190 on
@@ -105,126 +97,16 @@ describe('LoopView <loop-chart>', () => {
   })
 })
 
-describe('LoopView artifact primitives', () => {
-  it('keeps the glob-laden match attr through sanitize (loop-embed reaches its renderer)', () => {
-    // Regression twin of the `series` force-keep: `match` carries `*` and `/`,
-    // which DOMPurify would otherwise strip, silently blanking the embed. With
-    // no artifact fetch yet (static render), the shell shows the requested
-    // pattern — proving the attribute survived end-to-end.
-    const out = render('<loop-embed match="reports/digest-*.md"></loop-embed>')
-    expect(out).toContain('reports/digest-*.md')
-    expect(out).toContain('Loading…')
-  })
-
-  it('renders loop-calendar and keeps its match attr', () => {
-    const out = render('<loop-calendar match="reports/*.md"></loop-calendar>')
-    expect(out).toContain('Loading…')
-  })
-
-  it('keeps the comma-laden columns attr through sanitize (loop-kanban reaches its renderer)', async () => {
-    // `columns="research,in-progress,done"` carries commas DOMPurify would
-    // otherwise strip, leaving an empty <loop-kanban> that renders the "needs
-    // columns=" hint. The force-keep hook + wantsArtifacts detection must both
-    // fire, so the board reaches its renderer and (with an empty list) renders
-    // the declared column headers rather than the authoring hint.
-    const out = await mount('<loop-kanban columns="research,in-progress,done" match="notes/*.md"></loop-kanban>')
-    expect(out).not.toContain('needs columns=')
-    expect(out).toContain('in-progress') // a declared column header survived end-to-end
-  })
-
-  it('shows the authoring hint when loop-embed has no target attr', () => {
-    const out = render('<loop-embed></loop-embed>')
-    expect(out).toContain('needs file=')
-  })
-
-  it('fires the artifact fetch for an uppercase-authored tag (detection is on the sanitized html)', async () => {
-    // DOMPurify lowercases tag names, so <LOOP-EMBED> still reaches the parser
-    // swap. The fetch trigger must see the sanitized string too, or the embed
-    // sticks at "Loading…" forever.
-    const out = await mount('<LOOP-EMBED match="reports/*.md"></LOOP-EMBED>')
-    expect(out).not.toContain('Loading…')
-    expect(out).toContain('No synced file matches yet')
-  })
-
-  it('retries a failed artifact fetch instead of latching an empty list', async () => {
-    // One transient network blip on mount used to pin "No synced file matches
-    // yet" until the next run settled (the effect deps don't move in between).
-    vi.useFakeTimers()
-    try {
-      const file = { path: 'reports/digest-2026-07-01.md', size: 10, updatedAt: '2026-07-01T08:00:00.000Z', binary: false, oversize: false, meta: null }
-      vi.mocked(getArtifacts).mockClear()
-      vi.mocked(getArtifacts).mockRejectedValueOnce(new Error('blip')).mockResolvedValueOnce([file])
-      const host = document.createElement('div')
-      document.body.appendChild(host)
-      const root = createRoot(host)
-      await act(async () => {
-        root.render(createElement(LoopView, { html: '<loop-embed match="reports/*.md"></loop-embed>', runs: RUNS, loopId: 'loop-1' }))
-      })
-      // Failure keeps the loading state - never the misleading calm empty.
-      expect(host.innerHTML).toContain('Loading…')
-      expect(host.innerHTML).not.toContain('No synced file matches yet')
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000)
-      })
-      expect(vi.mocked(getArtifacts)).toHaveBeenCalledTimes(2)
-      expect(host.innerHTML).toContain('digest-2026-07-01.md')
-      await act(async () => root.unmount())
-      host.remove()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('excludes the task file from <loop-embed match=> results', async () => {
-    // The spec README syncs on every edit, so under a broad glob its sync-day
-    // date would outrank yesterday's date-stamped digest. Same rule as the
-    // calendar's default set; an exact file= path may still target it.
-    const mkFile = (path: string, updatedAt: string) => ({ path, size: 10, updatedAt, binary: false, oversize: false, meta: null })
-    vi.mocked(getArtifacts).mockClear()
-    vi.mocked(getArtifacts).mockResolvedValue([
-      mkFile('README.md', '2026-07-02T09:00:00.000Z'),
-      mkFile('digest-2026-07-01.md', '2026-07-01T08:00:00.000Z'),
-    ])
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-    await act(async () => {
-      root.render(
-        createElement(LoopView, {
-          html: '<loop-embed match="*.md"></loop-embed>',
-          runs: RUNS,
-          loopId: 'loop-1',
-          taskFile: '/Users/me/work/loop/README.md',
-        }),
-      )
-    })
-    expect(host.innerHTML).toContain('digest-2026-07-01.md')
-    expect(host.innerHTML).toContain('newest of 1 matching')
-    await act(async () => root.unmount())
-    host.remove()
-    vi.mocked(getArtifacts).mockReset()
-    vi.mocked(getArtifacts).mockResolvedValue([])
-  })
-
-  it('re-fetches artifacts when the newest run settles (not only when a new run id appears)', async () => {
-    // A run's files land on its FINAL sync, so keying the fetch on the run id
-    // alone would show run N's output only once run N+1 starts.
-    const embed = '<loop-embed match="reports/*.md"></loop-embed>'
-    const live = { ...mk('2026-06-20T14:00:00.000Z', null), running: true }
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-    vi.mocked(getArtifacts).mockClear()
-    await act(async () => {
-      root.render(createElement(LoopView, { html: embed, runs: [live, ...RUNS], loopId: 'loop-1' }))
-    })
-    expect(vi.mocked(getArtifacts)).toHaveBeenCalledTimes(1)
-    const settled = { ...live, running: false }
-    await act(async () => {
-      root.render(createElement(LoopView, { html: embed, runs: [settled, ...RUNS], loopId: 'loop-1' }))
-    })
-    expect(vi.mocked(getArtifacts)).toHaveBeenCalledTimes(2)
-    await act(async () => root.unmount())
-    host.remove()
+describe('LoopView retired artifact primitives', () => {
+  it('silently drops artifact-backed tags while preserving metrics panels', () => {
+    const out = render(
+      '<section><h3>score</h3></section>' +
+      '<loop-embed match="reports/*.md"></loop-embed>' +
+      '<loop-calendar></loop-calendar>' +
+      '<loop-kanban columns="open,done"></loop-kanban>',
+    )
+    expect(out).toContain('score')
+    expect(out).not.toMatch(/loop-(embed|calendar|kanban)/)
+    expect(out).not.toContain('data source is retired')
   })
 })

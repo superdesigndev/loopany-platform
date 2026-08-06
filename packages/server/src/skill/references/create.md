@@ -58,28 +58,10 @@ confirm → build**.
 - **Per-run output.** Propose a concrete artifact or message format: "a short markdown
   summary in `report.md`", "a one-line status, alert only when something looks off",
   "an article at `articles/<date>.md`". This becomes the Spec + notify rule.
-- **Product format — when the loop writes markdown products.** Design their shape now
-  so the dashboard can index them. Each product opens with a fenced `---` front-matter
-  block of **flat top-level `key: value` scalars** (no nested YAML, no lists — the
-  parser reads only flat scalars): `type:` the loop's own one-word classification
-  label, `title:` a display title, `date:` the product's day (`YYYY-MM-DD`; omit it
-  for a living doc that isn't a dated product). All three are optional. Pick the
-  loop's small, fixed **`type` vocabulary** up front — e.g. `idea | draft | published`,
-  or `research | in-progress | done` — and write it into the Spec so every run reuses
-  the same words; a `<loop-kanban>` dashboard board keys its columns on it (see
-  evolve.md §3). The dashboard treats `date:` as the authoritative calendar date and
-  shows `type`/`title` as quiet chips in the Files list. A compact example:
-
-  ```markdown
-  ---
-  type: draft
-  title: Q3 outreach plan
-  date: 2026-07-01
-  ---
-
-  # Q3 outreach plan
-  …body…
-  ```
+- **Product format — when the loop files a doc or task.** Design its stable key,
+  title, body and structured payload now. Use the object verb's front-matter contract
+  from `run.md`; Workspace owns the doc/task presentation, while the loop dashboard
+  stays reserved for reported metrics.
 - **Finish line — only for goal-shaped tasks.** Some tasks have a definite done state:
   the user says "until", "reach", "iterate to", "get X to Y". Those are **closed
   loops** — they carry a one-line, checkable **goal** and finish themselves when it's
@@ -255,12 +237,10 @@ The dashboard is usually left to a later evolve pass, but when you ALREADY know 
 loop's product shape at create time — a template-driven loop, or any loop whose Spec
 fixes the artifacts/metrics up front — author the initial `ui` NOW and include it in
 the config, so the loop has a day-one dashboard instead of a blank one until it
-evolves. Use the same panel primitives and `{{latest.<key>}}` bindings documented in
-`evolve.md` §3 (`<loop-chart>` for a metric trend, `<loop-kanban>`/`<loop-embed>`/
-`<loop-calendar>` for the loop's typed products, `<loop-tabs>` to split several panels
-into tabs) — don't duplicate that guidance here;
-just bind only keys your `stateSchema` declares and columns your Spec's `type`
-vocabulary uses. Keep it small. Skip it when the product shape isn't settled yet — a
+evolves. Use the same metrics primitives and `{{latest.<key>}}` bindings documented in
+`evolve.md` §3 (`<loop-chart>` for a metric trend and `<loop-tabs>` to split several
+metric panels into tabs) — don't duplicate that guidance here. Bind only keys your
+`stateSchema` declares. Keep it small. Skip it when the metric shape isn't settled yet — a
 speculative dashboard is worse than none.
 
 **Template references (on demand).** When the task came from a dashboard template,

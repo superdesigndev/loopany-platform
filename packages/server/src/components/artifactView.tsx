@@ -6,11 +6,8 @@ import { downloadHref, inlineHref } from './ArtifactFileRow'
 import { TaskFileView } from './TaskFileView'
 
 /**
- * Shared pieces of the artifact content viewer - one source for the Files
- * panel's detail pane AND the dashboard artifact primitives (`<loop-embed>`,
- * `<loop-calendar>`'s and `<loop-kanban>`'s detail), so the caption strip, the
- * binary/oversize copy, and the type-appropriate render can't drift between
- * surfaces.
+ * Shared pieces of the historical Files panel's artifact content viewer, so the
+ * caption strip, binary/oversize copy, and type-appropriate render stay aligned.
  *
  * Display types (see `lib/artifactKind`):
  *  - HTML   → a STRICT sandboxed iframe (`sandbox="allow-scripts"`, deliberately

@@ -2,7 +2,7 @@ import type { Widget } from '../lib/templateFlow'
 
 /**
  * The FlowSpec dashboard widgets, drawn to match the REAL dashboard primitives
- * (LoopKanban / LoopChart / LoopCalendar / report embed) — extracted from `LoopFlow`
+ * conceptual template-preview widgets — extracted from `LoopFlow`
  * (the compose modal's Dashboard tab, today's one consumer) so any future surface
  * that previews a FlowSpec dashboard renders the SAME widgets rather than a fork.
  *
@@ -29,9 +29,9 @@ export function FlowDashboard({ widgets }: { widgets: Widget[] }) {
   )
 }
 
-const CAL_DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] // Monday-start, like LoopCalendar
+const CAL_DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-/** A month grid of report days, matching LoopCalendar's look: Monday-start weekday
+/** A month grid of report days for the template preview: Monday-start weekday
  *  headers, mono day numbers top-right, hairline grid, an interactive-ink dot on days
  *  that produced a report. grid-cols-7 fills the column and reflows (min-w-0). */
 function CalendarWidget({ w }: { w: Extract<Widget, { type: 'calendar' }> }) {
@@ -85,7 +85,7 @@ function KanbanWidget({ w }: { w: Extract<Widget, { type: 'kanban' }> }) {
       </div>
       {/* The board is the only horizontal-scroll container: fixed-width columns
           shrink-0 so a wide (3-column) board scrolls inside its pane, never widening
-          the page — mirrors the real LoopKanban. */}
+          the page. */}
       <div className="flex min-w-0 gap-3 overflow-x-auto pb-1">
         {w.columns.map(([name, cards]) => (
           <div key={name} className="flex w-[190px] shrink-0 flex-col">

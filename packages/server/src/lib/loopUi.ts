@@ -4,10 +4,10 @@ import type { RunSummary } from '../types'
 import { buildBindingContext, resolveBindings } from './binding'
 
 /** Custom elements understood by both loop-dashboard renderers. */
-export const LOOP_UI_TAGS = ['loop-chart', 'loop-embed', 'loop-calendar', 'loop-kanban', 'loop-tabs'] as const
+export const LOOP_UI_TAGS = ['loop-chart', 'loop-tabs'] as const
 
 /** Data-only attributes carried by the custom elements above. */
-export const LOOP_UI_ATTRS = ['series', 'file', 'match', 'full', 'columns', 'tabs'] as const
+export const LOOP_UI_ATTRS = ['series', 'tabs'] as const
 
 const SANITIZE_CONFIG: Config = {
   ALLOWED_TAGS: [
@@ -25,8 +25,8 @@ const SANITIZE_CONFIG: Config = {
   },
 }
 
-// Data-bearing values such as `series="cpu:CPU:%, inlet:Temp:C"` and artifact
-// globs contain punctuation DOMPurify would otherwise erase. They are parsed as
+// Data-bearing values such as `series="cpu:CPU:%, inlet:Temp:C"` contain
+// punctuation DOMPurify would otherwise erase. They are parsed as
 // data by our React replacements and never re-enter markup, so preserve them.
 DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
   const tag = node.nodeName?.toLowerCase()

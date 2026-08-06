@@ -26,7 +26,7 @@ export type Widget =
   | { type: 'kanban'; heading: string; sub?: string; columns: [string, Card[]][] }
   | { type: 'metric'; label: string; series: number[]; note?: string; betterDown?: boolean }
   | { type: 'embed'; heading: string; title: string; date: string; lines: string[] }
-  // A compact month grid of report days — mirrors <loop-calendar> (LoopCalendar.tsx).
+  // A compact conceptual month grid used only by the template-market preview.
   // `firstWeekday` is the Monday-start offset (0=Mon…6=Sun) of day 1; `reportDays`
   // are the day-of-month numbers that carry a report.
   | { type: 'calendar'; heading: string; monthLabel: string; days: number; firstWeekday: number; reportDays: number[] }

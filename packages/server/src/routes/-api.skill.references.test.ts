@@ -225,8 +225,8 @@ describe('/api/skill/references/$', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/markdown; charset=utf-8')
     const body = await res.text()
-    // The on-demand dashboard layout + state schema the paste prompt points at.
-    expect(body).toContain('loop-tabs')
+    // The on-demand metrics dashboard layout + state schema the paste prompt points at.
+    expect(body).toContain('loop-chart')
     expect(body).toContain('eng_bugs_open')
   })
 

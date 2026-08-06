@@ -317,7 +317,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
             />
           </Suspense>
           <div className={hintCls}>
-            Agent-authored HTML with {'{{bindings}}'} and loop-chart / loop-embed / loop-calendar / loop-kanban elements.
+            Agent-authored metrics HTML with {'{{bindings}}'}, loop-chart and loop-tabs elements.
           </div>
         </div>
       </div>

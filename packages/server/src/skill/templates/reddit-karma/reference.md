@@ -62,10 +62,9 @@ Source: https://www.reddit.com/r/LLMDevs/comments/<id>/
 
 ## Dashboard reference layout
 
-A validated composition: the comment pipeline (kanban) at ~2/3 width, a metrics rail +
-karma chart beside it, the newest run report full-width below. A REFERENCE, not a
-mandate — keep the shape unless the owner wants something else; in auto-post mode the
-`drafted` column will simply stay near-empty. Set it via `loopany set-ui`.
+A validated metrics composition: current karma and activity cards above the trend. A REFERENCE, not a
+mandate — keep the shape unless the owner wants something else. Set it via
+`loopany set-ui`.
 
 ```html
 <div style="font-family:system-ui,-apple-system,sans-serif;font-size:13px;line-height:1.5">
@@ -73,10 +72,6 @@ mandate — keep the shape unless the owner wants something else; in auto-post m
   <p style="margin:0 0 12px;color:#666">{{One-line blurb: account, cadence, auto-post vs draft-for-review.}}</p>
 
   <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start">
-    <div style="flex:2 1 36rem;min-width:0">
-      <p style="margin:0 0 4px;color:#94a3b8;font-size:12px">Each card is a candidate comment; it moves drafted → posted, or lands in skipped.</p>
-      <loop-kanban columns="drafted,posted,skipped" match="RC-*.md"></loop-kanban>
-    </div>
     <div style="flex:1 1 20rem;min-width:0">
       <p style="margin:0 0 8px;font-weight:600">Karma</p>
       <div style="display:flex;gap:10px;margin:0 0 12px">
@@ -88,8 +83,6 @@ mandate — keep the shape unless the owner wants something else; in auto-post m
     </div>
   </div>
 
-  <p style="margin:12px 0 4px;font-weight:600">Latest run report</p>
-  <loop-embed match="report-*.md"></loop-embed>
 </div>
 ```
 

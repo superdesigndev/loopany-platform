@@ -309,8 +309,8 @@ computes pure functions. Run instructions: `README.md`.
   the task-file skeleton to author). (2) membership in exactly one `skill/bundles/*`
   meta + an entry in `server/templateRatings.ts` (without either the template ships
   invisible / fails its shape test). (3) OPTIONAL `reference.md` — bulky detail fetched on
-  demand: the artifact contract, the REAL dashboard layout markup (`loop-kanban`/`loop-chart`/
-  `loop-embed`), the metric state schema. (4) OPTIONAL `thumb.svg` — the folder-paired card
+  demand: the artifact contract, the REAL metrics dashboard layout markup (`loop-chart`/
+  `loop-tabs`), the metric state schema. (4) OPTIONAL `thumb.svg` — the folder-paired card
   thumbnail, hand-drawn in the dashboard/flow visual language (data-mock/flow art on theme
   vars, any brand logo in its real color - NOT a centered icon); the carousel renders it,
   the public market does not. (5) OPTIONAL **loop-flow
@@ -371,8 +371,8 @@ folder reaches nobody.
   / `LOOPANY_WATCH_RESCAN_MS` / `LOOPANY_LOOP_BYTES_CAP` knobs went with them.
 - **Data was NOT destroyed and there is no migration.** `blobs`, `artifact_files`
   and `run_snapshots` keep every row; the READ surfaces stay live (`getArtifacts` /
-  `getArtifact`, `server/artifactFiles.ts`, the byte-serving route, the Files panel
-  and the `loop-embed`/`loop-calendar`/`loop-kanban` dashboard primitives). They are
+  `getArtifact`, `server/artifactFiles.ts`, the byte-serving route and the Files panel).
+  The artifact-backed dashboard primitives retired instead of being repointed. These rows are
   HISTORY: for a loop created after the retirement they are simply empty. The one
   UI that could only ever go stale — the run page's "Changes" diff, which needs two
   manifests to compare — was retired honestly and replaced by a **Files** card
@@ -414,13 +414,12 @@ folder reaches nobody.
   row. With ingress gone this is historical for `blobs`, but the CONVENTION lives
   on where it now matters — the file a run hands to `loopany doc create --file` /
   `task create --file`, parsed at the artifact seam (`kernel/artifactSeam.ts`).
-  Front-matter `date:` stays the AUTHORITATIVE product date (`lib/productDate.ts`).
-- **OPEN FOLLOW-UP** (raised with this change, deliberately not taken): the three
-  artifact dashboard primitives read `artifact_files`, so a NEW loop can no longer
-  feed them. `evolve.md` now says so and steers new dashboards to metrics +
-  `<loop-chart>`, with file-shaped products going to docs. Re-pointing those
-  primitives at kernel docs is the natural next step; the captain's ruling put
-  `ui`/`stateSchema` out of scope here.
+  Historical blob metadata keeps its indexed `date`; new task/doc files follow the
+  kernel artifact seam's closed per-kind key sets instead.
+- **Dashboard ruling** (2026-08-06): artifact-backed `<loop-embed>`,
+  `<loop-calendar>` and `<loop-kanban>` retired and are silently stripped from old
+  `ui`; they were not repointed to kernel docs/tasks. Dashboard UI is metrics-only
+  (`{{latest.*}}`, `<loop-chart>`, layout and tabs). Workspace owns task/doc views.
 
 ## Security / hardening invariants
 
@@ -872,18 +871,11 @@ folder reaches nobody.
   the LITERAL `new URL('./x.tsx', import.meta.url)` form into an asset URL
   (`http://localhost:3000/...`), which `fileURLToPath` then rejects with "The URL must be
   of scheme file". Every guard in the repo uses the variable form - copy it, don't inline.
-- Dashboard generative-UI primitives are `loop-embed`/`loop-calendar`/`loop-kanban`
-  (registry in `LoopView.tsx`; `loop-kanban` in `components/LoopKanban.tsx` is a
-  collection view grouping front-matter-`type`d markdown artifacts into columns -
-  `columns` REQUIRED + comma-separated, unmatched types collect in a trailing
-  "Other" column, task file always excluded). Registering one means moving THREE
-  things together: (1) `LOOP_TAGS`/`LOOP_ATTRS` + the DOMPurify `uponSanitizeAttribute`
-  force-keep hook (data-bearing attrs like `columns`/`match` are otherwise stripped,
-  silently blanking the element); (2) the html-react-parser `replace` swap; (3) the
-  skill authoring docs (`evolve.md` §3 + `skill/run/edit.md`, plus `create.md` §2
-  for the `type` vocabulary). Board row is the ONLY horizontal-scroll container
-  (`min-w-0 overflow-x-auto`, columns `shrink-0` fixed-width) - a wide board scrolls
-  inside its pane, never widening the page. Skill markdown + UI copy is ENGLISH ONLY.
+- Dashboard generative UI is metrics-only: scalar bindings, `<loop-chart>` and
+  `<loop-tabs>`. Artifact-backed embed/calendar/kanban tags are absent from the
+  sanitizer allowlist, so old markup disappears silently without a fetch or notice.
+  Registering a primitive means moving the sanitizer registry, parser swap and skill
+  authoring docs together. Skill markdown + UI copy is ENGLISH ONLY.
 - Recharts stays OUT of the base client bundle (`LoopDetailView` lazy-loads the
   `LoopView` chunk). All animation is off, INCLUDING `<Tooltip
   isAnimationActive={false}>` (the position tween causes a transient page scrollbar
@@ -894,16 +886,15 @@ folder reaches nobody.
   `taskFileContent` from the loop record, not the blob fetch.
 - Dashboard refresh is fetch-then-set, never `router.invalidate` (its loader re-run
   throws on a transient blip; keep stale data instead).
-- **Artifact viewer** (`components/artifactView.tsx` `ArtifactBody`, one source for
-  the Files panel + every dashboard primitive's detail): dispatch by
+- **Artifact viewer** (`components/artifactView.tsx` `ArtifactBody`, used by
+  the historical Files panel): dispatch by
   `lib/artifactKind.ts` (extension only). HTML renders in a STRICT sandboxed iframe
   (`srcDoc` + `sandbox="allow-scripts"`, NEVER `allow-same-origin` → opaque origin;
   scripts run but can't read the app's cookies/session or reach `parent` - this is
   the stored-XSS containment, load-bearing; a Preview/Source toggle exposes raw
   markup). Images (incl. SVG - scriptable, so NEVER inlined into the app DOM) render
   via `<img src=inlineHref>` off the hardened `?view=inline` route. Markdown → the
-  shared pipeline; oversize → a metadata-only note (no stored bytes). `LoopEmbed`
-  disables the pixel-collapse for html/image (they self-bound + scroll internally).
+  shared pipeline; oversize → a metadata-only note (no stored bytes).
 - **The dashboard is a DEFAULT responsive grid CAPPED AT TWO COLUMNS** (`.loopview` in
   `styles/app.css`, `auto-fit minmax(min(100%, max(28rem, (100% - gap) / 2)), 1fr)`):
   independent top-level panels tile side by side on desktop (calendar left, document

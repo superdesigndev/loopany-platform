@@ -16,7 +16,7 @@ export const HOUSEKEEPER_LOOP = {
   agent: 'claude-code' as const,
   ui: [
     '<h2>Cleanups</h2>',
-    '<loop-kanban columns="open,merged" match="cleanups/*.md"></loop-kanban>',
+    '<loop-chart series="open_cleanups:Open cleanups,merged_cleanups:Merged cleanups"></loop-chart>',
     '<loop-chart series="cleanups:Cleanups landed"></loop-chart>',
   ].join('\n'),
 }

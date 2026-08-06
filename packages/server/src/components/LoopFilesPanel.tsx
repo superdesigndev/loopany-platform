@@ -92,8 +92,7 @@ export function LoopFilesPanel({
   const activeIsTask = isTaskEntry(active)
 
   return (
-    // `id="files"` - the anchor the dashboard's `<loop-embed>` "open in files →"
-    // link targets (same page, the panel sits below the dashboard box).
+    // Stable anchor for links into the historical file surface.
     <section id="files" className="min-w-0">
       <div className="mb-2.5 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">
         <h2 className="text-label font-semibold text-secondary">

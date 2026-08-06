@@ -493,9 +493,6 @@
   .ws-dashboard table { width: 100%; display: block; overflow-x: auto; border-collapse: collapse; }
   .ws-dashboard th, .ws-dashboard td { padding: 6px 9px; border-bottom: 1px solid var(--line); text-align: left; }
   .ws-dashboard pre { max-width: 100%; margin: 0; padding: 10px 12px; overflow: auto; border-radius: 6px; background: #f5f3ef; font-size: .6875rem; white-space: pre-wrap; }
-  .ws-retired-panel { min-width: 0; padding: 14px; border: 1px dashed #d8c9aa; border-radius: 8px; background: #fbf7ef; }
-  .ws-retired-panel strong { color: #80642d; font-family: var(--mono); font-size: .6875rem; }
-  .ws-retired-panel p { margin: 6px 0 0; color: #766c59; font-size: .75rem; }
   .ws-dashboard-tabs { grid-column: 1 / -1; min-width: 0; }
   .ws-dashboard-tabs > [role="tablist"] { display: flex; gap: 4px; margin-bottom: 10px; }
   .ws-dashboard-tabs [role="tab"] { min-height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--muted); font-size: .6875rem; cursor: pointer; }

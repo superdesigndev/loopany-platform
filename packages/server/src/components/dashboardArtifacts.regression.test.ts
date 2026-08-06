@@ -3,87 +3,13 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 /**
- * Regression guards for the dashboard artifact primitives, all serving the
- * hard no-page-horizontal-scroll rule and the layout-audit findings from the
- * design mock:
- *
- *  - the calendar grid must use shrinkable tracks (`grid-cols-7` =
- *    repeat(7, minmax(0,1fr))) and `min-w-0` cells so a long chip truncates
- *    inside its cell instead of widening the row (and the page);
- *  - the embed's collapse must clip via a WRAPPER (`overflow-hidden` +
- *    max-height on a parent div), never the text nodes themselves;
- *  - the chart must be container-driven (ResponsiveContainer at a FIXED pixel
+ * Regression guards for the metrics dashboard. The chart must be
+ * container-driven (ResponsiveContainer at a FIXED pixel
  *    height), never a fixed-viewBox svg stretched to the container (the old
  *    renderer scaled like an image: fat strokes, ballooning height).
  */
 
 const read = (name: string): string => readFileSync(fileURLToPath(new URL(name, import.meta.url)), 'utf8')
-
-describe('LoopCalendar width containment', () => {
-  const src = read('./LoopCalendar.tsx')
-
-  it('uses 7 shrinkable grid tracks with min-w-0 on the grid root', () => {
-    const gridRoot = /className="grid[^"]*grid-cols-7[^"]*"/.exec(src)?.[0]
-    expect(gridRoot, 'the month grid root should exist').toBeTruthy()
-    expect(gridRoot).toMatch(/\bmin-w-0\b/)
-  })
-
-  it('keeps day cells shrinkable and chips truncating inside them', () => {
-    expect(src).toMatch(/relative min-w-0 border-b/) // day cell
-    expect(src).toMatch(/\btruncate\b/) // named chip text
-  })
-})
-
-describe('LoopEmbed collapse containment', () => {
-  const src = read('./LoopEmbed.tsx')
-
-  it('clips via a wrapper (overflow-hidden + maxHeight), not the content', () => {
-    expect(src).toMatch(/collapsed \? 'overflow-hidden' : ''/)
-    expect(src).toMatch(/maxHeight: COLLAPSE_PX/)
-  })
-
-  it('keeps the shell shrinkable', () => {
-    expect(src).toMatch(/'min-w-0 overflow-hidden rounded-card/)
-  })
-})
-
-describe('LoopKanban width containment', () => {
-  const src = read('./LoopKanban.tsx')
-
-  it('scrolls the board inside its own pane (min-w-0 + overflow-x-auto on the row)', () => {
-    // The board row is the only horizontal-scroll container: a wide board of
-    // fixed-width columns must scroll INSIDE the pane, never widen the dashboard
-    // box or force a page-level scrollbar (the Timeline strip rule).
-    const row = /className=\{`\$\{shell\} flex[^`]*`\}/.exec(src)?.[0]
-    expect(row, 'the board row className should exist').toBeTruthy()
-    expect(row).toMatch(/overflow-x-auto/)
-    expect(src).toMatch(/const shell = 'min-w-0'/)
-  })
-
-  it('keeps columns fixed-width and shrink-0, card titles truncating', () => {
-    expect(src).toMatch(/w-\[248px\] shrink-0/) // fixed, non-shrinking column track
-    expect(src).toMatch(/min-w-0 truncate/) // card title truncates inside the column
-  })
-
-  it('caps board height and scrolls tall columns internally', () => {
-    // The board is height-capped; a long column scrolls its own card list
-    // (min-h-0 + overflow-y-auto) instead of stretching the dashboard box.
-    expect(src).toMatch(/max-h-\[420px\]/)
-    expect(src).toMatch(/min-h-0 flex-col gap-2 overflow-y-auto/)
-    // Cards must OVERFLOW the cap, never flex-compress to fit it (the squeeze
-    // bug: without shrink-0 a 12-card column squashes every card instead of
-    // scrolling), and overflow below the fold gets an explicit indicator.
-    expect(src).toMatch(/min-w-0 shrink-0 overflow-hidden rounded-control/)
-    expect(src).toMatch(/↓ scroll/)
-  })
-
-  it('reviews a card body in the shared Modal (its own scroll container), never inline', () => {
-    // The card body renders in the portal-mounted Modal (overflow-auto, viewport
-    // capped) - an inline expansion inside a 248px column can't clip/scroll sanely.
-    expect(src).toMatch(/<Modal open onClose/)
-    expect(src).not.toMatch(/CollapsibleBody/)
-  })
-})
 
 describe('LoopView default grid layout', () => {
   const css = readFileSync(fileURLToPath(new URL('../styles/app.css', import.meta.url)), 'utf8')

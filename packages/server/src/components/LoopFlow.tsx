@@ -9,9 +9,8 @@ import { FlowDashboard } from './FlowDashboardWidgets'
  * the paste prompt. Two tabs give the mental model at a glance:
  *   • Loop flow — how the loop runs: a vertical cycle (scheduled tick → steps, the
  *     ones done in an isolated git worktree grouped in a box → daily/weekly repeat).
- *   • Dashboard — what it leaves behind, drawn to match the real dashboard widgets
- *     (LoopKanban / LoopChart / LoopEmbed) so the preview reads like the actual
- *     product surface the loop builds.
+ *   • Dashboard — conceptual widgets that communicate the product surface the
+ *     loop builds.
  *
  * A template declares its nodes (+ which run in the worktree) and its dashboard
  * WIDGETS; `buildGeometry` lays the vertical diagram out (positions, wires, the

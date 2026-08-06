@@ -107,15 +107,6 @@ export function MetricTrends({ fields, runs }: { fields: LoopStateField[]; runs:
   )
 }
 
-function RetiredPanel({ tag }: { tag: string }) {
-  return (
-    <div className="ws-retired-panel" role="note">
-      <strong>{`<${tag}>`}</strong>
-      <p>This panel&apos;s data source is retired. Artifact-file history was not repointed; new file-shaped outputs live in Docs.</p>
-    </div>
-  )
-}
-
 function DashboardTabs({ labels, panels }: { labels: string[]; panels: ReactNode[] }) {
   const tabs = labels.slice(0, panels.length)
   const [active, setActive] = useState(0)
@@ -134,9 +125,7 @@ function DashboardTabs({ labels, panels }: { labels: string[]; panels: ReactNode
 }
 
 /**
- * Workspace-native renderer for the loop's sanitized `ui` body.
- * Artifact-backed tags deliberately stop at a placeholder until their data
- * source receives a separate captain ruling.
+ * Workspace-native renderer for the loop's sanitized metrics `ui` body.
  */
 export function LoopDashboard({ html, runs }: { html: string; runs: LoopRunRow[] }) {
   const summaries = useMemo(() => reportRuns(runs), [runs])
@@ -146,7 +135,6 @@ export function LoopDashboard({ html, runs }: { html: string; runs: LoopRunRow[]
       if (!(node instanceof Element)) return undefined
       const attrs = node.attribs ?? {}
       if (node.name === 'loop-chart') return <MetricTrends fields={parseSeries(attrs.series)} runs={runs} />
-      if (node.name === 'loop-embed' || node.name === 'loop-calendar' || node.name === 'loop-kanban') return <RetiredPanel tag={node.name} />
       if (node.name === 'loop-tabs') {
         const labels = (attrs.tabs ?? '').split(',').map((label) => label.trim()).filter(Boolean)
         const panels = node.children

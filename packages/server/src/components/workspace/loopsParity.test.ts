@@ -131,8 +131,8 @@ describe('workspace loop management parity', () => {
     expect(el.textContent).toContain('Quality score')
     expect(el.textContent).toContain('91%')
     expect(el.textContent).toContain('Daily score board')
-    expect(el.querySelectorAll('.ws-retired-panel')).toHaveLength(3)
-    expect(el.querySelectorAll('.ws-retired-panel')[0]!.textContent).toContain('data source is retired')
+    expect(el.textContent).not.toContain('data source is retired')
+    expect(el.innerHTML).not.toMatch(/loop-(embed|calendar|kanban)/)
 
     const run = el.querySelector<HTMLButtonElement>(`button[aria-label="Open run ${RUN}"]`)
     expect(run).toBeTruthy()
