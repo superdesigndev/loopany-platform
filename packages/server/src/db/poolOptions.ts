@@ -67,14 +67,15 @@ export interface PoolOptions {
  *
  * The binding constraint is a RESTART, not steady state. A process killed without a
  * clean shutdown leaves its backends held until TCP keepalive reaps them, while the
- * replacement immediately opens its own, so the worst case is `2*max + 1` (the extra
- * being the prestart migrator over DIRECT_DATABASE_URL - the same 15 slots, since
- * DATABASE_URL and DIRECT_DATABASE_URL point at the same session pooler here). At
- * the old `max: 10` that is 21 against a cap of 15: guaranteed refusals during any
- * restart, which is exactly what the 2026-08-10 crash loop produced (observed 14/15
- * occupied, with new connections refused).
+ * replacement immediately opens its own, so the worst case is `2*max`. The prestart
+ * migrator draws on the same 15 slots (DATABASE_URL and DIRECT_DATABASE_URL both
+ * point at the session pooler here) but closes its single connection before the
+ * server boots, so it overlaps only the dead process's lingering backends, not the
+ * fresh pool. At the old `max: 10` that is 20 against a cap of 15: guaranteed
+ * refusals during any restart, which is exactly what the 2026-08-10 crash loop
+ * produced (observed 14/15 occupied, with new connections refused).
  *
- * 6 keeps the restart worst case at 13, leaving headroom, and is still well clear of
+ * 6 keeps the restart worst case at 12, leaving headroom, and is still well clear of
  * demand: sampling prod once a second for a minute showed 0 active connections in 56
  * of 60 samples, 1 in three, and a peak of 4 - while the pool held all 10 open the
  * entire time (poll traffic keeps round-robining across them, so `idle_timeout` never

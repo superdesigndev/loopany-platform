@@ -80,3 +80,46 @@ describe('queued never renders as running', () => {
     expect(detail).toMatch(/s\.queued\s*\n?\s*\?\s*queuedReason/)
   })
 })
+
+/**
+ * `runPulseStyle` is the LIVE signal light (`ui.tsx`: an infinite breathing
+ * animation). Applying it to a queued surface makes the same false activity claim
+ * the badge fix removed, just in a smaller place - so the pulse must be gated on
+ * `running`, never on a condition a queued run also satisfies.
+ */
+describe('the live pulse never appears on a queued surface', () => {
+  it('gives the queued edit-run branch a still dot and honest wording', () => {
+    // The edit banner must branch on queued BEFORE running, and that branch must
+    // not carry the pulse or claim the edit is being applied.
+    expect(detail).toMatch(/editRun\.queued \? \(/)
+    const queuedBranch = detail.slice(
+      detail.indexOf('editRun.queued ? ('),
+      detail.indexOf('editRun.running ? ('),
+    )
+    expect(queuedBranch).not.toContain('runPulseStyle')
+    expect(queuedBranch).not.toContain('Applying your edit')
+    expect(queuedBranch).toContain('Edit queued')
+  })
+
+  it('pulses the run-list progress dot only while executing', () => {
+    expect(detail).toMatch(/style=\{x\.running \? runPulseStyle : undefined\}/)
+  })
+
+  it('keeps the not-yet-visible edit-queued line still as well', () => {
+    const branch = detail.slice(detail.indexOf('{!editRun ? ('), detail.indexOf('editRun.queued ? ('))
+    expect(branch).not.toContain('runPulseStyle')
+  })
+})
+
+/**
+ * Cancellation regression: before the split, `running` covered `pending`, so a queued
+ * run DID show the stop control. The server accepts both phases (`loopApi.cancelRun`),
+ * and a queued run is the one that can linger for days - losing its only cancel path
+ * would be a regression introduced by the split itself.
+ */
+describe('a queued run can still be cancelled from the UI', () => {
+  it('offers the control for both open states', () => {
+    expect(runView).toMatch(/\(run\.running \|\| run\.queued\) && \(/)
+    expect(runView).toMatch(/run\.running \? 'Stop run' : 'Cancel run'/)
+  })
+})

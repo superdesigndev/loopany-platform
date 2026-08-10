@@ -728,13 +728,24 @@ export function LoopDetailView({ id }: { id: string }) {
           aria-live="polite"
         >
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {/* The pulse is the LIVE signal light - it may only appear while an agent
+                is actually working. A waiting edit gets a still dot and says so, which
+                is the whole point of splitting queued from running. */}
             {!editRun ? (
               <span className="inline-flex items-center gap-2.5 text-body text-secondary">
-                <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={runPulseStyle} />
+                <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-disabled" />
                 <span className="font-medium text-primary">Edit queued</span>
                 <span>waiting for {onMachine} to pick it up…</span>
               </span>
-            ) : editRun.running || editRun.queued ? (
+            ) : editRun.queued ? (
+              <span className="inline-flex min-w-0 items-center gap-2.5 text-body text-secondary">
+                <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-disabled" />
+                <span className="shrink-0 font-medium text-primary">Edit queued</span>
+                <span className="truncate">
+                  {editRun.progress?.label ?? `waiting for ${onMachine} to pick it up…`}
+                </span>
+              </span>
+            ) : editRun.running ? (
               <span className="inline-flex min-w-0 items-center gap-2.5 text-body text-secondary">
                 <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={runPulseStyle} />
                 <span className="shrink-0 font-medium text-primary">Applying your edit</span>
@@ -942,8 +953,13 @@ function RunsSection({
                           row should say - so show the line for both open states. */}
                       {(x.running || x.queued) && x.progress ? (
                         <span className="inline-flex items-center gap-2 text-meta text-secondary">
-                          <span aria-hidden className="size-1.5 rounded-full" style={runPulseStyle} />
-                          <span className="text-disabled">{x.progress.step}</span>
+                          {/* Pulse only while executing; a queued row is still. */}
+                          <span
+                            aria-hidden
+                            className={`size-1.5 rounded-full${x.running ? '' : ' bg-disabled'}`}
+                            style={x.running ? runPulseStyle : undefined}
+                          />
+                          {x.running && <span className="text-disabled">{x.progress.step}</span>}
                           <span className="truncate">{x.progress.label}</span>
                         </span>
                       ) : x.error ? (

@@ -416,9 +416,12 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             View the whole loop →
           </Link>
           {continueSession.button}
-          {run.running && (
+          {/* Cancellation must cover BOTH open states: the server accepts pending and
+              running alike, and a queued run is precisely the one worth cancelling -
+              it can sit waiting on an offline machine for days. */}
+          {(run.running || run.queued) && (
             <button type="button" onClick={onStop} className={btnDanger}>
-              Stop run
+              {run.running ? 'Stop run' : 'Cancel run'}
             </button>
           )}
         </div>

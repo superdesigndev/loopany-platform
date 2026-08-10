@@ -212,7 +212,13 @@ export function dbWatchdogFailureThreshold(): number {
  * the watchdog's restarts turned a slow box into a crash loop.
  *
  * Set to 0 to disable the guard and restore the old always-blame-the-DB behavior.
+ * The guard is bounded regardless by `dbWatchdogStarvedCeiling` above, so it can
+ * never become a permanent excuse for a genuinely wedged pool.
  */
+export function dbWatchdogStarvedCeiling(): number {
+  return posIntEnv("LOOPANY_DB_WATCHDOG_STARVED_MAX", 45);
+}
+
 export function dbWatchdogLagCeilingMs(): number {
   const raw = process.env.LOOPANY_DB_WATCHDOG_LAG_CEILING_MS?.trim();
   if (raw === "0") return 0;
