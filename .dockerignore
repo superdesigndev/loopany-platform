@@ -1,6 +1,6 @@
 # Never copy host-built artifacts into the image — they're built INSIDE the
-# Dockerfile. Critically, host node_modules carries darwin-arm64 native binaries
-# (better-sqlite3) that crash a linux container with "invalid ELF header".
+# Dockerfile. Host node_modules can carry platform-specific binaries that are
+# incompatible with the Linux container.
 node_modules
 **/node_modules
 .output
