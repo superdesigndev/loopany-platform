@@ -226,6 +226,8 @@ describe("buildAgentSpawn", () => {
     delete process.env.LOOPANY_CLAUDE_BIN;
     delete process.env.LOOPANY_GROK_BIN;
     delete process.env.LOOPANY_CODEX_BIN;
+    delete process.env.LOOPANY_ACPX_BIN;
+    delete process.env.LOOPANY_CODEX_ACP_BIN;
   });
 
   test("claude-code: default bin + the claude arg vector (--verbose, stream-json, sys file)", () => {
@@ -314,6 +316,25 @@ describe("buildAgentSpawn", () => {
       "continue",
     ]);
   });
+
+  test("codex ACP: parallel backend uses acpx protocol stream, not codex exec flags", () => {
+    process.env.LOOPANY_ACPX_BIN = "/opt/acpx";
+    process.env.LOOPANY_CODEX_ACP_BIN = "/opt/codex-acp";
+    const { bin, args } = buildAgentSpawn({
+      agent: "codex",
+      backend: "acp",
+      acpSession: "loopany-run-7",
+      prompt: "observe it",
+      resumeSessionId: "thread-ignored-routing-is-by-name",
+      model: "gpt-test",
+    });
+    expect(bin).toBe("/opt/acpx");
+    expect(args).toContain("/opt/codex-acp");
+    expect(args).toContain("--json-strict");
+    expect(args).toContain("loopany-run-7");
+    expect(args).not.toContain("exec");
+    expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
 });
 
 describe("addCost", () => {
@@ -325,6 +346,13 @@ describe("addCost", () => {
       inputTokens: 10,
       outputTokens: 5,
     });
+  });
+
+  test("keeps the latest ACP context occupancy/window instead of summing them", () => {
+    expect(addCost(
+      { inputTokens: 10, contextTokens: 100, contextWindow: 1000 },
+      { inputTokens: 20, contextTokens: 130, contextWindow: 1000 },
+    )).toEqual({ inputTokens: 30, contextTokens: 130, contextWindow: 1000 });
   });
 });
 

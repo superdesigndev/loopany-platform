@@ -56,7 +56,9 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   const out = injected.out ?? ((s: string) => void process.stdout.write(s));
   const cwd = (injected.cwd ?? (() => process.cwd()))();
   const homedir = (injected.homedir ?? os.homedir)();
-  const pid = (injected.localPid ?? (() => verifiedRunningPid()))();
+  // The ambient SessionStart home is read-only. Never let a sandbox-dependent
+  // liveness probe erase the daemon's management handle.
+  const pid = (injected.localPid ?? (() => verifiedRunningPid({ clearStale: false })))();
   // The durable `loopany` path (our shim OR a real global on PATH) for the home's
   // `bin:` line (P8). Null ⇒ npx-without-global; the SERVER then renders the honest
   // "not on PATH — npm i -g" fallback so the line ALWAYS leads the home (F7).

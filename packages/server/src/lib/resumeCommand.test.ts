@@ -14,6 +14,15 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand({ sessionId: 'sess-abc123', dir: '' })).toBe('claude --resume sess-abc123')
   })
 
+  it('uses Codex resume for an ACP-backed Codex thread', () => {
+    expect(buildResumeCommand({ sessionId: '019f7f87-thread', dir: '/work/repo', agent: 'codex' })).toBe(
+      "cd '/work/repo' && codex exec resume 019f7f87-thread",
+    )
+    expect(buildResumeCommand({ sessionId: '019f7f87-thread', agent: 'codex' })).toBe(
+      'codex exec resume 019f7f87-thread',
+    )
+  })
+
   it('quotes a dir with spaces', () => {
     expect(buildResumeCommand({ sessionId: 's1', dir: '/Users/me/My Projects/loop' })).toBe(
       "cd '/Users/me/My Projects/loop' && claude --resume s1",
