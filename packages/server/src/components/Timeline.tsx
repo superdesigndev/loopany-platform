@@ -155,7 +155,8 @@ export function Timeline({
   // pulsing RunSeg in `visible` and settles into its finished color in place once
   // the report lands. We only need the flag here to suppress the next-run marker
   // while it executes (the live block already stands in for "what's next").
-  const running = !!job.running && atLatest
+  // Either open state stands in for "what's next", so both suppress the marker.
+  const running = (!!job.running || !!job.queued) && atLatest
 
   // Right edge: at the live edge we show the next-run marker; otherwise the
   // forward "+N" pager for the newer runs currently scrolled out of view.

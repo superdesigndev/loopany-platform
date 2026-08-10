@@ -20,6 +20,7 @@ const mark = (loopId: string, kind: TimelineMark['kind'] = 'run'): TimelineMark 
   runId: kind === 'run' ? 'r1' : null,
   kind,
   running: false,
+  queued: false,
   canceled: false,
   role: 'exec',
   outcome: kind === 'run' ? 'exec' : null,

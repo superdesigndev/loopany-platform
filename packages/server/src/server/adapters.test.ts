@@ -108,3 +108,75 @@ test("a workflow loop keeps the workflow kind regardless of recorded agent", asy
   });
   expect((await adapters.toJobSummary(loop)).kind).toBe("workflow");
 });
+
+/**
+ * QUEUED vs RUNNING (the 2026-08-10 report). `toRunSummary` used to collapse both
+ * open phases into one `running` flag, so a run merely QUEUED for an offline machine
+ * rendered as a pulsing "Running" badge and held every view at its 3s live-poll
+ * cadence. The two states differ in every way a viewer cares about: a running run is
+ * bounded by RUN_TIMEOUT_MS (~20min) and is actually working, while a queued one can
+ * sit for DEFERRED_MAX_MS (7 days) doing nothing.
+ */
+async function seedLoopWithRun(phase: "pending" | "running" | "done") {
+  await store.createMachine({ id: "m-q", userId: "u1", name: "M", tokenHash: "h", online: false });
+  const loop = await store.createLoop({
+    userId: "u1",
+    machineId: "m-q",
+    name: "Q",
+    cron: "0 8 * * *",
+    taskFile: "loopany/q/README.md",
+    enabled: true,
+    notify: "auto",
+  });
+  await store.addRun({
+    loopId: loop.id,
+    machineId: "m-q",
+    userId: "u1",
+    phase,
+    role: "exec",
+    ts: new Date().toISOString(),
+  });
+  return loop;
+}
+
+test("a PENDING run is queued, never running", async () => {
+  const loop = await seedLoopWithRun("pending");
+  const sum = await adapters.toJobSummary(loop);
+  expect(sum.queued).toBe(true);
+  expect(sum.running).toBe(false);
+  const run = sum.runs.at(-1)!;
+  expect(run.queued).toBe(true);
+  expect(run.running).toBe(false);
+});
+
+test("a RUNNING run is running, never queued", async () => {
+  const loop = await seedLoopWithRun("running");
+  const sum = await adapters.toJobSummary(loop);
+  expect(sum.running).toBe(true);
+  expect(sum.queued).toBe(false);
+  const run = sum.runs.at(-1)!;
+  expect(run.running).toBe(true);
+  expect(run.queued).toBe(false);
+});
+
+test("a finished run is neither running nor queued", async () => {
+  const loop = await seedLoopWithRun("done");
+  const sum = await adapters.toJobSummary(loop);
+  expect(sum.running).toBe(false);
+  expect(sum.queued).toBe(false);
+});
+
+test("queued and running are independent: a loop can show both", async () => {
+  const loop = await seedLoopWithRun("running");
+  await store.addRun({
+    loopId: loop.id,
+    machineId: "m-q",
+    userId: "u1",
+    phase: "pending",
+    role: "exec",
+    ts: new Date().toISOString(),
+  });
+  const sum = await adapters.toJobSummary(loop);
+  expect(sum.running).toBe(true);
+  expect(sum.queued).toBe(true);
+});

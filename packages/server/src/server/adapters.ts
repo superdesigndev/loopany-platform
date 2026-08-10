@@ -30,7 +30,8 @@ export function toRunSummary(r: Run): RunSummary {
     id: r.id,
     loopId: r.loopId,
     ts: r.ts,
-    running: r.phase === "pending" || r.phase === "running",
+    running: r.phase === "running",
+    queued: r.phase === "pending",
     canceled: r.phase === "canceled",
     role: r.role,
     outcome: r.outcome ?? "silent",
@@ -65,6 +66,7 @@ export function toArtifactSummary(row: ArtifactFileWithMeta): ArtifactSummary {
 
 export async function toJobSummary(loop: Loop): Promise<JobSummary> {
   const runs = (await store.listRuns(loop.id, SUMMARY_RUNS)).map(toRunSummary);
+  const open = await store.openRunPhases(loop.id);
   return {
     id: loop.id,
     name: loop.name ?? loop.id,
@@ -74,7 +76,8 @@ export async function toJobSummary(loop: Loop): Promise<JobSummary> {
     enabled: loop.enabled,
     notify: loop.notify,
     nextRun: nextRun(loop),
-    running: await store.hasOpenRun(loop.id),
+    running: open.running,
+    queued: open.queued,
     lastRunTs: runs.length ? runs[runs.length - 1]!.ts : null,
     graduation: null, // shadow/graduation is post-v1
     goal: loop.goal ?? null,

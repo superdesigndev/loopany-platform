@@ -414,6 +414,23 @@ export async function hasOpenRun(loopId: string): Promise<boolean> {
   return !!r;
 }
 
+/** Open-run state SPLIT by phase, for the UI adapters. `hasOpenRun` answers the
+ *  scheduler's "may I fire?" question, where pending and running are equivalent
+ *  (both mean: do not start a second agent). A VIEWER needs them apart - queued
+ *  means waiting on an offline machine (up to 7 days, nothing happening), running
+ *  means an agent is working (bounded by RUN_TIMEOUT_MS). Same single indexed
+ *  lookup as `hasOpenRun`, just projecting `phase` instead of existence. */
+export async function openRunPhases(loopId: string): Promise<{ running: boolean; queued: boolean }> {
+  const rows = await db
+    .select({ phase: runs.phase })
+    .from(runs)
+    .where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])));
+  return {
+    running: rows.some((r) => r.phase === "running"),
+    queued: rows.some((r) => r.phase === "pending"),
+  };
+}
+
 // ---- machines ----
 
 export async function listMachines(teamId?: string): Promise<Machine[]> {

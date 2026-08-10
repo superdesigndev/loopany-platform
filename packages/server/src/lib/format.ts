@@ -170,6 +170,7 @@ const titleCase = (s: string): string =>
  */
 export type RunLike = {
   running?: boolean
+  queued?: boolean
   canceled?: boolean
   role?: string
   outcome: RunOutcome | string | null
@@ -179,6 +180,10 @@ export type RunLike = {
 export function dotColor(r: RunLike): string {
   // An in-flight evolve pass pulses in its own blue; other runs pulse display ink.
   if (r.running) return r.role === 'evolve' ? ST.evolve.c : ST.new.c
+  // Queued but unclaimed: quiet secondary ink, and never a pulse (see dotLabel).
+  // It must not borrow the running colour - nothing is happening - nor fall
+  // through to the outcome lookup, which would paint it as a FINISHED silent run.
+  if (r.queued) return ST['nothing-new'].c
   if (r.canceled) return ST.silent.c
   if (r.outcome === 'error') return ST.error.c
   if (r.outcome === 'evolve') return ST.evolve.c
@@ -188,6 +193,10 @@ export function dotColor(r: RunLike): string {
 
 export function dotLabel(r: RunLike): string {
   if (r.running) return r.role === 'evolve' ? 'Evolving…' : 'Running…'
+  // Queued, NOT running: no ellipsis, because nothing is under way - the run is
+  // parked until its machine polls. The detail views surface the concrete reason
+  // from `progress.label` ("deferred - machine offline"); this is the compact form.
+  if (r.queued) return 'Queued'
   // A deferred run retired without executing (machine offline at fire time) -
   // it rides phase `canceled`, so this check must come first for the honest label.
   if (r.outcome === 'skipped') return 'Skipped'

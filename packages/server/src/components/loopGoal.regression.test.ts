@@ -54,7 +54,9 @@ describe('LoopDetailView closed/completed states', () => {
     expect(detail).toContain('completionReason')
   })
 
-  it('disables Run once while the loop is completed (until reopened) or already running', () => {
-    expect(detail).toMatch(/disabled=\{busy \|\| !online \|\| completed \|\| s\.running\}/)
+  it('disables Run once while the loop is completed (until reopened) or already open', () => {
+    // Both open states block a second dispatch - the scheduler refuses to stack two
+    // agents on one loop - so `queued` must be in the guard alongside `running`.
+    expect(detail).toMatch(/disabled=\{busy \|\| !online \|\| completed \|\| s\.running \|\| s\.queued\}/)
   })
 })

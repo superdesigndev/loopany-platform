@@ -188,6 +188,25 @@ export function dbWatchdogFailureThreshold(): number {
 }
 
 /**
+ * Event-loop delay above which a FAILED watchdog ping is treated as inconclusive
+ * rather than as evidence of a wedged pool (`server/dbWatchdog.ts`).
+ *
+ * Default 1000ms. A healthy server sits in single-digit ms; even a heavy GC pause or
+ * a busy SSR burst stays well under a second. A full second of delay means the
+ * process cannot service its own sockets or timers on schedule, so a `select 1` that
+ * blew its 5s deadline says nothing about the database. That was the 2026-08-10
+ * outage: ~6% of a core (88% steal) made every ping fail against a healthy DB, and
+ * the watchdog's restarts turned a slow box into a crash loop.
+ *
+ * Set to 0 to disable the guard and restore the old always-blame-the-DB behavior.
+ */
+export function dbWatchdogLagCeilingMs(): number {
+  const raw = process.env.LOOPANY_DB_WATCHDOG_LAG_CEILING_MS?.trim();
+  if (raw === "0") return 0;
+  return posIntEnv("LOOPANY_DB_WATCHDOG_LAG_CEILING_MS", 1_000);
+}
+
+/**
  * Self-schedule cadence floors — enforced ONLY on the RUN self-schedule path (a
  * run using `set-cron` / `reschedule` on itself). The owner's `editLoop` path is
  * unlimited. A run may not set a cron whose adjacent fires are closer than

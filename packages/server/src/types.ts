@@ -52,8 +52,20 @@ export interface RunSummary {
   /** The loop this run belongs to — lets the run-detail view resolve its files. */
   loopId: string
   ts: string
-  /** In-flight (phase pending/running) — the timeline renders this block pulsing. */
+  /** EXECUTING right now (phase `running`) - a machine claimed it and an agent is
+   *  working. The timeline pulses this block, and views poll fast while it holds.
+   *  Deliberately NOT true for a queued run: see `queued`. */
   running?: boolean
+  /** QUEUED, not started (phase `pending`) - the run exists but no machine has
+   *  claimed it, usually because the bound machine is asleep or offline (the
+   *  gateway sweep stamps `progress.label` with the reason). Split out from
+   *  `running` because the two differ in every way that matters to a viewer: a
+   *  running run is bounded by RUN_TIMEOUT_MS (~20min) and is actually doing
+   *  something, while a queued one can sit for up to DEFERRED_MAX_MS (7 days)
+   *  doing nothing. Collapsing them showed a pulsing "Running" badge on a run
+   *  waiting for a laptop that was shut, and pinned the page at its 3s live-poll
+   *  cadence for days. */
+  queued?: boolean
   /** Stopped by the user before it finished (phase canceled). */
   canceled?: boolean
   /** Delivery role — lets the UI tint an in-flight evolve pass (blue) vs a normal run. */
@@ -167,6 +179,8 @@ export interface TimelineMark {
   kind: 'run' | 'projected'
   /** Visual state — mirrors `lib/format.ts` dotColor/dotLabel inputs. */
   running: boolean
+  /** Queued but unclaimed (phase `pending`) - see `RunSummary.queued`. */
+  queued: boolean
   canceled: boolean
   role: 'exec' | 'evolve' | 'edit' | string
   outcome: RunOutcome | null
@@ -209,8 +223,10 @@ export interface JobSummary {
   enabled: boolean
   notify: 'auto' | 'always' | 'never' | string
   nextRun: string | null
-  /** True while the daemon is executing this loop right now (live indicator). */
+  /** True while the daemon is EXECUTING this loop right now (live indicator). */
   running?: boolean
+  /** True while a run for this loop is queued but unclaimed - see `RunSummary.queued`. */
+  queued?: boolean
   lastRunTs: string | null
   graduation: string | null
   /** CLOSED-loop setpoint (one-line goal). Null ⇒ OPEN loop (monitor/digest). */

@@ -89,7 +89,9 @@ function RecordedFiles({ run }: { run: RunSummary }) {
 function Changes({ run }: { run: RunSummary }) {
   const [data, setData] = useState<RunDiffResult | null>(null)
   useEffect(() => {
-    if (run.running) return // snapshot is captured at finalize — nothing to diff yet
+    // Snapshot is captured at finalize, so neither an executing NOR a queued run
+    // has anything to diff yet.
+    if (run.running || run.queued) return
     let alive = true
     getRunDiff({ data: { runId: run.id } })
       .then((d) => alive && setData(d))
@@ -97,9 +99,9 @@ function Changes({ run }: { run: RunSummary }) {
     return () => {
       alive = false
     }
-  }, [run.id, run.running])
+  }, [run.id, run.running, run.queued])
 
-  if (run.running)
+  if (run.running || run.queued)
     return (
       <Card label="Changes">
         <div className="text-body text-disabled">File changes appear once the run finishes.</div>
@@ -198,6 +200,33 @@ function LiveActivity({ run }: { run: RunSummary }) {
             <span className="text-body text-secondary">Starting - waiting for the first heartbeat.</span>
           )}
           <div className="mt-1 text-meta text-disabled">{elapsed ? `Running for ${elapsed} · ` : ''}updates live</div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+/**
+ * The QUEUED counterpart of `LiveActivity`: the run exists but no machine has
+ * claimed it. Deliberately still, with no pulse and no elapsed clock - both would
+ * imply work is under way. The waiting time is real and can run to days, so it is
+ * stated plainly rather than hidden, and the sweep's own reason (`progress.label`,
+ * e.g. "deferred - machine offline") is shown verbatim when present.
+ */
+function QueuedActivity({ run, machineName }: { run: RunSummary; machineName: string | null }) {
+  const waiting = dur(Math.max(0, Date.now() - Date.parse(run.ts)))
+  const target = machineName ? `“${machineName}”` : 'its machine'
+  return (
+    <Card label="Activity">
+      <div className="flex items-start gap-2.5">
+        <span aria-hidden className="mt-[5px] size-2 shrink-0 rounded-full bg-disabled" />
+        <div className="min-w-0 flex-1">
+          <span className="min-w-0 break-words text-body text-primary">
+            {run.progress?.label ?? `Queued - waiting for ${target} to pick it up.`}
+          </span>
+          <div className="mt-1 text-meta text-disabled">
+            {waiting ? `Queued for ${waiting} · ` : ''}it runs as soon as {target} reconnects
+          </div>
         </div>
       </div>
     </Card>
@@ -310,12 +339,16 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   }, [detail, run, searchDone, loopId, runId])
 
   // Keep a live run streaming in (its transcript + diff settle once it finishes).
+  // A QUEUED run still needs refreshing - it flips to running the moment its machine
+  // polls - but at a calm cadence: it can sit queued for days, so the 3s live rate is
+  // reserved for a run that is actually executing (and is bounded by RUN_TIMEOUT_MS).
   const running = !!run?.running
+  const queued = !run?.running && !!run?.queued
   useEffect(() => {
-    if (!running) return
-    const t = setInterval(() => void poll(), 3_000)
+    if (!running && !queued) return
+    const t = setInterval(() => void poll(), running ? 3_000 : 15_000)
     return () => clearInterval(t)
-  }, [running, poll])
+  }, [running, queued, poll])
 
   // Unconditional hook call (null sessionId while loading ⇒ renders nothing);
   // must sit above the early-return guards below.
@@ -397,6 +430,9 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
         <div className="flex min-w-0 flex-col gap-6">
           {run.running && <LiveActivity run={run} />}
+          {!run.running && run.queued && (
+            <QueuedActivity run={run} machineName={detail.machine.name || null} />
+          )}
 
           {run.message && (
             <Card label="Report">

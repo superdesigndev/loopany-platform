@@ -70,6 +70,8 @@ export function LoopCard({
             Running
           </Pill>
         )}
+        {/* Queued is a distinct, still state - no pulse, no "Running" claim. */}
+        {!job.running && job.queued && <Pill>Queued</Pill>}
         {job.graduation && <Pill>{job.graduation}</Pill>}
         {completed && (
           <Pill tone="success" dot="green">
