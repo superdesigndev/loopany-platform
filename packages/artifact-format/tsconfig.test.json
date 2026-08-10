@@ -1,0 +1,12 @@
+{
+  "comment": "Typecheck-only view that ADDS the test code the emitting build deliberately leaves out (src/**/*.test.ts plus the test/ helpers). These files pin the public surface, so type drift in them has to fail `typecheck`; they must never reach `dist`, which is why this config never emits and the build config keeps its rootDir/exclude.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": []
+}
