@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+/**
+ * A fake `gh` for the simulator sandbox (ring 2). It stands in for GitHub so the
+ * W3 fix arc is real work up to the PR: the agent writes a diff, pushes, and runs
+ * `gh pr create`, which this records and prints a plausible URL for.
+ *
+ * Contract (env, set by the sandbox / the run):
+ *   LOOPANY_SANDBOX  the sandbox root - where github/ and audit.log live
+ *   LOOPANY_NOW      the virtual instant, stamped onto recorded PRs + the audit log
+ *
+ * Every invocation appends one line to `<sandbox>/audit.log`:
+ *   <iso-now> gh <argv...>
+ *
+ * Supported:
+ *   gh pr create [--title T] [--body B] [--head BRANCH] [--base BASE]
+ *       records <sandbox>/github/pr-<n>.json {number,title,body,branch,base,
+ *       headSha,changedFiles,createdAt,repo} and prints the PR URL.
+ *   gh pr list [--json ...]   prints the recorded PRs (one URL per line, or JSON)
+ *   gh pr view <n> [--json]   prints one recorded PR
+ *
+ * Unknown subcommands are recorded, print a short "not supported in this
+ * environment" note, and exit 1 - NEVER crash the agent's run.
+ */
+
+import { execFileSync } from "node:child_process";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+
+const REPO = "superdesign-web";
+const OWNER = "superdesigndev";
+
+const sandbox = process.env.LOOPANY_SANDBOX;
+const now = process.env.LOOPANY_NOW ?? new Date().toISOString();
+const argv = process.argv.slice(2);
+
+if (!sandbox) {
+  // No sandbox wiring: still never crash the caller.
+  process.stderr.write("gh (sim): LOOPANY_SANDBOX unset\n");
+  process.exit(1);
+}
+
+const ghDir = join(sandbox, "github");
+mkdirSync(ghDir, { recursive: true });
+appendFileSync(join(sandbox, "audit.log"), `${now} gh ${argv.join(" ")}\n`);
+
+/** Parse `--key value` pairs (and repeated flags) from an argv slice. */
+function flags(args) {
+  const out = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith("--")) {
+      const key = a.slice(2);
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        out[key] = next;
+        i++;
+      } else {
+        out[key] = true;
+      }
+    }
+  }
+  return out;
+}
+
+/** All recorded PRs, sorted by number. */
+function recordedPrs() {
+  if (!existsSync(ghDir)) return [];
+  return readdirSync(ghDir)
+    .filter((f) => /^pr-\d+\.json$/.test(f))
+    .map((f) => JSON.parse(readFileSync(join(ghDir, f), "utf8")))
+    .sort((a, b) => a.number - b.number);
+}
+
+function nextPrNumber() {
+  const prs = recordedPrs();
+  return prs.length === 0 ? 1 : prs[prs.length - 1].number + 1;
+}
+
+/** The cwd repo's current branch + HEAD sha + files changed vs main. Best-effort:
+ *  a cwd that is not a git repo yields an empty changed-file set, never a throw. */
+function repoState(headOverride) {
+  const git = (args) => {
+    try {
+      return execFileSync("git", args, { cwd: process.cwd(), encoding: "utf8" }).trim();
+    } catch {
+      return "";
+    }
+  };
+  const branch = headOverride || git(["rev-parse", "--abbrev-ref", "HEAD"]) || "HEAD";
+  const headSha = git(["rev-parse", "HEAD"]);
+  const diff = git(["diff", "--name-only", "main...HEAD"]);
+  const changedFiles = diff ? diff.split("\n").filter(Boolean) : [];
+  return { branch, headSha, changedFiles };
+}
+
+function prUrl(number) {
+  return `https://github.com/${OWNER}/${REPO}/pull/${number}`;
+}
+
+const sub = argv[0];
+const subsub = argv[1];
+
+if (sub === "pr" && subsub === "create") {
+  const f = flags(argv.slice(2));
+  const number = nextPrNumber();
+  const { branch, headSha, changedFiles } = repoState(typeof f.head === "string" ? f.head : "");
+  const record = {
+    number,
+    title: typeof f.title === "string" ? f.title : "",
+    body: typeof f.body === "string" ? f.body : "",
+    branch,
+    base: typeof f.base === "string" ? f.base : "main",
+    headSha,
+    changedFiles,
+    createdAt: now,
+    repo: REPO,
+  };
+  writeFileSync(join(ghDir, `pr-${number}.json`), JSON.stringify(record, null, 2) + "\n");
+  process.stdout.write(prUrl(number) + "\n");
+  process.exit(0);
+}
+
+if (sub === "pr" && subsub === "list") {
+  const f = flags(argv.slice(2));
+  const prs = recordedPrs();
+  if (f.json) {
+    process.stdout.write(JSON.stringify(prs, null, 2) + "\n");
+  } else {
+    for (const pr of prs) process.stdout.write(`#${pr.number}\t${pr.title}\t${pr.branch}\n`);
+  }
+  process.exit(0);
+}
+
+if (sub === "pr" && subsub === "view") {
+  const rest = argv.slice(2).filter((a) => !a.startsWith("--"));
+  const number = Number(rest[0]);
+  const pr = recordedPrs().find((p) => p.number === number);
+  if (!pr) {
+    process.stderr.write(`gh (sim): no PR #${rest[0]}\n`);
+    process.exit(1);
+  }
+  const f = flags(argv.slice(2));
+  process.stdout.write(f.json ? JSON.stringify(pr, null, 2) + "\n" : `${prUrl(pr.number)}\n${pr.title}\n`);
+  process.exit(0);
+}
+
+process.stderr.write(`gh (sim): \`${argv.join(" ")}\` not supported in this environment\n`);
+process.exit(1);

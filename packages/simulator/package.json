@@ -1,0 +1,26 @@
+{
+  "name": "@loopany/simulator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Loopany kernel SIMULATOR - a version-independent scenario runner. A scenario is pure data (a day-by-day world script); the engine drives the `loopany-kernel` CLI on a virtual clock (LOOPANY_NOW) through a sandbox workspace, spawns the assignee agents, and snapshots per-day state for scoring. NOT published.",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "run:scenario": "tsx src/run.ts"
+  },
+  "dependencies": {
+    "@loopany/cli": "workspace:*",
+    "@loopany/kernel": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.9"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
