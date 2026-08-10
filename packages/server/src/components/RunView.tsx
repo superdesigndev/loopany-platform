@@ -361,10 +361,13 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
 
   async function onStop() {
     if (!run) return
-    if (!confirm('Stop this run? It will be marked canceled.')) return
+    // Match the button: a queued run is cancelled before it ever starts, so calling
+    // that "stopping" would misdescribe what the user is doing.
+    const verb = run.running ? 'Stop' : 'Cancel'
+    if (!confirm(`${verb} this run? It will be marked canceled.`)) return
     const r = await cancelRun({ data: run.id })
     if (r?.error) {
-      alert(`Stop failed: ${r.error}`)
+      alert(`${verb} failed: ${r.error}`)
       return
     }
     await load()

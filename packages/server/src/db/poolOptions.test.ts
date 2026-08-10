@@ -75,13 +75,15 @@ describe("poolOptionsFor", () => {
    * Supabase's session pooler refuses past `pool_size` (15 here) with
    * `EMAXCONNSESSION`, and the binding case is a RESTART: a process killed without a
    * clean shutdown leaves its backends held until TCP keepalive reaps them while the
-   * replacement opens its own, so the worst case is `2*max + 1` (the migrator shares
-   * the same budget). At the old `max: 10` that is 21 against 15 - guaranteed
-   * refusals during any restart, as the 2026-08-10 crash loop demonstrated.
+   * replacement opens its own, so the worst case is `2*max`. (The prestart migrator
+   * draws on the same budget but closes its connection before the server boots, so it
+   * overlaps only the dead process's leftovers.) At the old `max: 10` that is 20
+   * against 15 - guaranteed refusals during any restart, as the 2026-08-10 crash loop
+   * demonstrated.
    */
   it("leaves restart headroom under a 15-client pooler cap", () => {
     const POOLER_CAP = 15;
-    const worstCaseDuringRestart = DEFAULT_POOL_MAX * 2 + 1;
+    const worstCaseDuringRestart = DEFAULT_POOL_MAX * 2;
     expect(worstCaseDuringRestart).toBeLessThan(POOLER_CAP);
   });
 

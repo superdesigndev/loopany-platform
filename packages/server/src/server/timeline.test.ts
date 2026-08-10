@@ -4,6 +4,7 @@ import type { Loop } from '../db/schema.js'
 import type { TimelineRun } from '../db/store.js'
 import {
   MAX_PROJECTED_PER_LOOP,
+  projectedMark,
   projectFires,
   runToMark,
   sumCosts,
@@ -107,9 +108,16 @@ describe('runToMark', () => {
     expect(m.running).toBe(false)
   })
 
-  it('marks a projected fire neither running nor queued', () => {
+  it('leaves queued false for every non-pending phase', () => {
     expect(runToMark(run({ phase: 'running' })).queued).toBe(false)
     expect(runToMark(run({ phase: 'done' })).queued).toBe(false)
+    expect(runToMark(run({ phase: 'canceled' })).queued).toBe(false)
+  })
+
+  it('marks a PROJECTED fire neither running nor queued', () => {
+    const m = projectedMark('loop-1', '2026-07-21T06:00:00.000Z')
+    expect(m.running).toBe(false)
+    expect(m.queued).toBe(false)
   })
 
   it('carries the run id so a mark links to its run page', () => {

@@ -112,12 +112,16 @@ export function r2Config(): R2Config | null {
  * the bias is "keep storage bounded without ever surprising a healthy loop".
  */
 
-/** A positive env integer, or `fallback` when unset / unparseable / non-positive. */
+/** A positive env integer, or `fallback` when unset / unparseable / non-positive.
+ *  Floors BEFORE the positivity test: `0.5` used to pass `n > 0` and then floor to
+ *  `0`, which every caller reads as a disabling value (for the watchdog's starved
+ *  ceiling that silently turned the guard off entirely). A fractional value below 1
+ *  is nonsense for all of these knobs, so it falls back rather than becoming 0. */
 function posIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 /**
@@ -201,6 +205,20 @@ export function dbWatchdogFailureThreshold(): number {
 }
 
 /**
+ * Consecutive INCONCLUSIVE (event-loop-starved) watchdog ticks tolerated before the
+ * watchdog exits anyway (`server/dbWatchdog.ts` `DEFAULT_STARVED_CEILING`).
+ *
+ * The starvation guard must be an excuse, not an alibi: a wedged pool can coexist
+ * with a busy event loop, and an unbounded guard would hand back the 2026-07-12
+ * failure mode (~9h down, no auto-recovery). Default 45 ticks, ~15min at the 20s
+ * cadence - far above the 3-failure threshold, so the 2026-08-10 crash-loop
+ * amplification stays broken while recovery stays bounded.
+ */
+export function dbWatchdogStarvedCeiling(): number {
+  return posIntEnv("LOOPANY_DB_WATCHDOG_STARVED_MAX", 45);
+}
+
+/**
  * Event-loop delay above which a FAILED watchdog ping is treated as inconclusive
  * rather than as evidence of a wedged pool (`server/dbWatchdog.ts`).
  *
@@ -215,10 +233,6 @@ export function dbWatchdogFailureThreshold(): number {
  * The guard is bounded regardless by `dbWatchdogStarvedCeiling` above, so it can
  * never become a permanent excuse for a genuinely wedged pool.
  */
-export function dbWatchdogStarvedCeiling(): number {
-  return posIntEnv("LOOPANY_DB_WATCHDOG_STARVED_MAX", 45);
-}
-
 export function dbWatchdogLagCeilingMs(): number {
   const raw = process.env.LOOPANY_DB_WATCHDOG_LAG_CEILING_MS?.trim();
   if (raw === "0") return 0;

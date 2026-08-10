@@ -27,6 +27,20 @@ import { describe, expect, it } from 'vitest'
  */
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 
+/** Slice between two markers, asserting BOTH exist and are ordered. A bare
+ *  `indexOf` pair silently yields an empty string when a marker is removed, which
+ *  would make every negative assertion below pass vacuously - the exact way a
+ *  source-reading guard rots into a no-op. */
+function between(src: string, start: string, end: string): string {
+  const a = src.indexOf(start)
+  const b = src.indexOf(end)
+  expect(a, `missing marker: ${start}`).toBeGreaterThanOrEqual(0)
+  expect(b, `missing marker: ${end}`).toBeGreaterThan(a)
+  const slice = src.slice(a, b)
+  expect(slice.length).toBeGreaterThan(0)
+  return slice
+}
+
 const adapters = read('../server/adapters.ts')
 const detail = read('./LoopDetailView.tsx')
 const runView = read('./RunView.tsx')
@@ -92,10 +106,7 @@ describe('the live pulse never appears on a queued surface', () => {
     // The edit banner must branch on queued BEFORE running, and that branch must
     // not carry the pulse or claim the edit is being applied.
     expect(detail).toMatch(/editRun\.queued \? \(/)
-    const queuedBranch = detail.slice(
-      detail.indexOf('editRun.queued ? ('),
-      detail.indexOf('editRun.running ? ('),
-    )
+    const queuedBranch = between(detail, 'editRun.queued ? (', 'editRun.running ? (')
     expect(queuedBranch).not.toContain('runPulseStyle')
     expect(queuedBranch).not.toContain('Applying your edit')
     expect(queuedBranch).toContain('Edit queued')
@@ -106,7 +117,7 @@ describe('the live pulse never appears on a queued surface', () => {
   })
 
   it('keeps the not-yet-visible edit-queued line still as well', () => {
-    const branch = detail.slice(detail.indexOf('{!editRun ? ('), detail.indexOf('editRun.queued ? ('))
+    const branch = between(detail, '{!editRun ? (', 'editRun.queued ? (')
     expect(branch).not.toContain('runPulseStyle')
   })
 })
