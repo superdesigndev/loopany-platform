@@ -9,7 +9,8 @@ Loopany is a pnpm monorepo with two packages:
 
 - **`packages/server`** (`@loopany/server`, private) — the TanStack Start web app:
   UI + server functions + the in-process scheduler + machine/agent routes + Better
-  Auth + artifact storage. Drizzle/SQLite. Deployed on Fly.
+  Auth + artifact storage. Drizzle over Postgres (embedded pglite for local
+  dev, external Postgres in production). Deployed on Fly.
 - **`packages/daemon`** (`@crewlet/loopany`, public on npm) — the machine-side
   daemon that runs on each user's own machine, polls the server for due runs, and
   executes them via the user's local coding agent (BYOA).
@@ -37,12 +38,16 @@ pnpm dev          # server on http://127.0.0.1:3000 (UI + scheduler + machine ro
 Copy `.env.example` to `packages/server/.env` if you need to configure auth,
 the artifact blob store, or other options. The app runs open (no auth) by default.
 
-> Changed `packages/server/src/db/schema.ts`? Generate and apply the migration
-> locally — dev does **not** auto-migrate:
+> Changed `packages/server/src/db/schema.ts`? Author the migration, then let
+> dev apply it. `db:generate` diffs the schema → SQL (no DB needed); the default
+> embedded **pglite** dev tier auto-applies generated migrations in-process at
+> boot, so restart `pnpm dev` to pick them up:
 > ```bash
 > pnpm --filter @loopany/server db:generate   # write the SQL + snapshot
-> pnpm --filter @loopany/server db:migrate     # apply to the dev DB
 > ```
+> `db:migrate` (the drizzle-kit CLI) targets a real Postgres over the direct
+> `:5432` URL only — use it when developing against a real Postgres
+> (`DATABASE_URL` / `DIRECT_DATABASE_URL`), not the embedded pglite tier.
 
 ## Tests & typecheck
 
