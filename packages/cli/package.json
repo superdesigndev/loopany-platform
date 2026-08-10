@@ -1,0 +1,25 @@
+{
+  "name": "@loopany/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Loopany kernel CLI + local file driver. The `loopany-kernel` bin drives @loopany/kernel against a .loopany/ workspace (the M2 demo-phase file backend); the driver is exported for reuse by the M6 conformance harness. Bare `loopany` belongs to the daemon — the CLI verbs merge into it in a later batch.",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "loopany-kernel": "bin/loopany-kernel.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@loopany/artifact-format": "workspace:*",
+    "@loopany/kernel": "workspace:*",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.9"
+  }
+}
