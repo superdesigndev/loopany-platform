@@ -2,7 +2,7 @@
 // would boot the pglite database).
 import { describe, expect, it } from "vitest";
 
-import { isTransactionPooler, poolOptionsFor } from "./poolOptions.js";
+import { DEFAULT_POOL_MAX, isTransactionPooler, poolOptionsFor } from "./poolOptions.js";
 
 const TXN_URL = "postgresql://user:pass@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
 const TXN_URL_ALT_SCHEME = "postgres://user:pass@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
@@ -62,11 +62,32 @@ describe("poolOptionsFor", () => {
   it("keeps the shared pool knobs stable regardless of mode", () => {
     for (const url of ALL_URLS) {
       const opts = poolOptionsFor(url);
-      expect(opts.max).toBe(10);
+      expect(opts.max).toBe(6);
       expect(opts.idle_timeout).toBe(30);
       expect(opts.connect_timeout).toBe(15);
       expect(opts.max_lifetime).toBe(1800);
       expect(opts.connection.statement_timeout).toBe(30000);
     }
+  });
+
+  /**
+   * The pool is sized by the POOLER's client cap, not by our concurrency appetite.
+   * Supabase's session pooler refuses past `pool_size` (15 here) with
+   * `EMAXCONNSESSION`, and the binding case is a RESTART: a process killed without a
+   * clean shutdown leaves its backends held until TCP keepalive reaps them while the
+   * replacement opens its own, so the worst case is `2*max + 1` (the migrator shares
+   * the same budget). At the old `max: 10` that is 21 against 15 - guaranteed
+   * refusals during any restart, as the 2026-08-10 crash loop demonstrated.
+   */
+  it("leaves restart headroom under a 15-client pooler cap", () => {
+    const POOLER_CAP = 15;
+    const worstCaseDuringRestart = DEFAULT_POOL_MAX * 2 + 1;
+    expect(worstCaseDuringRestart).toBeLessThan(POOLER_CAP);
+  });
+
+  it("honors an explicit max so the pooler cap can change without a code change", () => {
+    expect(poolOptionsFor(SESSION_URL, false, 3).max).toBe(3);
+    // An omitted override keeps the documented default rather than going unbounded.
+    expect(poolOptionsFor(SESSION_URL, false, undefined).max).toBe(DEFAULT_POOL_MAX);
   });
 });

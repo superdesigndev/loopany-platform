@@ -28,7 +28,7 @@ import { drizzle as drizzlePglite, type PgliteDatabase } from "drizzle-orm/pglit
 import { drizzle as drizzlePostgres, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres, { type Sql } from "postgres";
 
-import { dataDir, databaseUrl, dbPoolMode } from "../env.js";
+import { dataDir, databaseUrl, dbPoolMax, dbPoolMode } from "../env.js";
 import { logger } from "../logger.js";
 import { isTransactionPooler, poolOptionsFor } from "./poolOptions.js";
 import { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runLeases, connectKeys } from "./schema.js";
@@ -96,9 +96,12 @@ function open(): { db: Db; client: Client; driver: Driver } {
     // Conservative pool for one always-on machine against the pooler. `max_lifetime`
     // + `statement_timeout` are the pool's self-healing ring after the 2026-07-09
     // wedged-pool incident (see api.health.db.ts for the full story + Fly backstop).
+    // `max` is sized by the POOLER's client cap, not our concurrency appetite, and
+    // the binding case is a restart's stale-plus-fresh overlap - see poolOptions.ts
+    // `DEFAULT_POOL_MAX`. `dbPoolMax()` overrides it when that external cap changes.
     const mode = dbPoolMode();
     const txnPooler = mode ? mode === "transaction" : isTransactionPooler(url);
-    const client = postgres(url, poolOptionsFor(url, txnPooler));
+    const client = postgres(url, poolOptionsFor(url, txnPooler, dbPoolMax()));
     const db = drizzlePostgres(client, { schema });
     g.__loopanyClient = client;
     g.__loopanyDb = db;

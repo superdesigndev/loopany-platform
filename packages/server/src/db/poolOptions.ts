@@ -59,10 +59,43 @@ export interface PoolOptions {
  * Pass `transactionPooler` explicitly to override the port-based detection
  * (the `LOOPANY_DB_POOL_MODE` escape hatch).
  */
-export function poolOptionsFor(url: string, transactionPooler: boolean = isTransactionPooler(url)): PoolOptions {
+/**
+ * Runtime pool size. Sized by the POOLER's client cap, not by our concurrency
+ * appetite - Supabase's session pooler refuses past `pool_size` (15 on this
+ * project) with `EMAXCONNSESSION`, and that budget is shared with the migrator and
+ * any ops session.
+ *
+ * The binding constraint is a RESTART, not steady state. A process killed without a
+ * clean shutdown leaves its backends held until TCP keepalive reaps them, while the
+ * replacement immediately opens its own, so the worst case is `2*max + 1` (the extra
+ * being the prestart migrator over DIRECT_DATABASE_URL - the same 15 slots, since
+ * DATABASE_URL and DIRECT_DATABASE_URL point at the same session pooler here). At
+ * the old `max: 10` that is 21 against a cap of 15: guaranteed refusals during any
+ * restart, which is exactly what the 2026-08-10 crash loop produced (observed 14/15
+ * occupied, with new connections refused).
+ *
+ * 6 keeps the restart worst case at 13, leaving headroom, and is still well clear of
+ * demand: sampling prod once a second for a minute showed 0 active connections in 56
+ * of 60 samples, 1 in three, and a peak of 4 - while the pool held all 10 open the
+ * entire time (poll traffic keeps round-robining across them, so `idle_timeout` never
+ * gets a 30s-quiet connection to reap). Queueing behind a smaller pool costs almost
+ * nothing on a single-vCPU box, where the CPU - not the connection count - is the
+ * real limit.
+ *
+ * Override with `LOOPANY_DB_POOL_MAX` (env.ts `dbPoolMax`) when the pooler's own
+ * `pool_size` changes; this stays an EXTERNAL constraint, so it must be tunable
+ * without a code change.
+ */
+export const DEFAULT_POOL_MAX = 6;
+
+export function poolOptionsFor(
+  url: string,
+  transactionPooler: boolean = isTransactionPooler(url),
+  max: number = DEFAULT_POOL_MAX,
+): PoolOptions {
   return {
     prepare: !transactionPooler,
-    max: 10,
+    max,
     idle_timeout: 30,
     connect_timeout: 15,
     max_lifetime: 60 * 30, // 30 min — retire connections by age so dead sockets drop

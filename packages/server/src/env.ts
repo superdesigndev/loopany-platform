@@ -42,6 +42,19 @@ export function dbPoolMode(): "transaction" | "session" | undefined {
 }
 
 /**
+ * Runtime connection-pool size override (`db/poolOptions.ts` `DEFAULT_POOL_MAX`).
+ * The right value is dictated by the POOLER's client cap - an external constraint
+ * that can change without a deploy - so it is tunable here. Returns undefined when
+ * unset or unparseable, leaving the documented default in force.
+ */
+export function dbPoolMax(): number | undefined {
+  const raw = process.env.LOOPANY_DB_POOL_MAX?.trim();
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/**
  * Direct (session-mode, `:5432`) Postgres URL used ONLY for migrations — DDL and
  * the migrator's advisory lock must NOT go through the transaction pooler. Falls
  * back to `DATABASE_URL` when unset (e.g. a plain non-pooled Postgres).
