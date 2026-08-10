@@ -33,3 +33,4 @@ __pycache__/
 evidence/
 /.playwright-cli
 .DS_Store
+docs/plans/

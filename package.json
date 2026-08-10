@@ -13,7 +13,8 @@
     "build": "pnpm --filter @loopany/server build",
     "start": "pnpm --filter @loopany/server start",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @loopany/server test && pnpm --filter @crewlet/loopany test"
+    "test": "pnpm --filter @loopany/kernel test && pnpm --filter @loopany/artifact-format test && pnpm --filter @loopany/cli test && pnpm --filter @loopany/simulator test && pnpm --filter @loopany/server test && pnpm --filter @crewlet/loopany test",
+    "test:conformance": "pnpm --filter @loopany/server test src/kernel/kernelConformance.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
