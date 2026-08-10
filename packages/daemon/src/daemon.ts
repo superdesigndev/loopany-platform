@@ -23,6 +23,7 @@ import { snapshotProgress } from "./progress.js";
 import { WatchManager, type WatchSpec } from "./watcher.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion, writeRunningVersion } from "./version.js";
+import { startMoonlight } from "./moonlight.js";
 
 const POLL_MS = Number(process.env.LOOPANY_POLL_MS || 3000);
 /** Per-poll fetch timeout — a hung connection must not stall the heartbeat
@@ -133,6 +134,11 @@ export async function runDaemon(): Promise<number> {
   // but the LOCAL roots jail still confines which folders may ever be watched.
   const watchManager = new WatchManager(server, token, roots);
 
+  // Moonlight: while resident, also drive the local kernel tick for every
+  // registered `.loopany/` workspace (~60s cadence, best-effort + isolated -
+  // never touches the poll loop). A registry with no entries is a no-op.
+  const stopMoonlight = startMoonlight();
+
   logger.info({ server, pollMs: POLL_MS, roots: roots.length ? roots : "(no workdir jail)" }, "polling for deliveries");
 
   // Runs execute in the BACKGROUND so the poll loop keeps heart-beating and can
@@ -194,6 +200,7 @@ export async function runDaemon(): Promise<number> {
   while (inFlight.size > 0 && Date.now() < drainDeadline) {
     await new Promise((r) => setTimeout(r, 200));
   }
+  stopMoonlight();
   await watchManager.closeAll();
   // Only clear the pidfile if it still records OUR pid — never delete a file a
   // newer daemon has since claimed.
