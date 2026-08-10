@@ -49,7 +49,7 @@ export function ViewerHead({
 }
 
 /** The binary / oversize body - download affordance or the metadata-only note. */
-export function BinaryNotice({
+function BinaryNotice({
   loopId,
   path,
   oversize,
