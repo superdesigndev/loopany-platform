@@ -1,0 +1,52 @@
+/**
+ * Pins the public surface — an export cannot appear or vanish unnoticed
+ * (the artifact-format discipline). Adding an export is a deliberate act:
+ * update this list in the same PR and say why.
+ */
+import { describe, expect, it } from "vitest";
+import * as kernel from "../src/index.js";
+
+const EXPECTED = [
+  "ACTIVE_RUN_STATES",
+  "EDITABLE_TASK_FIELDS",
+  "MIRROR_KINDS",
+  "REFUSAL_CODES",
+  "TASK_PRIORITIES",
+  "TASK_STATUSES",
+  "TASK_TYPES",
+  "TERMINAL_STATUSES",
+  "activeRun",
+  "applyChangeset",
+  "applyToWorld",
+  "boardView",
+  "cronTriggerId",
+  "decide",
+  "emptyChangeset",
+  "emptySnapshot",
+  "emptyWorld",
+  "eventId",
+  // foldChangeset / foldToWorld are intentionally NOT public — the
+  // unconditional folds are internal + test only (A1). tests import them from
+  // ../src/apply.js directly. A driver bypassing CAS via a public fold would
+  // undermine §9's single transactional boundary.
+  "inboxView",
+  "isDispatchable",
+  "isPersonAssignee",
+  "isTerminal",
+  "loopsView",
+  "mirrorId",
+  "onceTriggerId",
+  "refuse",
+  "runId",
+  "shortHash",
+  "slugify",
+  "sortTasksForList",
+  "tick",
+  "treeView",
+].sort();
+
+describe("public surface", () => {
+  it("exports exactly the pinned names", () => {
+    expect(Object.keys(kernel).sort()).toEqual(EXPECTED);
+  });
+});

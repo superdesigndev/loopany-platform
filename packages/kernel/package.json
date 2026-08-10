@@ -1,0 +1,20 @@
+{
+  "name": "@loopany/kernel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Loopany task kernel — the pure-function rulebook: entities (task/doc/mirror + events/triggers/runs), the six-state machine with entry invariants, decide(command) -> Changeset | Refusal, and tick(now). Zero I/O by design; it runs wherever the authority lives (local driver or the loopany server).",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "croner": "^10.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.9"
+  }
+}
