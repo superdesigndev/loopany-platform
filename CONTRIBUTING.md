@@ -5,7 +5,7 @@ getting set up and landing a change.
 
 ## Repo layout
 
-Loopany is a pnpm monorepo with two packages:
+Loopany is a pnpm monorepo with three packages:
 
 - **`packages/server`** (`@loopany/server`, private) — the TanStack Start web app:
   UI + server functions + the in-process scheduler + machine/agent routes + Better
@@ -13,6 +13,10 @@ Loopany is a pnpm monorepo with two packages:
 - **`packages/daemon`** (`@crewlet/loopany`, public on npm) — the machine-side
   daemon that runs on each user's own machine, polls the server for due runs, and
   executes them via the user's local coding agent (BYOA).
+- **`packages/artifact-format`** (`@loopany/artifact-format`, private) — the
+  artifact file format codec (YAML front matter + an opaque body). A pure
+  structural library with no I/O and no domain knowledge; see
+  [its README](packages/artifact-format/README.md) for the format contract.
 
 `AGENTS.md` is the in-repo design/decision log — read it for architecture context.
 
@@ -50,7 +54,8 @@ the artifact blob store, or other options. The app runs open (no auth) by defaul
 pnpm -r test                          # run every package's test suite
 pnpm --filter @loopany/server test    # server only
 pnpm --filter @crewlet/loopany test   # daemon only
-pnpm -r typecheck                     # typecheck both packages
+pnpm --filter @loopany/artifact-format test   # artifact-format only
+pnpm -r typecheck                     # typecheck every package
 ```
 
 Please keep tests and `typecheck` green before opening a PR.

@@ -150,7 +150,7 @@ Pass configuration with `-e KEY=value` or `--env-file` (same variables as [`.env
 ```bash
 pnpm dev            # server on http://127.0.0.1:3000
 pnpm -r test        # all tests
-pnpm -r typecheck   # both packages
+pnpm -r typecheck   # every package
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contributor guide (migrations, releases, PR flow) and [`AGENTS.md`](AGENTS.md) for architecture notes.

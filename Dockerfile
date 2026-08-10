@@ -10,10 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 RUN corepack enable
 WORKDIR /app
 
-# Install deps (cache on manifests).
+# Install deps (cache on manifests). Copy EVERY workspace package's manifest, so
+# the install layer reflects the real workspace: pnpm silently skips an importer
+# whose package.json is absent, which would only surface later as a missing
+# workspace link once the server actually depends on that package.
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/server/package.json packages/server/
 COPY packages/daemon/package.json packages/daemon/
+COPY packages/artifact-format/package.json packages/artifact-format/
 RUN pnpm install --frozen-lockfile
 
 # Build the server (nitro → .output/server/index.mjs).

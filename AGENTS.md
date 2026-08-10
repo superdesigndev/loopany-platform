@@ -31,13 +31,28 @@ computes pure functions. Run instructions: `README.md`.
   - `src/routes/` - pages + server-only route files.
 - `packages/daemon` (`@crewlet/loopany`) - one binary, two roles: poll-loop daemon
   and the in-run `loopany` callback; spawns claude.
+- `packages/artifact-format` (`@loopany/artifact-format`) - the Graph-Engineering-v3
+  **artifact file format codec**: YAML front matter + an OPAQUE body,
+  parse/serialize as deterministic inverses. PURE STRUCTURAL library - no I/O, no
+  server internals, and **zero domain knowledge**: it enforces only "the head is a
+  YAML mapping" + "`format` is a known enum", and preserves every other key
+  verbatim. Object kinds and their closed key sets belong to the server seam, NOT
+  here - do not add a field rule to this package. Not yet wired into server or UI.
+  The format contract, key ordering (`keyOrder`), error codes and hostile-input
+  ceilings are documented in its own `README.md` - read that, never a summary here.
+  It renders NOTHING (no markdown/sanitizer deps; a consumer displays a body under
+  its own policy), and its public surface is pinned by `src/codec.surface.test.ts`
+  against `test/target.ts`, so an export cannot appear or vanish unnoticed. NB it
+  is STRICT and throws, unlike the soft, never-throwing v2 loop-product reader
+  `packages/server/src/server/frontmatter.ts`; the two coexist by design.
 
 ## Commands
 
 - `pnpm dev` - server on :3000 (UI + scheduler + machine routes).
-- `pnpm -r typecheck` - both packages (server typecheck runs `tsr generate` first,
+- `pnpm -r typecheck` - every package (server typecheck runs `tsr generate` first,
   so a fresh checkout typechecks with no prior build).
-- `pnpm --filter @loopany/server test` / `pnpm --filter @crewlet/loopany test` -
+- `pnpm --filter @loopany/server test` / `pnpm --filter @crewlet/loopany test` /
+  `pnpm --filter @loopany/artifact-format test` (all three via `pnpm test`) -
   vitest; single file: append the path; single test: `vitest run -t "<name>"`.
 - `pnpm --filter @loopany/server db:generate` / `db:migrate` - Drizzle migrations.
 - `bash scripts/demo-cookie-unified.sh` - e2e demo loop through the unified server.
