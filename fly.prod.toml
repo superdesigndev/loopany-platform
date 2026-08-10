@@ -57,6 +57,22 @@ primary_region = "sjc"
     timeout = "10s"
     grace_period = "30s"
 
+# DEDICATED cpu, deliberately NOT a shared-cpu size - do not move it back.
+#
+# The 2026-08-10 outage: on `shared-cpu-1x` prod exhausted its CPU burst balance
+# and was pinned at the ~6% baseline (measured: 88% `steal` in /proc/stat, PSI
+# `some avg10=51`, load 1.38 on 1 vCPU). Node's event loop starved, so it could
+# not drain the DB sockets - every Postgres backend sat in `ClientRead` with zero
+# lock contention while a plain `select 1` took 0.6-5s. The DB watchdog
+# (server/dbWatchdog.ts) read that as a wedged pool and exited the process, and
+# every restart re-armed 109 enabled loops + misfire catch-up, spiking CPU again
+# on an already-drained balance. Each life got shorter (455s -> 161s -> 100s), so
+# the balance never recovered: a death spiral, ~2h of hard downtime.
+#
+# The watchdog cannot tell "pool wedged" from "event loop starved" (a known gap,
+# tracked separately). A dedicated core removes the trigger: steal drops to ~0,
+# so CPU starvation can never masquerade as a wedged pool again. Shared CPU is
+# also simply the wrong shape here - the scheduler must stay responsive 24/7.
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "1024mb"
+  size = "performance-1x"
+  memory = "2048mb"
