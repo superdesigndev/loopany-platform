@@ -30,6 +30,7 @@
     "better-auth": "^1.6.19",
     "croner": "^10.0.1",
     "diff": "^9.0.0",
+    "@loopany/kernel": "workspace:*",
     "dompurify": "^3.4.11",
     "drizzle-orm": "^0.45.2",
     "html-react-parser": "^6.1.3",
@@ -42,6 +43,7 @@
     "recharts": "^3.9.1"
   },
   "devDependencies": {
+    "@loopany/cli": "workspace:*",
     "@tailwindcss/vite": "^4.3.1",
     "@tanstack/react-router-devtools": "^1.167.0",
     "@tanstack/router-cli": "1.167.17",

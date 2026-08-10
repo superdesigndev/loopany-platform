@@ -335,6 +335,109 @@ export const connectKeys = pgTable("connect_keys", {
   mintedAt: text("minted_at").notNull(),
 });
 
+// ---- kernel_* : the @loopany/kernel four-record model, server-hosted (M5) ----
+//
+// The kernel (`@loopany/kernel`) is a PURE rulebook: Objects (present), Events
+// (past), Triggers (future), Runs (handoff). The server hosts it as ONE backend
+// among several (design §2/§9): it decides IN-PROCESS with the same kernel package
+// the local driver uses, then persists the resulting Changeset transactionally
+// (`kernel/store.ts`). Tables are PREFIXED `kernel_` because production already
+// owns a `runs` table (and `machines`/`loops`), and the two models must never
+// collide. EVERY row carries `team_id` — the kernel model has no team column of
+// its own (it is single-authority per workspace), so the team scope is applied
+// at this seam: reads snapshot one team, writes stamp the actor's team.
+//
+// The kernel's own row shapes are stored as-is: objects carry their whole record
+// as a typed jsonb `data` blob (the kernel's KernelObject is a discriminated
+// union whose closed keys belong to the package, NOT this schema — mirroring the
+// artifact-format "no domain field rules here" discipline), plus the indexed
+// columns the store needs to build a snapshot and enforce CAS (`id`, `archetype`,
+// `version`). Events are append-only. Triggers/runs likewise carry indexed
+// scheduling/lifecycle columns + a `data` blob for the full kernel record.
+
+/** A kernel Object (task | doc | mirror). `data` is the full KernelObject the
+ *  kernel package owns; `version` is the CAS token the transactional apply checks. */
+export const kernelObjects = pgTable(
+  "kernel_objects",
+  {
+    id: text("id").notNull(),
+    teamId: text("team_id").notNull(),
+    archetype: text("archetype", { enum: ["task", "doc", "mirror"] }).notNull(),
+    version: integer("version").notNull(),
+    data: jsonb("data").$type<unknown>().notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    // (teamId, id) is the identity: a kernel id is unique WITHIN a team's workspace.
+    uniqueIndex("kernel_objects_pk").on(t.teamId, t.id),
+    index("kernel_objects_team_idx").on(t.teamId),
+  ],
+);
+
+/** A kernel Event (append-only audit; Objects are authoritative). `data` is the
+ *  full KernelEvent. `objectId` indexes the per-object stream. */
+export const kernelEvents = pgTable(
+  "kernel_events",
+  {
+    id: text("id").notNull(),
+    teamId: text("team_id").notNull(),
+    objectId: text("object_id").notNull(),
+    kind: text("kind").notNull(),
+    at: text("at").notNull(),
+    data: jsonb("data").$type<unknown>().notNull(),
+  },
+  (t) => [
+    uniqueIndex("kernel_events_pk").on(t.teamId, t.id),
+    index("kernel_events_team_idx").on(t.teamId),
+    index("kernel_events_object_idx").on(t.teamId, t.objectId),
+  ],
+);
+
+/** A kernel Trigger (the future — the clock's only consumable). `data` is the full
+ *  Trigger; CAS is by whole-record structural equality (the kernel's TriggerMutation
+ *  precondition), so no version column — the transactional apply compares the read
+ *  trigger against current. `nextFireAt` indexes the due scan. */
+export const kernelTriggers = pgTable(
+  "kernel_triggers",
+  {
+    id: text("id").notNull(),
+    teamId: text("team_id").notNull(),
+    taskId: text("task_id").notNull(),
+    kind: text("kind", { enum: ["cron", "once"] }).notNull(),
+    enabled: boolean("enabled").notNull(),
+    nextFireAt: text("next_fire_at"),
+    data: jsonb("data").$type<unknown>().notNull(),
+  },
+  (t) => [
+    uniqueIndex("kernel_triggers_pk").on(t.teamId, t.id),
+    index("kernel_triggers_team_idx").on(t.teamId),
+    index("kernel_triggers_task_idx").on(t.teamId, t.taskId),
+  ],
+);
+
+/** A kernel Run (the handoff in flight ≈ production `runs`, but the kernel model).
+ *  `data` is the full RunRecord; `state` indexes the active/terminal scan. */
+export const kernelRuns = pgTable(
+  "kernel_runs",
+  {
+    id: text("id").notNull(),
+    teamId: text("team_id").notNull(),
+    taskId: text("task_id").notNull(),
+    cause: text("cause", { enum: ["assignment", "cron", "once", "manual"] }).notNull(),
+    state: text("state", {
+      enum: ["pending", "claimed", "running", "done", "failed", "superseded"],
+    }).notNull(),
+    scheduledAt: text("scheduled_at").notNull(),
+    data: jsonb("data").$type<unknown>().notNull(),
+  },
+  (t) => [
+    uniqueIndex("kernel_runs_pk").on(t.teamId, t.id),
+    index("kernel_runs_team_idx").on(t.teamId),
+    index("kernel_runs_task_idx").on(t.teamId, t.taskId),
+  ],
+);
+
 // ---- teams: the ownership/scope unit (every user gets a personal team) ----
 
 export const teams = pgTable("teams", {
