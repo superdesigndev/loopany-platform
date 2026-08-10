@@ -149,6 +149,8 @@ const WATCH_CACHE_TTL_MS = 15_000;
  *  back to the role default). Mirrors the runs.outcome enum minus "error", which
  *  only the server assigns. */
 const RUN_OUTCOMES = new Set(["direct", "silent", "exec", "evolve"]);
+// Same content-status vocabulary an agent sets via `loopany report --status`.
+const RUN_STATUSES = new Set(["new", "resolved", "nothing-new"]);
 
 /** `loopany log`: how many recent runs to return, and the per-run transcript cap.
  *  The on-machine agent wants recent history before editing/evolving — not an
@@ -1306,6 +1308,12 @@ export class MachineGateway {
       outcome?: "direct" | "silent" | "exec" | "evolve";
       /** Workflow's direct message (set on the run). */
       message?: string;
+      /** Content status — same vocabulary as an agent's `loopany report --status`
+       *  (new | resolved | nothing-new). An agent sets this via that CLI verb
+       *  mid-run instead; this lets a pure zero-LLM workflow set it too, since
+       *  only it calls this final report directly. Untrusted wire input —
+       *  anything outside the enum is dropped (never persisted). */
+      status?: unknown;
       /** Workflow cursor (free-form) → persisted as loop.state for next run's `prev`. */
       cursor?: unknown;
       /** Claude-reported cost/usage for this run (usd + token counts). */
@@ -1378,6 +1386,9 @@ export class MachineGateway {
       const rawMessage = body.message !== undefined ? body.message : body.finalText;
       const message = typeof rawMessage === "string" ? clipText(rawMessage, MESSAGE_CAP) : undefined;
       const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
+      const claimedStatus = RUN_STATUSES.has(body.status as string)
+        ? (body.status as "new" | "resolved" | "nothing-new")
+        : undefined;
       // Only a SUCCESSFUL reconcile carries the workflow cursor forward — same as
       // the normal path, a failed run must never advance loop.state (the next run's
       // `prev` would bind data whose output the user never saw). Bounded by
@@ -1411,6 +1422,7 @@ export class MachineGateway {
         ...(artifacts ? { artifacts } : {}),
         ...(transcript ? { transcript } : {}),
         ...(runState ? { state: runState } : {}),
+        ...(claimedStatus ? { status: claimedStatus } : {}),
         ...(message !== undefined ? { message } : {}),
         // Success clears the generic reclaim reason; a genuine late failure REPLACES
         // it with the real error (honest record), keeping the run an error.
@@ -1493,6 +1505,9 @@ export class MachineGateway {
     // Whitelist the claimed outcome (untrusted wire input) — anything outside the
     // known enum falls back to the role default rather than landing in the column.
     const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
+    const claimedStatus = RUN_STATUSES.has(body.status as string)
+      ? (body.status as "new" | "resolved" | "nothing-new")
+      : undefined;
     const finalized = await store.updateRun(lease.runId, {
       phase: ok ? "done" : "error",
       outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
@@ -1503,6 +1518,7 @@ export class MachineGateway {
       ...(transcript ? { transcript } : {}),
       ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
       ...(runState ? { state: runState } : {}),
+      ...(claimedStatus ? { status: claimedStatus } : {}),
       ...(message !== undefined ? { message } : {}),
       ...(ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
       progress: null, // live signal done — the full transcript supersedes it

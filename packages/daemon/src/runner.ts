@@ -64,6 +64,10 @@ interface ReportBody {
   durationMs: number;
   outcome?: "direct" | "silent" | "exec" | "evolve";
   message?: string;
+  /** Content status — same vocabulary as an agent's `loopany report --status`;
+   *  set only by a pure zero-LLM workflow (an agent sets it via that CLI verb
+   *  directly, mid-run, not through this final report). */
+  status?: "new" | "resolved" | "nothing-new";
   /** Workflow cursor (free-form) to persist as loop.state for next run's `prev`. */
   cursor?: unknown;
   sessionId?: string;
@@ -375,7 +379,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
         return reportRun({
           runId: d.runId, ok: true, durationMs: Date.now() - start,
           outcome: wf.result!.message ? "direct" : "silent",
-          message: wf.result!.message, cursor,
+          message: wf.result!.message, status: wf.result!.status, cursor,
           taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
         });
       }
