@@ -21,6 +21,7 @@ import type { BundleView } from '../types'
  * the SEO meta. The interactive bits (category filter, copy buttons) hydrate as usual.
  */
 export const Route = createFileRoute('/templates')({
+  loader: async (): Promise<{ bundles: BundleView[] }> => ({ bundles: await listPublicBundles() }),
   head: () => ({
     meta: [
       { title: 'Loopany templates — agent loops that actually work' },
@@ -31,7 +32,6 @@ export const Route = createFileRoute('/templates')({
       },
     ],
   }),
-  loader: async (): Promise<{ bundles: BundleView[] }> => ({ bundles: await listPublicBundles() }),
   component: TemplatesRoute,
 })
 

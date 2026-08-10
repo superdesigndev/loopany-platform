@@ -14,13 +14,13 @@ import { LoadErrorCard } from '../components/actionUi'
  * expose in the URL) renders the dashboard right here, unchanged.
  */
 export const Route = createFileRoute('/')({
-  ssr: false,
   // `?template=<name>` deep-links from the public market (`/templates`): it rides through
   // the gated redirect and preselects the compose modal (see DashboardView.openTemplate).
   validateSearch: (s: Record<string, unknown>): { template?: string } => ({
     template: typeof s.template === 'string' && s.template ? s.template : undefined,
   }),
   loaderDeps: ({ search }) => ({ template: search.template }),
+  ssr: false,
   loader: async ({ deps }): Promise<{ mode: 'signin' | 'dashboard'; auth: { enabled: boolean }; initial?: DashboardData }> => {
     const auth = await getAuthState()
     if (auth.enabled) {
