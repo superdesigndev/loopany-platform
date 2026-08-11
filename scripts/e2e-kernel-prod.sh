@@ -9,7 +9,10 @@
 #     loopany-kernel - the 2026-08-11 review's blocking finding was exactly that
 #     the packed package had no kernel callback);
 #   - the server is the unified TanStack dev server (UI + machine routes +
-#     scheduler + kernel gateway, one process, pglite tier);
+#     scheduler + kernel gateway, one process, pglite tier) with the LOGIN GATE
+#     ON: device tokens resolve through pre-seeded connect keys
+#     (scripts/e2e-kernel-seed.mts) into per-user teams, a forged token 401s,
+#     and the cross-team wall (step 8) is provable;
 #   - the "coding agent" is a stub bin (LOOPANY_CLAUDE_BIN) that calls
 #     `loopany-kernel` RESOLVED FROM PATH - proving the kernel-run shim dir +
 #     the in-run env contract (LOOPANY_KERNEL_BACKEND/TOKEN) end to end.
@@ -32,6 +35,7 @@ TMP="$(mktemp -d -t loopany-kernel-e2e)"
 PORT="${LOOPANY_PORT:-3899}"
 BASE="http://127.0.0.1:$PORT"
 TOKEN="dk_e2e_kernel_$(date +%s)"
+TOKEN_B="dk_e2e_wall_$(date +%s)"
 ALIAS="e2e-mbp"
 
 server_pid=""; daemon_pid=""
@@ -57,11 +61,22 @@ BIN="$TMP/install/node_modules/.bin"
 "$BIN/loopany-kernel" help >/dev/null || fail "shipped loopany-kernel does not execute"
 echo "✓ packed daemon exposes both bins; loopany-kernel executes"
 
-# ---- 2. unified server -------------------------------------------------------
-echo "▶ starting the unified server on $BASE ..."
+# ---- 2. seed connect keys, then the GATED unified server ---------------------
+# The login gate is ON (production shape): only a device token resolving to a
+# live connect key may enroll, and each enrolls into ITS OWN user's personal
+# team - which is what makes the cross-team wall scenario (step 8) meaningful.
+# pglite is single-writer, so the seeder runs + exits BEFORE the server boots.
+echo "▶ seeding connect keys (user-a, user-b) into the pglite dir ..."
+( cd "$ROOT/packages/server" && LOOPANY_DATA_DIR="$TMP/server-data" \
+    LOOPANY_DB_PATH="$TMP/server-data/loopany.db" \
+    npx -y tsx "$ROOT/scripts/e2e-kernel-seed.mts" "e2e-user-a=$TOKEN" "e2e-user-b=$TOKEN_B" ) \
+  >"$TMP/seed.log" 2>&1 || { cat "$TMP/seed.log"; fail "connect-key seed"; }
+
+echo "▶ starting the unified server on $BASE (login gate ON) ..."
 ( cd "$ROOT/packages/server" && LOOPANY_PORT="$PORT" LOOPANY_DATA_DIR="$TMP/server-data" \
     LOOPANY_DB_PATH="$TMP/server-data/loopany.db" LOOPANY_LOG_LEVEL=info LOOPANY_KERNEL_SWEEP_MS=2000 \
     LOOPANY_KERNEL_CLAIM_GRACE_MS=3000 LOOPANY_KERNEL_OFFLINE_RECLAIM_MS=5000 \
+    GITHUB_CLIENT_ID=e2e-gate GITHUB_CLIENT_SECRET=e2e-gate LOOPANY_AUTH_SECRET=e2e-secret \
     npx -y pnpm@8.15.0 dev ) >"$TMP/server.log" 2>&1 &
 server_pid=$!
 ready=""
@@ -261,7 +276,47 @@ FINAL_COUNT="$(curl -fsS -X POST "$BASE/api/kernel/cli" -H "Authorization: Beare
 [ "$FINAL_COUNT" = "1" ] || fail "bet-cron: expected exactly 1 run after repeated sweeps over one fire, got $FINAL_COUNT"
 echo "✓ bet-cron: ~5+ duplicate 2s sweeps over one fire minted exactly one run"
 
+# ---- 8. CROSS-TEAM WALL (gated, packed) --------------------------------------
+# user-b's machine enrolls with its OWN valid credential and the SAME alias
+# name. Team A's pending run addressed at that alias must NEVER reach B's
+# machine (delivery isolation), B's kernel read must not see A's objects
+# (read isolation), and B's owner surface gets a flat not-found on A's task.
+# Positive control: A's own poll DOES deliver the run - the wall blocks the
+# other team, not the feature.
+echo "▶ cross-team wall: enrolling user-b's machine under the same alias name ..."
+curl -fsS -X POST "$BASE/api/machine/poll" -H "Authorization: Bearer $TOKEN_B" \
+  -H 'Content-Type: application/json' \
+  -d "{\"host\":\"wall.local\",\"alias\":\"$ALIAS\",\"kernelInFlight\":[]}" >/dev/null \
+  || fail "wall: user-b's seeded token failed to enroll under the gate"
+
+# An UNKNOWN token must still 401 (the gate held while B's valid one passed).
+GATECODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/machine/poll" \
+  -H "Authorization: Bearer dk_forged_$(date +%s)" -H 'Content-Type: application/json' \
+  -d '{"host":"evil.local","kernelInFlight":[]}')"
+[ "$GATECODE" = "401" ] || fail "wall: a forged token enrolled (got $GATECODE, want 401)"
+
+lk create "wall probe" --id wall-probe --assignee "$ALIAS/claude" --workdir "$JAIL/proj" >/dev/null
+
+POLL_B="$(curl -fsS -X POST "$BASE/api/machine/poll" -H "Authorization: Bearer $TOKEN_B" \
+  -H 'Content-Type: application/json' -d "{\"host\":\"wall.local\",\"alias\":\"$ALIAS\",\"kernelInFlight\":[]}")"
+DELIV_B="$(echo "$POLL_B" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('kernelRuns') or []))")"
+[ "$DELIV_B" = "0" ] || { echo "$POLL_B"; fail "wall: team A's run was DELIVERED to user-b's machine"; }
+
+READ_B="$(curl -fsS -X POST "$BASE/api/kernel/cli" -H "Authorization: Bearer $TOKEN_B" \
+  -H 'Content-Type: application/json' -d '{"read":true}')"
+echo "$READ_B" | grep -q "wall-probe\|bet-e2e\|decide-brand" \
+  && { fail "wall: user-b's read leaked team A's objects"; } || true
+
+lkb() { LOOPANY_KERNEL_BACKEND="$BASE" LOOPANY_KERNEL_TOKEN="$TOKEN_B" "$BIN/loopany-kernel" "$@"; }
+lkb show bet-e2e >/dev/null 2>&1 && fail "wall: user-b's owner surface resolved team A's task" || true
+
+POLL_A="$(curl -fsS -X POST "$BASE/api/machine/poll" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d "{\"host\":\"e2e.local\",\"alias\":\"$ALIAS\",\"kernelInFlight\":[]}")"
+echo "$POLL_A" | grep -q "wall-probe" \
+  || { echo "$POLL_A" | head -5; fail "wall: the positive control failed - A's own poll did not deliver wall-probe"; }
+echo "✓ cross-team wall: forged token 401s; B gets no delivery, no read, flat not-found; A still delivers"
+
 echo
 echo "✅ production-shaped kernel E2E passed: packed daemon, shipped CLI callback,"
 echo "   workdir execution, postcondition, roots jail, closed goal, live hand-back,"
-echo "   remote timeline, daemon-death reclaim, duplicate-sweep dedup."
+echo "   remote timeline, daemon-death reclaim, duplicate-sweep dedup, cross-team wall."
