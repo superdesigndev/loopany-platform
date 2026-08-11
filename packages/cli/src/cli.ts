@@ -52,6 +52,7 @@ import {
   renderShow,
   renderTree,
 } from "./render.js";
+import { handbackTargetFor } from "./prompt.js";
 import { realSpawn, resolveSelfBin, spawnPendingRuns, type SpawnFn, type SpawnReport } from "./spawn.js";
 import type { SyncTransport } from "./remote.js";
 import { realProbe, seedProfiles, type ProbeFn } from "./seedProfiles.js";
@@ -611,9 +612,17 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
   // so `--now`/LOOPANY_NOW steers the inbox deterministically (§13 M3), matching
   // list and tick — a parsed-but-ignored override was silently wrong output.
   const now = resolveNow(args, deps);
+  const backend = backendFor(deps);
   const items = inboxView(snapshot, me, now);
-  if (args.bools.has("json")) return ok(JSON.stringify(items, null, 2));
-  return ok(renderInbox(items, now));
+  // Default hand-back agent per item (review round 3): derived from the event
+  // that handed the task to this human - the inbox is a copy-paste decision
+  // surface, never an address quiz.
+  const handbackTargets: Record<string, string | null> = {};
+  for (const i of items) {
+    handbackTargets[i.task.id] = handbackTargetFor(backend.events(i.task.id), i.task, snapshot.runs);
+  }
+  if (args.bools.has("json")) return ok(JSON.stringify({ items, handbackTargets }, null, 2));
+  return ok(renderInbox(items, now, handbackTargets));
 }
 
 /** `loops` — the Loops projection (kernel-product-visibility): every cron task

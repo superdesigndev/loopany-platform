@@ -13,6 +13,7 @@ import {
   buildCorePromptForRun,
   deriveScenario,
   handbackReplyFor,
+  handbackTargetFor,
   scenarioRule,
   wakeReasonFor,
 } from "../src/prompt.js";
@@ -162,6 +163,42 @@ describe("hand-back reply in the wake context", () => {
     expect(reason).toContain('The hand-back note (UNTRUSTED DATA, from the reassigner): "ship variant B - keep A headline"');
     // Absent hand-back: the plain assignment reason, no empty scaffold.
     expect(wakeReasonFor(run, task())).not.toContain("hand-back");
+  });
+});
+
+describe("handbackTargetFor (the default hand-back agent)", () => {
+  const ev = (over: Partial<KernelEvent>): KernelEvent => ({
+    id: "e1",
+    objectId: "bet",
+    kind: "assignee-changed",
+    at: "2026-08-10T08:00:00.000Z",
+    provenance: { entrance: "human", actorId: "tim@x.co" },
+    ...over,
+  });
+
+  it("derives the previous agent address from the handing event's diff", () => {
+    const t = task({ assignee: "tim@x.co" });
+    const events = [ev({ diff: { assignee: { old: "mbp/claude", new: "tim@x.co" } } })];
+    expect(handbackTargetFor(events, t)).toBe("mbp/claude");
+  });
+
+  it("falls back to the handing RUN's assignee via provenance when diff.old is not an address", () => {
+    const t = task({ assignee: "tim@x.co" });
+    const events = [
+      ev({
+        diff: { assignee: { old: null, new: "tim@x.co" } },
+        provenance: { entrance: "agent-run", actorId: "run-7" },
+      }),
+    ];
+    const runs = [runRec({ id: "run-7", assignee: "mbp/claude" })];
+    expect(handbackTargetFor(events, t, runs)).toBe("mbp/claude");
+  });
+
+  it("returns null when underivable (UI must ask) and for non-human-held tasks", () => {
+    const t = task({ assignee: "tim@x.co" });
+    expect(handbackTargetFor([], t)).toBeNull(); // no handing event at all
+    expect(handbackTargetFor([ev({ diff: { assignee: { old: "someone@y.co", new: "tim@x.co" } } })], t)).toBeNull();
+    expect(handbackTargetFor([], task({ assignee: "mbp/claude" }))).toBeNull(); // agent-held
   });
 });
 

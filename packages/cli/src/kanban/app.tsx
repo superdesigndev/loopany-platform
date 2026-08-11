@@ -16,6 +16,7 @@ import {
   boardView,
   taskDetailView,
 } from "@loopany/kernel";
+import { handbackTargetFor } from "../prompt.js";
 import stringWidth from "string-width";
 import type { Backend } from "../backend.js";
 import {
@@ -137,6 +138,12 @@ export function detailLines(
   // surface reads, so the TUI cannot drift from show/loops.
   const detail = snapshot ? taskDetailView(snapshot, task.id) : null;
   const run = detail?.activeRun ?? detail?.lastRun ?? null;
+  // Human-held task: surface the derived default hand-back agent so the human
+  // never needs to know a machine/profile address (review round 3).
+  const handback =
+    snapshot && task.assignee !== null && !task.assignee.includes("/")
+      ? handbackTargetFor(events, task, snapshot.runs)
+      : undefined;
   const lines = [
     `${task.id}  [${task.status}]  v${task.version}`,
     `assignee: ${task.assignee ?? "unassigned"}  owner: ${task.owner ?? "unowned"}`,
@@ -145,6 +152,13 @@ export function detailLines(
     ...(task.followUpAt ? [`follow-up: ${task.followUpAt}`] : []),
     ...(run
       ? [`run ${run.id}: ${run.state}${run.note ? ` - ${run.note.slice(0, 80)}` : ""}`]
+      : []),
+    ...(handback !== undefined
+      ? [
+          handback !== null
+            ? `hand back: update ${task.id} assignee=${handback} status=todo --note "..."`
+            : "hand back: pick an agent (no prior agent derivable)",
+        ]
       : []),
     ...(detail && detail.products.length > 0
       ? [

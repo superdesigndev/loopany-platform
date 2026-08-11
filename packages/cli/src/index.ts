@@ -39,6 +39,7 @@ export {
   buildCorePromptForRun,
   deriveScenario,
   handbackReplyFor,
+  handbackTargetFor,
   scenarioRule,
   wakeReasonFor,
   type Scenario,

@@ -283,7 +283,15 @@ function age(ms: number): string {
  *  before deciding (tracks), and how long it has been waiting (vs updatedAt,
  *  which the assigning update stamped). `now` keeps the age deterministic
  *  under --now/LOOPANY_NOW. */
-export function renderInbox(items: readonly InboxItem[], now?: string): string {
+export function renderInbox(
+  items: readonly InboxItem[],
+  now?: string,
+  /** The derived default hand-back agent per task id (handbackTargetFor) -
+   *  turns the inbox into a copy-paste decision surface: the human answers
+   *  without knowing any machine/profile address by heart. Null/absent =
+   *  underivable, the hint asks them to pick an agent explicitly. */
+  handbackTargets?: Readonly<Record<string, string | null>>,
+): string {
   if (items.length === 0) return "(inbox empty)";
   const nowMs = now !== undefined ? Date.parse(now) : Date.now();
   return items
@@ -294,7 +302,14 @@ export function renderInbox(items: readonly InboxItem[], now?: string): string {
         ...(i.task.tracks ? [`inspect ${i.task.tracks}`] : []),
         `waiting ${age(nowMs - Date.parse(i.task.updatedAt))}`,
       ];
-      return `${head}\n      ${bits.join(" · ")}`;
+      const target = handbackTargets?.[i.task.id];
+      const hint =
+        target != null
+          ? `hand back: update ${i.task.id} assignee=${target} status=todo --note "<your reply>"`
+          : target === null
+            ? `hand back: update ${i.task.id} assignee=<agent> status=todo --note "<your reply>"  (no prior agent - pick one)`
+            : null;
+      return `${head}\n      ${bits.join(" · ")}${hint ? `\n      ${hint}` : ""}`;
     })
     .join("\n");
 }

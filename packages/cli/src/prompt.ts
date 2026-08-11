@@ -202,6 +202,34 @@ export function wakeReasonFor(run: RunRecord, task: TaskObject, handback?: strin
   }
 }
 
+/** The DEFAULT hand-back target for a human-assigned task (review round 3):
+ *  the human should not need to know a machine/profile address by heart. Derive
+ *  it from the event that handed the task TO the current human - its
+ *  diff.assignee.old when that is a dispatchable address, else (the event was
+ *  written by an agent RUN) the run's own assignee via provenance.actorId.
+ *  Null = underivable; the UI must then ask the human to pick an agent. */
+export function handbackTargetFor(
+  events: readonly KernelEvent[],
+  task: TaskObject,
+  runs: readonly RunRecord[] = [],
+): string | null {
+  if (task.assignee === null || task.assignee.includes("/")) return null; // not human-held
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.kind !== "assignee-changed") continue;
+    const diff = e.diff?.assignee as { old?: unknown; new?: unknown } | undefined;
+    if (diff?.new !== task.assignee) continue;
+    const prev = diff?.old;
+    if (typeof prev === "string" && prev.includes("/")) return prev;
+    if (e.provenance.entrance === "agent-run") {
+      const run = runs.find((r) => r.id === e.provenance.actorId);
+      if (run?.assignee && run.assignee.includes("/")) return run.assignee;
+    }
+    return null; // the handing event exists but resolves to no agent address
+  }
+  return null;
+}
+
 /** The reply riding an ASSIGNMENT run: the newest assignee-changed event that
  *  handed the task to this run's assignee WITH a note. Pure over the task's
  *  event stream - both backends (local file driver, server dispatch) call this
