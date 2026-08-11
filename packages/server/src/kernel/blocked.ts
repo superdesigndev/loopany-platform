@@ -17,6 +17,7 @@
 import { decide, type Provenance, type RunRecord } from "@loopany/kernel";
 import { logger } from "../logger.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "./store.js";
+import { notifyKernelChangeset } from "./notify.js";
 
 const CLOCK: Provenance = { entrance: "clock", actorId: "kernel-dispatch" };
 
@@ -32,7 +33,11 @@ export async function recordDispatchBlocked(teamId: string, run: RunRecord, reas
       new Date().toISOString(),
     );
     if (!d.ok) return; // task deleted/renamed under us - nothing to surface on
-    await applyChangesetForTeam(teamId, d.changeset); // CAS loss: another writer won; the next round retries
+    const applied = await applyChangesetForTeam(teamId, d.changeset); // CAS loss: another writer won; the next round retries
+    // The blocked note doubles as the owner notification basis - notify exactly
+    // when the (deduped) event actually landed, so at most one push per
+    // blocked run and a fresh one only on a NEW run's new event.
+    if (applied.ok) await notifyKernelChangeset(teamId, d.changeset);
   } catch (err) {
     logger.warn(
       { teamId, runId: run.id, err: err instanceof Error ? err.message : String(err) },

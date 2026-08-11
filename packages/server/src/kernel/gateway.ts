@@ -30,6 +30,7 @@ import {
 import * as store from "../db/store.js";
 import { isDeviceTokenShape, machineIdFromToken, resolveLease, retireLeasesForRun, sha256 } from "../gateway/tokens.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "./store.js";
+import { notifyKernelChangeset } from "./notify.js";
 
 export interface KernelHttpResult {
   status: number;
@@ -251,6 +252,9 @@ async function commandRequest(
   if (!applied.ok) {
     return { status: 409, body: { ok: false, notices: decision.notices, conflict: applied.conflict } };
   }
+  // Owner notifications ride the just-applied changeset (human assignment,
+  // auto-park, ...). Best-effort by construction - never blocks the write.
+  await notifyKernelChangeset(teamId, decision.changeset);
   return {
     status: 200,
     body: {

@@ -35,6 +35,7 @@ import * as store from "../db/store.js";
 import { kernelLeases, retireLeasesForRun, type KernelLeaseRow } from "../gateway/tokens.js";
 import { logger } from "../logger.js";
 import { applyChangesetForTeam, readSnapshot } from "./store.js";
+import { notifyKernelChangeset } from "./notify.js";
 
 /** Reclaims act as the server authority - a clock actor, like the tick. */
 const RECLAIM_ACTOR: Provenance = { entrance: "clock", actorId: "kernel-reclaim" };
@@ -78,6 +79,9 @@ export async function reclaimKernelRun(
     // run settled; the winner's path owns the lease retirement.
     return "conflict";
   }
+  // A reclaim that AUTO-PARKED the task pushes the owner notification (plain
+  // reclaim failures stay quiet - the backoff ladder retries).
+  await notifyKernelChangeset(teamId, d.changeset);
   await retireLeasesForRun(runId);
   logger.warn({ teamId, runId, note }, "kernel run reclaimed as failed");
   return "reclaimed";
