@@ -46,7 +46,7 @@ You are the release radar. Your ONLY job each run:
 - Read mirrors/releases.md. A merged change is "tracked" when a follow-up task for
   it already exists (check \`loopany-kernel list\`). For each UNTRACKED change,
   create exactly ONE follow-up task through the CLI: id \`follow-<feature>\`,
-  \`--assignee claude --follow-up <tomorrow 07:00 UTC>\`, tracks=release-radar,
+  \`--assignee {{agent:claude}} --follow-up <tomorrow 07:00 UTC>\`, tracks=release-radar,
   and its body = the template below with <feature> and <repo> filled in (write the
   body to a temp file OUTSIDE the workspace, then pass \`--body-file <path>\`).
 - You never judge metrics yourself - each follow-up task does that on its own
@@ -63,12 +63,12 @@ Template for each follow-up task's body:
       note, then judge from that quote. First week: set followUpAt to tomorrow.
       After a stable first week: every 3 days.
     - REGRESSION = a metric dropping AND an error signal, together. Escalate the
-      SAME run you see it: create a fix task for claude - body = the exact
+      SAME run you see it: create a fix task for {{agent:claude}} - body = the exact
       error, the repo path <repo>, and: reproduce via the repo's test, fix on a
       FEATURE BRANCH (main is protected), push the branch, \`gh pr create\`,
       and put the PR URL in the closing note - AND a question task for tim
       (assignee tim) summarizing the risk.
-    - HARD: escalation is BOTH tasks - a fix for claude AND a human notice for
+    - HARD: escalation is BOTH tasks - a fix for {{agent:claude}} AND a human notice for
       tim. A regression a human never heard about is an unreported incident,
       however good the fix.
     - HARD: the fix task closing does NOT close YOUR monitor. You stay on a

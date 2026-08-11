@@ -75,20 +75,42 @@ export interface RemoteWorld {
   alias: string;
 }
 
+/** ONE bare profile name -> its dispatch address on the remote tier
+ *  (`claude` -> `<alias>/claude`). Person assignees (emails), already-addressed
+ *  names, and non-profile names pass through. */
+export function mapAssigneeName(name: string, profiles: Profiles, alias: string): string {
+  return profiles[name] !== undefined && !name.includes("/") && !name.includes("@")
+    ? `${alias}/${name}`
+    : name;
+}
+
 /** Rewrite BARE profile-named assignees into machine-addressed form for the
  *  remote tier: `--assignee replay` / `assignee=replay` -> `<alias>/replay`.
- *  Person assignees (emails) and already-addressed names pass through. Pure -
- *  unit-tested without a server. */
+ *  Pure - unit-tested without a server. */
 export function mapArgvAssignees(argv: string[], profiles: Profiles, alias: string): string[] {
-  const map = (name: string): string =>
-    profiles[name] !== undefined && !name.includes("/") && !name.includes("@") ? `${alias}/${name}` : name;
   const out = [...argv];
   for (let i = 0; i < out.length; i++) {
     const tok = out[i]!;
-    if (tok === "--assignee" && out[i + 1] !== undefined) out[i + 1] = map(out[i + 1]!);
-    else if (tok.startsWith("assignee=")) out[i] = `assignee=${map(tok.slice("assignee=".length))}`;
+    if (tok === "--assignee" && out[i + 1] !== undefined) out[i + 1] = mapAssigneeName(out[i + 1]!, profiles, alias);
+    else if (tok.startsWith("assignee="))
+      out[i] = `assignee=${mapAssigneeName(tok.slice("assignee=".length), profiles, alias)}`;
   }
   return out;
+}
+
+/** Substitute `{{agent:NAME}}` tokens in scenario PROSE (a task brief teaching a
+ *  REAL agent what address to create follow-ups with): the local tier binds the
+ *  bare profile name, the remote tier the machine-addressed form. A replayed
+ *  agent never reads prose, but a real one types exactly what the brief says -
+ *  a bare name remotely would mint runs that never dispatch. */
+export function substituteAgentTokens(
+  content: string,
+  profiles: Profiles,
+  remote: RemoteWorld | undefined,
+): string {
+  return content.replace(/\{\{agent:([A-Za-z0-9_-]+)\}\}/g, (_, name: string) =>
+    remote ? mapAssigneeName(name, profiles, remote.alias) : name,
+  );
 }
 
 /** Run a scenario end to end. Returns the structured capture (setup + per-day
@@ -141,7 +163,10 @@ export function runScenario(scenario: Scenario, opts: RunOpts): SimResult {
       throw new Error(`setup file "${rel}" escapes the workspace`);
     }
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, substituteSandbox(content, sandbox.root));
+    writeFileSync(
+      target,
+      substituteAgentTokens(substituteSandbox(content, sandbox.root), scenario.profiles, opts.remote),
+    );
   }
 
   const setup: SimCommand[] = [];
