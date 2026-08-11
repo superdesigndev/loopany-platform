@@ -549,6 +549,11 @@ export const notificationChannels = pgTable(
     name: text("name").notNull(),
     /** Transport secrets (shape per `type`). Stored as JSON; never sent to the client raw. */
     config: jsonb("config").$type<ChannelConfig>().notNull(),
+    /** OWNER ROUTING (review round 3, the smallest user->channel mapping):
+     *  when set, kernel owner-notifications for a task whose `owner` equals
+     *  this email route HERE first; null = a plain team channel (the
+     *  fallback). No new entity - one nullable column on the existing row. */
+    userEmail: text("user_email"),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("notification_channels_team_idx").on(t.teamId)],

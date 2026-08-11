@@ -114,6 +114,43 @@ test("a HUMAN assignment notifies with the reply and the product link; agent wor
   expect(pushes).toHaveLength(2);
 });
 
+test("OWNER ROUTING: the channel bound to the notification's human wins; team channel is the fallback", async () => {
+  const { teamId, deviceToken } = await enrolledDevice();
+  // Two channels: tim's personal-bound one + a plain team channel.
+  await store.createChannel({ teamId, type: "slack", name: "tim-dm", config: { token: "x", channel: "#tim" }, userEmail: "tim@x.co" });
+  await store.createChannel({ teamId, type: "slack", name: "team-wide", config: { token: "x", channel: "#team" } });
+  // Use the REAL notifier path but capture the send seam? The notifier seam
+  // replaces routing too - so test the routing DIRECTLY: restore the real
+  // notifier and stub the channel send at the CHANNELS layer instead.
+  knotify.setKernelNotifier(null);
+  const sent: Array<{ name: string; ownerHint: string }> = [];
+  const { CHANNELS } = await import("../gateway/notify.js");
+  const realSend = CHANNELS.slack.send;
+  CHANNELS.slack.send = async (config: any, title: string) => {
+    sent.push({ name: String(config.channel), ownerHint: title });
+    return { ok: true } as any;
+  };
+  try {
+    // Task OWNED by tim gets blocked -> routes to tim's channel.
+    await kgateway.kernelCli(deviceToken, {
+      command: { op: "create", title: "owned loop", id: "owned", assignee: "ghost/claude", owner: "tim@x.co" },
+    });
+    const run = (await kstore.readSnapshot(teamId)).runs.find((r) => r.taskId === "owned")!;
+    await blocked.recordDispatchBlocked(teamId, run, "no machine for ghost");
+    expect(sent.at(-1)?.name).toBe("#tim");
+
+    // A task with NO owner falls back to the plain team channel.
+    await kgateway.kernelCli(deviceToken, {
+      command: { op: "create", title: "unowned loop", id: "unowned", assignee: "ghost2/claude" },
+    });
+    const run2 = (await kstore.readSnapshot(teamId)).runs.find((r) => r.taskId === "unowned")!;
+    await blocked.recordDispatchBlocked(teamId, run2, "no machine for ghost2");
+    expect(sent.at(-1)?.name).toBe("#team");
+  } finally {
+    CHANNELS.slack.send = realSend;
+  }
+});
+
 test("a dispatch-blocked condition notifies ONCE per blocked run (dedup inherited from the event)", async () => {
   const { teamId, deviceToken } = await enrolledDevice();
   await kgateway.kernelCli(deviceToken, { command: { op: "create", title: "ghost loop", id: "ghost", assignee: "nowhere/claude" } });

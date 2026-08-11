@@ -30,11 +30,18 @@ import * as store from "../db/store.js";
 import { CHANNELS } from "../gateway/notify.js";
 import { logger } from "../logger.js";
 
-export type KernelNotifier = (teamId: string, title: string, message: string) => Promise<void>;
+export type KernelNotifier = (teamId: string, title: string, message: string, ownerEmail?: string | null) => Promise<void>;
 
-async function realNotifier(teamId: string, title: string, message: string): Promise<void> {
-  const channel = (await store.listChannels(teamId))[0];
-  if (!channel) return; // no channel = dashboard/timeline only
+async function realNotifier(teamId: string, title: string, message: string, ownerEmail?: string | null): Promise<void> {
+  const channels = await store.listChannels(teamId);
+  if (channels.length === 0) return; // no channel = dashboard/timeline only
+  // OWNER ROUTING (review round 3): a channel bound to the notification's human
+  // (channels.userEmail) wins; a plain team channel (userEmail null) is the
+  // fallback. Both stay inside the team's own channel rows - scoping unchanged.
+  const channel =
+    (ownerEmail ? channels.find((c) => c.userEmail === ownerEmail) : undefined) ??
+    channels.find((c) => !c.userEmail) ??
+    channels[0]!;
   const r = await CHANNELS[channel.type].send(channel.config, title, message);
   if (!r.ok) logger.warn({ teamId, err: r.error }, "kernel notify dispatch failed");
 }
@@ -71,7 +78,7 @@ export async function notifyKernelChangeset(teamId: string, cs: Changeset): Prom
       if (notified.has(e.id)) continue;
       if (notified.size >= NOTIFIED_CAP) notified.clear();
       notified.add(e.id);
-      await notifier(teamId, condition.title, condition.message);
+      await notifier(teamId, condition.title, condition.message, condition.owner);
     } catch (err) {
       logger.warn(
         { teamId, eventId: e.id, err: err instanceof Error ? err.message : String(err) },
@@ -81,7 +88,7 @@ export async function notifyKernelChangeset(teamId: string, cs: Changeset): Prom
   }
 }
 
-function classify(e: KernelEvent, cs: Changeset): { title: string; message: string } | null {
+function classify(e: KernelEvent, cs: Changeset): { title: string; message: string; owner?: string | null } | null {
   const task = taskIn(cs, e.objectId);
 
   // 1. Human assignment: created-with-person or handed-to-person.
@@ -89,6 +96,7 @@ function classify(e: KernelEvent, cs: Changeset): { title: string; message: stri
     return {
       title: `decision needed: ${task.title}`,
       message: `${task.assignee} - "${task.title}" (${task.id}) is waiting on you.${productLink(task)}`,
+      owner: task.assignee, // the human who must act
     };
   }
   if (e.kind === "assignee-changed") {
@@ -97,6 +105,7 @@ function classify(e: KernelEvent, cs: Changeset): { title: string; message: stri
       return {
         title: `decision needed: ${task?.title ?? e.objectId}`,
         message: `${next} - "${task?.title ?? e.objectId}" (${e.objectId}) was handed to you${e.note ? `: ${e.note}` : "."}${productLink(task)}`,
+        owner: next, // the human who must act
       };
     }
     return null;
@@ -107,6 +116,7 @@ function classify(e: KernelEvent, cs: Changeset): { title: string; message: stri
     return {
       title: `parked: ${task?.title ?? e.objectId}`,
       message: `"${task?.title ?? e.objectId}" (${e.objectId}) ${e.note}${productLink(task)}`,
+      owner: task?.owner,
     };
   }
 
@@ -115,6 +125,7 @@ function classify(e: KernelEvent, cs: Changeset): { title: string; message: stri
     return {
       title: `needs configuration: ${task?.title ?? e.objectId}`,
       message: `${e.note}${productLink(task)}`,
+      owner: task?.owner,
     };
   }
 
