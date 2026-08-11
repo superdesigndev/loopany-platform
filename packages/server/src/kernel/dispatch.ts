@@ -24,6 +24,7 @@ import { kernelRuns } from "../db/schema.js";
 import * as store from "../db/store.js";
 import { registerRunLease, retireLease } from "../gateway/tokens.js";
 import { logger } from "../logger.js";
+import { recordDispatchBlocked } from "./blocked.js";
 import { applyChangesetForTeam, readSnapshot } from "./store.js";
 import { assigneeSegments } from "./sweep.js";
 
@@ -80,6 +81,11 @@ export async function kernelDeliveriesForMachine(machineId: string): Promise<Ker
         logger.warn(
           { teamId: teamId, runId: run.id, assignee: run.assignee },
           "kernel delivery: AMBIGUOUS alias - run stays pending; rename one machine via LOOPANY_MACHINE_ALIAS",
+        );
+        await recordDispatchBlocked(
+          teamId,
+          run,
+          `alias "${seg.machine}" is AMBIGUOUS in this team (two machines expose it) - the run stays pending; rename one machine via LOOPANY_MACHINE_ALIAS`,
         );
         continue;
       }

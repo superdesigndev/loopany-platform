@@ -726,7 +726,13 @@ export class MachineGateway {
     try {
       const first = await this.poll(deviceToken, info, progress, opts.watchDigest);
       if (first.status !== 200) return first;
-      if ((first.body as { deliveries: Delivery[] }).deliveries.length) return first;
+      // KERNEL RUNS ARE IMMEDIATE WORK TOO: the first pass already CLAIMED them
+      // (running + lease minted), so parking would delay execution by the whole
+      // hold — and the woken branch below DISCARDS `first`, which would lose the
+      // claimed delivery outright (only the orphan reconcile would ever settle
+      // it, as a failure). Return the instant either kind of work exists.
+      const firstBody = first.body as { deliveries: Delivery[]; kernelRuns?: unknown[] };
+      if (firstBody.deliveries.length || firstBody.kernelRuns?.length) return first;
       const woken = await waiter.promise;
       if (!woken) {
         // Timed out empty: re-stamp before returning so the ~20s hold never eats

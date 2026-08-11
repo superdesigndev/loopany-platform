@@ -126,7 +126,7 @@ test("a due cron mints a pending run at the authority and wakes the aliased mach
   expect(r2.minted).toBe(0);
 });
 
-test("an unknown alias leaves the run pending with zero wakes (durable inbox)", async () => {
+test("an unknown alias leaves the run pending with zero wakes AND a durable, DEDUPED task event", async () => {
   const teamId = store.teamIdForUser("u1");
   await store.ensureTeam(teamId, "u1's team", "u1");
   await seedLoop(teamId); // no machine enrolled at all
@@ -136,7 +136,65 @@ test("an unknown alias leaves the run pending with zero wakes (durable inbox)", 
   });
   expect(r).toMatchObject({ minted: 1, woken: 0 });
   const snap = await kstore.readSnapshot(teamId);
-  expect(snap.runs[0]?.state).toBe("pending"); // waits for the machine to enroll
+  const run = snap.runs[0]!;
+  expect(run.state).toBe("pending"); // waits for the machine to enroll
+
+  // The condition is DURABLE + owner-visible: one note event on the task,
+  // written by the clock actor, naming the missing alias.
+  const blocked = (await kstore.readEvents(teamId)).filter(
+    (e) => e.objectId === "seo-bet-manager" && (e.note ?? "").includes("dispatch blocked"),
+  );
+  expect(blocked).toHaveLength(1);
+  expect(blocked[0]!.note).toContain('no machine in this team has alias "mbp"');
+  expect(blocked[0]!.provenance.entrance).toBe("clock");
+
+  // DEDUP: while the SAME run stays blocked, repeats write nothing new.
+  const { recordDispatchBlocked } = await import("./blocked.js");
+  await recordDispatchBlocked(teamId, run, "whatever - same run, must dedup");
+  const again = (await kstore.readEvents(teamId)).filter(
+    (e) => e.objectId === "seo-bet-manager" && (e.note ?? "").includes("dispatch blocked"),
+  );
+  expect(again).toHaveLength(1);
+});
+
+test("one team's tick failure is ISOLATED: later teams still sweep; the report counts it", async () => {
+  const teamA = store.teamIdForUser("uA");
+  const teamB = store.teamIdForUser("uB");
+  await store.ensureTeam(teamA, "A", "uA");
+  await store.ensureTeam(teamB, "B", "uB");
+  await seedLoop(teamA);
+  await seedLoop(teamB);
+
+  const ticked: string[] = [];
+  const real = (await import("./gateway.js")).tickTeamAtAuthority;
+  const r = await sweep.kernelSweep(T1, () => {}, async (teamId, now) => {
+    if (teamId === teamA) throw new Error("malformed team blows up");
+    ticked.push(teamId);
+    return real(teamId, now);
+  });
+  expect(r.failed).toBe(1);
+  expect(ticked).toEqual([teamB]); // B swept despite A throwing
+  const snapB = await kstore.readSnapshot(teamB);
+  expect(snapB.runs).toHaveLength(1); // B's fire really minted
+});
+
+test("a pass is BOUNDED: teams past the cap are dropped loudly and stay due for the next round", async () => {
+  process.env.LOOPANY_KERNEL_SWEEP_MAX_TEAMS = "2";
+  try {
+    for (const u of ["u1", "u2", "u3"]) {
+      const teamId = store.teamIdForUser(u);
+      await store.ensureTeam(teamId, u, u);
+      await seedLoop(teamId);
+    }
+    const r1 = await sweep.kernelSweep(T1, () => {});
+    expect(r1).toMatchObject({ teams: 2, minted: 2, dropped: 1 });
+
+    // The dropped team is simply still due: the next round picks it up.
+    const r2 = await sweep.kernelSweep(T1, () => {});
+    expect(r2).toMatchObject({ teams: 1, minted: 1, dropped: 0 });
+  } finally {
+    delete process.env.LOOPANY_KERNEL_SWEEP_MAX_TEAMS;
+  }
 });
 
 test("assigneeSegments splits the execution address and rejects non-addresses", () => {

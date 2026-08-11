@@ -171,6 +171,26 @@ test("POSTCONDITION: cross-task work counts as evidence (the pull-mode contract)
   expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)?.state).toBe("done");
 });
 
+test("POSTCONDITION: a doc PRODUCT (doc-put --task) is evidence - done stands", async () => {
+  const { teamId, runId, rk } = await deliveredRun("bet-doc");
+  const put = await kgateway.kernelCli(rk, {
+    command: { op: "doc-put", key: "weekly-report-2026W33", body: "# findings", attachTask: "bet-doc" },
+  });
+  expect(put.status).toBe(200);
+  const res = await kgateway.kernelCli(rk, { command: { op: "run-finish", runId, outcome: "done" } });
+  expect(res.status).toBe(200);
+  expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)?.state).toBe("done");
+});
+
+test("FOLLOW-UP COHERENCE: status=follow-up without a date refuses at the bridge (never inconsistent state)", async () => {
+  const { rk } = await deliveredRun("bet-fu");
+  const bad = await kgateway.kernelCli(rk, {
+    command: { op: "update", id: "bet-fu", patch: { status: "follow-up" } },
+  });
+  expect(bad.status).toBe(422);
+  expect(JSON.stringify(bad.body)).toContain("FOLLOWUP_NEEDS_DATE");
+});
+
 test("POSTCONDITION: a DEVICE credential's finish is an owner override - never second-guessed", async () => {
   const { teamId, deviceToken, runId } = await deliveredRun("bet-owner");
   const res = await kgateway.kernelCli(deviceToken, {

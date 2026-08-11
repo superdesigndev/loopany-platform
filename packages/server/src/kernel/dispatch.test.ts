@@ -128,6 +128,26 @@ test("a pending kernel run rides the poll as a claimed kernelRuns delivery, exac
   expect((res2.body as { kernelRuns?: unknown[] }).kernelRuns).toBeUndefined();
 });
 
+test("pollWait returns a claimed kernel run IMMEDIATELY - never parks it behind the long-poll hold", async () => {
+  const { gw, deviceToken, teamId } = await enroll("mbp");
+  await seedLoop(teamId);
+  await sweep.kernelSweep(T1, () => {});
+
+  const started = Date.now();
+  const res = await gw.pollWait(
+    deviceToken,
+    { host: "mbp.local", alias: "mbp" },
+    undefined,
+    { wait: true, waitMs: 5_000 },
+  );
+  const elapsed = Date.now() - started;
+  const body = res.body as { kernelRuns?: unknown[] };
+  expect(body.kernelRuns).toHaveLength(1);
+  // A regression parks the claimed run for the whole hold (and the woken branch
+  // would DROP it) - immediate return is the contract.
+  expect(elapsed).toBeLessThan(2_000);
+});
+
 test("a machine the assignee does not address never receives the run", async () => {
   const { gw, deviceToken, teamId } = await enroll("other-box");
   await seedLoop(teamId, "mbp/claude"); // addressed to mbp, not other-box
