@@ -1,9 +1,12 @@
 /**
- * Machine ALIAS (kernel remote dispatch, P0 stage A): the enroll path mints a
- * team-unique alias from the daemon-reported handle (suffixing collisions, never
- * re-suffixing a live alias on later polls), and `findMachineByAlias` resolves a
- * kernel assignee's machine segment (`mbp` in `mbp/claude`) to the machines row
- * within a team - falling back to the friendly `name` for pre-alias rows.
+ * Machine ALIAS (kernel remote dispatch, P0 stage A + the 2026-08-11 hardening):
+ * the enroll path mints a team-unique alias from the daemon-reported handle
+ * (suffixing collisions, never re-suffixing a live alias on later polls; a
+ * (teamId, alias) UNIQUE INDEX backs the probe at the DB level), and
+ * `resolveMachineByAlias` - THE ONE resolver both the sweep wake and the poll
+ * delivery use - resolves a kernel assignee's machine segment by ALIAS ONLY.
+ * A shared-team ambiguity (same alias via two home teams) is a distinct
+ * `ambiguous` result the callers refuse; the old friendly-name fallback is gone.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -78,15 +81,54 @@ test("enroll mints the reported alias; a collision suffixes -2; later polls neve
   expect((await store.getMachine(a.machineId))?.alias).toBe("mbp");
 });
 
-test("findMachineByAlias resolves within the team, falls back to name, misses cleanly", async () => {
+test("resolveMachineByAlias resolves by alias only, misses cleanly, and NEVER matches a name", async () => {
   const gw = gateway();
   const a = await enroll(gw, "mbp");
-  expect((await store.findMachineByAlias(a.teamId, "mbp"))?.id).toBe(a.machineId);
+  expect((await store.resolveMachineByAlias(a.teamId, "mbp")).machine?.id).toBe(a.machineId);
 
-  // Pre-alias row (older daemon): null alias but a friendly name still resolves.
+  // The old friendly-name fallback is GONE: a null-alias row is unaddressable
+  // until its next poll backfills an alias (enroll always does).
   await store.updateMachine(a.machineId, { alias: null as unknown as string, name: "legacy-box" });
-  expect((await store.findMachineByAlias(a.teamId, "legacy-box"))?.id).toBe(a.machineId);
+  expect((await store.resolveMachineByAlias(a.teamId, "legacy-box")).machine).toBeUndefined();
 
-  // Unknown handle = undefined (the caller defers the run, never throws).
-  expect(await store.findMachineByAlias(a.teamId, "ghost")).toBeUndefined();
+  // Unknown handle = no machine, not ambiguous (the caller defers the run).
+  const miss = await store.resolveMachineByAlias(a.teamId, "ghost");
+  expect(miss.machine).toBeUndefined();
+  expect(miss.ambiguous).toBeUndefined();
+});
+
+test("a SHARED team where two members' machines expose the same alias resolves as AMBIGUOUS", async () => {
+  const gw = gateway();
+  // u1's machine (home team u1) takes alias "mbp".
+  const a = await enroll(gw, "mbp");
+
+  // u2's machine in u2's OWN home team also takes "mbp" (no collision there -
+  // per-home-team suffixing cannot see across teams).
+  const deviceToken2 = tokens.mintDeviceToken();
+  const machine2 = tokens.machineIdFromToken(deviceToken2);
+  const team2 = store.teamIdForUser("u2");
+  await store.ensureTeam(team2, "u2's team", "u2");
+  await tokens.rememberConnectKey(deviceToken2, { userId: "u2", teamId: team2 });
+  expect((await gw.poll(deviceToken2, { host: "mbp.local", alias: "mbp" })).status).toBe(200);
+  expect((await store.getMachine(machine2))?.alias).toBe("mbp");
+
+  // A shared team containing BOTH users now sees two "mbp" machines: the
+  // resolver refuses with `ambiguous` instead of picking one arbitrarily.
+  await store.ensureTeam("team-shared", "Shared", "u1");
+  await store.addTeamMember("team-shared", "u2", "member");
+  const r = await store.resolveMachineByAlias("team-shared", "mbp");
+  expect(r.ambiguous).toBe(true);
+  expect(r.machine).toBeUndefined();
+
+  // Each home team still resolves its own machine unambiguously.
+  expect((await store.resolveMachineByAlias(a.teamId, "mbp")).machine?.id).toBe(a.machineId);
+  expect((await store.resolveMachineByAlias(team2, "mbp")).machine?.id).toBe(machine2);
+});
+
+test("the (teamId, alias) unique index rejects a duplicate alias write in one home team", async () => {
+  const gw = gateway();
+  await enroll(gw, "mbp");
+  const b = await enroll(gw, "solo", "solo.local");
+  // Bypass the suffix probe and write the colliding alias directly: the DB refuses.
+  await expect(store.updateMachine(b.machineId, { alias: "mbp" })).rejects.toThrow();
 });

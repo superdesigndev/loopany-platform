@@ -120,6 +120,24 @@ test("an rk_ kernel lease writes with RUN provenance; cross-task writes allowed;
   expect(snap.runs.find((r) => r.id === runId)?.state).toBe("done");
 });
 
+test("an rk_ credential cannot dictate time: body.now is ignored, events land on server time", async () => {
+  const { teamId, rk } = await deliveredRun();
+
+  const forged = "2020-01-01T00:00:00.000Z";
+  const res = await kgateway.kernelCli(rk, {
+    command: { op: "note", id: "seo-bet-manager", note: "backdated?" },
+    now: forged,
+  });
+  expect(res.status).toBe(200);
+
+  const events = await kstore.readEvents(teamId);
+  const noted = events.find((e) => e.kind === "note" && (e.note ?? "").includes("backdated?"));
+  expect(noted).toBeDefined();
+  expect(noted!.at).not.toBe(forged);
+  // Sanity: the stamp is recent server time, not the forged past.
+  expect(Date.parse(noted!.at)).toBeGreaterThan(Date.parse("2026-01-01T00:00:00.000Z"));
+});
+
 test("owner/host verbs 403 on a run credential; a foreign run-finish 403s; a non-kernel rk_ is 401", async () => {
   const { runId, rk } = await deliveredRun();
 

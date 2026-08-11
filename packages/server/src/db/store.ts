@@ -443,29 +443,30 @@ export async function getMachine(id: string): Promise<Machine | undefined> {
 
 /**
  * Resolve a kernel assignee's MACHINE SEGMENT (`mbp` in `mbp/claude`) to a
- * machine row within a team — the kernel-remote-dispatch adapter's lookup. A
- * machine is in scope when its owner belongs to the team (same membership join
- * as `listMachinesForTeam`, so a single daemon serving many teams is reachable
- * from each). Match is by `alias` first (the daemon-reported team-local handle),
- * falling back to the friendly `name` so a pre-alias machine is still
- * addressable. Returns undefined when nothing matches — the caller keeps the run
- * pending with a visible notice (deferred-inbox semantics, never an error).
+ * machine row within a team — THE ONE authoritative resolver (the sweep's wake
+ * AND the poll's delivery matching both use it, so the two can never disagree).
+ * A machine is in scope when its owner belongs to the team (same membership
+ * join as `listMachinesForTeam`, so a single daemon serving many teams is
+ * reachable from each). Match is by ALIAS ONLY: enroll backfills an alias on a
+ * machine's first poll, so any machine that can execute has one — the old
+ * friendly-name fallback reintroduced an unsanitized, unconstrained second
+ * match key and is gone. AMBIGUOUS (two members' machines exposing the same
+ * alias inside a SHARED team — per-home-team uniqueness cannot prevent that)
+ * is a distinct result: the caller must refuse and log, never pick one
+ * arbitrarily. `{}` = no match — the caller keeps the run pending (deferred
+ * inbox), never an error.
  */
-export async function findMachineByAlias(teamId: string, alias: string): Promise<Machine | undefined> {
+export async function resolveMachineByAlias(
+  teamId: string,
+  alias: string,
+): Promise<{ machine?: Machine; ambiguous?: boolean }> {
   const rows = await db
     .select({ m: machines })
     .from(machines)
     .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
     .where(and(eq(teamMembers.teamId, teamId), eq(machines.alias, alias)));
-  if (rows[0]) return rows[0].m;
-  // Fallback: a machine that enrolled before the alias column (or an older
-  // daemon) has a null alias — match its friendly name so it stays addressable.
-  const byName = await db
-    .select({ m: machines })
-    .from(machines)
-    .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
-    .where(and(eq(teamMembers.teamId, teamId), eq(machines.name, alias)));
-  return byName[0]?.m;
+  if (rows.length > 1) return { ambiguous: true };
+  return { machine: rows[0]?.m };
 }
 
 /** Whether ANY machine other than `exceptId` already claims `alias` under an

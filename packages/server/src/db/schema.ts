@@ -147,7 +147,17 @@ export const machines = pgTable(
     online: boolean("online").notNull().default(false),
     createdAt: text("created_at").notNull(),
   },
-  (t) => [index("machines_user_idx").on(t.userId), index("machines_team_idx").on(t.teamId)],
+  (t) => [
+    index("machines_user_idx").on(t.userId),
+    index("machines_team_idx").on(t.teamId),
+    // Alias is unique WITHIN the home team at the DB level (Postgres treats
+    // NULLs as distinct, so pre-alias rows coexist). The app-level suffixing in
+    // enroll is the friendly path; this index is what makes a suffixing RACE an
+    // error instead of two identical aliases. Shared-team ambiguity (the same
+    // alias arriving via two different home teams) is handled by
+    // resolveMachineByAlias's ambiguous refusal, not constrainable here.
+    uniqueIndex("machines_team_alias_uq").on(t.teamId, t.alias),
+  ],
 );
 
 // ---- loops: a scheduled behavior bound to one machine ----

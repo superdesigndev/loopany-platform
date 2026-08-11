@@ -24,6 +24,7 @@ import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
 import { kernelDeliveriesForMachine } from "../kernel/dispatch.js";
+import { reconcileKernelInFlight } from "../kernel/recover.js";
 import { autopauseMessage, completionMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
@@ -531,7 +532,7 @@ export class MachineGateway {
       // must never block on a name clash, and the daemon can pin an explicit
       // LOOPANY_MACHINE_ALIAS if it wants a stable handle.
       const alias = await this.uniqueAlias(teamId, str(info?.alias) ?? str(info?.host), machineId);
-      machine = await store.createMachine({
+      const row = {
         id: machineId,
         userId: ownerId,
         teamId,
@@ -542,8 +543,17 @@ export class MachineGateway {
         tokenHash: sha256(deviceToken),
         token: deviceToken,
         online: true,
-      });
-      log.info({ machineId, host: info?.host, alias }, "poll: self-registered machine");
+      };
+      try {
+        machine = await store.createMachine(row);
+      } catch (err) {
+        // Two same-hostname machines enrolling concurrently can both pass the
+        // suffix probe and race the (teamId, alias) unique index. Retry ONCE
+        // with the machine-id suffix (collision-free by construction).
+        if (!alias) throw err;
+        machine = await store.createMachine({ ...row, alias: `${alias}-${machineId.slice(2, 8)}` });
+      }
+      log.info({ machineId, host: info?.host, alias: machine.alias }, "poll: self-registered machine");
     }
     // Stamp online + lastSeen — THROTTLED: only when the flag must flip or the
     // stamp is older than LAST_SEEN_REFRESH_MS. Only the sweep (ONLINE_TTL_MS)
@@ -576,7 +586,16 @@ export class MachineGateway {
         ...(info.host && !machine.name?.trim() ? { name: info.host } : {}),
         ...aliasPatch,
       };
-      if (Object.keys(patch).length) await store.updateMachine(machineId, patch);
+      if (Object.keys(patch).length) {
+        try {
+          await store.updateMachine(machineId, patch);
+        } catch (err) {
+          // The alias backfill can race the (teamId, alias) unique index like
+          // create does — retry once with the collision-free machine-id suffix.
+          if (!aliasPatch.alias) throw err;
+          await store.updateMachine(machineId, { ...patch, alias: `${aliasPatch.alias}-${machineId.slice(2, 8)}` });
+        }
+      }
     }
 
     // Live progress for in-flight runs (slim activity line, not the transcript).
@@ -654,6 +673,16 @@ export class MachineGateway {
         .sort((a, b) => (a.loopId < b.loopId ? -1 : a.loopId > b.loopId ? 1 : 0));
       cached = { at: Date.now(), digest: sha256(JSON.stringify(watch)), watch };
       this.watchCache.set(machineId, cached);
+    }
+
+    // Kernel run recovery detector 1 (orphan reconcile): a kernel-aware daemon
+    // reports the runIds it is executing; an active kernel lease absent from
+    // that report past the claim grace is a lost run - reclaim it BEFORE the
+    // delivery pass. Gated on the array being PRESENT (an old daemon never
+    // sends it; absence must never read as "executing nothing").
+    const reportedInFlight = (info as { kernelInFlight?: unknown } | undefined)?.kernelInFlight;
+    if (Array.isArray(reportedInFlight)) {
+      await reconcileKernelInFlight(machineId, reportedInFlight.filter((v): v is string => typeof v === "string"));
     }
 
     // Kernel runs (P0 stage C): pending kernel runs addressed to this machine

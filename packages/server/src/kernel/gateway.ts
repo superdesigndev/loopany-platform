@@ -26,7 +26,7 @@ import {
 } from "@loopany/kernel";
 
 import * as store from "../db/store.js";
-import { isDeviceTokenShape, machineIdFromToken, resolveLease, sha256 } from "../gateway/tokens.js";
+import { isDeviceTokenShape, machineIdFromToken, resolveLease, retireLeasesForRun, sha256 } from "../gateway/tokens.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "./store.js";
 
 export interface KernelHttpResult {
@@ -108,19 +108,33 @@ async function resolveScope(
  *  mirror-add ANY task (cross-task writes are the pull-mode collaboration
  *  contract - claiming another loop's minted task, attaching docs) and finish
  *  ONLY ITS OWN run. Owner/host surfaces (tick, read-all is allowed, delete,
- *  run-claim) are refused with a clear 403 body. Returns null when allowed. */
-function runVerbRefusal(run: { runId: string }, req: KernelCliBody): { code: string; message: string } | null {
-  if (req.tick) return { code: "FORBIDDEN", message: "a run credential cannot host-tick (owner/host surface)" };
+ *  run-claim) are refused with a clear 403 body. A TERMINAL-GRACE lease (the
+ *  run was reclaimed) refuses EVERYTHING with 409 - kernel recovery retires
+ *  leases outright so this state is normally unreachable, but production
+ *  `terminalizeLease` targets by runId, so the guard is defense-in-depth
+ *  (parity with production run-token semantics). Returns null when allowed. */
+function runVerbRefusal(
+  run: { runId: string; state: "active" | "terminal-grace" },
+  req: KernelCliBody,
+): { status: number; code: string; message: string } | null {
+  if (run.state === "terminal-grace") {
+    return {
+      status: 409,
+      code: "CONFLICT",
+      message: "this run was reclaimed; its credential can no longer read or write",
+    };
+  }
+  if (req.tick) return { status: 403, code: "FORBIDDEN", message: "a run credential cannot host-tick (owner/host surface)" };
   if (req.read) return null; // reads are team-scoped and safe (show/list/inbox)
   const op = isRecord(req.command) ? String((req.command as { op?: unknown }).op ?? "") : "";
   const allowed = new Set(["create", "update", "note", "doc-put", "mirror-add", "run-finish"]);
   if (!allowed.has(op)) {
-    return { code: "FORBIDDEN", message: `a run credential cannot issue "${op}" (allowed: ${[...allowed].join(", ")})` };
+    return { status: 403, code: "FORBIDDEN", message: `a run credential cannot issue "${op}" (allowed: ${[...allowed].join(", ")})` };
   }
   if (op === "run-finish") {
     const runId = String((req.command as { runId?: unknown }).runId ?? "");
     if (runId !== run.runId) {
-      return { code: "FORBIDDEN", message: "a run may finish only ITS OWN run" };
+      return { status: 403, code: "FORBIDDEN", message: "a run may finish only ITS OWN run" };
     }
   }
   return null;
@@ -149,20 +163,33 @@ export async function kernelCli(
     isRecord(body) && ("command" in body || body.tick === true || body.read === true)
       ? (body as KernelCliBody)
       : { command: body };
-  const now = req.now ?? new Date().toISOString();
+  // A RUN credential never dictates time: honoring body.now would let a run
+  // backdate its own history or steer follow-up/backoff math. The deterministic
+  // `now` override stays an owner/test seam on DEVICE credentials only.
+  const now = scope.run ? new Date().toISOString() : (req.now ?? new Date().toISOString());
 
   // Run-credential verb subset (stage D): team is the hard wall (already
   // resolved), the subset keeps owner/host surfaces off a run token.
   if (scope.run) {
     const refusedVerb = runVerbRefusal(scope.run, req);
     if (refusedVerb) {
-      return { status: 403, body: { ok: false, notices: [], refusal: refusedVerb } };
+      return {
+        status: refusedVerb.status,
+        body: { ok: false, notices: [], refusal: { code: refusedVerb.code, message: refusedVerb.message } },
+      };
     }
   }
 
   if (req.read) return await readRequest(teamId);
   if (req.tick) return await tickRequest(teamId, now);
-  return await commandRequest(teamId, actor, req.command, now);
+  const result = await commandRequest(teamId, actor, req.command, now);
+  // A successful run-finish CONSUMES the run's credential: retire its leases so
+  // a completed run's rk_ never lingers as a live team-write token (and a
+  // duplicate finish gets a clean 401, single-shot like production reports).
+  if (result.status === 200 && isRecord(req.command) && req.command.op === "run-finish") {
+    await retireLeasesForRun(String((req.command as { runId?: unknown }).runId ?? ""));
+  }
+  return result;
 }
 
 async function commandRequest(

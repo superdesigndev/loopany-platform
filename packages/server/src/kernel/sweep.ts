@@ -26,6 +26,7 @@ import { kernelTriggers } from "../db/schema.js";
 import * as store from "../db/store.js";
 import { logger } from "../logger.js";
 import { tickTeamAtAuthority } from "./gateway.js";
+import { sweepOfflineKernelRuns } from "./recover.js";
 
 /** Sweep cadence (ms). 0 disables the sweep entirely (tests / tools). */
 export function kernelSweepIntervalMs(): number {
@@ -86,17 +87,31 @@ export async function kernelSweep(
       for (const run of r.minted) {
         const seg = assigneeSegments(run.assignee);
         if (!seg) continue; // person/bare assignee: nothing to wake
-        const machine = await store.findMachineByAlias(teamId, seg.machine);
-        if (!machine) {
+        const resolved = await store.resolveMachineByAlias(teamId, seg.machine);
+        if (resolved.ambiguous) {
+          logger.warn(
+            { teamId, runId: run.id, assignee: run.assignee },
+            "kernel sweep: AMBIGUOUS alias (two machines expose it in this team) - run stays pending; rename one via LOOPANY_MACHINE_ALIAS",
+          );
+          continue;
+        }
+        if (!resolved.machine) {
           logger.info(
             { teamId, runId: run.id, assignee: run.assignee },
             "kernel sweep: no machine for alias - run stays pending (durable inbox)",
           );
           continue;
         }
-        wake(machine.id);
+        wake(resolved.machine.id);
         woken++;
       }
+    }
+    // Recovery detector 2: reclaim claimed kernel runs whose machine has been
+    // silent past the offline window (bounded by active kernel leases).
+    try {
+      await sweepOfflineKernelRuns(Date.parse(now));
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err) }, "kernel sweep: offline reclaim failed");
     }
     return { teams: teams.length, minted, woken, skipped: false };
   } finally {

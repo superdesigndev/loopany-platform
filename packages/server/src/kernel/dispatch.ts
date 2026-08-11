@@ -22,7 +22,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { kernelRuns } from "../db/schema.js";
 import * as store from "../db/store.js";
-import { registerRunLease } from "../gateway/tokens.js";
+import { registerRunLease, retireLease } from "../gateway/tokens.js";
 import { logger } from "../logger.js";
 import { applyChangesetForTeam, readSnapshot } from "./store.js";
 import { assigneeSegments } from "./sweep.js";
@@ -55,23 +55,30 @@ async function pendingKernelRuns(teamId: string): Promise<RunRecord[]> {
 }
 
 /** Build the kernel deliveries for a polling machine: every pending kernel run
- *  (across the owner's teams) whose assignee machine segment matches this
- *  machine's alias (or friendly name), claimed atomically and packaged. A claim
- *  CAS loss (another poll won) skips silently; a prompt/lease failure logs and
- *  leaves the run pending for the next poll. */
+ *  (across the owner's teams) whose assignee resolves to THIS machine, claimed
+ *  atomically and packaged. Resolution goes through the SAME authoritative
+ *  `resolveMachineByAlias` the sweep's wake uses (one resolver, no drift), and
+ *  an AMBIGUOUS alias delivers to nobody - a run must never execute on an
+ *  arbitrarily-picked machine. A claim CAS loss (another poll won) skips
+ *  silently; a prompt/lease failure leaves the run pending for the next poll. */
 export async function kernelDeliveriesForMachine(machineId: string): Promise<KernelRunDelivery[]> {
   const machine = await store.getMachine(machineId);
   if (!machine?.userId) return [];
-  const handles = new Set(
-    [machine.alias, machine.name].filter((h): h is string => !!h && h.trim().length > 0),
-  );
-  if (handles.size === 0) return [];
 
   const out: KernelRunDelivery[] = [];
   for (const team of await store.listTeamsForUser(machine.userId)) {
     for (const run of await pendingKernelRuns(team.id)) {
       const seg = assigneeSegments(run.assignee);
-      if (!seg || !handles.has(seg.machine)) continue;
+      if (!seg) continue;
+      const resolved = await store.resolveMachineByAlias(team.id, seg.machine);
+      if (resolved.ambiguous) {
+        logger.warn(
+          { teamId: team.id, runId: run.id, assignee: run.assignee },
+          "kernel delivery: AMBIGUOUS alias - run stays pending; rename one machine via LOOPANY_MACHINE_ALIAS",
+        );
+        continue;
+      }
+      if (resolved.machine?.id !== machineId) continue;
       const delivery = await claimAndPackage(team.id, machineId, run, seg.agent);
       if (delivery) out.push(delivery);
     }
@@ -85,8 +92,13 @@ async function claimAndPackage(
   run: RunRecord,
   agent: string,
 ): Promise<KernelRunDelivery | undefined> {
-  // The kernel claim: pending -> running, sessionId captured on the run + the
-  // task's stream (same synthetic id scheme the local tick --spawn uses).
+  // ORDERING IS THE SAFETY HERE: every fallible step runs BEFORE the CAS claim
+  // commits, so a failure anywhere leaves the run PENDING (redeliverable on the
+  // next poll) instead of a claimed run nobody holds. The claim decision's own
+  // changeset carries the post-claim run + task, so the CORE prompt renders off
+  // a PURE projection - no committed-then-read window. The one irreducible gap
+  // left is "claim committed but the poll response never reached the daemon",
+  // which is the inactivity-reclaim's job, same as production runs.
   const sessionId = `spawn-${run.id}`;
   const actor: Provenance = { entrance: "agent-run", actorId: run.id, sessionId };
   const snapshot = await readSnapshot(teamId);
@@ -96,20 +108,17 @@ async function claimAndPackage(
     logger.info({ teamId, runId: run.id, code: d.refusal.code }, "kernel delivery: claim refused, skipping");
     return undefined;
   }
-  const applied = await applyChangesetForTeam(teamId, d.changeset);
-  if (!applied.ok) {
-    // CAS loss: the concurrent claimer won at the row level. The run is theirs.
-    logger.info({ teamId, runId: run.id }, "kernel delivery: claim CAS lost, skipping");
-    return undefined;
-  }
 
-  // Render the CORE against the POST-claim state (the claim just flipped the
-  // task to in-progress; the agent must see what it will find).
-  const claimed = await readSnapshot(teamId);
-  const claimedTask = claimed.objects[run.taskId];
-  const claimedRun = claimed.runs.find((r) => r.id === run.id);
-  if (!claimedRun || claimedTask?.archetype !== "task") {
-    logger.warn({ teamId, runId: run.id }, "kernel delivery: post-claim state missing task/run");
+  // Project the post-claim state from the decision itself (the claim flips the
+  // run to running and may flip a one-shot task to in-progress; the agent must
+  // see what it will find).
+  const claimedRun =
+    d.changeset.runs.map((m) => m.run).find((r) => r.id === run.id) ?? run;
+  const preTask = snapshot.objects[run.taskId];
+  const claimedTask =
+    d.changeset.objects.map((m) => m.object).find((o) => o.id === run.taskId) ?? preTask;
+  if (claimedTask?.archetype !== "task") {
+    logger.warn({ teamId, runId: run.id }, "kernel delivery: run points at a missing task");
     return undefined;
   }
   const prompt = buildCorePromptForRun(
@@ -118,6 +127,8 @@ async function claimAndPackage(
     wakeReasonFor(claimedRun, claimedTask as TaskObject),
   );
 
+  // Mint the lease BEFORE the claim commits: a mint failure leaves the run
+  // pending; a CAS loss below retires the orphan lease right away.
   const runToken = await registerRunLease({
     runId: run.id,
     loopId: run.taskId, // informational for kernel leases; the kernel fields are authoritative
@@ -127,6 +138,14 @@ async function claimAndPackage(
     kernelTeamId: teamId,
     kernelTaskId: run.taskId,
   });
+
+  const applied = await applyChangesetForTeam(teamId, d.changeset);
+  if (!applied.ok) {
+    // CAS loss: the concurrent claimer won at the row level. The run is theirs.
+    await retireLease(runToken);
+    logger.info({ teamId, runId: run.id }, "kernel delivery: claim CAS lost, skipping");
+    return undefined;
+  }
 
   return {
     runId: run.id,

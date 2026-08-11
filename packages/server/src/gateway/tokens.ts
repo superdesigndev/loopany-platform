@@ -245,6 +245,43 @@ export async function retireLease(token: string): Promise<void> {
   await db.delete(runLeases).where(eq(runLeases.tokenHash, sha256(token)));
 }
 
+/** Retire every lease for `runId` (kernel recovery + kernel run-finish
+ *  consummation: those callers hold a runId, not the wire token — the hash-only
+ *  table cannot recover the token from a run). */
+export async function retireLeasesForRun(runId: string): Promise<void> {
+  await db.delete(runLeases).where(eq(runLeases.runId, runId));
+}
+
+/** A KERNEL lease row as the recovery scans see it. The lease table doubles as
+ *  the kernel CLAIM REGISTER — minted just before the claim commits, deleted at
+ *  run-finish/reclaim — so "active kernel leases for machine X" IS the set of
+ *  kernel runs machine X is supposed to be executing right now. */
+export interface KernelLeaseRow {
+  runId: string;
+  machineId: string;
+  kernelTeamId: string;
+  kernelTaskId: string;
+  state: "active" | "terminal-grace";
+  createdAt: string;
+}
+
+/** Every kernel-marked lease, optionally narrowed to one machine. Bounded by
+ *  in-flight kernel runs (leases retire at finish), so a full scan stays cheap. */
+export async function kernelLeases(machineId?: string): Promise<KernelLeaseRow[]> {
+  const cond = machineId
+    ? and(isNotNull(runLeases.kernelTeamId), eq(runLeases.machineId, machineId))
+    : isNotNull(runLeases.kernelTeamId);
+  const rows = await db.select().from(runLeases).where(cond);
+  return rows.map((r) => ({
+    runId: r.runId,
+    machineId: r.machineId,
+    kernelTeamId: r.kernelTeamId as string,
+    kernelTaskId: r.kernelTaskId as string,
+    state: r.state,
+    createdAt: r.createdAt,
+  }));
+}
+
 /** Drop leases whose window has elapsed — bounded table, so a terminal-grace lease
  *  that never gets its wake-report doesn't linger forever. Called from the sweep.
  *  (`active` leases have null expiry and are never pruned here; a vanished
