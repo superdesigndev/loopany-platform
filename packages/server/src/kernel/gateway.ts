@@ -15,9 +15,11 @@
  * fired, and the HTTP status distinguishes: 200 ok, 422 refusal, 409 conflict.
  */
 import {
+  type ApplyConflict,
   type Command,
   type KernelEvent,
   type Provenance,
+  type RunRecord,
   type Snapshot,
   decide,
   tick,
@@ -144,16 +146,36 @@ async function commandRequest(
  *  surfaces without losing the fires that already landed — the same
  *  atomically-per-fire guarantee the local `runTick` gives. */
 async function tickRequest(teamId: string, now: string): Promise<KernelHttpResult> {
+  const r = await tickTeamAtAuthority(teamId, now);
+  if (r.conflict) {
+    return { status: 409, body: { ok: false, notices: r.notices, conflict: r.conflict, applied: r.applied } };
+  }
+  return { status: 200, body: { ok: true, notices: r.notices, applied: r.applied } };
+}
+
+/** Run the kernel tick at the authority for ONE team, applying each per-fire
+ *  changeset on its own CAS-validated transaction (a conflict on one fire never
+ *  loses the fires that already landed). Reports the PENDING RUNS the tick
+ *  minted so the caller (the kernel sweep) can wake the addressed machines'
+ *  long-polls - the mint itself is durable either way (deferred-inbox). */
+export async function tickTeamAtAuthority(
+  teamId: string,
+  now: string,
+): Promise<{ applied: number; notices: string[]; minted: RunRecord[]; conflict?: ApplyConflict }> {
   const result = tick(await readSnapshot(teamId), now);
   let applied = 0;
+  const minted: RunRecord[] = [];
   for (const cs of result.changesets) {
     const res = await applyChangesetForTeam(teamId, cs);
     if (!res.ok) {
-      return { status: 409, body: { ok: false, notices: result.notices, conflict: res.conflict, applied } };
+      return { applied, notices: result.notices, minted, conflict: res.conflict };
     }
     applied++;
+    for (const m of cs.runs) {
+      if (m.op === "insert" && m.run.state === "pending") minted.push(m.run);
+    }
   }
-  return { status: 200, body: { ok: true, notices: result.notices, applied } };
+  return { applied, notices: result.notices, minted };
 }
 
 /** A read of the authority snapshot + every object's event stream. The remote

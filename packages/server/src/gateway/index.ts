@@ -311,6 +311,14 @@ export class MachineGateway {
   private readonly watchCache = new Map<string, { at: number; digest: string; watch: WatchEntry[] }>();
 
   /** Resolve (and disarm) a machine's parked long-poll waiter, if any. */
+  /** Public wake for the KERNEL sweep (P0 stage B): a kernel pending run was
+   *  minted for this machine - pop its long-poll so delivery is immediate. Same
+   *  waiter the production Dispatcher pops; a machine with no armed waiter is a
+   *  no-op (its next short poll picks the run up). */
+  wakeForKernelRun(machineId: string): void {
+    this.wakeMachine(machineId);
+  }
+
   private wakeMachine(machineId: string): void {
     this.pollWaiters.get(machineId)?.(true);
   }

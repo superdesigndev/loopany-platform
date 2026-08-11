@@ -22,6 +22,7 @@ import {
   dbWatchdogFailureThreshold,
 } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
+import { kernelSweep, kernelSweepIntervalMs } from "../kernel/sweep.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
@@ -89,6 +90,22 @@ async function boot(): Promise<Booted> {
   // slow R2 delete can't block the loop; catch the promise (same unhandled-rejection
   // guard as sweep — the method is not supposed to throw, but a timer must never let
   // one escape).
+  // Kernel sweep (P0 stage B): the server-side time driver for kernel loops -
+  // tick due teams at the authority, wake the addressed machines' long-polls.
+  // Off when the interval is 0 (and under vitest by default via that env).
+  const kernelSweepMs = kernelSweepIntervalMs();
+  if (kernelSweepMs > 0) {
+    const kSweep = setInterval(
+      () =>
+        void kernelSweep(new Date().toISOString(), (machineId) => gateway.wakeForKernelRun(machineId)).catch(
+          (err) => logger.error({ err: String(err) }, "kernel sweep failed"),
+        ),
+      kernelSweepMs,
+    );
+    kSweep.unref?.();
+    abort.signal.addEventListener("abort", () => clearInterval(kSweep), { once: true });
+  }
+
   const gc = setInterval(
     () => void gateway.maintainStorage().catch((err) => logger.error({ err: String(err) }, "gc tick failed")),
     gcIntervalMs(),
