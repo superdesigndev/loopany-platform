@@ -341,3 +341,27 @@ describe("note / doc / mirror / run / delete", () => {
     expect(!d.ok && d.refusal.hint).toContain("archived");
   });
 });
+
+describe("doc put --task (atomic attach)", () => {
+  it("appends the doc id to the task's refs with a fields-changed event, idempotently", () => {
+    const w = seed({ op: "create", title: "loop", id: "loop" } as Command);
+    const r1 = run(w, { op: "doc-put", key: "portfolio", body: "v1", attachTask: "loop" });
+    expect(r1.d.ok).toBe(true);
+    expect(r1.d.ok && r1.d.notices.join()).toContain("attached — loop refs += portfolio");
+    expect(task(r1.world.snapshot, "loop").refs).toEqual(["portfolio"]);
+    // The attach leaves an event on the TASK's log (visibility on both sides).
+    const taskEvents = r1.world.events.filter((e) => e.objectId === "loop");
+    expect(taskEvents.some((e) => e.kind === "fields-changed" && e.note === 'doc "portfolio" attached')).toBe(true);
+
+    // Second put: doc updates, attach is a no-op (no duplicate ref, no event).
+    const r2 = run(r1.world, { op: "doc-put", key: "portfolio", body: "v2", attachTask: "loop" });
+    expect(r2.d.ok && r2.d.notices.join()).toContain("already attached");
+    expect(task(r2.world.snapshot, "loop").refs).toEqual(["portfolio"]);
+  });
+
+  it("refuses an unknown attach target BEFORE writing the doc", () => {
+    const { world, d } = run(emptyWorld(), { op: "doc-put", key: "p", body: "x", attachTask: "ghost" });
+    expect(!d.ok && d.refusal.code).toBe("UNKNOWN_OBJECT");
+    expect(world.snapshot.objects["p"]).toBeUndefined(); // fail whole, not half
+  });
+});

@@ -3,7 +3,7 @@
  *
  *   Read : show <id> [--log] · list [--status|--assignee|--due] · search · inbox
  *   Write: create · update <id> k=v… [--note] [--if-version] · note
- *          doc put <key> [--file] · mirror add <kind> <coords>
+ *          doc put <key> [--file --task <id>] · doc list · mirror add <kind> <coords>
  *   Host : init [--backend local]   (remote backend lands in M6)
  *
  * Every verb accepts --json — INCLUDING usage errors (§10: 全部 --json), which
@@ -40,6 +40,7 @@ import {
 } from "./driver.js";
 import { type Backend, selectBackend } from "./backend.js";
 import {
+  clip,
   renderError,
   renderFlatList,
   renderInbox,
@@ -380,7 +381,8 @@ function verbNote(args: ParsedArgs, deps: CliDeps): CliOutcome {
 
 function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const sub = args.positionals[0];
-  if (sub !== "put") throw new UsageError('doc supports only "doc put <key> [--file f.md]"');
+  if (sub === "list") return docList(deps, args);
+  if (sub !== "put") throw new UsageError('doc supports "doc put <key> [--file f.md] [--task <id>]" and "doc list"');
   const key = args.positionals[1];
   if (key === undefined) throw new UsageError("doc put needs a <key>");
   const backend = backendFor(deps);
@@ -417,8 +419,39 @@ function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
       }
     : undefined;
   const body = fileBody ?? "";
-  const command: Command = { op: "doc-put", key, body, ...(bareCreate ? { ifVersion: 0 } : {}) };
+  // The atomic attach: --task wins; inside a run the ambient LOOPANY_TASK_ID
+  // fills it in, so a bare `doc put` from an agent pass auto-attaches to the
+  // task that is running (six sim rounds proved the separate second step
+  // simply never happens). Out-of-run owner puts stay unattached by default.
+  const attachTask = args.flags.task ?? deps.env.LOOPANY_TASK_ID;
+  const command: Command = {
+    op: "doc-put",
+    key,
+    body,
+    ...(attachTask ? { attachTask } : {}),
+    ...(bareCreate ? { ifVersion: 0 } : {}),
+  };
   return execWrite(backend, command, args, deps, guard);
+}
+
+/** `doc list` — the doc enumeration a workspace never had (docs were only
+ *  reachable by knowing the key, or a lucky `search`). One line per doc. */
+function docList(deps: CliDeps, args: ParsedArgs): CliOutcome {
+  const snapshot = backendFor(deps).snapshot();
+  const docs = Object.values(snapshot.objects)
+    .filter((o) => o.archetype === "doc")
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+  if (args.bools.has("json")) return ok(JSON.stringify(docs, null, 2));
+  if (docs.length === 0) return ok("(no docs)");
+  return ok(
+    docs
+      .map((d) =>
+        d.archetype === "doc"
+          ? `${d.id}  (v${d.version})  ${d.updatedAt}  ${clip(d.title ?? "", 40) || "—"}`
+          : "",
+      )
+      .join("\n"),
+  );
 }
 
 function verbMirror(args: ParsedArgs, deps: CliDeps): CliOutcome {

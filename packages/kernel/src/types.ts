@@ -220,6 +220,12 @@ export interface DocPutCommand {
   title?: string;
   body: string;
   ifVersion?: number;
+  /** Attach the doc to this task in the SAME decision: append the doc id to the
+   *  task's `refs` (idempotent) + a fields-changed event on the TASK's log. One
+   *  command, both writes - the two-step attach was skipped by every real agent
+   *  across six sim rounds (the doc worked by key convention, but the task page
+   *  / forensics / future GC lose the edge). */
+  attachTask?: string;
 }
 
 export interface MirrorAddCommand {

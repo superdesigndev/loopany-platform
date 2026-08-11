@@ -841,7 +841,16 @@ function decideDocPut(cmd: DocPutCommand, ctx: Ctx): Decision {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
+  // Validate the attach TARGET before mutating anything (fail whole, not half).
+  let attachTo: TaskObject | null = null;
+  if (cmd.attachTask !== undefined) {
+    const t = getTask(snapshot, cmd.attachTask);
+    if (!t) return refuse("UNKNOWN_OBJECT", `attach target "${cmd.attachTask}" is not a task`);
+    attachTo = t;
+  }
+
   const cs = emptyChangeset();
+  const notices: string[] = [];
   cs.objects.push({ object: doc, expectedVersion: existing ? existing.version : null });
   cs.events.push({
     id: eventId(id, version, existing ? "doc-updated" : "created"),
@@ -851,7 +860,31 @@ function decideDocPut(cmd: DocPutCommand, ctx: Ctx): Decision {
     note: `body ${existing ? "updated" : "created"} (${Buffer.byteLength(cmd.body)} bytes)`,
     provenance: actor,
   });
-  return { ok: true, changeset: cs, notices: [], result: { id, existing: Boolean(existing) } };
+  // The atomic attach (sim rounds 1-6: nobody ever ran the second step, so the
+  // graph edge task->doc simply never existed). Idempotent: an already-attached
+  // doc changes nothing on the task.
+  if (attachTo && !attachTo.refs.includes(id)) {
+    const patched: TaskObject = {
+      ...attachTo,
+      refs: [...attachTo.refs, id],
+      version: attachTo.version + 1,
+      updatedAt: now,
+    };
+    cs.objects.push({ object: patched, expectedVersion: attachTo.version });
+    cs.events.push({
+      id: eventId(patched.id, patched.version, "fields-changed"),
+      objectId: patched.id,
+      kind: "fields-changed",
+      at: now,
+      diff: { refs: { old: attachTo.refs, new: patched.refs } },
+      note: `doc "${id}" attached`,
+      provenance: actor,
+    });
+    notices.push(`attached — ${patched.id} refs += ${id}`);
+  } else if (attachTo) {
+    notices.push(`already attached to ${attachTo.id}`);
+  }
+  return { ok: true, changeset: cs, notices, result: { id, existing: Boolean(existing) } };
 }
 
 // ---- mirror add (get-or-create on external identity) ----
