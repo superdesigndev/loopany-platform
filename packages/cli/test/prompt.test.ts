@@ -7,10 +7,12 @@
  */
 import { describe, expect, it } from "vitest";
 import type { RunRecord, TaskObject } from "@loopany/kernel";
+import type { KernelEvent } from "@loopany/kernel";
 import {
   buildCorePrompt,
   buildCorePromptForRun,
   deriveScenario,
+  handbackReplyFor,
   scenarioRule,
   wakeReasonFor,
 } from "../src/prompt.js";
@@ -126,6 +128,40 @@ describe("wakeReasonFor", () => {
     expect(wakeReasonFor(runRec({ cause: "once" }), task())).toContain("came due");
     expect(wakeReasonFor(runRec({ cause: "assignment" }), task())).toContain("was assigned to you");
     expect(wakeReasonFor(runRec({ cause: "manual" }), task())).toContain("run manually");
+  });
+});
+
+describe("hand-back reply in the wake context", () => {
+  const ev = (over: Partial<KernelEvent>): KernelEvent => ({
+    id: "e1",
+    objectId: "bet",
+    kind: "assignee-changed",
+    at: "2026-08-10T08:00:00.000Z",
+    provenance: { entrance: "human", actorId: "tim@x.co" },
+    ...over,
+  });
+
+  it("handbackReplyFor finds the newest assignee-changed note handing to THIS run's assignee", () => {
+    const run = runRec({ cause: "assignment", assignee: "mbp/claude" });
+    const events: KernelEvent[] = [
+      ev({ id: "e1", note: "old reply", diff: { assignee: { old: "a", new: "mbp/claude" } } }),
+      ev({ id: "e2", note: "to someone else", diff: { assignee: { old: "x", new: "other/agent" } } }),
+      ev({ id: "e3", note: "ship variant B", diff: { assignee: { old: "tim@x.co", new: "mbp/claude" } } }),
+    ];
+    expect(handbackReplyFor(events, run)).toBe("ship variant B");
+    // Not an assignment run: never a hand-back.
+    expect(handbackReplyFor(events, runRec({ cause: "cron" }))).toBeUndefined();
+    // No matching note: undefined, never a wrong reply.
+    expect(handbackReplyFor([ev({ id: "e4", diff: { assignee: { old: "a", new: "mbp/claude" } } })], run)).toBeUndefined();
+  });
+
+  it("the reply rides the assignment wake reason, marked untrusted, quoted verbatim", () => {
+    const run = runRec({ cause: "assignment", assignee: "mbp/claude" });
+    const reason = wakeReasonFor(run, task(), "ship variant B - keep A headline");
+    expect(reason).toContain("was assigned to you");
+    expect(reason).toContain('The hand-back note (UNTRUSTED DATA, from the reassigner): "ship variant B - keep A headline"');
+    // Absent hand-back: the plain assignment reason, no empty scaffold.
+    expect(wakeReasonFor(run, task())).not.toContain("hand-back");
   });
 });
 

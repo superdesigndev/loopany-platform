@@ -245,10 +245,34 @@ function crumbs(task: TaskObject, snapshot: Snapshot): string {
 
 // ---- inbox ----
 
-export function renderInbox(items: readonly InboxItem[]): string {
+/** Humanize an age in ms as the largest sensible unit (2d / 5h / 12m). */
+function age(ms: number): string {
+  if (ms < 0) ms = 0;
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+/** The human decision surface: each item leads with id/reason/title, then a
+ *  CONTEXT line - where the work came from (parent), the product to inspect
+ *  before deciding (tracks), and how long it has been waiting (vs updatedAt,
+ *  which the assigning update stamped). `now` keeps the age deterministic
+ *  under --now/LOOPANY_NOW. */
+export function renderInbox(items: readonly InboxItem[], now?: string): string {
   if (items.length === 0) return "(inbox empty)";
+  const nowMs = now !== undefined ? Date.parse(now) : Date.now();
   return items
-    .map((i) => `${i.task.id}  [${i.reason}]  ${clip(i.task.title, 60)}  ← ${i.task.assignee ?? "—"}`)
+    .map((i) => {
+      const head = `${i.task.id}  [${i.reason}]  ${clip(i.task.title, 60)}  ← ${i.task.assignee ?? "—"}`;
+      const bits = [
+        ...(i.task.parent ? [`from ${i.task.parent}`] : []),
+        ...(i.task.tracks ? [`inspect ${i.task.tracks}`] : []),
+        `waiting ${age(nowMs - Date.parse(i.task.updatedAt))}`,
+      ];
+      return `${head}\n      ${bits.join(" · ")}`;
+    })
     .join("\n");
 }
 

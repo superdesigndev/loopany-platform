@@ -583,9 +583,10 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
   // inboxView reads "now" for its due/follow-up buckets; route through resolveNow
   // so `--now`/LOOPANY_NOW steers the inbox deterministically (§13 M3), matching
   // list and tick — a parsed-but-ignored override was silently wrong output.
-  const items = inboxView(snapshot, me, resolveNow(args, deps));
+  const now = resolveNow(args, deps);
+  const items = inboxView(snapshot, me, now);
   if (args.bools.has("json")) return ok(JSON.stringify(items, null, 2));
-  return ok(renderInbox(items));
+  return ok(renderInbox(items, now));
 }
 
 // ---- dispatch + host ----

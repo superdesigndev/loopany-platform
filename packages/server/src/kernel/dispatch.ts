@@ -16,7 +16,7 @@
  * per user are few); no snapshot read unless a pending run actually addresses
  * this machine.
  */
-import { buildCorePromptForRun, wakeReasonFor } from "@loopany/cli";
+import { buildCorePromptForRun, handbackReplyFor, wakeReasonFor } from "@loopany/cli";
 import { decide, type Provenance, type RunRecord, type TaskObject } from "@loopany/kernel";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -25,7 +25,7 @@ import * as store from "../db/store.js";
 import { registerRunLease, retireLease } from "../gateway/tokens.js";
 import { logger } from "../logger.js";
 import { recordDispatchBlocked } from "./blocked.js";
-import { applyChangesetForTeam, readSnapshot } from "./store.js";
+import { applyChangesetForTeam, readEvents, readSnapshot } from "./store.js";
 import { assigneeSegments } from "./sweep.js";
 
 /** What the daemon receives for one kernel run (rides the poll body as
@@ -132,10 +132,19 @@ async function claimAndPackage(
     logger.warn({ teamId, runId: run.id }, "kernel delivery: run points at a missing task");
     return undefined;
   }
+  // An assignment run carries the hand-back reply (the reassigner's note) in
+  // its wake context - same pure helper the local spawn uses (no drift).
+  const handback =
+    claimedRun.cause === "assignment"
+      ? handbackReplyFor(
+          (await readEvents(teamId)).filter((e) => e.objectId === run.taskId),
+          claimedRun,
+        )
+      : undefined;
   const prompt = buildCorePromptForRun(
     claimedRun,
     claimedTask as TaskObject,
-    wakeReasonFor(claimedRun, claimedTask as TaskObject),
+    wakeReasonFor(claimedRun, claimedTask as TaskObject, handback),
   );
 
   // Mint the lease BEFORE the claim commits: a mint failure leaves the run

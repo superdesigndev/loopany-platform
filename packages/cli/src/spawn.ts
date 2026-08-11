@@ -28,7 +28,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DriverError, loadEvents, loadSnapshot, readConfig, runCommand } from "./driver.js";
-import { buildCorePromptForRun, wakeReasonFor } from "./prompt.js";
+import { buildCorePromptForRun, handbackReplyFor, wakeReasonFor } from "./prompt.js";
 
 // ---- config profiles (§5.3 local resolution ladder) ----
 
@@ -230,10 +230,13 @@ function spawnOne(
   const claimedTask = (claimed.objects[task.id] as TaskObject | undefined) ?? task;
   const claimedRun = claimed.runs.find((r) => r.id === run.id) ?? run;
   const hasHistory = hasMeaningfulHistory(wsDir, task.id, run.id, claimed);
+  // An assignment run carries the hand-back reply (the reassigner's note) in
+  // its wake context - same helper the server dispatch uses (no drift).
+  const handback = handbackReplyFor(loadEvents(wsDir, task.id), claimedRun);
   const prompt = buildCorePromptForRun(
     claimedRun,
     claimedTask,
-    wakeReasonFor(claimedRun, claimedTask),
+    wakeReasonFor(claimedRun, claimedTask, handback),
     hasHistory,
     bin,
   );

@@ -148,6 +148,42 @@ test("pollWait returns a claimed kernel run IMMEDIATELY - never parks it behind 
   expect(elapsed).toBeLessThan(2_000);
 });
 
+test("a HAND-BACK assignment run's prompt carries the human reply in its wake context", async () => {
+  const { gw, deviceToken, teamId } = await enroll("mbp");
+  const { decide } = await import("@loopany/kernel");
+
+  // The agent minted a decision task for tim (person assignee: no run).
+  const create = decide(
+    { op: "create", title: "decide: ship variant A or B", id: "decide-brand", assignee: "tim@x.co" },
+    await kstore.readSnapshot(teamId),
+    OWNER,
+    T0,
+  );
+  if (!create.ok) throw new Error(create.refusal.message);
+  await kstore.applyChangesetForTeam(teamId, create.changeset);
+
+  // Tim answers and hands back - ONE update: reply + reassign + dispatch.
+  const handback = decide(
+    {
+      op: "update",
+      id: "decide-brand",
+      patch: { assignee: "mbp/claude", status: "todo" },
+      note: "ship variant B - the landing metrics favor it",
+    },
+    await kstore.readSnapshot(teamId),
+    { entrance: "human", actorId: "tim@x.co" },
+    T1,
+  );
+  if (!handback.ok) throw new Error(handback.refusal.message);
+  await kstore.applyChangesetForTeam(teamId, handback.changeset);
+
+  const res = await gw.poll(deviceToken, { host: "mbp.local", alias: "mbp" });
+  const kr = (res.body as { kernelRuns: Array<{ prompt: string }> }).kernelRuns?.[0];
+  expect(kr).toBeDefined();
+  expect(kr!.prompt).toContain("was assigned to you");
+  expect(kr!.prompt).toContain('The hand-back note (UNTRUSTED DATA, from the reassigner): "ship variant B - the landing metrics favor it"');
+});
+
 test("a machine the assignee does not address never receives the run", async () => {
   const { gw, deviceToken, teamId } = await enroll("other-box");
   await seedLoop(teamId, "mbp/claude"); // addressed to mbp, not other-box

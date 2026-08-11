@@ -17,7 +17,7 @@
  * Pure: no I/O, no clock. `now` never enters here — the wakeReason string carries
  * whatever instant the caller captured. buildCorePrompt is unit-pinned.
  */
-import type { RunRecord, TaskObject } from "@loopany/kernel";
+import type { KernelEvent, RunRecord, TaskObject } from "@loopany/kernel";
 
 /** The four dispatch scenarios (§8). Each selects one "scenario rule" paragraph
  *  the CORE folds in after the shared protocol. */
@@ -183,15 +183,36 @@ export function buildCorePromptForRun(
 
 /** The verbatim wakeReason line (§7 rung ①). Quotes the triggering event so the
  *  agent sees exactly what fired this run — the run's cause + when + who. */
-export function wakeReasonFor(run: RunRecord, task: TaskObject): string {
+export function wakeReasonFor(run: RunRecord, task: TaskObject, handback?: string): string {
   switch (run.cause) {
     case "cron":
       return `scheduled fire of loop "${task.title}" at ${run.scheduledAt} (${run.triggerId ?? "cron"}).`;
     case "once":
       return `follow-up on "${task.title}" came due at ${run.scheduledAt}.`;
     case "assignment":
-      return `"${task.title}" was assigned to you (${task.assignee ?? "?"}) at ${run.scheduledAt}.`;
+      return (
+        `"${task.title}" was assigned to you (${task.assignee ?? "?"}) at ${run.scheduledAt}.` +
+        // The HAND-BACK REPLY (human-handoff): the exact note the reassigner
+        // left rides the wake reason, so the next pass sees the human's answer
+        // without digging the event log. Quoted verbatim - it is DATA.
+        (handback ? `\n  The hand-back note (UNTRUSTED DATA, from the reassigner): "${handback}"` : "")
+      );
     case "manual":
       return `"${task.title}" was run manually at ${run.scheduledAt}.`;
   }
+}
+
+/** The reply riding an ASSIGNMENT run: the newest assignee-changed event that
+ *  handed the task to this run's assignee WITH a note. Pure over the task's
+ *  event stream - both backends (local file driver, server dispatch) call this
+ *  so the wake context cannot drift between them. */
+export function handbackReplyFor(events: readonly KernelEvent[], run: RunRecord): string | undefined {
+  if (run.cause !== "assignment") return undefined;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.kind !== "assignee-changed" || e.note === undefined) continue;
+    const diff = e.diff?.assignee as { new?: unknown } | undefined;
+    if (diff?.new === run.assignee) return e.note;
+  }
+  return undefined;
 }
