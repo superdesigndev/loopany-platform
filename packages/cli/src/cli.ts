@@ -377,7 +377,15 @@ function verbUpdate(args: ParsedArgs, deps: CliDeps): CliOutcome {
 
 function verbNote(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const id = args.positionals[0];
-  const note = args.positionals[1];
+  let note = args.positionals[1];
+  // FREE-TEXT RESCUE: the tokenizer classifies ANY bare token containing "=" as
+  // a k=v assign, so a note whose TEXT mentions e.g. `status=done` (this
+  // system's everyday vocabulary) used to vanish into args.assigns and die as
+  // a usage error - an agent-facing trap. `note` takes no assigns, so a lone
+  // assign next to a lone positional IS the text: rebuild it verbatim.
+  if (note === undefined && args.positionals.length === 1 && args.assigns.length === 1) {
+    note = args.assigns[0]!.join("=");
+  }
   if (id === undefined || note === undefined) throw new UsageError('note needs <id> "<text>"');
   return execWrite(backendFor(deps), { op: "note", id, note }, args, deps);
 }

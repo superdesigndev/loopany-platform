@@ -203,6 +203,20 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(out.stderr).toContain("unknown verb");
   });
 
+  it("a note whose TEXT contains k=v prose (status=done) still lands verbatim", () => {
+    // The tokenizer classifies any bare token with "=" as an assign; the note
+    // verb rebuilds its free text from the lone assign - without this, everyday
+    // prose like "status=done" silently became a usage error (agent trap).
+    call(["init"]);
+    call(["create", "Prose task"]);
+    call(["note", "prose-task", "ended the pass with status=done after the fix"]);
+    const events = readFileSync(join(dir, ".loopany", "events", "prose-task.jsonl"), "utf8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as { kind: string; note?: string });
+    expect(events.find((e) => e.kind === "note")?.note).toBe("ended the pass with status=done after the fix");
+  });
+
   it("promotes provenance to agent-run via --session / LOOPANY_SESSION_ID", () => {
     call(["init"]);
     call(["create", "Agent task"]);
