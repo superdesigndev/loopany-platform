@@ -35,13 +35,17 @@ export type KernelNotifier = (teamId: string, title: string, message: string, ow
 async function realNotifier(teamId: string, title: string, message: string, ownerEmail?: string | null): Promise<void> {
   const channels = await store.listChannels(teamId);
   if (channels.length === 0) return; // no channel = dashboard/timeline only
-  // OWNER ROUTING (review round 3): a channel bound to the notification's human
-  // (channels.userEmail) wins; a plain team channel (userEmail null) is the
-  // fallback. Both stay inside the team's own channel rows - scoping unchanged.
+  // OWNER ROUTING (review rounds 3-4): the channel bound to the notification's
+  // human (channels.userEmail) wins; a plain TEAM channel (userEmail null) is
+  // the only fallback. NEVER another person's personal channel - when only
+  // other people's bound channels exist, we push NOTHING (the event is already
+  // in the timeline/inbox; a mis-routed push is a privacy leak, a missed push
+  // is not data loss).
+  const wanted = ownerEmail?.trim().toLowerCase();
   const channel =
-    (ownerEmail ? channels.find((c) => c.userEmail === ownerEmail) : undefined) ??
-    channels.find((c) => !c.userEmail) ??
-    channels[0]!;
+    (wanted ? channels.find((c) => c.userEmail?.trim().toLowerCase() === wanted) : undefined) ??
+    channels.find((c) => !c.userEmail);
+  if (!channel) return;
   const r = await CHANNELS[channel.type].send(channel.config, title, message);
   if (!r.ok) logger.warn({ teamId, err: r.error }, "kernel notify dispatch failed");
 }

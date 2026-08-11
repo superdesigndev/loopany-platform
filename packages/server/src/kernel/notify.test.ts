@@ -47,7 +47,8 @@ let pushes: Array<{ teamId: string; title: string; message: string }>;
 beforeEach(async () => {
   await (db.client as any).exec(
     "DELETE FROM kernel_runs; DELETE FROM kernel_triggers; DELETE FROM kernel_events; DELETE FROM kernel_objects; " +
-      "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
+      "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines; " +
+      "DELETE FROM notification_channels;",
   );
   pushes = [];
   knotify.setKernelNotifier(async (teamId, title, message) => {
@@ -146,6 +147,38 @@ test("OWNER ROUTING: the channel bound to the notification's human wins; team ch
     const run2 = (await kstore.readSnapshot(teamId)).runs.find((r) => r.taskId === "unowned")!;
     await blocked.recordDispatchBlocked(teamId, run2, "no machine for ghost2");
     expect(sent.at(-1)?.name).toBe("#team");
+  } finally {
+    CHANNELS.slack.send = realSend;
+  }
+});
+
+test("NEVER another person's personal channel: without an exact or team channel, nothing is pushed (review round 4)", async () => {
+  const { teamId, deviceToken } = await enrolledDevice();
+  // The ONLY channel in the team is Alice's personal binding - Bob's
+  // notification must not leak into her DM, and there is no team channel.
+  await store.createChannel({ teamId, type: "slack", name: "alice-dm", config: { token: "x", channel: "#alice" }, userEmail: "alice@x.co" });
+  knotify.setKernelNotifier(null);
+  const sent: string[] = [];
+  const { CHANNELS } = await import("../gateway/notify.js");
+  const realSend = CHANNELS.slack.send;
+  CHANNELS.slack.send = async (config: any) => {
+    sent.push(String(config.channel));
+    return { ok: true } as any;
+  };
+  try {
+    // Bob-owned task gets blocked: NO push at all (timeline/inbox carry it).
+    await kgateway.kernelCli(deviceToken, {
+      command: { op: "create", title: "bob loop", id: "bob-loop", assignee: "ghost/claude", owner: "bob@x.co" },
+    });
+    const run = (await kstore.readSnapshot(teamId)).runs.find((r) => r.taskId === "bob-loop")!;
+    await blocked.recordDispatchBlocked(teamId, run, "no machine for ghost");
+    expect(sent).toEqual([]);
+
+    // Alice's OWN notification (case-insensitive email match) still routes to her.
+    await kgateway.kernelCli(deviceToken, {
+      command: { op: "create", title: "alice decision", id: "alice-d", assignee: "Alice@X.co" },
+    });
+    expect(sent).toEqual(["#alice"]);
   } finally {
     CHANNELS.slack.send = realSend;
   }

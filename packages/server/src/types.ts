@@ -91,6 +91,9 @@ export interface ChannelSummary {
   name: string
   /** A redacted hint so the row reads as configured without leaking the secret. */
   hint: string
+  /** Optional PERSONAL binding: kernel owner-routed notifications addressed to
+   *  this email land here instead of the plain team channel. Null = team-wide. */
+  userEmail?: string | null
 }
 
 /** One Slack channel offered by the add-channel picker (`listSlackChannels`),

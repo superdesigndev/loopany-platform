@@ -108,6 +108,7 @@ export function ChannelAddForm({
 }) {
   const [adding, setAdding] = useState<ChannelType | null>(null)
   const [name, setName] = useState('')
+  const [userEmail, setUserEmail] = useState('')
   const [fields, setFields] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -120,6 +121,7 @@ export function ChannelAddForm({
 
   function startAdd(type: ChannelType) {
     setName('')
+    setUserEmail('')
     setFields({})
     setErr(null)
     setAdding(type)
@@ -159,7 +161,9 @@ export function ChannelAddForm({
       const config: ChannelConfig = Object.fromEntries(
         spec.fields.filter((f) => fields[f.key]?.trim()).map((f) => [f.key, fields[f.key]!.trim()]),
       )
-      const r = await createChannel({ data: { type: adding, name: name.trim(), config } })
+      const r = await createChannel({
+        data: { type: adding, name: name.trim(), config, ...(userEmail.trim() ? { userEmail: userEmail.trim() } : {}) },
+      })
       if (!r.ok || !r.id) {
         setErr(r.error ?? 'Could not save this channel.')
         return
@@ -203,6 +207,17 @@ export function ChannelAddForm({
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="e.g. My alerts"
+      />
+      <label className={labelCls} htmlFor="channel-add-user-email">
+        Personal binding (optional)
+      </label>
+      <input
+        id="channel-add-user-email"
+        className={inputCls}
+        type="email"
+        value={userEmail}
+        onChange={(e) => setUserEmail(e.target.value)}
+        placeholder="your@email - notifications addressed to this person route here"
       />
       {spec.fields.map((f) => {
         if (f.requires && !fields[f.requires]?.trim()) return null

@@ -17,7 +17,13 @@ import { CHANNELS, fetchSlackChannels } from '../gateway/notify.js'
 import type { ChannelSummary, SlackChannelSummary } from '../types'
 
 function toSummary(c: NotificationChannel): ChannelSummary {
-  return { id: c.id, type: c.type, name: c.name, hint: CHANNELS[c.type]?.hint(c.config) ?? '—' }
+  return {
+    id: c.id,
+    type: c.type,
+    name: c.name,
+    hint: CHANNELS[c.type]?.hint(c.config) ?? '—',
+    userEmail: c.userEmail ?? null,
+  }
 }
 
 /** Resolve a channel and authorize it against the request's team — undefined when
@@ -41,7 +47,7 @@ export const listChannels = createServerFn({ method: 'GET' }).handler(async (): 
 
 /** POST — create a channel in the team. Validates per-type required fields. */
 export const createChannel = createServerFn({ method: 'POST' })
-  .validator((d: { type: ChannelType; name: string; config: ChannelConfig }) => d)
+  .validator((d: { type: ChannelType; name: string; config: ChannelConfig; userEmail?: string }) => d)
   .handler(async ({ data }): Promise<{ ok: boolean; id?: string; error?: string }> => {
     await ensureServer()
     const { enforce, userId, teamId } = await requestScope()
@@ -61,7 +67,12 @@ export const createChannel = createServerFn({ method: 'POST' })
     // an off-allowlist / non-HTTPS target before it is ever stored or fired.
     const invalid = kind.validate?.(config)
     if (invalid) return { ok: false, error: invalid }
-    const ch = await store.createChannel({ teamId, type: data.type, name, config })
+    // Optional PERSONAL binding (kernel owner routing): notifications addressed
+    // to this email route here instead of the plain team channel. Free text by
+    // design - the kernel addresses humans by email string, not by account.
+    const userEmail = data.userEmail?.trim() || null
+    if (userEmail && !userEmail.includes('@')) return { ok: false, error: 'userEmail must be an email address' }
+    const ch = await store.createChannel({ teamId, type: data.type, name, config, userEmail })
     return { ok: true, id: ch.id }
   })
 
