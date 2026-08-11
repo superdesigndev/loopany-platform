@@ -60,16 +60,20 @@ describe("poll transport helpers", () => {
     const info = { host: "mac", platform: "darwin" };
 
     const idle = buildPollBody(info, [], true, undefined);
-    expect(idle).toEqual({ host: "mac", platform: "darwin", wait: true });
+    // kernelInFlight is ALWAYS present (even empty) - the server's orphan
+    // reconcile must tell "executing nothing" from "old daemon, never reports".
+    expect(idle).toEqual({ host: "mac", platform: "darwin", wait: true, kernelInFlight: [] });
 
     // A run in flight: no wait flag (progress heartbeat needs the short cadence),
-    // progress rides along, and the last-seen digest is echoed.
-    const busy = buildPollBody(info, [{ runId: "r1", step: 2, label: "editing" }], false, "d1");
+    // progress rides along, the last-seen digest is echoed, and the in-flight
+    // runIds ride as the kernel claim report.
+    const busy = buildPollBody(info, [{ runId: "r1", step: 2, label: "editing" }], false, "d1", ["r1"]);
     expect(busy).toEqual({
       host: "mac",
       platform: "darwin",
       progress: [{ runId: "r1", step: 2, label: "editing" }],
       watchDigest: "d1",
+      kernelInFlight: ["r1"],
     });
   });
 

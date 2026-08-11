@@ -59,18 +59,24 @@ export function machineAlias(env: NodeJS.ProcessEnv = process.env, hostname: str
 
 /** Poll request body: machine identity + optional progress + long-poll opt-in
  *  (idle only — with a run in flight the short cadence keeps the progress
- *  heartbeat fresh) + the last watch digest echo (absent until a server sent one). */
+ *  heartbeat fresh) + the last watch digest echo (absent until a server sent
+ *  one) + `kernelInFlight`: the runIds this daemon is executing, ALWAYS present
+ *  (even empty) so the server's orphan reconcile can tell "executing nothing"
+ *  from "old daemon that never reports" and reclaim kernel runs this process
+ *  lost to a crash/restart. */
 export function buildPollBody(
   info: Record<string, unknown>,
   progress: Array<{ runId: string; step: number; label: string }>,
   idle: boolean,
   watchDigest: string | undefined,
+  kernelInFlight: string[] = [],
 ): Record<string, unknown> {
   return {
     ...info,
     ...(progress.length ? { progress } : {}),
     ...(idle ? { wait: true } : {}),
     ...(watchDigest ? { watchDigest } : {}),
+    kernelInFlight,
   };
 }
 
@@ -184,7 +190,7 @@ export async function runDaemon(): Promise<number> {
       const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest)),
+        body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest, [...inFlight])),
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
         const data = (await res.json()) as { deliveries?: Delivery[]; kernelRuns?: KernelRunDelivery[]; watch?: WatchSpec[]; watchDigest?: string };
@@ -211,7 +217,7 @@ export async function runDaemon(): Promise<number> {
           if (inFlight.has(kr.runId)) continue;
           inFlight.add(kr.runId);
           logger.info({ runId: kr.runId, taskId: kr.taskId, agent: kr.agent }, "kernel run delivered — running");
-          void runKernelDelivery(kr, server, ac.signal)
+          void runKernelDelivery(kr, server, roots, ac.signal)
             .then(() => logger.info({ runId: kr.runId }, "kernel run finished"))
             .catch((err) => logger.error({ runId: kr.runId, err: err instanceof Error ? err.message : String(err) }, "kernel run failed"))
             .finally(() => inFlight.delete(kr.runId));

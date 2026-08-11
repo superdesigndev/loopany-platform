@@ -10,7 +10,8 @@
   },
   "type": "module",
   "bin": {
-    "loopany": "dist/cli.js"
+    "loopany": "dist/cli.js",
+    "loopany-kernel": "dist/kernel-cli.mjs"
   },
   "files": [
     "dist",
@@ -24,11 +25,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "node scripts/sync-skill.mjs && node scripts/copy-runtime-assets.mjs && tsc",
+    "build": "node scripts/sync-skill.mjs && node scripts/copy-runtime-assets.mjs && tsc && node scripts/bundle-kernel-cli.mjs",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "node scripts/sync-skill.mjs && node scripts/copy-runtime-assets.mjs && tsc"
+    "prepublishOnly": "node scripts/sync-skill.mjs && node scripts/copy-runtime-assets.mjs && tsc && node scripts/bundle-kernel-cli.mjs"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
@@ -40,6 +41,7 @@
     "@types/node": "^25.9.3",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "vitest": "4.1.9"
+    "vitest": "4.1.9",
+    "esbuild": "^0.27.0"
   }
 }
