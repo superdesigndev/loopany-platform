@@ -134,7 +134,9 @@ describe("finding #2: applyChangeset validates preconditions and returns a typed
     const d = decide({ op: "create", title: "x" }, emptyWorld().snapshot, HUMAN, T0);
     if (!d.ok) throw new Error("unreachable");
     const occupied: Snapshot = {
-      objects: { x: { archetype: "task", id: "x", title: "x", status: "todo", assignee: null, priority: null, type: null, parent: null, tracks: null, refs: [], followUpAt: null, body: "", version: 1, createdAt: T0, updatedAt: T0 } },
+      objects: { x: { archetype: "task", id: "x", title: "x", status: "todo", assignee: null, priority: null, type: null, parent: null, tracks: null, refs: [], followUpAt: null,
+    owner: null,
+    workdir: null, body: "", version: 1, createdAt: T0, updatedAt: T0 } },
       triggers: [],
       runs: [],
     };
@@ -336,7 +338,9 @@ describe("mirror id occupied by another archetype", () => {
       ...world.snapshot,
       objects: {
         ...world.snapshot.objects,
-        [mirror!.id]: { archetype: "task", id: mirror!.id, title: "squatter", status: "todo", assignee: null, priority: null, type: null, parent: null, tracks: null, refs: [], followUpAt: null, body: "", version: 1, createdAt: T0, updatedAt: T0 },
+        [mirror!.id]: { archetype: "task", id: mirror!.id, title: "squatter", status: "todo", assignee: null, priority: null, type: null, parent: null, tracks: null, refs: [], followUpAt: null,
+    owner: null,
+    workdir: null, body: "", version: 1, createdAt: T0, updatedAt: T0 },
       },
     };
     const d = decide({ op: "mirror-add", kind: "url", coords: "https://example.com" }, collided, HUMAN, T0);

@@ -49,12 +49,14 @@ function fieldLines(obj: KernelObject): string[] {
       `title: ${t.title}`,
       `status: ${t.status}`,
       `assignee: ${t.assignee ?? "—"}`,
+      `owner: ${t.owner ?? "—"}`,
       `priority: ${t.priority ?? "—"}`,
       `type: ${t.type ?? "—"}`,
       `parent: ${t.parent ?? "—"}`,
       `tracks: ${t.tracks ?? "—"}`,
       `refs: ${t.refs.length > 0 ? t.refs.join(", ") : "—"}`,
       `followUpAt: ${t.followUpAt ?? "—"}`,
+      `workdir: ${t.workdir ?? "—"}`,
     ];
   }
   if (obj.archetype === "doc") {

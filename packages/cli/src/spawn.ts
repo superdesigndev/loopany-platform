@@ -25,6 +25,7 @@ import {
   type TaskObject,
 } from "@loopany/kernel";
 import { spawnSync } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DriverError, loadEvents, loadSnapshot, readConfig, runCommand } from "./driver.js";
 import { buildCorePromptForRun, wakeReasonFor } from "./prompt.js";
@@ -125,6 +126,16 @@ export const realSpawn: SpawnFn = (req) => {
   }
   return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? "" };
 };
+
+/** True when the task's workdir exists AND is a directory on THIS machine.
+ *  A file at the path is as broken as an absent dir - both fail the run loud. */
+export function workdirExists(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 // ---- one run's spawn (claim -> spawn -> finish) ----
 
@@ -227,7 +238,16 @@ function spawnOne(
     bin,
   );
 
-  const req = buildSpawnRequest(profile, prompt, run, task, sessionId, baseEnv, wsDir);
+  // The task's workdir (absolute, machine-local) is where the agent session
+  // starts; missing = FAIL LOUD as a failed run with a clear note - never a
+  // silent fallback to the workspace root (owner decision: a loop working in
+  // another project's checkout must not quietly run somewhere else).
+  if (claimedTask.workdir !== null && !workdirExists(claimedTask.workdir)) {
+    const note = `workdir does not exist on this machine: ${claimedTask.workdir}`;
+    runCommand(wsDir, { op: "run-finish", runId: run.id, outcome: "failed", note }, actor, now);
+    return { runId: run.id, taskId: task.id, assignee: run.assignee ?? "", outcome: "failed", status: 127 };
+  }
+  const req = buildSpawnRequest(profile, prompt, run, task, sessionId, baseEnv, wsDir, claimedTask.workdir ?? undefined);
   let res = spawn(req);
   let retried = false;
   if (res.status !== 0) {
@@ -321,6 +341,8 @@ export function buildSpawnRequest(
   sessionId: string,
   baseEnv: Record<string, string | undefined>,
   wsDir: string,
+  /** Absolute spawn cwd override (task.workdir); defaults to the workspace. */
+  cwd?: string,
 ): SpawnRequest {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(baseEnv)) if (v !== undefined) env[k] = v;
@@ -344,7 +366,9 @@ export function buildSpawnRequest(
     args,
     // Default the agent's cwd to the workspace's parent (the repo root holding
     // .loopany/) when the profile does not pin one.
-    cwd: profile.cwd ?? repoRootOf(wsDir),
+    // task.workdir wins (the loop works in another project); then the
+    // profile-level cwd; then the workspace root.
+    cwd: cwd ?? profile.cwd ?? repoRootOf(wsDir),
     env,
     ...(onArgv ? {} : { input: prompt }),
   };

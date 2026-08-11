@@ -64,6 +64,8 @@ export const EDITABLE_TASK_FIELDS = [
   "refs",
   "body",
   "followUpAt",
+  "owner",
+  "workdir",
   "cron",
   "timezone",
 ] as const;
@@ -78,6 +80,17 @@ export function isPersonAssignee(assignee: string): boolean {
 /** An assignee a dispatch can actually target: a non-empty, non-person name. */
 export function isDispatchable(assignee: string | null): boolean {
   return assignee !== null && assignee.length > 0 && !isPersonAssignee(assignee);
+}
+
+/** workdir must be an ABSOLUTE machine-local path (loops usually work inside
+ *  another project's checkout). Relative segments would silently anchor to
+ *  whatever cwd the daemon happens to run from. */
+function workdirRefusal(workdir: string | null): Decision | null {
+  if (workdir === null) return null;
+  if (!workdir.startsWith("/") || workdir.split("/").includes("..")) {
+    return refuse("INVALID_REFERENCE", `workdir must be an absolute path (got "${workdir}")`);
+  }
+  return null;
 }
 
 export function activeRun(snapshot: Snapshot, taskId: string): RunRecord | undefined {
@@ -434,17 +447,22 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
     title: cmd.title,
     status,
     assignee: cmd.assignee ?? null,
+    owner: cmd.owner ?? null,
     priority: cmd.priority ?? null,
     type: cmd.type ?? null,
     parent: cmd.parent ?? null,
     tracks: cmd.tracks ?? null,
     refs: cmd.refs ?? [],
     followUpAt: status === "follow-up" ? (cmd.followUpAt as string) : null,
+    workdir: cmd.workdir ?? null,
     body: cmd.body ?? "",
     version: 1,
     createdAt: now,
     updatedAt: now,
   };
+
+  const workdirIssue = workdirRefusal(task.workdir);
+  if (workdirIssue) return workdirIssue;
 
   const issues = referenceIssues(snapshot, id, task.parent, task.tracks);
   if (issues.length > 0) {
@@ -536,6 +554,10 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
   // on a non-string, no bad cron reaching nextFire) ----
   const fieldIssue = validatePatchFields(patch);
   if (fieldIssue) return fieldIssue;
+  if (patch.workdir !== undefined) {
+    const wd = workdirRefusal(patch.workdir as string | null);
+    if (wd) return wd;
+  }
 
   if (patch.status !== undefined && !(TASK_STATUSES as readonly string[]).includes(patch.status as string)) {
     return refuse("INVALID_STATUS", `unknown status "${String(patch.status)}"`, {
@@ -555,6 +577,8 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
     refs: patch.refs !== undefined ? (patch.refs as string[]) : before.refs,
     body: patch.body !== undefined ? String(patch.body) : before.body,
     followUpAt: patch.followUpAt !== undefined ? (patch.followUpAt as string | null) : before.followUpAt,
+    owner: patch.owner !== undefined ? (patch.owner as string | null) : before.owner,
+    workdir: patch.workdir !== undefined ? (patch.workdir as string | null) : before.workdir,
     version: before.version + 1,
     updatedAt: now,
   };
@@ -632,7 +656,7 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
     });
   };
   const fieldDiff: NonNullable<KernelEvent["diff"]> = {};
-  for (const key of ["title", "priority", "type", "parent", "tracks", "refs", "body", "followUpAt"] as const) {
+  for (const key of ["title", "priority", "type", "parent", "tracks", "refs", "body", "followUpAt", "owner", "workdir"] as const) {
     const oldValue = before[key];
     const newValue = after[key];
     if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {

@@ -365,3 +365,30 @@ describe("doc put --task (atomic attach)", () => {
     expect(world.snapshot.objects["p"]).toBeUndefined(); // fail whole, not half
   });
 });
+
+describe("owner + workdir (the executable-task quartet)", () => {
+  it("create stores owner (email) and an ABSOLUTE workdir; both are editable + evented", () => {
+    const { world, d } = run(emptyWorld(), {
+      op: "create", title: "seo loop", id: "seo",
+      owner: "tim@superdesign.dev", workdir: "/Users/tim/work/superdesign",
+    });
+    expect(d.ok).toBe(true);
+    expect(task(world.snapshot, "seo")).toMatchObject({
+      owner: "tim@superdesign.dev",
+      workdir: "/Users/tim/work/superdesign",
+    });
+    const { world: w2 } = run(world, { op: "update", id: "seo", patch: { workdir: "/srv/checkout" } });
+    expect(task(w2.snapshot, "seo").workdir).toBe("/srv/checkout");
+    const evt = w2.events.at(-1);
+    expect(evt).toMatchObject({ kind: "fields-changed" });
+    expect(evt?.diff?.workdir).toEqual({ old: "/Users/tim/work/superdesign", new: "/srv/checkout" });
+  });
+
+  it("refuses a relative or traversing workdir on create AND update", () => {
+    expect(run(emptyWorld(), { op: "create", title: "x", workdir: "seo/" }).d.ok).toBe(false);
+    expect(run(emptyWorld(), { op: "create", title: "x", workdir: "/a/../b" }).d.ok).toBe(false);
+    const w = seed({ op: "create", title: "y" });
+    const { d } = run(w, { op: "update", id: "y", patch: { workdir: "relative/path" } });
+    expect(!d.ok && d.refusal.code).toBe("INVALID_REFERENCE");
+  });
+});

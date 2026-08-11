@@ -59,6 +59,8 @@ const OPTIONS: NonNullable<ParseArgsConfig["options"]> = {
   session: { type: "string" },
   // `doc put --task <id>` atomic attach target (in-run default: LOOPANY_TASK_ID).
   task: { type: "string" },
+  owner: { type: "string" },
+  workdir: { type: "string" },
   actor: { type: "string" },
   kind: { type: "string" },
   // deterministic-clock override (hidden): tests + reproducible ticks pin `now`

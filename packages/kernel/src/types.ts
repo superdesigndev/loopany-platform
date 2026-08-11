@@ -38,8 +38,12 @@ export interface TaskObject {
   id: string;
   title: string;
   status: TaskStatus;
-  /** Person (email), agent name, loop name, or null = backlog. Resolution is the driver's job. */
+  /** Person (email), agent name, loop name, or null = backlog. Resolution is the driver's job.
+   *  Remote convention: an EXECUTION ADDRESS `<machine>/<agent>` (mbp/claude). */
   assignee: string | null;
+  /** The responsible HUMAN (email) - notification / escalation recipient. Not
+   *  the executor (that is assignee). Null = unowned. */
+  owner: string | null;
   priority: string | null;
   type: string | null;
   /** Single-valued tree edge; cycle-checked at write time. */
@@ -50,6 +54,11 @@ export interface TaskObject {
   refs: readonly string[];
   /** The single follow-up slot. Invariant: non-null <=> status === "follow-up". */
   followUpAt: string | null;
+  /** ABSOLUTE working directory the run spawns in (loops usually work inside
+   *  another project's checkout). Null = the workspace root. The path is
+   *  machine-local by design (assignee already names the machine); spawn fails
+   *  LOUD when it does not exist on the executing machine. */
+  workdir: string | null;
   /** Curated present (Spec / current understanding). */
   body: string;
   version: number;
@@ -188,6 +197,8 @@ export interface CreateCommand {
   title: string;
   status?: string;
   assignee?: string;
+  owner?: string;
+  workdir?: string;
   priority?: string;
   type?: string;
   parent?: string;

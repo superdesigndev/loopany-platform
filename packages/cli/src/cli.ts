@@ -332,6 +332,8 @@ function verbCreate(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (args.flags.parent) cmd.parent = args.flags.parent;
   if (args.flags.tracks) cmd.tracks = args.flags.tracks;
   if (args.flags.assignee) cmd.assignee = args.flags.assignee;
+  if (args.flags.owner) cmd.owner = args.flags.owner;
+  if (args.flags.workdir) cmd.workdir = args.flags.workdir;
   if (args.flags.type) cmd.type = args.flags.type;
   const priority = args.flags.p ?? args.flags.priority;
   if (priority) cmd.priority = priority;
@@ -762,7 +764,7 @@ read
   inbox --assignee <me>
 
 write  (all accept --dry-run)
-  create "<title>" [--id --parent --tracks --assignee --type -p --status
+  create "<title>" [--id --parent --tracks --assignee --owner --workdir --type -p --status
                     --cron "<expr>" --timezone <tz> --follow-up <date> --body-file f.md]
   update <id> k=v … [--note "<text>"] [--if-version N]
   note <id> "<text>"

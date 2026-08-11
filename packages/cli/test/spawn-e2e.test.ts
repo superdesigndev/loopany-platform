@@ -272,3 +272,42 @@ describe("M4 local agent loop (fake-agent E2E)", () => {
     expect(readRun(report.spawned[0].runId).note).toContain("after one retry");
   });
 });
+
+describe("workdir spawn semantics", () => {
+  it("threads the task's workdir into the spawn cwd; missing dir fails LOUD without spawning", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { run } = await import("../src/index.js");
+    const { spawnPendingRuns } = await import("../src/spawn.js");
+    const dir = mkdtempSync(join(tmpdir(), "loopany-workdir-"));
+    const project = mkdtempSync(join(tmpdir(), "loopany-project-"));
+    try {
+      const deps = { cwd: dir, now: "2026-08-09T12:00:00.000Z", env: {}, registryHome: dir, probe: () => false };
+      run(["init"], deps);
+      const { readFileSync, writeFileSync } = await import("node:fs");
+      const cfgPath = join(dir, ".loopany", "config.json");
+      const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+      cfg.profiles = { claude: { cmd: "true", args: [] } };
+      writeFileSync(cfgPath, JSON.stringify(cfg));
+      // Task A: existing workdir -> spawn receives it as cwd.
+      run(["create", "A", "--id", "a", "--assignee", "claude", "--workdir", project], deps);
+      // Task B: missing workdir -> failed run, agent NEVER spawned.
+      run(["create", "B", "--id", "b", "--assignee", "claude", "--workdir", join(project, "ghost")], deps);
+      const seen: string[] = [];
+      const report = spawnPendingRuns(join(dir, ".loopany"), "2026-08-09T12:01:00.000Z", (req) => {
+        seen.push(req.cwd);
+        return { status: 0 };
+      });
+      expect(seen).toEqual([project]); // only A spawned, in its workdir
+      const b = report.spawned.find((r) => r.taskId === "b");
+      expect(b?.outcome).toBe("failed");
+      expect(report.notices.join()).toContain("b");
+      const showB = run(["show", "b", "--log"], deps);
+      expect(showB.stdout).toContain("workdir does not exist on this machine");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
