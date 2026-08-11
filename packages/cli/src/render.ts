@@ -57,6 +57,7 @@ function fieldLines(obj: KernelObject): string[] {
       `refs: ${t.refs.length > 0 ? t.refs.join(", ") : "—"}`,
       `followUpAt: ${t.followUpAt ?? "—"}`,
       `workdir: ${t.workdir ?? "—"}`,
+      ...(t.goal != null ? [`goal (finish line): ${t.goal}`] : []),
     ];
   }
   if (obj.archetype === "doc") {

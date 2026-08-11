@@ -334,6 +334,7 @@ function verbCreate(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (args.flags.assignee) cmd.assignee = args.flags.assignee;
   if (args.flags.owner) cmd.owner = args.flags.owner;
   if (args.flags.workdir) cmd.workdir = args.flags.workdir;
+  if (args.flags.goal) cmd.goal = args.flags.goal;
   if (args.flags.type) cmd.type = args.flags.type;
   const priority = args.flags.p ?? args.flags.priority;
   if (priority) cmd.priority = priority;

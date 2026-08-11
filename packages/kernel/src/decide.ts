@@ -66,6 +66,7 @@ export const EDITABLE_TASK_FIELDS = [
   "followUpAt",
   "owner",
   "workdir",
+  "goal",
   "cron",
   "timezone",
 ] as const;
@@ -455,6 +456,7 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
     refs: cmd.refs ?? [],
     followUpAt: status === "follow-up" ? (cmd.followUpAt as string) : null,
     workdir: cmd.workdir ?? null,
+    goal: cmd.goal ?? null,
     body: cmd.body ?? "",
     version: 1,
     createdAt: now,
@@ -579,6 +581,7 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
     followUpAt: patch.followUpAt !== undefined ? (patch.followUpAt as string | null) : before.followUpAt,
     owner: patch.owner !== undefined ? (patch.owner as string | null) : before.owner,
     workdir: patch.workdir !== undefined ? (patch.workdir as string | null) : before.workdir,
+    goal: patch.goal !== undefined ? (patch.goal as string | null) : before.goal,
     version: before.version + 1,
     updatedAt: now,
   };
@@ -597,6 +600,17 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
     return refuse("FOLLOWUP_NEEDS_DATE", "followUpAt only lives on status=follow-up (the waiting state)");
   } else {
     after.followUpAt = null; // leaving follow-up clears the slot
+  }
+
+  // CLOSED-GOAL COMPLETION CONTRACT: a task with a finish line (`goal` set)
+  // cannot silently become done - the completing update must carry a note (the
+  // completion evidence, recorded on the status-changed event). Trigger
+  // pausing on completion + deterministic reopen re-arm are the EXISTING
+  // terminal-status invariants #2/#2' - no goal-specific trigger logic.
+  if (after.goal != null && after.status === "done" && before.status !== "done" && !cmd.note?.trim()) {
+    return refuse("GOAL_NEEDS_NOTE", `"${after.id}" is a closed goal - marking it done needs a completion note`, {
+      hint: 'update <id> status=done --note "<how the finish line was met>"',
+    });
   }
 
   const issues = referenceIssues(snapshot, after.id, after.parent, after.tracks);
@@ -656,7 +670,7 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
     });
   };
   const fieldDiff: NonNullable<KernelEvent["diff"]> = {};
-  for (const key of ["title", "priority", "type", "parent", "tracks", "refs", "body", "followUpAt", "owner", "workdir"] as const) {
+  for (const key of ["title", "priority", "type", "parent", "tracks", "refs", "body", "followUpAt", "owner", "workdir", "goal"] as const) {
     const oldValue = before[key];
     const newValue = after[key];
     if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
@@ -776,7 +790,7 @@ function validatePatchFields(
       });
     }
   }
-  for (const k of ["assignee", "priority", "type", "parent", "tracks"] as const) {
+  for (const k of ["assignee", "priority", "type", "parent", "tracks", "goal"] as const) {
     const bad = stringOrNull(k);
     if (bad) return bad;
   }

@@ -163,7 +163,7 @@ describe("update", () => {
 
   it("refuses unknown fields listing the editable set", () => {
     const w = seed({ op: "create", title: "x" });
-    const { d } = run(w, { op: "update", id: "x", patch: { goal: "y" } });
+    const { d } = run(w, { op: "update", id: "x", patch: { milestone: "y" } });
     expect(!d.ok && d.refusal.code).toBe("UNKNOWN_FIELD");
     expect(!d.ok && d.refusal.issues?.[0]).toContain("status");
   });

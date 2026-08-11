@@ -59,6 +59,11 @@ export interface TaskObject {
    *  machine-local by design (assignee already names the machine); spawn fails
    *  LOUD when it does not exist on the executing machine. */
   workdir: string | null;
+  /** The FINISH LINE (closed goal). Null = open work (a loop may run forever);
+   *  non-null = this task COMPLETES: moving it to done requires a completion
+   *  note as evidence, and completion pauses its triggers (the existing
+   *  terminal-status invariant). A goal is prose, never a separate entity. */
+  goal: string | null;
   /** Curated present (Spec / current understanding). */
   body: string;
   version: number;
@@ -208,6 +213,7 @@ export interface CreateCommand {
   cron?: string;
   timezone?: string;
   followUpAt?: string;
+  goal?: string;
 }
 
 export interface UpdateCommand {
@@ -351,6 +357,7 @@ export const REFUSAL_CODES = [
   "INVALID_REFERENCE",
   "ASSIGNEE_NOT_DISPATCHABLE",
   "TERMINAL_TASK",
+  "GOAL_NEEDS_NOTE",
   "NO_OP",
   // run lifecycle (run-claim / run-finish)
   "UNKNOWN_RUN",

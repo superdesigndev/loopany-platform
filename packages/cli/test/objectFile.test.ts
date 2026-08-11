@@ -30,6 +30,7 @@ function task(over: Partial<Extract<KernelObject, { archetype: "task" }>> = {}):
     tracks: null,
     owner: null,
     workdir: null,
+  goal: null,
     refs: [],
     followUpAt: null,
     body: "",

@@ -61,6 +61,7 @@ const OPTIONS: NonNullable<ParseArgsConfig["options"]> = {
   task: { type: "string" },
   owner: { type: "string" },
   workdir: { type: "string" },
+  goal: { type: "string" },
   actor: { type: "string" },
   kind: { type: "string" },
   // deterministic-clock override (hidden): tests + reproducible ticks pin `now`
