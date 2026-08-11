@@ -67,10 +67,14 @@ Template for each follow-up task's body:
       error, the repo path <repo>, and: reproduce via the repo's test, fix on a
       FEATURE BRANCH (main is protected), push the branch, \`gh pr create\`,
       and put the PR URL in the closing note - AND a question task for tim
-      (assignee tim) summarizing the risk. Keep your own alarm DAILY until
-      recovery is verified - never downshift during an open regression.
-    - status=done ONLY after the numbers are verified recovered/stable and your
-      closing note states the conclusion with data.
+      (assignee tim) summarizing the risk.
+    - HARD: escalation is BOTH tasks - a fix for claude AND a human notice for
+      tim. A regression a human never heard about is an unreported incident,
+      however good the fix.
+    - HARD: the fix task closing does NOT close YOUR monitor. You stay on a
+      DAILY alarm until the MIRROR itself shows recovery - status=done ONLY
+      after the numbers are verified recovered/stable, with the data in your
+      closing note. A fix that nobody re-measures is an unverified fix.
 `;
 
 /** Baseline mirrors seeded at setup. */
