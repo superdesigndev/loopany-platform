@@ -62,6 +62,8 @@ const OPTIONS: NonNullable<ParseArgsConfig["options"]> = {
   owner: { type: "string" },
   workdir: { type: "string" },
   goal: { type: "string" },
+  since: { type: "string" },
+  limit: { type: "string" },
   actor: { type: "string" },
   kind: { type: "string" },
   // deterministic-clock override (hidden): tests + reproducible ticks pin `now`
@@ -73,6 +75,7 @@ const OPTIONS: NonNullable<ParseArgsConfig["options"]> = {
   "dry-run": { type: "boolean" },
   log: { type: "boolean" },
   due: { type: "boolean" },
+  all: { type: "boolean" },
   tree: { type: "boolean" },
   // `tick --spawn` (§13 M4): after firing due triggers, consume the resulting
   // pending runs by launching each assignee's configured agent profile.

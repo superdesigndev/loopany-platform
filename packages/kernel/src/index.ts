@@ -33,6 +33,7 @@ export {
   type InboxItem,
   type LoopRow,
 } from "./views.js";
+export { timelineView, type TimelineItem, type TimelineKind, type TimelineOptions } from "./timeline.js";
 export {
   slugify,
   shortHash,

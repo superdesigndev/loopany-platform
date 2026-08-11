@@ -21,8 +21,10 @@ import {
   type Provenance,
   type RunRecord,
   type Snapshot,
+  type TimelineItem,
   decide,
   tick,
+  timelineView,
 } from "@loopany/kernel";
 
 import * as store from "../db/store.js";
@@ -51,6 +53,8 @@ export interface KernelCliResponse {
   events?: Record<string, KernelEvent[]>;
   /** On a TICK request: the number of per-fire changesets applied. */
   applied?: number;
+  /** On a TIMELINE request: the projected items (bounded, newest first). */
+  timeline?: TimelineItem[];
 }
 
 /** The POST /api/kernel/cli body. A discriminated union so the ONE route serves
@@ -65,6 +69,9 @@ export interface KernelCliBody {
   command?: unknown;
   tick?: boolean;
   read?: boolean;
+  /** The BOUNDED team-timeline query (kernel-team-timeline): the server runs
+   *  the shared timelineView so a remote CLI never downloads every event. */
+  timeline?: { since?: unknown; limit?: unknown; taskId?: unknown; actor?: unknown; all?: unknown };
   now?: string;
 }
 
@@ -125,7 +132,7 @@ function runVerbRefusal(
     };
   }
   if (req.tick) return { status: 403, code: "FORBIDDEN", message: "a run credential cannot host-tick (owner/host surface)" };
-  if (req.read) return null; // reads are team-scoped and safe (show/list/inbox)
+  if (req.read || req.timeline !== undefined) return null; // reads are team-scoped and safe (show/list/inbox/timeline)
   const op = isRecord(req.command) ? String((req.command as { op?: unknown }).op ?? "") : "";
   const allowed = new Set(["create", "update", "note", "doc-put", "mirror-add", "run-finish"]);
   if (!allowed.has(op)) {
@@ -160,7 +167,7 @@ export async function kernelCli(
 
   // Normalize: a legacy bare-Command call (or any non-envelope value) is a write.
   const req: KernelCliBody =
-    isRecord(body) && ("command" in body || body.tick === true || body.read === true)
+    isRecord(body) && ("command" in body || body.tick === true || body.read === true || "timeline" in body)
       ? (body as KernelCliBody)
       : { command: body };
   // A RUN credential never dictates time: honoring body.now would let a run
@@ -181,6 +188,7 @@ export async function kernelCli(
   }
 
   if (req.read) return await readRequest(teamId);
+  if (req.timeline !== undefined) return await timelineRequest(teamId, req.timeline);
   if (req.tick) return await tickRequest(teamId, now);
 
   // RUN POSTCONDITION: an exit-code-0 agent process is NOT a result. The
@@ -289,6 +297,25 @@ export async function tickTeamAtAuthority(
     }
   }
   return { applied, notices: result.notices, minted };
+}
+
+/** The BOUNDED timeline query: sanitize the wire opts, cap the limit, run the
+ *  SHARED timelineView at the authority (identical semantics to the local file
+ *  driver by construction). Team scoping is the credential scope above. */
+async function timelineRequest(
+  teamId: string,
+  raw: NonNullable<KernelCliBody["timeline"]>,
+): Promise<KernelHttpResult> {
+  const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
+  const limit = Math.min(Math.max(Number(raw.limit) || 50, 1), 200);
+  const items = timelineView(await readSnapshot(teamId), await readEvents(teamId), {
+    since: str(raw.since),
+    taskId: str(raw.taskId),
+    actor: str(raw.actor),
+    all: raw.all === true,
+    limit,
+  });
+  return { status: 200, body: { ok: true, notices: [], timeline: items } };
 }
 
 /** A read of the authority snapshot + every object's event stream. The remote

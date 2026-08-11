@@ -23,6 +23,8 @@
  * in-process transport instead.
  */
 import {
+  type TimelineItem,
+  type TimelineOptions,
   type Command,
   type KernelEvent,
   type Provenance,
@@ -44,6 +46,7 @@ export interface KernelCliResponse {
   snapshot?: Snapshot;
   events?: Record<string, KernelEvent[]>;
   applied?: number;
+  timeline?: TimelineItem[];
 }
 
 /** A synchronous HTTP transport: given a URL/token/body, return the parsed
@@ -107,6 +110,13 @@ export class RemoteBackend implements Backend {
     // round-trip (show --log reads snapshot() then events()).
     this.lastEvents = res.events ?? {};
     return res.snapshot;
+  }
+
+  timeline(opts: TimelineOptions): TimelineItem[] {
+    // The BOUNDED server endpoint runs the same timelineView at the authority -
+    // never download every team event to filter client-side.
+    const res = this.send({ timeline: opts });
+    return res.timeline ?? [];
   }
 
   private lastEvents: Record<string, KernelEvent[]> | null = null;

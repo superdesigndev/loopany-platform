@@ -200,6 +200,43 @@ test("POSTCONDITION: a DEVICE credential's finish is an owner override - never s
   expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)?.state).toBe("done");
 });
 
+test("TIMELINE endpoint: bounded, team-scoped, readable by BOTH credentials, run-collapsed", async () => {
+  const { teamId, runId, rk, deviceToken } = await deliveredRun();
+
+  // The run writes a product + a note (collapses into one item).
+  await kgateway.kernelCli(rk, { command: { op: "doc-put", key: "w33-report", body: "# w33", attachTask: "seo-bet-manager" } });
+  await kgateway.kernelCli(rk, { command: { op: "note", id: "seo-bet-manager", note: "progress" } });
+
+  // Device credential reads the timeline.
+  const dres = await kgateway.kernelCli(deviceToken, { timeline: { since: "2020-01-01T00:00:00.000Z" } });
+  expect(dres.status).toBe(200);
+  const items = dres.body.timeline!;
+  const runItems = items.filter((i) => i.runId === runId);
+  expect(runItems).toHaveLength(1); // the whole pass is ONE item
+  expect(runItems[0]!.summary).toContain("doc ");
+
+  // Run credential may read it too (team-scoped, safe).
+  const rres = await kgateway.kernelCli(rk, { timeline: { since: "2020-01-01T00:00:00.000Z" } });
+  expect(rres.status).toBe(200);
+  expect(rres.body.timeline!.length).toBeGreaterThan(0);
+
+  // The limit is CAPPED server-side (bounded endpoint, never a full dump).
+  const capped = await kgateway.kernelCli(deviceToken, { timeline: { since: "2020-01-01T00:00:00.000Z", limit: 99999 } });
+  expect(capped.status).toBe(200);
+  expect(capped.body.timeline!.length).toBeLessThanOrEqual(200);
+
+  // TEAM ISOLATION: another team's credential sees none of this team's items.
+  const otherToken = tokens.mintDeviceToken();
+  const otherTeam = store.teamIdForUser("u2");
+  await store.ensureTeam(otherTeam, "u2's team", "u2");
+  await tokens.rememberConnectKey(otherToken, { userId: "u2", teamId: otherTeam });
+  const gw2 = gateway();
+  await gw2.poll(otherToken, { host: "other.local", alias: "other" });
+  const ores = await kgateway.kernelCli(otherToken, { timeline: { since: "2020-01-01T00:00:00.000Z" } });
+  expect(ores.status).toBe(200);
+  expect(ores.body.timeline!).toHaveLength(0);
+});
+
 test("owner/host verbs 403 on a run credential; a foreign run-finish 403s; a non-kernel rk_ is 401", async () => {
   const { runId, rk } = await deliveredRun();
 

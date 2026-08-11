@@ -42,6 +42,9 @@ const EXPECTED = [
   "slugify",
   "sortTasksForList",
   "tick",
+  // timelineView: the kernel-team-timeline projection (2026-08-11) - one
+  // shared derivation for CLI + server endpoint + future web surfaces.
+  "timelineView",
   "treeView",
 ].sort();
 

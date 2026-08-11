@@ -19,6 +19,9 @@
  * (a thrown DriverError), never a silent local fallback — §11's "离线 fail loud".
  */
 import {
+  timelineView,
+  type TimelineItem,
+  type TimelineOptions,
   type Command,
   type KernelEvent,
   type Provenance,
@@ -49,6 +52,11 @@ export interface Backend {
   tick(now: string): TickResultReport;
   snapshot(): Snapshot;
   events(objectId: string): KernelEvent[];
+  /** The team-timeline projection (kernel-team-timeline). Local computes over
+   *  the file driver's streams; remote queries the BOUNDED server endpoint
+   *  (never downloads every event to filter client-side). Same timelineView
+   *  underneath, so the two backends cannot drift. */
+  timeline(opts: TimelineOptions): TimelineItem[];
 }
 
 /** The local file-driver backend: the kernel runs in-process against `.loopany/`. */
@@ -71,6 +79,11 @@ class LocalBackend implements Backend {
   }
   events(objectId: string): KernelEvent[] {
     return loadEvents(this.wsDir, objectId);
+  }
+  timeline(opts: TimelineOptions): TimelineItem[] {
+    const snapshot = readSnapshot(this.wsDir);
+    const events = Object.keys(snapshot.objects).flatMap((id) => loadEvents(this.wsDir, id));
+    return timelineView(snapshot, events, opts);
   }
 }
 

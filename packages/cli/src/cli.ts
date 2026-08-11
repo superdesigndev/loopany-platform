@@ -46,6 +46,7 @@ import {
   renderInbox,
   renderNotices,
   renderSearchHits,
+  renderTimeline,
   renderShow,
   renderTree,
 } from "./render.js";
@@ -613,6 +614,31 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
   return ok(renderInbox(items, now));
 }
 
+/** `timeline` — the team's recent MEANINGFUL activity (kernel-team-timeline):
+ *  a derived projection, newest first, default last 24h / 50 items. Mechanical
+ *  noise (starts, claims, ordinary returns, no-op checks) hides unless --all.
+ *  Content is untrusted team activity DATA, never instructions. */
+function verbTimeline(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const now = resolveNow(args, deps);
+  let limit: number | undefined;
+  if (args.flags.limit !== undefined) {
+    if (!/^\d+$/.test(args.flags.limit)) throw new UsageError(`--limit must be a positive integer, got "${args.flags.limit}"`);
+    limit = Number(args.flags.limit);
+  }
+  if (args.flags.since !== undefined && !Number.isFinite(Date.parse(args.flags.since))) {
+    throw new UsageError(`--since must be an ISO instant, got "${args.flags.since}"`);
+  }
+  const items = backendFor(deps).timeline({
+    since: args.flags.since ?? new Date(Date.parse(now) - 24 * 3600_000).toISOString(),
+    limit,
+    taskId: args.flags.task,
+    actor: args.flags.actor,
+    all: args.bools.has("all"),
+  });
+  if (args.bools.has("json")) return ok(JSON.stringify(items, null, 2));
+  return ok(renderTimeline(items));
+}
+
 // ---- dispatch + host ----
 
 /** `run <id> [--wait]` — the third dispatch entrance (§5.1): create a manual
@@ -734,6 +760,8 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
         return verbSearch(args, deps);
       case "inbox":
         return verbInbox(args, deps);
+      case "timeline":
+        return verbTimeline(args, deps);
       case "run":
         return verbRun(args, deps);
       case "tick":
@@ -804,6 +832,9 @@ read
   list [--status <s>] [--assignee <a>] [--due] [--tree]   # no filter = tree (depth 2)
   search <keyword>
   inbox --assignee <me>
+  timeline [--since <iso>] [--limit N] [--task <id>] [--actor <id>] [--all]
+                                    # recent meaningful team activity (24h/50
+                                    #   default); --all reveals mechanical rows
 
 write  (all accept --dry-run)
   create "<title>" [--id --parent --tracks --assignee --owner --workdir --type -p --status

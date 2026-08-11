@@ -217,6 +217,27 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(events.find((e) => e.kind === "note")?.note).toBe("ended the pass with status=done after the fix");
   });
 
+  it("timeline shows meaningful activity, hides no-op checks, honors --task/--json", () => {
+    call(["init"]);
+    call(["create", "Busy loop", "--id", "busy"]);
+    call(["note", "busy", "please review pricing"]); // human note - kept
+    call(["note", "busy", "nothing actionable", "--session", "s1", "--actor", "run-noop"]); // agent no-op - hidden
+    call(["create", "Side task", "--id", "side"]);
+
+    const out = call(["timeline"]);
+    expect(out.stdout).toContain("please review pricing");
+    expect(out.stdout).toContain("[task-created]");
+    expect(out.stdout).not.toContain("nothing actionable");
+    const all = call(["timeline", "--all"]);
+    expect(all.stdout).toContain("nothing actionable");
+
+    const scoped = call(["timeline", "--task", "side"]);
+    expect(scoped.stdout).not.toContain("pricing");
+    const json = JSON.parse(call(["timeline", "--json"]).stdout) as Array<{ kind: string }>;
+    expect(json.length).toBeGreaterThan(0);
+    expect(json.every((i) => typeof i.kind === "string")).toBe(true);
+  });
+
   it("promotes provenance to agent-run via --session / LOOPANY_SESSION_ID", () => {
     call(["init"]);
     call(["create", "Agent task"]);

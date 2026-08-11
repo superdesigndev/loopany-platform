@@ -6,6 +6,7 @@
  * rung ⑤).
  */
 import {
+  type TimelineItem,
   type InboxItem,
   type KernelEvent,
   type KernelObject,
@@ -273,6 +274,17 @@ export function renderInbox(items: readonly InboxItem[], now?: string): string {
       ];
       return `${head}\n      ${bits.join(" · ")}`;
     })
+    .join("\n");
+}
+
+// ---- timeline ----
+
+/** One line per item: `<at>  <kind>  <objectId>  ·  <actor>` then the bounded
+ *  summary. References only - drill down via `show <id> --log`. */
+export function renderTimeline(items: readonly TimelineItem[]): string {
+  if (items.length === 0) return "(no meaningful activity in range — try --since or --all)";
+  return items
+    .map((i) => `${i.at}  [${i.kind}]  ${i.objectId}  ·  ${i.actor}\n      ${i.summary}`)
     .join("\n");
 }
 
