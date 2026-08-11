@@ -107,6 +107,15 @@ function getTask(snapshot: Snapshot, id: string): TaskObject | undefined {
   return o?.archetype === "task" ? o : undefined;
 }
 
+/** True when some task already points at `id` (refs or tracks). Backs the
+ *  island warning on doc-put/mirror-add: an unattached artifact is invisible
+ *  from every task page, so the writer should hear it at write time. */
+function anyTaskPointsAt(snapshot: Snapshot, id: string): boolean {
+  return Object.values(snapshot.objects).some(
+    (o) => o.archetype === "task" && (o.refs.includes(id) || o.tracks === id),
+  );
+}
+
 // ---- cron / timezone validation (validated as a PAIR — an invalid tz throws
 // in croner, so it must be caught alongside the spec, never separately) ----
 
@@ -921,6 +930,14 @@ function decideDocPut(cmd: DocPutCommand, ctx: Ctx): Decision {
     notices.push(`attached — ${patched.id} refs += ${id}`);
   } else if (attachTo) {
     notices.push(`already attached to ${attachTo.id}`);
+  } else if (!anyTaskPointsAt(snapshot, id)) {
+    // The island warning: nothing points at this doc, so no task page will
+    // ever surface it. Loud at write time — the writer is the one who knows
+    // which task it belongs to.
+    notices.push(
+      `unattached — no task refs this doc; it is invisible from every task page. ` +
+        `Attach it: doc put ${id} --task <task-id> (in-run, LOOPANY_TASK_ID auto-fills)`,
+    );
   }
   return { ok: true, changeset: cs, notices, result: { id, existing: Boolean(existing) } };
 }
@@ -940,30 +957,68 @@ function decideMirrorAdd(cmd: MirrorAddCommand, ctx: Ctx): Decision {
   if (coords.length === 0) return refuse("INVALID_REFERENCE", "coords must be non-empty");
   const id = mirrorId(cmd.kind, coords);
   const existing = getObject(snapshot, id);
-  if (existing) {
-    if (existing.archetype !== "mirror" || existing.kind !== cmd.kind) {
-      // A derived id collision with a DIFFERENT archetype/kind — never silently
-      // return the occupier as "existing" (finding: mirror id occupied).
-      return refuse("CONFLICT", `id "${id}" is occupied by a ${existing.archetype}`, {
-        hint: "the (kind, coords) pair hashes onto an existing object of another kind",
-      });
-    }
-    return { ok: true, changeset: emptyChangeset(), notices: [], result: { id, existing: true } };
+  if (existing && (existing.archetype !== "mirror" || existing.kind !== cmd.kind)) {
+    // A derived id collision with a DIFFERENT archetype/kind — never silently
+    // return the occupier as "existing" (finding: mirror id occupied).
+    return refuse("CONFLICT", `id "${id}" is occupied by a ${existing.archetype}`, {
+      hint: "the (kind, coords) pair hashes onto an existing object of another kind",
+    });
+  }
+  // Validate the attach TARGET before mutating anything (fail whole, not half —
+  // same discipline as decideDocPut).
+  let attachTo: TaskObject | null = null;
+  if (cmd.attachTask !== undefined) {
+    const t = getTask(snapshot, cmd.attachTask);
+    if (!t) return refuse("UNKNOWN_OBJECT", `attach target "${cmd.attachTask}" is not a task`);
+    attachTo = t;
   }
   const cs = emptyChangeset();
-  cs.objects.push({
-    object: { archetype: "mirror", id, kind: cmd.kind, coords, version: 1, createdAt: now, updatedAt: now },
-    expectedVersion: null,
-  });
-  cs.events.push({
-    id: eventId(id, 1, "created"),
-    objectId: id,
-    kind: "created",
-    at: now,
-    note: `${cmd.kind} ${coords}`,
-    provenance: actor,
-  });
-  return { ok: true, changeset: cs, notices: [], result: { id } };
+  const notices: string[] = [];
+  if (!existing) {
+    cs.objects.push({
+      object: { archetype: "mirror", id, kind: cmd.kind, coords, version: 1, createdAt: now, updatedAt: now },
+      expectedVersion: null,
+    });
+    cs.events.push({
+      id: eventId(id, 1, "created"),
+      objectId: id,
+      kind: "created",
+      at: now,
+      note: `${cmd.kind} ${coords}`,
+      provenance: actor,
+    });
+  }
+  // The attach rides BOTH branches: a dedup hit still links the existing mirror
+  // to the task when the edge is missing (idempotent when it is already there).
+  if (attachTo && !attachTo.refs.includes(id)) {
+    const patched: TaskObject = {
+      ...attachTo,
+      refs: [...attachTo.refs, id],
+      version: attachTo.version + 1,
+      updatedAt: now,
+    };
+    cs.objects.push({ object: patched, expectedVersion: attachTo.version });
+    cs.events.push({
+      id: eventId(patched.id, patched.version, "fields-changed"),
+      objectId: patched.id,
+      kind: "fields-changed",
+      at: now,
+      diff: { refs: { old: attachTo.refs, new: patched.refs } },
+      note: `mirror "${id}" attached`,
+      provenance: actor,
+    });
+    notices.push(`attached — ${patched.id} refs += ${id}`);
+  } else if (attachTo) {
+    notices.push(`already attached to ${attachTo.id}`);
+  } else if (!anyTaskPointsAt(snapshot, id)) {
+    // The island warning (same as doc-put): an unlinked pointer is only
+    // findable via `mirror list`/search — say so where the writer can act.
+    notices.push(
+      `unattached — no task refs this mirror. ` +
+        `Attach it: mirror add ${cmd.kind} <coords> --task <task-id> (in-run, LOOPANY_TASK_ID auto-fills)`,
+    );
+  }
+  return { ok: true, changeset: cs, notices, result: { id, existing: Boolean(existing) } };
 }
 
 // ---- manual run ----

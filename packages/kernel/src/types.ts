@@ -249,6 +249,12 @@ export interface MirrorAddCommand {
   op: "mirror-add";
   kind: string;
   coords: string;
+  /** Attach the mirror to this task in the SAME decision (append to the task's
+   *  `refs`, idempotent) — the doc-put atomic attach, applied to mirrors for
+   *  the same reason: the separate second link step never happens, so a bare
+   *  `mirror add` leaves an island object no task points at. Attach also fires
+   *  on a DEDUP hit (the mirror already existed but the edge may not). */
+  attachTask?: string;
 }
 
 export interface RunCommand {

@@ -60,6 +60,54 @@ describe("doc put --task (atomic attach)", () => {
     expect(call(["show", "p"]).exitCode).not.toBe(0); // doc was not created
   });
 
+  it("mirror add --task attaches; ambient LOOPANY_TASK_ID fills it in-run", () => {
+    call(["init"]);
+    call(["create", "Triage", "--id", "triage"]);
+    const explicit = call(["mirror", "add", "url", "https://x.test/1", "--task", "triage"]);
+    expect(explicit.exitCode).toBe(0);
+    expect(explicit.stdout).toContain("attached — triage refs +=");
+    const ambient = call(["mirror", "add", "url", "https://x.test/2"], { LOOPANY_TASK_ID: "triage" });
+    expect(ambient.stdout).toContain("attached — triage refs +=");
+    // Out-of-run bare add stays an unattached pointer (owner adds don't guess).
+    const bare = call(["mirror", "add", "url", "https://x.test/3"]);
+    expect(bare.stdout).not.toContain("refs +=");
+    expect(bare.stdout).toContain("unattached — no task refs this mirror");
+    expect(call(["show", "triage"]).stdout).toMatch(/refs: m-.*m-/);
+  });
+
+  it("mirror list enumerates mirrors; empty state is definitive; add stays idempotent", () => {
+    call(["init"]);
+    expect(call(["mirror", "list"]).stdout).toContain("(no mirrors)");
+    call(["mirror", "add", "github-pr", "superdesigndev/loopany-platform#174"]);
+    call(["mirror", "add", "url", "https://example.com/dash"]);
+    call(["mirror", "add", "github-pr", "superdesigndev/loopany-platform#174"]); // dup — no-op
+    const out = call(["mirror", "list"]).stdout;
+    expect(out).toContain("[github-pr]  superdesigndev/loopany-platform#174");
+    expect(out).toContain("[url]  https://example.com/dash");
+    expect(out.trim().split("\n")).toHaveLength(2); // the duplicate add minted nothing
+    const json = JSON.parse(call(["mirror", "list", "--json"]).stdout);
+    expect(json).toHaveLength(2);
+  });
+
+  it("doc --help / mirror --help short-circuit; the default screen stays lean", () => {
+    const doc = call(["doc", "--help"]);
+    expect(doc.exitCode).toBe(0);
+    expect(doc.stdout).toContain("doc put <key>");
+    expect(doc.stdout).toContain("doc list");
+    const mirror = call(["mirror", "-h"]);
+    expect(mirror.exitCode).toBe(0);
+    expect(mirror.stdout).toContain("mirror add <kind> <coords>");
+    expect(mirror.stdout).toContain("mirror list");
+    // `doc help` (bare word) works too, and never reaches the workspace.
+    expect(call(["mirror", "help"]).exitCode).toBe(0);
+    // The default screen points at the per-verb help instead of listing subs.
+    const top = call(["--help"]).stdout;
+    expect(top).toContain("doc --help for the full doc surface");
+    expect(top).toContain("mirror --help for the full mirror surface");
+    expect(top).not.toMatch(/^\s+doc list/m);
+    expect(top).not.toMatch(/^\s+mirror list/m);
+  });
+
   it("doc list enumerates docs; empty state is definitive", () => {
     call(["init"]);
     expect(call(["doc", "list"]).stdout).toContain("(no docs)");

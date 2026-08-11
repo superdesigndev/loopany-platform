@@ -465,13 +465,37 @@ function docList(deps: CliDeps, args: ParsedArgs): CliOutcome {
   );
 }
 
+/** `mirror list` — the mirror twin of `doc list`. One line per pointer. */
+function mirrorList(deps: CliDeps, args: ParsedArgs): CliOutcome {
+  const snapshot = backendFor(deps).snapshot();
+  const mirrors = Object.values(snapshot.objects)
+    .filter((o) => o.archetype === "mirror")
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+  if (args.bools.has("json")) return ok(JSON.stringify(mirrors, null, 2));
+  if (mirrors.length === 0) return ok("(no mirrors)");
+  return ok(
+    mirrors
+      .map((m) => (m.archetype === "mirror" ? `${m.id}  [${m.kind}]  ${m.coords}` : ""))
+      .join("\n"),
+  );
+}
+
 function verbMirror(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const sub = args.positionals[0];
-  if (sub !== "add") throw new UsageError('mirror supports only "mirror add <kind> <coords>"');
+  if (sub === "list") return mirrorList(deps, args);
+  if (sub !== "add") throw new UsageError('mirror supports "mirror add <kind> <coords>" and "mirror list"');
   const kind = args.positionals[1];
   const coords = args.positionals[2];
   if (kind === undefined || coords === undefined) throw new UsageError("mirror add needs <kind> <coords>");
-  return execWrite(backendFor(deps), { op: "mirror-add", kind, coords }, args, deps);
+  // Same atomic attach as `doc put`: --task wins, the ambient in-run
+  // LOOPANY_TASK_ID fills it otherwise, out-of-run adds stay unattached.
+  const attachTask = args.flags.task ?? deps.env.LOOPANY_TASK_ID;
+  return execWrite(
+    backendFor(deps),
+    { op: "mirror-add", kind, coords, ...(attachTask ? { attachTask } : {}) },
+    args,
+    deps,
+  );
 }
 
 // ---- reads ----
@@ -672,6 +696,13 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
   if (verb === undefined || verb === "help" || verb === "--help" || verb === "-h") {
     return { stdout: USAGE, stderr: "", exitCode: verb === undefined ? 2 : 0 };
   }
+  // Per-verb help short-circuits BEFORE parseArgs (`--help` is not in the strict
+  // option table, so it would otherwise render as an unknown-flag usage error).
+  // The default screen stays lean; the sub-verb detail lives here.
+  const verbHelp = VERB_USAGE[verb];
+  if (verbHelp !== undefined && wantsHelp(argv.slice(1))) {
+    return { stdout: verbHelp, stderr: "", exitCode: 0 };
+  }
   // parseArgs runs INSIDE the boundary (C2): a value-bearing flag with no value
   // or an unknown flag is a USAGE error rendered like any other, never an
   // uncaught throw. `--json` may not be parseable yet, so the catch sniffs it
@@ -779,8 +810,8 @@ write  (all accept --dry-run)
                     --cron "<expr>" --timezone <tz> --follow-up <date> --body-file f.md]
   update <id> k=v … [--note "<text>"] [--if-version N]
   note <id> "<text>"
-  doc put <key> [--file f.md]
-  mirror add <kind> <coords>
+  doc put <key> [--file f.md]       # doc --help for the full doc surface
+  mirror add <kind> <coords>        # mirror --help for the full mirror surface
 
 dispatch
   run <id> [--wait]                # the third dispatch entrance (a manual run)
@@ -794,3 +825,35 @@ flags
   --session <id>   agent-run provenance (also LOOPANY_SESSION_ID)
   --actor <id>     provenance actorId
   --now <iso>      pin the clock deterministically (also LOOPANY_NOW)`;
+
+/** `<verb> --help` short-circuit texts. A verb absent here degrades to the
+ *  full USAGE screen via the normal unknown-flag/usage paths. */
+const VERB_USAGE: Record<string, string> = {
+  doc: `doc — keyed prose the humans read (no state machine, one upsert verb)
+
+  doc put <key> [--file f.md] [--task <id>] [--if-version N] [--dry-run]
+      create-or-replace the doc \`slugify(<key>)\`. --file is REQUIRED to
+      replace an existing doc (a bare put only creates — it refuses rather
+      than wipe a stored body). --task attaches the doc to that task's refs
+      atomically; inside a run LOOPANY_TASK_ID fills it in automatically.
+      --if-version N refuses when the stored version differs (CAS).
+
+  doc list [--json]
+      one line per doc: <id>  (v<version>)  <updatedAt>  <title>`,
+  mirror: `mirror — an ADDRESS for an external fact (no bytes, immutable, dedup by hash)
+
+  mirror add <kind> <coords> [--task <id>] [--dry-run]
+      record that an external thing matters here. kinds: github-pr |
+      github-issue | url. The id derives from (kind, coords), so a repeat
+      add of the same pair is a silent no-op ({existing: true}). --task
+      attaches the mirror to that task's refs atomically; inside a run
+      LOOPANY_TASK_ID fills it in automatically (a dedup hit still attaches).
+
+  mirror list [--json]
+      one line per mirror: <id>  [<kind>]  <coords>`,
+};
+
+/** True when a post-verb argv asks for help (`--help`, `-h`, or a bare `help`). */
+function wantsHelp(rest: readonly string[]): boolean {
+  return rest.includes("--help") || rest.includes("-h") || rest[0] === "help";
+}

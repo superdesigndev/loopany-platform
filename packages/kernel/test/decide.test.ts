@@ -318,12 +318,52 @@ describe("note / doc / mirror / run / delete", () => {
 
   it("mirror add is get-or-create on (kind, coords); unknown kind is a hard refusal", () => {
     const { world, d } = run(emptyWorld(), { op: "mirror-add", kind: "github-pr", coords: "app#482" });
-    expect(d.ok && d.result?.existing).toBeUndefined();
+    expect(d.ok && d.result?.existing).toBe(false);
     const again = run(world, { op: "mirror-add", kind: "github-pr", coords: "app#482" });
     expect(again.d.ok && again.d.result?.existing).toBe(true);
     expect(again.world.events).toHaveLength(1); // no second event
     const bad = run(world, { op: "mirror-add", kind: "jira", coords: "X-1" });
     expect(!bad.d.ok && bad.d.refusal.code).toBe("BAD_MIRROR_KIND");
+  });
+
+  it("mirror add attachTask appends to refs atomically; a dedup hit still attaches", () => {
+    let w = seed({ op: "create", title: "Triage", id: "triage" });
+    // Create + attach in one decision.
+    const first = run(w, { op: "mirror-add", kind: "url", coords: "https://x.test/9912", attachTask: "triage" });
+    expect(first.d.ok).toBe(true);
+    const mid = first.d.ok ? (first.d.result as { id: string }).id : "";
+    expect((first.world.snapshot.objects["triage"] as unknown as { refs: string[] }).refs).toContain(mid);
+    expect(first.d.ok && first.d.notices.join()).toContain(`attached — triage refs += ${mid}`);
+    // Repeat: mirror dedups AND the attach is idempotent (no version churn).
+    const again = run(first.world, { op: "mirror-add", kind: "url", coords: "https://x.test/9912", attachTask: "triage" });
+    expect(again.d.ok && again.d.notices.join()).toContain("already attached");
+    expect((again.world.snapshot.objects["triage"] as unknown as { version: number }).version).toBe(
+      (first.world.snapshot.objects["triage"] as unknown as { version: number }).version,
+    );
+    // Dedup hit on an EXISTING mirror still creates the missing edge.
+    w = run(w, { op: "mirror-add", kind: "url", coords: "https://x.test/9912" }).world; // island first
+    const late = run(w, { op: "mirror-add", kind: "url", coords: "https://x.test/9912", attachTask: "triage" });
+    expect(late.d.ok && late.d.result?.existing).toBe(true);
+    expect((late.world.snapshot.objects["triage"] as unknown as { refs: string[] }).refs).toContain(mid);
+    // An unknown attach target refuses without minting the mirror.
+    const bad = run(emptyWorld(), { op: "mirror-add", kind: "url", coords: "https://y.test/1", attachTask: "ghost" });
+    expect(!bad.d.ok && bad.d.refusal.code).toBe("UNKNOWN_OBJECT");
+  });
+
+  it("an unattached doc/mirror warns loudly; a linked one stays quiet", () => {
+    const w = seed({ op: "create", title: "Triage", id: "triage" });
+    // Island doc: no attachTask, nothing refs it -> the warning notice.
+    const island = run(w, { op: "doc-put", key: "orphan", body: "b" });
+    expect(island.d.ok && island.d.notices.join()).toContain("unattached — no task refs this doc");
+    // Island mirror: same.
+    const mIsland = run(w, { op: "mirror-add", kind: "url", coords: "https://x.test/7" });
+    expect(mIsland.d.ok && mIsland.d.notices.join()).toContain("unattached — no task refs this mirror");
+    // Attached at write time -> no warning.
+    const linked = run(w, { op: "doc-put", key: "window", body: "b", attachTask: "triage" });
+    expect(linked.d.ok && linked.d.notices.join()).not.toContain("unattached");
+    // A REPLACE of a doc some task already refs stays quiet (not an island).
+    const replaced = run(linked.world, { op: "doc-put", key: "window", body: "b2" });
+    expect(replaced.d.ok && replaced.d.notices.join()).not.toContain("unattached");
   });
 
   it("manual run needs an agent assignee and no active run", () => {
