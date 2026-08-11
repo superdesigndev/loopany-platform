@@ -14,10 +14,15 @@
 #     `loopany-kernel` RESOLVED FROM PATH - proving the kernel-run shim dir +
 #     the in-run env contract (LOOPANY_KERNEL_BACKEND/TOKEN) end to end.
 #
-# Three tasks under ONE daemon session (LOOPANY_ROOTS jail active):
-#   bet-e2e    workdir inside the jail; stub notes progress  -> run DONE
-#   bet-silent stub exits 0 writing NOTHING                  -> postcondition FAILED
-#   bet-jail   workdir OUTSIDE the jail                      -> jail FAILED, no spawn
+# Five scenarios under ONE daemon session (LOOPANY_ROOTS jail active):
+#   bet-e2e     workdir inside the jail; stub notes progress  -> run DONE
+#   bet-silent  stub exits 0 writing NOTHING                  -> postcondition FAILED
+#   bet-jail    workdir OUTSIDE the jail                      -> jail FAILED, no spawn
+#   bet-goal    CLOSED GOAL: silent done refuses, done+note completes + pauses cron
+#   decide-brand HUMAN HAND-BACK (live, after the daemon is up): the delivered
+#               prompt carries the reply in its wake context
+# (Offline catch-up is structural: the first three runs are minted BEFORE the
+#  daemon starts and are claimed on its first poll.)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -82,7 +87,10 @@ JAIL="$TMP/work"; mkdir -p "$JAIL/proj"; mkdir -p "$TMP/outside"
 lk create "bet e2e"    --id bet-e2e    --assignee "$ALIAS/claude" --workdir "$JAIL/proj"    >/dev/null
 lk create "bet silent" --id bet-silent --assignee "$ALIAS/claude" --workdir "$JAIL/proj"    >/dev/null
 lk create "bet jail"   --id bet-jail   --assignee "$ALIAS/claude" --workdir "$TMP/outside" >/dev/null
-echo "✓ three tasks seeded, three assignment runs pending"
+lk create "reach 1k subs" --id bet-goal --assignee "$ALIAS/claude" --workdir "$JAIL/proj" \
+  --goal "newsletter reaches 1000 confirmed subscribers" >/dev/null
+lk create "decide: variant A or B" --id decide-brand --assignee "tim@x.co" --workdir "$JAIL/proj" >/dev/null
+echo "✓ tasks seeded (4 assignment runs pending; decide-brand waits on the human)"
 
 # ---- 4. stub agent + packed daemon ------------------------------------------
 # The stub proves the WHOLE in-run contract: `loopany-kernel` comes from PATH
@@ -92,10 +100,30 @@ echo "✓ three tasks seeded, three assignment runs pending"
 # stub at generation time (an ad-hoc env var would never reach the agent).
 STUB="$TMP/stub-claude"
 MARKER="$TMP/marker.txt"
+GOAL_MARKER="$TMP/goal-marker.txt"
+HANDBACK_MARKER="$TMP/handback-marker.txt"
 cat > "$STUB" <<EOS
 #!/bin/sh
 if [ "\$LOOPANY_TASK_ID" = "bet-silent" ]; then
   exit 0   # a silent "success" - the postcondition must catch this
+fi
+if [ "\$LOOPANY_TASK_ID" = "bet-goal" ]; then
+  # A closed goal must REFUSE a silent done ...
+  if loopany-kernel update bet-goal status=done >/dev/null 2>&1; then
+    echo "UNGUARDED-DONE" >> "$GOAL_MARKER"
+  else
+    echo "silent-done-refused" >> "$GOAL_MARKER"
+  fi
+  # ... and complete with the note as evidence.
+  loopany-kernel update bet-goal status=done --note "hit 1042 confirmed subscribers" || exit 1
+  exit 0
+fi
+if [ "\$LOOPANY_TASK_ID" = "decide-brand" ]; then
+  # The delivered prompt (our argv) must carry the hand-back reply.
+  if echo "\$@" | grep -q "hand-back note"; then echo "reply-in-wake-context" >> "$HANDBACK_MARKER"; fi
+  echo "\$@" | grep -q "ship variant B" && echo "reply-verbatim" >> "$HANDBACK_MARKER"
+  loopany-kernel note decide-brand "acting on the decision" || exit 1
+  exit 0
 fi
 pwd > "$MARKER"
 command -v loopany-kernel >> "$MARKER"
@@ -111,16 +139,25 @@ HOME="$TMP/home" LOOPANY_MACHINE_ALIAS="$ALIAS" LOOPANY_CLAUDE_BIN="$STUB" \
   "$BIN/loopany" up --foreground --server-url "$BASE" --api-key "$TOKEN" >"$TMP/daemon.log" 2>&1 &
 daemon_pid=$!
 
-# ---- 5. wait for all three runs to settle ------------------------------------
-echo "▶ waiting for the three runs to settle ..."
+# ---- 5. LIVE hand-back while the daemon polls, then wait for all runs --------
+sleep 3
+echo "▶ handing decide-brand back to the agent (live dispatch) ..."
+lk update decide-brand assignee="$ALIAS/claude" status=todo \
+  --note "ship variant B - the landing metrics favor it" >/dev/null
+
+echo "▶ waiting for the five runs to settle ..."
 settled=""
-for i in $(seq 1 60); do
+for i in $(seq 1 90); do
   LOG_E2E="$(lk show bet-e2e --log 2>/dev/null || true)"
   LOG_SILENT="$(lk show bet-silent --log 2>/dev/null || true)"
   LOG_JAIL="$(lk show bet-jail --log 2>/dev/null || true)"
+  LOG_GOAL="$(lk show bet-goal --log 2>/dev/null || true)"
+  LOG_DECIDE="$(lk show decide-brand --log 2>/dev/null || true)"
   if echo "$LOG_E2E" | grep -q "run-returned" \
      && echo "$LOG_SILENT" | grep -q "run-returned" \
-     && echo "$LOG_JAIL" | grep -q "run-returned"; then settled=1; break; fi
+     && echo "$LOG_JAIL" | grep -q "run-returned" \
+     && echo "$LOG_GOAL" | grep -q "run-returned" \
+     && echo "$LOG_DECIDE" | grep -q "run-returned"; then settled=1; break; fi
   sleep 1
 done
 [ -n "$settled" ] || { echo "--- daemon.log ---"; tail -30 "$TMP/daemon.log"; fail "runs never settled"; }
@@ -149,6 +186,29 @@ echo "$LOG_JAIL" | grep -q "returned failed: workdir" \
 grep -q "bet-jail" "$MARKER" && fail "bet-jail: the agent SPAWNED despite the jail" || true
 echo "✓ bet-jail: LOOPANY_ROOTS jail refused the out-of-jail workdir without spawning"
 
+grep -q "silent-done-refused" "$GOAL_MARKER" \
+  || { cat "$GOAL_MARKER" 2>/dev/null; fail "bet-goal: a silent done was NOT refused"; }
+grep -q "UNGUARDED-DONE" "$GOAL_MARKER" && fail "bet-goal: silent done slipped through" || true
+echo "$LOG_GOAL" | grep -q "hit 1042 confirmed subscribers" \
+  || { echo "$LOG_GOAL"; fail "bet-goal: the completion note never landed"; }
+echo "$LOG_GOAL" | grep -q "status: done" \
+  || { echo "$LOG_GOAL"; fail "bet-goal: the closed goal did not complete"; }
+echo "✓ bet-goal: closed-goal contract (silent done refused; done+note completes)"
+
+grep -q "reply-in-wake-context" "$HANDBACK_MARKER" \
+  || { cat "$HANDBACK_MARKER" 2>/dev/null; fail "decide-brand: the delivered prompt carried no hand-back note"; }
+grep -q "reply-verbatim" "$HANDBACK_MARKER" \
+  || { cat "$HANDBACK_MARKER" 2>/dev/null; fail "decide-brand: the reply text was not verbatim"; }
+echo "$LOG_DECIDE" | grep -q "acting on the decision" \
+  || { echo "$LOG_DECIDE"; fail "decide-brand: the follow-on pass never ran"; }
+echo "✓ decide-brand: live hand-back dispatched with the reply in the wake context"
+
+TL="$(lk timeline --since 2020-01-01T00:00:00.000Z 2>/dev/null || true)"
+echo "$TL" | grep -q "run-activity\|run-failed" \
+  || { echo "$TL" | head -10; fail "timeline: no collapsed run items over the remote backend"; }
+echo "✓ timeline: the remote bounded endpoint projects the day's runs"
+
 echo
 echo "✅ production-shaped kernel E2E passed: packed daemon, shipped CLI callback,"
-echo "   workdir execution, postcondition, roots jail."
+echo "   workdir execution, postcondition, roots jail, closed goal, live hand-back,"
+echo "   remote timeline."
