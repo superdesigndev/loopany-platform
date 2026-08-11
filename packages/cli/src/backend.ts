@@ -87,6 +87,22 @@ export function selectBackend(
   env: Record<string, string | undefined>,
   transport?: SyncTransport,
 ): Backend {
+  // In-run remote override (P0 stage E): a daemon-spawned agent works in the
+  // TASK's workdir - an arbitrary project checkout with no .loopany stub - so
+  // the backend rides entirely on env: LOOPANY_KERNEL_BACKEND (the server URL,
+  // injected by the daemon alongside the rk_ LOOPANY_KERNEL_TOKEN). Explicit env
+  // beats workspace discovery; a stray stub in the checkout cannot hijack the
+  // run's authority.
+  const envBackend = env.LOOPANY_KERNEL_BACKEND;
+  if (envBackend && /^https?:\/\//.test(envBackend)) {
+    const token = env.LOOPANY_KERNEL_TOKEN;
+    if (!token) {
+      throw new DriverError("NO_CREDENTIAL", "LOOPANY_KERNEL_BACKEND is set but LOOPANY_KERNEL_TOKEN is not", {
+        hint: "the daemon injects both; set LOOPANY_KERNEL_TOKEN or unset LOOPANY_KERNEL_BACKEND",
+      });
+    }
+    return transport ? new RemoteBackend(envBackend, token, transport) : new RemoteBackend(envBackend, token);
+  }
   const wsDir = requireWorkspace(cwd);
   const config = readConfig(wsDir);
   if (config.backend === "local") return new LocalBackend(wsDir);

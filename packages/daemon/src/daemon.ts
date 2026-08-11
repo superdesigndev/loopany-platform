@@ -16,6 +16,7 @@ import os from "node:os";
 
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
+import { runKernelDelivery, type KernelRunDelivery } from "./kernel-run.js";
 import { runDelivery, type Delivery } from "./runner.js";
 import { DEVICE_FILE, SERVER_FILE, persist, readStored } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
@@ -185,7 +186,7 @@ export async function runDaemon(): Promise<number> {
         body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest)),
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
-        const data = (await res.json()) as { deliveries?: Delivery[]; watch?: WatchSpec[]; watchDigest?: string };
+        const data = (await res.json()) as { deliveries?: Delivery[]; kernelRuns?: KernelRunDelivery[]; watch?: WatchSpec[]; watchDigest?: string };
         // Reconcile the loop-folder watchers against the server's current set.
         // An ABSENT `watch` means "unchanged since the digest you echoed" (the
         // server omits it only after a matching echo) — never an empty set.
@@ -202,6 +203,17 @@ export async function runDaemon(): Promise<number> {
             .then(() => logger.info({ runId: d.runId }, "delivery finished"))
             .catch((err) => logger.error({ runId: d.runId, err: err instanceof Error ? err.message : String(err) }, "delivery failed"))
             .finally(() => inFlight.delete(d.runId));
+        }
+        // Kernel runs (P0 stage E): server-claimed, CORE prompt prebuilt - the
+        // daemon only executes + reports. Same inFlight dedup + background run.
+        for (const kr of data.kernelRuns ?? []) {
+          if (inFlight.has(kr.runId)) continue;
+          inFlight.add(kr.runId);
+          logger.info({ runId: kr.runId, taskId: kr.taskId, agent: kr.agent }, "kernel run delivered — running");
+          void runKernelDelivery(kr, server, ac.signal)
+            .then(() => logger.info({ runId: kr.runId }, "kernel run finished"))
+            .catch((err) => logger.error({ runId: kr.runId, err: err instanceof Error ? err.message : String(err) }, "kernel run failed"))
+            .finally(() => inFlight.delete(kr.runId));
         }
       } else {
         logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");

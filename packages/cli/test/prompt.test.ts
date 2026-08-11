@@ -25,6 +25,8 @@ const task = (over?: Partial<TaskObject>): TaskObject => ({
   type: null,
   parent: null,
   tracks: null,
+  owner: null,
+  workdir: null,
   refs: [],
   followUpAt: null,
   body: "the spec",
