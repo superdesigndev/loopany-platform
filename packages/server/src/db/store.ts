@@ -503,15 +503,35 @@ export async function ensureTeamAliases(teamId: string): Promise<void> {
   }
 }
 
-/** The team's alias register (owner-facing discovery: the blocked note lists it). */
+/** REVOCATION GUARD (review round 4): a register row is immutable IDENTITY,
+ *  not standing AUTHORITY - membership is re-validated at every read. A machine
+ *  is reachable while its owner is a team member OR the team is its home
+ *  (open-mode anonymous machines have no membership rows). When the owner
+ *  leaves, the row stays (so a re-join resolves to the SAME alias and a new
+ *  machine can never silently steal it) but resolution and discovery both
+ *  refuse - the team can no longer route work to the departed member's machine. */
+async function machineReachableInTeam(teamId: string, machine: Machine): Promise<boolean> {
+  if (machine.teamId === teamId) return true; // home team
+  if (!machine.userId) return false;
+  const rows = await db
+    .select({ userId: teamMembers.userId })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, machine.userId)));
+  return rows.length > 0;
+}
+
+/** The team's alias register (owner-facing discovery: the blocked note lists
+ *  it). Filtered to CURRENTLY REACHABLE machines - a departed member's alias
+ *  is not advertised, matching the resolver's revocation guard. */
 export async function listTeamAliases(teamId: string): Promise<Array<{ alias: string; machineId: string; name: string }>> {
   await ensureTeamAliases(teamId);
+  const reachableIds = new Set((await machinesReachableInTeam(teamId)).map((m) => m.id));
   const rows = await db
     .select({ alias: machineTeamAliases.alias, machineId: machineTeamAliases.machineId, name: machines.name })
     .from(machineTeamAliases)
     .innerJoin(machines, eq(machineTeamAliases.machineId, machines.id))
     .where(eq(machineTeamAliases.teamId, teamId));
-  return rows.sort((a, b) => (a.alias < b.alias ? -1 : 1));
+  return rows.filter((r) => reachableIds.has(r.machineId)).sort((a, b) => (a.alias < b.alias ? -1 : 1));
 }
 
 export async function resolveMachineByAlias(
@@ -528,7 +548,9 @@ export async function resolveMachineByAlias(
   )[0];
   // Ambiguity is IMPOSSIBLE by construction now (unique(teamId, alias)); the
   // field stays on the signature for the callers' defensive branches.
-  return { machine: row?.m };
+  if (!row) return {};
+  if (!(await machineReachableInTeam(teamId, row.m))) return {}; // revoked member
+  return { machine: row.m };
 }
 
 /** Whether ANY machine other than `exceptId` already claims `alias` under an

@@ -36,7 +36,8 @@ afterAll(() => {
 
 beforeEach(async () => {
   await (db.client as any).exec(
-    "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
+    "DELETE FROM kernel_runs; DELETE FROM kernel_triggers; DELETE FROM kernel_events; DELETE FROM kernel_objects; " +
+      "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
   );
 });
 
@@ -130,6 +131,54 @@ test("a SHARED team where two members' machines share a base handle resolves BOT
   // Each home team still resolves its own machine under the plain base.
   expect((await store.resolveMachineByAlias(a.teamId, "mbp")).machine?.id).toBe(a.machineId);
   expect((await store.resolveMachineByAlias(team2, "mbp")).machine?.id).toBe(machine2);
+});
+
+test("MEMBER REVOCATION: a departed member's machine stops resolving, drops from discovery, and gets NO deliveries", async () => {
+  const gw = gateway();
+  // u2 joins u1's shared team with machine "wall".
+  const deviceToken2 = tokens.mintDeviceToken();
+  const machine2 = tokens.machineIdFromToken(deviceToken2);
+  const team2 = store.teamIdForUser("u2");
+  await store.ensureTeam(team2, "u2's team", "u2");
+  await tokens.rememberConnectKey(deviceToken2, { userId: "u2", teamId: team2 });
+  expect((await gw.poll(deviceToken2, { host: "wall.local", alias: "wall" })).status).toBe(200);
+
+  await store.ensureTeam("team-wall", "Wall", "u1");
+  await store.addTeamMember("team-wall", "u2", "member");
+  // While a member: resolves + advertised in the register.
+  expect((await store.resolveMachineByAlias("team-wall", "wall")).machine?.id).toBe(machine2);
+  expect((await store.listTeamAliases("team-wall")).map((r) => r.alias)).toContain("wall");
+
+  // A kernel loop in the shared team addresses u2's machine; the sweep mints a
+  // pending run for it.
+  const { decide } = await import("@loopany/kernel");
+  const kstore = await import("../kernel/store.js");
+  const ksweep = await import("../kernel/sweep.js");
+  const d = decide(
+    { op: "create", title: "wall probe", id: "wall-probe", cron: "0 7 * * 1", timezone: "UTC", status: "in-progress", assignee: "wall/claude" },
+    await kstore.readSnapshot("team-wall"),
+    { entrance: "human", actorId: "u1" },
+    "2026-09-07T06:00:00.000Z",
+  );
+  if (!d.ok) throw new Error(d.refusal.message);
+  await kstore.applyChangesetForTeam("team-wall", d.changeset);
+  await ksweep.kernelSweep("2026-09-07T07:00:01.000Z", () => {});
+  expect((await kstore.readSnapshot("team-wall")).runs[0]?.state).toBe("pending");
+
+  // u2 leaves. Resolution refuses, discovery drops the alias, and the pending
+  // run is NOT delivered to the departed member's machine - it stays pending.
+  expect(await store.removeTeamMemberGuarded("team-wall", "u2")).toBe("ok");
+  expect((await store.resolveMachineByAlias("team-wall", "wall")).machine).toBeUndefined();
+  expect((await store.listTeamAliases("team-wall")).map((r) => r.alias)).not.toContain("wall");
+  const dispatch = await import("../kernel/dispatch.js");
+  expect(await dispatch.kernelDeliveriesForMachine(machine2)).toEqual([]);
+  expect((await kstore.readSnapshot("team-wall")).runs[0]?.state).toBe("pending");
+
+  // The HOME team is unaffected, and the register row is RETAINED identity: a
+  // re-join resolves the SAME alias again (a new machine can never steal it).
+  expect((await store.resolveMachineByAlias(team2, "wall")).machine?.id).toBe(machine2);
+  await store.addTeamMember("team-wall", "u2", "member");
+  expect((await store.resolveMachineByAlias("team-wall", "wall")).machine?.id).toBe(machine2);
 });
 
 test("the (teamId, alias) unique index rejects a duplicate alias write in one home team", async () => {
