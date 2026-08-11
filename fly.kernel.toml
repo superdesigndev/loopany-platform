@@ -1,0 +1,58 @@
+# Loopany KERNEL TESTING on Fly.io — app "loopany-kernel-testing". A disposable
+# single-machine environment for the fm/kernel-cli branch: kernel gateway smoke,
+# remote-backend simulator runs, and packed-daemon tests against a real deploy.
+#
+# Deliberate differences from staging (fly.toml):
+#   - NO volume: pglite lives on the container's ephemeral disk, so a machine
+#     restart IS the database reset (each simulator scenario starts clean).
+#   - OPEN MODE: no GitHub gate secrets — machines self-register into the shared
+#     team, which is what the remote simulator + smoke flows want. Gated
+#     behavior is covered by the local packed E2E.
+#   - LOOPANY_KERNEL_SWEEP_MS=0: the real-clock kernel sweep is OFF. Simulator
+#     scenarios run on a virtual clock (LOOPANY_NOW rides the request body for
+#     device credentials); a wall-clock sweep would fight it. Ticks are driven
+#     by the client (`tick` requests). Flip to e.g. 5000 for wall-clock tests.
+#
+# Deploy (manual, from the branch worktree — CI only deploys main):
+#   fly apps create loopany-kernel-testing
+#   fly deploy --config fly.kernel.toml --remote-only \
+#     --build-arg GIT_SHA=$(git rev-parse HEAD) --build-arg BUILT_AT=$(date -u +%FT%TZ)
+
+app = "loopany-kernel-testing"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  LOOPANY_DATA_DIR = "/data"
+  PORT = "3000"
+  # Embedded pglite on the EPHEMERAL container disk (no mount below) — restart
+  # = clean slate, by design for this testing app.
+  LOOPANY_DB = "pglite"
+  LOOPANY_KERNEL_SWEEP_MS = "0"
+  # SIMULATOR seam: rk_ run credentials honor body.now here, so in-run agent
+  # events ride the same virtual clock as the device ticks. NEVER set on
+  # staging/prod - there the rk_ server-time invariant is absolute.
+  LOOPANY_KERNEL_TRUST_CLIENT_NOW = "1"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # The kernel gateway must stay awake for long-poll daemons; exactly one machine.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "get"
+    path = "/api/health/db"
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # 512mb OOMs during the pglite (WASM) boot on this app (~330MB rss at kill);
+  # staging survives on 512 only marginally. 1GB gives the simulator headroom.
+  memory = "1024mb"

@@ -10,10 +10,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 RUN corepack enable
 WORKDIR /app
 
-# Install deps (cache on manifests).
+# Install deps (cache on manifests). EVERY workspace package manifest must be
+# copied - a frozen-lockfile install fails when the lockfile knows an importer
+# whose package.json is absent (the kernel/cli packages are server deps now).
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/server/package.json packages/server/
 COPY packages/daemon/package.json packages/daemon/
+COPY packages/kernel/package.json packages/kernel/
+COPY packages/cli/package.json packages/cli/
+COPY packages/artifact-format/package.json packages/artifact-format/
+COPY packages/simulator/package.json packages/simulator/
 RUN pnpm install --frozen-lockfile
 
 # Build the server (nitro → .output/server/index.mjs).

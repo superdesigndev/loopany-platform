@@ -61,7 +61,17 @@ const now = process.env.LOOPANY_NOW ?? "";
 const day = now.slice(0, 10); // YYYY-MM-DD prefix of the ISO instant
 const dateKeyed = /^\d{4}-\d{2}-\d{2}$/.test(day) ? script[`${taskId}@${day}`] : undefined;
 const sequence = Array.isArray(dateKeyed) ? dateKeyed : script[taskId];
-if (!Array.isArray(sequence)) process.exit(0); // no entry for this task = no-op
+if (!Array.isArray(sequence)) {
+  // No entry = "nothing to do" - but a WELL-BEHAVED kernel agent never exits
+  // silently: the CORE protocol requires an honest note each pass, and the
+  // SERVER runtime's postcondition rewrites a zero-evidence done into FAILED
+  // (the silent-exit guard). Leave the one honest breadcrumb, then exit clean.
+  spawnSync(process.execPath, [bin, "note", taskId, "nothing new this pass (no scripted work)"], {
+    env: process.env,
+    encoding: "utf8",
+  });
+  process.exit(0);
+}
 
 for (const argv of sequence) {
   if (!Array.isArray(argv)) continue;

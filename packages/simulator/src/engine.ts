@@ -23,6 +23,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { Profiles } from "@loopany/cli";
 import { kernelBinPath, createSandbox, fixturesDir, plantRepo, type Sandbox } from "./sandbox.js";
 import { captureDay } from "./snapshot.js";
 import { buildProbe } from "./probe.js";
@@ -55,6 +56,39 @@ export interface RunOpts {
   dir?: string;
   /** Extra env for the sandbox (the P1 claude-identity hook point). */
   extraEnv?: Record<string, string>;
+  /** REMOTE tier: drive a deployed server instead of the local file driver.
+   *  Every CLI invocation rides the device credential (LOOPANY_KERNEL_BACKEND/
+   *  TOKEN env), spawning goes through the remote-pump shim (poll -> rk_
+   *  delivery -> spawn -> run-finish; `tick --spawn` refuses remote by design),
+   *  and scenario assignees are machine-addressed (`<alias>/<name>`). The
+   *  deployment must run with LOOPANY_KERNEL_TRUST_CLIENT_NOW=1 so in-run
+   *  events share the virtual clock. */
+  remote?: RemoteWorld;
+}
+
+export interface RemoteWorld {
+  /** Server base URL (e.g. https://loopany-kernel-testing.fly.dev). */
+  base: string;
+  /** The dk_ device credential the simulated machine enrolls with. */
+  token: string;
+  /** The machine alias - the assignee's machine segment. */
+  alias: string;
+}
+
+/** Rewrite BARE profile-named assignees into machine-addressed form for the
+ *  remote tier: `--assignee replay` / `assignee=replay` -> `<alias>/replay`.
+ *  Person assignees (emails) and already-addressed names pass through. Pure -
+ *  unit-tested without a server. */
+export function mapArgvAssignees(argv: string[], profiles: Profiles, alias: string): string[] {
+  const map = (name: string): string =>
+    profiles[name] !== undefined && !name.includes("/") && !name.includes("@") ? `${alias}/${name}` : name;
+  const out = [...argv];
+  for (let i = 0; i < out.length; i++) {
+    const tok = out[i]!;
+    if (tok === "--assignee" && out[i + 1] !== undefined) out[i + 1] = map(out[i + 1]!);
+    else if (tok.startsWith("assignee=")) out[i] = `assignee=${map(tok.slice("assignee=".length))}`;
+  }
+  return out;
 }
 
 /** Run a scenario end to end. Returns the structured capture (setup + per-day
@@ -100,8 +134,19 @@ export function runScenario(scenario: Scenario, opts: RunOpts): SimResult {
   }
 
   const setup: SimCommand[] = [];
+  // REMOTE tier: layer the backend env onto the sandbox AFTER init (init built
+  // the local workspace with a clean env), then enroll the simulated machine so
+  // alias resolution exists before the first dispatchable create.
+  const remote = opts.remote;
+  if (remote) {
+    sandbox.env.LOOPANY_KERNEL_BACKEND = remote.base;
+    sandbox.env.LOOPANY_KERNEL_TOKEN = remote.token;
+    sandbox.env.LOOPANY_SIM_ALIAS = remote.alias;
+    setup.push(execPump(sandbox, "enroll", setupNow));
+  }
   for (const argv of scenario.setup.tasks) {
-    setup.push(execCli(sandbox, argv, setupNow, undefined, labelFor("setup", argv)));
+    const mapped = remote ? mapArgvAssignees(argv, scenario.profiles, remote.alias) : argv;
+    setup.push(execCli(sandbox, mapped, setupNow, undefined, labelFor("setup", argv)));
   }
 
   // Deferred CONDITIONAL events carry forward: an event whose `when` returned
@@ -116,10 +161,17 @@ export function runScenario(scenario: Scenario, opts: RunOpts): SimResult {
   scenario.days.forEach((day, i) => {
     const morning = [...deferredMorning, ...day.morning];
     const evening = [...deferredEvening, ...day.evening];
-    const result = runDay(sandbox, day, morning, evening, i, i + 1, opts.runId, {
-      rules: scenario.human ?? [],
-      state: humanState,
-    });
+    const result = runDay(
+      sandbox,
+      day,
+      morning,
+      evening,
+      i,
+      i + 1,
+      opts.runId,
+      { rules: scenario.human ?? [], state: humanState },
+      remote ? { world: remote, profiles: scenario.profiles } : undefined,
+    );
     deferredMorning = result.deferredMorning;
     deferredEvening = result.deferredEvening;
     days.push(result.simDay);
@@ -143,6 +195,7 @@ function runDay(
   dayNumber: number,
   runId: string,
   human: { rules: HumanRule[]; state: HumanState },
+  remote?: { world: RemoteWorld; profiles: Profiles },
 ): DayResult {
   const commands: SimCommand[] = [];
 
@@ -150,26 +203,59 @@ function runDay(
   // WITHOUT `--spawn`, so no agent is launched and the runs stay pending for the
   // next online day's tick to claim (the durable-inbox catch-up, §4). The `tick`
   // argv drops the flag; everything else about the day is identical.
-  const tickArgv = day.offline ? ["tick"] : ["tick", "--spawn"];
+  // REMOTE tier: `tick --spawn` refuses a remote backend by design, so the tick
+  // is always bare and consumption goes through the pump (skipped offline - the
+  // pending runs wait, same durable-inbox semantics).
+  const tickArgv = day.offline || remote ? ["tick"] : ["tick", "--spawn"];
 
   const morningNow = instant(day.date, MORNING);
   const deferredMorning = applyEvents(sandbox, morning, morningNow, commands);
   commands.push(execCli(sandbox, tickArgv, morningNow, undefined, "07:00 tick"));
+  if (remote && !day.offline) commands.push(execPump(sandbox, "pump", morningNow));
 
   const eveningNow = instant(day.date, EVENING);
   const deferredEvening = applyEvents(sandbox, evening, eveningNow, commands);
   // The human actor scans the evening's tasks (§3.3) and injects due replies
   // BEFORE the 19:00 follow-up tick, so the reassigned-back task is claimed then.
   if (human.rules.length > 0) {
-    applyHumanReplies(sandbox, human, dayZeroIndex, eveningNow, commands);
+    applyHumanReplies(sandbox, human, dayZeroIndex, eveningNow, commands, remote);
   }
   commands.push(execCli(sandbox, tickArgv, eveningNow, undefined, "19:00 tick"));
+  if (remote && !day.offline) commands.push(execPump(sandbox, "pump", eveningNow));
 
   const snapshotDir = captureDay(sandbox.workspace, runId, dayNumber);
+  // REMOTE tier: the kernel state lives on the server, not in the local
+  // .loopany - capture the read body alongside the local copy so scoring has
+  // the full remote world for the day.
+  if (remote) {
+    const read = execPump(sandbox, "read", eveningNow);
+    commands.push({ ...read, stdout: read.exitCode === 0 ? "(remote-state.json)" : read.stdout });
+    if (read.exitCode === 0) writeFileSync(join(snapshotDir, "remote-state.json"), read.stdout);
+  }
   return {
     simDay: { date: day.date, commands, snapshotDir },
     deferredMorning,
     deferredEvening,
+  };
+}
+
+/** Run the remote-pump shim (the per-sandbox copy - createSandbox copies the
+ *  packaged shims) in the given mode, recorded like any CLI command. */
+function execPump(sandbox: Sandbox, mode: "enroll" | "pump" | "read", now: string): SimCommand {
+  const pump = join(sandbox.root, "shims", "remote-pump.mjs");
+  const child = spawnSync(process.execPath, [pump, mode], {
+    cwd: sandbox.workspace,
+    env: { ...sandbox.env, LOOPANY_NOW: now },
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024, // the read body carries the whole team state
+  });
+  return {
+    argv: ["remote-pump", mode],
+    label: `remote-pump: ${mode}`,
+    now,
+    stdout: child.stdout ?? "",
+    stderr: child.stderr ?? "",
+    exitCode: child.status ?? (child.error ? 127 : 1),
   };
 }
 
@@ -182,6 +268,7 @@ function applyHumanReplies(
   dayZeroIndex: number,
   now: string,
   commands: SimCommand[],
+  remote?: { world: RemoteWorld; profiles: Profiles },
 ): void {
   const listCmd = execCli(sandbox, ["list", "--json"], now, undefined, "human: list");
   commands.push(listCmd);
@@ -195,11 +282,13 @@ function applyHumanReplies(
     commands.push(
       execCli(sandbox, ["note", reply.taskId, text], now, { LOOPANY_ACTOR: actor }, `${actor} note ${reply.taskId}`),
     );
-    // Reassign the task back to the agent so the follow-up run picks it up.
+    // Reassign the task back to the agent so the follow-up run picks it up
+    // (machine-addressed on the remote tier, same mapping as setup).
+    const reassignArgv = ["update", reply.taskId, `assignee=${reply.reassignTo}`];
     commands.push(
       execCli(
         sandbox,
-        ["update", reply.taskId, `assignee=${reply.reassignTo}`],
+        remote ? mapArgvAssignees(reassignArgv, remote.profiles, remote.world.alias) : reassignArgv,
         now,
         { LOOPANY_ACTOR: actor },
         `${actor} reassign ${reply.taskId} -> ${reply.reassignTo}`,

@@ -140,6 +140,35 @@ test("an rk_ credential cannot dictate time: body.now is ignored, events land on
   expect(Date.parse(noted!.at)).toBeGreaterThan(Date.parse("2026-01-01T00:00:00.000Z"));
 });
 
+test("SIMULATOR seam: LOOPANY_KERNEL_TRUST_CLIENT_NOW=1 lets an rk_ ride the virtual clock (default stays OFF)", async () => {
+  const { teamId, rk } = await deliveredRun();
+  const virtual = "2026-01-05T07:00:00.000Z";
+  try {
+    process.env.LOOPANY_KERNEL_TRUST_CLIENT_NOW = "1";
+    const res = await kgateway.kernelCli(rk, {
+      command: { op: "note", id: "seo-bet-manager", note: "virtual-clock note" },
+      now: virtual,
+    });
+    expect(res.status).toBe(200);
+    const noted = (await kstore.readEvents(teamId)).find(
+      (e) => e.kind === "note" && (e.note ?? "").includes("virtual-clock note"),
+    );
+    expect(noted!.at).toBe(virtual);
+  } finally {
+    delete process.env.LOOPANY_KERNEL_TRUST_CLIENT_NOW;
+  }
+  // Flag cleared: the very next rk_ write is back on server time.
+  const after = await kgateway.kernelCli(rk, {
+    command: { op: "note", id: "seo-bet-manager", note: "post-flag note" },
+    now: "2020-06-06T00:00:00.000Z",
+  });
+  expect(after.status).toBe(200);
+  const post = (await kstore.readEvents(teamId)).find(
+    (e) => e.kind === "note" && (e.note ?? "").includes("post-flag note"),
+  );
+  expect(post!.at).not.toBe("2020-06-06T00:00:00.000Z");
+});
+
 test("POSTCONDITION: a zero-evidence run-finish(done) settles as FAILED", async () => {
   // Silent success: the daemon reports done but the run wrote nothing - the
   // server settles it as a protocol FAILURE, never a done run.

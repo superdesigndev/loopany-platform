@@ -28,7 +28,7 @@ import {
   RELEASE_RADAR_ID,
 } from "../scenarios/mini-w3.js";
 import { seoScaleScenario, SEO_SCALE_REPLAY } from "../scenarios/seo-scale.js";
-import { replayAgentPath } from "../scenarios/smoke-seo.js";
+import { replayAgentPath, smokeSeoScenario } from "../scenarios/smoke-seo.js";
 
 export type Tier = "replay" | "haiku" | "sonnet" | "codex";
 
@@ -83,6 +83,12 @@ export function agentProfileFor(tier: Tier): Profile {
 /** The scenario registry (one for P1). The `<scenario>` arg keys into it. */
 function selectScenario(name: string, tier: Tier): Scenario {
   const key = name.replace(/.*\//, "").replace(/\.(ts|js)$/, "");
+  if (key === "smoke-seo") {
+    // The 3-day mechanism smoke - replay-only by construction (its profiles map
+    // the `replay` assignee onto the replay shim).
+    if (tier !== "replay") throw new Error("smoke-seo is a replay-tier scenario");
+    return smokeSeoScenario();
+  }
   if (key === "mini-w3") {
     const scenario = miniW3Scenario(agentProfileFor(tier));
     // Only the replay tier gets a replay script wired.
@@ -92,7 +98,7 @@ function selectScenario(name: string, tier: Tier): Scenario {
     const scenario = seoScaleScenario(agentProfileFor(tier));
     return tier === "replay" ? { ...scenario, replayScript: SEO_SCALE_REPLAY } : scenario;
   }
-  throw new Error(`unknown scenario "${name}" (known: mini-w3, seo-scale)`);
+  throw new Error(`unknown scenario "${name}" (known: smoke-seo, mini-w3, seo-scale)`);
 }
 
 /** Deps the runner injects (so tests never seed a real identity or spawn claude). */
@@ -139,6 +145,11 @@ export interface RunnerOpts {
   tier: Tier;
   runId: string;
   dir?: string;
+  /** REMOTE tier: the deployed server's base URL. The runner derives a
+   *  deterministic device token + machine alias from the runId (the disposable
+   *  testing deployment resets its DB on restart, so no cross-run collision
+   *  management is needed). */
+  remote?: string;
 }
 
 /** Run a scenario. For the haiku tier this seeds the identity + runs the smoke
@@ -201,7 +212,15 @@ export function runCli(opts: RunnerOpts, deps: RunnerDeps = realRunnerDeps): Sim
     : codexHome
       ? { CODEX_HOME: codexHome }
       : undefined;
-  const result = runScenario(scenario, { runId: opts.runId, dir: sandboxDir, extraEnv });
+  const remote = opts.remote
+    ? {
+        base: opts.remote.replace(/\/$/, ""),
+        token: `dk_sim_${opts.runId.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+        alias: `sim-${opts.runId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 24)}`,
+      }
+    : undefined;
+  if (remote) deps.log(`remote: ${remote.base} (machine ${remote.alias})`);
+  const result = runScenario(scenario, { runId: opts.runId, dir: sandboxDir, extraEnv, remote });
 
   for (const day of result.days) {
     const refusals = day.commands.filter((c) => c.exitCode !== 0).length;
@@ -254,7 +273,7 @@ export function parseRunnerArgv(argv: string[]): RunnerOpts {
   const tier = (flag("tier") ?? "replay") as Tier;
   if (tier !== "replay" && tier !== "haiku" && tier !== "sonnet" && tier !== "codex") throw new Error(`--tier must be replay|haiku|sonnet|codex, got "${tier}"`);
   const runId = flag("run-id") ?? `${scenario.replace(/.*\//, "").replace(/\.(ts|js)$/, "")}-${tier}`;
-  return { scenario, tier, runId, dir: flag("dir") };
+  return { scenario, tier, runId, dir: flag("dir"), remote: flag("remote") };
 }
 
 // CLI entry: `tsx src/run.ts ...`.

@@ -178,7 +178,13 @@ export async function kernelCli(
   // A RUN credential never dictates time: honoring body.now would let a run
   // backdate its own history or steer follow-up/backoff math. The deterministic
   // `now` override stays an owner/test seam on DEVICE credentials only.
-  const now = scope.run ? new Date().toISOString() : (req.now ?? new Date().toISOString());
+  // EXCEPTION (env-gated, default OFF): a SIMULATOR deployment sets
+  // LOOPANY_KERNEL_TRUST_CLIENT_NOW=1 so in-run events ride the virtual clock
+  // too - the whole world (device ticks AND agent callbacks) then shares one
+  // deterministic timeline. Never set on staging/prod (fly.kernel.toml only).
+  const trustClientNow = process.env.LOOPANY_KERNEL_TRUST_CLIENT_NOW === "1";
+  const now =
+    scope.run && !trustClientNow ? new Date().toISOString() : (req.now ?? new Date().toISOString());
 
   // Run-credential verb subset (stage D): team is the hard wall (already
   // resolved), the subset keeps owner/host surfaces off a run token.
