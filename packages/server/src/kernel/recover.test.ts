@@ -145,6 +145,9 @@ test("offline reclaim: a machine silent past the window has its claimed kernel r
 
 test("a successful run-finish RETIRES the lease: the rk_ is single-shot", async () => {
   const { teamId, runId, rk } = await deliveredRun();
+  // Real-flow shape: the agent leaves evidence before the daemon reports done
+  // (a zero-evidence done would be rewritten failed by the postcondition).
+  await kgateway.kernelCli(rk, { command: { op: "note", id: "seo-bet-manager", note: "W1 pass" } });
   const finish = await kgateway.kernelCli(rk, {
     command: { op: "run-finish", runId, outcome: "done", note: "agent run completed" },
   });

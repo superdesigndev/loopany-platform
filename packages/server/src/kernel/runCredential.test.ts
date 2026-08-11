@@ -66,7 +66,7 @@ function gateway() {
 
 /** Full stage A-C pipeline: enroll mbp, seed the weekly loop, sweep, poll -
  *  returns the delivered kernel run's rk_ token + ids. */
-async function deliveredRun() {
+async function deliveredRun(taskId = "seo-bet-manager") {
   const gw = gateway();
   const deviceToken = tokens.mintDeviceToken();
   const teamId = store.teamIdForUser("u1");
@@ -76,7 +76,7 @@ async function deliveredRun() {
 
   const { decide } = await import("@loopany/kernel");
   const d = decide(
-    { op: "create", title: "seo bet manager", id: "seo-bet-manager", cron: "0 7 * * 1", timezone: "UTC", status: "in-progress", assignee: "mbp/claude" },
+    { op: "create", title: "seo bet manager", id: taskId, cron: "0 7 * * 1", timezone: "UTC", status: "in-progress", assignee: "mbp/claude" },
     await kstore.readSnapshot(teamId),
     OWNER,
     T0,
@@ -86,7 +86,7 @@ async function deliveredRun() {
   await sweep.kernelSweep(T1, () => {});
   const res = await gw.poll(deviceToken, { host: "mbp.local", alias: "mbp" });
   const kr = (res.body as { kernelRuns: Array<{ runId: string; runToken: string }> }).kernelRuns[0]!;
-  return { teamId, runId: kr.runId, rk: kr.runToken };
+  return { teamId, deviceToken, runId: kr.runId, rk: kr.runToken };
 }
 
 test("an rk_ kernel lease writes with RUN provenance; cross-task writes allowed; own run-finish works", async () => {
@@ -136,6 +136,48 @@ test("an rk_ credential cannot dictate time: body.now is ignored, events land on
   expect(noted!.at).not.toBe(forged);
   // Sanity: the stamp is recent server time, not the forged past.
   expect(Date.parse(noted!.at)).toBeGreaterThan(Date.parse("2026-01-01T00:00:00.000Z"));
+});
+
+test("POSTCONDITION: a zero-evidence run-finish(done) settles as FAILED", async () => {
+  // Silent success: the daemon reports done but the run wrote nothing - the
+  // server settles it as a protocol FAILURE, never a done run.
+  const { teamId, runId, rk } = await deliveredRun();
+  const res = await kgateway.kernelCli(rk, {
+    command: { op: "run-finish", runId, outcome: "done", note: "agent run completed (exit 0)" },
+  });
+  expect(res.status).toBe(200);
+  const run = (await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId);
+  expect(run?.state).toBe("failed");
+  expect(run?.note ?? "").toContain("postcondition");
+});
+
+test("POSTCONDITION: an explicit no-op note is honest evidence - done stands", async () => {
+  const { teamId, runId, rk } = await deliveredRun("bet-noop");
+  await kgateway.kernelCli(rk, {
+    command: { op: "note", id: "bet-noop", note: "nothing actionable this pass" },
+  });
+  const res = await kgateway.kernelCli(rk, {
+    command: { op: "run-finish", runId, outcome: "done", note: "agent run completed (exit 0)" },
+  });
+  expect(res.status).toBe(200);
+  expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)?.state).toBe("done");
+});
+
+test("POSTCONDITION: cross-task work counts as evidence (the pull-mode contract)", async () => {
+  const { teamId, runId, rk } = await deliveredRun("bet-cross");
+  await kgateway.kernelCli(rk, { command: { op: "create", title: "spun-off bet", id: "bet-spinoff" } });
+  const res = await kgateway.kernelCli(rk, { command: { op: "run-finish", runId, outcome: "done" } });
+  expect(res.status).toBe(200);
+  expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)?.state).toBe("done");
+});
+
+test("POSTCONDITION: a DEVICE credential's finish is an owner override - never second-guessed", async () => {
+  const { teamId, deviceToken, runId } = await deliveredRun("bet-owner");
+  const res = await kgateway.kernelCli(deviceToken, {
+    command: { op: "run-finish", runId, outcome: "done", note: "owner closes it manually" },
+  });
+  expect(res.status).toBe(200);
+  expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)?.state).toBe("done");
 });
 
 test("owner/host verbs 403 on a run credential; a foreign run-finish 403s; a non-kernel rk_ is 401", async () => {

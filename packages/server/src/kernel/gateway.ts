@@ -182,7 +182,26 @@ export async function kernelCli(
 
   if (req.read) return await readRequest(teamId);
   if (req.tick) return await tickRequest(teamId, now);
-  const result = await commandRequest(teamId, actor, req.command, now);
+
+  // RUN POSTCONDITION: an exit-code-0 agent process is NOT a result. The
+  // daemon's run-finish(done) rides the rk_ credential; when the run wrote NO
+  // durable event beyond the claim machinery, the "success" is a protocol
+  // failure (missing CLI, forgotten protocol, no-op process) and settles as
+  // FAILED with a note naming it — so a silent agent can never mark a one-shot
+  // task's run done. An explicit no-op note ("nothing actionable") is an honest
+  // result and passes. A DEVICE credential's finish is an owner override and is
+  // never second-guessed.
+  let command = req.command;
+  if (scope.run && isRecord(command) && command.op === "run-finish" && command.outcome === "done") {
+    if (!(await runProducedEvidence(teamId, scope.run.runId))) {
+      command = {
+        ...command,
+        outcome: "failed",
+        note: `postcondition: the agent exited 0 but wrote NO durable event this run — not a result (original note: ${String(command.note ?? "")})`,
+      };
+    }
+  }
+  const result = await commandRequest(teamId, actor, command, now);
   // A successful run-finish CONSUMES the run's credential: retire its leases so
   // a completed run's rk_ never lingers as a live team-write token (and a
   // duplicate finish gets a clean 401, single-shot like production reports).
@@ -190,6 +209,24 @@ export async function kernelCli(
     await retireLeasesForRun(String((req.command as { runId?: unknown }).runId ?? ""));
   }
   return result;
+}
+
+/** Did `runId` write any durable EVIDENCE this run? Evidence = an event carrying
+ *  the run's forced provenance, excluding the CLAIM MACHINERY the server itself
+ *  wrote at claim time: `run-started`, and the one-shot `status-changed` stamped
+ *  at the exact claim instant (excluded by kind+timestamp, not ordering, so a
+ *  same-millisecond agent note still counts). A note, doc, mirror, task update,
+ *  or cross-task create all count — including an explicit "nothing actionable"
+ *  note, which is an honest no-op result. */
+async function runProducedEvidence(teamId: string, runId: string): Promise<boolean> {
+  const all = await readEvents(teamId);
+  const mine = all.filter((e) => e.provenance.entrance === "agent-run" && e.provenance.actorId === runId);
+  const startedAt = mine.find((e) => e.kind === "run-started")?.at;
+  return mine.some(
+    (e) =>
+      e.kind !== "run-started" &&
+      !(e.kind === "status-changed" && startedAt !== undefined && e.at === startedAt),
+  );
 }
 
 async function commandRequest(
