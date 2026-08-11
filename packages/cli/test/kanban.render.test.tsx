@@ -34,6 +34,57 @@ const event: KernelEvent = {
   provenance: { entrance: "human", actorId: "cli" },
 };
 
+describe("detailLines projections", () => {
+  it("the detail pane reads taskDetailView: goal, run, products (tracked marker), children", async () => {
+    const { detailLines } = await import("../src/kanban/app.js");
+    const doc = {
+      archetype: "doc" as const,
+      id: "weekly-report",
+      key: "weekly-report",
+      title: "Weekly report",
+      body: "#",
+      version: 1,
+      createdAt: "2026-08-11T00:00:00.000Z",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+    };
+    const child: TaskObject = { ...task, id: "child-bet", title: "Child bet", parent: "rich", refs: [] };
+    const rich: TaskObject = {
+      ...task,
+      id: "rich",
+      title: "Rich task",
+      goal: "reach 1k subs",
+      tracks: "weekly-report",
+      refs: ["weekly-report"],
+    };
+    const snap: Snapshot = {
+      objects: { rich, "child-bet": child, "weekly-report": doc },
+      triggers: [],
+      runs: [
+        {
+          id: "run-9",
+          taskId: "rich",
+          cause: "cron",
+          scheduledAt: "2026-08-11T07:00:00.000Z",
+          state: "failed",
+          assignee: "mbp/claude",
+          triggerId: null,
+          createdAt: "2026-08-11T07:00:00.000Z",
+          note: "boom",
+        },
+      ],
+    };
+    const lines = detailLines(rich, [], 80, snap).join("\n");
+    expect(lines).toContain("goal (finish line): reach 1k subs");
+    expect(lines).toContain("run run-9: failed - boom");
+    expect(lines).toContain("Products");
+    expect(lines).toContain("doc weekly-report  Weekly report  (tracked)");
+    expect(lines).toContain("Children");
+    expect(lines).toContain("child-bet  [todo]  Child bet");
+    // Without a snapshot the pane degrades to the plain fields (old behavior).
+    expect(detailLines(rich, [], 80).join("\n")).not.toContain("Products");
+  });
+});
+
 describe("KanbanView", () => {
   const board = boardView(snapshot);
   const events = { [task.id]: [event] };

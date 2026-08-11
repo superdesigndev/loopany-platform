@@ -14,6 +14,7 @@ import {
   type Snapshot,
   type TaskObject,
   boardView,
+  taskDetailView,
 } from "@loopany/kernel";
 import stringWidth from "string-width";
 import type { Backend } from "../backend.js";
@@ -32,6 +33,7 @@ export interface KanbanViewProps {
   board: KanbanBoard;
   state: KanbanState;
   events: Readonly<Record<string, readonly KernelEvent[]>>;
+  snapshot?: Snapshot;
 }
 
 function priorityColor(priority: string | null): "red" | "yellow" | "cyan" | undefined {
@@ -127,13 +129,37 @@ export function detailLines(
   task: TaskObject,
   events: readonly KernelEvent[],
   width: number,
+  snapshot?: Snapshot,
 ): string[] {
   const recent = events.slice(-6).reverse();
+  // The Task Detail projection (kernel-product-visibility): products from
+  // tracks+refs, children, and the run pair - same taskDetailView every other
+  // surface reads, so the TUI cannot drift from show/loops.
+  const detail = snapshot ? taskDetailView(snapshot, task.id) : null;
+  const run = detail?.activeRun ?? detail?.lastRun ?? null;
   const lines = [
     `${task.id}  [${task.status}]  v${task.version}`,
     `assignee: ${task.assignee ?? "unassigned"}  owner: ${task.owner ?? "unowned"}`,
     `priority: ${task.priority ?? "--"}  type: ${task.type ?? "--"}`,
+    ...(task.goal != null ? [`goal (finish line): ${task.goal}`] : []),
     ...(task.followUpAt ? [`follow-up: ${task.followUpAt}`] : []),
+    ...(run
+      ? [`run ${run.id}: ${run.state}${run.note ? ` - ${run.note.slice(0, 80)}` : ""}`]
+      : []),
+    ...(detail && detail.products.length > 0
+      ? [
+          "",
+          "Products",
+          ...detail.products.map((prod) =>
+            prod.archetype === "doc"
+              ? `doc ${prod.id}  ${(prod.title ?? prod.key).slice(0, 60)}${task.tracks === prod.id ? "  (tracked)" : ""}`
+              : `mirror ${prod.id}  [${prod.kind}] ${prod.coords}`,
+          ),
+        ]
+      : []),
+    ...(detail && detail.children.length > 0
+      ? ["", "Children", ...detail.children.map((c) => `${c.id}  [${c.status}]  ${c.title.slice(0, 60)}`)]
+      : []),
     "",
     "Spec",
     ...wrapPlainText(task.body.trim() || "(empty)", width),
@@ -163,8 +189,9 @@ export function detailViewport(
   task: TaskObject,
   events: readonly KernelEvent[],
   state: KanbanState,
+  snapshot?: Snapshot,
 ): DetailViewport {
-  const lines = detailLines(task, events, Math.max(10, state.width - 2));
+  const lines = detailLines(task, events, Math.max(10, state.width - 2), snapshot);
   const capacity = Math.max(1, state.height - 2);
   const maxOffset = Math.max(0, lines.length - capacity);
   const offset = Math.min(state.detailOffset, maxOffset);
@@ -181,12 +208,14 @@ function Detail({
   task,
   events,
   state,
+  snapshot,
 }: {
   task: TaskObject;
   events: readonly KernelEvent[];
   state: KanbanState;
+  snapshot?: Snapshot;
 }) {
-  const viewport = detailViewport(task, events, state);
+  const viewport = detailViewport(task, events, state, snapshot);
   return (
     <Box flexDirection="column">
       <Box height={1} justifyContent="space-between">
@@ -215,10 +244,10 @@ function taskById(board: KanbanBoard, id: string | null): TaskObject | undefined
 }
 
 /** Hook-free render surface used by the terminal app and snapshot render tests. */
-export function KanbanView({ board, state, events }: KanbanViewProps) {
+export function KanbanView({ board, state, events, snapshot }: KanbanViewProps) {
   if (state.detailId !== null) {
     const task = taskById(board, state.detailId);
-    if (task) return <Detail task={task} events={events[task.id] ?? []} state={state} />;
+    if (task) return <Detail task={task} events={events[task.id] ?? []} state={state} snapshot={snapshot} />;
   }
   return <Board board={board} state={state} />;
 }
@@ -246,7 +275,7 @@ function KanbanApp({ snapshot, events }: { snapshot: Snapshot; events: KanbanVie
     if (intent) dispatch(intent);
   });
 
-  return <KanbanView board={board} state={state} events={events} />;
+  return <KanbanView board={board} state={state} events={events} snapshot={snapshot} />;
 }
 
 export type KanbanRenderer = (

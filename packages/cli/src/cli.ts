@@ -781,6 +781,19 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
         return verbTimeline(args, deps);
       case "loops":
         return verbLoops(args, deps);
+      case "kanban":
+        // The workspace launcher intercepts `kanban` BEFORE this dispatch (the
+        // TUI is a separate tsx entry so React/Ink never load here). Reaching
+        // this case means the BUNDLED callback CLI (the daemon's shipped
+        // kernel-cli.mjs, deliberately TUI-free) - refuse with direction
+        // instead of a bare unknown-verb.
+        return {
+          stdout: "",
+          stderr:
+            "the interactive kanban board is not part of this bundled callback CLI —\n" +
+            "use `list`, `show <id>`, `timeline`, or `inbox --assignee <me>` (all --json capable)",
+          exitCode: 1,
+        };
       case "run":
         return verbRun(args, deps);
       case "tick":
