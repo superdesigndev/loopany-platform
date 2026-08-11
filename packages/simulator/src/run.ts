@@ -2,7 +2,7 @@
  * The scenario RUNNER entry (§4 tiers a/b): drives a scenario against a sandbox
  * on the chosen agent tier and prints a per-day progress line + a final summary.
  *
- *   npx tsx src/run.ts <scenario> --tier replay|haiku|sonnet --run-id <id> [--dir <sandbox>]
+ *   npx tsx src/run.ts <scenario> --tier replay|haiku|sonnet|codex --run-id <id> [--dir <sandbox>]
  *
  * Tier `replay` runs the scenario's replay script (zero-cost, deterministic - no
  * identity work). Tier `haiku` seeds the claude identity into a config dir OUTSIDE
@@ -20,6 +20,7 @@ import type { Profile } from "@loopany/cli";
 import { runScenario } from "./engine.js";
 import { readRecordedPrs } from "./probe.js";
 import { seedClaudeIdentity, realIdentityDeps, type IdentityDeps } from "./claudeIdentity.js";
+import { seedCodexIdentity, type CodexIdentityDeps } from "./codexIdentity.js";
 import type { Scenario, SimResult } from "./types.js";
 import {
   miniW3Scenario,
@@ -29,7 +30,7 @@ import {
 import { seoScaleScenario, SEO_SCALE_REPLAY } from "../scenarios/seo-scale.js";
 import { replayAgentPath } from "../scenarios/smoke-seo.js";
 
-export type Tier = "replay" | "haiku" | "sonnet";
+export type Tier = "replay" | "haiku" | "sonnet" | "codex";
 
 /** Real-agent model ids per tier (the CLI accepts the full name; short aliases
  *  vary by claude version, so full ids are the safe choice). haiku is the
@@ -48,6 +49,21 @@ export const SONNET_MODEL = "claude-sonnet-4-6";
 export function agentProfileFor(tier: Tier): Profile {
   if (tier === "replay") {
     return { cmd: process.execPath, args: [replayAgentPath()] };
+  }
+  if (tier === "codex") {
+    // Containment is OUR sandbox rings (fake HOME, PATH shims, env allowlist,
+    // branch-protected origin) - codex's own sandbox would block the workspace
+    // writes, so it is bypassed. No -m: the account default model is the point
+    // of the A/B. The workspace is not a git repo, hence --skip-git-repo-check.
+    return {
+      cmd: process.env.LOOPANY_CODEX_BIN ?? "codex",
+      args: [
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
+        "{{prompt}}",
+      ],
+    };
   }
   return {
     cmd: process.env.LOOPANY_CLAUDE_BIN ?? "claude",
@@ -85,6 +101,10 @@ export interface RunnerDeps {
   /** The identity smoke: run `claude -p` once and return its exit code. Injected
    *  so a test asserts the preflight path without a real API call. */
   smoke: (configDir: string, home: string) => { status: number; stderr: string };
+  /** Codex-tier seams (optional: replay/claude-tier callers never touch them;
+   *  the codex branch falls back to the real implementations when absent). */
+  seedCodex?: (codexHome: string, deps?: CodexIdentityDeps) => { codexHome: string };
+  codexSmoke?: (codexHome: string, home: string) => { status: number; stderr: string };
   log: (line: string) => void;
 }
 
@@ -100,6 +120,15 @@ export const realRunnerDeps: RunnerDeps = {
       env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: configDir },
       encoding: "utf8",
     });
+    return { status: child.status ?? 1, stderr: child.stderr ?? "" };
+  },
+  seedCodex: (codexHome, deps) => seedCodexIdentity(codexHome, deps),
+  codexSmoke: (codexHome, home) => {
+    const child = spawnSync(
+      process.env.LOOPANY_CODEX_BIN ?? "codex",
+      ["exec", "--skip-git-repo-check", "reply OK"],
+      { env: { ...process.env, HOME: home, CODEX_HOME: codexHome }, encoding: "utf8" },
+    );
     return { status: child.status ?? 1, stderr: child.stderr ?? "" };
   },
   log: (line) => process.stdout.write(line + "\n"),
@@ -142,12 +171,36 @@ export function runCli(opts: RunnerOpts, deps: RunnerDeps = realRunnerDeps): Sim
     deps.log("identity: OK");
   }
 
+  let codexHome: string | undefined;
+  if (opts.tier === "codex") {
+    // Same discipline as the claude tiers: the seeded dir lives OUTSIDE the
+    // workspace so snapshots never capture auth.json.
+    codexHome = join(tmpdir(), `loopany-sim-codex-${opts.runId}`);
+    deps.log(`identity: seeding ${codexHome}`);
+    (deps.seedCodex ?? seedCodexIdentity)(codexHome);
+    const smokeHome = join(tmpdir(), `loopany-sim-smokehome-${opts.runId}`);
+    mkdirSync(smokeHome, { recursive: true });
+    const smoke = (deps.codexSmoke ?? realRunnerDeps.codexSmoke!)(codexHome, smokeHome);
+    if (smoke.status !== 0) {
+      throw new Error(
+        `codex identity preflight FAILED (exit ${smoke.status}): ${smoke.stderr}\n` +
+          "fix: log into codex on this machine (\`codex login\`), then retry - the " +
+          "seed copies ~/.codex/auth.json into a sandbox CODEX_HOME.",
+      );
+    }
+    deps.log("identity: OK");
+  }
+
   const scenario = selectScenario(opts.scenario, opts.tier);
 
   deps.log(`running ${scenario.name} (tier ${opts.tier}, run ${opts.runId})`);
-  // The haiku tier threads CLAUDE_CONFIG_DIR into the child env (spawn.ts inherits
-  // the sandbox base env), so the spawned claude authenticates off the seeded dir.
-  const extraEnv = claudeConfigDir ? { CLAUDE_CONFIG_DIR: claudeConfigDir } : undefined;
+  // Real tiers thread the seeded auth dir into the child env (spawn.ts inherits
+  // the sandbox base env): CLAUDE_CONFIG_DIR for claude, CODEX_HOME for codex.
+  const extraEnv: Record<string, string> | undefined = claudeConfigDir
+    ? { CLAUDE_CONFIG_DIR: claudeConfigDir }
+    : codexHome
+      ? { CODEX_HOME: codexHome }
+      : undefined;
   const result = runScenario(scenario, { runId: opts.runId, dir: sandboxDir, extraEnv });
 
   for (const day of result.days) {
@@ -192,14 +245,14 @@ function printSummary(result: SimResult, deps: RunnerDeps): void {
 export function parseRunnerArgv(argv: string[]): RunnerOpts {
   const scenario = argv[0];
   if (!scenario || scenario.startsWith("--")) {
-    throw new Error("usage: run.ts <scenario> --tier replay|haiku|sonnet --run-id <id> [--dir <sandbox>]");
+    throw new Error("usage: run.ts <scenario> --tier replay|haiku|sonnet|codex --run-id <id> [--dir <sandbox>]");
   }
   const flag = (name: string): string | undefined => {
     const i = argv.indexOf(`--${name}`);
     return i >= 0 ? argv[i + 1] : undefined;
   };
   const tier = (flag("tier") ?? "replay") as Tier;
-  if (tier !== "replay" && tier !== "haiku" && tier !== "sonnet") throw new Error(`--tier must be replay|haiku|sonnet, got "${tier}"`);
+  if (tier !== "replay" && tier !== "haiku" && tier !== "sonnet" && tier !== "codex") throw new Error(`--tier must be replay|haiku|sonnet|codex, got "${tier}"`);
   const runId = flag("run-id") ?? `${scenario.replace(/.*\//, "").replace(/\.(ts|js)$/, "")}-${tier}`;
   return { scenario, tier, runId, dir: flag("dir") };
 }
