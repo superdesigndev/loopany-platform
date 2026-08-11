@@ -64,10 +64,10 @@ describe("list tree depth cutoff (§10, S2)", () => {
     call(["create", "Handoff", "--id", "handoff", "--assignee", "claude"]); // mints a pending run
 
     const out = call(["list"]).stdout;
-    expect(out).toContain("loop  [in-progress] @claude  Loop  ·  ⟳ 0 7 * * 1");
-    expect(out).toContain("claim-me  [todo] @—  Claimable");
-    expect(out).toContain("sleeper  [follow-up] @—  Sleeper  ·  ⏰ 2026-09-01T07:00:00.000Z");
-    expect(out).toContain("handoff  [todo] @claude  Handoff  ·  ▶ pending");
+    expect(out).toContain("loop  [in-progress] @claude  ·  ⟳ 0 7 * * 1");
+    expect(out).toContain("claim-me  [todo] @—");
+    expect(out).toContain("sleeper  [follow-up] @—  ·  ⏰ 2026-09-01T07:00:00.000Z");
+    expect(out).toContain("handoff  [todo] @claude  ·  ▶ pending");
     expect(out).toContain("— 4 tasks: 2 todo · 1 in-progress · 1 follow-up");
   });
 
@@ -82,6 +82,6 @@ describe("list tree depth cutoff (§10, S2)", () => {
     call(["init"]);
     call(["create", "Claimable", "--id", "claim-me"]);
     const out = call(["list", "--status", "todo"]).stdout;
-    expect(out).toContain("claim-me  [todo] @—  Claimable");
+    expect(out).toContain("claim-me  [todo] @—");
   });
 });

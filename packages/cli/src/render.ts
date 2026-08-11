@@ -212,7 +212,7 @@ function renderTreeRow(task: TaskObject, snapshot: Snapshot, now: string, depth:
   if (active) bits.push(`▶ ${active.state}`);
   if (task.tracks) bits.push(`◇${task.tracks}`);
   const tail = bits.length > 0 ? `  ·  ${bits.join("  ·  ")}` : "";
-  return `${indent}${task.id}  [${task.status}] @${task.assignee ?? "—"}  ${clip(task.title, 60)}${tail}`;
+  return `${indent}${task.id}  [${task.status}] @${task.assignee ?? "—"}${tail}`;
 }
 
 /** A filtered/flat list with breadcrumbs to the root (§10). Carries the same
@@ -223,7 +223,7 @@ export function renderFlatList(list: readonly TaskObject[], snapshot: Snapshot):
   return list
     .map((t) => {
       const due = t.followUpAt ? `  ·  ⏰ ${t.followUpAt}` : "";
-      return `${t.id}  [${t.status}] @${t.assignee ?? "—"}${crumbs(t, snapshot)}  ${clip(t.title, 60)}${due}`;
+      return `${t.id}  [${t.status}] @${t.assignee ?? "—"}${crumbs(t, snapshot)}${due}`;
     })
     .join("\n");
 }
