@@ -14,6 +14,7 @@ import {
   type Snapshot,
   type TaskObject,
   boardView,
+  isPersonAssignee,
   taskDetailView,
 } from "@loopany/kernel";
 import { handbackTargetFor } from "../prompt.js";
@@ -171,9 +172,10 @@ export function detailLines(
   const detail = snapshot ? taskDetailView(snapshot, task.id, events) : null;
   const run = detail?.activeRun ?? detail?.lastRun ?? null;
   // Human-held task: surface the derived default hand-back agent so the human
-  // never needs to know a machine/profile address (review round 3).
+  // never needs to know a machine/profile address (review round 3). Human-ness
+  // is the kernel's ONE heuristic (isPersonAssignee), never a bare "/" probe.
   const handback =
-    snapshot && task.assignee !== null && !task.assignee.includes("/")
+    snapshot && task.assignee !== null && isPersonAssignee(task.assignee)
       ? handbackTargetFor(events, task, snapshot.runs)
       : undefined;
   const lines = [

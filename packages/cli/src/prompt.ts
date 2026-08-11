@@ -17,7 +17,7 @@
  * Pure: no I/O, no clock. `now` never enters here — the wakeReason string carries
  * whatever instant the caller captured. buildCorePrompt is unit-pinned.
  */
-import type { KernelEvent, RunRecord, TaskObject } from "@loopany/kernel";
+import { isDispatchable, isPersonAssignee, type KernelEvent, type RunRecord, type TaskObject } from "@loopany/kernel";
 
 /** The four dispatch scenarios (§8). Each selects one "scenario rule" paragraph
  *  the CORE folds in after the shared protocol. */
@@ -202,30 +202,42 @@ export function wakeReasonFor(run: RunRecord, task: TaskObject, handback?: strin
   }
 }
 
-/** The DEFAULT hand-back target for a human-assigned task (review round 3):
+/** The DEFAULT hand-back target for a human-assigned task (review rounds 3-4):
  *  the human should not need to know a machine/profile address by heart. Derive
- *  it from the event that handed the task TO the current human - its
- *  diff.assignee.old when that is a dispatchable address, else (the event was
- *  written by an agent RUN) the run's own assignee via provenance.actorId.
+ *  it from the event that handed the task TO the current human:
+ *   - an `assignee-changed` whose diff.old is a dispatchable address, else (the
+ *     event was written by an agent RUN) that run's assignee via
+ *     provenance.actorId;
+ *   - a `created` written by an agent RUN with the human already assigned (the
+ *     common approval shape: a run mints a decision task for a person - there is
+ *     no assignee-changed at all), again via the creating run's assignee.
  *  Null = underivable; the UI must then ask the human to pick an agent. */
 export function handbackTargetFor(
   events: readonly KernelEvent[],
   task: TaskObject,
   runs: readonly RunRecord[] = [],
 ): string | null {
-  if (task.assignee === null || task.assignee.includes("/")) return null; // not human-held
+  if (task.assignee === null || !isPersonAssignee(task.assignee)) return null; // not human-held
+  const runAssignee = (runId: unknown): string | null => {
+    const run = runs.find((r) => r.id === runId);
+    return run?.assignee && isDispatchable(run.assignee) ? run.assignee : null;
+  };
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
-    if (e.kind !== "assignee-changed") continue;
-    const diff = e.diff?.assignee as { old?: unknown; new?: unknown } | undefined;
-    if (diff?.new !== task.assignee) continue;
-    const prev = diff?.old;
-    if (typeof prev === "string" && prev.includes("/")) return prev;
-    if (e.provenance.entrance === "agent-run") {
-      const run = runs.find((r) => r.id === e.provenance.actorId);
-      if (run?.assignee && run.assignee.includes("/")) return run.assignee;
+    if (e.objectId !== task.id) continue;
+    if (e.kind === "assignee-changed") {
+      const diff = e.diff?.assignee as { old?: unknown; new?: unknown } | undefined;
+      if (diff?.new !== task.assignee) continue;
+      const prev = diff?.old;
+      if (typeof prev === "string" && isDispatchable(prev)) return prev;
+      if (e.provenance.entrance === "agent-run") return runAssignee(e.provenance.actorId);
+      return null; // the handing event exists but resolves to no agent address
     }
-    return null; // the handing event exists but resolves to no agent address
+    if (e.kind === "created") {
+      // Created ALREADY human-assigned by an agent run: the creator is the target.
+      if (e.provenance.entrance === "agent-run") return runAssignee(e.provenance.actorId);
+      return null; // human-created with no agent lineage - genuinely underivable
+    }
   }
   return null;
 }

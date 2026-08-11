@@ -199,6 +199,28 @@ describe("handbackTargetFor (the default hand-back agent)", () => {
     expect(handbackTargetFor([], t)).toBeNull(); // no handing event at all
     expect(handbackTargetFor([ev({ diff: { assignee: { old: "someone@y.co", new: "tim@x.co" } } })], t)).toBeNull();
     expect(handbackTargetFor([], task({ assignee: "mbp/claude" }))).toBeNull(); // agent-held
+    // A bare local-mode agent name is DISPATCHABLE, not human-held (the kernel's
+    // one heuristic is isPersonAssignee - never a "/" probe).
+    expect(handbackTargetFor([], task({ assignee: "claude" }))).toBeNull();
+  });
+
+  it("derives the CREATING run's assignee for a task born human-assigned by an agent run (review round 4)", () => {
+    // The common approval shape: an agent run mints a decision task directly
+    // for a person - the only event is `created`, no assignee-changed at all.
+    const t = task({ assignee: "tim@x.co" });
+    const events = [
+      ev({ kind: "created", diff: undefined, provenance: { entrance: "agent-run", actorId: "run-9" } }),
+    ];
+    const runs = [runRec({ id: "run-9", assignee: "mbp/claude" })];
+    expect(handbackTargetFor(events, t, runs)).toBe("mbp/claude");
+    // A LOCAL-mode creator (bare agent name) is a valid target too.
+    expect(handbackTargetFor(events, t, [runRec({ id: "run-9", assignee: "claude" })])).toBe("claude");
+    // Human-created with no agent lineage: genuinely underivable.
+    expect(handbackTargetFor([ev({ kind: "created", diff: undefined })], t)).toBeNull();
+    // The creating run is unknown (event stream clipped): null, never a guess.
+    expect(handbackTargetFor(events, t, [])).toBeNull();
+    // Another task's created event never leaks in as this task's lineage.
+    expect(handbackTargetFor([{ ...events[0]!, objectId: "other" }], t, runs)).toBeNull();
   });
 });
 
