@@ -69,6 +69,15 @@ describe("buildCorePrompt", () => {
     expect(prompt).toContain("One pass then stop"); // 5. stop
   });
 
+  // The seo-scale graduations (rounds 2-4): three disciplines proven in the
+  // scenario briefs, promoted here so every dispatched agent carries them.
+  it("carries the promoted sim disciplines: computed quantities, commitments, handoff receipt", () => {
+    expect(prompt).toContain("Sources beat memory"); // mini-w3 promotion (context)
+    expect(prompt).toContain("COMPUTED from the log's dates"); // seo-scale round 2 (fabricated "4 weeks")
+    expect(prompt).toContain("is a COMMITMENT: execute it this pass or explicitly"); // round 3 (silently extended deadline)
+    expect(prompt).toContain("A handoff you did not verify did not happen"); // round 2 (silent handoff deadlock)
+  });
+
   it("quotes the wakeReason verbatim on its own line", () => {
     expect(prompt).toContain("WHY YOU WOKE:");
     expect(prompt).toContain("scheduled fire at 07:00.");
