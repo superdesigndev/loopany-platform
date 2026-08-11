@@ -162,6 +162,9 @@ export function spawnPendingRuns(
   now: string,
   spawn: SpawnFn,
   baseEnv: Record<string, string | undefined> = {},
+  /** The CLI invocation the CORE prompt teaches (see resolveSelfBin). Defaults
+   *  to the bare PATH name so tests stay stable. */
+  bin?: string,
 ): SpawnReport {
   const profiles = readProfiles(wsDir);
   const snapshot = loadSnapshot(wsDir);
@@ -185,7 +188,7 @@ export function spawnPendingRuns(
       notices.push(`run ${run.id}: no profile for assignee "${assignee}" — left pending`);
       continue;
     }
-    const result = spawnOne(wsDir, run, task, profile, now, spawn, baseEnv);
+    const result = spawnOne(wsDir, run, task, profile, now, spawn, baseEnv, bin);
     spawned.push(result);
     notices.push(
       `run ${run.id} (${assignee}) ${result.outcome} (exit ${result.status})`,
@@ -202,6 +205,7 @@ function spawnOne(
   now: string,
   spawn: SpawnFn,
   baseEnv: Record<string, string | undefined>,
+  bin?: string,
 ): SpawnedRun {
   const sessionId = sessionIdFor(run);
   const actor: Provenance = { entrance: "agent-run", actorId: run.id, sessionId };
@@ -220,6 +224,7 @@ function spawnOne(
     claimedTask,
     wakeReasonFor(claimedRun, claimedTask),
     hasHistory,
+    bin,
   );
 
   const req = buildSpawnRequest(profile, prompt, run, task, sessionId, baseEnv, wsDir);
@@ -287,6 +292,23 @@ function isMeaningfulHistoryEvent(e: KernelEvent): boolean {
   // note / observation / doc-updated / assignee-changed / fields-changed /
   // run-returned / trigger-discarded — all require a prior pass or a human.
   return true;
+}
+
+/** The CLI invocation the CORE prompt should teach the spawned agent. A child
+ *  shell may REBUILD its PATH from scratch (a login-shell zprofile under a fake
+ *  HOME rebuilt codex's PATH and orphaned the bare `loopany-kernel` name -
+ *  while claude only ever found it through the runner's transient npx PATH
+ *  entry, the same trap the daemon's resolveDurableCommand exists for). So the
+ *  durable form is ABSOLUTE: "<abs node> <abs entry>" when we are running from
+ *  a script, the bare name only as the last resort. LOOPANY_BIN overrides. */
+export function resolveSelfBin(
+  env: Record<string, string | undefined> = process.env,
+  argv1: string | undefined = process.argv[1],
+  execPath: string = process.execPath,
+): string {
+  if (env.LOOPANY_BIN) return env.LOOPANY_BIN;
+  if (argv1 && argv1.includes("loopany-kernel")) return `${execPath} ${argv1}`;
+  return "loopany-kernel";
 }
 
 /** Build the child request: env carries the run identity, and the prompt goes on

@@ -48,7 +48,7 @@ import {
   renderShow,
   renderTree,
 } from "./render.js";
-import { realSpawn, spawnPendingRuns, type SpawnFn, type SpawnReport } from "./spawn.js";
+import { realSpawn, resolveSelfBin, spawnPendingRuns, type SpawnFn, type SpawnReport } from "./spawn.js";
 import type { SyncTransport } from "./remote.js";
 import { realProbe, seedProfiles, type ProbeFn } from "./seedProfiles.js";
 import {
@@ -589,7 +589,7 @@ function verbTick(args: ParsedArgs, deps: CliDeps): CliOutcome {
   let spawnReport: SpawnReport | null = null;
   if (wantsSpawn) {
     const ws = requireWorkspace(deps.cwd);
-    spawnReport = spawnPendingRuns(ws, now, deps.spawn ?? realSpawn, deps.env);
+    spawnReport = spawnPendingRuns(ws, now, deps.spawn ?? realSpawn, deps.env, resolveSelfBin(deps.env));
   }
   if (args.bools.has("json")) {
     return ok(

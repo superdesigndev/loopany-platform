@@ -105,6 +105,17 @@ export function createSandbox(opts: SandboxOpts, now: string): Sandbox {
   // at a per-sandbox copy (never the packaged tree, which a run must not mutate).
   const shims = join(root, "shims");
   cpSync(packagedShimsDir(), shims, { recursive: true });
+  // A REAL `loopany-kernel` shim with ABSOLUTE node + entry paths (codex round
+  // 1: a login-shell zprofile rebuilt the child PATH and orphaned the bare
+  // name, which only ever resolved through the runner's transient npx entry).
+  // The CORE prompt now teaches an absolute invocation too - this shim is the
+  // PATH-side backstop for agents that probe `command -v loopany-kernel`.
+  const kernelShim = join(shims, "loopany-kernel");
+  writeFileSync(
+    kernelShim,
+    `#!/bin/sh\nexec "${process.execPath}" "${kernelBinPath()}" "$@"\n`,
+  );
+  chmodSync(kernelShim, 0o755);
 
   const env = buildEnv(home, opts.extraEnv, root);
 

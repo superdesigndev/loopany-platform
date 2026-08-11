@@ -30,6 +30,13 @@ export function buildCorePrompt(
   task: TaskObject,
   wakeReason: string,
   scenarioRule: string,
+  /** How the agent invokes the CLI. Defaults to the bare PATH name; the tick
+   *  host passes an ABSOLUTE invocation ("<node> <entry>") because a child
+   *  shell may rebuild PATH from scratch (login-shell zprofile under a fake
+   *  HOME - the codex round-1 finding; same lesson as the daemon's
+   *  resolveDurableCommand: durable means absolute, never a transient npx
+   *  PATH entry). */
+  bin = "loopany-kernel",
 ): string {
   return [
     // ── identity ────────────────────────────────────────────────────────────
@@ -47,7 +54,7 @@ export function buildCorePrompt(
     "",
     // ── the five-step protocol ───────────────────────────────────────────────
     "PROTOCOL — one pass, then stop:",
-    `  1. Read first. Run \`loopany-kernel show ${task.id} --log\` to see the task's`,
+    `  1. Read first. Run \`${bin} show ${task.id} --log\` to see the task's`,
     "     current understanding (its body) and its recent history before you act.",
     "     Follow the sessionIds in the log to `find … <sessionId>.jsonl` if you need",
     "     the full transcript of a prior pass. Sources beat memory: when the task",
@@ -57,7 +64,7 @@ export function buildCorePrompt(
     "     never estimated from memory. A decision point a past pass named",
     '     ("check X by <date>") is a COMMITMENT: execute it this pass or explicitly',
     "     revise it with new data - never silently extend it.",
-    `  2. Note your progress. As you work, \`loopany-kernel note ${task.id} "…"\``,
+    `  2. Note your progress. As you work, \`${bin} note ${task.id} "…"\``,
     "     so the next pass (and any human) can see what you did and why. Nothing you",
     "     learn should disappear silently.",
     "  3. File products by KIND, never by writing loose files no one reads:",
@@ -69,7 +76,7 @@ export function buildCorePrompt(
     "       • prose to read inside the product   → a doc (`doc put <key> --file`)",
     "       • bytes that live elsewhere (a PR, a URL) → a mirror (`mirror add`)",
     "     An artifact with no lifecycle does not deserve a record — say it in a note.",
-    `  4. End with an honest status. \`loopany-kernel update ${task.id} status=<s>`,
+    `  4. End with an honest status. \`${bin} update ${task.id} status=<s>`,
     '     --note "<what changed>"\`. There is NO finish/report/close verb — the',
     "     status IS the ending: `done` when the goal is met, `follow-up` (with a",
     "     `--follow-up <date>`) to look again later, `in-progress` if a recurring",
@@ -156,8 +163,9 @@ export function buildCorePromptForRun(
   task: TaskObject,
   wakeReason: string,
   hasHistory?: boolean,
+  bin?: string,
 ): string {
-  return buildCorePrompt(task, wakeReason, scenarioRule(deriveScenario(run, task, hasHistory)));
+  return buildCorePrompt(task, wakeReason, scenarioRule(deriveScenario(run, task, hasHistory)), bin);
 }
 
 /** The verbatim wakeReason line (§7 rung ①). Quotes the triggering event so the
