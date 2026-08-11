@@ -19,6 +19,8 @@ export const Route = createFileRoute('/api/machine/poll')({
           platform?: string
           arch?: string
           version?: string
+          /** Team-local machine handle (the kernel assignee's machine segment). */
+          alias?: string
           progress?: Array<{ runId: string; step: number; label: string }>
           /** Long-poll opt-in: hold the request until work arrives (bounded server-side). */
           wait?: boolean

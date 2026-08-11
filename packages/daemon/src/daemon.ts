@@ -43,6 +43,18 @@ function flag(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
+/** The team-local machine alias reported on enroll: LOOPANY_MACHINE_ALIAS if the
+ *  owner set one, else the short hostname (the first dotted label, so
+ *  `mbp.local` → `mbp`). Empty/whitespace env falls back to the hostname; a
+ *  hostname that is itself empty yields undefined (the server then leaves the
+ *  alias unset). Exported for the daemon unit test. */
+export function machineAlias(env: NodeJS.ProcessEnv = process.env, hostname: string = os.hostname()): string | undefined {
+  const explicit = env.LOOPANY_MACHINE_ALIAS?.trim();
+  if (explicit) return explicit;
+  const short = hostname.split(".")[0]?.trim();
+  return short || undefined;
+}
+
 /** Poll request body: machine identity + optional progress + long-poll opt-in
  *  (idle only — with a run in flight the short cadence keeps the progress
  *  heartbeat fresh) + the last watch digest echo (absent until a server sent one). */
@@ -99,8 +111,16 @@ export async function runDaemon(): Promise<number> {
     .filter(Boolean);
   // Machine identity reported on every poll (the server captures it on connect).
   // `version` is this daemon's own package version, so the web can flag an
-  // outdated daemon and show the exact update command.
-  const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
+  // outdated daemon and show the exact update command. `alias` is the team-local
+  // handle a kernel assignee's machine segment (`mbp` in `mbp/claude`) resolves
+  // to — LOOPANY_MACHINE_ALIAS, else the short hostname (first dotted label).
+  const info = {
+    host: os.hostname(),
+    platform: process.platform,
+    arch: process.arch,
+    version: daemonVersion(),
+    alias: machineAlias(),
+  };
 
   // Refuse to boot when a live, VERIFIED daemon already owns the pidfile — a
   // second daemon (e.g. a bare `loopany` in a terminal) would overwrite it, and

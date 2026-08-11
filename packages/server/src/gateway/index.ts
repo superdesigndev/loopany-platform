@@ -320,6 +320,24 @@ export class MachineGateway {
     this.watchCache.delete(machineId);
   }
 
+  /** Resolve a team-unique alias for a machine from its `wanted` handle (clipped
+   *  untrusted wire input). Returns `wanted` when free within the team; otherwise
+   *  appends `-2`, `-3`, … until unique (bounded, then a machine-id-derived
+   *  suffix as a guaranteed-unique last resort). `undefined` in ⇒ `undefined` out
+   *  (the row keeps a null alias). Only aliases owned by DIFFERENT machines in the
+   *  team count as collisions, so a re-probe of a machine's own alias is stable. */
+  private async uniqueAlias(teamId: string, wanted: string | null | undefined, machineId: string): Promise<string | undefined> {
+    const base = wanted ? clipText(wanted, 64).trim() : "";
+    if (!base) return undefined;
+    if (!(await store.aliasTakenInTeam(teamId, base, machineId))) return base;
+    for (let n = 2; n <= 50; n++) {
+      const candidate = `${base}-${n}`;
+      if (!(await store.aliasTakenInTeam(teamId, candidate, machineId))) return candidate;
+    }
+    // Pathological contention: fall back to a suffix that can never collide.
+    return `${base}-${machineId.slice(2, 8)}`;
+  }
+
   /** Arm this machine's long-poll waiter: the promise resolves `true` when
    *  `wakeMachine` fires (a run went pending), `false` on timeout or cancel.
    *  A pre-existing waiter is superseded (woken) first — a dangling held
@@ -455,7 +473,7 @@ export class MachineGateway {
 
   async poll(
     deviceToken: string,
-    info?: { host?: string; platform?: string; arch?: string; version?: string },
+    info?: { host?: string; platform?: string; arch?: string; version?: string; alias?: string },
     progress?: Array<{ runId: string; step: number; label: string }>,
     /** The daemon's echo of the last watch digest it applied — matching ⇒ the
      *  watch array is omitted from the response (an old daemon never echoes). */
@@ -497,6 +515,11 @@ export class MachineGateway {
       // shared team the owner is merely a (possibly later-revoked) member of.
       const teamId = store.teamIdForUser(ownerId);
       await store.ensureTeam(teamId, ownerId === "shared" ? "Shared Workspace" : "Personal Team", ownerId === "shared" ? null : ownerId);
+      // Team-unique alias (the kernel assignee's machine segment resolves to it).
+      // A collision inside the team suffixes rather than fails loud — enrollment
+      // must never block on a name clash, and the daemon can pin an explicit
+      // LOOPANY_MACHINE_ALIAS if it wants a stable handle.
+      const alias = await this.uniqueAlias(teamId, str(info?.alias) ?? str(info?.host), machineId);
       machine = await store.createMachine({
         id: machineId,
         userId: ownerId,
@@ -504,11 +527,12 @@ export class MachineGateway {
         // Always name it (never blank) — listMachines hides empty-name rows, so a
         // self-registered machine must carry a name to show up + be counted.
         name: info?.host || `machine-${machineId.slice(2, 8)}`,
+        alias,
         tokenHash: sha256(deviceToken),
         token: deviceToken,
         online: true,
       });
-      log.info({ machineId, host: info?.host }, "poll: self-registered machine");
+      log.info({ machineId, host: info?.host, alias }, "poll: self-registered machine");
     }
     // Stamp online + lastSeen — THROTTLED: only when the flag must flip or the
     // stamp is older than LAST_SEEN_REFRESH_MS. Only the sweep (ONLINE_TTL_MS)
@@ -521,12 +545,25 @@ export class MachineGateway {
     if (info) {
       // Untrusted wire input: a version is a short semver, so clip defensively.
       const version = typeof info.version === "string" ? clipText(info.version, 64) : undefined;
+      // Backfill the alias only when the row has none yet (an older-daemon or
+      // pre-column machine that just upgraded) — never re-suffix a live alias on
+      // every poll (that would churn the handle a kernel assignee points at). The
+      // uniqueness probe runs against the machine's own team.
+      let aliasPatch: { alias?: string } = {};
+      if (!machine.alias?.trim()) {
+        const wanted = str(info.alias) ?? str(info.host);
+        if (wanted) {
+          const teamId = machine.teamId ?? store.teamIdForUser(machine.userId);
+          aliasPatch = { alias: await this.uniqueAlias(teamId, wanted, machineId) };
+        }
+      }
       const patch = {
         ...(info.host && info.host !== machine.hostname ? { hostname: info.host } : {}),
         ...(info.platform && info.platform !== machine.platform ? { platform: info.platform } : {}),
         ...(info.arch && info.arch !== machine.arch ? { arch: info.arch } : {}),
         ...(version && version !== machine.daemonVersion ? { daemonVersion: version } : {}),
         ...(info.host && !machine.name?.trim() ? { name: info.host } : {}),
+        ...aliasPatch,
       };
       if (Object.keys(patch).length) await store.updateMachine(machineId, patch);
     }
@@ -632,7 +669,7 @@ export class MachineGateway {
    */
   async pollWait(
     deviceToken: string,
-    info?: { host?: string; platform?: string; arch?: string; version?: string },
+    info?: { host?: string; platform?: string; arch?: string; version?: string; alias?: string },
     progress?: Array<{ runId: string; step: number; label: string }>,
     opts?: { wait?: boolean; watchDigest?: string; waitMs?: number },
   ): Promise<HttpResult> {

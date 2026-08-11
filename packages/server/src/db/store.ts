@@ -441,6 +441,45 @@ export async function getMachine(id: string): Promise<Machine | undefined> {
   return (await db.select().from(machines).where(eq(machines.id, id)))[0];
 }
 
+/**
+ * Resolve a kernel assignee's MACHINE SEGMENT (`mbp` in `mbp/claude`) to a
+ * machine row within a team — the kernel-remote-dispatch adapter's lookup. A
+ * machine is in scope when its owner belongs to the team (same membership join
+ * as `listMachinesForTeam`, so a single daemon serving many teams is reachable
+ * from each). Match is by `alias` first (the daemon-reported team-local handle),
+ * falling back to the friendly `name` so a pre-alias machine is still
+ * addressable. Returns undefined when nothing matches — the caller keeps the run
+ * pending with a visible notice (deferred-inbox semantics, never an error).
+ */
+export async function findMachineByAlias(teamId: string, alias: string): Promise<Machine | undefined> {
+  const rows = await db
+    .select({ m: machines })
+    .from(machines)
+    .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
+    .where(and(eq(teamMembers.teamId, teamId), eq(machines.alias, alias)));
+  if (rows[0]) return rows[0].m;
+  // Fallback: a machine that enrolled before the alias column (or an older
+  // daemon) has a null alias — match its friendly name so it stays addressable.
+  const byName = await db
+    .select({ m: machines })
+    .from(machines)
+    .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
+    .where(and(eq(teamMembers.teamId, teamId), eq(machines.name, alias)));
+  return byName[0]?.m;
+}
+
+/** Whether ANY machine other than `exceptId` already claims `alias` under an
+ *  owner in `teamId` — the per-team uniqueness probe the enroll path uses to
+ *  suffix a colliding alias. */
+export async function aliasTakenInTeam(teamId: string, alias: string, exceptId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: machines.id })
+    .from(machines)
+    .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
+    .where(and(eq(teamMembers.teamId, teamId), eq(machines.alias, alias)));
+  return rows.some((r) => r.id !== exceptId);
+}
+
 export async function createMachine(input: Omit<NewMachine, "createdAt"> & { id: string }): Promise<Machine> {
   return (await db.insert(machines).values({ ...input, createdAt: nowIso() }).returning())[0]!;
 }

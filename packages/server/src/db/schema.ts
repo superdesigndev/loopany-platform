@@ -117,6 +117,12 @@ export const machines = pgTable(
     teamId: text("team_id"),
     /** Friendly name (set AFTER the daemon connects; empty string = pending/unnamed). */
     name: text("name").notNull(),
+    /** Stable, human-typable machine handle unique WITHIN the owning team — the
+     *  target of a kernel assignee's machine segment (`mbp` in `mbp/claude`). The
+     *  daemon reports it on enroll (`LOOPANY_MACHINE_ALIAS`, else the short
+     *  hostname); the kernel remote-dispatch adapter resolves an assignee to a
+     *  machines row by (teamId, alias). Null for pre-alias rows / older daemons. */
+    alias: text("alias"),
     /** Daemon-reported machine identity (captured on first connect). */
     hostname: text("hostname"),
     platform: text("platform"),

@@ -83,3 +83,13 @@ describe("poll transport helpers", () => {
     expect(nextPollDelayMs(3000, 3000)).toBe(250);
   });
 });
+
+describe("machineAlias", () => {
+  test("explicit env wins; else the short hostname label; blank yields undefined", async () => {
+    const { machineAlias } = await import("./daemon.js");
+    expect(machineAlias({ LOOPANY_MACHINE_ALIAS: "mbp" } as NodeJS.ProcessEnv, "whatever.local")).toBe("mbp");
+    expect(machineAlias({} as NodeJS.ProcessEnv, "tim-mbp.lan")).toBe("tim-mbp");
+    expect(machineAlias({ LOOPANY_MACHINE_ALIAS: "  " } as NodeJS.ProcessEnv, "host.local")).toBe("host");
+    expect(machineAlias({} as NodeJS.ProcessEnv, "")).toBeUndefined();
+  });
+});
