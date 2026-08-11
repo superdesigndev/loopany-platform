@@ -65,21 +65,26 @@ export async function kernelDeliveriesForMachine(machineId: string): Promise<Ker
   const machine = await store.getMachine(machineId);
   if (!machine?.userId) return [];
 
+  // The owner's member teams PLUS the machine's home team - open mode's
+  // anonymous (shared) machines have no membership rows, only a home teamId.
+  const teamIds = new Set((await store.listTeamsForUser(machine.userId)).map((t) => t.id));
+  if (machine.teamId) teamIds.add(machine.teamId);
+
   const out: KernelRunDelivery[] = [];
-  for (const team of await store.listTeamsForUser(machine.userId)) {
-    for (const run of await pendingKernelRuns(team.id)) {
+  for (const teamId of teamIds) {
+    for (const run of await pendingKernelRuns(teamId)) {
       const seg = assigneeSegments(run.assignee);
       if (!seg) continue;
-      const resolved = await store.resolveMachineByAlias(team.id, seg.machine);
+      const resolved = await store.resolveMachineByAlias(teamId, seg.machine);
       if (resolved.ambiguous) {
         logger.warn(
-          { teamId: team.id, runId: run.id, assignee: run.assignee },
+          { teamId: teamId, runId: run.id, assignee: run.assignee },
           "kernel delivery: AMBIGUOUS alias - run stays pending; rename one machine via LOOPANY_MACHINE_ALIAS",
         );
         continue;
       }
       if (resolved.machine?.id !== machineId) continue;
-      const delivery = await claimAndPackage(team.id, machineId, run, seg.agent);
+      const delivery = await claimAndPackage(teamId, machineId, run, seg.agent);
       if (delivery) out.push(delivery);
     }
   }

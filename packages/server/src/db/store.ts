@@ -460,13 +460,21 @@ export async function resolveMachineByAlias(
   teamId: string,
   alias: string,
 ): Promise<{ machine?: Machine; ambiguous?: boolean }> {
-  const rows = await db
+  const viaMembership = await db
     .select({ m: machines })
     .from(machines)
     .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
     .where(and(eq(teamMembers.teamId, teamId), eq(machines.alias, alias)));
-  if (rows.length > 1) return { ambiguous: true };
-  return { machine: rows[0]?.m };
+  // A machine's HOME team reaches it even with no members row - open mode's
+  // anonymous (shared) machines have no user/membership at all, only teamId.
+  const viaHome = await db
+    .select({ m: machines })
+    .from(machines)
+    .where(and(eq(machines.teamId, teamId), eq(machines.alias, alias)));
+  const byId = new Map<string, Machine>();
+  for (const r of [...viaMembership, ...viaHome]) byId.set(r.m.id, r.m);
+  if (byId.size > 1) return { ambiguous: true };
+  return { machine: [...byId.values()][0] };
 }
 
 /** Whether ANY machine other than `exceptId` already claims `alias` under an
