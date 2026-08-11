@@ -121,6 +121,20 @@ describe("seo-scale e2e (replay tier)", () => {
     expect(doc?.archetype === "doc" && doc.body.length).toBeGreaterThan(0);
   });
 
+  it("(d2) weekly reports are FROZEN under dated keys and the docs auto-attach to the loop", () => {
+    const s = loadSnapshot(wsDir);
+    // One immortal report per Monday - the window (seo-portfolio) is replaced,
+    // the records accumulate.
+    for (const week of ["2026-w36", "2026-w37", "2026-w38"]) {
+      expect(s.objects[`seo-report-${week}`]?.archetype, week).toBe("doc");
+    }
+    // The in-run ambient attach (LOOPANY_TASK_ID) built the task->doc edges
+    // with ZERO extra replay commands: the loop's refs are the archive index.
+    const loop = s.objects[BET_MANAGER_ID];
+    expect(loop?.archetype === "task" && loop.refs).toContain("seo-portfolio");
+    expect(loop?.archetype === "task" && loop.refs).toContain("seo-report-2026-w37");
+  });
+
   it("(e) the offline Wed left the engine's fire pending; it completed on Thursday (catch-up, not failed)", () => {
     const s = loadSnapshot(wsDir);
     const wedFire = s.runs.find(

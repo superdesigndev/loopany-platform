@@ -72,6 +72,12 @@ You are the SEO bet manager. Weekly (Monday), one pass then stop:
   next checkpoint), (2) this week's wins + kills with their data, (3) scale output
   list pointing at content/scale/, (4) next week's plan. Write the body to a temp
   file OUTSIDE the workspace, then pass --file.
+- Also FREEZE this week's judgment as a dated report: \`doc put
+  seo-report-<ISO week, e.g. 2026-w37> --file <path>\` - a NEW key every week,
+  never overwrite a past week's report. The portfolio is the WINDOW (current
+  state, replaced weekly); the report is the RECORD (this week's decisions with
+  their evidence, immortal). Not a copy of each other - the report captures what
+  THIS pass decided and why.
 - Nothing new to bet on = say so in one note and stop. Never manufacture activity.
 `;
 
@@ -312,6 +318,7 @@ export const SEO_SCALE_REPLAY: Record<string, string[][]> = {
     ["create", "bet: ai design agent", "--id", BET_A_ID, "--parent", BET_MANAGER_ID, "--assignee", "claude", "--status", "in-progress", "--note", "opened bet on \"ai design agent\" (rank 35)"],
     ["create", "bet: figma alternative", "--id", BET_B_ID, "--parent", BET_MANAGER_ID, "--assignee", "claude", "--status", "in-progress", "--note", "opened bet on \"figma alternative\" (rank 42)"],
     ["doc", "put", "seo-portfolio", "--file", "specs/bet-manager.md"],
+    ["doc", "put", "seo-report-2026-w36", "--file", "specs/bet-manager.md"],
     ["note", BET_MANAGER_ID, "W1: opened bets A + B; trial pages written; portfolio seeded"],
   ],
   // --- bet-manager, W2 Monday: bet A won -> done + scale-A minted (unassigned) ---
@@ -319,6 +326,7 @@ export const SEO_SCALE_REPLAY: Record<string, string[][]> = {
     ["update", BET_A_ID, "status=done", "--note", "won: \"ai design agent\" rank 35 -> 22, crossed validation line"],
     ["create", "scale: ai design agent", "--id", SCALE_A_ID, "--parent", BET_A_ID, "--note", "unassigned - engine pulls this"],
     ["doc", "put", "seo-portfolio", "--file", "specs/bet-manager.md"],
+    ["doc", "put", "seo-report-2026-w37", "--file", "specs/bet-manager.md"],
     ["note", BET_MANAGER_ID, "W2: bet A won -> scale-A minted for engine; bet B still flat"],
   ],
   // --- bet-manager, W3 Monday: kill bet B (archived), discover opportunity as C ---
@@ -326,6 +334,7 @@ export const SEO_SCALE_REPLAY: Record<string, string[][]> = {
     ["update", BET_B_ID, "status=archived", "--note", "killed: \"figma alternative\" flat at rank 41-45 two weeks, no signal"],
     ["create", "bet: claude code design", "--id", BET_C_ID, "--parent", BET_MANAGER_ID, "--assignee", "claude", "--status", "in-progress", "--note", "discovered \"claude code design\" rising (rank 30) - new bet"],
     ["doc", "put", "seo-portfolio", "--file", "specs/bet-manager.md"],
+    ["doc", "put", "seo-report-2026-w38", "--file", "specs/bet-manager.md"],
     ["note", BET_MANAGER_ID, "W3: killed bet B; opened bet C on the opportunity keyword"],
   ],
   // --- engine, offline-Wed fire caught up Thu 09-10: SINGLE-update claim + done ---
