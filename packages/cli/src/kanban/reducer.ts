@@ -9,6 +9,33 @@ export interface KanbanState {
   detailOffset: number;
   width: number;
   height: number;
+  /** `/` search: the committed filter (id/title substring, case-insensitive). */
+  query: string;
+  /** True while the `/` input line is capturing keystrokes. */
+  searching: boolean;
+  /** `f` filter toggle: false (default) = ACTIVE columns only; true = all six. */
+  showAll: boolean;
+}
+
+/** The default board view: active work only - done/archived are reachable via
+ *  the `f` toggle, never squeezed into the initial six-column strip. */
+export const ACTIVE_STATUSES: readonly TaskStatus[] = ["idea", "todo", "in-progress", "follow-up"];
+
+export function visibleStatuses(state: KanbanState): readonly TaskStatus[] {
+  return state.showAll ? TASK_STATUSES : ACTIVE_STATUSES;
+}
+
+/** Filter a board by the committed query (id/title substring, case-insensitive).
+ *  Pure - the underlying board projection is never mutated. */
+export function filterBoard(board: KanbanBoard, query: string): KanbanBoard {
+  const q = query.trim().toLowerCase();
+  if (!q) return board;
+  return Object.fromEntries(
+    Object.entries(board).map(([status, tasks]) => [
+      status,
+      tasks.filter((t) => t.id.toLowerCase().includes(q) || t.title.toLowerCase().includes(q)),
+    ]),
+  ) as unknown as KanbanBoard;
 }
 
 export type KanbanAction =
@@ -19,7 +46,13 @@ export type KanbanAction =
   | { type: "open" }
   | { type: "back" }
   | { type: "scroll"; offset: number; maxOffset: number }
-  | { type: "resize"; width: number; height: number };
+  | { type: "resize"; width: number; height: number }
+  | { type: "search-start" }
+  | { type: "search-input"; ch: string }
+  | { type: "search-backspace" }
+  | { type: "search-commit" }
+  | { type: "search-clear" }
+  | { type: "toggle-all" };
 
 export interface KanbanKey {
   escape?: boolean;
@@ -28,6 +61,8 @@ export interface KanbanKey {
   rightArrow?: boolean;
   upArrow?: boolean;
   downArrow?: boolean;
+  backspace?: boolean;
+  delete?: boolean;
 }
 
 export type KanbanInputIntent = KanbanAction | "exit" | null;
@@ -39,8 +74,24 @@ export function kanbanInputIntent(
   key: KanbanKey,
   detail?: { offset: number; maxOffset: number },
 ): KanbanInputIntent {
+  // `/` search input mode captures every keystroke until commit/cancel.
+  if (state.searching) {
+    if (key.escape) return { type: "search-clear" };
+    if (key.return) return { type: "search-commit" };
+    if (key.backspace || key.delete) return { type: "search-backspace" };
+    if (input && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
+      return { type: "search-input", ch: input };
+    }
+    return null;
+  }
   if (input === "q") return "exit";
-  if (key.escape) return state.detailId === null ? "exit" : { type: "back" };
+  if (key.escape) {
+    if (state.detailId !== null) return { type: "back" };
+    if (state.query) return { type: "search-clear" }; // Esc clears an active filter first
+    return "exit";
+  }
+  if (state.detailId === null && input === "/") return { type: "search-start" };
+  if (state.detailId === null && input === "f") return { type: "toggle-all" };
   if (state.detailId !== null) {
     if (!detail) return null;
     if (input === "k" || key.upArrow) {
@@ -74,11 +125,15 @@ export function initialKanbanState(width = 80, height = 24): KanbanState {
     detailOffset: 0,
     width: Math.max(1, width),
     height: Math.max(1, height),
+    query: "",
+    searching: false,
+    showAll: false,
   };
 }
 
 export function activeStatus(state: KanbanState): TaskStatus {
-  return TASK_STATUSES[state.column] ?? TASK_STATUSES[0];
+  const statuses = visibleStatuses(state);
+  return statuses[state.column] ?? statuses[0]!;
 }
 
 export function activeTask(state: KanbanState, board: KanbanBoard): TaskObject | undefined {
@@ -109,13 +164,23 @@ export function reduceKanban(
       detailOffset: Math.max(0, Math.min(action.maxOffset, action.offset)),
     };
   }
+  if (action.type === "search-start") return { ...state, searching: true };
+  if (action.type === "search-input") return { ...state, query: state.query + action.ch };
+  if (action.type === "search-backspace") return { ...state, query: state.query.slice(0, -1) };
+  if (action.type === "search-commit") return { ...state, searching: false };
+  if (action.type === "search-clear") return { ...state, searching: false, query: "" };
+  if (action.type === "toggle-all") {
+    // Clamp the column into the new strip so f never strands the cursor.
+    const next = { ...state, showAll: !state.showAll };
+    return { ...next, column: Math.min(next.column, visibleStatuses(next).length - 1) };
+  }
   if (state.detailId !== null) return state;
 
   if (action.type === "left" || action.type === "right") {
     const delta = action.type === "left" ? -1 : 1;
     return {
       ...state,
-      column: Math.max(0, Math.min(TASK_STATUSES.length - 1, state.column + delta)),
+      column: Math.max(0, Math.min(visibleStatuses(state).length - 1, state.column + delta)),
     };
   }
 
@@ -139,8 +204,9 @@ export const BOARD_CHROME_ROWS = 3;
 
 /** Status columns that fit in the current terminal, centered around selection. */
 export function visibleColumnIndexes(state: KanbanState): number[] {
-  const count = Math.max(1, Math.min(TASK_STATUSES.length, Math.floor(state.width / MIN_COLUMN_WIDTH)));
-  const maxStart = TASK_STATUSES.length - count;
+  const total = visibleStatuses(state).length;
+  const count = Math.max(1, Math.min(total, Math.floor(state.width / MIN_COLUMN_WIDTH)));
+  const maxStart = total - count;
   const start = Math.max(0, Math.min(maxStart, state.column - Math.floor(count / 2)));
   return Array.from({ length: count }, (_, index) => start + index);
 }

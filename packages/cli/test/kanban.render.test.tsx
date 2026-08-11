@@ -34,6 +34,33 @@ const event: KernelEvent = {
   provenance: { entrance: "human", actorId: "cli" },
 };
 
+describe("wide text + color-disabled terminals", () => {
+  it("CJK titles render without crashing and stay within truncation", () => {
+    const cjk: TaskObject = { ...task, id: "cjk-task", title: "每周搜索引擎优化报告与投放实验回顾" };
+    const snap: Snapshot = { objects: { [cjk.id]: cjk }, triggers: [], runs: [] };
+    const out = renderToString(
+      <KanbanView board={boardView(snap)} state={initialKanbanState(60, 24)} events={{}} snapshot={snap} />,
+    );
+    expect(out).toContain("每周搜索");
+    expect(out).toContain("cjk-task");
+  });
+
+  it("renders identical content with color disabled (FORCE_COLOR=0)", async () => {
+    const prev = process.env.FORCE_COLOR;
+    process.env.FORCE_COLOR = "0";
+    try {
+      const out = renderToString(
+        <KanbanView board={boardView(snapshot)} state={initialKanbanState(80, 24)} events={{}} snapshot={snapshot} />,
+      );
+      expect(out).toContain("Ship it");
+      expect(out).toContain("TODO (1)");
+    } finally {
+      if (prev === undefined) delete process.env.FORCE_COLOR;
+      else process.env.FORCE_COLOR = prev;
+    }
+  });
+});
+
 describe("detailLines projections", () => {
   it("the detail pane reads taskDetailView: goal, run, products (tracked marker), children", async () => {
     const { detailLines } = await import("../src/kanban/app.js");

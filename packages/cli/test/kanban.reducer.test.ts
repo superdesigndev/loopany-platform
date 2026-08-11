@@ -1,6 +1,8 @@
 import { TASK_STATUSES, boardView, type Snapshot, type TaskObject } from "@loopany/kernel";
 import { describe, expect, it } from "vitest";
 import {
+  filterBoard,
+  ACTIVE_STATUSES,
   activeStatus,
   initialKanbanState,
   kanbanInputIntent,
@@ -63,16 +65,46 @@ describe("kanban reducer", () => {
     expect(state.detailOffset).toBe(0);
   });
 
-  it("clamps every edge and derives a resize-aware column window", () => {
+  it("clamps every edge and derives a resize-aware column window (ACTIVE columns by default, f reveals all)", () => {
     let state = initialKanbanState(44, 20);
     state = reduceKanban(state, { type: "left" }, board);
     expect(state.column).toBe(0);
+    // The DEFAULT strip is the four ACTIVE columns - done/archived stay behind f.
+    for (let index = 0; index < 20; index += 1) state = reduceKanban(state, { type: "right" }, board);
+    expect(state.column).toBe(ACTIVE_STATUSES.length - 1);
+    // f reveals all six; navigation then reaches the terminal columns.
+    state = reduceKanban(state, { type: "toggle-all" }, board);
     for (let index = 0; index < 20; index += 1) state = reduceKanban(state, { type: "right" }, board);
     expect(state.column).toBe(TASK_STATUSES.length - 1);
     expect(visibleColumnIndexes(state)).toEqual([4, 5]);
     state = reduceKanban(state, { type: "resize", width: 200, height: 0 }, board);
     expect(visibleColumnIndexes(state)).toEqual([0, 1, 2, 3, 4, 5]);
     expect(state.height).toBe(1);
+    // Toggling BACK clamps the cursor into the shorter strip.
+    state = reduceKanban(state, { type: "toggle-all" }, board);
+    expect(state.column).toBe(ACTIVE_STATUSES.length - 1);
+  });
+
+  it("slash search: captures input, commits, filters the board, Esc clears", () => {
+    let state = initialKanbanState(80, 24);
+    expect(kanbanInputIntent(state, "/", {})).toEqual({ type: "search-start" });
+    state = reduceKanban(state, { type: "search-start" }, board);
+    expect(state.searching).toBe(true);
+    for (const ch of "task") state = reduceKanban(state, { type: "search-input", ch }, board);
+    expect(kanbanInputIntent(state, "", { return: true })).toEqual({ type: "search-commit" });
+    state = reduceKanban(state, { type: "search-commit" }, board);
+    expect(state).toMatchObject({ searching: false, query: "task" });
+
+    const filtered = filterBoard(board, state.query);
+    const all = Object.values(filtered).flat();
+    expect(all.length).toBeGreaterThan(0);
+    expect(all.every((t) => `${t.id} ${t.title}`.toLowerCase().includes("task"))).toBe(true);
+
+    // Esc on the board clears an active filter before exiting.
+    expect(kanbanInputIntent(state, "", { escape: true })).toEqual({ type: "search-clear" });
+    state = reduceKanban(state, { type: "search-clear" }, board);
+    expect(state.query).toBe("");
+    expect(kanbanInputIntent(state, "", { escape: true })).toBe("exit");
   });
 
   it("budgets bordered cards by their five rendered rows", () => {

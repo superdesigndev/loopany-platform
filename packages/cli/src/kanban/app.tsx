@@ -20,6 +20,8 @@ import { handbackTargetFor } from "../prompt.js";
 import stringWidth from "string-width";
 import type { Backend } from "../backend.js";
 import {
+  visibleStatuses,
+  filterBoard,
   activeStatus,
   initialKanbanState,
   kanbanInputIntent,
@@ -44,7 +46,28 @@ function priorityColor(priority: string | null): "red" | "yellow" | "cyan" | und
   return undefined;
 }
 
-function Card({ task, active }: { task: TaskObject; active: boolean }) {
+/** Compact card indicator strip (review round 3): due date, recent-activity
+ *  age, and the failure/active/product markers - pure over the snapshot so the
+ *  render tests pin it. */
+export function cardIndicators(task: TaskObject, snapshot?: Snapshot, nowMs = Date.now()): string {
+  const bits: string[] = [];
+  if (task.followUpAt) bits.push(`due ${task.followUpAt.slice(0, 10)}`);
+  const ageMin = Math.max(0, Math.floor((nowMs - Date.parse(task.updatedAt)) / 60_000));
+  bits.push(ageMin < 60 ? `${ageMin}m` : ageMin < 60 * 48 ? `${Math.floor(ageMin / 60)}h` : `${Math.floor(ageMin / 1440)}d`);
+  if (snapshot) {
+    const runs = snapshot.runs.filter((r) => r.taskId === task.id);
+    if (runs.some((r) => r.state === "pending" || r.state === "claimed" || r.state === "running")) bits.push("▶");
+    else if (runs.length > 0) {
+      const last = runs.reduce((a, b) => (a.createdAt > b.createdAt ? a : b));
+      if (last.state === "failed") bits.push("✖ failed");
+    }
+  }
+  const products = [task.tracks, ...task.refs].filter(Boolean).length;
+  if (products > 0) bits.push(`◆${products}`);
+  return bits.join("  ");
+}
+
+function Card({ task, active, snapshot }: { task: TaskObject; active: boolean; snapshot?: Snapshot }) {
   return (
     <Box flexDirection="column" paddingX={1} borderStyle={active ? "bold" : "single"}>
       <Text bold={active} inverse={active} wrap="truncate-end">
@@ -52,24 +75,30 @@ function Card({ task, active }: { task: TaskObject; active: boolean }) {
       </Text>
       <Text dimColor={!active} wrap="truncate-end">
         <Text color={priorityColor(task.priority)}>{task.priority ?? "--"}</Text>
-        {`  ${task.id}`}
+        {`  ${task.id}  @${task.assignee ?? "unassigned"}`}
       </Text>
-      <Text dimColor wrap="truncate-end">@{task.assignee ?? "unassigned"}</Text>
+      <Text dimColor wrap="truncate-end">{cardIndicators(task, snapshot)}</Text>
     </Box>
   );
 }
 
-function Board({ board, state }: Omit<KanbanViewProps, "events">) {
+function Board({ board, state, snapshot }: Omit<KanbanViewProps, "events">) {
   const indexes = visibleColumnIndexes(state);
+  const statuses = visibleStatuses(state);
   return (
     <Box flexDirection="column">
       <Box height={1} justifyContent="space-between">
         <Text bold color="cyan" wrap="truncate-end">Loopany Kanban</Text>
-        <Text dimColor wrap="truncate-end">h/l columns  j/k cards  Enter details  q/Esc quit</Text>
+        <Text dimColor wrap="truncate-end">h/l columns  j/k cards  Enter details  / search  f all-columns  q quit</Text>
       </Box>
+      {state.searching || state.query ? (
+        <Text wrap="truncate-end">
+          {state.searching ? `/${state.query}▏  (Enter apply · Esc cancel)` : `filter: "${state.query}"  (Esc clears)`}
+        </Text>
+      ) : null}
       <Box>
         {indexes.map((columnIndex) => {
-          const status = TASK_STATUSES[columnIndex];
+          const status = statuses[columnIndex]!;
           const tasks = board[status];
           const selected = state.selected[status];
           const window = visibleCardWindow(state, tasks.length, selected);
@@ -90,6 +119,7 @@ function Board({ board, state }: Omit<KanbanViewProps, "events">) {
                 <Card
                   key={task.id}
                   task={task}
+                  snapshot={snapshot}
                   active={columnIndex === state.column && window.start + localIndex === selected}
                 />
               ))}
@@ -97,8 +127,10 @@ function Board({ board, state }: Omit<KanbanViewProps, "events">) {
           );
         })}
       </Box>
-      {indexes.length < TASK_STATUSES.length ? (
-        <Text dimColor>{`Showing ${indexes[0] + 1}-${indexes.at(-1)! + 1} of ${TASK_STATUSES.length} columns`}</Text>
+      {indexes.length < statuses.length || !state.showAll ? (
+        <Text dimColor>
+          {`Showing ${indexes[0]! + 1}-${indexes.at(-1)! + 1} of ${statuses.length}${state.showAll ? "" : " active"} columns${state.showAll ? "" : "  ·  f shows done/archived"}`}
+        </Text>
       ) : null}
     </Box>
   );
@@ -263,15 +295,18 @@ export function KanbanView({ board, state, events, snapshot }: KanbanViewProps) 
     const task = taskById(board, state.detailId);
     if (task) return <Detail task={task} events={events[task.id] ?? []} state={state} snapshot={snapshot} />;
   }
-  return <Board board={board} state={state} />;
+  return <Board board={board} state={state} snapshot={snapshot} />;
 }
 
 function KanbanApp({ snapshot, events }: { snapshot: Snapshot; events: KanbanViewProps["events"] }) {
-  const board = useMemo(() => boardView(snapshot), [snapshot]);
+  const rawBoard = useMemo(() => boardView(snapshot), [snapshot]);
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
+  // The reducer navigates over the FILTERED board, which itself depends on
+  // state.query - a ref breaks the circular initializer (assigned each render).
+  const boardRef = React.useRef<KanbanBoard>(rawBoard);
   const [state, dispatch] = useReducer(
-    (current: KanbanState, action: Parameters<typeof reduceKanban>[1]) => reduceKanban(current, action, board),
+    (current: KanbanState, action: Parameters<typeof reduceKanban>[1]) => reduceKanban(current, action, boardRef.current),
     initialKanbanState(columns, rows),
   );
 
@@ -289,6 +324,8 @@ function KanbanApp({ snapshot, events }: { snapshot: Snapshot; events: KanbanVie
     if (intent) dispatch(intent);
   });
 
+  const board = useMemo(() => filterBoard(rawBoard, state.query), [rawBoard, state.query]);
+  boardRef.current = board;
   return <KanbanView board={board} state={state} events={events} snapshot={snapshot} />;
 }
 
