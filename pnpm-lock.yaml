@@ -120,6 +120,9 @@ importers:
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
+      '@loopany/cli':
+        specifier: workspace:*
+        version: link:../cli
       '@loopany/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -175,9 +178,6 @@ importers:
         specifier: ^3.9.1
         version: 3.9.1(@types/react@19.2.17)(react-dom@19.2.7)(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)
     devDependencies:
-      '@loopany/cli':
-        specifier: workspace:*
-        version: link:../cli
       '@tailwindcss/vite':
         specifier: ^4.3.1
         version: 4.3.1(vite@8.0.16)

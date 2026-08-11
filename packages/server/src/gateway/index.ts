@@ -23,6 +23,7 @@ import type { CodingAgent, Loop, NewLoop, Run, RunArtifact, RunRole, RunUsage, T
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
+import { kernelDeliveriesForMachine } from "../kernel/dispatch.js";
 import { autopauseMessage, completionMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
@@ -653,7 +654,12 @@ export class MachineGateway {
       this.watchCache.set(machineId, cached);
     }
 
-    if (deliveries.length) log.info({ machineId, exec: deliveries.length }, "poll: delivered");
+    // Kernel runs (P0 stage C): pending kernel runs addressed to this machine
+    // ride the SAME poll response as an additive field old daemons ignore.
+    const kernelRunDeliveries = await kernelDeliveriesForMachine(machineId);
+
+    if (deliveries.length || kernelRunDeliveries.length)
+      log.info({ machineId, exec: deliveries.length, kernel: kernelRunDeliveries.length }, "poll: delivered");
     // A matching digest echo means the daemon already holds this exact watch set —
     // omit the array. An old daemon never echoes, so it always gets the full list
     // (omission requires proof the client speaks the digest protocol, never a default).
@@ -661,6 +667,7 @@ export class MachineGateway {
       status: 200,
       body: {
         deliveries,
+        ...(kernelRunDeliveries.length ? { kernelRuns: kernelRunDeliveries } : {}),
         watchDigest: cached.digest,
         ...(watchDigest === cached.digest ? {} : { watch: cached.watch }),
       },

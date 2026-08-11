@@ -125,6 +125,11 @@ export interface RunLeaseCaps {
    *  only for an EXEC run on a CLOSED loop (loop.goal != null) — independent of
    *  allowControl (like the structural caps). Evolve/edit runs never get it. */
   canFinish?: boolean;
+  /** KERNEL lease (P0 stage C): the kernel run's team + task. Presence of
+   *  kernelTeamId marks the lease as a KERNEL credential — the /api/kernel/cli
+   *  bridge resolves scope from it; the production cli router never sees it. */
+  kernelTeamId?: string;
+  kernelTaskId?: string;
 }
 
 /**
@@ -176,6 +181,8 @@ function leaseFromRow(row: typeof runLeases.$inferSelect): RunLease {
     canSetSchema: row.canSetSchema,
     canSetWorkflow: row.canSetWorkflow,
     canFinish: row.canFinish,
+    ...(row.kernelTeamId ? { kernelTeamId: row.kernelTeamId } : {}),
+    ...(row.kernelTaskId ? { kernelTaskId: row.kernelTaskId } : {}),
     state: row.state,
     expiresAt: row.expiresAt == null ? Number.POSITIVE_INFINITY : Date.parse(row.expiresAt),
   };
@@ -197,6 +204,8 @@ export async function registerRunLease(caps: RunLeaseCaps): Promise<string> {
     canSetSchema: caps.canSetSchema ?? false,
     canSetWorkflow: caps.canSetWorkflow ?? false,
     canFinish: caps.canFinish ?? false,
+    kernelTeamId: caps.kernelTeamId ?? null,
+    kernelTaskId: caps.kernelTaskId ?? null,
     createdAt: new Date().toISOString(),
   });
   return token;

@@ -304,6 +304,11 @@ export const runLeases = pgTable(
     runId: text("run_id").notNull(),
     loopId: text("loop_id").notNull(),
     machineId: text("machine_id").notNull(),
+    /** KERNEL lease marker (P0 stage C): a kernel run's lease carries the team +
+     *  task the run belongs to, so the /api/kernel/cli credential bridge resolves
+     *  scope without a loops row. Null for production loop leases. */
+    kernelTeamId: text("kernel_team_id"),
+    kernelTaskId: text("kernel_task_id"),
     role: text("role", { enum: ["exec", "evolve", "edit"] }).notNull(),
     allowControl: boolean("allow_control").notNull().default(false),
     canSetUi: boolean("can_set_ui").notNull().default(false),
