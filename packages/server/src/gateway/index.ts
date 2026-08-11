@@ -336,7 +336,9 @@ export class MachineGateway {
    *  (the row keeps a null alias). Only aliases owned by DIFFERENT machines in the
    *  team count as collisions, so a re-probe of a machine's own alias is stable. */
   private async uniqueAlias(teamId: string, wanted: string | null | undefined, machineId: string): Promise<string | undefined> {
-    const base = wanted ? clipText(wanted, 64).trim() : "";
+    // A slash would corrupt the assignee address grammar (`<alias>/<agent>`) -
+    // sanitize it out rather than reject (the daemon reports hostnames verbatim).
+    const base = wanted ? clipText(wanted, 64).trim().replace(/\//g, "-") : "";
     if (!base) return undefined;
     if (!(await store.aliasTakenInTeam(teamId, base, machineId))) return base;
     for (let n = 2; n <= 50; n++) {

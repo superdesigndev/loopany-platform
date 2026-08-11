@@ -50,9 +50,10 @@ function flag(name: string): string | undefined {
  *  hostname that is itself empty yields undefined (the server then leaves the
  *  alias unset). Exported for the daemon unit test. */
 export function machineAlias(env: NodeJS.ProcessEnv = process.env, hostname: string = os.hostname()): string | undefined {
-  const explicit = env.LOOPANY_MACHINE_ALIAS?.trim();
+  // A slash would corrupt the assignee address grammar (`<alias>/<agent>`).
+  const explicit = env.LOOPANY_MACHINE_ALIAS?.trim().replace(/\//g, "-");
   if (explicit) return explicit;
-  const short = hostname.split(".")[0]?.trim();
+  const short = hostname.split(".")[0]?.trim().replace(/\//g, "-");
   return short || undefined;
 }
 
