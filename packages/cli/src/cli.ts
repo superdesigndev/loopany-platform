@@ -24,6 +24,7 @@ import {
   type Snapshot,
   type TaskObject,
   inboxView,
+  loopsView,
   slugify,
   sortTasksForList,
   treeView,
@@ -44,6 +45,7 @@ import {
   renderError,
   renderFlatList,
   renderInbox,
+  renderLoops,
   renderNotices,
   renderSearchHits,
   renderTimeline,
@@ -614,6 +616,21 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
   return ok(renderInbox(items, now));
 }
 
+/** `loops` — the Loops projection (kernel-product-visibility): every cron task
+ *  with its next fire, in-flight run, last result, and the dispatch-blocked
+ *  configuration state (derived from the dispatcher's clock notes). */
+function verbLoops(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const backend = backendFor(deps);
+  const snapshot = backend.snapshot();
+  // The blocked derivation needs each loop task's event stream; loops are few,
+  // so per-task loads stay cheap on both backends.
+  const loopTaskIds = snapshot.triggers.filter((t) => t.kind === "cron").map((t) => t.taskId);
+  const events = loopTaskIds.flatMap((id) => backend.events(id));
+  const rows = loopsView(snapshot, events);
+  if (args.bools.has("json")) return ok(JSON.stringify(rows, null, 2));
+  return ok(renderLoops(rows));
+}
+
 /** `timeline` — the team's recent MEANINGFUL activity (kernel-team-timeline):
  *  a derived projection, newest first, default last 24h / 50 items. Mechanical
  *  noise (starts, claims, ordinary returns, no-op checks) hides unless --all.
@@ -762,6 +779,8 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
         return verbInbox(args, deps);
       case "timeline":
         return verbTimeline(args, deps);
+      case "loops":
+        return verbLoops(args, deps);
       case "run":
         return verbRun(args, deps);
       case "tick":
@@ -832,6 +851,8 @@ read
   list [--status <s>] [--assignee <a>] [--due] [--tree]   # no filter = tree (depth 2)
   search <keyword>
   inbox --assignee <me>
+  loops                             # every cron loop: next fire, last result,
+                                    #   in-flight run, blocked/config state
   timeline [--since <iso>] [--limit N] [--task <id>] [--actor <id>] [--all]
                                     # recent meaningful team activity (24h/50
                                     #   default); --all reveals mechanical rows

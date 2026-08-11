@@ -3,6 +3,9 @@
  * never stored. One source for CLI and web, so the two renders cannot drift.
  */
 import {
+  type KernelEvent,
+  type MirrorObject,
+  type DocObject,
   ACTIVE_RUN_STATES,
   type RunRecord,
   type Snapshot,
@@ -109,24 +112,77 @@ export interface LoopRow {
   task: TaskObject;
   trigger: Trigger;
   activeRun: RunRecord | null;
+  /** The most recent SETTLED run - the loop's last result. */
+  lastRun: RunRecord | null;
+  /** The dispatch-blocked/configuration note when a PENDING run is stuck
+   *  (unknown/ambiguous alias etc.) - derived from the clock-actor note the
+   *  dispatcher wrote on the task (blocked.ts). Null = not blocked. Only
+   *  derived when the caller passes the event streams. */
+  blockedNote: string | null;
 }
 
-export function loopsView(snapshot: Snapshot): LoopRow[] {
+export function loopsView(snapshot: Snapshot, events?: readonly KernelEvent[]): LoopRow[] {
   const rows: LoopRow[] = [];
   for (const trigger of snapshot.triggers) {
     if (trigger.kind !== "cron") continue;
     const task = snapshot.objects[trigger.taskId];
     if (!task || task.archetype !== "task") continue;
-    rows.push({
-      task,
-      trigger,
-      activeRun:
-        snapshot.runs.find(
-          (r) => r.taskId === task.id && ACTIVE_RUN_STATES.includes(r.state),
-        ) ?? null,
-    });
+    const runs = snapshot.runs.filter((r) => r.taskId === task.id);
+    const activeRun = runs.find((r) => ACTIVE_RUN_STATES.includes(r.state)) ?? null;
+    const settled = runs.filter((r) => !ACTIVE_RUN_STATES.includes(r.state));
+    const lastRun = settled.length > 0 ? settled.reduce((a, b) => (a.createdAt > b.createdAt ? a : b)) : null;
+    // Parked/config visibility: a stuck PENDING run whose blocked note the
+    // dispatcher recorded (per-run marker) surfaces on the loop row.
+    let blockedNote: string | null = null;
+    if (events && activeRun?.state === "pending") {
+      const marker = `dispatch blocked (run ${activeRun.id})`;
+      blockedNote =
+        [...events].reverse().find(
+          (e) => e.objectId === task.id && e.provenance.entrance === "clock" && (e.note ?? "").includes(marker),
+        )?.note ?? null;
+    }
+    rows.push({ task, trigger, activeRun, lastRun, blockedNote });
   }
   return rows.sort((a, b) => byPriorityThenAge(a.task, b.task));
+}
+
+// ---- task detail (the human Task Detail projection - kernel-product-visibility) ----
+
+export interface TaskDetail {
+  task: TaskObject;
+  /** The task's PRODUCTS, resolved from `tracks` (first - the shepherd
+   *  reference) then `refs`, in that order: the latest key doc/mirror is
+   *  findable WITHOUT reading raw events. Ids that resolve to tasks (or to
+   *  nothing) are excluded here - they are relations, not products. */
+  products: readonly (DocObject | MirrorObject)[];
+  /** Direct children (the tree edge), list-sorted. */
+  children: readonly TaskObject[];
+  /** The in-flight run, if any. */
+  activeRun: RunRecord | null;
+  /** The most recent SETTLED run (done/failed/superseded) - the last result. */
+  lastRun: RunRecord | null;
+}
+
+/** The minimum Task Detail projection: goal/spec + current state live on the
+ *  task itself; this adds the linked products, the children, and the run pair
+ *  (active + last settled). Pure over the snapshot - no stored view model. */
+export function taskDetailView(snapshot: Snapshot, id: string): TaskDetail | null {
+  const task = snapshot.objects[id];
+  if (task?.archetype !== "task") return null;
+  const products: (DocObject | MirrorObject)[] = [];
+  const seen = new Set<string>();
+  for (const ref of [task.tracks, ...task.refs]) {
+    if (!ref || seen.has(ref)) continue;
+    seen.add(ref);
+    const obj = snapshot.objects[ref];
+    if (obj?.archetype === "doc" || obj?.archetype === "mirror") products.push(obj);
+  }
+  const children = sortTasksForList(tasks(snapshot).filter((t) => t.parent === id));
+  const runs = snapshot.runs.filter((r) => r.taskId === id);
+  const activeRun = runs.find((r) => ACTIVE_RUN_STATES.includes(r.state)) ?? null;
+  const settled = runs.filter((r) => !ACTIVE_RUN_STATES.includes(r.state));
+  const lastRun = settled.length > 0 ? settled.reduce((a, b) => (a.createdAt > b.createdAt ? a : b)) : null;
+  return { task, products, children, activeRun, lastRun };
 }
 
 export function sortTasksForList(list: TaskObject[]): TaskObject[] {

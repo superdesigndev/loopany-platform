@@ -217,6 +217,25 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(events.find((e) => e.kind === "note")?.note).toBe("ended the pass with status=done after the fix");
   });
 
+  it("show is the Task Detail: products from tracks+refs, children, last run; loops is the Loops projection", () => {
+    call(["init"]);
+    call(["create", "Seo loop", "--id", "seo", "--cron", "0 7 * * *", "--status", "in-progress", "--assignee", "mbp/claude"]);
+    call(["doc", "put", "weekly-report", "--task", "seo"]);
+    call(["create", "Child bet", "--id", "bet-child", "--parent", "seo"]);
+
+    const show = call(["show", "seo"]);
+    expect(show.stdout).toContain("products:");
+    expect(show.stdout).toContain("doc weekly-report");
+    expect(show.stdout).toContain("children:");
+    expect(show.stdout).toContain("bet-child");
+
+    const loops = call(["loops"]);
+    expect(loops.stdout).toContain("seo  ⟳ 0 7 * * *");
+    expect(loops.stdout).toContain("next=");
+    const json = JSON.parse(call(["loops", "--json"]).stdout) as Array<{ task: { id: string }; blockedNote: unknown }>;
+    expect(json[0]!.task.id).toBe("seo");
+  });
+
   it("timeline shows meaningful activity, hides no-op checks, honors --task/--json", () => {
     call(["init"]);
     call(["create", "Busy loop", "--id", "busy"]);

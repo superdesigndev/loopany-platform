@@ -6,6 +6,8 @@
  * rung ⑤).
  */
 import {
+  type LoopRow,
+  taskDetailView,
   type TimelineItem,
   type InboxItem,
   type KernelEvent,
@@ -80,15 +82,35 @@ export function renderShow(
   events: readonly KernelEvent[] | null,
 ): string {
   const parts: string[] = [fieldLines(obj).join("\n")];
-  // A task's live schedule + active run belong in `show` (they are the task's
-  // FUTURE and HANDOFF — §3).
+  // A task's live schedule + run pair + products + children belong in `show` -
+  // this IS the Task Detail projection (kernel-product-visibility): the latest
+  // key doc/mirror is findable here, never by reading raw events.
   if (obj.archetype === "task") {
     const trigs = snapshot.triggers.filter((t) => t.taskId === obj.id);
     for (const t of trigs) parts.push(renderTriggerLine(t));
-    const active = snapshot.runs.find(
-      (r) => r.taskId === obj.id && (r.state === "pending" || r.state === "claimed" || r.state === "running"),
-    );
-    if (active) parts.push(renderRunLine(active));
+    const detail = taskDetailView(snapshot, obj.id);
+    if (detail) {
+      if (detail.activeRun) parts.push(renderRunLine(detail.activeRun));
+      else if (detail.lastRun) {
+        const note = detail.lastRun.note ? `  ·  ${clip(detail.lastRun.note)}` : "";
+        parts.push(`last run ${detail.lastRun.id}: ${detail.lastRun.state}${note}`);
+      }
+      if (detail.products.length > 0) {
+        parts.push("products:");
+        for (const prod of detail.products) {
+          const label =
+            prod.archetype === "doc"
+              ? `doc ${prod.id}  ${clip(prod.title ?? prod.key, 60)}`
+              : `mirror ${prod.id}  [${prod.kind}] ${prod.coords}`;
+          const shepherd = obj.tracks === prod.id ? "  (tracked)" : "";
+          parts.push(`  ${label}${shepherd}`);
+        }
+      }
+      if (detail.children.length > 0) {
+        parts.push("children:");
+        for (const c of detail.children) parts.push(`  ${c.id}  [${c.status}]  ${clip(c.title, 60)}`);
+      }
+    }
   }
   const body = objectBody(obj);
   if (body) parts.push("\n" + body);
@@ -273,6 +295,29 @@ export function renderInbox(items: readonly InboxItem[], now?: string): string {
         `waiting ${age(nowMs - Date.parse(i.task.updatedAt))}`,
       ];
       return `${head}\n      ${bits.join(" · ")}`;
+    })
+    .join("\n");
+}
+
+// ---- loops (the Loops projection - kernel-product-visibility) ----
+
+/** One loop per line: id, cadence, next fire, then the STATE column - blocked
+ *  (with the config note), an in-flight run, the last result, or quiet. Machine
+ *  availability is a server-side fact and rides the server surfaces, not this
+ *  local projection. */
+export function renderLoops(rows: readonly LoopRow[]): string {
+  if (rows.length === 0) return "(no loops - a loop is a task with a cron)";
+  return rows
+    .map((r) => {
+      const head = `${r.task.id}  ⟳ ${r.trigger.spec}  next=${r.trigger.enabled ? (r.trigger.nextFireAt ?? "—") : `paused(${r.trigger.disabledBy ?? "?"})`}`;
+      const state = r.blockedNote
+        ? `⚠ ${clip(r.blockedNote)}`
+        : r.activeRun
+          ? `▶ ${r.activeRun.state} run ${r.activeRun.id}`
+          : r.lastRun
+            ? `last: ${r.lastRun.state}${r.lastRun.note ? ` · ${clip(r.lastRun.note, 80)}` : ""}`
+            : "quiet";
+      return `${head}\n      ${state}`;
     })
     .join("\n");
 }

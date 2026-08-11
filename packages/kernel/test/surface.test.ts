@@ -41,6 +41,9 @@ const EXPECTED = [
   "shortHash",
   "slugify",
   "sortTasksForList",
+  // taskDetailView: the Task Detail projection (kernel-product-visibility) -
+  // products from tracks+refs, children, active/last run. Pure, no view model.
+  "taskDetailView",
   "tick",
   // timelineView: the kernel-team-timeline projection (2026-08-11) - one
   // shared derivation for CLI + server endpoint + future web surfaces.

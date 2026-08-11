@@ -29,9 +29,11 @@ export {
   boardView,
   loopsView,
   sortTasksForList,
+  taskDetailView,
   type TreeNode,
   type InboxItem,
   type LoopRow,
+  type TaskDetail,
 } from "./views.js";
 export { timelineView, type TimelineItem, type TimelineKind, type TimelineOptions } from "./timeline.js";
 export {
