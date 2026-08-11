@@ -76,6 +76,9 @@ describe("buildCorePrompt", () => {
     expect(prompt).toContain("COMPUTED from the log's dates"); // seo-scale round 2 (fabricated "4 weeks")
     expect(prompt).toContain("is a COMMITMENT: execute it this pass or explicitly"); // round 3 (silently extended deadline)
     expect(prompt).toContain("A handoff you did not verify did not happen"); // round 2 (silent handoff deadlock)
+    // The doc-as-human-window nudge (scenario-02 principle: absent from the
+    // process, never absent from visibility; file-mirror upload deferred).
+    expect(prompt).toContain("The doc is the HUMAN WINDOW");
   });
 
   it("quotes the wakeReason verbatim on its own line", () => {
