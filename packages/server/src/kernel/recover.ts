@@ -45,6 +45,13 @@ const RECLAIM_ACTOR: Provenance = { entrance: "clock", actorId: "kernel-reclaim"
  *  returned/executed yet). */
 export const CLAIM_REPORT_GRACE_MS = 2 * 60_000;
 
+/** The effective claim grace - env-tunable so the packed E2E can prove the
+ *  death-recovery path in seconds instead of minutes. */
+export function claimReportGraceMs(): number {
+  const n = Number(process.env.LOOPANY_KERNEL_CLAIM_GRACE_MS);
+  return Number.isFinite(n) && n > 0 ? n : CLAIM_REPORT_GRACE_MS;
+}
+
 /** Machine-silence threshold for the offline reclaim. Generous by default so a
  *  sleeping laptop wakes and finishes normally; env-tunable for tests/ops. */
 export function kernelOfflineReclaimMs(): number {
@@ -99,7 +106,7 @@ export async function reconcileKernelInFlight(
   let reclaimed = 0;
   for (const lease of await kernelLeases(machineId)) {
     if (held.has(lease.runId)) continue;
-    if (now - Date.parse(lease.createdAt) < CLAIM_REPORT_GRACE_MS) continue;
+    if (now - Date.parse(lease.createdAt) < claimReportGraceMs()) continue;
     const r = await reclaimKernelRun(
       lease.kernelTeamId,
       lease.runId,
@@ -130,7 +137,7 @@ export async function sweepOfflineKernelRuns(now: number = Date.now()): Promise<
     for (const lease of rows) {
       // A lease younger than the claim grace never reclaims (freshly claimed
       // work on a machine that just went quiet gets its window).
-      if (now - Date.parse(lease.createdAt) < CLAIM_REPORT_GRACE_MS) continue;
+      if (now - Date.parse(lease.createdAt) < claimReportGraceMs()) continue;
       const r = await reclaimKernelRun(
         lease.kernelTeamId,
         lease.runId,

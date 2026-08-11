@@ -61,6 +61,7 @@ echo "✓ packed daemon exposes both bins; loopany-kernel executes"
 echo "▶ starting the unified server on $BASE ..."
 ( cd "$ROOT/packages/server" && LOOPANY_PORT="$PORT" LOOPANY_DATA_DIR="$TMP/server-data" \
     LOOPANY_DB_PATH="$TMP/server-data/loopany.db" LOOPANY_LOG_LEVEL=info LOOPANY_KERNEL_SWEEP_MS=2000 \
+    LOOPANY_KERNEL_CLAIM_GRACE_MS=3000 LOOPANY_KERNEL_OFFLINE_RECLAIM_MS=5000 \
     npx -y pnpm@8.15.0 dev ) >"$TMP/server.log" 2>&1 &
 server_pid=$!
 ready=""
@@ -106,6 +107,10 @@ cat > "$STUB" <<EOS
 #!/bin/sh
 if [ "\$LOOPANY_TASK_ID" = "bet-silent" ]; then
   exit 0   # a silent "success" - the postcondition must catch this
+fi
+if [ "\$LOOPANY_TASK_ID" = "bet-death" ]; then
+  sleep 45   # long enough for the daemon to be killed mid-run
+  exit 0
 fi
 if [ "\$LOOPANY_TASK_ID" = "bet-goal" ]; then
   # A closed goal must REFUSE a silent done ...
@@ -208,7 +213,55 @@ echo "$TL" | grep -q "run-activity\|run-failed" \
   || { echo "$TL" | head -10; fail "timeline: no collapsed run items over the remote backend"; }
 echo "✓ timeline: the remote bounded endpoint projects the day's runs"
 
+# ---- 7. DAEMON DEATH recovery + duplicate-sweep dedup (packed) ---------------
+# bet-death: a slow run gets claimed, then the daemon is KILLED mid-run. The
+# server's offline reclaim (threshold 5s here, sweep 2s) must settle it failed.
+# bet-cron: a every-minute cron fires while the daemon is DEAD - repeated 2s
+# sweeps over the same fire must mint EXACTLY ONE pending run (dedup + the
+# active-run guard), proving duplicate sweeps are idempotent in packed shape.
+echo "▶ daemon-death recovery: seeding a slow run + an every-minute cron ..."
+lk create "bet death" --id bet-death --assignee "$ALIAS/claude" --workdir "$JAIL/proj" >/dev/null
+lk create "bet cron"  --id bet-cron  --assignee "$ALIAS/claude" --workdir "$JAIL/proj" \
+  --cron "* * * * *" --status in-progress >/dev/null
+
+claimed=""
+for i in $(seq 1 30); do
+  if lk show bet-death --log 2>/dev/null | grep -q "run-started"; then claimed=1; break; fi
+  sleep 1
+done
+[ -n "$claimed" ] || { tail -20 "$TMP/daemon.log"; fail "bet-death was never claimed"; }
+echo "▶ killing the daemon mid-run (pid $daemon_pid) ..."
+kill -9 "$daemon_pid" 2>/dev/null || true
+daemon_pid=""
+
+reclaimed=""
+for i in $(seq 1 40); do
+  LOG_DEATH="$(lk show bet-death --log 2>/dev/null || true)"
+  if echo "$LOG_DEATH" | grep -q "returned failed"; then reclaimed=1; break; fi
+  sleep 1
+done
+[ -n "$reclaimed" ] || { echo "$LOG_DEATH"; fail "bet-death: the dead daemon's run was never reclaimed"; }
+echo "$LOG_DEATH" | grep -q "offline past the reclaim window" \
+  || { echo "$LOG_DEATH"; fail "bet-death: reclaim note does not name the offline window"; }
+echo "✓ bet-death: daemon killed mid-run -> offline reclaim settled the run failed"
+
+echo "▶ duplicate-sweep dedup: waiting for a cron fire under the dead daemon ..."
+minted=""
+for i in $(seq 1 75); do
+  COUNT="$(curl -fsS -X POST "$BASE/api/kernel/cli" -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' -d '{"read":true}' \
+    | python3 -c "import sys,json; d=json.load(sys.stdin); print(sum(1 for r in d.get('snapshot',{}).get('runs',[]) if r.get('taskId')=='bet-cron'))")"
+  if [ "$COUNT" != "0" ]; then minted="$COUNT"; sleep 8; break; fi
+  sleep 1
+done
+[ -n "$minted" ] || fail "bet-cron: the cron never fired"
+FINAL_COUNT="$(curl -fsS -X POST "$BASE/api/kernel/cli" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"read":true}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(sum(1 for r in d.get('snapshot',{}).get('runs',[]) if r.get('taskId')=='bet-cron'))")"
+[ "$FINAL_COUNT" = "1" ] || fail "bet-cron: expected exactly 1 run after repeated sweeps over one fire, got $FINAL_COUNT"
+echo "✓ bet-cron: ~5+ duplicate 2s sweeps over one fire minted exactly one run"
+
 echo
 echo "✅ production-shaped kernel E2E passed: packed daemon, shipped CLI callback,"
 echo "   workdir execution, postcondition, roots jail, closed goal, live hand-back,"
-echo "   remote timeline."
+echo "   remote timeline, daemon-death reclaim, duplicate-sweep dedup."
