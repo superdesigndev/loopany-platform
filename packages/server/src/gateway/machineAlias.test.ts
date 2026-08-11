@@ -1,12 +1,11 @@
 /**
- * Machine ALIAS (kernel remote dispatch, P0 stage A + the 2026-08-11 hardening):
- * the enroll path mints a team-unique alias from the daemon-reported handle
- * (suffixing collisions, never re-suffixing a live alias on later polls; a
- * (teamId, alias) UNIQUE INDEX backs the probe at the DB level), and
- * `resolveMachineByAlias` - THE ONE resolver both the sweep wake and the poll
- * delivery use - resolves a kernel assignee's machine segment by ALIAS ONLY.
- * A shared-team ambiguity (same alias via two home teams) is a distinct
- * `ambiguous` result the callers refuse; the old friendly-name fallback is gone.
+ * Machine ALIAS (P0 stage A + review rounds 2-3): enroll mints the machine
+ * BASE handle (unique within its home team, DB-backed); the PER-TEAM alias
+ * REGISTER (machine_team_aliases, review round 3) then gives every execution
+ * team its own unique(team, alias) mapping, minted deterministically by
+ * machine age and immutable afterwards - so a shared team where two members
+ * both own a "mbp" resolves BOTH machines (mbp / mbp-2), never an ambiguous
+ * permanently-pending run. resolveMachineByAlias is THE ONE resolver.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -37,7 +36,7 @@ afterAll(() => {
 
 beforeEach(async () => {
   await (db.client as any).exec(
-    "DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
+    "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
   );
 });
 
@@ -97,13 +96,13 @@ test("resolveMachineByAlias resolves by alias only, misses cleanly, and NEVER ma
   expect(miss.ambiguous).toBeUndefined();
 });
 
-test("a SHARED team where two members' machines expose the same alias resolves as AMBIGUOUS", async () => {
+test("a SHARED team where two members' machines share a base handle resolves BOTH deterministically", async () => {
   const gw = gateway();
-  // u1's machine (home team u1) takes alias "mbp".
+  // u1's machine (home team u1) takes base "mbp"; created FIRST.
   const a = await enroll(gw, "mbp");
 
-  // u2's machine in u2's OWN home team also takes "mbp" (no collision there -
-  // per-home-team suffixing cannot see across teams).
+  // u2's machine in u2's OWN home team also takes base "mbp" (no collision
+  // there - home scopes are independent).
   const deviceToken2 = tokens.mintDeviceToken();
   const machine2 = tokens.machineIdFromToken(deviceToken2);
   const team2 = store.teamIdForUser("u2");
@@ -112,15 +111,23 @@ test("a SHARED team where two members' machines expose the same alias resolves a
   expect((await gw.poll(deviceToken2, { host: "mbp.local", alias: "mbp" })).status).toBe(200);
   expect((await store.getMachine(machine2))?.alias).toBe("mbp");
 
-  // A shared team containing BOTH users now sees two "mbp" machines: the
-  // resolver refuses with `ambiguous` instead of picking one arbitrarily.
+  // The SHARED team's register mints per-team aliases deterministically by
+  // machine age: the older machine keeps the base, the newer gets -2. BOTH are
+  // addressable - no ambiguity, no permanently pending run.
   await store.ensureTeam("team-shared", "Shared", "u1");
   await store.addTeamMember("team-shared", "u2", "member");
-  const r = await store.resolveMachineByAlias("team-shared", "mbp");
-  expect(r.ambiguous).toBe(true);
-  expect(r.machine).toBeUndefined();
+  const first = await store.resolveMachineByAlias("team-shared", "mbp");
+  expect(first.ambiguous).toBeUndefined();
+  expect(first.machine?.id).toBe(a.machineId);
+  const second = await store.resolveMachineByAlias("team-shared", "mbp-2");
+  expect(second.machine?.id).toBe(machine2);
 
-  // Each home team still resolves its own machine unambiguously.
+  // The register is IMMUTABLE + idempotent: re-resolution never re-suffixes.
+  expect((await store.resolveMachineByAlias("team-shared", "mbp")).machine?.id).toBe(a.machineId);
+  const register = await store.listTeamAliases("team-shared");
+  expect(register.map((r) => r.alias).sort()).toEqual(["mbp", "mbp-2"]);
+
+  // Each home team still resolves its own machine under the plain base.
   expect((await store.resolveMachineByAlias(a.teamId, "mbp")).machine?.id).toBe(a.machineId);
   expect((await store.resolveMachineByAlias(team2, "mbp")).machine?.id).toBe(machine2);
 });

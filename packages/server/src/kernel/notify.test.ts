@@ -47,7 +47,7 @@ let pushes: Array<{ teamId: string; title: string; message: string }>;
 beforeEach(async () => {
   await (db.client as any).exec(
     "DELETE FROM kernel_runs; DELETE FROM kernel_triggers; DELETE FROM kernel_events; DELETE FROM kernel_objects; " +
-      "DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
+      "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
   );
   pushes = [];
   knotify.setKernelNotifier(async (teamId, title, message) => {

@@ -15,6 +15,7 @@ import { user } from "./auth-schema.js";
 import {
   loops,
   machines,
+  machineTeamAliases,
   runs,
   teams,
   teamMembers,
@@ -456,25 +457,78 @@ export async function getMachine(id: string): Promise<Machine | undefined> {
  * arbitrarily. `{}` = no match — the caller keeps the run pending (deferred
  * inbox), never an error.
  */
-export async function resolveMachineByAlias(
-  teamId: string,
-  alias: string,
-): Promise<{ machine?: Machine; ambiguous?: boolean }> {
+/** Every machine REACHABLE in a team: the members' machines (membership join)
+ *  plus home-team machines (open mode's anonymous machines have no membership
+ *  rows, only a home teamId). Deduped, ordered by createdAt then id - the
+ *  DETERMINISTIC minting order for the per-team alias register. */
+async function machinesReachableInTeam(teamId: string): Promise<Machine[]> {
   const viaMembership = await db
     .select({ m: machines })
     .from(machines)
     .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
-    .where(and(eq(teamMembers.teamId, teamId), eq(machines.alias, alias)));
-  // A machine's HOME team reaches it even with no members row - open mode's
-  // anonymous (shared) machines have no user/membership at all, only teamId.
-  const viaHome = await db
-    .select({ m: machines })
-    .from(machines)
-    .where(and(eq(machines.teamId, teamId), eq(machines.alias, alias)));
+    .where(eq(teamMembers.teamId, teamId));
+  const viaHome = await db.select({ m: machines }).from(machines).where(eq(machines.teamId, teamId));
   const byId = new Map<string, Machine>();
   for (const r of [...viaMembership, ...viaHome]) byId.set(r.m.id, r.m);
-  if (byId.size > 1) return { ambiguous: true };
-  return { machine: [...byId.values()][0] };
+  return [...byId.values()].sort((a, b) =>
+    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1,
+  );
+}
+
+/** Mint any MISSING per-team alias rows (review round 3): machines in
+ *  deterministic order take their base handle, then base-2, base-3 ... within
+ *  THIS team. Rows are IMMUTABLE once minted - a later machine never re-suffixes
+ *  an earlier one, and an assignee string can never silently re-target. A
+ *  base-less machine (no alias, pre-column daemon that never re-polled) is
+ *  unaddressable and skipped. Idempotent; the unique index absorbs races. */
+export async function ensureTeamAliases(teamId: string): Promise<void> {
+  const reachable = await machinesReachableInTeam(teamId);
+  if (reachable.length === 0) return;
+  const rows = await db.select().from(machineTeamAliases).where(eq(machineTeamAliases.teamId, teamId));
+  const taken = new Set(rows.map((r) => r.alias));
+  const have = new Set(rows.map((r) => r.machineId));
+  for (const m of reachable) {
+    if (have.has(m.id)) continue;
+    const base = m.alias?.trim();
+    if (!base) continue;
+    let candidate = base;
+    for (let n = 2; taken.has(candidate) && n <= 60; n++) candidate = `${base}-${n}`;
+    if (taken.has(candidate)) candidate = `${base}-${m.id.slice(2, 8)}`;
+    try {
+      await db.insert(machineTeamAliases).values({ teamId, machineId: m.id, alias: candidate, createdAt: nowIso() });
+      taken.add(candidate);
+    } catch {
+      // Unique-index race: another writer minted concurrently - re-read next call.
+    }
+  }
+}
+
+/** The team's alias register (owner-facing discovery: the blocked note lists it). */
+export async function listTeamAliases(teamId: string): Promise<Array<{ alias: string; machineId: string; name: string }>> {
+  await ensureTeamAliases(teamId);
+  const rows = await db
+    .select({ alias: machineTeamAliases.alias, machineId: machineTeamAliases.machineId, name: machines.name })
+    .from(machineTeamAliases)
+    .innerJoin(machines, eq(machineTeamAliases.machineId, machines.id))
+    .where(eq(machineTeamAliases.teamId, teamId));
+  return rows.sort((a, b) => (a.alias < b.alias ? -1 : 1));
+}
+
+export async function resolveMachineByAlias(
+  teamId: string,
+  alias: string,
+): Promise<{ machine?: Machine; ambiguous?: boolean }> {
+  await ensureTeamAliases(teamId);
+  const row = (
+    await db
+      .select({ m: machines })
+      .from(machineTeamAliases)
+      .innerJoin(machines, eq(machineTeamAliases.machineId, machines.id))
+      .where(and(eq(machineTeamAliases.teamId, teamId), eq(machineTeamAliases.alias, alias)))
+  )[0];
+  // Ambiguity is IMPOSSIBLE by construction now (unique(teamId, alias)); the
+  // field stays on the signature for the callers' defensive branches.
+  return { machine: row?.m };
 }
 
 /** Whether ANY machine other than `exceptId` already claims `alias` under an

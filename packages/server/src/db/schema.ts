@@ -344,6 +344,30 @@ export const runLeases = pgTable(
 // post-restart paste silently mis-file the loop into the machine's home team.
 // Rows expire after CONNECT_KEY_TTL_MS (lazy on read + pruned on write).
 
+// ---- machine_team_aliases: the PER-TEAM alias register (review round 3) ----
+//
+// A machine's `alias` column is only its BASE handle, unique within its HOME
+// team - two members of a SHARED team can both own a "mbp". The kernel
+// assignee grammar needs "exactly one machine per (team, alias)", so each team
+// keeps its own register: rows are minted DETERMINISTICALLY (machines ordered
+// by createdAt get base, base-2, ...) on first resolution in that team and are
+// IMMUTABLE afterwards (an assignee string must never silently re-target).
+// Ambiguity is impossible by construction; an unknown alias stays a loud
+// blocked state that lists this register.
+export const machineTeamAliases = pgTable(
+  "machine_team_aliases",
+  {
+    teamId: text("team_id").notNull(),
+    machineId: text("machine_id").notNull(),
+    alias: text("alias").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("mta_team_alias_uq").on(t.teamId, t.alias),
+    uniqueIndex("mta_team_machine_uq").on(t.teamId, t.machineId),
+  ],
+);
+
 export const connectKeys = pgTable("connect_keys", {
   /** m-sha256(connectKey)[:16] — the machine id this key self-registers as. */
   machineId: text("machine_id").primaryKey(),

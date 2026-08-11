@@ -129,10 +129,14 @@ export async function kernelSweep(
               { teamId, runId: run.id, assignee: run.assignee },
               "kernel sweep: no machine for alias - run stays pending (durable inbox)",
             );
+            const register = await store.listTeamAliases(teamId);
+            const available = register.length
+              ? ` available aliases here: ${register.map((r) => `${r.alias} (${r.name})`).join(", ")}.`
+              : "";
             await recordDispatchBlocked(
               teamId,
               run,
-              `no machine in this team has alias "${seg.machine}" (assignee "${run.assignee}") - the run stays pending until that machine enrolls`,
+              `no machine in this team has alias "${seg.machine}" (assignee "${run.assignee}") - the run stays pending until that machine enrolls.${available}`,
             );
             continue;
           }
