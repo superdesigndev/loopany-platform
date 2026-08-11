@@ -18,7 +18,13 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const entry = join(here, "..", "src", "bin.ts");
+// Kanban is split at this plain-JS executable boundary. The normal entry never
+// imports React/Ink, which also keeps the daemon's bundled callback lightweight.
+const isKanban = process.argv[2] === "kanban";
+const entry = isKanban
+  ? join(here, "..", "src", "kanban", "bin.ts")
+  : join(here, "..", "src", "bin.ts");
+const forwardedArgs = process.argv.slice(isKanban ? 3 : 2);
 const require = createRequire(import.meta.url);
 
 // Resolve tsx's CLI from THIS package's dependency tree (never PATH), so the
@@ -28,7 +34,7 @@ const tsxCli = require.resolve("tsx/cli");
 // Record THIS launcher's absolute path so the workspace registry (written by
 // `init`/`register`) points the daemon at the node-runnable `.mjs` entry - never
 // the tsx-only `src/bin.ts` the child sees as its own argv[1].
-const child = spawnSync(process.execPath, [tsxCli, entry, ...process.argv.slice(2)], {
+const child = spawnSync(process.execPath, [tsxCli, entry, ...forwardedArgs], {
   stdio: "inherit",
   env: { ...process.env, LOOPANY_KERNEL_BIN: fileURLToPath(import.meta.url) },
 });

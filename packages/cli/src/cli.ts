@@ -767,6 +767,7 @@ workspace
                                     #   registry the resident daemon auto-ticks
 
 read
+  kanban                              # for humans: interactive read-only board (TTY only)
   show <id> [--log]
   list [--status <s>] [--assignee <a>] [--due] [--tree]   # no filter = tree (depth 2)
   search <keyword>

@@ -15,10 +15,14 @@
   "dependencies": {
     "@loopany/artifact-format": "workspace:*",
     "@loopany/kernel": "workspace:*",
+    "ink": "^7.1.1",
+    "react": "^19.2.0",
+    "string-width": "^8.2.1",
     "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
     "typescript": "^6.0.3",
     "vitest": "4.1.9"
   }

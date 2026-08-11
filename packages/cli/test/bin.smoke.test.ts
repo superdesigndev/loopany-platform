@@ -6,6 +6,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // fileURLToPath then rejects (repo-wide guard idiom).
 const rel = "../bin/loopany-kernel.mjs";
 const binPath = join(dirname(fileURLToPath(import.meta.url)), rel);
+const runtimeFixtureRel = "fixtures/kanban-runtime-smoke.ts";
+const runtimeFixture = join(dirname(fileURLToPath(import.meta.url)), runtimeFixtureRel);
+const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
 
 describe("declared bin executes under bare node (process spawn)", () => {
   let dir: string;
@@ -51,5 +55,22 @@ describe("declared bin executes under bare node (process spawn)", () => {
     const out = run("no-such-verb");
     expect(out.status).toBe(2);
     expect(out.stderr).toContain("unknown verb");
+  });
+
+  it("refuses kanban when the executable is piped", () => {
+    const out = run("kanban");
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("requires an interactive TTY");
+    expect(out.stderr).not.toContain("NO_WORKSPACE");
+  });
+
+  it("loads and starts the Kanban TSX entry through the real tsx runtime", () => {
+    const out = spawnSync(process.execPath, [tsxCli, runtimeFixture], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+    expect(out.status, out.stderr).toBe(0);
+    expect(out.stdout).toContain("kanban runtime loaded");
+    expect(out.stderr).not.toContain("React is not defined");
   });
 });

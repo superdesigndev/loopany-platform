@@ -1,0 +1,273 @@
+import {
+  Box,
+  Text,
+  render,
+  useApp,
+  useInput,
+  useWindowSize,
+  type RenderOptions,
+} from "ink";
+import React, { useEffect, useMemo, useReducer } from "react";
+import {
+  TASK_STATUSES,
+  type KernelEvent,
+  type Snapshot,
+  type TaskObject,
+  boardView,
+} from "@loopany/kernel";
+import stringWidth from "string-width";
+import type { Backend } from "../backend.js";
+import {
+  activeStatus,
+  initialKanbanState,
+  kanbanInputIntent,
+  reduceKanban,
+  visibleCardWindow,
+  visibleColumnIndexes,
+  type KanbanBoard,
+  type KanbanState,
+} from "./reducer.js";
+
+export interface KanbanViewProps {
+  board: KanbanBoard;
+  state: KanbanState;
+  events: Readonly<Record<string, readonly KernelEvent[]>>;
+}
+
+function priorityColor(priority: string | null): "red" | "yellow" | "cyan" | undefined {
+  if (priority === "P0") return "red";
+  if (priority === "P1") return "yellow";
+  if (priority === "P2") return "cyan";
+  return undefined;
+}
+
+function Card({ task, active }: { task: TaskObject; active: boolean }) {
+  return (
+    <Box flexDirection="column" paddingX={1} borderStyle={active ? "bold" : "single"}>
+      <Text bold={active} inverse={active} wrap="truncate-end">
+        {active ? "> " : "  "}{task.title}
+      </Text>
+      <Text dimColor={!active} wrap="truncate-end">
+        <Text color={priorityColor(task.priority)}>{task.priority ?? "--"}</Text>
+        {`  ${task.id}`}
+      </Text>
+      <Text dimColor wrap="truncate-end">@{task.assignee ?? "unassigned"}</Text>
+    </Box>
+  );
+}
+
+function Board({ board, state }: Omit<KanbanViewProps, "events">) {
+  const indexes = visibleColumnIndexes(state);
+  return (
+    <Box flexDirection="column">
+      <Box height={1} justifyContent="space-between">
+        <Text bold color="cyan" wrap="truncate-end">Loopany Kanban</Text>
+        <Text dimColor wrap="truncate-end">h/l columns  j/k cards  Enter details  q/Esc quit</Text>
+      </Box>
+      <Box>
+        {indexes.map((columnIndex) => {
+          const status = TASK_STATUSES[columnIndex];
+          const tasks = board[status];
+          const selected = state.selected[status];
+          const window = visibleCardWindow(state, tasks.length, selected);
+          return (
+            <Box
+              key={status}
+              width={`${100 / indexes.length}%`}
+              minWidth={20}
+              flexDirection="column"
+              paddingRight={columnIndex === indexes.at(-1) ? 0 : 1}
+            >
+              <Text bold={columnIndex === state.column} color={columnIndex === state.column ? "cyan" : undefined}>
+                {status.toUpperCase()} ({tasks.length})
+              </Text>
+              {tasks.length === 0 ? <Text dimColor>(empty)</Text> : null}
+              {tasks.length > 0 && window.capacity === 0 ? <Text dimColor>(grow terminal to show cards)</Text> : null}
+              {tasks.slice(window.start, window.end).map((task, localIndex) => (
+                <Card
+                  key={task.id}
+                  task={task}
+                  active={columnIndex === state.column && window.start + localIndex === selected}
+                />
+              ))}
+            </Box>
+          );
+        })}
+      </Box>
+      {indexes.length < TASK_STATUSES.length ? (
+        <Text dimColor>{`Showing ${indexes[0] + 1}-${indexes.at(-1)! + 1} of ${TASK_STATUSES.length} columns`}</Text>
+      ) : null}
+    </Box>
+  );
+}
+
+function wrapPlainText(value: string, width: number): string[] {
+  const safeWidth = Math.max(1, width);
+  return value.split("\n").flatMap((rawLine) => {
+    if (rawLine.length === 0) return [""];
+    const lines: string[] = [];
+    let line = "";
+    let used = 0;
+    for (const character of rawLine) {
+      const characterWidth = stringWidth(character);
+      if (line && used + characterWidth > safeWidth) {
+        lines.push(line);
+        line = "";
+        used = 0;
+      }
+      line += character;
+      used += characterWidth;
+    }
+    if (line) lines.push(line);
+    return lines;
+  });
+}
+
+export function detailLines(
+  task: TaskObject,
+  events: readonly KernelEvent[],
+  width: number,
+): string[] {
+  const recent = events.slice(-6).reverse();
+  const lines = [
+    `${task.id}  [${task.status}]  v${task.version}`,
+    `assignee: ${task.assignee ?? "unassigned"}  owner: ${task.owner ?? "unowned"}`,
+    `priority: ${task.priority ?? "--"}  type: ${task.type ?? "--"}`,
+    ...(task.followUpAt ? [`follow-up: ${task.followUpAt}`] : []),
+    "",
+    "Spec",
+    ...wrapPlainText(task.body.trim() || "(empty)", width),
+    "",
+    "Recent events",
+    ...(recent.length === 0
+      ? ["(none)"]
+      : recent.flatMap((event) =>
+          wrapPlainText(
+            `${event.at}  ${event.kind}${event.note ? `: ${event.note}` : ""}`,
+            width,
+          ),
+        )),
+  ];
+  return lines;
+}
+
+export interface DetailViewport {
+  lines: string[];
+  offset: number;
+  end: number;
+  maxOffset: number;
+  total: number;
+}
+
+export function detailViewport(
+  task: TaskObject,
+  events: readonly KernelEvent[],
+  state: KanbanState,
+): DetailViewport {
+  const lines = detailLines(task, events, Math.max(10, state.width - 2));
+  const capacity = Math.max(1, state.height - 2);
+  const maxOffset = Math.max(0, lines.length - capacity);
+  const offset = Math.min(state.detailOffset, maxOffset);
+  return {
+    lines: lines.slice(offset, offset + capacity),
+    offset,
+    end: Math.min(lines.length, offset + capacity),
+    maxOffset,
+    total: lines.length,
+  };
+}
+
+function Detail({
+  task,
+  events,
+  state,
+}: {
+  task: TaskObject;
+  events: readonly KernelEvent[];
+  state: KanbanState;
+}) {
+  const viewport = detailViewport(task, events, state);
+  return (
+    <Box flexDirection="column">
+      <Box height={1} justifyContent="space-between">
+        <Text bold color="cyan" wrap="truncate-end">{task.title}</Text>
+        <Text dimColor wrap="truncate-end">j/k scroll  Esc back  q quit</Text>
+      </Box>
+      {viewport.lines.map((line, index) => (
+        <Text
+          key={`${viewport.offset + index}:${line}`}
+          bold={line === "Spec" || line === "Recent events"}
+          wrap="truncate-end"
+        >
+          {line || " "}
+        </Text>
+      ))}
+      <Text dimColor>
+        {viewport.offset + 1}-{viewport.end} of {viewport.total}
+      </Text>
+    </Box>
+  );
+}
+
+function taskById(board: KanbanBoard, id: string | null): TaskObject | undefined {
+  if (id === null) return undefined;
+  return Object.values(board).flat().find((candidate) => candidate.id === id);
+}
+
+/** Hook-free render surface used by the terminal app and snapshot render tests. */
+export function KanbanView({ board, state, events }: KanbanViewProps) {
+  if (state.detailId !== null) {
+    const task = taskById(board, state.detailId);
+    if (task) return <Detail task={task} events={events[task.id] ?? []} state={state} />;
+  }
+  return <Board board={board} state={state} />;
+}
+
+function KanbanApp({ snapshot, events }: { snapshot: Snapshot; events: KanbanViewProps["events"] }) {
+  const board = useMemo(() => boardView(snapshot), [snapshot]);
+  const { exit } = useApp();
+  const { columns, rows } = useWindowSize();
+  const [state, dispatch] = useReducer(
+    (current: KanbanState, action: Parameters<typeof reduceKanban>[1]) => reduceKanban(current, action, board),
+    initialKanbanState(columns, rows),
+  );
+
+  useEffect(() => dispatch({ type: "resize", width: columns, height: rows }), [columns, rows]);
+  useInput((input, key) => {
+    let detail: { offset: number; maxOffset: number } | undefined;
+    if (state.detailId !== null) {
+      const task = taskById(board, state.detailId);
+      if (!task) return;
+      const viewport = detailViewport(task, events[task.id] ?? [], state);
+      detail = { offset: viewport.offset, maxOffset: viewport.maxOffset };
+    }
+    const intent = kanbanInputIntent(state, input, key, detail);
+    if (intent === "exit") return exit();
+    if (intent) dispatch(intent);
+  });
+
+  return <KanbanView board={board} state={state} events={events} />;
+}
+
+export type KanbanRenderer = (
+  node: React.ReactElement,
+  options: RenderOptions,
+) => Pick<ReturnType<typeof render>, "waitUntilExit">;
+
+export async function startKanban(
+  backend: Backend,
+  renderer: KanbanRenderer = render,
+): Promise<void> {
+  const snapshot = backend.snapshot();
+  const events: Record<string, readonly KernelEvent[]> = {};
+  for (const object of Object.values(snapshot.objects)) {
+    if (object.archetype === "task") events[object.id] = backend.events(object.id);
+  }
+  const instance = renderer(<KanbanApp snapshot={snapshot} events={events} />, {
+    alternateScreen: true,
+    exitOnCtrlC: true,
+    interactive: true,
+    patchConsole: false,
+  });
+  await instance.waitUntilExit();
+}
