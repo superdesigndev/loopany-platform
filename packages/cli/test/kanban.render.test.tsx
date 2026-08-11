@@ -129,7 +129,7 @@ describe("KanbanView", () => {
     state = reduceKanban(state, { type: "open" }, board);
     const frame = renderToString(<KanbanView board={board} state={state} events={events} />);
     expect(frame).toContain("Make the release safe.");
-    expect(frame).toContain("Recent events");
+    expect(frame).toContain("Recent activity");
     expect(frame).toContain("Ready for review");
   });
 

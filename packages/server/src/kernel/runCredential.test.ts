@@ -107,9 +107,11 @@ test("an rk_ kernel lease writes with RUN provenance; cross-task writes allowed;
   const betCreated = events.find((e) => e.objectId === "bet-a" && e.kind === "created");
   expect(betCreated?.provenance).toMatchObject({ entrance: "agent-run", actorId: runId });
 
-  // Reads are team-scoped and allowed (show/list ride this).
+  // Reads are team-scoped and allowed (show/list ride this) - and carry the
+  // per-alias machine presence the Loops projection consumes (review round 3).
   const read = await kgateway.kernelCli(rk, { read: true });
   expect(read.status).toBe(200);
+  expect(read.body.machinePresence).toMatchObject({ mbp: "online" });
 
   // run-finish for the OWN run succeeds.
   const finish = await kgateway.kernelCli(rk, {

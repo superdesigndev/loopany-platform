@@ -15,6 +15,7 @@ import {
   type Trigger,
   isTerminal,
 } from "./types.js";
+import { timelineView, type TimelineItem } from "./timeline.js";
 
 function tasks(snapshot: Snapshot): TaskObject[] {
   return Object.values(snapshot.objects).filter((o): o is TaskObject => o.archetype === "task");
@@ -119,9 +120,18 @@ export interface LoopRow {
    *  dispatcher wrote on the task (blocked.ts). Null = not blocked. Only
    *  derived when the caller passes the event streams. */
   blockedNote: string | null;
+  /** MACHINE AVAILABILITY (review round 3): the presence of the assignee's
+   *  machine ("online" | "asleep" | "offline"), resolved from the caller's
+   *  presence map keyed by machine alias. Null = no map / bare assignee /
+   *  unknown alias (local mode has no machines). */
+  machinePresence: string | null;
 }
 
-export function loopsView(snapshot: Snapshot, events?: readonly KernelEvent[]): LoopRow[] {
+export function loopsView(
+  snapshot: Snapshot,
+  events?: readonly KernelEvent[],
+  machinePresence?: Readonly<Record<string, string>>,
+): LoopRow[] {
   const rows: LoopRow[] = [];
   for (const trigger of snapshot.triggers) {
     if (trigger.kind !== "cron") continue;
@@ -141,12 +151,28 @@ export function loopsView(snapshot: Snapshot, events?: readonly KernelEvent[]): 
           (e) => e.objectId === task.id && e.provenance.entrance === "clock" && (e.note ?? "").includes(marker),
         )?.note ?? null;
     }
-    rows.push({ task, trigger, activeRun, lastRun, blockedNote });
+    const seg = task.assignee?.includes("/") ? task.assignee.slice(0, task.assignee.indexOf("/")) : null;
+    rows.push({
+      task,
+      trigger,
+      activeRun,
+      lastRun,
+      blockedNote,
+      machinePresence: (seg && machinePresence?.[seg]) ?? null,
+    });
   }
   return rows.sort((a, b) => byPriorityThenAge(a.task, b.task));
 }
 
 // ---- task detail (the human Task Detail projection - kernel-product-visibility) ----
+
+export interface ProductRef {
+  product: DocObject | MirrorObject;
+  /** PRODUCER PROVENANCE (review round 3), joined from the product's own
+   *  creating/last-updating EVENT - never a second source field on the object.
+   *  Null when the caller passed no events or none matched. */
+  producedBy: { actor: string; runId?: string; sessionId?: string; at: string } | null;
+}
 
 export interface TaskDetail {
   task: TaskObject;
@@ -154,35 +180,64 @@ export interface TaskDetail {
    *  reference) then `refs`, in that order: the latest key doc/mirror is
    *  findable WITHOUT reading raw events. Ids that resolve to tasks (or to
    *  nothing) are excluded here - they are relations, not products. */
-  products: readonly (DocObject | MirrorObject)[];
+  products: readonly ProductRef[];
   /** Direct children (the tree edge), list-sorted. */
   children: readonly TaskObject[];
   /** The in-flight run, if any. */
   activeRun: RunRecord | null;
   /** The most recent SETTLED run (done/failed/superseded) - the last result. */
   lastRun: RunRecord | null;
+  /** ONE coherent recent-activity view (review round 3): the timeline
+   *  projection scoped to this task, so every renderer reads the SAME
+   *  collapsed meaningful items instead of interpreting raw events itself.
+   *  Empty when the caller passed no events. */
+  recent: readonly TimelineItem[];
 }
 
 /** The minimum Task Detail projection: goal/spec + current state live on the
  *  task itself; this adds the linked products, the children, and the run pair
  *  (active + last settled). Pure over the snapshot - no stored view model. */
-export function taskDetailView(snapshot: Snapshot, id: string): TaskDetail | null {
+export function taskDetailView(
+  snapshot: Snapshot,
+  id: string,
+  /** The TEAM's events (or any superset covering this task + its products):
+   *  enables producer provenance on products and the coherent `recent` view.
+   *  Optional - projections stay usable from a bare snapshot. */
+  events?: readonly KernelEvent[],
+): TaskDetail | null {
   const task = snapshot.objects[id];
   if (task?.archetype !== "task") return null;
-  const products: (DocObject | MirrorObject)[] = [];
+  const products: ProductRef[] = [];
   const seen = new Set<string>();
   for (const ref of [task.tracks, ...task.refs]) {
     if (!ref || seen.has(ref)) continue;
     seen.add(ref);
     const obj = snapshot.objects[ref];
-    if (obj?.archetype === "doc" || obj?.archetype === "mirror") products.push(obj);
+    if (obj?.archetype !== "doc" && obj?.archetype !== "mirror") continue;
+    // Producer provenance = the product's newest created/doc-updated event.
+    let producedBy: ProductRef["producedBy"] = null;
+    if (events) {
+      for (let i = events.length - 1; i >= 0; i--) {
+        const e = events[i]!;
+        if (e.objectId !== ref || (e.kind !== "created" && e.kind !== "doc-updated")) continue;
+        producedBy = {
+          actor: `${e.provenance.entrance}:${e.provenance.actorId}`,
+          ...(e.provenance.entrance === "agent-run" ? { runId: e.provenance.actorId } : {}),
+          ...(e.provenance.sessionId ? { sessionId: e.provenance.sessionId } : {}),
+          at: e.at,
+        };
+        break;
+      }
+    }
+    products.push({ product: obj, producedBy });
   }
   const children = sortTasksForList(tasks(snapshot).filter((t) => t.parent === id));
   const runs = snapshot.runs.filter((r) => r.taskId === id);
   const activeRun = runs.find((r) => ACTIVE_RUN_STATES.includes(r.state)) ?? null;
   const settled = runs.filter((r) => !ACTIVE_RUN_STATES.includes(r.state));
   const lastRun = settled.length > 0 ? settled.reduce((a, b) => (a.createdAt > b.createdAt ? a : b)) : null;
-  return { task, products, children, activeRun, lastRun };
+  const recent = events ? timelineView(snapshot, events, { taskId: id, limit: 8 }) : [];
+  return { task, products, children, activeRun, lastRun, recent };
 }
 
 export function sortTasksForList(list: TaskObject[]): TaskObject[] {

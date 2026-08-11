@@ -168,7 +168,7 @@ export function detailLines(
   // The Task Detail projection (kernel-product-visibility): products from
   // tracks+refs, children, and the run pair - same taskDetailView every other
   // surface reads, so the TUI cannot drift from show/loops.
-  const detail = snapshot ? taskDetailView(snapshot, task.id) : null;
+  const detail = snapshot ? taskDetailView(snapshot, task.id, events) : null;
   const run = detail?.activeRun ?? detail?.lastRun ?? null;
   // Human-held task: surface the derived default hand-back agent so the human
   // never needs to know a machine/profile address (review round 3).
@@ -196,11 +196,13 @@ export function detailLines(
       ? [
           "",
           "Products",
-          ...detail.products.map((prod) =>
-            prod.archetype === "doc"
-              ? `doc ${prod.id}  ${(prod.title ?? prod.key).slice(0, 60)}${task.tracks === prod.id ? "  (tracked)" : ""}`
-              : `mirror ${prod.id}  [${prod.kind}] ${prod.coords}`,
-          ),
+          ...detail.products.map(({ product, producedBy }) => {
+            const label =
+              product.archetype === "doc"
+                ? `doc ${product.id}  ${(product.title ?? product.key).slice(0, 60)}${task.tracks === product.id ? "  (tracked)" : ""}`
+                : `mirror ${product.id}  [${product.kind}] ${product.coords}`;
+            return producedBy ? `${label}  · by ${producedBy.actor}` : label;
+          }),
         ]
       : []),
     ...(detail && detail.children.length > 0
@@ -210,15 +212,17 @@ export function detailLines(
     "Spec",
     ...wrapPlainText(task.body.trim() || "(empty)", width),
     "",
-    "Recent events",
-    ...(recent.length === 0
-      ? ["(none)"]
-      : recent.flatMap((event) =>
-          wrapPlainText(
-            `${event.at}  ${event.kind}${event.note ? `: ${event.note}` : ""}`,
-            width,
-          ),
-        )),
+    "Recent activity",
+    // ONE coherent recent-activity view (taskDetailView.recent = the collapsed
+    // task-scoped timeline) - renderers never interpret raw events themselves.
+    // Raw-event fallback only when no snapshot/detail was supplied.
+    ...(detail && detail.recent.length > 0
+      ? detail.recent.flatMap((item) => wrapPlainText(`${item.at}  [${item.kind}]  ${item.summary}`, width))
+      : recent.length === 0
+        ? ["(none)"]
+        : recent.flatMap((event) =>
+            wrapPlainText(`${event.at}  ${event.kind}${event.note ? `: ${event.note}` : ""}`, width),
+          )),
   ];
   return lines;
 }
@@ -271,7 +275,7 @@ function Detail({
       {viewport.lines.map((line, index) => (
         <Text
           key={`${viewport.offset + index}:${line}`}
-          bold={line === "Spec" || line === "Recent events"}
+          bold={line === "Spec" || line === "Recent activity" || line === "Products" || line === "Children"}
           wrap="truncate-end"
         >
           {line || " "}

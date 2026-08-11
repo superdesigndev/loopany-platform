@@ -47,6 +47,7 @@ export interface KernelCliResponse {
   events?: Record<string, KernelEvent[]>;
   applied?: number;
   timeline?: TimelineItem[];
+  machinePresence?: Record<string, string>;
 }
 
 /** A synchronous HTTP transport: given a URL/token/body, return the parsed
@@ -109,7 +110,13 @@ export class RemoteBackend implements Backend {
     // Cache the streams so a following events(id) in the same command reuses one
     // round-trip (show --log reads snapshot() then events()).
     this.lastEvents = res.events ?? {};
+    this.lastPresence = res.machinePresence ?? {};
     return res.snapshot;
+  }
+
+  private lastPresence: Record<string, string> = {};
+  machinePresence(): Readonly<Record<string, string>> {
+    return this.lastPresence;
   }
 
   timeline(opts: TimelineOptions): TimelineItem[] {

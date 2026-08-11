@@ -57,6 +57,9 @@ export interface Backend {
    *  (never downloads every event to filter client-side). Same timelineView
    *  underneath, so the two backends cannot drift. */
   timeline(opts: TimelineOptions): TimelineItem[];
+  /** Machine availability per team alias (review round 3): the remote backend
+   *  reads it off the authority; local mode has no machines - empty. */
+  machinePresence(): Readonly<Record<string, string>>;
 }
 
 /** The local file-driver backend: the kernel runs in-process against `.loopany/`. */
@@ -84,6 +87,9 @@ class LocalBackend implements Backend {
     const snapshot = readSnapshot(this.wsDir);
     const events = Object.keys(snapshot.objects).flatMap((id) => loadEvents(this.wsDir, id));
     return timelineView(snapshot, events, opts);
+  }
+  machinePresence(): Readonly<Record<string, string>> {
+    return {}; // local mode has no machines - profiles run in-process
   }
 }
 

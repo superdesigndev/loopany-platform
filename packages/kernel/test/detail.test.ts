@@ -35,11 +35,17 @@ describe("taskDetailView", () => {
     w = step(w, { op: "update", id: "seo", patch: { tracks: "seo-portfolio" } }, TIM, T1);
     w = step(w, { op: "create", title: "child bet", id: "bet-child", parent: "seo" }, AGENT, T1);
 
-    const d = taskDetailView(w.snapshot, "seo")!;
+    const d = taskDetailView(w.snapshot, "seo", w.events)!;
     expect(d.task.id).toBe("seo");
     // tracks FIRST, then the refs docs, deduped.
-    expect(d.products[0]!.id).toBe("seo-portfolio");
-    expect(d.products.map((p) => p.id)).toContain("seo-report-2026w33");
+    expect(d.products[0]!.product.id).toBe("seo-portfolio");
+    expect(d.products.map((p) => p.product.id)).toContain("seo-report-2026w33");
+    // PRODUCER PROVENANCE joins the product's creating event - traceable to the
+    // run + session without renderers re-reading raw events.
+    expect(d.products[0]!.producedBy).toMatchObject({ actor: "agent-run:run-1", runId: "run-1" });
+    // The COHERENT recent-activity view is the task-scoped timeline projection.
+    expect(d.recent.length).toBeGreaterThan(0);
+    expect(d.recent.every((i) => typeof i.summary === "string")).toBe(true);
     expect(d.children.map((c) => c.id)).toEqual(["bet-child"]);
     // Non-task / unknown ids never crash it.
     expect(taskDetailView(w.snapshot, "seo-portfolio")).toBeNull();
@@ -66,5 +72,11 @@ describe("loopsView last result + blocked note", () => {
     expect(rows[0]!.blockedNote).toContain("no machine in this team");
     // Without events the derivation stands down (null, never wrong).
     expect(loopsView(w.snapshot)[0]!.blockedNote).toBeNull();
+
+    // MACHINE AVAILABILITY rides a presence map keyed by the assignee's machine
+    // segment; absent map / unknown alias = null, never a guess.
+    expect(loopsView(w.snapshot, w.events, { mbp: "offline" })[0]!.machinePresence).toBe("offline");
+    expect(loopsView(w.snapshot, w.events, { other: "online" })[0]!.machinePresence).toBeNull();
+    expect(rows[0]!.machinePresence).toBeNull();
   });
 });

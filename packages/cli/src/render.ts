@@ -88,7 +88,7 @@ export function renderShow(
   if (obj.archetype === "task") {
     const trigs = snapshot.triggers.filter((t) => t.taskId === obj.id);
     for (const t of trigs) parts.push(renderTriggerLine(t));
-    const detail = taskDetailView(snapshot, obj.id);
+    const detail = taskDetailView(snapshot, obj.id, events ?? undefined);
     if (detail) {
       if (detail.activeRun) parts.push(renderRunLine(detail.activeRun));
       else if (detail.lastRun) {
@@ -97,13 +97,16 @@ export function renderShow(
       }
       if (detail.products.length > 0) {
         parts.push("products:");
-        for (const prod of detail.products) {
+        for (const { product, producedBy } of detail.products) {
           const label =
-            prod.archetype === "doc"
-              ? `doc ${prod.id}  ${clip(prod.title ?? prod.key, 60)}`
-              : `mirror ${prod.id}  [${prod.kind}] ${prod.coords}`;
-          const shepherd = obj.tracks === prod.id ? "  (tracked)" : "";
-          parts.push(`  ${label}${shepherd}`);
+            product.archetype === "doc"
+              ? `doc ${product.id}  ${clip(product.title ?? product.key, 60)}`
+              : `mirror ${product.id}  [${product.kind}] ${product.coords}`;
+          const shepherd = obj.tracks === product.id ? "  (tracked)" : "";
+          const by = producedBy
+            ? `  ·  by ${producedBy.actor}${producedBy.sessionId ? ` session=${producedBy.sessionId}` : ""}`
+            : "";
+          parts.push(`  ${label}${shepherd}${by}`);
         }
       }
       if (detail.children.length > 0) {
@@ -332,7 +335,8 @@ export function renderLoops(rows: readonly LoopRow[]): string {
           : r.lastRun
             ? `last: ${r.lastRun.state}${r.lastRun.note ? ` · ${clip(r.lastRun.note, 80)}` : ""}`
             : "quiet";
-      return `${head}\n      ${state}`;
+      const machine = r.machinePresence ? `  ·  machine ${r.machinePresence}` : "";
+      return `${head}${machine}\n      ${state}`;
     })
     .join("\n");
 }

@@ -635,7 +635,7 @@ function verbLoops(args: ParsedArgs, deps: CliDeps): CliOutcome {
   // so per-task loads stay cheap on both backends.
   const loopTaskIds = snapshot.triggers.filter((t) => t.kind === "cron").map((t) => t.taskId);
   const events = loopTaskIds.flatMap((id) => backend.events(id));
-  const rows = loopsView(snapshot, events);
+  const rows = loopsView(snapshot, events, backend.machinePresence());
   if (args.bools.has("json")) return ok(JSON.stringify(rows, null, 2));
   return ok(renderLoops(rows));
 }

@@ -52,6 +52,10 @@ export interface KernelCliResponse {
    *  state. Absent on write/tick responses. */
   snapshot?: Snapshot;
   events?: Record<string, KernelEvent[]>;
+  /** On a READ: presence per TEAM ALIAS ("online" | "asleep" | "offline") for
+   *  every machine reachable in the team - the Loops projection's machine
+   *  availability (review round 3). */
+  machinePresence?: Record<string, string>;
   /** On a TICK request: the number of per-fire changesets applied. */
   applied?: number;
   /** On a TIMELINE request: the projected items (bounded, newest first). */
@@ -333,7 +337,21 @@ async function readRequest(teamId: string): Promise<KernelHttpResult> {
   for (const ev of all) {
     (events[ev.objectId] ??= []).push(ev);
   }
-  return { status: 200, body: { ok: true, notices: [], snapshot, events } };
+  // Machine availability per team alias (the Loops projection consumes it).
+  const machinePresence: Record<string, string> = {};
+  for (const { alias, machineId } of await store.listTeamAliases(teamId)) {
+    const m = await store.getMachine(machineId);
+    if (m) machinePresence[alias] = machinePresence[alias] ?? presenceOf(m.lastSeen);
+  }
+  return { status: 200, body: { ok: true, notices: [], snapshot, events, machinePresence } };
+}
+
+function presenceOf(lastSeen: string | null): string {
+  if (!lastSeen) return "offline";
+  const silentMs = Date.now() - Date.parse(lastSeen);
+  if (silentMs < 30_000) return "online";
+  if (silentMs < 6 * 3600_000) return "asleep";
+  return "offline";
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
