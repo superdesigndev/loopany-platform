@@ -111,7 +111,18 @@ export function runScenario(scenario: Scenario, opts: RunOpts): SimResult {
   );
   if (scenario.replayScript && extraEnv.LOOPANY_REPLAY_SCRIPT === undefined) {
     const scriptPath = join(sandbox.root, "replay-script.json");
-    writeFileSync(scriptPath, JSON.stringify(scenario.replayScript));
+    // REMOTE tier: a replayed run may CREATE tasks with bare profile-named
+    // assignees (`--assignee claude`) - remotely those must be machine-addressed
+    // or the minted runs would never dispatch. Same mapping as setup argv.
+    const script = opts.remote
+      ? Object.fromEntries(
+          Object.entries(scenario.replayScript).map(([key, seqs]) => [
+            key,
+            seqs.map((argv) => mapArgvAssignees(argv, scenario.profiles, opts.remote!.alias)),
+          ]),
+        )
+      : scenario.replayScript;
+    writeFileSync(scriptPath, JSON.stringify(script));
     // Layer it onto the sandbox env in place so every spawned run inherits it.
     sandbox.env.LOOPANY_REPLAY_SCRIPT = scriptPath;
   }
