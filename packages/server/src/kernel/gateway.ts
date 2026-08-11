@@ -26,7 +26,7 @@ import {
 } from "@loopany/kernel";
 
 import * as store from "../db/store.js";
-import { isDeviceTokenShape, machineIdFromToken, sha256 } from "../gateway/tokens.js";
+import { isDeviceTokenShape, machineIdFromToken, resolveLease, sha256 } from "../gateway/tokens.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "./store.js";
 
 export interface KernelHttpResult {
@@ -68,22 +68,62 @@ export interface KernelCliBody {
   now?: string;
 }
 
-/** Resolve a `dk_` device credential to its `{teamId, actor}` scope, or a flat
- *  401 (enumeration-safe: unknown machine and wrong token hash are indistinct).
- *  Every request kind (command/tick/read) shares this ONE auth chokepoint. */
+/** Resolve a credential to its `{teamId, actor, run?}` scope, or a flat 401
+ *  (enumeration-safe: unknown machine and wrong token hash are indistinct).
+ *  Every request kind (command/tick/read) shares this ONE auth chokepoint.
+ *
+ *  Two credential classes (P0 stage D):
+ *  - `dk_` device token -> the OWNER scope (human actor, full verb surface).
+ *  - `rk_` run lease with kernel markers -> the RUN scope: team from the lease,
+ *    actor {agent-run, runId, sessionId} so every write is attributed to the
+ *    run, and a VERB SUBSET enforced by the caller (`runVerbRefusal`). A
+ *    production (non-kernel) rk_ lease resolves to null here - it has no kernel
+ *    team and belongs to the loop surface, not this route. */
 async function resolveScope(
-  deviceToken: string,
-): Promise<{ teamId: string; actor: Provenance } | null> {
-  if (!isDeviceTokenShape(deviceToken)) return null;
-  const machineId = machineIdFromToken(deviceToken);
+  credential: string,
+): Promise<{ teamId: string; actor: Provenance; run?: { runId: string; state: "active" | "terminal-grace" } } | null> {
+  if (credential.startsWith("rk_")) {
+    const lease = await resolveLease(credential);
+    if (!lease?.kernelTeamId) return null;
+    return {
+      teamId: lease.kernelTeamId,
+      actor: { entrance: "agent-run", actorId: lease.runId, sessionId: `spawn-${lease.runId}` },
+      run: { runId: lease.runId, state: lease.state },
+    };
+  }
+  if (!isDeviceTokenShape(credential)) return null;
+  const machineId = machineIdFromToken(credential);
   const machine = await store.getMachine(machineId);
   if (!machine) return null;
-  if (machine.tokenHash && machine.tokenHash !== sha256(deviceToken)) return null;
+  if (machine.tokenHash && machine.tokenHash !== sha256(credential)) return null;
   const teamId = machine.teamId ?? store.teamIdForUser(machine.userId);
   // Actor identity is OVERRIDDEN from the credential — the body's provenance (if
   // any) is ignored. A device token is a human owner acting from their machine.
   const actor: Provenance = { entrance: "human", actorId: machine.userId ?? "shared" };
   return { teamId, actor };
+}
+
+/** The RUN credential's verb subset (P0 stage D). The hard wall is the TEAM
+ *  (scope resolution above); within it a run may create/update/note/doc-put/
+ *  mirror-add ANY task (cross-task writes are the pull-mode collaboration
+ *  contract - claiming another loop's minted task, attaching docs) and finish
+ *  ONLY ITS OWN run. Owner/host surfaces (tick, read-all is allowed, delete,
+ *  run-claim) are refused with a clear 403 body. Returns null when allowed. */
+function runVerbRefusal(run: { runId: string }, req: KernelCliBody): { code: string; message: string } | null {
+  if (req.tick) return { code: "FORBIDDEN", message: "a run credential cannot host-tick (owner/host surface)" };
+  if (req.read) return null; // reads are team-scoped and safe (show/list/inbox)
+  const op = isRecord(req.command) ? String((req.command as { op?: unknown }).op ?? "") : "";
+  const allowed = new Set(["create", "update", "note", "doc-put", "mirror-add", "run-finish"]);
+  if (!allowed.has(op)) {
+    return { code: "FORBIDDEN", message: `a run credential cannot issue "${op}" (allowed: ${[...allowed].join(", ")})` };
+  }
+  if (op === "run-finish") {
+    const runId = String((req.command as { runId?: unknown }).runId ?? "");
+    if (runId !== run.runId) {
+      return { code: "FORBIDDEN", message: "a run may finish only ITS OWN run" };
+    }
+  }
+  return null;
 }
 
 /**
@@ -110,6 +150,15 @@ export async function kernelCli(
       ? (body as KernelCliBody)
       : { command: body };
   const now = req.now ?? new Date().toISOString();
+
+  // Run-credential verb subset (stage D): team is the hard wall (already
+  // resolved), the subset keeps owner/host surfaces off a run token.
+  if (scope.run) {
+    const refusedVerb = runVerbRefusal(scope.run, req);
+    if (refusedVerb) {
+      return { status: 403, body: { ok: false, notices: [], refusal: refusedVerb } };
+    }
+  }
 
   if (req.read) return await readRequest(teamId);
   if (req.tick) return await tickRequest(teamId, now);

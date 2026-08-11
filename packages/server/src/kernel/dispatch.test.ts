@@ -106,7 +106,7 @@ test("a pending kernel run rides the poll as a claimed kernelRuns delivery, exac
   expect(res.status).toBe(200);
   const body = res.body as { kernelRuns?: Array<Record<string, unknown>> };
   expect(body.kernelRuns).toHaveLength(1);
-  const kr = body.kernelRuns![0];
+  const kr = body.kernelRuns![0]!;
   expect(kr.taskId).toBe("seo-bet-manager");
   expect(kr.agent).toBe("claude");
   expect(kr.workdir).toBe("/Users/u1/work/superdesign");
