@@ -67,6 +67,11 @@ function priorityColor(priority: string | null): "red" | "yellow" | "cyan" | und
   return undefined;
 }
 
+/** A Loop is not a second object kind. It is a Task with a cron trigger. */
+export function isLoopTask(snapshot: Snapshot | undefined, taskId: string): boolean {
+  return snapshot?.triggers.some((trigger) => trigger.taskId === taskId && trigger.kind === "cron") ?? false;
+}
+
 /** Compact card indicator strip (review round 3): due date, recent-activity
  *  age, and the failure/active/artifact markers - pure over the snapshot so the
  *  render tests pin it. */
@@ -89,12 +94,14 @@ export function cardIndicators(task: TaskObject, snapshot?: Snapshot, nowMs = Da
 }
 
 function Card({ task, active, snapshot }: { task: TaskObject; active: boolean; snapshot?: Snapshot }) {
+  const loop = isLoopTask(snapshot, task.id);
   return (
     <Box flexDirection="column" paddingX={1} borderStyle={active ? "bold" : "single"}>
       <Text bold={active} inverse={active} wrap="truncate-end">
         {active ? "> " : "  "}{task.title}
       </Text>
       <Text dimColor={!active} wrap="truncate-end">
+        {loop ? <Text bold color="magenta">LOOP  </Text> : null}
         <Text color={priorityColor(task.priority)}>{task.priority ?? "--"}</Text>
         {`  ${task.id}  @${task.assignee ?? "unassigned"}`}
       </Text>
@@ -172,6 +179,7 @@ function Inbox({
   height,
   refreshLabel,
   message,
+  snapshot,
 }: {
   me: string | null;
   items: readonly InboxItem[];
@@ -179,6 +187,7 @@ function Inbox({
   height: number;
   refreshLabel: string;
   message: string | null;
+  snapshot: Snapshot;
 }) {
   const capacity = Math.max(1, height - 5);
   const start = Math.max(0, Math.min(selected - Math.floor(capacity / 2), Math.max(0, items.length - capacity)));
@@ -204,6 +213,7 @@ function Inbox({
                 {active ? "> " : "  "}{item.task.title}
               </Text>
               <Text dimColor={!active} wrap="truncate-end">
+                {isLoopTask(snapshot, item.task.id) ? <Text bold color="magenta">LOOP  </Text> : null}
                 {item.task.id}  [{item.reason}]{item.task.parent ? `  from ${item.task.parent}` : ""}
               </Text>
               <Text dimColor wrap="truncate-end">
@@ -260,7 +270,7 @@ export function detailLines(
       ? handbackTargetFor(events, task, snapshot.runs)
       : undefined;
   const lines = [
-    `${task.id}  [${task.status}]  v${task.version}`,
+    `${task.id}  [${task.status}]${isLoopTask(snapshot, task.id) ? "  [LOOP]" : ""}  v${task.version}`,
     `assignee: ${task.assignee ?? "unassigned"}  owner: ${task.owner ?? "unowned"}`,
     `priority: ${task.priority ?? "--"}  type: ${task.type ?? "--"}`,
     ...(task.goal != null ? [`goal (finish line): ${task.goal}`] : []),
@@ -556,7 +566,7 @@ function KanbanApp({
   if (state.detailId !== null) {
     content = <KanbanView board={board} state={state} events={events} snapshot={snapshot} />;
   } else if (view === "inbox") {
-    content = <Inbox me={me} items={inboxItems} selected={inboxSelected} height={state.height} refreshLabel={refreshLabel} message={message} />;
+    content = <Inbox me={me} items={inboxItems} selected={inboxSelected} height={state.height} refreshLabel={refreshLabel} message={message} snapshot={snapshot} />;
   } else {
     content = <Board board={board} state={state} snapshot={snapshot} refreshLabel={refreshLabel} message={message} />;
   }

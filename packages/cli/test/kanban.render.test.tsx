@@ -1,7 +1,7 @@
 import { boardView, type KernelEvent, type Snapshot, type TaskObject } from "@loopany/kernel";
 import { renderToString } from "ink";
 import { describe, expect, it } from "vitest";
-import { detailViewport, KanbanView } from "../src/kanban/app.js";
+import { detailViewport, isLoopTask, KanbanView } from "../src/kanban/app.js";
 import { initialKanbanState, reduceKanban } from "../src/kanban/reducer.js";
 
 const task: TaskObject = {
@@ -122,6 +122,27 @@ describe("KanbanView", () => {
     expect(frame).toContain("TODO (1)");
     expect(frame).toContain("Ship it");
     expect(frame).toContain("@claude");
+  });
+
+  it("marks cron-backed tasks as Loops without adding a task kind", () => {
+    const loopSnapshot: Snapshot = {
+      ...snapshot,
+      triggers: [{
+        id: "trg-ship-it-cron",
+        taskId: task.id,
+        kind: "cron",
+        spec: "0 9 * * *",
+        timezone: "UTC",
+        enabled: true,
+        disabledBy: null,
+        nextFireAt: "2026-08-12T09:00:00.000Z",
+      }],
+    };
+    expect(isLoopTask(loopSnapshot, task.id)).toBe(true);
+    const frame = renderToString(
+      <KanbanView board={boardView(loopSnapshot)} state={initialKanbanState(80, 24)} events={{}} snapshot={loopSnapshot} />,
+    );
+    expect(frame).toContain("LOOP");
   });
 
   it("renders task fields and Backend events in detail", () => {
