@@ -1,7 +1,7 @@
 /**
  * OWNER NOTIFICATIONS (kernel-owner-notifications): attention-only pushes over
  * the just-applied changeset - human assignment (with the hand-back note and
- * the product link), auto-park, dispatch-blocked (dedup inherited) - and the
+ * the artifact link), auto-park, dispatch-blocked (dedup inherited) - and the
  * quiet path: ordinary successful activity notifies NOTHING.
  */
 import fs from "node:fs";
@@ -84,15 +84,15 @@ async function enrolledDevice() {
   return { gw, deviceToken, teamId };
 }
 
-test("a HUMAN assignment notifies with the reply and the product link; agent work stays quiet", async () => {
+test("a HUMAN assignment notifies with the reply and the artifact link; agent work stays quiet", async () => {
   const { deviceToken } = await enrolledDevice();
 
-  // Quiet path: ordinary agent-bound create + a doc product notify NOTHING.
+  // Quiet path: ordinary agent-bound create + a doc artifact notify NOTHING.
   await kgateway.kernelCli(deviceToken, { command: { op: "create", title: "seo loop", id: "seo", assignee: "mbp/claude" } });
   await kgateway.kernelCli(deviceToken, { command: { op: "doc-put", key: "w33", body: "#", attachTask: "seo" } });
   expect(pushes).toHaveLength(0);
 
-  // A decision task minted FOR a human notifies, linking the tracked product.
+  // A decision task minted FOR a human notifies, linking the tracked artifact.
   await kgateway.kernelCli(deviceToken, {
     command: { op: "create", title: "decide: variant A or B", id: "decide-v", assignee: "tim@x.co", tracks: "w33" },
   });

@@ -49,7 +49,7 @@ function priorityColor(priority: string | null): "red" | "yellow" | "cyan" | und
 }
 
 /** Compact card indicator strip (review round 3): due date, recent-activity
- *  age, and the failure/active/product markers - pure over the snapshot so the
+ *  age, and the failure/active/artifact markers - pure over the snapshot so the
  *  render tests pin it. */
 export function cardIndicators(task: TaskObject, snapshot?: Snapshot, nowMs = Date.now()): string {
   const bits: string[] = [];
@@ -64,8 +64,8 @@ export function cardIndicators(task: TaskObject, snapshot?: Snapshot, nowMs = Da
       if (last.state === "failed") bits.push("✖ failed");
     }
   }
-  const products = [task.tracks, ...task.refs].filter(Boolean).length;
-  if (products > 0) bits.push(`◆${products}`);
+  const artifacts = [task.tracks, ...task.refs].filter(Boolean).length;
+  if (artifacts > 0) bits.push(`◆${artifacts}`);
   return bits.join("  ");
 }
 
@@ -167,7 +167,7 @@ export function detailLines(
   snapshot?: Snapshot,
 ): string[] {
   const recent = events.slice(-6).reverse();
-  // The Task Detail projection (kernel-product-visibility): products from
+  // The Task Detail projection: artifacts from
   // tracks+refs, children, and the run pair - same taskDetailView every other
   // surface reads, so the TUI cannot drift from show/loops.
   const detail = snapshot ? taskDetailView(snapshot, task.id, events) : null;
@@ -195,15 +195,15 @@ export function detailLines(
             : "hand back: pick an agent (no prior agent derivable)",
         ]
       : []),
-    ...(detail && detail.products.length > 0
+    ...(detail && detail.artifacts.length > 0
       ? [
           "",
           "Products",
-          ...detail.products.map(({ product, producedBy }) => {
+          ...detail.artifacts.map(({ artifact, producedBy }) => {
             const label =
-              product.archetype === "doc"
-                ? `doc ${product.id}  ${(product.title ?? product.key).slice(0, 60)}${task.tracks === product.id ? "  (tracked)" : ""}`
-                : `mirror ${product.id}  [${product.kind}] ${product.coords}`;
+              artifact.archetype === "doc"
+                ? `doc ${artifact.id}  ${(artifact.title ?? artifact.key).slice(0, 60)}${task.tracks === artifact.id ? "  (tracked)" : ""}`
+                : `mirror ${artifact.id}  [${artifact.kind}] ${artifact.coords}`;
             return producedBy ? `${label}  · by ${producedBy.actor}` : label;
           }),
         ]

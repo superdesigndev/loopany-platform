@@ -26,7 +26,7 @@ function step(world: World, cmd: Command, actor: Provenance, now: string): World
   return foldToWorld(world, d.changeset);
 }
 
-/** A realistic day: a loop task, one full agent pass (claim, doc product,
+/** A realistic day: a loop task, one full agent pass (claim, doc artifact,
  *  attach, status, return), a human note, and a hand-back. */
 function busyWorld(): World {
   let w = emptyWorld();
@@ -35,7 +35,7 @@ function busyWorld(): World {
   const runId = "run-1";
   const AGENT: Provenance = { entrance: "agent-run", actorId: runId, sessionId: "s1" };
   // seed a pending run via the manual path? — simpler: drive the run lifecycle
-  // through decide is heavy here; instead the agent writes products directly
+  // through decide is heavy here; instead the agent writes artifacts directly
   // under its run provenance (what collapse actually keys on).
   w = step(w, { op: "doc-put", key: "seo-report-2026W33", body: "# w33", attachTask: "seo" }, AGENT, T1);
   w = step(w, { op: "note", id: "seo", note: "nothing else actionable" }, AGENT, T1);
@@ -55,7 +55,7 @@ describe("timelineView", () => {
     const runItems = items.filter((i) => i.runId === "run-1");
     expect(runItems).toHaveLength(1);
     expect(runItems[0]!.kind).toBe("run-activity");
-    expect(runItems[0]!.summary).toContain("doc "); // doc product named as a product, not a task
+    expect(runItems[0]!.summary).toContain("doc "); // doc artifact named as an artifact, not a task
     expect(runItems[0]!.summary).toContain("+decide-v"); // minted task named
     expect(runItems[0]!.eventIds.length).toBeGreaterThan(2); // drill-down preserved
 
@@ -69,7 +69,7 @@ describe("timelineView", () => {
     expect([...ats].sort().reverse()).toEqual(ats);
   });
 
-  it("task scope keeps cross-object products written by that task's run", () => {
+  it("task scope keeps cross-object artifacts written by that task's run", () => {
     let w = busyWorld();
     // Associate the synthetic run provenance with its home task, as a real
     // claimed run is represented in the snapshot.

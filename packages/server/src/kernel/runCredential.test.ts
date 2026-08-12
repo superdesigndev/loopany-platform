@@ -258,7 +258,7 @@ test("POSTCONDITION: a DEVICE credential's finish is an owner override - never s
 test("TIMELINE endpoint: bounded, team-scoped, readable by BOTH credentials, run-collapsed", async () => {
   const { teamId, runId, rk, deviceToken } = await deliveredRun();
 
-  // The run writes a product + a note (collapses into one item).
+  // The run writes an artifact + a note (collapses into one item).
   await kgateway.kernelCli(rk, { command: { op: "doc-put", key: "w33-report", body: "# w33", attachTask: "seo-bet-manager" } });
   await kgateway.kernelCli(rk, { command: { op: "note", id: "seo-bet-manager", note: "progress" } });
 

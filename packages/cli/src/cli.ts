@@ -914,7 +914,7 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
   return ok(header + renderInbox(items, now, handbackTargets));
 }
 
-/** `loops` — the Loops projection (kernel-product-visibility): every cron task
+/** `loops` - the Loops projection: every cron task
  *  with its next fire, in-flight run, last result, and the dispatch-blocked
  *  configuration state (derived from the dispatcher's clock notes). */
 function verbLoops(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -1423,7 +1423,7 @@ ${COMMON_HELP}`,
   show: `usage: lk show <id> [--limit <n>] [--all] [--log] [--json]
 
 Show an object. Tasks include recent meaningful activity by default; --log
-shows the raw object event stream and --all expands products/activity.
+shows the raw object event stream and --all expands artifacts/activity.
 ${COMMON_HELP}`,
   list: `usage: lk list [--status <status>] [--assignee <who>] [--due]
                [--tree] [--all] [--json [--full]]

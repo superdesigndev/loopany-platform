@@ -3,7 +3,7 @@ name: loopany
 description: >-
   Record, advance, and hand off tasks and documents with the loopany kernel CLI.
   Use inside a loop run (you were spawned with a task) to note progress, file
-  products by kind, and end the run with an honest status. Also the human/agent
+  artifacts by kind, and end the run with an honest status. Also the human/agent
   surface for reading the tree, the inbox, and a task's full history.
 ---
 
@@ -25,7 +25,7 @@ read
             [--log [--limit N]]         raw object event stream
   list [--status|--assignee|--due|--tree]  no filter = the two-level tree
   search <keyword>
-  inbox --assignee <me>                 products awaiting YOUR decision
+  inbox --assignee <me>                 artifacts awaiting YOUR decision
 
 write  (all accept --dry-run)
   create "<title>" [--parent --tracks --assignee --type -p --status
@@ -55,13 +55,13 @@ create and assign to a loop).
    into a note or an event. If you looked and found nothing, say "found nothing" —
    an empty run is an honest result, never a reason to manufacture activity.
 
-## The artifact rule (file products by KIND)
+## The artifact rule (file artifacts by KIND)
 
-A product you make lands in exactly one of three places, by its NATURE:
+An artifact you make lands in exactly one of three places, by its NATURE:
 
 - **Has a lifecycle** (it will change, needs tracking, someone acts on it) →
   a **task** (`create` / `update`). Bugs, follow-ups, sub-goals.
-- **Prose meant to be read inside the product** → a **doc** (`doc put <key>`).
+- **Prose meant to be read as an artifact** → a **doc** (`doc put <key>`).
   A report, a spec, a runbook. `doc put` is an upsert: same key overwrites.
 - **Bytes that live somewhere else** (a PR, a URL, an external issue) →
   a **mirror** (`mirror add <kind> <coords>`). A mirror is an ADDRESS, not a
@@ -72,8 +72,8 @@ found in a `note` and move on.
 
 ## The shepherd rule (getting a human decision)
 
-The loop never owes the human its attention — it owes them its PRODUCTS. To put a
-product in front of a human for a decision, create a small **shepherd task** that
+The loop never owes the human its attention - it owes them its ARTIFACTS. To put an
+artifact in front of a human for a decision, create a small **shepherd task** that
 `--tracks` the doc or mirror and assign it to the person:
 
 ```text
@@ -106,5 +106,5 @@ attributed on the event stream (and how a future pass finds your transcript with
    - `in-progress` — a recurring loop simply continues.
    - `archived` — no longer relevant (there is no delete).
 
-Between those two, note as you go (rule 2) and file products by kind (the artifact
+Between those two, note as you go (rule 2) and file artifacts by kind (the artifact
 rule). Then stop: one pass, no waiting for a reply.

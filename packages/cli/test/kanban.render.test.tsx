@@ -62,7 +62,7 @@ describe("wide text + color-disabled terminals", () => {
 });
 
 describe("detailLines projections", () => {
-  it("the detail pane reads taskDetailView: goal, run, products (tracked marker), children", async () => {
+  it("the detail pane reads taskDetailView: goal, run, artifacts (tracked marker), children", async () => {
     const { detailLines } = await import("../src/kanban/app.js");
     const doc = {
       archetype: "doc" as const,

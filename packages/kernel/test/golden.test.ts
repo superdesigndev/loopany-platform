@@ -1,5 +1,5 @@
 /**
- * The GOLDEN SCRIPT — a full product scenario driven only through the public
+ * The GOLDEN SCRIPT - a full artifact scenario driven only through the public
  * surface (decide/tick/apply). This same script is the M6 conformance gate:
  * run it against the local driver and the server driver and the outcomes must
  * match. Keep it scenario-shaped, not unit-shaped.

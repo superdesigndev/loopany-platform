@@ -313,7 +313,7 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(events.find((e) => e.kind === "note")?.note).toBe("ended the pass with status=done after the fix");
   });
 
-  it("show is the Task Detail: products from tracks+refs, children, last run; loops is the Loops projection", () => {
+  it("show is the Task Detail: artifacts from tracks+refs, children, last run; loops is the Loops projection", () => {
     call(["init"]);
     call(["create", "Seo loop", "--id", "seo", "--cron", "0 7 * * *", "--status", "in-progress", "--assignee", "mbp/claude"]);
     const report = join(dir, "weekly.md");
@@ -324,7 +324,7 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     call(["create", "Child bet", "--id", "bet-child", "--parent", "seo"]);
 
     const show = call(["show", "seo"]);
-    expect(show.stdout).toContain("products (latest 5 of 7; --all for all):");
+    expect(show.stdout).toContain("artifacts (latest 5 of 7; --all for all):");
     expect(show.stdout).toContain("doc weekly-report");
     expect(show.stdout).not.toContain("doc weekly-report  weekly-report");
     expect(show.stdout).not.toContain("doc report-1");
@@ -340,7 +340,7 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(show.stdout).toContain("bet-child");
 
     const expanded = call(["show", "seo", "--all"]);
-    expect(expanded.stdout).toContain("products:");
+    expect(expanded.stdout).toContain("artifacts:");
     expect(expanded.stdout).toContain("doc report-1");
 
     const loops = call(["loops"]);

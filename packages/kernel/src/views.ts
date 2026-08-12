@@ -164,11 +164,11 @@ export function loopsView(
   return rows.sort((a, b) => byPriorityThenAge(a.task, b.task));
 }
 
-// ---- task detail (the human Task Detail projection - kernel-product-visibility) ----
+// ---- task detail (the human Task Detail artifact projection) ----
 
-export interface ProductRef {
-  product: DocObject | MirrorObject;
-  /** PRODUCER PROVENANCE (review round 3), joined from the product's own
+export interface ArtifactRef {
+  artifact: DocObject | MirrorObject;
+  /** PRODUCER PROVENANCE (review round 3), joined from the artifact's own
    *  creating/last-updating EVENT - never a second source field on the object.
    *  Null when the caller passed no events or none matched. */
   producedBy: { actor: string; runId?: string; sessionId?: string; at: string } | null;
@@ -176,11 +176,11 @@ export interface ProductRef {
 
 export interface TaskDetail {
   task: TaskObject;
-  /** The task's PRODUCTS, resolved from `tracks` (first - the shepherd
+  /** The task's ARTIFACTS, resolved from `tracks` (first - the shepherd
    *  reference) then `refs`, in that order: the latest key doc/mirror is
    *  findable WITHOUT reading raw events. Ids that resolve to tasks (or to
-   *  nothing) are excluded here - they are relations, not products. */
-  products: readonly ProductRef[];
+   *  nothing) are excluded here - they are relations, not artifacts. */
+  artifacts: readonly ArtifactRef[];
   /** Direct children (the tree edge), list-sorted. */
   children: readonly TaskObject[];
   /** The in-flight run, if any. */
@@ -195,27 +195,27 @@ export interface TaskDetail {
 }
 
 /** The minimum Task Detail projection: goal/spec + current state live on the
- *  task itself; this adds the linked products, the children, and the run pair
+ *  task itself; this adds the linked artifacts, the children, and the run pair
  *  (active + last settled). Pure over the snapshot - no stored view model. */
 export function taskDetailView(
   snapshot: Snapshot,
   id: string,
-  /** The TEAM's events (or any superset covering this task + its products):
-   *  enables producer provenance on products and the coherent `recent` view.
+  /** The TEAM's events (or any superset covering this task + its artifacts):
+   *  enables producer provenance on artifacts and the coherent `recent` view.
    *  Optional - projections stay usable from a bare snapshot. */
   events?: readonly KernelEvent[],
 ): TaskDetail | null {
   const task = snapshot.objects[id];
   if (task?.archetype !== "task") return null;
-  const products: ProductRef[] = [];
+  const artifacts: ArtifactRef[] = [];
   const seen = new Set<string>();
   for (const ref of [task.tracks, ...task.refs]) {
     if (!ref || seen.has(ref)) continue;
     seen.add(ref);
     const obj = snapshot.objects[ref];
     if (obj?.archetype !== "doc" && obj?.archetype !== "mirror") continue;
-    // Producer provenance = the product's newest created/doc-updated event.
-    let producedBy: ProductRef["producedBy"] = null;
+    // Producer provenance = the artifact's newest created/doc-updated event.
+    let producedBy: ArtifactRef["producedBy"] = null;
     if (events) {
       for (let i = events.length - 1; i >= 0; i--) {
         const e = events[i]!;
@@ -229,7 +229,7 @@ export function taskDetailView(
         break;
       }
     }
-    products.push({ product: obj, producedBy });
+    artifacts.push({ artifact: obj, producedBy });
   }
   const children = sortTasksForList(tasks(snapshot).filter((t) => t.parent === id));
   const runs = snapshot.runs.filter((r) => r.taskId === id);
@@ -237,7 +237,7 @@ export function taskDetailView(
   const settled = runs.filter((r) => !ACTIVE_RUN_STATES.includes(r.state));
   const lastRun = settled.length > 0 ? settled.reduce((a, b) => (a.createdAt > b.createdAt ? a : b)) : null;
   const recent = events ? timelineView(snapshot, events, { taskId: id, limit: 8 }) : [];
-  return { task, products, children, activeRun, lastRun, recent };
+  return { task, artifacts, children, activeRun, lastRun, recent };
 }
 
 export function sortTasksForList(list: TaskObject[]): TaskObject[] {

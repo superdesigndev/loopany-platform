@@ -20,7 +20,7 @@
  *     one such event per blocked run, so at most one notification - and a later
  *     fire (a NEW run) legitimately re-notifies on a new event basis.
  *
- * Every message links the task and its key product (tracks first, else the
+ * Every message links the task and its key artifact (tracks first, else the
  * first doc/mirror ref) so the notification is actionable. A bounded seen-set
  * on event ids is the double-send safety (retries/races), not the dedup policy.
  * Best-effort by design: a notify failure never breaks the write that caused it.

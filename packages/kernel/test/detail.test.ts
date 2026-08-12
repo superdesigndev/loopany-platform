@@ -1,5 +1,5 @@
 /**
- * TASK DETAIL + LOOPS projections (kernel-product-visibility): products resolve
+ * TASK DETAIL + LOOPS projections: artifacts resolve
  * from tracks+refs (latest key doc findable WITHOUT raw events), children and
  * the run pair ride along; loopsView derives last result + the blocked note.
  */
@@ -26,7 +26,7 @@ function step(world: World, cmd: Command, actor: Provenance = TIM, now = T0): Wo
 }
 
 describe("taskDetailView", () => {
-  it("resolves products from tracks (first) + refs, lists children, finds the run pair", () => {
+  it("resolves artifacts from tracks (first) + refs, lists children, finds the run pair", () => {
     let w = emptyWorld();
     w = step(w, { op: "create", title: "seo loop", id: "seo", cron: "0 7 * * *", status: "in-progress", assignee: "mbp/claude" });
     const AGENT: Provenance = { entrance: "agent-run", actorId: "run-1" };
@@ -38,11 +38,11 @@ describe("taskDetailView", () => {
     const d = taskDetailView(w.snapshot, "seo", w.events)!;
     expect(d.task.id).toBe("seo");
     // tracks FIRST, then the refs docs, deduped.
-    expect(d.products[0]!.product.id).toBe("seo-portfolio");
-    expect(d.products.map((p) => p.product.id)).toContain("seo-report-2026w33");
-    // PRODUCER PROVENANCE joins the product's creating event - traceable to the
+    expect(d.artifacts[0]!.artifact.id).toBe("seo-portfolio");
+    expect(d.artifacts.map((p) => p.artifact.id)).toContain("seo-report-2026w33");
+    // PRODUCER PROVENANCE joins the artifact's creating event - traceable to the
     // run + session without renderers re-reading raw events.
-    expect(d.products[0]!.producedBy).toMatchObject({ actor: "agent-run:run-1", runId: "run-1" });
+    expect(d.artifacts[0]!.producedBy).toMatchObject({ actor: "agent-run:run-1", runId: "run-1" });
     // The COHERENT recent-activity view is the task-scoped timeline projection.
     expect(d.recent.length).toBeGreaterThan(0);
     expect(d.recent.every((i) => typeof i.summary === "string")).toBe(true);

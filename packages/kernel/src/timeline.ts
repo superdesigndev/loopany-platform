@@ -6,7 +6,7 @@
  *
  * MEANINGFUL vs MECHANICAL is the whole design:
  *  - kept by default: task creation, completion/reopen, assignee handoffs
- *    (with their reply notes), human notes, observations, Doc/Mirror products,
+ *    (with their reply notes), human notes, observations, Doc/Mirror artifacts,
  *    reference changes, FAILED runs, dispatch-blocked/config conditions.
  *  - hidden by default (--all reveals): run-started, claim-only status flips,
  *    ordinary successful run-returned, trigger cursor changes, and note-only
@@ -32,7 +32,7 @@ export type TimelineKind =
   | "human-note"
   | "agent-note"
   | "observation"
-  | "product"
+  | "artifact"
   | "fields"
   | "status"
   | "run-failed"
@@ -103,7 +103,7 @@ function classifySingle(e: KernelEvent, snapshot: Snapshot): { kind: TimelineKin
     case "created": {
       const obj = snapshot.objects[e.objectId];
       if (obj?.archetype === "doc" || obj?.archetype === "mirror") {
-        return { kind: "product", summary: `${obj.archetype} ${e.objectId} created` };
+        return { kind: "artifact", summary: `${obj.archetype} ${e.objectId} created` };
       }
       return { kind: "task-created", summary: e.note ?? `task ${e.objectId} created` };
     }
@@ -136,7 +136,7 @@ function classifySingle(e: KernelEvent, snapshot: Snapshot): { kind: TimelineKin
     case "observation":
       return { kind: "observation", summary: e.note ?? "observation recorded" };
     case "doc-updated":
-      return { kind: "product", summary: `doc ${e.objectId}: ${e.note ?? "updated"}` };
+      return { kind: "artifact", summary: `doc ${e.objectId}: ${e.note ?? "updated"}` };
     case "fields-changed": {
       // Reference changes are graph edits humans care about; other field noise
       // (a version bump, a body tweak) is mechanical.
@@ -172,19 +172,19 @@ function collapseRun(
   const bits: string[] = [];
   let failed = false;
   let lastNote: string | null = null;
-  let hasProduct = false;
+  let hasArtifact = false;
   for (const e of events) {
     switch (e.kind) {
       case "doc-updated":
         bits.push(`doc ${e.objectId}`);
-        hasProduct = true;
+        hasArtifact = true;
         break;
       case "created": {
-        // A fresh doc/mirror is a PRODUCT; a fresh task is minted work.
+        // A fresh doc/mirror is an ARTIFACT; a fresh task is minted work.
         const obj = snapshot.objects[e.objectId];
         if (obj?.archetype === "doc" || obj?.archetype === "mirror") {
           bits.push(`${obj.archetype} ${e.objectId}`);
-          hasProduct = true;
+          hasArtifact = true;
         } else {
           bits.push(`+${e.objectId}`);
         }
@@ -199,9 +199,9 @@ function collapseRun(
         bits.push("observation");
         break;
       case "fields-changed":
-        // An attach accompanies the product event in a full run projection. Do
-        // not let the generic graph edit replace the meaningful product name.
-        if (e.diff && "refs" in e.diff && !hasProduct) bits.push("refs");
+        // An attach accompanies the artifact event in a full run projection. Do
+        // not let the generic graph edit replace the meaningful artifact name.
+        if (e.diff && "refs" in e.diff && !hasArtifact) bits.push("refs");
         break;
       case "status-changed": {
         const { new: next } = statusDiff(e);

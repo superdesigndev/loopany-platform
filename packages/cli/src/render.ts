@@ -99,8 +99,8 @@ export function renderShow(
   contextEvents: readonly KernelEvent[] | null = null,
 ): string {
   const parts: string[] = [fieldLines(obj).join("\n")];
-  // A task's live schedule + run pair + products + children belong in `show` -
-  // this IS the Task Detail projection (kernel-product-visibility): the latest
+  // A task's live schedule + run pair + artifacts + children belong in `show`.
+  // This is the Task Detail projection: the latest
   // key doc/mirror is findable here, never by reading raw events.
   if (obj.archetype === "task") {
     const trigs = snapshot.triggers.filter((t) => t.taskId === obj.id);
@@ -144,26 +144,26 @@ export function renderShow(
         loopLines.push(`  machine ${machine}: ${presence === "unavailable" ? "presence unavailable (local backend)" : presence}`);
       }
       if (loopLines.length > 0) parts.push("", "loop:", ...loopLines);
-      if (detail.products.length > 0) {
-        const maxProducts = 5;
-        let products = detail.products;
-        if (!expanded && products.length > maxProducts) {
-          const tracked = products.find(({ product }) => product.id === obj.tracks);
-          const others = products.filter(({ product }) => product.id !== obj.tracks);
-          products = tracked ? [tracked, ...others.slice(-(maxProducts - 1))] : others.slice(-maxProducts);
+      if (detail.artifacts.length > 0) {
+        const maxArtifacts = 5;
+        let artifacts = detail.artifacts;
+        if (!expanded && artifacts.length > maxArtifacts) {
+          const tracked = artifacts.find(({ artifact }) => artifact.id === obj.tracks);
+          const others = artifacts.filter(({ artifact }) => artifact.id !== obj.tracks);
+          artifacts = tracked ? [tracked, ...others.slice(-(maxArtifacts - 1))] : others.slice(-maxArtifacts);
         }
         parts.push(
           "",
-          !expanded && products.length < detail.products.length
-            ? `products (latest ${products.length} of ${detail.products.length}; --all for all):`
-            : "products:",
+          !expanded && artifacts.length < detail.artifacts.length
+            ? `artifacts (latest ${artifacts.length} of ${detail.artifacts.length}; --all for all):`
+            : "artifacts:",
         );
-        for (const { product, producedBy } of products) {
+        for (const { artifact, producedBy } of artifacts) {
           const label =
-            product.archetype === "doc"
-              ? `doc ${product.id}${product.title && product.title !== product.id && product.title !== product.key ? `  ${clip(product.title, 60)}` : ""}`
-              : `mirror ${product.id}  [${product.kind}] ${product.coords}`;
-          const shepherd = obj.tracks === product.id ? "  (tracked)" : "";
+            artifact.archetype === "doc"
+              ? `doc ${artifact.id}${artifact.title && artifact.title !== artifact.id && artifact.title !== artifact.key ? `  ${clip(artifact.title, 60)}` : ""}`
+              : `mirror ${artifact.id}  [${artifact.kind}] ${artifact.coords}`;
+          const shepherd = obj.tracks === artifact.id ? "  (tracked)" : "";
           // Same axi-concise rule as the log lines: the kernel claim session
           // (`spawn-<runId>`) is derivable from the producing run - drop it.
           const bySession =
@@ -178,9 +178,9 @@ export function renderShow(
         parts.push("", "children:");
         for (const c of detail.children) parts.push(`  ${c.id}  [${c.status}]  ${clip(c.title, 60)}`);
       }
-      const productIds = new Set(detail.products.map(({ product }) => product.id));
+      const artifactIds = new Set(detail.artifacts.map(({ artifact }) => artifact.id));
       const related = obj.refs
-        .filter((id) => !productIds.has(id) && id !== obj.tracks)
+        .filter((id) => !artifactIds.has(id) && id !== obj.tracks)
         .map((id) => snapshot.objects[id])
         .filter((ref): ref is TaskObject => ref?.archetype === "task");
       if (related.length > 0) {
@@ -471,7 +471,7 @@ function age(ms: number): string {
 }
 
 /** The human decision surface: each item leads with id/reason/title, then a
- *  CONTEXT line - where the work came from (parent), the product to inspect
+ *  CONTEXT line - where the work came from (parent), the artifact to inspect
  *  before deciding (tracks), and how long it has been waiting (vs updatedAt,
  *  which the assigning update stamped). `now` keeps the age deterministic
  *  under --now/LOOPANY_NOW. */
@@ -506,7 +506,7 @@ export function renderInbox(
     .join("\n");
 }
 
-// ---- loops (the Loops projection - kernel-product-visibility) ----
+// ---- loops ----
 
 /** One loop per line: id, humanized cadence (raw spec in parens when they
  *  differ - this is the edit surface, the literal cron matters here), next
