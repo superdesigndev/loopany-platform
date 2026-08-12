@@ -736,11 +736,13 @@ function verbList(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (args.bools.has("tree") || !filtered) {
     const tree = treeView(snapshot);
     if (args.bools.has("json")) return ok(JSON.stringify(tree, null, 2));
-    return ok(renderTree(tree, snapshot, now));
+    // Default view collapses fully-done subtrees (decision surface); --all
+    // renders every node. Counts in the tail are full either way.
+    return ok(renderTree(tree, snapshot, now, args.bools.has("all")));
   }
   const list = sortTasksForList(matchTasks(snapshot, filters, now));
   if (args.bools.has("json")) return ok(JSON.stringify(list, null, 2));
-  return ok(renderFlatList(list, snapshot));
+  return ok(renderFlatList(list, snapshot, now));
 }
 
 function matchTasks(

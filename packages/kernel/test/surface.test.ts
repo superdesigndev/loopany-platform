@@ -19,6 +19,9 @@ const EXPECTED = [
   "applyChangeset",
   "applyToWorld",
   "boardView",
+  // cronText: the ONE cron humaniser — moved down from server lib/format.ts
+  // (which re-exports it) so CLI list rows and the web UI render identically.
+  "cronText",
   "cronTriggerId",
   "decide",
   "emptyChangeset",

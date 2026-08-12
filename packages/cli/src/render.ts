@@ -6,7 +6,9 @@
  * rung ⑤).
  */
 import {
+  cronText,
   type LoopRow,
+  slugify,
   taskDetailView,
   type TimelineItem,
   type InboxItem,
@@ -211,36 +213,72 @@ function fmtVal(v: unknown): string {
 
 // ---- tree / list ----
 
-/** The no-filter tree renders at most TWO levels (§10: "深度 2 + 截断提示").
- *  A node whose own children are cut off gets a "… N more" truncation notice on
- *  its own indented line, so a deep tree never silently loses nodes and the
- *  reader knows to `list --parent`/`show` to drill in. The cutoff is a cheap
- *  render-side guard; treeView itself stays the full source of truth (kernel +
- *  web share it). */
-const MAX_TREE_DEPTH = 1; // depth 0 (roots) + depth 1 (their children) = two levels
+/** Statuses the default tree COLLAPSES (not hides — the aggregate tail and the
+ *  collapse summary lines still count every one; axi: no silent truncation). */
+const COLLAPSED_STATUSES = new Set(["done", "archived"]);
 
-export function renderTree(nodes: readonly TreeNode[], snapshot: Snapshot, now: string): string {
-  const out: string[] = [];
+// The no-filter tree renders at most TWO levels (§10: "深度 2 + 截断提示") —
+// structurally: roots render their children as rows, a child's own children
+// never render and surface as its inline `+N deeper (show <id>)` suffix. The
+// cutoff is a cheap render-side guard; treeView itself stays the full source
+// of truth (kernel + web share it).
+
+/** A subtree is collapsible when EVERY node in it is done/archived — a done
+ *  parent with a live descendant stays visible so the live work never hides. */
+function subtreeCollapsed(node: TreeNode): boolean {
+  return COLLAPSED_STATUSES.has(node.task.status) && node.children.every(subtreeCollapsed);
+}
+
+function subtreeSize(node: TreeNode): number {
+  let n = 1;
+  for (const c of node.children) n += subtreeSize(c);
+  return n;
+}
+
+function countDescendants(node: TreeNode): number {
+  return subtreeSize(node) - 1;
+}
+
+/**
+ * The default `list` view is a DECISION SURFACE (axi): live work renders as
+ * rows; fully-done subtrees collapse into one `… N done` summary per sibling
+ * group (`--all` expands). Children connect with `├─`/`└─` guides; root
+ * subtrees separate with a blank line. The tail counts ALWAYS cover the full
+ * tree, collapsed and depth-cut nodes included.
+ */
+export function renderTree(nodes: readonly TreeNode[], snapshot: Snapshot, now: string, expanded = false): string {
+  // Full counts first, independent of what renders — the tail line must never
+  // under-report what exists (axi: no silent truncation).
   let total = 0;
   const byStatus = new Map<string, number>();
-  const walk = (node: TreeNode, depth: number): void => {
-    out.push(renderTreeRow(node.task, snapshot, now, depth));
+  const countAll = (n: TreeNode): void => {
     total += 1;
-    byStatus.set(node.task.status, (byStatus.get(node.task.status) ?? 0) + 1);
-    if (depth >= MAX_TREE_DEPTH) {
-      const hidden = countDescendants(node);
-      if (hidden > 0) {
-        // Hidden nodes still count in the totals — the tail line must never
-        // under-report what exists (axi: no silent truncation).
-        tally(node, byStatus, (n) => (total += n));
-        out.push(`${"  ".repeat(depth + 1)}… ${hidden} more (deeper; drill in with \`show ${node.task.id}\`)`);
-      }
-      return;
-    }
-    for (const c of node.children) walk(c, depth + 1);
+    byStatus.set(n.task.status, (byStatus.get(n.task.status) ?? 0) + 1);
+    for (const c of n.children) countAll(c);
   };
-  for (const n of nodes) walk(n, 0);
-  if (out.length === 0) return "(no tasks)";
+  for (const n of nodes) countAll(n);
+  if (total === 0) return "(no tasks)";
+
+  const collapsed = (n: TreeNode): boolean => !expanded && subtreeCollapsed(n);
+  const blocks: string[] = [];
+  let hiddenRootTasks = 0;
+  for (const root of nodes) {
+    if (collapsed(root)) {
+      hiddenRootTasks += subtreeSize(root);
+      continue;
+    }
+    const lines = [nodeLine(root, snapshot, now, false)];
+    const visible = root.children.filter((c) => !collapsed(c));
+    const hiddenHere = root.children.filter(collapsed).reduce((s, c) => s + subtreeSize(c), 0);
+    visible.forEach((c, i) => {
+      const conn = i === visible.length - 1 && hiddenHere === 0 ? "└─ " : "├─ ";
+      lines.push(conn + nodeLine(c, snapshot, now, true));
+    });
+    if (hiddenHere > 0) lines.push(`└─ … ${hiddenHere} done  (\`list --all\` shows them)`);
+    blocks.push(lines.join("\n"));
+  }
+  if (hiddenRootTasks > 0) blocks.push(`… ${hiddenRootTasks} done  (\`list --all\` shows them)`);
+
   // Pre-computed aggregate tail (axi): one orientation line, statuses in a
   // stable order so agents can pattern-match it.
   const order = ["todo", "in-progress", "follow-up", "review", "idea", "done", "archived"];
@@ -248,59 +286,78 @@ export function renderTree(nodes: readonly TreeNode[], snapshot: Snapshot, now: 
     .filter((s) => byStatus.has(s))
     .map((s) => `${byStatus.get(s)} ${s}`)
     .join(" · ");
-  out.push(`— ${total} task${total === 1 ? "" : "s"}: ${counts}`);
-  return out.join("\n");
+  blocks.push(`— ${total} task${total === 1 ? "" : "s"}: ${counts}`);
+  return blocks.join("\n\n");
 }
 
-function countDescendants(node: TreeNode): number {
-  let n = 0;
-  for (const c of node.children) n += 1 + countDescendants(c);
-  return n;
-}
-
-/** Fold a truncated node's hidden descendants into the aggregate counts. */
-function tally(node: TreeNode, byStatus: Map<string, number>, addTotal: (n: number) => void): void {
-  for (const c of node.children) {
-    byStatus.set(c.task.status, (byStatus.get(c.task.status) ?? 0) + 1);
-    addTotal(1);
-    tally(c, byStatus, addTotal);
-  }
+/** A node's row plus its inline depth-cut suffix. Under MAX_TREE_DEPTH only a
+ *  depth-1 node can have hidden descendants (roots always render their
+ *  children as rows), so `isChild` gates the `+N deeper (show <id>)` suffix —
+ *  the inline replacement for the old orphan "… N more" truncation line. */
+function nodeLine(node: TreeNode, snapshot: Snapshot, now: string, isChild: boolean): string {
+  const row = renderTaskRow(node.task, snapshot, now);
+  const deeper = countDescendants(node);
+  return isChild && deeper > 0 ? `${row}  ·  +${deeper} deeper (show ${node.task.id})` : row;
 }
 
 /** One task row, every dispatch-relevant fact visible (tree-v2 taskLine lineage,
- *  sim seo-scale rounds 1-2): explicit `@—` for unassigned (claimability is a
- *  load-bearing state, never render it as absence), the cron SPEC not just a
- *  marker, the follow-up DATE (with `(due)` once matured), and an active-run
- *  marker `▶ <state>` so a task mid-handoff is never mistaken for claimable. */
-function renderTreeRow(task: TaskObject, snapshot: Snapshot, now: string, depth: number): string {
-  const indent = "  ".repeat(depth);
+ *  sim seo-scale rounds 1-2), NO icons — plain-text tags only (2026-08-12):
+ *  explicit `@—` for unassigned (claimability is a load-bearing state, never
+ *  render it as absence), a `[loop]` tag + humanized cadence + relative next
+ *  fire for a cron task, the follow-up DATE (with `(due)` once matured), an
+ *  active-run marker `run <state>` so a task mid-handoff is never mistaken for
+ *  claimable, and the clipped TITLE (skipped when it adds nothing over the id).
+ *  A stale todo shows `waiting <age>` (≥1h) so stuck work is visible at a scan. */
+function renderTaskRow(task: TaskObject, snapshot: Snapshot, now: string): string {
   const bits: string[] = [];
   const cron = snapshot.triggers.find((t) => t.taskId === task.id && t.kind === "cron");
-  if (cron) bits.push(`⟳ ${cron.spec}${cron.enabled ? "" : " (paused)"}`);
+  if (cron) {
+    if (!cron.enabled) bits.push(`paused(${cron.disabledBy ?? "?"})`);
+    else {
+      bits.push(cronText(cron.spec));
+      if (cron.nextFireAt) bits.push(`next ${untilText(Date.parse(now), cron.nextFireAt)}`);
+    }
+  }
   if (task.followUpAt) {
     const due = Date.parse(task.followUpAt) <= Date.parse(now);
-    bits.push(`⏰ ${formatLocalTime(task.followUpAt)}${due ? " (due)" : ""}`);
+    bits.push(`follow-up ${formatLocalTime(task.followUpAt)}${due ? " (due)" : ""}`);
   }
   const active = snapshot.runs.find(
     (r) => r.taskId === task.id && (r.state === "pending" || r.state === "claimed" || r.state === "running"),
   );
-  if (active) bits.push(`▶ ${active.state}`);
-  if (task.tracks) bits.push(`◇${task.tracks}`);
+  if (active) bits.push(`run ${active.state}`);
+  else if (task.status === "todo") {
+    // Stale-work signal: age since last touch, shown once it exceeds an hour
+    // (a fresh task's "waiting 0m" would be pure noise).
+    const ms = Date.parse(now) - Date.parse(task.updatedAt);
+    if (ms >= 3_600_000) bits.push(`waiting ${age(ms)}`);
+  }
+  if (task.tracks) bits.push(`tracks ${task.tracks}`);
   const tail = bits.length > 0 ? `  ·  ${bits.join("  ·  ")}` : "";
-  return `${indent}${task.id}  [${task.status}] @${task.assignee ?? "—"}${tail}`;
+  // The title is the human-readable column; skip it only when the id IS the
+  // slugified title (it would repeat the id verbatim).
+  const title = slugify(task.title) === task.id ? "" : `  ${clip(task.title, 60)}`;
+  return `${task.id}  [${task.status}]${cron ? " [loop]" : ""} @${task.assignee ?? "—"}${title}${tail}`;
 }
 
-/** A filtered/flat list with breadcrumbs to the root (§10). Carries the same
- *  dispatch-relevant fields as the tree row — a filtered worklist is what a
- *  pull-mode consumer reads, so assignee/follow-up state must survive here too. */
-export function renderFlatList(list: readonly TaskObject[], snapshot: Snapshot): string {
+/** Compact time-until-future, deterministic under --now: "due"/"in 50m"/"in 2h"/"in 3d". */
+function untilText(nowMs: number, t: string): string {
+  const s = Math.round((Date.parse(t) - nowMs) / 1000);
+  if (s <= 0) return "due";
+  const m = Math.round(s / 60);
+  if (m < 60) return `in ${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `in ${h}h`;
+  return `in ${Math.round(h / 24)}d`;
+}
+
+/** A filtered/flat list with breadcrumbs to the root (§10). SAME row renderer
+ *  as the tree — a filtered worklist is what a pull-mode consumer reads, so
+ *  assignee/loop/follow-up/title must survive here too (no second row grammar
+ *  to drift). */
+export function renderFlatList(list: readonly TaskObject[], snapshot: Snapshot, now: string): string {
   if (list.length === 0) return "(no matches)";
-  return list
-    .map((t) => {
-      const due = t.followUpAt ? `  ·  ⏰ ${formatLocalTime(t.followUpAt)}` : "";
-      return `${t.id}  [${t.status}] @${t.assignee ?? "—"}${crumbs(t, snapshot)}${due}`;
-    })
-    .join("\n");
+  return list.map((t) => `${renderTaskRow(t, snapshot, now)}${crumbs(t, snapshot)}`).join("\n");
 }
 
 function crumbs(task: TaskObject, snapshot: Snapshot): string {
@@ -367,19 +424,23 @@ export function renderInbox(
 
 // ---- loops (the Loops projection - kernel-product-visibility) ----
 
-/** One loop per line: id, cadence, next fire, then the STATE column - blocked
- *  (with the config note), an in-flight run, the last result, or quiet. Machine
- *  availability is a server-side fact and rides the server surfaces, not this
- *  local projection. */
+/** One loop per line: id, humanized cadence (raw spec in parens when they
+ *  differ - this is the edit surface, the literal cron matters here), next
+ *  fire, then the STATE column - blocked (with the config note), an in-flight
+ *  run, the last result, or quiet. No icons - plain-text tags (2026-08-12).
+ *  Machine availability is a server-side fact and rides the server surfaces,
+ *  not this local projection. */
 export function renderLoops(rows: readonly LoopRow[]): string {
   if (rows.length === 0) return "(no loops - a loop is a task with a cron)";
   return rows
     .map((r) => {
-      const head = `${r.task.id}  ⟳ ${r.trigger.spec}  next=${r.trigger.enabled ? (r.trigger.nextFireAt ? formatLocalTime(r.trigger.nextFireAt) : "—") : `paused(${r.trigger.disabledBy ?? "?"})`}`;
+      const human = cronText(r.trigger.spec);
+      const cadence = human === r.trigger.spec ? r.trigger.spec : `${human} (${r.trigger.spec})`;
+      const head = `${r.task.id}  ${cadence}  next=${r.trigger.enabled ? (r.trigger.nextFireAt ? formatLocalTime(r.trigger.nextFireAt) : "—") : `paused(${r.trigger.disabledBy ?? "?"})`}`;
       const state = r.blockedNote
-        ? `⚠ ${clip(r.blockedNote)}`
+        ? `blocked: ${clip(r.blockedNote)}`
         : r.activeRun
-          ? `▶ ${r.activeRun.state} run ${r.activeRun.id}`
+          ? `run ${r.activeRun.id}: ${r.activeRun.state}`
           : r.lastRun
             ? `last: ${r.lastRun.state}${r.lastRun.note ? ` · ${clip(r.lastRun.note, 80)}` : ""}`
             : "quiet";
@@ -396,7 +457,11 @@ export function renderLoops(rows: readonly LoopRow[]): string {
 export function renderTimeline(items: readonly TimelineItem[]): string {
   if (items.length === 0) return "(no meaningful activity in range — try --since or --all)";
   return items
-    .map((i) => `${formatLocalTime(i.at)}  [${i.kind}]  ${i.objectId}  ·  ${i.actor}\n      ${i.summary}`)
+    .map((i) => {
+      const agent = i.agent ? `  ·  agent ${i.agent}` : "";
+      const session = i.agentSessionId ? `  ·  session ${i.agentSessionId}` : "";
+      return `${formatLocalTime(i.at)}  [${i.kind}]  ${i.objectId}  ·  ${i.actor}${agent}${session}\n      ${i.summary}`;
+    })
     .join("\n");
 }
 

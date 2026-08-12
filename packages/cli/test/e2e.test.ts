@@ -182,19 +182,21 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     // Default provenance is human.
     expect(events.every((e) => e.provenance.entrance === "human")).toBe(true);
 
-    // --- list: no filter renders the tree with markers. The nightly loop node
-    // carries the ⟳ loop marker; the child is nested under its parent. ---
+    // --- list: no filter renders the tree with plain-text markers. The
+    // nightly loop node carries the [loop] tag + humanized cadence; the child
+    // is nested under its parent behind a tree guide. ---
     const list = call(["list"]);
     expect(list.stdout).toContain("ship-the-redesign");
     expect(list.stdout).toContain("wire-the-header");
     expect(list.stdout).toContain("nightly-audit");
-    expect(list.stdout).toContain("⟳"); // the cron loop marker
-    expect(list.stdout).toContain(`◇${mirrorId}`); // the shepherd marker on the review task
-    // The child is indented below its parent (tree, not flat).
+    expect(list.stdout).toContain("[loop]"); // the cron loop tag (no icons)
+    expect(list.stdout).toContain("daily 07:00"); // humanized cadence (kernel cronText)
+    expect(list.stdout).toContain(`tracks ${mirrorId}`); // the shepherd marker on the review task
+    // The child connects below its parent (tree, not flat).
     const parentLine = list.stdout.split("\n").findIndex((l) => l.includes("ship-the-redesign"));
-    const childLine = list.stdout.split("\n").findIndex((l) => l.trimStart().startsWith("wire-the-header"));
+    const childLine = list.stdout.split("\n").findIndex((l) => l.includes("wire-the-header"));
     expect(childLine).toBeGreaterThan(parentLine);
-    expect(list.stdout.split("\n")[childLine]).toMatch(/^\s{2,}wire-the-header/);
+    expect(list.stdout.split("\n")[childLine]).toMatch(/^└─ wire-the-header/);
 
     // --- a filtered list is flat with breadcrumbs to the root. ---
     const filtered = call(["list", "--assignee", "claude"]);
@@ -263,7 +265,8 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(expanded.stdout).toContain("doc report-1");
 
     const loops = call(["loops"]);
-    expect(loops.stdout).toContain("seo  ⟳ 0 7 * * *");
+    // Humanized cadence with the raw spec in parens (the edit surface), no icon.
+    expect(loops.stdout).toContain("seo  daily 07:00 (0 7 * * *)");
     expect(loops.stdout).toContain("next=");
     const json = JSON.parse(call(["loops", "--json"]).stdout) as Array<{ task: { id: string }; blockedNote: unknown }>;
     expect(json[0]!.task.id).toBe("seo");
@@ -531,8 +534,8 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(out.stdout).toContain("root");
     // the tree shape nests the child under its parent, unlike a flat filter.
     const rows = out.stdout.split("\n");
-    const childRow = rows.find((r) => r.trimStart().startsWith("child"));
-    expect(childRow).toMatch(/^\s{2,}child/);
+    const childRow = rows.find((r) => r.includes("child"));
+    expect(childRow).toMatch(/^[├└]─ child/);
   });
 
   it("the object file round-trips through the codec (parse == serialize inverse)", () => {
