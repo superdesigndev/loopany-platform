@@ -39,6 +39,7 @@ const EXPECTED = [
   "loopsView",
   "mirrorId",
   "onceTriggerId",
+  "projectOperationalContext",
   "refuse",
   "runId",
   "shortHash",

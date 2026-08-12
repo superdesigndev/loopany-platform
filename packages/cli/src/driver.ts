@@ -31,9 +31,11 @@ import {
   type RunRecord,
   type RunState,
   type Snapshot,
+  type OperationalContext,
   type Trigger,
   applyChangeset,
   decide,
+  projectOperationalContext,
   tick,
 } from "@loopany/kernel";
 import { CodecError, parseObject, serializeObject } from "./objectFile.js";
@@ -555,6 +557,7 @@ export interface CommandResult {
   snapshot: Snapshot;
   notices: string[];
   result?: { id: string; existing?: boolean };
+  operationalContext?: OperationalContext;
 }
 
 /** decide -> applyChangeset -> persist, under the workspace lock. `dryRun`
@@ -585,7 +588,12 @@ export function runCommand(
     const applied = applyChangeset(before, decision.changeset);
     if (!applied.ok) throw conflictToError(applied.conflict);
     persist(wsDir, before, applied.snapshot, decision.changeset.events);
-    return { snapshot: applied.snapshot, notices: decision.notices, result: decision.result };
+    return {
+      snapshot: applied.snapshot,
+      notices: decision.notices,
+      result: decision.result,
+      operationalContext: projectOperationalContext(command, decision.changeset, applied.snapshot),
+    };
   } finally {
     release();
   }

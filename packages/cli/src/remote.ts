@@ -29,6 +29,7 @@ import {
   type KernelEvent,
   type Provenance,
   type Snapshot,
+  type OperationalContext,
   decide,
 } from "@loopany/kernel";
 import { spawnSync } from "node:child_process";
@@ -48,6 +49,7 @@ export interface KernelCliResponse {
   applied?: number;
   timeline?: TimelineItem[];
   machinePresence?: Record<string, string>;
+  operationalContext?: OperationalContext;
 }
 
 /** A synchronous HTTP transport: given a URL/token/body, return the parsed
@@ -101,7 +103,7 @@ export class RemoteBackend implements Backend {
     // when the doc is already visible.
     if (opts?.guard) opts.guard(this.snapshot());
     const res = this.send({ command, now, provenance: actor });
-    return { snapshot: EMPTY_SNAPSHOT, notices: res.notices ?? [], result: res.result };
+    return { snapshot: EMPTY_SNAPSHOT, notices: res.notices ?? [], result: res.result, operationalContext: res.operationalContext };
   }
 
   tick(now: string): TickResultReport {

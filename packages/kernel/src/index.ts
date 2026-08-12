@@ -40,6 +40,7 @@ export { timelineView, type TimelineItem, type TimelineKind, type TimelineOption
 // lib/format.ts so the CLI list surface and the web UI cannot render "0 7 * * *"
 // two different ways. Pure string derivation, zero I/O.
 export { cronText } from "./format.js";
+export { projectOperationalContext, type OperationalContext } from "./operational.js";
 export {
   slugify,
   shortHash,

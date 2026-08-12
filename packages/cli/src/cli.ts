@@ -21,6 +21,7 @@ import {
   type Command,
   type CreateCommand,
   type Provenance,
+  type OperationalContext,
   type Snapshot,
   type TaskObject,
   inboxView,
@@ -213,43 +214,11 @@ function execWrite(
   deps: CliDeps,
   guard?: (locked: Snapshot) => void,
 ): CliOutcome {
-  const before = backend.snapshot();
   const actor = resolveActor(args, deps.env, backend.kind === "remote");
   const dryRun = args.bools.has("dry-run");
   const res = backend.command(command, actor, resolveNow(args, deps), { dryRun, guard });
   res.notices.push(...provenanceNotices(actor));
-  const after = dryRun ? null : backend.kind === "local" ? res.snapshot : backend.snapshot();
-  return renderWriteResult(res, args, dryRun, operationalContext(command, before, after, backend.machinePresence()));
-}
-
-/** Add delivery truth to a write without inventing another Run state. Presence
- *  is a derived hint: the pending Run remains durable and may be claimed later. */
-function execDispatchWrite(
-  backend: Backend,
-  command: Command,
-  assignee: string | null | undefined,
-  args: ParsedArgs,
-  deps: CliDeps,
-): CliOutcome {
-  const before = backend.snapshot();
-  let deliveryNotice: string | null = null;
-  const slash = assignee?.indexOf("/") ?? -1;
-  if (backend.kind === "remote" && assignee && slash > 0) {
-    const alias = assignee.slice(0, slash);
-    const presence = backend.machinePresence()[alias];
-    if (presence !== "online") {
-      deliveryNotice = presence
-        ? `run queued: machine "${alias}" is ${presence}; it will claim when its daemon reconnects`
-        : `run queued: machine alias "${alias}" is not registered; check the assignee or enroll its daemon`;
-    }
-  }
-  const actor = resolveActor(args, deps.env, backend.kind === "remote");
-  const dryRun = args.bools.has("dry-run");
-  const res = backend.command(command, actor, resolveNow(args, deps), { dryRun });
-  res.notices.push(...provenanceNotices(actor));
-  if (deliveryNotice && !dryRun) res.notices.push(deliveryNotice);
-  const after = dryRun ? null : backend.kind === "local" ? res.snapshot : backend.snapshot();
-  return renderWriteResult(res, args, dryRun, operationalContext(command, before, after, backend.machinePresence()));
+  return renderWriteResult(res, args, dryRun, dryRun ? null : res.operationalContext ?? null);
 }
 
 /** Select the backend for a verb, injecting the fetch/transport seam if deps
@@ -259,62 +228,6 @@ function backendFor(deps: CliDeps, args?: ParsedArgs): Backend {
   return selectBackend(deps.cwd, deps.env, deps.transport, {
     remote: args?.bools.has("remote") ?? false,
   });
-}
-
-interface OperationalContext {
-  changed: string[];
-  taskId: string | null;
-  run: { createdId: string | null; retainedId: string | null; supersededId: string | null; consequence: "created" | "retained" | "superseded" | "superseded-and-replaced" | "none" };
-  machine: { alias: string; presence: string } | null;
-  nextTriggerAt: string | null;
-  action: string | null;
-  nextCommand: string | null;
-}
-
-function operationalContext(
-  command: Command,
-  before: Snapshot,
-  after: Snapshot | null,
-  presence: Readonly<Record<string, string>>,
-): OperationalContext | null {
-  if (!after) return null;
-  const commandWithTarget = command as Command & { id?: string; attachTask?: string; patch?: Record<string, unknown> };
-  const createdTaskId = command.op === "create"
-    ? Object.values(after.objects).find((o) => o.archetype === "task" && !before.objects[o.id])?.id
-    : undefined;
-  const candidate = commandWithTarget.attachTask ?? commandWithTarget.id ?? createdTaskId;
-  const taskId = candidate && after.objects[candidate]?.archetype === "task" ? candidate : null;
-  const beforeRuns = new Map(before.runs.map((r) => [r.id, r]));
-  const afterTaskRuns = taskId ? after.runs.filter((r) => r.taskId === taskId) : [];
-  const created = afterTaskRuns.find((r) => !beforeRuns.has(r.id)) ?? null;
-  const superseded = afterTaskRuns.find((r) => beforeRuns.get(r.id)?.state !== "superseded" && r.state === "superseded") ?? null;
-  const retained = !created && !superseded ? afterTaskRuns.find((r) => r.state === "pending" || r.state === "claimed" || r.state === "running") ?? null : null;
-  const consequence = superseded && created ? "superseded-and-replaced" : superseded ? "superseded" : created ? "created" : retained ? "retained" : "none";
-  const task = taskId && after.objects[taskId]?.archetype === "task" ? after.objects[taskId] : null;
-  const alias = task?.assignee?.includes("/") ? task.assignee.slice(0, task.assignee.indexOf("/")) : null;
-  const machine = alias ? { alias, presence: presence[alias] ?? "unregistered" } : null;
-  const trigger = taskId
-    ? after.triggers.filter((t) => t.taskId === taskId && t.enabled && t.nextFireAt).sort((a, b) => a.nextFireAt!.localeCompare(b.nextFireAt!))[0]
-    : undefined;
-  let action: string | null = null;
-  let nextCommand: string | null = null;
-  if (machine && machine.presence !== "online" && (created || retained)) {
-    action = machine.presence === "unregistered"
-      ? `human action needed: machine alias "${machine.alias}" is not registered; this pending run cannot be delivered`
-      : `no action required if the daemon will reconnect; the pending run is retained for the ${machine.presence} machine`;
-    if (machine.presence === "unregistered" && taskId) nextCommand = `loopany-kernel update ${taskId} assignee=<registered-machine/agent> --note "correct dispatch target"`;
-  } else if (task && task.assignee && !task.assignee.includes("@") && !created && !retained && !trigger) {
-    action = "manual dispatch is needed to run this task now";
-    nextCommand = `loopany-kernel run ${task.id}`;
-  } else if (trigger?.nextFireAt) {
-    action = `no action required; the next trigger fires at ${trigger.nextFireAt}`;
-  } else if (created) {
-    action = "no action required; the run is queued for delivery";
-  }
-  const changed = command.op === "update"
-    ? Object.keys(commandWithTarget.patch ?? {})
-    : command.op === "note" ? ["note"] : command.op === "doc-put" ? ["doc"] : command.op === "mirror-add" ? ["mirror"] : command.op === "run" ? ["manual run"] : ["task"];
-  return { changed, taskId, run: { createdId: created?.id ?? null, retainedId: retained?.id ?? null, supersededId: superseded?.id ?? null, consequence }, machine, nextTriggerAt: trigger?.nextFireAt ?? null, action, nextCommand };
 }
 
 function renderWriteResult(res: CommandResult, args: ParsedArgs, dryRun: boolean, context: OperationalContext | null): CliOutcome {
@@ -594,7 +507,7 @@ function verbCreate(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const body = bodyFromFile(args, deps, "body-file");
   if (body !== undefined) cmd.body = body;
   const backend = backendFor(deps, args);
-  return cmd.assignee ? execDispatchWrite(backend, cmd, cmd.assignee, args, deps) : execWrite(backend, cmd, args, deps);
+  return execWrite(backend, cmd, args, deps);
 }
 
 function verbUpdate(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -1026,13 +939,7 @@ function verbTimeline(args: ParsedArgs, deps: CliDeps): CliOutcome {
 function verbRun(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const id = args.positionals[0];
   if (id === undefined) throw new UsageError("run needs an <id>");
-  const backend = backendFor(deps, args);
-  const task = backend.snapshot().objects[id];
-  if (!task || task.archetype !== "task") {
-    // Let the Kernel return its authoritative UNKNOWN_OBJECT refusal.
-    return execWrite(backend, { op: "run", id }, args, deps);
-  }
-  return execDispatchWrite(backend, { op: "run", id }, task.assignee, args, deps);
+  return execWrite(backendFor(deps, args), { op: "run", id }, args, deps);
 }
 
 /** `tick [--json] [--spawn]` — the host verb an agent NEVER calls (§10). Runs the

@@ -22,7 +22,9 @@ import {
   type RunRecord,
   type Snapshot,
   type TimelineItem,
+  type OperationalContext,
   decide,
+  projectOperationalContext,
   tick,
   timelineView,
 } from "@loopany/kernel";
@@ -57,6 +59,9 @@ export interface KernelCliResponse {
    *  every machine reachable in the team - the Loops projection's machine
    *  availability (review round 3). */
   machinePresence?: Record<string, string>;
+  /** Immediate consequence derived from this write's applied changeset and
+   * authoritative post-apply snapshot. */
+  operationalContext?: OperationalContext;
   /** On a TICK request: the number of per-fire changesets applied. */
   applied?: number;
   /** On a TIMELINE request: the projected items (bounded, newest first). */
@@ -334,12 +339,14 @@ async function commandRequest(
   // Owner notifications ride the just-applied changeset (human assignment,
   // auto-park, ...). Best-effort by construction - never blocks the write.
   await notifyKernelChangeset(teamId, decision.changeset);
+  const machinePresence = await readMachinePresence(teamId);
   return {
     status: 200,
     body: {
       ok: true,
       notices: decision.notices,
       ...(decision.result ? { result: decision.result } : {}),
+      operationalContext: projectOperationalContext(command as Command, decision.changeset, applied.snapshot, machinePresence),
     },
   };
 }
@@ -413,12 +420,17 @@ async function readRequest(teamId: string): Promise<KernelHttpResult> {
     (events[ev.objectId] ??= []).push(ev);
   }
   // Machine availability per team alias (the Loops projection consumes it).
+  const machinePresence = await readMachinePresence(teamId);
+  return { status: 200, body: { ok: true, notices: [], snapshot, events, machinePresence } };
+}
+
+async function readMachinePresence(teamId: string): Promise<Record<string, string>> {
   const machinePresence: Record<string, string> = {};
   for (const { alias, machineId } of await store.listTeamAliases(teamId)) {
     const m = await store.getMachine(machineId);
     if (m) machinePresence[alias] = machinePresence[alias] ?? presenceOf(m.lastSeen);
   }
-  return { status: 200, body: { ok: true, notices: [], snapshot, events, machinePresence } };
+  return machinePresence;
 }
 
 function presenceOf(lastSeen: string | null): string {

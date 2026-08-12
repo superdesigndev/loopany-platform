@@ -29,12 +29,29 @@ const snapshot = {
   runs: [],
 };
 
-function deps(presence: Record<string, string>): CliDeps {
+function deps(presence: Record<string, string>, calls?: unknown[]): CliDeps {
   const transport: SyncTransport = (_url, _token, body) => {
+    calls?.push(body);
     if ((body as { read?: boolean }).read) {
       return { status: 200, response: { ok: true, snapshot, events: {}, machinePresence: presence } };
     }
-    return { status: 200, response: { ok: true, result: { id: "audit" }, notices: [] } };
+    return {
+      status: 200,
+      response: {
+        ok: true,
+        result: { id: "audit" },
+        notices: [],
+        operationalContext: {
+          changed: ["manual run"],
+          taskId: "audit",
+          run: { createdId: "run-owned", retainedId: null, supersededId: null, consequence: "created" },
+          machine: { alias: "mbp", presence: presence.mbp ?? "unregistered" },
+          nextTriggerAt: null,
+          action: presence.mbp === "online" ? "no action required; the run is queued for delivery" : `no action required if the daemon will reconnect; the pending run is retained for the ${presence.mbp} machine`,
+          nextCommand: null,
+        },
+      },
+    };
   };
   return {
     cwd: "/tmp",
@@ -59,12 +76,16 @@ describe("remote dispatch feedback", () => {
     expect(out.stdout).not.toContain("machine mbp: unregistered");
   });
 
-  it("says an offline machine's manual run is queued", () => {
-    const out = run(["run", "audit", "--json"], deps({ mbp: "offline" }));
+  it("returns an offline machine's dispatch context in exactly one write request", () => {
+    const calls: unknown[] = [];
+    const out = run(["run", "audit", "--json"], deps({ mbp: "offline" }, calls));
     expect(out.exitCode).toBe(0);
-    expect(JSON.parse(out.stdout).notices).toContain(
-      'run queued: machine "mbp" is offline; it will claim when its daemon reconnects',
-    );
+    expect(JSON.parse(out.stdout).operationalContext).toMatchObject({
+      run: { createdId: "run-owned", consequence: "created" },
+      machine: { alias: "mbp", presence: "offline" },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ command: { op: "run", id: "audit" } });
   });
 
   it("keeps online dispatch concise", () => {
