@@ -1076,7 +1076,7 @@ function renderErrorFor(e: DriverError, argv: readonly string[]): string {
   return renderError(e);
 }
 
-const USAGE = `loopany-kernel — the kernel CLI (M2 local file driver)
+const USAGE = `Loopany Kernel CLI (Internal Testing)
 
 workspace
   init [--backend local]            # remote backend lands in M6; seeds agent
