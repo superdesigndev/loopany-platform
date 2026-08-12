@@ -127,20 +127,37 @@ function ok(stdout: string): CliOutcome {
 
 // ---- actor provenance ----
 
-/** entrance=human by default; --session / --actor / LOOPANY_SESSION_ID promote
- *  to agent-run provenance (every agent action is attributable to a session —
- *  §3). --actor sets actorId; the default human actor is LOOPANY_ACTOR or "cli". */
-function resolveActor(args: ParsedArgs, env: CliDeps["env"]): Provenance {
+/** Infer audit provenance without turning it into authority. A delivered run is
+ *  identified by LOOPANY_RUN_ID. Ordinary Codex and Claude Code sessions stay
+ *  ordinary agent activity, while an interactive terminal uses the configured
+ *  human identity. We never guess a Claude session from local transcript files. */
+function resolveActor(args: ParsedArgs, env: CliDeps["env"], remote: boolean): Provenance {
   const sessionId = args.flags.session ?? env.LOOPANY_SESSION_ID;
   const explicitActor = args.flags.actor;
-  if (sessionId !== undefined || explicitActor !== undefined) {
+  if (env.LOOPANY_RUN_ID) {
     return {
       entrance: "agent-run",
-      actorId: explicitActor ?? env.LOOPANY_ACTOR ?? "agent",
+      actorId: explicitActor ?? env.LOOPANY_ACTOR ?? env.LOOPANY_RUN_ID,
       ...(sessionId !== undefined ? { sessionId } : {}),
     };
   }
-  return { entrance: "human", actorId: env.LOOPANY_ACTOR ?? "cli" };
+  if (explicitActor !== undefined || sessionId !== undefined) {
+    return { entrance: "agent", actorId: explicitActor ?? "agent", ...(sessionId ? { sessionId } : {}) };
+  }
+  if (env.CODEX_THREAD_ID) return { entrance: "agent", actorId: "codex", sessionId: env.CODEX_THREAD_ID };
+  const claudeSession = env.CLAUDE_CODE_SESSION_ID ?? env.CLAUDE_SESSION_ID;
+  if (claudeSession) return { entrance: "agent", actorId: "claude", sessionId: claudeSession };
+  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT) return { entrance: "agent", actorId: "claude" };
+  const me = remote ? readGlobalConnect(env)?.me : undefined;
+  if (env.LOOPANY_ACTOR || me) return { entrance: "human", actorId: env.LOOPANY_ACTOR ?? me! };
+  return { entrance: "device", actorId: "shared" };
+}
+
+function provenanceNotices(actor: Provenance): string[] {
+  if (actor.entrance === "agent" && actor.actorId === "claude" && !actor.sessionId) {
+    return ["provenance: Claude Code detected, but no session id was exposed; actor recorded without a session"];
+  }
+  return [];
 }
 
 /** The effective `now`: a hidden `--now <iso>` flag (or `LOOPANY_NOW` env) pins a
@@ -195,9 +212,10 @@ function execWrite(
   deps: CliDeps,
   guard?: (locked: Snapshot) => void,
 ): CliOutcome {
-  const actor = resolveActor(args, deps.env);
+  const actor = resolveActor(args, deps.env, backend.kind === "remote");
   const dryRun = args.bools.has("dry-run");
   const res = backend.command(command, actor, resolveNow(args, deps), { dryRun, guard });
+  res.notices.push(...provenanceNotices(actor));
   return renderWriteResult(res, args, dryRun);
 }
 
@@ -222,9 +240,10 @@ function execDispatchWrite(
         : `run queued: machine alias "${alias}" is not registered; check the assignee or enroll its daemon`;
     }
   }
-  const actor = resolveActor(args, deps.env);
+  const actor = resolveActor(args, deps.env, backend.kind === "remote");
   const dryRun = args.bools.has("dry-run");
   const res = backend.command(command, actor, resolveNow(args, deps), { dryRun });
+  res.notices.push(...provenanceNotices(actor));
   if (deliveryNotice && !dryRun) res.notices.push(deliveryNotice);
   return renderWriteResult(res, args, dryRun);
 }
@@ -1120,7 +1139,7 @@ host  (an agent never calls these)
 
 flags
   --json           machine-readable output
-  --session <id>   agent-run provenance (also LOOPANY_SESSION_ID)
+  --session <id>   coding-session provenance (also LOOPANY_SESSION_ID)
   --actor <id>     provenance actorId
   --now <iso>      pin the clock deterministically (also LOOPANY_NOW)`;
 

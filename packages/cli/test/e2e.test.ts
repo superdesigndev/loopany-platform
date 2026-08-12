@@ -158,7 +158,7 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(show.stdout).toContain("status-changed");
     // The compact event line carries the attributable actor `entrance:actorId`
     // (§3/§7), not just the entrance — the default human actor is "cli".
-    expect(show.stdout).toContain("human:cli");
+    expect(show.stdout).toContain("device:shared");
 
     // Bare Task show carries a bounded meaningful projection by default. Raw
     // mechanics remain behind --log/--all rather than forcing agents to know a
@@ -179,8 +179,8 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
       .map((l) => JSON.parse(l) as { kind: string; provenance: { entrance: string } });
     expect(events.map((e) => e.kind)).toContain("created");
     expect(events.map((e) => e.kind)).toContain("status-changed");
-    // Default provenance is human.
-    expect(events.every((e) => e.provenance.entrance === "human")).toBe(true);
+    // With no configured person or agent, provenance is honestly device:shared.
+    expect(events.every((e) => e.provenance.entrance === "device")).toBe(true);
 
     // --- list: no filter renders the tree with plain-text markers. The
     // nightly loop node carries the [loop] tag + humanized cadence; the child
@@ -298,7 +298,7 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(json.every((i) => typeof i.kind === "string")).toBe(true);
   });
 
-  it("promotes provenance to agent-run via --session / LOOPANY_SESSION_ID", () => {
+  it("attributes explicit sessions to an ordinary agent outside a delivered run", () => {
     call(["init"]);
     call(["create", "Agent task"]);
     call(["note", "agent-task", "did the thing", "--session", "sess-abc-123"]);
@@ -308,7 +308,7 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
       .filter((l) => l.trim().length > 0)
       .map((l) => JSON.parse(l) as { kind: string; provenance: { entrance: string; sessionId?: string } });
     const noteEvent = events.find((e) => e.kind === "note");
-    expect(noteEvent?.provenance.entrance).toBe("agent-run");
+    expect(noteEvent?.provenance.entrance).toBe("agent");
     expect(noteEvent?.provenance.sessionId).toBe("sess-abc-123");
 
     // The sessionId is NEVER truncated in `show --log` — it is the deep-dive key.
@@ -319,6 +319,19 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     call(["note", "agent-task", "second thought"], { env: { LOOPANY_SESSION_ID: "sess-env-999" } });
     const show2 = call(["show", "agent-task", "--log"]);
     expect(show2.stdout).toContain("session=sess-env-999");
+  });
+
+  it("infers Codex and Claude Code sessions without calling them delivered runs", () => {
+    call(["init"]);
+    call(["create", "Harness task", "--id", "harness-task"]);
+    call(["note", "harness-task", "from codex"], { env: { CODEX_THREAD_ID: "codex-thread-1" } });
+    call(["note", "harness-task", "from claude"], { env: { CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "claude-session-1" } });
+
+    const show = call(["show", "harness-task", "--log"]);
+    expect(show.stdout).toContain("agent:codex");
+    expect(show.stdout).toContain("session=codex-thread-1");
+    expect(show.stdout).toContain("agent:claude");
+    expect(show.stdout).toContain("session=claude-session-1");
   });
 
   it("the compact event line names actorId, not just entrance (§7)", () => {
@@ -332,8 +345,8 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     // human events read `human:<actorId>`, agent events `agent-run:<actorId>` —
     // the entrance ALONE would collapse both to "human"/"agent-run" and lose the
     // attributable identity (the bug this fixes).
-    expect(show.stdout).toContain("human:cli");
-    expect(show.stdout).toContain("agent-run:run-99");
+    expect(show.stdout).toContain("device:shared");
+    expect(show.stdout).toContain("agent:run-99");
     // the session key still rides in FULL, unaffected.
     expect(show.stdout).toContain("session=sess-77");
   });

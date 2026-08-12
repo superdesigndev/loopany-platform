@@ -34,6 +34,7 @@ async function seedMachine(token: string, userId: string): Promise<{ machineId: 
     userId,
     teamId,
     name: `m-${userId}`,
+    alias: userId === 'u_alice' ? 'alice-mbp' : 'bob-mbp',
     tokenHash: tokens.sha256(token),
     token,
   })
@@ -140,6 +141,20 @@ describe('kernelCli — golden-shaped command sequence lands + reads back', () =
     // Every event is attributed to the credential's owner, never the body.
     expect(events.every((e) => e.provenance.entrance === 'human')).toBe(true)
     expect(events.every((e) => e.provenance.actorId === 'u_alice')).toBe(true)
+  })
+
+  it('accepts agent audit context but derives the machine alias from the credential', async () => {
+    const r = await gateway.kernelCli(TOK_A, {
+      command: { op: 'create', id: 'audit-context', title: 'audit context' },
+      provenance: { entrance: 'agent', actorId: 'codex', sessionId: 'thread-123' },
+    })
+    expect(r.status).toBe(200)
+    const events = await kstore.readEvents(TEAM_A, 'audit-context')
+    expect(events[0]?.provenance).toEqual({
+      entrance: 'agent',
+      actorId: 'alice-mbp/codex',
+      sessionId: 'thread-123',
+    })
   })
 })
 

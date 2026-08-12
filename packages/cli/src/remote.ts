@@ -100,7 +100,7 @@ export class RemoteBackend implements Backend {
     // was created under the race window. The guard here just avoids a round-trip
     // when the doc is already visible.
     if (opts?.guard) opts.guard(this.snapshot());
-    const res = this.send({ command, now });
+    const res = this.send({ command, now, provenance: actor });
     return { snapshot: EMPTY_SNAPSHOT, notices: res.notices ?? [], result: res.result };
   }
 

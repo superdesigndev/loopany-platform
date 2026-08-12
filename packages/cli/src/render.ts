@@ -472,7 +472,8 @@ export function renderTimeline(items: readonly TimelineItem[]): string {
   return items
     .map((i) => {
       const agent = i.agent ? `  ·  agent ${i.agent}` : "";
-      const session = i.agentSessionId ? `  ·  session ${i.agentSessionId}` : "";
+      const sessionId = i.agentSessionId ?? i.sessionId;
+      const session = sessionId ? `  ·  session ${sessionId}` : "";
       return `${formatLocalTime(i.at)}  [${i.kind}]  ${i.objectId}  ·  ${i.actor}${agent}${session}\n      ${i.summary}`;
     })
     .join("\n");

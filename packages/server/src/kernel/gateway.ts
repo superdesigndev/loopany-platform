@@ -2,7 +2,7 @@
  * Kernel CLI gateway — the HTTP seam for POST /api/kernel/cli (milestone M5).
  *
  * It is a thin ROUTER: authorize a device (`dk_`) token to a machine → its team,
- * OVERRIDE the actor identity from the credential (never trust the body's actor),
+ * derive authority from the credential, accept only bounded audit context,
  * decide IN-PROCESS with `@loopany/kernel`, then persist transactionally via
  * `kernel/store.ts`. The server runs the SAME kernel package the local driver
  * runs (design §9), so authority-side validation cannot drift between backends.
@@ -70,9 +70,11 @@ export interface KernelCliResponse {
  *  (the local driver's `--now` twin, §13 M3) — the two backends must both be
  *  reproducible for the M6 conformance double-run; a client-supplied instant only
  *  affects schedule times the owner already controls, unlike the actor identity
- *  which is ALWAYS credential-derived and never trusted from the body. */
+ *  which never changes credential-derived authorization. */
 export interface KernelCliBody {
   command?: unknown;
+  /** Audit hint from an owner CLI. It never affects credential scope. */
+  provenance?: unknown;
   tick?: boolean;
   read?: boolean;
   /** The BOUNDED team-timeline query (kernel-team-timeline): the server runs
@@ -116,7 +118,7 @@ function checkSimAuthority(presented: unknown): "absent" | "granted" | "refused"
  *    team and belongs to the loop surface, not this route. */
 async function resolveScope(
   credential: string,
-): Promise<{ teamId: string; actor: Provenance; run?: { runId: string; state: "active" | "terminal-grace" } } | null> {
+): Promise<{ teamId: string; actor: Provenance; machineId?: string; run?: { runId: string; state: "active" | "terminal-grace" } } | null> {
   if (credential.startsWith("rk_")) {
     const lease = await resolveLease(credential);
     if (!lease?.kernelTeamId) return null;
@@ -132,10 +134,37 @@ async function resolveScope(
   if (!machine) return null;
   if (machine.tokenHash && machine.tokenHash !== sha256(credential)) return null;
   const teamId = machine.teamId ?? store.teamIdForUser(machine.userId);
-  // Actor identity is OVERRIDDEN from the credential — the body's provenance (if
-  // any) is ignored. A device token is a human owner acting from their machine.
+  // This is the safe fallback. A bounded audit hint may refine it later, but
+  // never changes the credential's authority or team scope.
   const actor: Provenance = { entrance: "human", actorId: machine.userId ?? "shared" };
-  return { teamId, actor };
+  return { teamId, actor, machineId };
+}
+
+/** Accept a bounded audit hint only for a device credential. The credential
+ * still owns authorization and team scope. Agent machine aliases are derived
+ * server-side from that credential, never accepted from the request body. */
+async function deviceActor(
+  scope: { teamId: string; actor: Provenance; machineId?: string },
+  raw: unknown,
+): Promise<Provenance> {
+  if (!isRecord(raw)) return scope.actor.actorId === "shared" ? { entrance: "device", actorId: "shared" } : scope.actor;
+  const entrance = raw.entrance;
+  const actorId = raw.actorId;
+  const sessionId = raw.sessionId;
+  if (
+    (entrance !== "human" && entrance !== "agent" && entrance !== "device") ||
+    typeof actorId !== "string" ||
+    actorId.length < 1 ||
+    actorId.length > 200 ||
+    (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.length > 200))
+  ) {
+    return scope.actor;
+  }
+  if (entrance === "agent" && scope.machineId && (actorId === "codex" || actorId === "claude")) {
+    const alias = (await store.listTeamAliases(scope.teamId)).find((row) => row.machineId === scope.machineId)?.alias;
+    return { entrance, actorId: `${alias ?? "device"}/${actorId}`, ...(sessionId ? { sessionId } : {}) };
+  }
+  return { entrance, actorId, ...(sessionId ? { sessionId } : {}) };
 }
 
 /** The RUN credential's verb subset (P0 stage D). The hard wall is the TEAM
@@ -182,8 +211,8 @@ function runVerbRefusal(
  * arg) is still accepted and routed as a write.
  *
  * `deviceToken` is the `dk_` machine credential (same machinery as every other
- * machine route). A command's ACTOR is derived from the credential here — the
- * body never dictates who acted (a client could otherwise forge provenance).
+ * machine route). The body may refine audit attribution, but cannot change the
+ * credential's team, permissions, or machine alias.
  */
 export async function kernelCli(
   deviceToken: string,
@@ -191,13 +220,14 @@ export async function kernelCli(
 ): Promise<KernelHttpResult> {
   const scope = await resolveScope(deviceToken);
   if (!scope) return unauth();
-  const { teamId, actor } = scope;
+  const { teamId } = scope;
 
   // Normalize: a legacy bare-Command call (or any non-envelope value) is a write.
   const req: KernelCliBody =
     isRecord(body) && ("command" in body || body.tick === true || body.read === true || "timeline" in body)
       ? (body as KernelCliBody)
       : { command: body };
+  const actor = scope.run ? scope.actor : await deviceActor(scope, req.provenance);
   // A RUN credential never dictates time: honoring body.now would let a run
   // backdate its own history or steer follow-up/backoff math. The deterministic
   // `now` override stays an owner/test seam on DEVICE credentials only.

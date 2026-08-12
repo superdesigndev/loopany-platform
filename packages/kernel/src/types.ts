@@ -171,8 +171,8 @@ export interface Observation {
 }
 
 export interface Provenance {
-  entrance: "human" | "agent-run" | "clock";
-  /** userId | runId | triggerId — captured at write time, unreconstructable later. */
+  entrance: "human" | "agent" | "agent-run" | "clock" | "device";
+  /** userId | machine/agent | runId | triggerId - captured at write time. */
   actorId: string;
   sessionId?: string;
 }

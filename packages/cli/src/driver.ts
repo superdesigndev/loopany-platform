@@ -375,7 +375,7 @@ function validateRun(v: unknown, where: string): RunRecord {
   };
 }
 
-const EVENT_ENTRANCES = ["human", "agent-run", "clock"] as const;
+const EVENT_ENTRANCES = ["human", "agent", "agent-run", "clock", "device"] as const;
 
 /** Shape-guard one event line. Valid JSON is not a valid event: a `null` / `{}` /
  *  a line with a bad `provenance` parses cleanly but crashes the `--log` renderer

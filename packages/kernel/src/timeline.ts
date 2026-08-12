@@ -30,6 +30,7 @@ export type TimelineKind =
   | "reopened"
   | "handoff"
   | "human-note"
+  | "agent-note"
   | "observation"
   | "product"
   | "fields"
@@ -60,6 +61,8 @@ export interface TimelineItem {
    *  human can use it for transcript drill-down; absent when the daemon did
    *  not capture one. Never provenance or authorization evidence. */
   agentSessionId?: string;
+  /** Session attached to a non-run coding-agent write. */
+  sessionId?: string;
 }
 
 export interface TimelineOptions {
@@ -124,6 +127,10 @@ function classifySingle(e: KernelEvent, snapshot: Snapshot): { kind: TimelineKin
       // note is a decision or comment. Both are attention-worthy.
       if (e.provenance.entrance === "clock") {
         return { kind: "blocked", summary: e.note ?? "" };
+      }
+      if (e.provenance.entrance === "agent") {
+        if ((e.note ?? "").toLowerCase().includes("nothing actionable")) return null;
+        return { kind: "agent-note", summary: e.note ?? "" };
       }
       return { kind: "human-note", summary: e.note ?? "" };
     case "observation":
@@ -275,9 +282,9 @@ export function timelineView(
     }
     const c = classifySingle(e, snapshot);
     if (c) {
-      items.push({ at: e.at, kind: c.kind, objectId: e.objectId, actor: actorOf(e), summary: clip(c.summary), eventIds: [e.id] });
+      items.push({ at: e.at, kind: c.kind, objectId: e.objectId, actor: actorOf(e), summary: clip(c.summary), eventIds: [e.id], ...(e.provenance.sessionId ? { sessionId: e.provenance.sessionId } : {}) });
     } else if (opts.all) {
-      items.push({ at: e.at, kind: "mechanical", objectId: e.objectId, actor: actorOf(e), summary: clip(e.note ?? e.kind), eventIds: [e.id] });
+      items.push({ at: e.at, kind: "mechanical", objectId: e.objectId, actor: actorOf(e), summary: clip(e.note ?? e.kind), eventIds: [e.id], ...(e.provenance.sessionId ? { sessionId: e.provenance.sessionId } : {}) });
     }
   }
   for (const [runId, group] of runGroups) {
