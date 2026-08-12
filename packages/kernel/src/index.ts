@@ -36,6 +36,10 @@ export {
   type TaskDetail,
 } from "./views.js";
 export { timelineView, type TimelineItem, type TimelineKind, type TimelineOptions } from "./timeline.js";
+// checkInvariants: the EXECUTABLE SPEC — every structural constraint the
+// decide/apply/tick pipeline preserves, restated as a pure total check. Backs
+// the fast-check property suite; hosts may assert it in dev after a fold.
+export { checkInvariants, type Violation } from "./invariants.js";
 // cronText: the ONE cron humaniser (2026-08-12) — moved down from the server's
 // lib/format.ts so the CLI list surface and the web UI cannot render "0 7 * * *"
 // two different ways. Pure string derivation, zero I/O.

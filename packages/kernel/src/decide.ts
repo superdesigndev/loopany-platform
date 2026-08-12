@@ -86,13 +86,132 @@ export function isDispatchable(assignee: string | null): boolean {
 /** workdir must be an ABSOLUTE machine-local path (loops usually work inside
  *  another project's checkout). Relative segments would silently anchor to
  *  whatever cwd the daemon happens to run from. */
-function workdirRefusal(workdir: string | null): Decision | null {
-  if (workdir === null) return null;
-  if (!workdir.startsWith("/") || workdir.split("/").includes("..")) {
-    return refuse("INVALID_REFERENCE", `workdir must be an absolute path (got "${workdir}")`);
+// ---- the FIELD-RULE TABLE: context-free per-field wire validation ----
+//
+// The ONE home for every rule that can be checked WITHOUT the snapshot: type
+// shape, hard enums, context-free value formats. decideCreate and the update
+// patch both consume it (fieldTypeRefusals), so the two write paths cannot
+// drift. The dividing line is deliberate: anything needing the snapshot (CAS,
+// references, the merged after-state invariants) or another field (the
+// cron×timezone pair) stays in the handlers.
+//
+// Record<EditableField, …> keys the table on EDITABLE_TASK_FIELDS itself, so
+// adding an editable field without a rule is a compile error, not a gap.
+
+type EditableField = (typeof EDITABLE_TASK_FIELDS)[number];
+
+interface FieldRule {
+  /** Refusal for a value of the wrong TYPE (non-string / non-array / bad null). */
+  badType: (v: unknown) => Decision;
+  /** "string" fields hold a string (or an allowed null); "stringArray" is refs. */
+  kind: "string" | "stringArray";
+  /** Context-free VALUE check on a present string (enum, format, path shape). */
+  check?: (v: string) => Decision | null;
+}
+
+function mustBeString(field: string): (v: unknown) => Decision {
+  return (v) =>
+    refuse("INVALID_REFERENCE", `"${field}" must be a string`, {
+      issues: [`got ${v === null ? "null" : typeof v}`],
+    });
+}
+
+function statusRefusal(v: unknown): Decision {
+  return refuse("INVALID_STATUS", `unknown status "${String(v)}"`, {
+    issues: [`valid statuses: ${TASK_STATUSES.join(" | ")}`],
+  });
+}
+
+const FIELD_RULES: Record<EditableField, FieldRule> = {
+  title: { kind: "string", badType: mustBeString("title") },
+  status: {
+    kind: "string",
+    badType: statusRefusal,
+    check: (v) => ((TASK_STATUSES as readonly string[]).includes(v) ? null : statusRefusal(v)),
+  },
+  assignee: { kind: "string", badType: mustBeString("assignee") },
+  priority: { kind: "string", badType: mustBeString("priority") },
+  type: { kind: "string", badType: mustBeString("type") },
+  parent: { kind: "string", badType: mustBeString("parent") },
+  tracks: { kind: "string", badType: mustBeString("tracks") },
+  refs: {
+    kind: "stringArray",
+    badType: () => refuse("INVALID_REFERENCE", `"refs" must be a string array`),
+  },
+  body: { kind: "string", badType: mustBeString("body") },
+  followUpAt: {
+    kind: "string",
+    badType: () => refuse("FOLLOWUP_NEEDS_DATE", `followUpAt must be an ISO instant string`),
+    check: (v) =>
+      validInstant(v) ? null : refuse("FOLLOWUP_NEEDS_DATE", `followUpAt "${v}" is not a valid instant`),
+  },
+  owner: { kind: "string", badType: mustBeString("owner") },
+  workdir: {
+    kind: "string",
+    badType: mustBeString("workdir"),
+    check: (v) =>
+      !v.startsWith("/") || v.split("/").includes("..")
+        ? refuse("INVALID_REFERENCE", `workdir must be an absolute path (got "${v}")`)
+        : null,
+  },
+  goal: { kind: "string", badType: mustBeString("goal") },
+  cron: {
+    kind: "string",
+    badType: () => refuse("INVALID_CRON", `cron must be a string expression`),
+    // Cron VALIDITY is cross-field (spec×timezone) — cronPairRefusal, not here.
+  },
+  timezone: {
+    kind: "string",
+    badType: () => refuse("INVALID_TIMEZONE", `timezone must be a string`),
+    check: (v) => (validTimezone(v) ? null : refuse("INVALID_TIMEZONE", `invalid timezone "${v}"`)),
+  },
+};
+
+/** Which fields may be set to NULL (a clear) on the update path. Create never
+ *  passes null — its optional fields simply default. */
+const UPDATE_NULLABLE: ReadonlySet<EditableField> = new Set<EditableField>([
+  "assignee",
+  "priority",
+  "type",
+  "parent",
+  "tracks",
+  "goal",
+  "owner",
+  "workdir",
+  "followUpAt",
+  "cron",
+  "timezone",
+]);
+
+/** Run the field-rule table over the given field values, in EDITABLE_TASK_FIELDS
+ *  order. `nullable` is the call site's null policy (update clears; create never
+ *  nulls). Returns the first refusal or null. */
+function fieldTypeRefusals(
+  fields: Partial<Record<EditableField, unknown>>,
+  nullable: ReadonlySet<EditableField>,
+): Decision | null {
+  for (const field of EDITABLE_TASK_FIELDS) {
+    const v = fields[field];
+    if (v === undefined) continue;
+    const rule = FIELD_RULES[field];
+    if (v === null) {
+      if (nullable.has(field)) continue;
+      return rule.badType(v);
+    }
+    if (rule.kind === "stringArray") {
+      if (!Array.isArray(v) || !v.every((r) => typeof r === "string")) return rule.badType(v);
+      continue;
+    }
+    if (typeof v !== "string") return rule.badType(v);
+    if (rule.check) {
+      const bad = rule.check(v);
+      if (bad) return bad;
+    }
   }
   return null;
 }
+
+const CREATE_NULLABLE: ReadonlySet<EditableField> = new Set();
 
 export function activeRun(snapshot: Snapshot, taskId: string): RunRecord | undefined {
   return snapshot.runs.find((r) => r.taskId === taskId && ACTIVE_RUN_STATES.includes(r.state));
@@ -385,34 +504,18 @@ function requireString(value: unknown, field: string, code: RefusalCode): Decisi
 
 function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
   const { snapshot, actor, now } = ctx;
-  // Validate wire VALUES before any string op or verbatim copy into the object.
+  // Validate wire VALUES before any string op or verbatim copy into the
+  // object: title/id required-ness here, every per-field type + context-free
+  // value rule via the FIELD-RULE TABLE (one home with the update path).
   const titleBad = requireString(cmd.title, "title", "INVALID_REFERENCE");
   if (titleBad) return titleBad;
-  for (const [k, v] of [
-    ["id", cmd.id],
-    ["assignee", cmd.assignee],
-    ["priority", cmd.priority],
-    ["type", cmd.type],
-    ["parent", cmd.parent],
-    ["tracks", cmd.tracks],
-    ["body", cmd.body],
-  ] as const) {
-    if (v !== undefined) {
-      const bad = requireString(v, k, "INVALID_REFERENCE");
-      if (bad) return bad;
-    }
+  if (cmd.id !== undefined) {
+    const idBad = requireString(cmd.id, "id", "INVALID_REFERENCE");
+    if (idBad) return idBad;
   }
-  if (cmd.refs !== undefined && (!Array.isArray(cmd.refs) || !cmd.refs.every((r) => typeof r === "string"))) {
-    return refuse("INVALID_REFERENCE", `"refs" must be a string array`);
-  }
-  if (cmd.cron !== undefined) {
-    const bad = requireString(cmd.cron, "cron", "INVALID_CRON");
-    if (bad) return bad;
-  }
-  if (cmd.timezone !== undefined) {
-    const bad = requireString(cmd.timezone, "timezone", "INVALID_TIMEZONE");
-    if (bad) return bad;
-  }
+  const fieldBad = fieldTypeRefusals(cmd, CREATE_NULLABLE);
+  if (fieldBad) return fieldBad;
+
   const id = cmd.id ?? slugify(cmd.title);
   if (getObject(snapshot, id)) {
     return refuse("CONFLICT", `object "${id}" already exists`, {
@@ -420,21 +523,9 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
     });
   }
 
-  let status: TaskStatus;
-  if (cmd.status !== undefined) {
-    if (!(TASK_STATUSES as readonly string[]).includes(cmd.status)) {
-      return refuse("INVALID_STATUS", `unknown status "${cmd.status}"`, {
-        issues: [`valid statuses: ${TASK_STATUSES.join(" | ")}`],
-      });
-    }
-    status = cmd.status as TaskStatus;
-  } else {
-    status = cmd.followUpAt !== undefined ? "follow-up" : "todo";
-  }
+  const status: TaskStatus =
+    cmd.status !== undefined ? (cmd.status as TaskStatus) : cmd.followUpAt !== undefined ? "follow-up" : "todo";
 
-  if (cmd.followUpAt !== undefined && !validInstant(cmd.followUpAt)) {
-    return refuse("FOLLOWUP_NEEDS_DATE", `followUpAt "${String(cmd.followUpAt)}" is not a valid instant`);
-  }
   // Invariant #1 both directions: follow-up <=> followUpAt.
   if (status === "follow-up" && cmd.followUpAt === undefined) {
     return refuse("FOLLOWUP_NEEDS_DATE", "entering follow-up requires followUpAt", {
@@ -447,8 +538,6 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
   if (cmd.cron !== undefined) {
     const bad = cronPairRefusal(cmd.cron, cmd.timezone ?? null);
     if (bad) return bad;
-  } else if (cmd.timezone !== undefined && !validTimezone(cmd.timezone)) {
-    return refuse("INVALID_TIMEZONE", `invalid timezone "${cmd.timezone}"`);
   }
 
   const task: TaskObject = {
@@ -471,9 +560,6 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
     createdAt: now,
     updatedAt: now,
   };
-
-  const workdirIssue = workdirRefusal(task.workdir);
-  if (workdirIssue) return workdirIssue;
 
   const issues = referenceIssues(snapshot, id, task.parent, task.tracks);
   if (issues.length > 0) {
@@ -562,19 +648,14 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
   const patch = cmd.patch as Partial<Record<(typeof EDITABLE_TASK_FIELDS)[number], unknown>>;
 
   // ---- validate every field value BEFORE constructing `after` (no .includes
-  // on a non-string, no bad cron reaching nextFire) ----
-  const fieldIssue = validatePatchFields(patch);
+  // on a non-string, no bad cron reaching nextFire) — the FIELD-RULE TABLE,
+  // one home with the create path ----
+  if (cmd.note !== undefined) {
+    const noteBad = requireString(cmd.note, "note", "INVALID_REFERENCE");
+    if (noteBad) return noteBad;
+  }
+  const fieldIssue = fieldTypeRefusals(patch, UPDATE_NULLABLE);
   if (fieldIssue) return fieldIssue;
-  if (patch.workdir !== undefined) {
-    const wd = workdirRefusal(patch.workdir as string | null);
-    if (wd) return wd;
-  }
-
-  if (patch.status !== undefined && !(TASK_STATUSES as readonly string[]).includes(patch.status as string)) {
-    return refuse("INVALID_STATUS", `unknown status "${String(patch.status)}"`, {
-      issues: [`valid statuses: ${TASK_STATUSES.join(" | ")}`],
-    });
-  }
 
   const after: TaskObject = {
     ...before,
@@ -774,59 +855,6 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
   }
   cs.runs.push(...runMutations);
   return { ok: true, changeset: cs, notices, result: { id: after.id } };
-}
-
-/** Validate patch field VALUES so nothing malformed reaches business logic
- *  (finding #4). Returns a granular Refusal or null. */
-function validatePatchFields(
-  patch: Partial<Record<(typeof EDITABLE_TASK_FIELDS)[number], unknown>>,
-): Decision | null {
-  const stringOrNull = (k: (typeof EDITABLE_TASK_FIELDS)[number]): Decision | null => {
-    const v = patch[k];
-    if (v !== undefined && v !== null && typeof v !== "string") {
-      return refuse("INVALID_REFERENCE", `"${k}" must be a string`, { issues: [`got ${typeof v}`] });
-    }
-    return null;
-  };
-  // title/body are REQUIRED non-nullable strings (types.ts) — refuse null rather
-  // than let String(null) store the literal "null". The genuinely nullable
-  // fields (assignee/priority/type/parent/tracks) keep accepting null.
-  for (const k of ["title", "body"] as const) {
-    const v = patch[k];
-    if (v !== undefined && typeof v !== "string") {
-      return refuse("INVALID_REFERENCE", `"${k}" must be a string`, {
-        issues: [`got ${v === null ? "null" : typeof v}`],
-      });
-    }
-  }
-  for (const k of ["assignee", "priority", "type", "parent", "tracks", "goal"] as const) {
-    const bad = stringOrNull(k);
-    if (bad) return bad;
-  }
-  if (patch.refs !== undefined) {
-    if (!Array.isArray(patch.refs) || !patch.refs.every((r) => typeof r === "string")) {
-      return refuse("INVALID_REFERENCE", `"refs" must be a string array`);
-    }
-  }
-  if (patch.followUpAt !== undefined && patch.followUpAt !== null && typeof patch.followUpAt !== "string") {
-    return refuse("FOLLOWUP_NEEDS_DATE", `followUpAt must be an ISO instant string`);
-  }
-  if (patch.cron !== undefined && patch.cron !== null && typeof patch.cron !== "string") {
-    return refuse("INVALID_CRON", `cron must be a string expression`);
-  }
-  if (patch.timezone !== undefined && patch.timezone !== null) {
-    if (typeof patch.timezone !== "string") {
-      return refuse("INVALID_TIMEZONE", `timezone must be a string`);
-    }
-    // Validate the zone SEMANTICALLY regardless of cron presence — decideCreate
-    // already refuses an invalid tz with no cron, so the two write paths must
-    // agree (finding: invalid tz on a non-loop update returned NO_OP). A VALID
-    // tz with no cron still has nothing to re-derive and stays a NO_OP downstream.
-    if (!validTimezone(patch.timezone)) {
-      return refuse("INVALID_TIMEZONE", `invalid timezone "${patch.timezone}"`);
-    }
-  }
-  return null;
 }
 
 // ---- note ----

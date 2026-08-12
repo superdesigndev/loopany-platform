@@ -19,6 +19,9 @@ const EXPECTED = [
   "applyChangeset",
   "applyToWorld",
   "boardView",
+  // checkInvariants: the executable spec backing the property suite
+  // (test/invariants.property.test.ts) — see src/invariants.ts.
+  "checkInvariants",
   // cronText: the ONE cron humaniser — moved down from server lib/format.ts
   // (which re-exports it) so CLI list rows and the web UI render identically.
   "cronText",
