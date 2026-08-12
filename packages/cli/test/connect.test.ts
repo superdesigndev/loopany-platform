@@ -5,11 +5,19 @@
  * no-silent-redirect guarantee - a forgotten binding must never send a local
  * command to a server.
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearGlobalConnect, connectFiles, readGlobalConnect, redactToken, writeGlobalConnect } from "../src/connect.js";
+import {
+  clearGlobalConnect,
+  connectFiles,
+  liveDaemonPid,
+  readGlobalConnect,
+  redactToken,
+  writeGlobalConnect,
+} from "../src/connect.js";
 import { selectBackend } from "../src/backend.js";
 import { run } from "../src/cli.js";
 import type { SyncTransport } from "../src/remote.js";
@@ -88,6 +96,17 @@ describe("connect file lifecycle (ONE credential home - the daemon's files)", ()
     writeFileSync(files.server, "ftp://x");
     writeFileSync(files.token, "t");
     expect(readGlobalConnect(env)).toBeNull();
+  });
+});
+
+describe("backend source diagnostics", () => {
+  it("a local workspace not-found explains remote shadowing", () => {
+    writeGlobalConnect(env, { backend: "https://remote.example", token: "dk_remote" });
+    run(["init"], { cwd, env, now: "2026-08-12T00:00:00.000Z", registryHome: home, probe: () => false });
+    const out = run(["show", "remote-only"], { cwd, env, now: "2026-08-12T00:00:00.000Z" });
+    expect(out.exitCode).toBe(1);
+    expect(out.stderr).toContain("selected the cwd's local .loopany workspace");
+    expect(out.stderr).toContain("--remote");
   });
 });
 
@@ -203,5 +222,90 @@ describe("identity follows the credential (remote inbox)", () => {
     const deps = { cwd, env, transport, now: "2026-08-12T00:00:00.000Z" };
     const res = run(["connect", "https://fly.example", "--token", "dk_g", "--me", "not-an-email"], deps as never);
     expect(res.exitCode).not.toBe(0);
+  });
+});
+
+describe("live-daemon guard (connect is a machine-connection action, not a config write)", () => {
+  const depsWith = (daemonPid: () => number | undefined) => {
+    const { transport } = fakeTransport();
+    return { cwd, env, transport, daemonPid, now: "2026-08-12T00:00:00.000Z" };
+  };
+
+  it("a CONNECTION CHANGE under a running daemon fails LOUD and writes nothing", () => {
+    writeGlobalConnect(env, { backend: "https://old.example", token: "dk_old" });
+    const res = run(["connect", "https://new.example", "--token", "dk_new"], depsWith(() => 4242) as never);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("4242");
+    expect(res.stderr).toContain("loopany down");
+    // The runtime dual-truth never materialized: disk still holds the old pair.
+    expect(readGlobalConnect(env)).toEqual({ backend: "https://old.example", token: "dk_old" });
+  });
+
+  it("re-connecting the SAME pair is idempotent, and a me-only update rides it", () => {
+    writeGlobalConnect(env, { backend: "https://x.example", token: "dk_same" });
+    const res = run(
+      ["connect", "https://x.example", "--token", "dk_same", "--me", "tim@x.co"],
+      depsWith(() => 4242) as never,
+    );
+    expect(res.exitCode).toBe(0);
+    expect(readGlobalConnect(env)).toEqual({ backend: "https://x.example", token: "dk_same", me: "tim@x.co" });
+  });
+
+  it("--clear under a running daemon fails LOUD; with no daemon it clears", () => {
+    writeGlobalConnect(env, { backend: "https://x.example", token: "dk_x" });
+    const refused = run(["connect", "--clear"], depsWith(() => 4242) as never);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("loopany down");
+    expect(readGlobalConnect(env)).not.toBeNull();
+
+    const cleared = run(["connect", "--clear"], depsWith(() => undefined) as never);
+    expect(cleared.exitCode).toBe(0);
+    expect(readGlobalConnect(env)).toBeNull();
+  });
+
+  it("no daemon running: a change proceeds normally", () => {
+    writeGlobalConnect(env, { backend: "https://old.example", token: "dk_old" });
+    const res = run(["connect", "https://new.example", "--token", "dk_new"], depsWith(() => undefined) as never);
+    expect(res.exitCode).toBe(0);
+    expect(readGlobalConnect(env)?.backend).toBe("https://new.example");
+  });
+});
+
+describe("liveDaemonPid (the read-only pidfile probe)", () => {
+  const pidfile = () => join(home, "daemon.pid");
+
+  it("REAL PROCESS: verifies the daemon pidfile format (<pid>:<ps lstart>) against a live pid", () => {
+    // The vitest process itself is the live daemon stand-in; the pidfile is
+    // written EXACTLY the way packages/daemon/src/pidfile.ts writePidFile does
+    // (pid + `ps -o lstart=`), so this is the format-parity proof - a daemon
+    // format change breaks this test, not colleagues' machines.
+    mkdirSync(home, { recursive: true });
+    const lstart = execFileSync("ps", ["-p", String(process.pid), "-o", "lstart="], { encoding: "utf8" }).trim();
+    writeFileSync(pidfile(), `${process.pid}:${lstart}\n`);
+    expect(liveDaemonPid(env)).toBe(process.pid);
+  });
+
+  it("a DEAD pid or a REUSED pid (start-time mismatch) is not a live daemon", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(pidfile(), `${process.pid}:Sat Jan  1 00:00:00 2000\n`);
+    expect(liveDaemonPid(env)).toBeUndefined(); // alive but not the recorded identity
+    writeFileSync(pidfile(), "999999999\n");
+    expect(liveDaemonPid(env, { alive: () => false })).toBeUndefined();
+    // READ-ONLY: even a stale file is never deleted (the daemon owns its hygiene).
+    expect(existsSync(pidfile())).toBe(true);
+  });
+
+  it("absent or garbage pidfile = no daemon", () => {
+    expect(liveDaemonPid(env)).toBeUndefined();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(pidfile(), "not-a-pid\n");
+    expect(liveDaemonPid(env)).toBeUndefined();
+  });
+
+  it("a bare-pid legacy record degrades to alive-only", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(pidfile(), "4242\n");
+    expect(liveDaemonPid(env, { alive: () => true })).toBe(4242);
+    expect(liveDaemonPid(env, { alive: () => false })).toBeUndefined();
   });
 });

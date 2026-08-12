@@ -56,7 +56,7 @@ import {
 import { handbackTargetFor } from "./prompt.js";
 import { realSpawn, resolveSelfBin, spawnPendingRuns, type SpawnFn, type SpawnReport } from "./spawn.js";
 import { RemoteBackend, type SyncTransport } from "./remote.js";
-import { clearGlobalConnect, readGlobalConnect, redactToken, writeGlobalConnect } from "./connect.js";
+import { clearGlobalConnect, liveDaemonPid, readGlobalConnect, redactToken, writeGlobalConnect } from "./connect.js";
 import { realProbe, seedProfiles, type ProbeFn } from "./seedProfiles.js";
 import { formatLocalTime } from "./time.js";
 import {
@@ -93,6 +93,10 @@ export interface CliDeps {
    *  inbox's default identity. Injected in tests; undefined falls back to the
    *  real git probe (bounded, never throws). */
   gitEmail?: () => string | null;
+  /** Live-daemon probe seam for `connect`'s connection-change guard. Injected
+   *  in tests; undefined falls back to the real pidfile probe (connect.ts
+   *  liveDaemonPid). */
+  daemonPid?: () => number | undefined;
 }
 
 /** The real `git config user.email` probe - the machine-local human identity
@@ -194,6 +198,34 @@ function execWrite(
   const actor = resolveActor(args, deps.env);
   const dryRun = args.bools.has("dry-run");
   const res = backend.command(command, actor, resolveNow(args, deps), { dryRun, guard });
+  return renderWriteResult(res, args, dryRun);
+}
+
+/** Add delivery truth to a write without inventing another Run state. Presence
+ *  is a derived hint: the pending Run remains durable and may be claimed later. */
+function execDispatchWrite(
+  backend: Backend,
+  command: Command,
+  assignee: string | null | undefined,
+  args: ParsedArgs,
+  deps: CliDeps,
+): CliOutcome {
+  let deliveryNotice: string | null = null;
+  const slash = assignee?.indexOf("/") ?? -1;
+  if (backend.kind === "remote" && assignee && slash > 0) {
+    backend.snapshot(); // populates the authority-provided presence projection
+    const alias = assignee.slice(0, slash);
+    const presence = backend.machinePresence()[alias];
+    if (presence !== "online") {
+      deliveryNotice = presence
+        ? `run queued: machine "${alias}" is ${presence}; it will claim when its daemon reconnects`
+        : `run queued: machine alias "${alias}" is not registered; check the assignee or enroll its daemon`;
+    }
+  }
+  const actor = resolveActor(args, deps.env);
+  const dryRun = args.bools.has("dry-run");
+  const res = backend.command(command, actor, resolveNow(args, deps), { dryRun });
+  if (deliveryNotice && !dryRun) res.notices.push(deliveryNotice);
   return renderWriteResult(res, args, dryRun);
 }
 
@@ -329,9 +361,28 @@ function verbUnregister(args: ParsedArgs, deps: CliDeps): CliOutcome {
  *  machine is already bound for the CLI and vice versa. Precedence stays env >
  *  cwd workspace > this binding; `--remote` on any verb forces it. A live
  *  write VERIFIES the pair with one read round-trip so a typo'd URL/token
- *  fails now, not at first use. */
+ *  fails now, not at first use.
+ *
+ *  LIVE-DAEMON GUARD: one home means connect is a MACHINE-CONNECTION action,
+ *  not a config write. A running daemon keeps its boot-time credentials in
+ *  memory, so changing (or clearing) the binding under it would split the
+ *  machine into "process on the old authority, disk on the new" - the exact
+ *  runtime dual-truth the one-home unification exists to kill. So a CHANGE or
+ *  a clear while the daemon is alive fails LOUD (run `loopany down` first);
+ *  re-connecting the SAME pair is idempotent and passes (a me-only update is
+ *  CLI-layer identity, not daemon state - also allowed). */
 function verbConnect(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const daemonPid = deps.daemonPid ?? (() => liveDaemonPid(deps.env));
   if (args.bools.has("clear")) {
+    const current = readGlobalConnect(deps.env);
+    const live = current ? daemonPid() : undefined;
+    if (current && live !== undefined) {
+      throw new DriverError(
+        "DAEMON_RUNNING",
+        `a daemon (pid ${live}) is running on this binding - clearing would strand it on in-memory credentials`,
+        { hint: "run `loopany down` first, then `connect --clear`" },
+      );
+    }
     const existed = clearGlobalConnect(deps.env);
     if (args.bools.has("json")) return ok(JSON.stringify({ ok: true, cleared: existed }, null, 2));
     return ok(
@@ -371,6 +422,22 @@ function verbConnect(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const me = args.flags.me;
   if (me !== undefined && !me.includes("@")) {
     throw new UsageError(`--me must be an email (the kernel's human-assignee form), got "${me}"`);
+  }
+  // The live-daemon guard fires only on a CONNECTION CHANGE (server or token
+  // differs from the stored binding). Same-pair re-connects are idempotent -
+  // and a me-only update rides them freely.
+  const normalized = url.replace(/\/+$/, "");
+  const current = readGlobalConnect(deps.env);
+  const changes = !current || current.backend !== normalized || current.token !== token;
+  if (changes) {
+    const live = daemonPid();
+    if (live !== undefined) {
+      throw new DriverError(
+        "DAEMON_RUNNING",
+        `a daemon (pid ${live}) is running on the current binding - changing it would leave the process on the old authority until restart`,
+        { hint: "run `loopany down` first, then re-run connect (and `loopany up` after)" },
+      );
+    }
   }
   // Verify BEFORE persisting: one read round-trip against the pair.
   const probe = deps.transport
@@ -436,7 +503,8 @@ function verbCreate(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (args.flags["follow-up"]) cmd.followUpAt = args.flags["follow-up"];
   const body = bodyFromFile(args, deps, "body-file");
   if (body !== undefined) cmd.body = body;
-  return execWrite(backendFor(deps, args), cmd, args, deps);
+  const backend = backendFor(deps, args);
+  return cmd.assignee ? execDispatchWrite(backend, cmd, cmd.assignee, args, deps) : execWrite(backend, cmd, args, deps);
 }
 
 function verbUpdate(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -480,34 +548,6 @@ function verbNote(args: ParsedArgs, deps: CliDeps): CliOutcome {
   }
   if (id === undefined || note === undefined) throw new UsageError('note needs <id> "<text>"');
   return execWrite(backendFor(deps, args), { op: "note", id, note }, args, deps);
-}
-
-/** The body is the doc's one source of truth. Derive its display title from
- *  the first real ATX H1, ignoring examples inside fenced code blocks. */
-function docTitle(body: string): string | null {
-  let fence: "`" | "~" | null = null;
-  let fenceLength = 0;
-  for (const line of body.split(/\r?\n/)) {
-    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (fenceMatch) {
-      const marker = fenceMatch[1]!;
-      const char = marker[0] as "`" | "~";
-      if (fence === null) {
-        fence = char;
-        fenceLength = marker.length;
-      } else if (char === fence && marker.length >= fenceLength) {
-        fence = null;
-        fenceLength = 0;
-      }
-      continue;
-    }
-    if (fence !== null) continue;
-    const heading = /^ {0,3}#[ \t]+(.+?)\s*$/.exec(line)?.[1]
-      ?.replace(/[ \t]+#+[ \t]*$/, "")
-      .trim();
-    if (heading) return heading;
-  }
-  return null;
 }
 
 function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -559,7 +599,6 @@ function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
     op: "doc-put",
     key,
     body,
-    title: docTitle(body),
     ...(attachTask ? { attachTask } : {}),
     ...(bareCreate ? { ifVersion: 0 } : {}),
   };
@@ -627,7 +666,12 @@ function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const backend = backendFor(deps, args);
   const snapshot = backend.snapshot();
   const obj = snapshot.objects[id];
-  if (!obj) throw new DriverError("UNKNOWN_OBJECT", `no object "${id}"`);
+  if (!obj) {
+    const shadowedRemote = backend.kind === "local" && !args.bools.has("remote") && readGlobalConnect(deps.env) !== null;
+    throw new DriverError("UNKNOWN_OBJECT", `no object "${id}"`, shadowedRemote ? {
+      hint: "this command selected the cwd's local .loopany workspace; retry with --remote to query the configured team server",
+    } : undefined);
+  }
   const events = args.bools.has("log") ? backend.events(id) : null;
   if (args.bools.has("json")) {
     // The JSON envelope must carry the SAME four record classes the text view
@@ -817,7 +861,13 @@ function verbTimeline(args: ParsedArgs, deps: CliDeps): CliOutcome {
 function verbRun(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const id = args.positionals[0];
   if (id === undefined) throw new UsageError("run needs an <id>");
-  return execWrite(backendFor(deps, args), { op: "run", id }, args, deps);
+  const backend = backendFor(deps, args);
+  const task = backend.snapshot().objects[id];
+  if (!task || task.archetype !== "task") {
+    // Let the Kernel return its authoritative UNKNOWN_OBJECT refusal.
+    return execWrite(backend, { op: "run", id }, args, deps);
+  }
+  return execDispatchWrite(backend, { op: "run", id }, task.assignee, args, deps);
 }
 
 /** `tick [--json] [--spawn]` — the host verb an agent NEVER calls (§10). Runs the
