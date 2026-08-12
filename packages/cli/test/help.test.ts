@@ -17,7 +17,7 @@ const deps: CliDeps = {
 describe("per-command help", () => {
   const topLevel = [
     "init", "register", "unregister", "connect", "create", "update", "note",
-    "doc", "mirror", "show", "list", "search", "inbox", "loops", "timeline",
+    "doc", "mirror", "show", "list", "ls", "search", "inbox", "loops", "timeline",
     "kanban", "run", "tick",
   ];
 
@@ -45,5 +45,19 @@ describe("per-command help", () => {
     expect(run(["show", "-h"], deps).exitCode).toBe(0);
     expect(run(["show", "help"], deps).exitCode).toBe(0);
     expect(run(["doc", "put", "-h"], deps).stdout).toContain("lk doc put");
+  });
+
+  it("diagnoses an unknown command before interpreting --help as a flag", () => {
+    const out = run(["not-a-command", "--help"], deps);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).toContain('unknown verb "not-a-command"');
+    expect(out.stderr).not.toContain("Unknown option");
+  });
+
+  it("ls is a complete alias of list", () => {
+    const help = run(["ls", "--help"], deps);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("ls is an alias of list");
+    expect(help.stdout).toContain("usage: lk list");
   });
 });

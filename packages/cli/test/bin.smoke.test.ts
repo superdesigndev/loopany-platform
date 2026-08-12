@@ -49,6 +49,10 @@ describe("declared bin executes under bare node (process spawn)", () => {
     const list = run("list");
     expect(list.status).toBe(0);
     expect(list.stdout).toContain("smoke-test");
+
+    const ls = run("ls");
+    expect(ls.status).toBe(0);
+    expect(ls.stdout).toContain("smoke-test");
   });
 
   it("propagates a non-zero exit for a usage error", () => {

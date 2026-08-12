@@ -956,10 +956,15 @@ function verbTick(args: ParsedArgs, deps: CliDeps): CliOutcome {
 // ---- top-level dispatch ----
 
 export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
-  const verb = argv[0];
-  if (verb === undefined || verb === "help" || verb === "--help" || verb === "-h") {
-    return { stdout: USAGE, stderr: "", exitCode: verb === undefined ? 2 : 0 };
+  const requestedVerb = argv[0];
+  if (requestedVerb === undefined || requestedVerb === "help" || requestedVerb === "--help" || requestedVerb === "-h") {
+    return { stdout: USAGE, stderr: "", exitCode: requestedVerb === undefined ? 2 : 0 };
   }
+  const verb = VERB_ALIASES[requestedVerb] ?? requestedVerb;
+  // Validate the command BEFORE parsing its flags. Otherwise `wat --help`
+  // reports an unknown OPTION, hiding the actual problem: `wat` is not a
+  // command. This also keeps aliases normalized through one dispatch path.
+  if (!KNOWN_VERBS.has(verb)) return renderUnknownVerb(requestedVerb, argv);
   // Per-verb help short-circuits BEFORE parseArgs (`--help` is not in the strict
   // option table, so it would otherwise render as an unknown-flag usage error).
   // The default screen stays lean; the sub-verb detail lives here.
@@ -1121,6 +1126,13 @@ flags
 
 const COMMON_HELP = `Common flags: --json --remote --actor <id> --session <id> --now <iso>`;
 
+const VERB_ALIASES: Record<string, string> = { ls: "list" };
+const KNOWN_VERBS = new Set([
+  "init", "register", "unregister", "connect", "create", "update", "note",
+  "doc", "mirror", "show", "list", "search", "inbox", "loops", "timeline",
+  "kanban", "run", "tick",
+]);
+
 /** Command help is deliberately data, not handler branches. `helpFor` resolves
  * it before argument parsing, workspace discovery, backend reads, or writes. */
 const VERB_USAGE: Record<string, string> = {
@@ -1232,8 +1244,11 @@ List every external mirror pointer.`,
 
 function helpFor(argv: readonly string[]): string | undefined {
   if (!wantsHelp(argv.slice(1))) return undefined;
-  const nested = argv[1] ? SUBCOMMAND_USAGE[`${argv[0]} ${argv[1]}`] : undefined;
-  return nested ?? VERB_USAGE[argv[0] ?? ""];
+  const requested = argv[0] ?? "";
+  const verb = VERB_ALIASES[requested] ?? requested;
+  const nested = argv[1] ? SUBCOMMAND_USAGE[`${verb} ${argv[1]}`] : undefined;
+  const help = nested ?? VERB_USAGE[verb];
+  return requested === "ls" && help ? `ls is an alias of list.\n\n${help}` : help;
 }
 
 /** True when a post-verb argv asks for help (`--help`, `-h`, or a bare `help`). */
