@@ -226,6 +226,57 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(out.stdout).toBe("");
   });
 
+  it("returns operational context when an assignee handoff supersedes a pending run", () => {
+    call(["init"]);
+    const created = call(["create", "Handoff work", "--assignee", "mbp/claude", "--status", "todo"]);
+    expect(created.stdout).toContain("run:");
+    expect(created.stdout).toContain("created");
+    const before = requireWorkspace(dir);
+    const firstRun = JSON.parse(
+      readFileSync(join(before, "runs", readdirSync(join(before, "runs"))[0]!), "utf8"),
+    ) as { id: string };
+
+    const handoff = call(["update", "handoff-work", "assignee=studio/codex", "--json"]);
+    const body = JSON.parse(handoff.stdout) as {
+      operationalContext: {
+        run: { createdId: string; supersededId: string; consequence: string };
+        machine: { alias: string; presence: string };
+        nextCommand: string | null;
+      };
+    };
+    expect(body.operationalContext.run).toMatchObject({
+      supersededId: firstRun.id,
+      consequence: "superseded-and-replaced",
+    });
+    expect(body.operationalContext.run.createdId).toMatch(/^run-/);
+    expect(body.operationalContext.machine).toEqual({ alias: "studio", presence: "unregistered" });
+    expect(body.operationalContext.nextCommand).toContain("loopany-kernel update handoff-work assignee=<registered-machine/agent>");
+  });
+
+  it("returns compact operational context for note, doc, mirror, and manual run writes", () => {
+    call(["init"]);
+    call(["create", "Context target", "--assignee", "claude", "--status", "in-progress"]);
+
+    const note = call(["note", "context-target", "ready for dispatch"]);
+    expect(note.stdout).toContain("changed: note");
+
+    writeFileSync(join(dir, "context.md"), "# Context\nUseful details.\n");
+    const doc = call(["doc", "put", "context", "--file", join(dir, "context.md"), "--task", "context-target"]);
+    expect(doc.stdout).toContain("changed: doc");
+    expect(doc.stdout).toContain("attached");
+
+    const mirror = call(["mirror", "add", "github-pr", "acme/repo#7", "--task", "context-target"]);
+    expect(mirror.stdout).toContain("changed: mirror");
+    expect(mirror.stdout).toContain("attached");
+
+    const manual = call(["run", "context-target", "--json"]);
+    const body = JSON.parse(manual.stdout) as {
+      operationalContext: { changed: string[]; run: { consequence: string } };
+    };
+    expect(body.operationalContext.changed).toEqual(["manual run"]);
+    expect(body.operationalContext.run.consequence).toBe("created");
+  });
+
   it("teaches archived instead of delete (no delete verb)", () => {
     call(["init"]);
     call(["create", "Throwaway"]);
