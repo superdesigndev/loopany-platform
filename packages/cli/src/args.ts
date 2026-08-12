@@ -84,6 +84,11 @@ const OPTIONS: NonNullable<ParseArgsConfig["options"]> = {
   // simulator's virtual clock must not be ticked by the resident real-clock
   // daemon). Profiles seeding is unaffected.
   "no-register": { type: "boolean" },
+  // `connect --clear` removes the global backend binding.
+  clear: { type: "boolean" },
+  // `--remote` on any verb forces the GLOBAL binding (`connect`) even inside a
+  // local workspace (which otherwise shadows it by design).
+  remote: { type: "boolean" },
 };
 
 /** Parse the post-verb argv. Throws {@link UsageError} on any parse failure —

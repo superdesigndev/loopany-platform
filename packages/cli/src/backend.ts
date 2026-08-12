@@ -39,6 +39,7 @@ import {
   runTick,
 } from "./driver.js";
 import { RemoteBackend, type SyncTransport } from "./remote.js";
+import { readGlobalConnect } from "./connect.js";
 
 export interface Backend {
   /** Human-facing label for errors/usage (e.g. "local" or the server origin). */
@@ -105,6 +106,11 @@ export function selectBackend(
   cwd: string,
   env: Record<string, string | undefined>,
   transport?: SyncTransport,
+  opts?: {
+    /** `--remote`: force the GLOBAL binding (`connect`) even inside a local
+     *  workspace - the cwd-workspace shadowing escape hatch. */
+    remote?: boolean;
+  },
 ): Backend {
   // In-run remote override (P0 stage E): a daemon-spawned agent works in the
   // TASK's workdir - an arbitrary project checkout with no .loopany stub - so
@@ -122,7 +128,28 @@ export function selectBackend(
     }
     return transport ? new RemoteBackend(envBackend, token, transport) : new RemoteBackend(envBackend, token);
   }
-  const wsDir = requireWorkspace(cwd);
+  // `--remote` forces the GLOBAL binding, checked BEFORE workspace discovery -
+  // the flag exists exactly because a cwd workspace would otherwise shadow it.
+  if (opts?.remote) {
+    const g = readGlobalConnect(env);
+    if (!g) {
+      throw new DriverError("NO_CREDENTIAL", "--remote needs a global binding", {
+        hint: "run `loopany-kernel connect <url> --token <dk_…>` first",
+      });
+    }
+    return transport ? new RemoteBackend(g.backend, g.token, transport) : new RemoteBackend(g.backend, g.token);
+  }
+  // Workspace next, global binding LAST: standing inside any `.loopany` keeps
+  // that workspace's semantics - a forgotten global binding never silently
+  // redirects a local command to a server.
+  let wsDir: string;
+  try {
+    wsDir = requireWorkspace(cwd);
+  } catch (e) {
+    const g = readGlobalConnect(env);
+    if (g) return transport ? new RemoteBackend(g.backend, g.token, transport) : new RemoteBackend(g.backend, g.token);
+    throw e;
+  }
   const config = readConfig(wsDir);
   if (config.backend === "local") return new LocalBackend(wsDir);
   const token = env.LOOPANY_KERNEL_TOKEN ?? config.token;

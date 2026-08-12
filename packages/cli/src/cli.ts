@@ -54,7 +54,8 @@ import {
 } from "./render.js";
 import { handbackTargetFor } from "./prompt.js";
 import { realSpawn, resolveSelfBin, spawnPendingRuns, type SpawnFn, type SpawnReport } from "./spawn.js";
-import type { SyncTransport } from "./remote.js";
+import { RemoteBackend, type SyncTransport } from "./remote.js";
+import { clearGlobalConnect, readGlobalConnect, redactToken, writeGlobalConnect } from "./connect.js";
 import { realProbe, seedProfiles, type ProbeFn } from "./seedProfiles.js";
 import {
   readRegistry,
@@ -177,8 +178,10 @@ function execWrite(
 /** Select the backend for a verb, injecting the fetch/transport seam if deps
  *  provide one (tests / conformance harness). All verbs but `init` go through
  *  this — `init` creates the workspace, it does not read one. */
-function backendFor(deps: CliDeps): Backend {
-  return selectBackend(deps.cwd, deps.env, deps.transport);
+function backendFor(deps: CliDeps, args?: ParsedArgs): Backend {
+  return selectBackend(deps.cwd, deps.env, deps.transport, {
+    remote: args?.bools.has("remote") ?? false,
+  });
 }
 
 function renderWriteResult(res: CommandResult, args: ParsedArgs, dryRun: boolean): CliOutcome {
@@ -298,6 +301,45 @@ function verbUnregister(args: ParsedArgs, deps: CliDeps): CliOutcome {
   return ok(removed ? `unregistered ${dir}` : `${dir} was not registered`);
 }
 
+/** `connect [<url> --token <dk_…>] [--clear]` - the GLOBAL remote binding
+ *  (`~/.loopany/kernel-backend.json`, 0600). Precedence stays env > cwd
+ *  workspace > this binding; `--remote` on any verb forces it. A live write
+ *  VERIFIES the pair with one read round-trip so a typo'd URL/token fails now,
+ *  not at first use. */
+function verbConnect(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  if (args.bools.has("clear")) {
+    const existed = clearGlobalConnect(deps.env);
+    if (args.bools.has("json")) return ok(JSON.stringify({ ok: true, cleared: existed }, null, 2));
+    return ok(existed ? "cleared the global backend binding" : "no global binding to clear");
+  }
+  const url = args.positionals[0];
+  if (url === undefined) {
+    const g = readGlobalConnect(deps.env);
+    if (args.bools.has("json")) {
+      return ok(JSON.stringify({ ok: true, backend: g?.backend ?? null, token: g ? redactToken(g.token) : null }, null, 2));
+    }
+    if (!g) return ok("no global binding — connect <url> --token <dk_…>");
+    return ok(
+      `global backend: ${g.backend}\n` +
+        `token: ${redactToken(g.token)}\n` +
+        "(env LOOPANY_KERNEL_BACKEND and a cwd workspace both take precedence; force this binding with --remote)",
+    );
+  }
+  if (!/^https?:\/\//.test(url)) {
+    throw new UsageError(`connect needs a server URL (http/https), got "${url}"`);
+  }
+  const token = args.flags.token ?? deps.env.LOOPANY_KERNEL_TOKEN;
+  if (token === undefined) throw new UsageError("connect needs --token <dk_…> (or LOOPANY_KERNEL_TOKEN set)");
+  // Verify BEFORE persisting: one read round-trip against the pair.
+  const probe = deps.transport
+    ? new RemoteBackend(url, token, deps.transport)
+    : new RemoteBackend(url, token);
+  probe.snapshot(); // throws a DriverError (OFFLINE/UNAUTHORIZED/…) on a bad pair
+  const path = writeGlobalConnect(deps.env, { backend: url, token });
+  if (args.bools.has("json")) return ok(JSON.stringify({ ok: true, backend: url.replace(/\/+$/, ""), path }, null, 2));
+  return ok(`connected: ${url.replace(/\/+$/, "")}\ntoken stored (0600) at ${path}`);
+}
+
 /** The repo root holding a `.loopany/` dir is its parent. */
 function repoRootOf(wsDir: string): string {
   return resolve(wsDir, "..");
@@ -348,7 +390,7 @@ function verbCreate(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (args.flags["follow-up"]) cmd.followUpAt = args.flags["follow-up"];
   const body = bodyFromFile(args, deps, "body-file");
   if (body !== undefined) cmd.body = body;
-  return execWrite(backendFor(deps), cmd, args, deps);
+  return execWrite(backendFor(deps, args), cmd, args, deps);
 }
 
 function verbUpdate(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -376,7 +418,7 @@ function verbUpdate(args: ParsedArgs, deps: CliDeps): CliOutcome {
       ? { ifVersion: parseIfVersion(args.flags["if-version"]) }
       : {}),
   };
-  return execWrite(backendFor(deps), cmd, args, deps);
+  return execWrite(backendFor(deps, args), cmd, args, deps);
 }
 
 function verbNote(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -391,7 +433,7 @@ function verbNote(args: ParsedArgs, deps: CliDeps): CliOutcome {
     note = args.assigns[0]!.join("=");
   }
   if (id === undefined || note === undefined) throw new UsageError('note needs <id> "<text>"');
-  return execWrite(backendFor(deps), { op: "note", id, note }, args, deps);
+  return execWrite(backendFor(deps, args), { op: "note", id, note }, args, deps);
 }
 
 function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -400,7 +442,7 @@ function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (sub !== "put") throw new UsageError('doc supports "doc put <key> [--file f.md] [--task <id>]" and "doc list"');
   const key = args.positionals[1];
   if (key === undefined) throw new UsageError("doc put needs a <key>");
-  const backend = backendFor(deps);
+  const backend = backendFor(deps, args);
   const fileBody = bodyFromFile(args, deps, "file");
   // `doc put` is an upsert. Defaulting a missing --file to "" is fine for
   // CREATION (an empty-body doc is a legal first version), but on an EXISTING
@@ -452,7 +494,7 @@ function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
 /** `doc list` — the doc enumeration a workspace never had (docs were only
  *  reachable by knowing the key, or a lucky `search`). One line per doc. */
 function docList(deps: CliDeps, args: ParsedArgs): CliOutcome {
-  const snapshot = backendFor(deps).snapshot();
+  const snapshot = backendFor(deps, args).snapshot();
   const docs = Object.values(snapshot.objects)
     .filter((o) => o.archetype === "doc")
     .sort((a, b) => (a.id < b.id ? -1 : 1));
@@ -471,7 +513,7 @@ function docList(deps: CliDeps, args: ParsedArgs): CliOutcome {
 
 /** `mirror list` — the mirror twin of `doc list`. One line per pointer. */
 function mirrorList(deps: CliDeps, args: ParsedArgs): CliOutcome {
-  const snapshot = backendFor(deps).snapshot();
+  const snapshot = backendFor(deps, args).snapshot();
   const mirrors = Object.values(snapshot.objects)
     .filter((o) => o.archetype === "mirror")
     .sort((a, b) => (a.id < b.id ? -1 : 1));
@@ -495,7 +537,7 @@ function verbMirror(args: ParsedArgs, deps: CliDeps): CliOutcome {
   // LOOPANY_TASK_ID fills it otherwise, out-of-run adds stay unattached.
   const attachTask = args.flags.task ?? deps.env.LOOPANY_TASK_ID;
   return execWrite(
-    backendFor(deps),
+    backendFor(deps, args),
     { op: "mirror-add", kind, coords, ...(attachTask ? { attachTask } : {}) },
     args,
     deps,
@@ -507,7 +549,7 @@ function verbMirror(args: ParsedArgs, deps: CliDeps): CliOutcome {
 function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const id = args.positionals[0];
   if (id === undefined) throw new UsageError("show needs an <id>");
-  const backend = backendFor(deps);
+  const backend = backendFor(deps, args);
   const snapshot = backend.snapshot();
   const obj = snapshot.objects[id];
   if (!obj) throw new DriverError("UNKNOWN_OBJECT", `no object "${id}"`);
@@ -539,7 +581,7 @@ function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
 }
 
 function verbList(args: ParsedArgs, deps: CliDeps): CliOutcome {
-  const snapshot = backendFor(deps).snapshot();
+  const snapshot = backendFor(deps, args).snapshot();
   // The due-filter and the tree's due markers both read "now"; route through
   // resolveNow so `--now`/LOOPANY_NOW (§13 M3, a deterministic-read requirement
   // M6's golden conformance depends on) actually steers the output instead of
@@ -589,7 +631,7 @@ function verbSearch(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const kw = args.positionals[0];
   if (kw === undefined) throw new UsageError("search needs a <keyword>");
   const needle = kw.toLowerCase();
-  const snapshot = backendFor(deps).snapshot();
+  const snapshot = backendFor(deps, args).snapshot();
   const hits = Object.values(snapshot.objects).filter((o) => {
     if (o.id.toLowerCase().includes(needle)) return true;
     if (o.archetype === "task") return o.title.toLowerCase().includes(needle) || o.body.toLowerCase().includes(needle);
@@ -607,12 +649,12 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (me === undefined) {
     throw new UsageError("inbox needs --assignee <me> (or set LOOPANY_ACTOR / LOOPANY_INBOX)");
   }
-  const snapshot = backendFor(deps).snapshot();
+  const snapshot = backendFor(deps, args).snapshot();
   // inboxView reads "now" for its due/follow-up buckets; route through resolveNow
   // so `--now`/LOOPANY_NOW steers the inbox deterministically (§13 M3), matching
   // list and tick — a parsed-but-ignored override was silently wrong output.
   const now = resolveNow(args, deps);
-  const backend = backendFor(deps);
+  const backend = backendFor(deps, args);
   const items = inboxView(snapshot, me, now);
   // Default hand-back agent per item (review round 3): derived from the event
   // that handed the task to this human - the inbox is a copy-paste decision
@@ -629,7 +671,7 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
  *  with its next fire, in-flight run, last result, and the dispatch-blocked
  *  configuration state (derived from the dispatcher's clock notes). */
 function verbLoops(args: ParsedArgs, deps: CliDeps): CliOutcome {
-  const backend = backendFor(deps);
+  const backend = backendFor(deps, args);
   const snapshot = backend.snapshot();
   // The blocked derivation needs each loop task's event stream; loops are few,
   // so per-task loads stay cheap on both backends.
@@ -654,7 +696,7 @@ function verbTimeline(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (args.flags.since !== undefined && !Number.isFinite(Date.parse(args.flags.since))) {
     throw new UsageError(`--since must be an ISO instant, got "${args.flags.since}"`);
   }
-  const items = backendFor(deps).timeline({
+  const items = backendFor(deps, args).timeline({
     since: args.flags.since ?? new Date(Date.parse(now) - 24 * 3600_000).toISOString(),
     limit,
     taskId: args.flags.task,
@@ -674,7 +716,7 @@ function verbTimeline(args: ParsedArgs, deps: CliDeps): CliOutcome {
 function verbRun(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const id = args.positionals[0];
   if (id === undefined) throw new UsageError("run needs an <id>");
-  return execWrite(backendFor(deps), { op: "run", id }, args, deps);
+  return execWrite(backendFor(deps, args), { op: "run", id }, args, deps);
 }
 
 /** `tick [--json] [--spawn]` — the host verb an agent NEVER calls (§10). Runs the
@@ -687,7 +729,7 @@ function verbRun(args: ParsedArgs, deps: CliDeps): CliOutcome {
  *  and finishes the run from the exit code. The spawn seam is injected via
  *  `deps.spawn` (tests) or defaults to a real subprocess (`realSpawn`). */
 function verbTick(args: ParsedArgs, deps: CliDeps): CliOutcome {
-  const backend = backendFor(deps);
+  const backend = backendFor(deps, args);
   const wantsSpawn = args.bools.has("spawn");
   // `--spawn` is the LOCAL host loop (§5.2): it claims each pending run and
   // launches the assignee's config profile as a subprocess against THIS
@@ -768,6 +810,8 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
         return verbRegister(args, deps);
       case "unregister":
         return verbUnregister(args, deps);
+      case "connect":
+        return verbConnect(args, deps);
       case "create":
         return verbCreate(args, deps);
       case "update":
@@ -866,6 +910,9 @@ workspace
                                     #   registry, e.g. a virtual-clock sandbox)
   register / unregister             # enroll (or drop) this workspace in the
                                     #   registry the resident daemon auto-ticks
+  connect <url> --token <dk_…>      # GLOBAL remote binding (~/.loopany, 0600);
+          | --clear | (bare: show)  #   env > cwd workspace > this binding -
+                                    #   force it anywhere with --remote
 
 read
   kanban                              # for humans: interactive read-only board (TTY only)

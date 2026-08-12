@@ -7,5 +7,6 @@ const exitCode = await launchKanban({
   stdin: process.stdin,
   stdout: process.stdout,
   stderr: process.stderr,
+  remote: process.argv.includes("--remote"),
 });
 process.exit(exitCode);

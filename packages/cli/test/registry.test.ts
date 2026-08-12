@@ -235,7 +235,9 @@ describe("selectBackend env override (P0 stage E)", () => {
       // Backend URL without the token fails loud, never a silent local fallback.
       expect(() => selectBackend(dir, { LOOPANY_KERNEL_BACKEND: "https://srv.example" })).toThrow(/LOOPANY_KERNEL_TOKEN/);
       // No env pair: normal workspace discovery (this dir has none - throws).
-      expect(() => selectBackend(dir, {})).toThrow();
+      // LOOPANY_HOME pins the global-connect lookup to the SAME empty temp dir,
+      // so a real `connect` binding in the developer's ~/.loopany can't leak in.
+      expect(() => selectBackend(dir, { LOOPANY_HOME: dir })).toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
