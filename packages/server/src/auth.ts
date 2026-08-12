@@ -32,7 +32,7 @@ export const authEnabled = loginGateEnabled();
 const authSecret = process.env.LOOPANY_AUTH_SECRET?.trim();
 if (authEnabled && !authSecret) {
   throw new Error(
-    "LOOPANY_AUTH_SECRET must be set when the GitHub login gate is enabled (GITHUB_CLIENT_ID/SECRET present) — refusing to fall back to the public dev secret.",
+    "LOOPANY_AUTH_SECRET must be set when the login gate is enabled (GitHub OAuth configured or LOOPANY_AUTH_MODE=shared-password) - refusing to fall back to the public dev secret.",
   );
 }
 
@@ -177,6 +177,9 @@ export async function canAccessLoop(loopTeamId: string | null, scope: RequestSco
 export const auth = betterAuth({
   baseURL: process.env.LOOPANY_BASE_URL || "http://127.0.0.1:3000",
   secret: authSecret || "dev-insecure-secret-change-in-prod",
+  advanced: authMode === "shared-password"
+    ? { defaultCookieAttributes: { sameSite: "none", secure: true, partitioned: true } }
+    : undefined,
   database: drizzleAdapter(db, { provider: "pg" }),
   socialProviders: authEnabled
     && clientId && clientSecret

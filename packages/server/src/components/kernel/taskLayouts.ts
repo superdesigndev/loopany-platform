@@ -15,3 +15,13 @@ export function visibleTaskTree<T extends TreeNode>(nodes: T[], showHidden: bool
 export function hiddenTaskCount(tasks: Array<{ status: string }>): number {
   return tasks.filter((task) => HIDDEN_STATUSES.includes(task.status as (typeof HIDDEN_STATUSES)[number])).length;
 }
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+export function resumeCommand(profile: string | null, sessionId: string, workdir?: string | null): string {
+  const executable = profile === "codex" ? "codex resume" : "claude --resume";
+  const resume = `${executable} ${shellQuote(sessionId)}`;
+  return workdir ? `cd -- ${shellQuote(workdir)} && ${resume}` : resume;
+}

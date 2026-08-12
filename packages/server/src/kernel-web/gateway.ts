@@ -18,11 +18,16 @@ export class KernelWebError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-async function access(teamId: string) {
+/** Open mode (gate off) is the anonymous shared workspace, mirroring requestScope;
+ *  gated mode requires a signed-in member of exactly this team. Team mismatch is a
+ *  flat 404 (enumeration-safe), checked before the sign-in 401. */
+async function access(teamId: string): Promise<{ user: Awaited<ReturnType<typeof currentUser>>; email: string | null }> {
+  const scope = await requestScope(teamId);
+  if (scope.teamId !== teamId) throw new KernelWebError(404, "Not found");
+  if (!scope.enforce) return { user: null, email: null };
   const user = await currentUser();
   if (!user?.email) throw new KernelWebError(401, "Sign in required");
-  const scope = await requestScope(teamId);
-  if (scope.teamId !== teamId || !scope.userId) throw new KernelWebError(404, "Not found");
+  if (!scope.userId) throw new KernelWebError(404, "Not found");
   return { user, email: user.email.trim().toLowerCase() };
 }
 
@@ -37,7 +42,7 @@ export async function workspace(teamId: string) {
   const recentRuns = [...snapshot.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30);
   return {
     team: { id: teamId, name: team?.name ?? teamId },
-    me: { id: user.id, email },
+    me: { id: user?.id ?? null, email },
     members: members.flatMap((m) => m.email ? [{ id: m.userId, email: m.email.trim().toLowerCase(), role: m.role }] : []),
     tasks,
     tree: treeView(snapshot),
@@ -45,7 +50,7 @@ export async function workspace(teamId: string) {
     activeRuns,
     recentRuns,
     documents,
-    inbox: inboxView(snapshot, email, new Date().toISOString()),
+    inbox: inboxView(snapshot, email ?? "", new Date().toISOString()),
     recentTimeline: timelineView(snapshot, events, { limit: 30 }),
     generatedAt: new Date().toISOString(),
   };
@@ -75,7 +80,8 @@ export async function runDetail(teamId: string, id: string) {
   const [snapshot, events] = await Promise.all([readSnapshot(teamId), readEvents(teamId)]);
   const run = snapshot.runs.find((r) => r.id === id);
   if (!run) throw new KernelWebError(404, "Run not found");
-  return { run, task: snapshot.objects[run.taskId] ?? null, events: events.filter((e) => e.provenance.actorId === id || e.note?.includes(id)) };
+  // Only the run's OWN writes (actorId = runId); a note merely mentioning the id is not this run's event.
+  return { run, task: snapshot.objects[run.taskId] ?? null, events: events.filter((e) => e.provenance.actorId === id) };
 }
 
 export async function timeline(teamId: string, all = false) {
@@ -86,10 +92,13 @@ export async function timeline(teamId: string, all = false) {
 
 export async function command(teamId: string, raw: unknown) {
   const { user, email } = await access(teamId);
+  if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new KernelWebError(400, "body must be { command: { op, ... } }");
+  }
   const request = { command: raw };
   const forbidden = authorizeKernelRequest("human-session", request);
   if (forbidden) throw new KernelWebError(forbidden.status, forbidden.message);
-  const actor: Provenance = { entrance: "human", actorId: email, ...(user.sessionId ? { sessionId: user.sessionId } : {}) };
+  const actor: Provenance = { entrance: "human", actorId: email ?? "anonymous", ...(user?.sessionId ? { sessionId: user.sessionId } : {}) };
   const decision = decide(raw as Command, await readSnapshot(teamId), actor, new Date().toISOString());
   if (!decision.ok) return { status: 422, body: { ok: false, refusal: decision.refusal, notices: [] } };
   const applied = await applyChangesetForTeam(teamId, decision.changeset);

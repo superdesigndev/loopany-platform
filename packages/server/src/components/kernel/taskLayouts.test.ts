@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BOARD_STATUSES, hiddenTaskCount, visibleTaskTree } from "./taskLayouts";
+import { BOARD_STATUSES, hiddenTaskCount, resumeCommand, visibleTaskTree } from "./taskLayouts";
 
 describe("kernel web task layouts", () => {
   it("uses the active workflow columns", () => {
@@ -12,5 +12,15 @@ describe("kernel web task layouts", () => {
     expect(visibleTaskTree(tree, false)).toEqual([child]);
     expect(visibleTaskTree(tree, true)).toEqual(tree);
     expect(hiddenTaskCount([{ status: "idea" }, { status: "todo" }, { status: "archived" }])).toBe(2);
+  });
+
+  it("resumes an agent session from its task workdir with shell-safe values", () => {
+    expect(resumeCommand("claude", "session-1", "/Users/tim/My Project")).toBe(
+      "cd -- '/Users/tim/My Project' && claude --resume 'session-1'",
+    );
+    expect(resumeCommand("codex", "session'2", "/tmp/tim's repo")).toBe(
+      `cd -- '/tmp/tim'"'"'s repo' && codex resume 'session'"'"'2'`,
+    );
+    expect(resumeCommand("claude", "session-3")).toBe("claude --resume 'session-3'");
   });
 });

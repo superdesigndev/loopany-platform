@@ -28,8 +28,11 @@ async function dispatch(request: Request): Promise<Response> {
     }
     return jsonError(404, "Not found");
   } catch (error) {
-    const status = typeof error === "object" && error && "status" in error ? Number(error.status) : 500;
-    return jsonError(status, error instanceof Error ? error.message : "Internal error");
+    // Clamp to a real HTTP error status: a stray `.status` (NaN, "23503", 200)
+    // must not make Response.json throw a second, unhandled error.
+    const raw = typeof error === "object" && error !== null && "status" in error ? Number((error as { status: unknown }).status) : 500;
+    const status = Number.isInteger(raw) && raw >= 400 && raw <= 599 ? raw : 500;
+    return jsonError(status, status < 500 && error instanceof Error ? error.message : "Internal error");
   }
 }
 

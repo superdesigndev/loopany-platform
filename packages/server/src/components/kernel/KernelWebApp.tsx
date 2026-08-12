@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { authClient, useSession } from "../../lib/auth-client";
-import { BOARD_STATUSES, hiddenTaskCount, visibleTaskTree } from "./taskLayouts";
+import { authClient } from "../../lib/auth-client";
+import { BOARD_STATUSES, hiddenTaskCount, resumeCommand, visibleTaskTree } from "./taskLayouts";
 
 type Obj = Record<string, any>;
 type View = "inbox" | "tasks" | "documents" | "timeline";
@@ -9,10 +9,12 @@ type Selection = { kind: "task" | "doc" | "run"; id: string };
 type LoadedDetail = Selection & { value: Obj };
 
 const fmt = (iso?: string) => iso ? new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(iso)) : "-";
-const agent = (assignee?: string | null) => assignee?.includes("/") ? assignee.split("/").pop() : null;
+const agent = (assignee?: string | null) => (assignee?.includes("/") ? assignee.split("/").pop() : null) ?? null;
 
 export function KernelWebApp({ teamId }: { teamId: string }) {
-  const { data: session, isPending } = useSession();
+  // Auth is driven by the API, not a client session: a 401 means sign in. This
+  // keeps open mode (gate off, no session at all) working without a login wall.
+  const [unauthorized, setUnauthorized] = useState(false);
   const [view, setView] = useState<View>("inbox");
   const [data, setData] = useState<Obj | null>(null);
   const [selected, setSelected] = useState<Selection | null>(null);
@@ -23,7 +25,9 @@ export function KernelWebApp({ teamId }: { teamId: string }) {
   const load = useCallback(async () => {
     try {
       const res = await fetch(`/api/kernel/web/workspace?teamId=${encodeURIComponent(teamId)}`);
+      if (res.status === 401) { setUnauthorized(true); return; }
       if (!res.ok) throw new Error((await res.json()).error ?? `HTTP ${res.status}`);
+      setUnauthorized(false);
       setData(await res.json()); setRefreshed(new Date()); setError("");
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [teamId]);
@@ -37,14 +41,13 @@ export function KernelWebApp({ teamId }: { teamId: string }) {
   }, [selected, teamId]);
 
   useEffect(() => {
-    if (!session) return;
     void load();
     const id = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, 5000);
     const visible = () => { if (document.visibilityState === "visible") void load(); };
     document.addEventListener("visibilitychange", visible);
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", visible); };
-  }, [session, load]);
-  useEffect(() => { if (session) void loadDetail(); }, [session, loadDetail, data?.generatedAt]);
+  }, [load]);
+  useEffect(() => { void loadDetail(); }, [loadDetail, data?.generatedAt]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "TEXTAREA") return;
@@ -54,18 +57,17 @@ export function KernelWebApp({ teamId }: { teamId: string }) {
     window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
   }, [load]);
 
-  if (isPending) return <main className="kw-login">Loading session...</main>;
-  if (!session) return <KernelLogin />;
+  if (unauthorized) return <KernelLogin />;
 
   const select = (kind: "task" | "doc" | "run", id: string) => { setDetail(null); setSelected({ kind, id }); };
   const selectedDetail = selected && detail?.kind === selected.kind && detail.id === selected.id ? detail.value : null;
   return <div className="kw-root">
     <header className="kw-head">
-      <strong>LOOPANY KERNEL</strong><span>{data?.team?.name ?? teamId}</span><span className="kw-muted">{session.user.email}</span>
+      <strong>LOOPANY KERNEL</strong><span>{data?.team?.name ?? teamId}</span><span className="kw-muted">{data?.me?.email ?? ""}</span>
       <span className="kw-spacer" />
       <span>{data?.activeRuns?.length ?? 0} running</span>
       <button onClick={() => void load()}>R Refresh</button>
-      <button onClick={() => void authClient.signOut()}>Sign out</button>
+      {data?.me?.email && <button onClick={() => void authClient.signOut().then(() => window.location.reload())}>Sign out</button>}
     </header>
     <div className="kw-grid">
       <nav className="kw-nav">
@@ -147,7 +149,7 @@ function Timeline({ items, select }: { items: Obj[]; select: Function }) {
 function Detail({ kind, detail, select, teamId, reload }: { kind: string; detail: Obj | null; select: Function; teamId: string; reload: Function }) {
   if (!detail) return <Empty text="Loading detail..." />;
   if (kind === "doc") return <div><h2>{detail.doc.title ?? detail.doc.key}</h2><div className="kw-meta">DOC · v{detail.doc.version} · {fmt(detail.doc.updatedAt)}</div><pre className="kw-body">{detail.doc.body}</pre>{detail.linkedTasks.map((t: Obj) => <button key={t.id} onClick={() => select("task", t.id)}>Task: {t.title}</button>)}</div>;
-  if (kind === "run") { const r = detail.run; const profile = agent(r.assignee); const command = r.agentSessionId ? (profile === "codex" ? `codex resume ${r.agentSessionId}` : `claude --resume ${r.agentSessionId}`) : null; return <div><h2>{r.id}</h2><div className="kw-meta">RUN · {r.state} · {profile ?? "agent unknown"}</div><dl><dt>Task</dt><dd><button onClick={() => select("task", r.taskId)}>{r.taskId}</button></dd><dt>Cause</dt><dd>{r.cause}</dd><dt>Assignee</dt><dd>{r.assignee ?? "-"}</dd><dt>Started</dt><dd>{fmt(r.createdAt)}</dd><dt>Agent session</dt><dd>{r.agentSessionId ?? "not recorded"}</dd></dl>{command && <button onClick={() => navigator.clipboard.writeText(command)}>Copy: {command}</button>}<pre className="kw-body">{r.note ?? "No return note yet"}</pre></div>; }
+  if (kind === "run") { const r = detail.run; const profile = agent(r.assignee); const command = r.agentSessionId ? resumeCommand(profile, r.agentSessionId, detail.task?.workdir) : null; return <div><h2>{r.id}</h2><div className="kw-meta">RUN · {r.state} · {profile ?? "agent unknown"}</div><dl><dt>Task</dt><dd><button onClick={() => select("task", r.taskId)}>{r.taskId}</button></dd><dt>Cause</dt><dd>{r.cause}</dd><dt>Assignee</dt><dd>{r.assignee ?? "-"}</dd><dt>Workdir</dt><dd>{detail.task?.workdir ?? "-"}</dd><dt>Started</dt><dd>{fmt(r.createdAt)}</dd><dt>Agent session</dt><dd>{r.agentSessionId ?? "not recorded"}</dd></dl>{command && <button onClick={() => navigator.clipboard.writeText(command)}>Copy: {command}</button>}<pre className="kw-body">{r.note ?? "No return note yet"}</pre></div>; }
   const t = detail.task; return <div><div className="kw-titleline"><h2>{t.title}</h2>{detail.activeRun && <button onClick={() => select("run", detail.activeRun.id)}>RUNNING</button>}</div><div className="kw-meta">{t.id} · v{t.version}</div><dl><dt>Status</dt><dd>{t.status}</dd><dt>Owner</dt><dd>{t.owner ?? "-"}</dd><dt>Assignee</dt><dd>{t.assignee ?? "-"}</dd><dt>Workdir</dt><dd>{t.workdir ?? "-"}</dd><dt>Goal</dt><dd>{t.goal ?? "-"}</dd></dl><TaskActions task={t} teamId={teamId} reload={reload} /><h3>Spec</h3><pre className="kw-body">{t.body || "No spec"}</pre><h3>Children</h3>{detail.children.map((c: Obj) => <button key={c.id} onClick={() => select("task", c.id)}>{c.title}</button>)}<h3>Artifacts</h3>{detail.artifacts.map((a: Obj) => <button key={a.artifact.id} onClick={() => select(a.artifact.archetype === "doc" ? "doc" : "task", a.artifact.id)}>{a.artifact.title ?? a.artifact.id}</button>)}<h3>Recent</h3>{detail.recent.map((x: Obj) => <div className="kw-event" key={x.eventIds.join(":")}>{fmt(x.at)} · {x.summary}</div>)}<h3>Runs</h3>{detail.runs.slice(0, 10).map((r: Obj) => <button key={r.id} onClick={() => select("run", r.id)}>{r.state} · {fmt(r.createdAt)} · {agent(r.assignee) ?? "agent"}</button>)}</div>;
 }
 

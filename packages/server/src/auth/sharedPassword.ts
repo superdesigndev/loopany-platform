@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { BetterAuthPlugin } from "better-auth";
 import { APIError, createAuthEndpoint } from "better-auth/api";
 import { setSessionCookie } from "better-auth/cookies";
@@ -11,10 +11,12 @@ const body = z.object({
   password: z.string().min(1).max(512),
 });
 
+/** Hashing both sides equalizes length, so the compare leaks neither the
+ * secret's byte length nor an early length mismatch. */
 function sameSecret(got: string, expected: string): boolean {
-  const a = Buffer.from(got);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
+  const a = createHash("sha256").update(got).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
 }
 
 /** Internal dogfood login. The shared secret admits an allowlisted email, then
@@ -32,7 +34,11 @@ export function sharedPasswordPlugin(options: {
         { method: "POST", body, requireHeaders: true },
         async (ctx) => {
           const email = ctx.body.email.trim().toLowerCase();
-          if (!options.emailAllowed(email) || !sameSecret(ctx.body.password, options.secret)) {
+          // Evaluate BOTH checks unconditionally: a short-circuit would let
+          // response timing reveal which emails are on the allowlist.
+          const allowed = options.emailAllowed(email);
+          const passwordOk = sameSecret(ctx.body.password, options.secret);
+          if (!allowed || !passwordOk) {
             throw new APIError("UNAUTHORIZED", { message: "Invalid email or password" });
           }
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Loopany Kernel Web"
+  short_description: "Open the Loopany team workspace inside Codex"
+  default_prompt: "Use $loopany-kernel-web to open the Loopany Kernel workspace inside Codex."
