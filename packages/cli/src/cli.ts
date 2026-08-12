@@ -58,6 +58,7 @@ import { realSpawn, resolveSelfBin, spawnPendingRuns, type SpawnFn, type SpawnRe
 import { RemoteBackend, type SyncTransport } from "./remote.js";
 import { clearGlobalConnect, readGlobalConnect, redactToken, writeGlobalConnect } from "./connect.js";
 import { realProbe, seedProfiles, type ProbeFn } from "./seedProfiles.js";
+import { formatLocalTime } from "./time.js";
 import {
   readRegistry,
   registerWorkspace,
@@ -543,7 +544,7 @@ function docList(deps: CliDeps, args: ParsedArgs): CliOutcome {
     docs
       .map((d) =>
         d.archetype === "doc"
-          ? `${d.id}  (v${d.version})  ${d.updatedAt}  ${clip(d.title ?? "", 40) || "—"}`
+          ? `${d.id}  (v${d.version})  ${formatLocalTime(d.updatedAt)}  ${clip(d.title ?? "", 40) || "—"}`
           : "",
       )
       .join("\n"),

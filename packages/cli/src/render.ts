@@ -19,6 +19,7 @@ import {
   type Trigger,
 } from "@loopany/kernel";
 import type { DriverError } from "./driver.js";
+import { formatLocalTime } from "./time.js";
 
 const NOTE_CLIP = 100;
 
@@ -58,7 +59,7 @@ function fieldLines(obj: KernelObject): string[] {
       `parent: ${t.parent ?? "—"}`,
       `tracks: ${t.tracks ?? "—"}`,
       `refs: ${t.refs.length > 0 ? t.refs.join(", ") : "—"}`,
-      `followUpAt: ${t.followUpAt ?? "—"}`,
+      `followUpAt: ${t.followUpAt ? formatLocalTime(t.followUpAt) : "—"}`,
       `workdir: ${t.workdir ?? "—"}`,
       ...(t.goal != null ? [`goal (finish line): ${t.goal}`] : []),
     ];
@@ -135,12 +136,12 @@ export function renderShow(
 
 export function renderTriggerLine(t: Trigger): string {
   const state = t.enabled ? "enabled" : `disabled (${t.disabledBy ?? "?"})`;
-  const next = t.nextFireAt ? ` next=${t.nextFireAt}` : "";
+  const next = t.nextFireAt ? ` next=${formatLocalTime(t.nextFireAt)}` : "";
   return `trigger ${t.kind}: ${t.spec} [${state}]${next}`;
 }
 
 export function renderRunLine(r: RunRecord): string {
-  return `run ${r.id}: ${r.cause} ${r.state} @${r.scheduledAt} -> ${r.assignee ?? "—"}`;
+  return `run ${r.id}: ${r.cause} ${r.state} @${formatLocalTime(r.scheduledAt)} -> ${r.assignee ?? "—"}`;
 }
 
 /** The host agent's own session, with a COPYABLE trace command (axi practice:
@@ -164,7 +165,7 @@ export function renderSessionTrace(r: RunRecord): string | null {
  *  session, a foreign host) still renders. */
 export function renderEventLine(e: KernelEvent): string {
   const actor = `${e.provenance.entrance}:${e.provenance.actorId}`;
-  const bits = [e.at, e.kind, actor];
+  const bits = [formatLocalTime(e.at), e.kind, actor];
   if (e.note) bits.push(clip(e.note));
   else if (e.diff) bits.push(clip(summarizeDiff(e.diff)));
   let line = `  ${bits.join("  ·  ")}`;
@@ -257,7 +258,7 @@ function renderTreeRow(task: TaskObject, snapshot: Snapshot, now: string, depth:
   if (cron) bits.push(`⟳ ${cron.spec}${cron.enabled ? "" : " (paused)"}`);
   if (task.followUpAt) {
     const due = Date.parse(task.followUpAt) <= Date.parse(now);
-    bits.push(`⏰ ${task.followUpAt}${due ? " (due)" : ""}`);
+    bits.push(`⏰ ${formatLocalTime(task.followUpAt)}${due ? " (due)" : ""}`);
   }
   const active = snapshot.runs.find(
     (r) => r.taskId === task.id && (r.state === "pending" || r.state === "claimed" || r.state === "running"),
@@ -275,7 +276,7 @@ export function renderFlatList(list: readonly TaskObject[], snapshot: Snapshot):
   if (list.length === 0) return "(no matches)";
   return list
     .map((t) => {
-      const due = t.followUpAt ? `  ·  ⏰ ${t.followUpAt}` : "";
+      const due = t.followUpAt ? `  ·  ⏰ ${formatLocalTime(t.followUpAt)}` : "";
       return `${t.id}  [${t.status}] @${t.assignee ?? "—"}${crumbs(t, snapshot)}${due}`;
     })
     .join("\n");
@@ -353,7 +354,7 @@ export function renderLoops(rows: readonly LoopRow[]): string {
   if (rows.length === 0) return "(no loops - a loop is a task with a cron)";
   return rows
     .map((r) => {
-      const head = `${r.task.id}  ⟳ ${r.trigger.spec}  next=${r.trigger.enabled ? (r.trigger.nextFireAt ?? "—") : `paused(${r.trigger.disabledBy ?? "?"})`}`;
+      const head = `${r.task.id}  ⟳ ${r.trigger.spec}  next=${r.trigger.enabled ? (r.trigger.nextFireAt ? formatLocalTime(r.trigger.nextFireAt) : "—") : `paused(${r.trigger.disabledBy ?? "?"})`}`;
       const state = r.blockedNote
         ? `⚠ ${clip(r.blockedNote)}`
         : r.activeRun
@@ -374,7 +375,7 @@ export function renderLoops(rows: readonly LoopRow[]): string {
 export function renderTimeline(items: readonly TimelineItem[]): string {
   if (items.length === 0) return "(no meaningful activity in range — try --since or --all)";
   return items
-    .map((i) => `${i.at}  [${i.kind}]  ${i.objectId}  ·  ${i.actor}\n      ${i.summary}`)
+    .map((i) => `${formatLocalTime(i.at)}  [${i.kind}]  ${i.objectId}  ·  ${i.actor}\n      ${i.summary}`)
     .join("\n");
 }
 

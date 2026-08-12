@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run, type CliDeps } from "../src/index.js";
+import { formatLocalTime } from "../src/time.js";
 
 describe("list tree depth cutoff (§10, S2)", () => {
   let dir: string;
@@ -66,7 +67,7 @@ describe("list tree depth cutoff (§10, S2)", () => {
     const out = call(["list"]).stdout;
     expect(out).toContain("loop  [in-progress] @claude  ·  ⟳ 0 7 * * 1");
     expect(out).toContain("claim-me  [todo] @—");
-    expect(out).toContain("sleeper  [follow-up] @—  ·  ⏰ 2026-09-01T07:00:00.000Z");
+    expect(out).toContain(`sleeper  [follow-up] @—  ·  ⏰ ${formatLocalTime("2026-09-01T07:00:00.000Z")}`);
     expect(out).toContain("handoff  [todo] @claude  ·  ▶ pending");
     expect(out).toContain("— 4 tasks: 2 todo · 1 in-progress · 1 follow-up");
   });
@@ -75,7 +76,7 @@ describe("list tree depth cutoff (§10, S2)", () => {
     call(["init"]);
     call(["create", "Ripe", "--id", "ripe", "--follow-up", "2026-08-01T07:00:00.000Z"]); // past vs now
     const out = call(["list"]).stdout;
-    expect(out).toContain("⏰ 2026-08-01T07:00:00.000Z (due)");
+    expect(out).toContain(`⏰ ${formatLocalTime("2026-08-01T07:00:00.000Z")} (due)`);
   });
 
   it("the filtered flat list keeps assignee + follow-up state", () => {

@@ -20,6 +20,7 @@ import {
 import { handbackTargetFor } from "../prompt.js";
 import stringWidth from "string-width";
 import type { Backend } from "../backend.js";
+import { formatLocalTime } from "../time.js";
 import {
   visibleStatuses,
   filterBoard,
@@ -52,7 +53,7 @@ function priorityColor(priority: string | null): "red" | "yellow" | "cyan" | und
  *  render tests pin it. */
 export function cardIndicators(task: TaskObject, snapshot?: Snapshot, nowMs = Date.now()): string {
   const bits: string[] = [];
-  if (task.followUpAt) bits.push(`due ${task.followUpAt.slice(0, 10)}`);
+  if (task.followUpAt) bits.push(`due ${formatLocalTime(task.followUpAt)}`);
   const ageMin = Math.max(0, Math.floor((nowMs - Date.parse(task.updatedAt)) / 60_000));
   bits.push(ageMin < 60 ? `${ageMin}m` : ageMin < 60 * 48 ? `${Math.floor(ageMin / 60)}h` : `${Math.floor(ageMin / 1440)}d`);
   if (snapshot) {
@@ -183,7 +184,7 @@ export function detailLines(
     `assignee: ${task.assignee ?? "unassigned"}  owner: ${task.owner ?? "unowned"}`,
     `priority: ${task.priority ?? "--"}  type: ${task.type ?? "--"}`,
     ...(task.goal != null ? [`goal (finish line): ${task.goal}`] : []),
-    ...(task.followUpAt ? [`follow-up: ${task.followUpAt}`] : []),
+    ...(task.followUpAt ? [`follow-up: ${formatLocalTime(task.followUpAt)}`] : []),
     ...(run
       ? [`run ${run.id}: ${run.state}${run.note ? ` - ${run.note.slice(0, 80)}` : ""}`]
       : []),
@@ -219,11 +220,11 @@ export function detailLines(
     // task-scoped timeline) - renderers never interpret raw events themselves.
     // Raw-event fallback only when no snapshot/detail was supplied.
     ...(detail && detail.recent.length > 0
-      ? detail.recent.flatMap((item) => wrapPlainText(`${item.at}  [${item.kind}]  ${item.summary}`, width))
+      ? detail.recent.flatMap((item) => wrapPlainText(`${formatLocalTime(item.at)}  [${item.kind}]  ${item.summary}`, width))
       : recent.length === 0
         ? ["(none)"]
         : recent.flatMap((event) =>
-            wrapPlainText(`${event.at}  ${event.kind}${event.note ? `: ${event.note}` : ""}`, width),
+            wrapPlainText(`${formatLocalTime(event.at)}  ${event.kind}${event.note ? `: ${event.note}` : ""}`, width),
           )),
   ];
   return lines;
