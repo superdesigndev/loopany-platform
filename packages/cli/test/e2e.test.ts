@@ -166,7 +166,9 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     const recentShow = call(["show", "ship-the-redesign"]);
     expect(recentShow.stdout).toContain("recent:");
     expect(recentShow.stdout).toContain("kicked off the work");
-    expect(recentShow.stdout).toContain("handoff:");
+    // Creation context remains in recent activity. It is not mislabeled as a
+    // handoff unless an assignee-change event supplied a reason.
+    expect(recentShow.stdout).not.toContain("handoff:");
     expect(recentShow.stdout).toContain("full history: loopany-kernel show ship-the-redesign --log");
     expect(recentShow.stdout).not.toContain("run-started:");
     const boundedShow = call(["show", "ship-the-redesign", "--limit", "1", "--json"]);

@@ -99,8 +99,20 @@ export function renderShow(
     const detail = taskDetailView(snapshot, obj.id, contextEvents ?? events ?? undefined);
     if (detail) {
       const taskEvents = contextEvents ?? events ?? [];
-      const handoff = [...taskEvents].reverse().find((e) => e.kind === "assignee-changed" || e.kind === "created");
-      const handoffReason = handoff?.note;
+      // Creation is identity context, not a handoff. A multi-field update puts
+      // its one note on the first sibling event, so recover that same-write
+      // note when the assignee-change event itself does not carry it.
+      const handoff = [...taskEvents].reverse().find((e) => e.kind === "assignee-changed");
+      const handoffReason = handoff?.note ?? (handoff
+        ? taskEvents.find(
+            (e) =>
+              e !== handoff &&
+              e.at === handoff.at &&
+              e.provenance.entrance === handoff.provenance.entrance &&
+              e.provenance.actorId === handoff.provenance.actorId &&
+              Boolean(e.note),
+          )?.note
+        : undefined);
       if (handoffReason) parts.push("", "handoff:", `  ${clip(handoffReason, 180)}`);
       const loopLines: string[] = [];
       for (const t of trigs) loopLines.push(`  ${renderTriggerLine(t)}`);
@@ -165,9 +177,17 @@ export function renderShow(
         for (const task of related) parts.push(`  task ${task.id}  [${task.status}]  ${clip(task.title, 60)}`);
       }
 
-      const blocked = [...taskEvents].reverse().find(
-        (e) => e.kind === "note" && e.provenance.entrance === "clock" && (e.note ?? "").includes("dispatch blocked"),
-      );
+      // A dispatch block belongs to one pending run. Historical block notes
+      // must not survive that run being claimed, completed, or superseded, nor
+      // should a repaired route keep sending the owner back to fix it again.
+      const blocked = detail.activeRun?.state === "pending"
+        ? [...taskEvents].reverse().find(
+            (e) =>
+              e.kind === "note" &&
+              e.provenance.entrance === "clock" &&
+              (e.note ?? "").includes(`dispatch blocked (run ${detail.activeRun!.id})`),
+          )
+        : undefined;
       const humanDecision = obj.assignee?.includes("@") && obj.status !== "done" && obj.status !== "archived";
       if (blocked?.note) parts.push("", "blocking condition:", `  ${clip(blocked.note, 220)}`);
       else if (humanDecision) parts.push("", "human decision:", `  waiting on ${obj.assignee}${handoffReason ? ` - ${clip(handoffReason, 160)}` : ""}`);
