@@ -141,3 +141,37 @@ describe("the connect verb", () => {
     expect(readGlobalConnect(env)).toBeNull();
   });
 });
+
+describe("identity follows the credential (remote inbox)", () => {
+  it("connect --me persists the declared identity; bare inbox on remote uses it (announced)", () => {
+    const { transport } = fakeTransport();
+    const deps = { cwd, env, transport, now: "2026-08-12T00:00:00.000Z" };
+    const set = run(["connect", "https://fly.example", "--token", "dk_g", "--me", "tim@x.co"], deps as never);
+    expect(set.exitCode).toBe(0);
+    expect(readGlobalConnect(env)?.me).toBe("tim@x.co");
+    expect(run(["connect"], deps as never).stdout).toContain("me: tim@x.co");
+    // Bare remote inbox: identity = the credential binding, never git.
+    const inbox = run(["inbox"], { ...deps, gitEmail: () => "wrong@git.local" } as never);
+    expect(inbox.exitCode).toBe(0);
+    expect(inbox.stdout).toContain("inbox for tim@x.co");
+    expect(inbox.stdout).toContain("connect --me");
+    expect(inbox.stdout).not.toContain("wrong@git.local");
+  });
+
+  it("remote with NO bound identity refuses with the connect --me hint (git is never consulted)", () => {
+    const { transport } = fakeTransport();
+    writeGlobalConnect(env, { backend: "https://fly.example", token: "dk_g" });
+    const deps = { cwd, env, transport, gitEmail: () => "wrong@git.local", now: "2026-08-12T00:00:00.000Z" };
+    const res = run(["inbox"], deps as never);
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).toContain("--me");
+    expect(res.stderr).not.toContain("git");
+  });
+
+  it("--me must be an email", () => {
+    const { transport } = fakeTransport();
+    const deps = { cwd, env, transport, now: "2026-08-12T00:00:00.000Z" };
+    const res = run(["connect", "https://fly.example", "--token", "dk_g", "--me", "not-an-email"], deps as never);
+    expect(res.exitCode).not.toBe(0);
+  });
+});

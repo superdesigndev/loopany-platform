@@ -24,6 +24,11 @@ import { join } from "node:path";
 export interface GlobalConnect {
   backend: string;
   token: string;
+  /** WHO the human behind this credential is (their kernel assignee email) -
+   *  the identity `inbox` filters by on the remote backend. Declared at
+   *  `connect --me` for now (open mode tokens carry no server-side identity);
+   *  the gated phase resolves/validates it from the credential at the server. */
+  me?: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -41,7 +46,11 @@ export function readGlobalConnect(env: Env): GlobalConnect | null {
     const raw = JSON.parse(readFileSync(connectPath(env), "utf8")) as Partial<GlobalConnect>;
     if (typeof raw.backend !== "string" || !/^https?:\/\//.test(raw.backend)) return null;
     if (typeof raw.token !== "string" || raw.token.length === 0) return null;
-    return { backend: raw.backend.replace(/\/+$/, ""), token: raw.token };
+    return {
+      backend: raw.backend.replace(/\/+$/, ""),
+      token: raw.token,
+      ...(typeof raw.me === "string" && raw.me.includes("@") ? { me: raw.me } : {}),
+    };
   } catch {
     return null;
   }
@@ -52,7 +61,18 @@ export function readGlobalConnect(env: Env): GlobalConnect | null {
 export function writeGlobalConnect(env: Env, binding: GlobalConnect): string {
   const path = connectPath(env);
   mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify({ backend: binding.backend.replace(/\/+$/, ""), token: binding.token }, null, 2) + "\n");
+  writeFileSync(
+    path,
+    JSON.stringify(
+      {
+        backend: binding.backend.replace(/\/+$/, ""),
+        token: binding.token,
+        ...(binding.me ? { me: binding.me } : {}),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
   chmodSync(path, 0o600);
   return path;
 }

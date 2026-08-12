@@ -69,6 +69,9 @@ const OPTIONS: NonNullable<ParseArgsConfig["options"]> = {
   // deterministic-clock override (hidden): tests + reproducible ticks pin `now`
   // rather than reading the wall clock (also LOOPANY_NOW). §13 M3 requirement.
   now: { type: "string" },
+  // `connect <url> --token <dk_…> --me <email>` declares WHO the human behind
+  // the credential is (the remote inbox's default identity).
+  me: { type: "string" },
   wait: { type: "boolean" },
   // boolean flags
   json: { type: "boolean" },

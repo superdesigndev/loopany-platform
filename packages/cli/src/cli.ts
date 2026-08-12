@@ -337,12 +337,19 @@ function verbConnect(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (url === undefined) {
     const g = readGlobalConnect(deps.env);
     if (args.bools.has("json")) {
-      return ok(JSON.stringify({ ok: true, backend: g?.backend ?? null, token: g ? redactToken(g.token) : null }, null, 2));
+      return ok(
+        JSON.stringify(
+          { ok: true, backend: g?.backend ?? null, token: g ? redactToken(g.token) : null, me: g?.me ?? null },
+          null,
+          2,
+        ),
+      );
     }
-    if (!g) return ok("no global binding — connect <url> --token <dk_…>");
+    if (!g) return ok("no global binding — connect <url> --token <dk_…> [--me <you@email>]");
     return ok(
       `global backend: ${g.backend}\n` +
         `token: ${redactToken(g.token)}\n` +
+        `me: ${g.me ?? "— (set with connect <url> --token <dk_…> --me <you@email>)"}\n` +
         "(env LOOPANY_KERNEL_BACKEND and a cwd workspace both take precedence; force this binding with --remote)",
     );
   }
@@ -351,14 +358,25 @@ function verbConnect(args: ParsedArgs, deps: CliDeps): CliOutcome {
   }
   const token = args.flags.token ?? deps.env.LOOPANY_KERNEL_TOKEN;
   if (token === undefined) throw new UsageError("connect needs --token <dk_…> (or LOOPANY_KERNEL_TOKEN set)");
+  // WHO the human behind this credential is (`inbox` filters by it remotely).
+  // Open-mode tokens carry no server-side identity, so this is a DECLARATION
+  // stored with the binding; the gated phase resolves it from the server.
+  const me = args.flags.me;
+  if (me !== undefined && !me.includes("@")) {
+    throw new UsageError(`--me must be an email (the kernel's human-assignee form), got "${me}"`);
+  }
   // Verify BEFORE persisting: one read round-trip against the pair.
   const probe = deps.transport
     ? new RemoteBackend(url, token, deps.transport)
     : new RemoteBackend(url, token);
   probe.snapshot(); // throws a DriverError (OFFLINE/UNAUTHORIZED/…) on a bad pair
-  const path = writeGlobalConnect(deps.env, { backend: url, token });
-  if (args.bools.has("json")) return ok(JSON.stringify({ ok: true, backend: url.replace(/\/+$/, ""), path }, null, 2));
-  return ok(`connected: ${url.replace(/\/+$/, "")}\ntoken stored (0600) at ${path}`);
+  const path = writeGlobalConnect(deps.env, { backend: url, token, ...(me ? { me } : {}) });
+  if (args.bools.has("json")) {
+    return ok(JSON.stringify({ ok: true, backend: url.replace(/\/+$/, ""), me: me ?? null, path }, null, 2));
+  }
+  return ok(
+    `connected: ${url.replace(/\/+$/, "")}${me ? `\nme: ${me}` : ""}\ntoken stored (0600) at ${path}`,
+  );
 }
 
 /** The repo root holding a `.loopany/` dir is its parent. */
@@ -666,23 +684,37 @@ function verbSearch(args: ParsedArgs, deps: CliDeps): CliOutcome {
 }
 
 function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const backend = backendFor(deps, args);
   const explicit = args.flags.assignee ?? args.flags.actor ?? deps.env.LOOPANY_ACTOR ?? deps.env.LOOPANY_INBOX;
-  // DEFAULT IDENTITY: the local git user.email - a bare `inbox` shows YOUR
-  // decision queue (the kernel's human assignee is an email, and git already
-  // knows which one this machine's human is). Explicit flags/env still win.
-  const derived = explicit === undefined ? (deps.gitEmail ?? realGitEmail)() : null;
-  const me = explicit ?? derived ?? undefined;
+  // DEFAULT IDENTITY follows the backend, because identity follows the
+  // CREDENTIAL: on a REMOTE backend "me" is the identity declared with the
+  // binding (`connect --me`; the gated phase resolves it server-side from the
+  // token) - never a guess from an unrelated local repo config. Only the
+  // LOCAL file driver, which has no credential at all, falls back to git
+  // user.email (the machine-local identity of record). Explicit always wins.
+  let derived: { me: string; from: string } | null = null;
+  if (explicit === undefined) {
+    if (backend.kind === "remote") {
+      const bound = readGlobalConnect(deps.env)?.me;
+      if (bound) derived = { me: bound, from: "connect --me" };
+    } else {
+      const git = (deps.gitEmail ?? realGitEmail)();
+      if (git) derived = { me: git, from: "git user.email" };
+    }
+  }
+  const me = explicit ?? derived?.me;
   if (me === undefined) {
     throw new UsageError(
-      "inbox needs --assignee <me> (or set LOOPANY_ACTOR / LOOPANY_INBOX, or configure git user.email)",
+      backend.kind === "remote"
+        ? "inbox needs an identity: pass --assignee <me>, or bind one to the credential with `connect <url> --token <dk_…> --me <you@email>`"
+        : "inbox needs --assignee <me> (or set LOOPANY_ACTOR / LOOPANY_INBOX, or configure git user.email)",
     );
   }
-  const snapshot = backendFor(deps, args).snapshot();
+  const snapshot = backend.snapshot();
   // inboxView reads "now" for its due/follow-up buckets; route through resolveNow
   // so `--now`/LOOPANY_NOW steers the inbox deterministically (§13 M3), matching
   // list and tick — a parsed-but-ignored override was silently wrong output.
   const now = resolveNow(args, deps);
-  const backend = backendFor(deps, args);
   const items = inboxView(snapshot, me, now);
   // Default hand-back agent per item (review round 3): derived from the event
   // that handed the task to this human - the inbox is a copy-paste decision
@@ -692,11 +724,11 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
     handbackTargets[i.task.id] = handbackTargetFor(backend.events(i.task.id), i.task, snapshot.runs);
   }
   if (args.bools.has("json")) {
-    return ok(JSON.stringify({ me, ...(derived ? { derivedFrom: "git user.email" } : {}), items, handbackTargets }, null, 2));
+    return ok(JSON.stringify({ me, ...(derived ? { derivedFrom: derived.from } : {}), items, handbackTargets }, null, 2));
   }
   // A DERIVED identity is announced (never a silent guess): whose inbox this
   // is, where the identity came from, and how to override it.
-  const header = derived ? `inbox for ${me}  (git user.email — override with --assignee)\n` : "";
+  const header = derived ? `inbox for ${me}  (${derived.from} — override with --assignee)\n` : "";
   return ok(header + renderInbox(items, now, handbackTargets));
 }
 
@@ -944,6 +976,7 @@ workspace
   register / unregister             # enroll (or drop) this workspace in the
                                     #   registry the resident daemon auto-ticks
   connect <url> --token <dk_…>      # GLOBAL remote binding (~/.loopany, 0600);
+          [--me <you@email>]        #   --me = who YOU are (remote inbox default);
           | --clear | (bare: show)  #   env > cwd workspace > this binding -
                                     #   force it anywhere with --remote
 
