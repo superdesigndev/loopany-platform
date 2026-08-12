@@ -46,7 +46,9 @@ async function waitForTarget(port) {
   while (Date.now() < deadline) {
     try {
       const found = await targets(port);
-      const target = found.find((item) => /chatgpt|codex/i.test(`${item.title} ${item.url}`)) || found[0];
+      const target = found.find((item) => item.url === "app://-/index.html")
+        || found.find((item) => /chatgpt|codex/i.test(`${item.title} ${item.url}`) && !item.url.includes("initialRoute="))
+        || found[0];
       if (target) return target;
     } catch {}
     await delay(250);
@@ -83,17 +85,16 @@ class Cdp {
 async function launch(port) {
   const profile = join(homedir(), "Library", "Application Support", "Loopany Kernel Codex");
   await mkdir(profile, { recursive: true });
-  const child = spawn("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", [
+  return spawn("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", [
     `--user-data-dir=${profile}`,
     "--remote-debugging-address=127.0.0.1",
     `--remote-debugging-port=${port}`,
     `--remote-allow-origins=http://127.0.0.1:${port}`,
-  ], { detached: true, stdio: "ignore" });
-  child.unref();
+  ], { stdio: "ignore" });
 }
 
 const options = args(process.argv.slice(2));
-if (!options.attach) await launch(options.port);
+const appProcess = options.attach ? null : await launch(options.port);
 const target = await waitForTarget(options.port);
 const cdp = new Cdp(target.webSocketDebuggerUrl);
 await cdp.connect();
@@ -128,6 +129,7 @@ console.log("Keep this process running. Press Ctrl+C to detach.");
 const stop = async () => {
   try { await cdp.send("Runtime.evaluate", { expression: "window.__loopanyKernelWebInjection__?.destroy?.()" }); } catch {}
   cdp.close();
+  appProcess?.kill("SIGTERM");
   process.exit(0);
 };
 process.on("SIGINT", stop);
