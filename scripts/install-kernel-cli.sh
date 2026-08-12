@@ -1,18 +1,13 @@
 #!/usr/bin/env bash
-# Install the SELF-CONTAINED loopany-kernel CLI globally (no npm -g, no repo
-# dependency at run time): esbuild-bundle the CLI + the kanban TUI chunk (the
-# same bundles the published daemon ships), land them under ~/.local/lib, and
-# expose `loopany-kernel` + the short `lk` via wrapper scripts in ~/.local/bin.
+# Install a DEVELOPMENT loopany-kernel CLI globally (no npm -g). The wrapper
+# points directly at this checkout's source launcher, so edits and branch
+# switches take effect immediately without rebuilding or reinstalling.
 #
 #   bash scripts/install-kernel-cli.sh              # install/update
 #   bash scripts/install-kernel-cli.sh --uninstall  # remove everything
 #
-# Layout (the .mjs files must keep their extension - node derives the module
-# type from it, so the bin entries are tiny sh wrappers, not renamed bundles):
-#   ~/.local/lib/loopany-kernel/kernel-cli.mjs      # the CLI (kanban-free)
-#   ~/.local/lib/loopany-kernel/kernel-kanban.mjs   # lazy TUI chunk (sibling
-#                                                   #   lookup by kernel-cli)
-#   ~/.local/bin/loopany-kernel                     # wrapper -> node kernel-cli.mjs
+# Layout:
+#   ~/.local/bin/loopany-kernel                     # wrapper -> checkout source
 #   ~/.local/bin/lk                                 # symlink -> loopany-kernel
 set -euo pipefail
 
@@ -31,18 +26,13 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
-# 1. Bundle (the daemon's own build script: kernel-cli.mjs + the kanban chunk).
-if [ ! -d "$ROOT/packages/daemon/node_modules" ]; then
+# The source launcher uses the checkout's tsx runtime and workspace packages.
+if ! ( cd "$ROOT/packages/cli" && node -e 'require.resolve("tsx/cli"); require.resolve("@loopany/kernel")' ) >/dev/null 2>&1; then
   echo "▶ workspace deps missing - installing (pnpm) ..."
   ( cd "$ROOT" && npx -y pnpm@8.15.0 install ) >/dev/null
 fi
-echo "▶ bundling kernel CLI + kanban TUI ..."
-( cd "$ROOT/packages/daemon" && node scripts/bundle-kernel-cli.mjs )
 
-# 2. Land the bundles + wrappers.
-mkdir -p "$LIB" "$BIN"
-install -m 0644 "$ROOT/packages/daemon/dist/kernel-cli.mjs" "$LIB/kernel-cli.mjs"
-install -m 0644 "$ROOT/packages/daemon/dist/kernel-kanban.mjs" "$LIB/kernel-kanban.mjs"
+mkdir -p "$BIN"
 
 # Refuse to clobber a foreign `loopany-kernel`/`lk` (ours carries the marker).
 for name in loopany-kernel lk; do
@@ -56,12 +46,12 @@ done
 cat > "$BIN/loopany-kernel" <<EOF
 #!/bin/sh
 $MARKER
-exec node "$LIB/kernel-cli.mjs" "\$@"
+exec node "$ROOT/packages/cli/bin/loopany-kernel.mjs" "\$@"
 EOF
 chmod 0755 "$BIN/loopany-kernel"
 ln -sf loopany-kernel "$BIN/lk"
 
-echo "✓ installed: $BIN/loopany-kernel (+ lk)"
+echo "✓ installed: $BIN/loopany-kernel (+ lk) -> $ROOT/packages/cli/bin/loopany-kernel.mjs"
 case ":$PATH:" in
   *":$BIN:"*) ;;
   *) echo "  NOTE: $BIN is not on PATH - add:  export PATH=\"$BIN:\$PATH\"" ;;

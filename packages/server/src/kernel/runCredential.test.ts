@@ -140,33 +140,56 @@ test("an rk_ credential cannot dictate time: body.now is ignored, events land on
   expect(Date.parse(noted!.at)).toBeGreaterThan(Date.parse("2026-01-01T00:00:00.000Z"));
 });
 
-test("SIMULATOR seam: LOOPANY_KERNEL_TRUST_CLIENT_NOW=1 lets an rk_ ride the virtual clock (default stays OFF)", async () => {
+test("SIM TIME AUTHORITY is a CAPABILITY, never a mode (kernel-authority-clock-seam)", async () => {
   const { teamId, rk } = await deliveredRun();
   const virtual = "2026-01-05T07:00:00.000Z";
+
+  // 1. No secret configured: presenting ANY authority is a loud 403 (a
+  //    misconfigured simulator must never silently run on real time), and the
+  //    capability is unreachable - nothing can grant it.
+  const unconfigured = await kgateway.kernelCli(rk, {
+    command: { op: "note", id: "seo-bet-manager", note: "x" },
+    now: virtual,
+    simAuthority: "whatever",
+  });
+  expect(unconfigured.status).toBe(403);
+
   try {
-    process.env.LOOPANY_KERNEL_TRUST_CLIENT_NOW = "1";
-    const res = await kgateway.kernelCli(rk, {
-      command: { op: "note", id: "seo-bet-manager", note: "virtual-clock note" },
+    process.env.LOOPANY_KERNEL_SIM_SECRET = "sim-secret-1";
+
+    // 2. Secret configured, rk_ WITHOUT the authority: server time, always.
+    const plain = await kgateway.kernelCli(rk, {
+      command: { op: "note", id: "seo-bet-manager", note: "no-authority note" },
       now: virtual,
     });
-    expect(res.status).toBe(200);
+    expect(plain.status).toBe(200);
+    const plainNote = (await kstore.readEvents(teamId)).find(
+      (e) => e.kind === "note" && (e.note ?? "").includes("no-authority note"),
+    );
+    expect(plainNote!.at).not.toBe(virtual);
+
+    // 3. WRONG authority: loud 403, nothing written.
+    const wrong = await kgateway.kernelCli(rk, {
+      command: { op: "note", id: "seo-bet-manager", note: "forged" },
+      now: virtual,
+      simAuthority: "sim-secret-2",
+    });
+    expect(wrong.status).toBe(403);
+
+    // 4. CORRECT authority: the rk_ rides the virtual clock.
+    const granted = await kgateway.kernelCli(rk, {
+      command: { op: "note", id: "seo-bet-manager", note: "virtual-clock note" },
+      now: virtual,
+      simAuthority: "sim-secret-1",
+    });
+    expect(granted.status).toBe(200);
     const noted = (await kstore.readEvents(teamId)).find(
       (e) => e.kind === "note" && (e.note ?? "").includes("virtual-clock note"),
     );
     expect(noted!.at).toBe(virtual);
   } finally {
-    delete process.env.LOOPANY_KERNEL_TRUST_CLIENT_NOW;
+    delete process.env.LOOPANY_KERNEL_SIM_SECRET;
   }
-  // Flag cleared: the very next rk_ write is back on server time.
-  const after = await kgateway.kernelCli(rk, {
-    command: { op: "note", id: "seo-bet-manager", note: "post-flag note" },
-    now: "2020-06-06T00:00:00.000Z",
-  });
-  expect(after.status).toBe(200);
-  const post = (await kstore.readEvents(teamId)).find(
-    (e) => e.kind === "note" && (e.note ?? "").includes("post-flag note"),
-  );
-  expect(post!.at).not.toBe("2020-06-06T00:00:00.000Z");
 });
 
 test("POSTCONDITION: a zero-evidence run-finish(done) settles as FAILED", async () => {

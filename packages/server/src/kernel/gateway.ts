@@ -27,6 +27,7 @@ import {
   timelineView,
 } from "@loopany/kernel";
 
+import { timingSafeEqual } from "node:crypto";
 import * as store from "../db/store.js";
 import { isDeviceTokenShape, machineIdFromToken, resolveLease, retireLeasesForRun, sha256 } from "../gateway/tokens.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "./store.js";
@@ -78,6 +79,28 @@ export interface KernelCliBody {
    *  the shared timelineView so a remote CLI never downloads every event. */
   timeline?: { since?: unknown; limit?: unknown; taskId?: unknown; actor?: unknown; all?: unknown };
   now?: string;
+  /** The SIMULATOR time-authority capability (kernel-authority-clock-seam):
+   *  presenting the server's LOOPANY_KERNEL_SIM_SECRET here (timing-safe
+   *  compared) lets `now` be honored even on a RUN credential. Unverifiable
+   *  presentation = loud 403; no secret configured = the capability does not
+   *  exist. Never a mode, never ambient. */
+  simAuthority?: unknown;
+}
+
+/** Verify a presented simulator time authority against the configured secret.
+ *  Three-state by design: `absent` (nothing presented - the normal case),
+ *  `granted` (secret configured AND matches, timing-safe), `refused` (presented
+ *  but unverifiable - wrong value OR no secret configured; the caller must fail
+ *  LOUD, because a simulator silently falling back to real time corrupts its
+ *  own determinism without a trace). */
+function checkSimAuthority(presented: unknown): "absent" | "granted" | "refused" {
+  if (presented === undefined || presented === null) return "absent";
+  const secret = process.env.LOOPANY_KERNEL_SIM_SECRET;
+  if (typeof presented !== "string" || !secret) return "refused";
+  const a = Buffer.from(presented);
+  const b = Buffer.from(secret);
+  if (a.length !== b.length) return "refused";
+  return timingSafeEqual(a, b) ? "granted" : "refused";
 }
 
 /** Resolve a credential to its `{teamId, actor, run?}` scope, or a flat 401
@@ -178,13 +201,29 @@ export async function kernelCli(
   // A RUN credential never dictates time: honoring body.now would let a run
   // backdate its own history or steer follow-up/backoff math. The deterministic
   // `now` override stays an owner/test seam on DEVICE credentials only.
-  // EXCEPTION (env-gated, default OFF): a SIMULATOR deployment sets
-  // LOOPANY_KERNEL_TRUST_CLIENT_NOW=1 so in-run events ride the virtual clock
-  // too - the whole world (device ticks AND agent callbacks) then shares one
-  // deterministic timeline. Never set on staging/prod (fly.kernel.toml only).
-  const trustClientNow = process.env.LOOPANY_KERNEL_TRUST_CLIENT_NOW === "1";
+  //
+  // The ONE exception is a CAPABILITY, never a mode: a simulator deployment
+  // configures LOOPANY_KERNEL_SIM_SECRET, and only a request PRESENTING that
+  // secret (body.simAuthority, compared timing-safe) may pin `now` on a run
+  // credential - so the whole virtual world (device ticks AND agent callbacks)
+  // shares one deterministic timeline. With no secret configured the capability
+  // is unreachable; presenting an authority that cannot be verified is a LOUD
+  // 403 (a misconfigured simulator must never silently fall back to real time
+  // and corrupt its own determinism). Ordinary rk_ requests are untouched under
+  // every configuration - the kernel-authority-clock-seam invariant.
+  const grant = checkSimAuthority(req.simAuthority);
+  if (grant === "refused") {
+    return {
+      status: 403,
+      body: {
+        ok: false,
+        notices: [],
+        refusal: { code: "FORBIDDEN", message: "simulator time authority not verifiable (wrong or unconfigured LOOPANY_KERNEL_SIM_SECRET)" },
+      },
+    };
+  }
   const now =
-    scope.run && !trustClientNow ? new Date().toISOString() : (req.now ?? new Date().toISOString());
+    scope.run && grant !== "granted" ? new Date().toISOString() : (req.now ?? new Date().toISOString());
 
   // Run-credential verb subset (stage D): team is the hard wall (already
   // resolved), the subset keeps owner/host surfaces off a run token.

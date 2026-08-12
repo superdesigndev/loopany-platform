@@ -217,8 +217,18 @@ export function runCli(opts: RunnerOpts, deps: RunnerDeps = realRunnerDeps): Sim
         base: opts.remote.replace(/\/$/, ""),
         token: `dk_sim_${opts.runId.replace(/[^a-zA-Z0-9_-]/g, "")}`,
         alias: `sim-${opts.runId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 24)}`,
+        // The sim time-authority capability: without it the server (correctly)
+        // stamps in-run rk_ events with REAL time and the virtual world's
+        // determinism silently breaks - so its absence is a HARD error here.
+        simAuthority: process.env.LOOPANY_KERNEL_SIM_AUTHORITY,
       }
     : undefined;
+  if (remote && !remote.simAuthority) {
+    throw new Error(
+      "remote tier needs LOOPANY_KERNEL_SIM_AUTHORITY (= the server's LOOPANY_KERNEL_SIM_SECRET) - " +
+        "in-run events would otherwise land on server time and break the virtual clock",
+    );
+  }
   if (remote) deps.log(`remote: ${remote.base} (machine ${remote.alias})`);
   const result = runScenario(scenario, { runId: opts.runId, dir: sandboxDir, extraEnv, remote });
 

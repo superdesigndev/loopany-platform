@@ -7,7 +7,7 @@
 #            live (this file)          testing (fly.kernel.toml)
 #   DB       volume-backed, durable    ephemeral (restart = wipe)
 #   clock    real (sweep 30s default)  client-driven (sweep 0)
-#   rk_ now  server time (invariant)   LOOPANY_KERNEL_TRUST_CLIENT_NOW=1
+#   rk_ now  server time (invariant)   sim time-authority capability (secret)
 #
 # ACCESS MODEL (phase 1): OPEN MODE - no GitHub gate. Any dk_-shaped token
 # self-registers into the ONE shared team, and the app URL is publicly

@@ -61,8 +61,8 @@ export interface RunOpts {
    *  TOKEN env), spawning goes through the remote-pump shim (poll -> rk_
    *  delivery -> spawn -> run-finish; `tick --spawn` refuses remote by design),
    *  and scenario assignees are machine-addressed (`<alias>/<name>`). The
-   *  deployment must run with LOOPANY_KERNEL_TRUST_CLIENT_NOW=1 so in-run
-   *  events share the virtual clock. */
+   *  deployment must hold LOOPANY_KERNEL_SIM_SECRET and the run must present
+   *  it (RemoteWorld.simAuthority) so in-run events share the virtual clock. */
   remote?: RemoteWorld;
 }
 
@@ -73,6 +73,10 @@ export interface RemoteWorld {
   token: string;
   /** The machine alias - the assignee's machine segment. */
   alias: string;
+  /** The sim time-authority capability (must equal the server's
+   *  LOOPANY_KERNEL_SIM_SECRET) - without it, in-run rk_ events land on SERVER
+   *  time and the virtual world's determinism breaks. */
+  simAuthority?: string;
 }
 
 /** ONE bare profile name -> its dispatch address on the remote tier
@@ -178,6 +182,7 @@ export function runScenario(scenario: Scenario, opts: RunOpts): SimResult {
     sandbox.env.LOOPANY_KERNEL_BACKEND = remote.base;
     sandbox.env.LOOPANY_KERNEL_TOKEN = remote.token;
     sandbox.env.LOOPANY_SIM_ALIAS = remote.alias;
+    if (remote.simAuthority) sandbox.env.LOOPANY_KERNEL_SIM_AUTHORITY = remote.simAuthority;
     setup.push(execPump(sandbox, "enroll", setupNow));
   }
   for (const argv of scenario.setup.tasks) {

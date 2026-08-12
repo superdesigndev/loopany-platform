@@ -31,10 +31,12 @@ primary_region = "nrt"
   # = clean slate, by design for this testing app.
   LOOPANY_DB = "pglite"
   LOOPANY_KERNEL_SWEEP_MS = "0"
-  # SIMULATOR seam: rk_ run credentials honor body.now here, so in-run agent
-  # events ride the same virtual clock as the device ticks. NEVER set on
-  # staging/prod - there the rk_ server-time invariant is absolute.
-  LOOPANY_KERNEL_TRUST_CLIENT_NOW = "1"
+  # SIM TIME AUTHORITY (kernel-authority-clock-seam): the capability secret is
+  # NOT set here (a committed file must never carry it). Provision it once:
+  #   fly secrets set LOOPANY_KERNEL_SIM_SECRET=$(openssl rand -hex 16) -a loopany-kernel-testing
+  # and export the same value as LOOPANY_KERNEL_SIM_AUTHORITY when running the
+  # simulator against this app. Ordinary rk_ credentials can never pin time -
+  # only a request presenting this secret can, and only on this app.
 
 [http_service]
   internal_port = 3000

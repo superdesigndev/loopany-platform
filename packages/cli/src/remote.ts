@@ -65,6 +65,11 @@ export class RemoteBackend implements Backend {
     serverUrl: string,
     private readonly token: string,
     private readonly transport: SyncTransport = syncHttpTransport,
+    /** The SIMULATOR time-authority capability (LOOPANY_KERNEL_SIM_AUTHORITY):
+     *  presented on every request so a virtual `now` is honored at the
+     *  authority. Absent in every normal use - see the server's
+     *  kernel-authority-clock-seam invariant. */
+    private readonly simAuthority?: string,
   ) {
     // POST target: <serverUrl>/api/kernel/cli. Tolerate a trailing slash.
     this.url = `${serverUrl.replace(/\/+$/, "")}/api/kernel/cli`;
@@ -136,7 +141,8 @@ export class RemoteBackend implements Backend {
   /** POST the envelope, translate a Refusal/ApplyConflict to a DriverError, and
    *  return the ok response. FAIL LOUD on any transport/status failure. */
   private send(body: Record<string, unknown>): KernelCliResponse {
-    const { status, response } = this.transport(this.url, this.token, body);
+    const withAuthority = this.simAuthority ? { ...body, simAuthority: this.simAuthority } : body;
+    const { status, response } = this.transport(this.url, this.token, withAuthority);
     if (response.refusal) throw refusalError(response.refusal);
     if (response.conflict) throw conflictError(response.conflict);
     if (status !== 200 || !response.ok) {

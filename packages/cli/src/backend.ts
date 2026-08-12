@@ -126,7 +126,7 @@ export function selectBackend(
         hint: "the daemon injects both; set LOOPANY_KERNEL_TOKEN or unset LOOPANY_KERNEL_BACKEND",
       });
     }
-    return transport ? new RemoteBackend(envBackend, token, transport) : new RemoteBackend(envBackend, token);
+    return new RemoteBackend(envBackend, token, transport ?? undefined, env.LOOPANY_KERNEL_SIM_AUTHORITY);
   }
   // `--remote` forces the GLOBAL binding, checked BEFORE workspace discovery -
   // the flag exists exactly because a cwd workspace would otherwise shadow it.
@@ -137,7 +137,7 @@ export function selectBackend(
         hint: "run `loopany-kernel connect <url> --token <dk_…>` first",
       });
     }
-    return transport ? new RemoteBackend(g.backend, g.token, transport) : new RemoteBackend(g.backend, g.token);
+    return new RemoteBackend(g.backend, g.token, transport ?? undefined, env.LOOPANY_KERNEL_SIM_AUTHORITY);
   }
   // Workspace next, global binding LAST: standing inside any `.loopany` keeps
   // that workspace's semantics - a forgotten global binding never silently
@@ -147,7 +147,7 @@ export function selectBackend(
     wsDir = requireWorkspace(cwd);
   } catch (e) {
     const g = readGlobalConnect(env);
-    if (g) return transport ? new RemoteBackend(g.backend, g.token, transport) : new RemoteBackend(g.backend, g.token);
+    if (g) return new RemoteBackend(g.backend, g.token, transport ?? undefined, env.LOOPANY_KERNEL_SIM_AUTHORITY);
     throw e;
   }
   const config = readConfig(wsDir);
@@ -160,7 +160,5 @@ export function selectBackend(
       { hint: "set LOOPANY_KERNEL_TOKEN, or add a `token` to .loopany/config.json" },
     );
   }
-  return transport
-    ? new RemoteBackend(config.backend, token, transport)
-    : new RemoteBackend(config.backend, token);
+  return new RemoteBackend(config.backend, token, transport ?? undefined, env.LOOPANY_KERNEL_SIM_AUTHORITY);
 }

@@ -12,8 +12,8 @@
  *   pump     poll for kernel deliveries; for each: spawn the profile for the
  *            delivered agent segment (prompt via {{prompt}} argv token or
  *            stdin), then run-finish on the delivered rk_ credential with the
- *            VIRTUAL now (the deployment must set
- *            LOOPANY_KERNEL_TRUST_CLIENT_NOW=1 for in-run virtual time).
+ *            VIRTUAL now (requires the LOOPANY_KERNEL_SIM_AUTHORITY capability
+ *            matching the server's LOOPANY_KERNEL_SIM_SECRET).
  *            Repeats until a poll delivers nothing (a run's own writes may mint
  *            follow-on runs). Prints a JSON report.
  *   read     dump the remote read body (snapshot + events + machinePresence) -
@@ -54,10 +54,13 @@ async function poll() {
 }
 
 async function kernelCli(credential, body) {
+  // The sim time authority (kernel-authority-clock-seam): a virtual `now` on a
+  // run credential is honored ONLY with this capability presented.
+  const simAuthority = process.env.LOOPANY_KERNEL_SIM_AUTHORITY;
   const res = await fetch(`${BASE}/api/kernel/cli`, {
     method: "POST",
     headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(simAuthority ? { ...body, simAuthority } : body),
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
