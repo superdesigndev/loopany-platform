@@ -113,6 +113,16 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     // A non-owner's inbox does not see it.
     const otherInbox = call(["inbox", "--assignee", "someone-else@acme.dev"]);
     expect(otherInbox.stdout).toContain("inbox empty");
+    // BARE `inbox` derives YOU from git user.email (announced, never a silent
+    // guess) — the kernel's human identity IS an email, and git knows yours.
+    const bareInbox = call(["inbox"], { gitEmail: () => "reviewer@acme.dev" });
+    expect(bareInbox.stdout).toContain("inbox for reviewer@acme.dev");
+    expect(bareInbox.stdout).toContain("git user.email");
+    expect(bareInbox.stdout).toContain("review-pr-42");
+    // No identity from any source: the usage error names all three.
+    const noId = run(["inbox"], deps({ gitEmail: () => null }));
+    expect(noId.exitCode).not.toBe(0);
+    expect(noId.stderr).toContain("git user.email");
 
     // --- update: a note rides along and provenance is recorded. Advancing the
     // nightly loop to done disarms its cron under invariant ②; reviving it

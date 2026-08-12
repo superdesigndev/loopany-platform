@@ -29,6 +29,7 @@ import {
   sortTasksForList,
   treeView,
 } from "@loopany/kernel";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { UsageError, parseArgs, type ParsedArgs } from "./args.js";
@@ -87,6 +88,26 @@ export interface CliDeps {
    *  the seed never depends on the host's installed agents; the bin passes the
    *  real PATH probe. */
   probe?: ProbeFn;
+  /** "Who am I" seam: the LOCAL user's email (git config user.email), the
+   *  inbox's default identity. Injected in tests; undefined falls back to the
+   *  real git probe (bounded, never throws). */
+  gitEmail?: () => string | null;
+}
+
+/** The real `git config user.email` probe - the machine-local human identity
+ *  (zero-config, and the kernel's human-assignee heuristic IS an email). Null
+ *  when git is absent/unconfigured; never throws. */
+function realGitEmail(): string | null {
+  try {
+    const out = execFileSync("git", ["config", "--get", "user.email"], {
+      encoding: "utf8",
+      timeout: 3_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return out.includes("@") ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface CliOutcome {
@@ -645,9 +666,16 @@ function verbSearch(args: ParsedArgs, deps: CliDeps): CliOutcome {
 }
 
 function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
-  const me = args.flags.assignee ?? args.flags.actor ?? deps.env.LOOPANY_ACTOR ?? deps.env.LOOPANY_INBOX;
+  const explicit = args.flags.assignee ?? args.flags.actor ?? deps.env.LOOPANY_ACTOR ?? deps.env.LOOPANY_INBOX;
+  // DEFAULT IDENTITY: the local git user.email - a bare `inbox` shows YOUR
+  // decision queue (the kernel's human assignee is an email, and git already
+  // knows which one this machine's human is). Explicit flags/env still win.
+  const derived = explicit === undefined ? (deps.gitEmail ?? realGitEmail)() : null;
+  const me = explicit ?? derived ?? undefined;
   if (me === undefined) {
-    throw new UsageError("inbox needs --assignee <me> (or set LOOPANY_ACTOR / LOOPANY_INBOX)");
+    throw new UsageError(
+      "inbox needs --assignee <me> (or set LOOPANY_ACTOR / LOOPANY_INBOX, or configure git user.email)",
+    );
   }
   const snapshot = backendFor(deps, args).snapshot();
   // inboxView reads "now" for its due/follow-up buckets; route through resolveNow
@@ -663,8 +691,13 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
   for (const i of items) {
     handbackTargets[i.task.id] = handbackTargetFor(backend.events(i.task.id), i.task, snapshot.runs);
   }
-  if (args.bools.has("json")) return ok(JSON.stringify({ items, handbackTargets }, null, 2));
-  return ok(renderInbox(items, now, handbackTargets));
+  if (args.bools.has("json")) {
+    return ok(JSON.stringify({ me, ...(derived ? { derivedFrom: "git user.email" } : {}), items, handbackTargets }, null, 2));
+  }
+  // A DERIVED identity is announced (never a silent guess): whose inbox this
+  // is, where the identity came from, and how to override it.
+  const header = derived ? `inbox for ${me}  (git user.email — override with --assignee)\n` : "";
+  return ok(header + renderInbox(items, now, handbackTargets));
 }
 
 /** `loops` — the Loops projection (kernel-product-visibility): every cron task
