@@ -383,6 +383,18 @@ describe("note / doc / mirror / run / delete", () => {
 });
 
 describe("doc put --task (atomic attach)", () => {
+  it("derives title at the authority from the first H1 and clears it with the H1", () => {
+    const first = run(emptyWorld(), {
+      op: "doc-put",
+      key: "report",
+      body: "```md\n# Example only\n```\n\n# Real report #\n",
+      title: "stale client title",
+    });
+    expect(first.world.snapshot.objects.report).toMatchObject({ title: "Real report" });
+    const second = run(first.world, { op: "doc-put", key: "report", body: "No heading.\n" });
+    expect(second.world.snapshot.objects.report).toMatchObject({ title: null });
+  });
+
   it("appends the doc id to the task's refs with a fields-changed event, idempotently", () => {
     const w = seed({ op: "create", title: "loop", id: "loop" } as Command);
     const r1 = run(w, { op: "doc-put", key: "portfolio", body: "v1", attachTask: "loop" });

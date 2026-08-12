@@ -69,6 +69,26 @@ describe("timelineView", () => {
     expect([...ats].sort().reverse()).toEqual(ats);
   });
 
+  it("task scope keeps cross-object products written by that task's run", () => {
+    let w = busyWorld();
+    // Associate the synthetic run provenance with its home task, as a real
+    // claimed run is represented in the snapshot.
+    w = {
+      ...w,
+      snapshot: {
+        ...w.snapshot,
+        runs: [{
+          id: "run-1", taskId: "seo", cause: "manual", scheduledAt: T1,
+          state: "done", assignee: "mbp/claude", triggerId: null, createdAt: T1,
+        }],
+      },
+    };
+    const item = timelineView(w.snapshot, w.events, { taskId: "seo" }).find((i) => i.runId === "run-1");
+    expect(item?.summary).toContain("doc seo-report-2026w33");
+    expect(item?.summary).toContain("nothing else actionable");
+    expect(item?.summary).not.toBe("refs");
+  });
+
   it("hides mechanical activity by default; --all reveals it", () => {
     let w = emptyWorld();
     w = step(w, { op: "create", title: "plain", id: "plain" }, TIM, T0);

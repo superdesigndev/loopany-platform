@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
+  agentSessionIdFromText,
   ensureKernelBinDir,
   FINISH_RETRY_DELAYS_MS,
   kernelAgentKind,
@@ -14,6 +15,11 @@ import {
   type KernelRunDelivery,
   type KernelRunDeps,
 } from "./kernel-run.js";
+
+test("host session ids are treated as opaque provider values", () => {
+  expect(agentSessionIdFromText('{"type":"system","session_id":"sess-claude_01"}')).toBe("sess-claude_01");
+  expect(agentSessionIdFromText('{"session_id":""}')).toBeNull();
+});
 
 const KR: KernelRunDelivery = {
   runId: "run-abc",

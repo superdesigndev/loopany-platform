@@ -209,4 +209,19 @@ describe("tickRegisteredWorkspaces (best-effort, isolated, dedup)", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  test("a missing registered workspace warns once across passes", async () => {
+    const missing = join(dir, "missing-on-two-passes");
+    const logs: string[] = [];
+    const deps = {
+      readRegistry: () => [{ dir: missing, bin: "/b.mjs" }],
+      spawnTick: async () => okResult(),
+      exists: () => false,
+      log: (line: string) => logs.push(line),
+    };
+    await tickRegisteredWorkspaces(new Set(), deps);
+    await tickRegisteredWorkspaces(new Set(), deps);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("registered workspace missing - skipped");
+  });
 });

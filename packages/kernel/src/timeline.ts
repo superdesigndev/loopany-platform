@@ -156,15 +156,23 @@ function collapseRun(
 
   const bits: string[] = [];
   let failed = false;
+  let lastNote: string | null = null;
+  let hasProduct = false;
   for (const e of events) {
     switch (e.kind) {
       case "doc-updated":
         bits.push(`doc ${e.objectId}`);
+        hasProduct = true;
         break;
       case "created": {
         // A fresh doc/mirror is a PRODUCT; a fresh task is minted work.
         const obj = snapshot.objects[e.objectId];
-        bits.push(obj?.archetype === "doc" || obj?.archetype === "mirror" ? `${obj.archetype} ${e.objectId}` : `+${e.objectId}`);
+        if (obj?.archetype === "doc" || obj?.archetype === "mirror") {
+          bits.push(`${obj.archetype} ${e.objectId}`);
+          hasProduct = true;
+        } else {
+          bits.push(`+${e.objectId}`);
+        }
         break;
       }
       case "assignee-changed": {
@@ -176,7 +184,9 @@ function collapseRun(
         bits.push("observation");
         break;
       case "fields-changed":
-        if (e.diff && "refs" in e.diff) bits.push("refs");
+        // An attach accompanies the product event in a full run projection. Do
+        // not let the generic graph edit replace the meaningful product name.
+        if (e.diff && "refs" in e.diff && !hasProduct) bits.push("refs");
         break;
       case "status-changed": {
         const { new: next } = statusDiff(e);
@@ -189,6 +199,8 @@ function collapseRun(
         if ((e.note ?? "").includes("returned failed")) failed = true;
         break;
       case "note":
+        if (e.note) lastNote = e.note;
+        break;
       case "run-started":
       case "trigger-discarded":
         break;
@@ -208,6 +220,7 @@ function collapseRun(
     };
   }
   if (bits.length === 0) return null; // start + claim + ordinary return (or note-only no-op)
+  if (lastNote) bits.push(lastNote);
 
   return {
     at: last.at,
@@ -228,10 +241,13 @@ export function timelineView(
   opts: TimelineOptions = {},
 ): TimelineItem[] {
   const limit = opts.limit !== undefined && opts.limit > 0 ? opts.limit : 50;
+  const runTask = new Map(snapshot.runs.map((r) => [r.id, r.taskId]));
   const inScope = events.filter(
     (e) =>
       (opts.since === undefined || e.at > opts.since) &&
-      (opts.taskId === undefined || e.objectId === opts.taskId) &&
+      (opts.taskId === undefined ||
+        e.objectId === opts.taskId ||
+        (e.provenance.entrance === "agent-run" && runTask.get(e.provenance.actorId) === opts.taskId)) &&
       (opts.actor === undefined || e.provenance.actorId === opts.actor),
   );
   const ordered = [...inScope].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id < b.id ? -1 : 1));

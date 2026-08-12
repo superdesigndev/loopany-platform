@@ -46,6 +46,14 @@ export function kernelAgentKind(agent: string): CodingAgent | null {
   return null;
 }
 
+/** Extract the provider session id from a bounded stream window. Session ids
+ * are opaque protocol values, not necessarily UUIDs (Codex and test harnesses
+ * commonly use prefixed ids), so do not narrow the wire contract here. */
+export function agentSessionIdFromText(text: string): string | null {
+  const match = text.match(/"session_id"\s*:\s*"([^"\\]{1,200})"/);
+  return match?.[1] ?? null;
+}
+
 export interface KernelRunDeps {
   /** True when the path exists AND is a directory (fs seam). */
   isDirectory: (path: string) => boolean;
@@ -118,9 +126,9 @@ export const realKernelRunDeps: KernelRunDeps = {
     }
   },
   run: async (bin, args, opts) => {
-    // Scan the stream for the agent's own session id (first match wins; claude
-    // stream-json stamps it on every line). Cheap regex over chunks - no JSONL
-    // parser needed for one field, and a non-stream agent simply never matches.
+    // Scan the stream for the agent's own opaque session id (first match wins;
+    // claude stream-json stamps it on every line). A non-stream agent simply
+    // never matches.
     let agentSessionId: string | null = null;
     let carry = "";
     const res = await runProcess(bin, args, {
@@ -130,8 +138,7 @@ export const realKernelRunDeps: KernelRunDeps = {
       onStdout: (chunk) => {
         if (agentSessionId) return;
         carry = (carry + chunk).slice(-4096); // bounded: the id never spans >4KB
-        const m = carry.match(/"session_id"\s*:\s*"([0-9a-fA-F-]{8,64})"/);
-        if (m) agentSessionId = m[1]!;
+        agentSessionId = agentSessionIdFromText(carry);
       },
     });
     return { code: res.code, agentSessionId };

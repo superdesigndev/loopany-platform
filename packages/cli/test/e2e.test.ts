@@ -160,6 +160,18 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     // (§3/§7), not just the entrance — the default human actor is "cli".
     expect(show.stdout).toContain("human:cli");
 
+    // Bare Task show carries a bounded meaningful projection by default. Raw
+    // mechanics remain behind --log/--all rather than forcing agents to know a
+    // protocol-only flag just to understand current context.
+    const recentShow = call(["show", "ship-the-redesign"]);
+    expect(recentShow.stdout).toContain("recent:");
+    expect(recentShow.stdout).toContain("kicked off the work");
+    expect(recentShow.stdout).not.toContain("run-started:");
+    const boundedShow = call(["show", "ship-the-redesign", "--limit", "1", "--json"]);
+    const boundedJson = JSON.parse(boundedShow.stdout) as { recent: unknown[]; events?: unknown[] };
+    expect(boundedJson.recent).toHaveLength(1);
+    expect(boundedJson.events).toBeUndefined();
+
     // The event stream on disk carries every event for the object.
     const events = readFileSync(join(dir, ".loopany", "events", "ship-the-redesign.jsonl"), "utf8")
       .split("\n")
@@ -230,14 +242,25 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
   it("show is the Task Detail: products from tracks+refs, children, last run; loops is the Loops projection", () => {
     call(["init"]);
     call(["create", "Seo loop", "--id", "seo", "--cron", "0 7 * * *", "--status", "in-progress", "--assignee", "mbp/claude"]);
-    call(["doc", "put", "weekly-report", "--task", "seo"]);
+    const report = join(dir, "weekly.md");
+    writeFileSync(report, "# weekly-report\n");
+    call(["doc", "put", "weekly-report", "--file", report, "--task", "seo"]);
+    call(["update", "seo", "tracks=weekly-report"]);
+    for (let i = 1; i <= 6; i++) call(["doc", "put", `report-${i}`, "--task", "seo"]);
     call(["create", "Child bet", "--id", "bet-child", "--parent", "seo"]);
 
     const show = call(["show", "seo"]);
-    expect(show.stdout).toContain("products:");
+    expect(show.stdout).toContain("products (latest 5 of 7; --all for all):");
     expect(show.stdout).toContain("doc weekly-report");
+    expect(show.stdout).not.toContain("doc weekly-report  weekly-report");
+    expect(show.stdout).not.toContain("doc report-1");
+    expect(show.stdout).toContain("doc report-6");
     expect(show.stdout).toContain("children:");
     expect(show.stdout).toContain("bet-child");
+
+    const expanded = call(["show", "seo", "--all"]);
+    expect(expanded.stdout).toContain("products:");
+    expect(expanded.stdout).toContain("doc report-1");
 
     const loops = call(["loops"]);
     expect(loops.stdout).toContain("seo  ⟳ 0 7 * * *");

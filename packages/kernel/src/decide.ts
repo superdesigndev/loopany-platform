@@ -857,16 +857,38 @@ function decideNote(cmd: NoteCommand, ctx: Ctx): Decision {
 
 // ---- doc put (no state machine => one upsert verb) ----
 
+function docTitle(body: string): string | null {
+  let fence: "`" | "~" | null = null;
+  let fenceLength = 0;
+  for (const line of body.split(/\r?\n/)) {
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1]!;
+      const char = marker[0] as "`" | "~";
+      if (fence === null) {
+        fence = char;
+        fenceLength = marker.length;
+      } else if (char === fence && marker.length >= fenceLength) {
+        fence = null;
+        fenceLength = 0;
+      }
+      continue;
+    }
+    if (fence !== null) continue;
+    const heading = /^ {0,3}#[ \t]+(.+?)\s*$/.exec(line)?.[1]
+      ?.replace(/[ \t]+#+[ \t]*$/, "")
+      .trim();
+    if (heading) return heading;
+  }
+  return null;
+}
+
 function decideDocPut(cmd: DocPutCommand, ctx: Ctx): Decision {
   const { snapshot, actor, now } = ctx;
   const keyBad = requireString(cmd.key, "key", "INVALID_REFERENCE");
   if (keyBad) return keyBad;
   const bodyBad = requireString(cmd.body, "body", "INVALID_REFERENCE");
   if (bodyBad) return bodyBad;
-  if (cmd.title !== undefined && cmd.title !== null) {
-    const titleBad = requireString(cmd.title, "title", "INVALID_REFERENCE");
-    if (titleBad) return titleBad;
-  }
   const id = slugify(cmd.key);
   const existing = getObject(snapshot, id);
   if (existing && existing.archetype !== "doc") {
@@ -882,7 +904,7 @@ function decideDocPut(cmd: DocPutCommand, ctx: Ctx): Decision {
     archetype: "doc",
     id,
     key: id,
-    title: cmd.title === undefined ? (existing?.archetype === "doc" ? existing.title : null) : cmd.title,
+    title: docTitle(cmd.body),
     body: cmd.body,
     version,
     createdAt: existing?.createdAt ?? now,

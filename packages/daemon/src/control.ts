@@ -17,6 +17,10 @@
 import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { PID_FILE, readPidFile, clearPidFile, isAlive, processStartTime, verifiedRunningPid, type PidRecord } from "./pidfile.js";
+import { readRegistryFile, type RegistryEntry } from "./moonlight.js";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 export type MachineStatus = { online: boolean; name: string | null };
 
@@ -51,9 +55,11 @@ export type ControlDeps = {
   // from the ambient ~/.loopany. Omitted ⇒ read from disk.
   server?: string;
   token?: string;
+  registry?: RegistryEntry[];
+  pathExists?: (path: string) => boolean;
 };
 
-type Seams = Required<Omit<ControlDeps, "server" | "token">>;
+type Seams = Required<Omit<ControlDeps, "server" | "token" | "registry" | "pathExists">>;
 
 function deps(d: ControlDeps): Seams {
   return {
@@ -89,6 +95,18 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
   d.out(`  server:    ${server || "not configured — run `loopany up --server-url <url>`"}\n`);
   d.out(`  identity:  ${token ? tokenFingerprint(token) : "no device token — run `loopany up`"}\n`);
   d.out(`  pidfile:   ${PID_FILE}\n`);
+  const registry = injected.registry ?? readRegistryFile();
+  const pathExists = injected.pathExists ?? existsSync;
+  const tempRoots = [path.resolve(tmpdir()), "/tmp", "/private/tmp"].map((p) => p + path.sep);
+  const missing = registry.filter((e) => !pathExists(e.dir));
+  const temporary = registry.filter((e) => tempRoots.some((root) => path.resolve(e.dir).startsWith(root)));
+  d.out(
+    `  kernels:   ${registry.length} local workspace${registry.length === 1 ? "" : "s"} registered` +
+      `${missing.length ? ` (${missing.length} missing)` : ""}${temporary.length ? ` (${temporary.length} temporary)` : ""}\n`,
+  );
+  for (const entry of registry) {
+    d.out(`             ${pathExists(entry.dir) ? "active" : "missing"} ${entry.dir}\n`);
+  }
 
   // Best-effort: only the server can say whether this machine is currently
   // CONNECTED (the local pid being alive doesn't prove the poll loop is healthy).

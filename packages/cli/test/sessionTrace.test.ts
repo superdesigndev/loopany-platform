@@ -43,6 +43,11 @@ describe("renderSessionTrace", () => {
     expect(renderSessionTrace(run())).toBeNull();
     expect(renderSessionTrace(run({ agentSessionId: null }))).toBeNull();
   });
+
+  it("does not invent a Claude transcript path for another provider", () => {
+    const line = renderSessionTrace(run({ assignee: "stonex-mbp/codex", agentSessionId: "codex-session-1" }));
+    expect(line).toBe("  session codex-session-1");
+  });
 });
 
 describe("renderEventLine session suffix (axi-concise)", () => {

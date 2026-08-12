@@ -21,7 +21,8 @@ read this when you want the deeper grammar.
 
 ```text
 read
-  show <id> [--log]                     the object + (with --log) its event stream
+  show <id> [--limit N] [--all]         task detail + recent meaningful events
+            [--log [--limit N]]         raw object event stream
   list [--status|--assignee|--due|--tree]  no filter = the two-level tree
   search <keyword>
   inbox --assignee <me>                 products awaiting YOUR decision
@@ -92,9 +93,10 @@ Inside a run you were spawned with three env vars — `LOOPANY_TASK_ID`,
 attributed on the event stream (and how a future pass finds your transcript with
 `find … <sessionId>.jsonl`). Your whole session is bracketed by two kernel calls:
 
-1. **Open by reading.** `loopany-kernel show $LOOPANY_TASK_ID --log` — the body is
-   the current understanding, the log is what happened, the sessionIds in it lead
-   to prior transcripts.
+1. **Open by reading.** `loopany-kernel show $LOOPANY_TASK_ID` — the body is
+   current understanding and `recent` is the bounded meaningful history. Use
+   `show $LOOPANY_TASK_ID --log` only when you need raw Events or a prior
+   sessionId for transcript drill-down.
 2. **Close by writing status.** `loopany-kernel update $LOOPANY_TASK_ID status=<s>
    --note "<what changed>"`. There is NO terminal verb — the status you set IS the
    ending:

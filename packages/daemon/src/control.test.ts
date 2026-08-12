@@ -16,6 +16,7 @@ function capture(extra: ControlDeps = {}): ControlDeps & { stdout: () => string;
     err: (s) => { err += s; },
     stdout: () => out,
     stderr: () => err,
+    registry: [],
     ...extra,
   };
 }
@@ -117,6 +118,23 @@ describe("runStatus", () => {
     await runStatus([], cap);
     expect(called).toBe(false);
     expect(cap.stdout()).toContain("no device token");
+  });
+
+  test("shows registered local kernel scope and stale/temp entries", async () => {
+    const cap = capture({
+      readPid: () => undefined,
+      server: "",
+      token: undefined,
+      registry: [
+        { dir: "/private/tmp/demo-kernel", bin: "/bin/lk" },
+        { dir: "/work/live", bin: "/bin/lk" },
+      ],
+      pathExists: (p) => p === "/work/live",
+    });
+    await runStatus([], cap);
+    expect(cap.stdout()).toContain("2 local workspaces registered (1 missing) (1 temporary)");
+    expect(cap.stdout()).toContain("missing /private/tmp/demo-kernel");
+    expect(cap.stdout()).toContain("active /work/live");
   });
 });
 

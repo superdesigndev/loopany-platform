@@ -672,7 +672,18 @@ function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
       hint: "this command selected the cwd's local .loopany workspace; retry with --remote to query the configured team server",
     } : undefined);
   }
-  const events = args.bools.has("log") ? backend.events(id) : null;
+  let limit: number | undefined;
+  if (args.flags.limit !== undefined) {
+    if (!/^\d+$/.test(args.flags.limit) || Number(args.flags.limit) < 1) {
+      throw new UsageError(`--limit must be a positive integer, got "${args.flags.limit}"`);
+    }
+    limit = Number(args.flags.limit);
+  }
+  const rawEvents = args.bools.has("log") ? backend.events(id) : null;
+  const events = rawEvents && limit !== undefined ? rawEvents.slice(-limit) : rawEvents;
+  const recent = obj.archetype === "task" && !args.bools.has("log")
+    ? backend.timeline({ taskId: id, limit: limit ?? 8, all: args.bools.has("all") })
+    : null;
   if (args.bools.has("json")) {
     // The JSON envelope must carry the SAME four record classes the text view
     // surfaces (§3), or --json is strictly weaker than text — a break M6
@@ -690,13 +701,19 @@ function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
         : null;
     return ok(
       JSON.stringify(
-        { object: obj, triggers, activeRun, events: events ?? undefined },
+        {
+          object: obj,
+          triggers,
+          activeRun,
+          events: events ?? undefined,
+          recent: recent ?? undefined,
+        },
         null,
         2,
       ),
     );
   }
-  return ok(renderShow(obj, snapshot, events));
+  return ok(renderShow(obj, snapshot, events, recent, args.bools.has("all")));
 }
 
 function verbList(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -1068,7 +1085,8 @@ workspace
 
 read
   kanban                              # for humans: interactive read-only board (TTY only)
-  show <id> [--log]
+  show <id> [--limit N] [--all]       # tasks include recent meaningful activity
+            [--log [--limit N]]       # raw object event stream
   list [--status <s>] [--assignee <a>] [--due] [--tree]   # no filter = tree (depth 2)
   search <keyword>
   inbox --assignee <me>

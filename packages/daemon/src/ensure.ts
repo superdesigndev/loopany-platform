@@ -80,6 +80,7 @@ export type EnsureDeps = {
   localPid?: () => number | undefined;
   persist?: (file: string, value: string) => void;
   readToken?: () => string | undefined;
+  readServer?: () => string | undefined;
   /** Refresh the user-scope skill (best-effort, announced). Injected in tests. */
   installSkill?: (opts: InstallOpts) => Promise<InstallOutcome>;
   /** Install/refresh the `loopany` PATH shim (best-effort, feedback #4). Injected in tests. */
@@ -109,6 +110,7 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
     localPid: injected.localPid ?? (() => verifiedRunningPid()),
     persist: injected.persist ?? persist,
     readToken: injected.readToken ?? (() => readStored(DEVICE_FILE)),
+    readServer: injected.readServer ?? (() => readStored(SERVER_FILE)),
     installSkill: injected.installSkill ?? installSkill,
     ensureBinShim: injected.ensureBinShim ?? (() => void ensureBinShim()),
     refreshHooks: injected.refreshHooks ?? (() => refreshHooks()),
@@ -136,6 +138,8 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
     await d.refreshHooks();
   };
 
+  const requestedServer = (flag(args, "server-url") || process.env.LOOPANY_SERVER_URL || "").replace(/\/$/, "");
+  const storedServer = d.readServer()?.replace(/\/$/, "");
   const server = resolveServerUrl(flag(args, "server-url"));
   // Reuse this machine's stored identity first (so we stay the SAME machine across
   // runs); only adopt the connect-key the first time, when nothing is stored yet.
@@ -144,11 +148,6 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
     d.err("loopany: usage: loopany up --server-url <url> --connect-key <dk_…>\n");
     return 2;
   }
-
-  // Persist both now so `loopany new` and a restart are zero-config (the daemon
-  // persists them too on boot; doing it here makes them available immediately).
-  d.persist(SERVER_FILE, server);
-  d.persist(DEVICE_FILE, token);
 
   const logFile = path.join(LOOPANY_DIR, "daemon.log");
 
@@ -159,6 +158,18 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
   if (!opts.force) {
     const localPid = d.localPid();
     if (localPid !== undefined) {
+      // A live daemon owns this home. Never rewrite its durable connection out
+      // from underneath it: the process would keep polling the old server while
+      // every new CLI invocation reads the new one. A second environment belongs
+      // in a distinct LOOPANY_HOME.
+      if (requestedServer && (!storedServer || requestedServer !== storedServer)) {
+        d.err(
+          `loopany: daemon already running from ${LOOPANY_DIR} with ` +
+            `${storedServer ?? "an unknown stored server"}; refusing ${requestedServer}\n` +
+            "use a separate LOOPANY_HOME for another environment\n",
+        );
+        return 1;
+      }
       const st = await d.fetchStatus(server, token);
       if (st?.online) {
         d.out(`daemon already running for this machine${st.name ? ` (${st.name})` : ""}\n`);
@@ -176,6 +187,11 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
       return 0;
     }
   }
+
+  // Persist only after the live-daemon guard. This makes an idempotent `up`
+  // byte-preserving and a cross-environment mistake unable to clobber the home.
+  d.persist(SERVER_FILE, server);
+  d.persist(DEVICE_FILE, token);
 
   d.out("starting daemon…\n");
   const childPid = d.spawnDaemon(server, token, logFile);

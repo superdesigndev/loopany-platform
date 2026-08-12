@@ -75,12 +75,14 @@ function objectBody(obj: KernelObject): string | null {
   return null;
 }
 
-/** The `show <id>` view: fields, then the body, then (with --log) the compact
- *  one-line event stream. */
+/** The `show <id>` view: fields, body, then a Task's recent meaningful activity
+ *  by default. `--log` replaces that projection with the raw event stream. */
 export function renderShow(
   obj: KernelObject,
   snapshot: Snapshot,
   events: readonly KernelEvent[] | null,
+  recent: readonly TimelineItem[] | null = null,
+  expanded = false,
 ): string {
   const parts: string[] = [fieldLines(obj).join("\n")];
   // A task's live schedule + run pair + products + children belong in `show` -
@@ -102,11 +104,22 @@ export function renderShow(
         if (trace) parts.push(trace);
       }
       if (detail.products.length > 0) {
-        parts.push("products:");
-        for (const { product, producedBy } of detail.products) {
+        const maxProducts = 5;
+        let products = detail.products;
+        if (!expanded && products.length > maxProducts) {
+          const tracked = products.find(({ product }) => product.id === obj.tracks);
+          const others = products.filter(({ product }) => product.id !== obj.tracks);
+          products = tracked ? [tracked, ...others.slice(-(maxProducts - 1))] : others.slice(-maxProducts);
+        }
+        parts.push(
+          !expanded && products.length < detail.products.length
+            ? `products (latest ${products.length} of ${detail.products.length}; --all for all):`
+            : "products:",
+        );
+        for (const { product, producedBy } of products) {
           const label =
             product.archetype === "doc"
-              ? `doc ${product.id}  ${clip(product.title ?? product.key, 60)}`
+              ? `doc ${product.id}${product.title && product.title !== product.id && product.title !== product.key ? `  ${clip(product.title, 60)}` : ""}`
               : `mirror ${product.id}  [${product.kind}] ${product.coords}`;
           const shepherd = obj.tracks === product.id ? "  (tracked)" : "";
           // Same axi-concise rule as the log lines: the kernel claim session
@@ -130,6 +143,9 @@ export function renderShow(
   if (events) {
     parts.push("\nlog:");
     parts.push(events.length > 0 ? events.map(renderEventLine).join("\n") : "  (no events)");
+  } else if (obj.archetype === "task" && recent) {
+    parts.push("\nrecent:");
+    parts.push(recent.length > 0 ? renderTimeline(recent) : "  (no meaningful activity)");
   }
   return parts.join("\n");
 }
@@ -144,14 +160,19 @@ export function renderRunLine(r: RunRecord): string {
   return `run ${r.id}: ${r.cause} ${r.state} @${formatLocalTime(r.scheduledAt)} -> ${r.assignee ?? "—"}`;
 }
 
-/** The host agent's own session, with a COPYABLE trace command (axi practice:
+/** The host agent's own session, with a COPYABLE trace command when its local
+ * transcript convention is known (axi practice:
  *  a full never-clipped id plus the exact deep-dive invocation, so "what did
  *  that session actually do" is one paste away). Only rendered when the run
  *  carries an agentSessionId (claude runs report it at finish; replay shims and
  *  non-claude agents have none). */
 export function renderSessionTrace(r: RunRecord): string | null {
   if (!r.agentSessionId) return null;
-  return `  session ${r.agentSessionId}  ·  trace: find ~/.claude/projects -name '${r.agentSessionId}.jsonl'`;
+  const agent = r.assignee?.split("/").at(-1);
+  if (agent === "claude" || agent === "claude-code") {
+    return `  session ${r.agentSessionId}  ·  trace: find ~/.claude/projects -name '${r.agentSessionId}.jsonl'`;
+  }
+  return `  session ${r.agentSessionId}`;
 }
 
 /** ONE compact event line: 时间 / 类型 / actor / note (§7). The actor is the

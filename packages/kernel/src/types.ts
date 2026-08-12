@@ -241,8 +241,8 @@ export interface NoteCommand {
 export interface DocPutCommand {
   op: "doc-put";
   key: string;
-  /** Derived from the Markdown body by the CLI. Explicit null clears a title
-   *  when the replacement body no longer has an H1; undefined preserves it. */
+  /** @deprecated Accepted on old wires but ignored. The Kernel authority
+   *  derives title from body so clients of different versions cannot drift. */
   title?: string | null;
   body: string;
   ifVersion?: number;

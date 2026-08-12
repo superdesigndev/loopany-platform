@@ -75,6 +75,7 @@ export interface MoonlightDeps {
 }
 
 const REGISTRY_FILE = path.join(LOOPANY_DIR, "kernel.json");
+const warnedMissing = new Set<string>();
 
 /** Read + parse `kernel.json`, TOLERANT of every failure (missing, corrupt,
  *  non-array, bad entries) → an empty list. Never throws (registry breakage must
@@ -204,7 +205,14 @@ export async function tickRegisteredWorkspaces(
   const passes = entries.map(async (entry) => {
     const dir = path.resolve(entry.dir);
     if (inFlight.has(dir)) return; // still ticking from a prior interval
-    if (!exists(dir)) return; // vanished workspace - skip (never auto-remove)
+    if (!exists(dir)) {
+      if (!warnedMissing.has(dir)) {
+        warnedMissing.add(dir);
+        log(`moonlight: registered workspace missing - skipped ${dir}; run \`lk unregister\` from that workspace or remove the stale registry entry`);
+      }
+      return; // never auto-remove: registry authority stays explicit
+    }
+    warnedMissing.delete(dir);
     inFlight.add(dir);
     try {
       const res = await spawnTick(entry);

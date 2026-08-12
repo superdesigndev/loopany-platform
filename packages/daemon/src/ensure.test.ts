@@ -49,8 +49,37 @@ function seams(extra: EnsureDeps = {}): Cap {
 }
 
 describe("runEnsure — local pidfile first (no daemon leaks)", () => {
+  test("a different explicit server cannot mutate a live daemon's home", async () => {
+    const writes: Array<[string, string]> = [];
+    const cap = seams({
+      localPid: () => 4242,
+      readServer: () => "https://prod.example",
+      persist: (file, value) => { writes.push([file, value]); },
+    });
+    const code = await runEnsure(["--server-url", "https://staging.example", "--connect-key", "dk_new"], cap);
+    expect(code).toBe(1);
+    expect(cap.spawned()).toBe(0);
+    expect(writes).toEqual([]);
+    expect(cap.stderr()).toContain("refusing https://staging.example");
+    expect(cap.stderr()).toContain("separate LOOPANY_HOME");
+  });
+
+  test("the same explicit server remains idempotent and byte-preserving", async () => {
+    const writes: Array<[string, string]> = [];
+    const cap = seams({
+      localPid: () => 4242,
+      readServer: () => "http://srv/",
+      fetchStatus: async () => ({ online: true, name: "MacBook" }),
+      persist: (file, value) => { writes.push([file, value]); },
+    });
+    const code = await runEnsure(["--server-url", "http://srv"], cap);
+    expect(code).toBe(0);
+    expect(cap.spawned()).toBe(0);
+    expect(writes).toEqual([]);
+  });
+
   test("a live local daemon short-circuits: never spawns a second one even when the server is unreachable", async () => {
-    const cap = seams({ localPid: () => 4242, fetchStatus: async () => undefined });
+    const cap = seams({ localPid: () => 4242, readServer: () => "http://srv", fetchStatus: async () => undefined });
     const code = await runEnsure(["--server-url", "http://srv"], cap);
     expect(code).toBe(0);
     expect(cap.spawned()).toBe(0);
@@ -58,7 +87,7 @@ describe("runEnsure — local pidfile first (no daemon leaks)", () => {
   });
 
   test("a live local daemon that the server also sees online → the classic already-running message", async () => {
-    const cap = seams({ localPid: () => 4242, fetchStatus: async () => ({ online: true, name: "MacBook" }) });
+    const cap = seams({ localPid: () => 4242, readServer: () => "http://srv", fetchStatus: async () => ({ online: true, name: "MacBook" }) });
     const code = await runEnsure(["--server-url", "http://srv"], cap);
     expect(code).toBe(0);
     expect(cap.spawned()).toBe(0);
@@ -118,7 +147,7 @@ describe("runEnsure — force (update's replace path)", () => {
 
 describe("runEnsure — user-scope skill refresh on every success path", () => {
   test("live local daemon + server online → refreshes the skill (global), announced", async () => {
-    const cap = seams({ localPid: () => 4242, fetchStatus: async () => ({ online: true, name: "Mac" }) });
+    const cap = seams({ localPid: () => 4242, readServer: () => "http://srv", fetchStatus: async () => ({ online: true, name: "Mac" }) });
     const code = await runEnsure(["--server-url", "http://srv"], cap);
     expect(code).toBe(0);
     expect(cap.skillInstalls()).toEqual([{ global: true }]);
@@ -126,7 +155,7 @@ describe("runEnsure — user-scope skill refresh on every success path", () => {
   });
 
   test("live local daemon + server unreachable → still refreshes the skill", async () => {
-    const cap = seams({ localPid: () => 4242, fetchStatus: async () => undefined });
+    const cap = seams({ localPid: () => 4242, readServer: () => "http://srv", fetchStatus: async () => undefined });
     const code = await runEnsure(["--server-url", "http://srv"], cap);
     expect(code).toBe(0);
     expect(cap.skillInstalls()).toEqual([{ global: true }]);

@@ -67,7 +67,8 @@ describe("buildCorePrompt", () => {
 
   it("carries the full five-step protocol including the no-terminal-verb rule", () => {
     expect(prompt).toContain("PROTOCOL — one pass, then stop:");
-    expect(prompt).toContain("show bet --log"); // 1. read first
+    expect(prompt).toContain("show bet"); // 1. read first
+    expect(prompt).toContain("show bet --log"); // deeper raw-event rung, not the default read
     expect(prompt).toContain("note bet"); // 2. note progress
     expect(prompt).toContain("File products by KIND"); // 3. artifact rule
     expect(prompt).toContain("update bet status="); // 4. honest status
