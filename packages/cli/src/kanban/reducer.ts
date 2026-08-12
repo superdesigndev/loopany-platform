@@ -13,13 +13,13 @@ export interface KanbanState {
   query: string;
   /** True while the `/` input line is capturing keystrokes. */
   searching: boolean;
-  /** `f` filter toggle: false (default) = ACTIVE columns only; true = all six. */
+  /** `f` filter toggle: false (default) = actionable columns; true = all six. */
   showAll: boolean;
 }
 
-/** The default board view: active work only - done/archived are reachable via
- *  the `f` toggle, never squeezed into the initial six-column strip. */
-export const ACTIVE_STATUSES: readonly TaskStatus[] = ["idea", "todo", "in-progress", "follow-up"];
+/** The default board is actionable work. Ideas are a backlog, not an execution
+ *  lane, so idea/done/archived stay behind `f`. */
+export const ACTIVE_STATUSES: readonly TaskStatus[] = ["todo", "in-progress", "follow-up"];
 
 export function visibleStatuses(state: KanbanState): readonly TaskStatus[] {
   return state.showAll ? TASK_STATUSES : ACTIVE_STATUSES;
@@ -44,6 +44,8 @@ export type KanbanAction =
   | { type: "up" }
   | { type: "down" }
   | { type: "open" }
+  | { type: "open-id"; id: string }
+  | { type: "select-id"; id: string | null; board: KanbanBoard }
   | { type: "back" }
   | { type: "scroll"; offset: number; maxOffset: number }
   | { type: "resize"; width: number; height: number }
@@ -174,6 +176,18 @@ export function reduceKanban(
     const next = { ...state, showAll: !state.showAll };
     return { ...next, column: Math.min(next.column, visibleStatuses(next).length - 1) };
   }
+  if (action.type === "open-id") return { ...state, detailId: action.id, detailOffset: 0 };
+  if (action.type === "select-id") {
+    if (state.detailId !== null && !Object.values(action.board).flat().some((task) => task.id === state.detailId)) {
+      return { ...state, detailId: null, detailOffset: 0 };
+    }
+    if (!action.id) return state;
+    for (const [column, status] of visibleStatuses(state).entries()) {
+      const selected = action.board[status].findIndex((task) => task.id === action.id);
+      if (selected >= 0) return { ...state, column, selected: { ...state.selected, [status]: selected } };
+    }
+    return state;
+  }
   if (state.detailId !== null) return state;
 
   if (action.type === "left" || action.type === "right") {
@@ -200,7 +214,7 @@ export function reduceKanban(
 
 export const MIN_COLUMN_WIDTH = 22;
 export const CARD_HEIGHT = 5;
-export const BOARD_CHROME_ROWS = 3;
+export const BOARD_CHROME_ROWS = 5;
 
 /** Status columns that fit in the current terminal, centered around selection. */
 export function visibleColumnIndexes(state: KanbanState): number[] {

@@ -1482,7 +1482,7 @@ Show recent meaningful team activity. Defaults to 24 hours and hides mechanical 
 ${COMMON_HELP}`,
   kanban: `usage: lk kanban [--remote]
 
-Open the read-only interactive task board. Requires a TTY; intended for humans.`,
+Open the interactive Board and Inbox. Auto-refreshes every 5s; press R to refresh now.`,
   run: `usage: lk run <id> [--dry-run] [--json]
 
 Queue a manual run for a task's current assignee.

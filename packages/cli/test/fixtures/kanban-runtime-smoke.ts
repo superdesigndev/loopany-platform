@@ -19,5 +19,5 @@ const renderer: KanbanRenderer = (_node, options) => {
   return { waitUntilExit: async () => undefined };
 };
 
-await startKanban(backend, renderer);
+await startKanban(backend, null, renderer);
 process.stdout.write("kanban runtime loaded\n");

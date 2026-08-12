@@ -103,12 +103,12 @@ describe("detailLines projections", () => {
     const lines = detailLines(rich, [], 80, snap).join("\n");
     expect(lines).toContain("goal (finish line): reach 1k subs");
     expect(lines).toContain("run run-9: failed - boom");
-    expect(lines).toContain("Products");
+    expect(lines).toContain("Artifacts");
     expect(lines).toContain("doc weekly-report  Weekly report  (tracked)");
     expect(lines).toContain("Children");
     expect(lines).toContain("child-bet  [todo]  Child bet");
     // Without a snapshot the pane degrades to the plain fields (old behavior).
-    expect(detailLines(rich, [], 80).join("\n")).not.toContain("Products");
+    expect(detailLines(rich, [], 80).join("\n")).not.toContain("Artifacts");
   });
 });
 
@@ -117,7 +117,7 @@ describe("KanbanView", () => {
   const events = { [task.id]: [event] };
 
   it("renders status columns and the active card", () => {
-    const state = reduceKanban(initialKanbanState(132, 30), { type: "right" }, board);
+    const state = initialKanbanState(132, 30);
     const frame = renderToString(<KanbanView board={board} state={state} events={events} />, { columns: 132 });
     expect(frame).toContain("TODO (1)");
     expect(frame).toContain("Ship it");
@@ -125,7 +125,7 @@ describe("KanbanView", () => {
   });
 
   it("renders task fields and Backend events in detail", () => {
-    let state = reduceKanban(initialKanbanState(), { type: "right" }, board);
+    let state = initialKanbanState();
     state = reduceKanban(state, { type: "open" }, board);
     const frame = renderToString(<KanbanView board={board} state={state} events={events} />);
     expect(frame).toContain("Make the release safe.");
@@ -146,11 +146,10 @@ describe("KanbanView", () => {
       }),
     );
     const crowded = boardView({ objects, triggers: [], runs: [] });
-    const state = reduceKanban(initialKanbanState(132, 13), { type: "right" }, crowded);
+    const state = initialKanbanState(132, 13);
     const frame = renderToString(<KanbanView board={crowded} state={state} events={{}} />, { columns: 132 });
     expect(frame).toContain("Bulk 0");
-    expect(frame).toContain("Bulk 1");
-    expect(frame).not.toContain("Bulk 2");
+    expect(frame).not.toContain("Bulk 1");
   });
 
   it("clips long detail content and renders a scroll position", () => {
@@ -159,7 +158,7 @@ describe("KanbanView", () => {
       body: Array.from({ length: 12 }, (_, index) => `Body line ${String(index).padStart(2, "0")}`).join("\n"),
     };
     const longBoard = boardView({ objects: { [longTask.id]: longTask }, triggers: [], runs: [] });
-    let state = reduceKanban(initialKanbanState(80, 8), { type: "right" }, longBoard);
+    let state = initialKanbanState(80, 8);
     state = reduceKanban(state, { type: "open" }, longBoard);
 
     const first = renderToString(<KanbanView board={longBoard} state={state} events={{}} />);

@@ -49,7 +49,6 @@ describe("kanban reducer", () => {
 
   it("navigates columns/cards and enters then leaves detail", () => {
     let state = initialKanbanState();
-    state = reduceKanban(state, { type: "right" }, board);
     expect(activeStatus(state)).toBe("todo");
     state = reduceKanban(state, { type: "down" }, board);
     expect(state.selected.todo).toBe(1);
@@ -69,7 +68,7 @@ describe("kanban reducer", () => {
     let state = initialKanbanState(44, 20);
     state = reduceKanban(state, { type: "left" }, board);
     expect(state.column).toBe(0);
-    // The DEFAULT strip is the four ACTIVE columns - done/archived stay behind f.
+    // The DEFAULT strip is actionable work - idea/done/archived stay behind f.
     for (let index = 0; index < 20; index += 1) state = reduceKanban(state, { type: "right" }, board);
     expect(state.column).toBe(ACTIVE_STATUSES.length - 1);
     // f reveals all six; navigation then reaches the terminal columns.
@@ -110,7 +109,7 @@ describe("kanban reducer", () => {
   it("budgets bordered cards by their five rendered rows", () => {
     let state = initialKanbanState(80, 13);
     state = reduceKanban(state, { type: "right" }, board);
-    expect(visibleCardWindow(state, 10)).toEqual({ start: 0, end: 2, capacity: 2 });
+    expect(visibleCardWindow(state, 10)).toEqual({ start: 0, end: 1, capacity: 1 });
     state = reduceKanban(state, { type: "resize", width: 80, height: 7 }, board);
     expect(visibleCardWindow(state, 10)).toEqual({ start: 0, end: 0, capacity: 0 });
   });
@@ -120,7 +119,6 @@ describe("kanban reducer", () => {
     expect(kanbanInputIntent(state, "q", {})).toBe("exit");
     expect(kanbanInputIntent(state, "", { escape: true })).toBe("exit");
 
-    state = reduceKanban(state, { type: "right" }, board);
     state = reduceKanban(state, { type: "open" }, board);
     expect(kanbanInputIntent(state, "", { escape: true })).toEqual({ type: "back" });
     expect(kanbanInputIntent(state, "j", {}, { offset: 2, maxOffset: 4 })).toEqual({
@@ -133,5 +131,11 @@ describe("kanban reducer", () => {
       offset: 1,
       maxOffset: 4,
     });
+  });
+
+  it("hides idea by default and opens a task directly from another projection", () => {
+    const state = initialKanbanState();
+    expect(ACTIVE_STATUSES).toEqual(["todo", "in-progress", "follow-up"]);
+    expect(reduceKanban(state, { type: "open-id", id: "doing" }, board).detailId).toBe("doing");
   });
 });
