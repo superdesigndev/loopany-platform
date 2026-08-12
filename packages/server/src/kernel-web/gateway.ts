@@ -89,7 +89,7 @@ export async function command(teamId: string, raw: unknown) {
   const request = { command: raw };
   const forbidden = authorizeKernelRequest("human-session", request);
   if (forbidden) throw new KernelWebError(forbidden.status, forbidden.message);
-  const actor: Provenance = { entrance: "human", actorId: email, sessionId: user.id };
+  const actor: Provenance = { entrance: "human", actorId: email, ...(user.sessionId ? { sessionId: user.sessionId } : {}) };
   const decision = decide(raw as Command, await readSnapshot(teamId), actor, new Date().toISOString());
   if (!decision.ok) return { status: 422, body: { ok: false, refusal: decision.refusal, notices: [] } };
   const applied = await applyChangesetForTeam(teamId, decision.changeset);

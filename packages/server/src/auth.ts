@@ -81,11 +81,11 @@ const TEAM_COOKIE = "loopany.team";
  * no session. Reads the request via TanStack's async-local context, so it only
  * works inside a server fn / server route handler.
  */
-export async function currentUser(): Promise<{ id: string; email: string | null } | null> {
+export async function currentUser(): Promise<{ id: string; email: string | null; sessionId: string | null } | null> {
   const { getRequest } = await import("@tanstack/react-start/server");
   const session = await auth.api.getSession({ headers: getRequest().headers });
   const u = session?.user;
-  return u ? { id: u.id, email: u.email ?? null } : null;
+  return u ? { id: u.id, email: u.email ?? null, sessionId: session?.session.id ?? null } : null;
 }
 
 export async function currentUserId(): Promise<string | null> {
