@@ -323,16 +323,22 @@ function verbUnregister(args: ParsedArgs, deps: CliDeps): CliOutcome {
   return ok(removed ? `unregistered ${dir}` : `${dir} was not registered`);
 }
 
-/** `connect [<url> --token <dk_…>] [--clear]` - the GLOBAL remote binding
- *  (`~/.loopany/kernel-backend.json`, 0600). Precedence stays env > cwd
- *  workspace > this binding; `--remote` on any verb forces it. A live write
- *  VERIFIES the pair with one read round-trip so a typo'd URL/token fails now,
- *  not at first use. */
+/** `connect [<url> --token <dk_…> --me <email>] [--clear]` - the GLOBAL remote
+ *  binding, stored in the ONE credential home the daemon owns
+ *  (`~/.loopany/{server-url,device-token,me}`, 0600) - a `loopany up`-connected
+ *  machine is already bound for the CLI and vice versa. Precedence stays env >
+ *  cwd workspace > this binding; `--remote` on any verb forces it. A live
+ *  write VERIFIES the pair with one read round-trip so a typo'd URL/token
+ *  fails now, not at first use. */
 function verbConnect(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (args.bools.has("clear")) {
     const existed = clearGlobalConnect(deps.env);
     if (args.bools.has("json")) return ok(JSON.stringify({ ok: true, cleared: existed }, null, 2));
-    return ok(existed ? "cleared the global backend binding" : "no global binding to clear");
+    return ok(
+      existed
+        ? "cleared the global binding (NB: one credential home - this machine's daemon connection is cleared too; the next `loopany up` needs an explicit --connect-key)"
+        : "no global binding to clear",
+    );
   }
   const url = args.positionals[0];
   if (url === undefined) {

@@ -1,21 +1,28 @@
 /**
  * GLOBAL remote binding - `loopany-kernel connect <url> --token <dk_...>`.
  *
- * The stored pair lives at `<LOOPANY_HOME|~/.loopany>/kernel-backend.json`
- * (0600, same home + discipline as the daemon's device-token). Resolution
- * precedence is deliberate:
+ * ONE CREDENTIAL HOME (kernel-one-credential-home): the CLI's global layer
+ * reads and writes the DAEMON's own files under `<LOOPANY_HOME|~/.loopany>` -
  *
- *   env LOOPANY_KERNEL_BACKEND  >  cwd workspace config  >  global binding
+ *   server-url     the server base URL      (daemon convention, plain text)
+ *   device-token   the dk_ machine identity (daemon convention, 0600)
+ *   me             who the human behind the credential is (CLI-only addition)
  *
- * env first preserves the in-run authority rule (a daemon-spawned agent's
- * backend can never be hijacked by ambient state); the WORKSPACE beats the
- * global so standing inside any local `.loopany` keeps local semantics - a
- * forgotten global binding must never silently redirect a local write to a
- * server. `--remote` on any verb forces the global binding from anywhere.
+ * so a machine that ran `loopany up` is ALREADY connected for the owner CLI,
+ * and `connect` conversely seeds the token `loopany up` will adopt. There is no
+ * second binding to drift. The pre-unification `kernel-backend.json` is
+ * migrated on first read (files win when both exist) and removed.
  *
- * LONG-TERM: when the kernel CLI merges into `loopany`, this file retires and
- * the global layer reads the daemon's own `~/.loopany/{server-url,device-token}`
- * - one credential home, no drift. The `connect` verb's surface stays.
+ * Resolution precedence is deliberate and unchanged:
+ *
+ *   env LOOPANY_KERNEL_BACKEND  >  cwd workspace config  >  this home
+ *
+ * env first preserves the in-run authority rule; the WORKSPACE beats the
+ * global so standing inside any local `.loopany` keeps local semantics.
+ * `--remote` on any verb forces the global binding from anywhere.
+ *
+ * GATED-MODE FUTURE: the server will resolve the credential's identity
+ * (whoami) and validate/auto-fill `me`; the file stays the local cache.
  */
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -25,63 +32,107 @@ export interface GlobalConnect {
   backend: string;
   token: string;
   /** WHO the human behind this credential is (their kernel assignee email) -
-   *  the identity `inbox` filters by on the remote backend. Declared at
-   *  `connect --me` for now (open mode tokens carry no server-side identity);
-   *  the gated phase resolves/validates it from the credential at the server. */
+   *  the identity `inbox` filters by on the remote backend. */
   me?: string;
 }
 
 type Env = Record<string, string | undefined>;
 
-/** The binding file path. `LOOPANY_HOME` overrides the home (same env the
- *  daemon honors, so a dev shell isolates both with one variable). */
-export function connectPath(env: Env): string {
-  return join(env.LOOPANY_HOME || join(homedir(), ".loopany"), "kernel-backend.json");
+/** The credential home. `LOOPANY_HOME` overrides (same env the daemon honors,
+ *  so a dev shell isolates BOTH tools with one variable). */
+export function credentialHome(env: Env): string {
+  return env.LOOPANY_HOME || join(homedir(), ".loopany");
 }
 
-/** Read the global binding; null when absent or malformed (a broken file must
- *  never take the CLI down - `connect` overwrites it). */
-export function readGlobalConnect(env: Env): GlobalConnect | null {
+/** The daemon-convention files this module shares with `loopany up`. */
+export function connectFiles(env: Env): { server: string; token: string; me: string; legacy: string } {
+  const home = credentialHome(env);
+  return {
+    server: join(home, "server-url"),
+    token: join(home, "device-token"),
+    me: join(home, "me"),
+    legacy: join(home, "kernel-backend.json"),
+  };
+}
+
+function readText(path: string): string | undefined {
   try {
-    const raw = JSON.parse(readFileSync(connectPath(env), "utf8")) as Partial<GlobalConnect>;
-    if (typeof raw.backend !== "string" || !/^https?:\/\//.test(raw.backend)) return null;
-    if (typeof raw.token !== "string" || raw.token.length === 0) return null;
-    return {
-      backend: raw.backend.replace(/\/+$/, ""),
-      token: raw.token,
-      ...(typeof raw.me === "string" && raw.me.includes("@") ? { me: raw.me } : {}),
-    };
+    const v = readFileSync(path, "utf8").trim();
+    return v.length > 0 ? v : undefined;
   } catch {
-    return null;
+    return undefined;
   }
 }
 
-/** Persist the binding (dir 0700, file 0600 - it holds a device credential).
- *  Returns the written path. */
-export function writeGlobalConnect(env: Env, binding: GlobalConnect): string {
-  const path = connectPath(env);
-  mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
-  writeFileSync(
-    path,
-    JSON.stringify(
-      {
-        backend: binding.backend.replace(/\/+$/, ""),
-        token: binding.token,
-        ...(binding.me ? { me: binding.me } : {}),
-      },
-      null,
-      2,
-    ) + "\n",
-  );
-  chmodSync(path, 0o600);
-  return path;
+function writeSecret(path: string, value: string): void {
+  writeFileSync(path, value, { mode: 0o600 });
+  chmodSync(path, 0o600); // an existing file keeps its old mode without this
 }
 
-/** Remove the binding. Returns whether one existed. */
+/** Read the global binding; null when absent or malformed. Migrates the
+ *  pre-unification `kernel-backend.json` ONCE (files win when both exist). */
+export function readGlobalConnect(env: Env): GlobalConnect | null {
+  const files = connectFiles(env);
+  migrateLegacy(env);
+  const backend = readText(files.server);
+  const token = readText(files.token);
+  if (!backend || !/^https?:\/\//.test(backend) || !token) return null;
+  const me = readText(files.me);
+  return {
+    backend: backend.replace(/\/+$/, ""),
+    token,
+    ...(me && me.includes("@") ? { me } : {}),
+  };
+}
+
+/** Persist the binding into the ONE home (dir 0700, secrets 0600). Returns the
+ *  home dir. The daemon's next `loopany up` adopts this token (readToken()
+ *  precedes --connect-key), so CLI and daemon cannot point at different
+ *  servers/credentials from here. */
+export function writeGlobalConnect(env: Env, binding: GlobalConnect): string {
+  const files = connectFiles(env);
+  mkdirSync(credentialHome(env), { recursive: true, mode: 0o700 });
+  writeSecret(files.server, binding.backend.replace(/\/+$/, ""));
+  writeSecret(files.token, binding.token);
+  if (binding.me) writeSecret(files.me, binding.me);
+  rmSync(files.legacy, { force: true }); // the second binding must not linger
+  return credentialHome(env);
+}
+
+/** Remove the binding. Returns whether one existed. NB with ONE credential
+ *  home this clears the MACHINE's connection - the daemon's next `loopany up`
+ *  will need an explicit --connect-key again (the caller warns). */
 export function clearGlobalConnect(env: Env): boolean {
   const existed = readGlobalConnect(env) !== null;
-  rmSync(connectPath(env), { force: true });
+  const files = connectFiles(env);
+  for (const f of [files.server, files.token, files.me, files.legacy]) rmSync(f, { force: true });
   return existed;
+}
+
+/** ONE-SHOT migration of the pre-unification `kernel-backend.json`: fill only
+ *  the MISSING daemon-convention files (an existing daemon connection always
+ *  wins), then remove the legacy file. Malformed legacy content is dropped -
+ *  `connect` rewrites it cleanly. */
+function migrateLegacy(env: Env): void {
+  const files = connectFiles(env);
+  const raw = readText(files.legacy);
+  if (raw === undefined) return;
+  try {
+    const legacy = JSON.parse(raw) as { backend?: unknown; token?: unknown; me?: unknown };
+    mkdirSync(credentialHome(env), { recursive: true, mode: 0o700 });
+    if (typeof legacy.backend === "string" && /^https?:\/\//.test(legacy.backend) && readText(files.server) === undefined) {
+      writeSecret(files.server, legacy.backend.replace(/\/+$/, ""));
+    }
+    if (typeof legacy.token === "string" && legacy.token.length > 0 && readText(files.token) === undefined) {
+      writeSecret(files.token, legacy.token);
+    }
+    if (typeof legacy.me === "string" && legacy.me.includes("@") && readText(files.me) === undefined) {
+      writeSecret(files.me, legacy.me);
+    }
+  } catch {
+    /* malformed legacy file - just retire it */
+  }
+  rmSync(files.legacy, { force: true });
 }
 
 /** A display-safe token form: prefix + last 4, never the middle. */

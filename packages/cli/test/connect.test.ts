@@ -5,11 +5,11 @@
  * no-silent-redirect guarantee - a forgotten binding must never send a local
  * command to a server.
  */
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearGlobalConnect, connectPath, readGlobalConnect, redactToken, writeGlobalConnect } from "../src/connect.js";
+import { clearGlobalConnect, connectFiles, readGlobalConnect, redactToken, writeGlobalConnect } from "../src/connect.js";
 import { selectBackend } from "../src/backend.js";
 import { run } from "../src/cli.js";
 import type { SyncTransport } from "../src/remote.js";
@@ -39,24 +39,54 @@ function fakeTransport(): { transport: SyncTransport; calls: Array<{ url: string
   return { transport, calls };
 }
 
-describe("connect file lifecycle", () => {
-  it("writes 0600, reads back, redacts, clears", () => {
-    const path = writeGlobalConnect(env, { backend: "https://x.example/", token: "dk_secret_1234" });
-    expect(path).toBe(connectPath(env));
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    // Trailing slash normalized on write AND read.
-    expect(readGlobalConnect(env)).toEqual({ backend: "https://x.example", token: "dk_secret_1234" });
+describe("connect file lifecycle (ONE credential home - the daemon's files)", () => {
+  it("writes the daemon-convention files 0600, reads back, redacts, clears", () => {
+    writeGlobalConnect(env, { backend: "https://x.example/", token: "dk_secret_1234", me: "tim@x.co" });
+    const files = connectFiles(env);
+    // THE point of kernel-one-credential-home: these are the DAEMON's own
+    // files - `loopany up` adopts this token, the CLI reads the daemon's.
+    expect(readFileSync(files.server, "utf8")).toBe("https://x.example");
+    expect(readFileSync(files.token, "utf8")).toBe("dk_secret_1234");
+    expect(readFileSync(files.me, "utf8")).toBe("tim@x.co");
+    for (const f of [files.server, files.token, files.me]) {
+      expect(statSync(f).mode & 0o777).toBe(0o600);
+    }
+    expect(readGlobalConnect(env)).toEqual({ backend: "https://x.example", token: "dk_secret_1234", me: "tim@x.co" });
     expect(redactToken("dk_secret_1234")).toBe("dk_secr…1234");
     expect(clearGlobalConnect(env)).toBe(true);
     expect(readGlobalConnect(env)).toBeNull();
     expect(clearGlobalConnect(env)).toBe(false);
   });
 
-  it("a malformed or non-http binding reads as null, never throws", () => {
+  it("a daemon-connected machine (loopany up wrote the files) is ALREADY bound for the CLI", () => {
+    const files = connectFiles(env);
     mkdirSync(home, { recursive: true });
-    writeFileSync(connectPath(env), "not json");
+    writeFileSync(files.server, "https://live.example\n");
+    writeFileSync(files.token, "dk_daemon_token\n");
+    expect(readGlobalConnect(env)).toEqual({ backend: "https://live.example", token: "dk_daemon_token" });
+  });
+
+  it("migrates the legacy kernel-backend.json ONCE (existing daemon files win) and retires it", () => {
+    const files = connectFiles(env);
+    mkdirSync(home, { recursive: true });
+    writeFileSync(files.legacy, JSON.stringify({ backend: "https://old.example", token: "dk_old", me: "tim@x.co" }));
+    expect(readGlobalConnect(env)).toEqual({ backend: "https://old.example", token: "dk_old", me: "tim@x.co" });
+    expect(existsSync(files.legacy)).toBe(false); // retired
+    expect(readFileSync(files.token, "utf8")).toBe("dk_old"); // migrated into the ONE home
+
+    // When the daemon files ALREADY exist, the legacy content never overwrites.
+    writeFileSync(files.legacy, JSON.stringify({ backend: "https://stale.example", token: "dk_stale" }));
+    expect(readGlobalConnect(env)?.token).toBe("dk_old");
+    expect(existsSync(files.legacy)).toBe(false);
+  });
+
+  it("a malformed or non-http binding reads as null, never throws", () => {
+    const files = connectFiles(env);
+    mkdirSync(home, { recursive: true });
+    writeFileSync(files.legacy, "not json");
     expect(readGlobalConnect(env)).toBeNull();
-    writeFileSync(connectPath(env), JSON.stringify({ backend: "ftp://x", token: "t" }));
+    writeFileSync(files.server, "ftp://x");
+    writeFileSync(files.token, "t");
     expect(readGlobalConnect(env)).toBeNull();
   });
 });
