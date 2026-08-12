@@ -254,6 +254,17 @@ export interface DocPutCommand {
   attachTask?: string;
 }
 
+export interface DocAppendCommand {
+  op: "doc-append";
+  key: string;
+  body: string;
+  /** Required CAS token. Append is deliberately unavailable without it so a
+   *  retry after an ambiguous transport failure cannot duplicate the entry. */
+  ifVersion: number;
+  /** Same atomic task attachment behavior as doc-put. */
+  attachTask?: string;
+}
+
 export interface MirrorAddCommand {
   op: "mirror-add";
   kind: string;
@@ -301,6 +312,7 @@ export type Command =
   | UpdateCommand
   | NoteCommand
   | DocPutCommand
+  | DocAppendCommand
   | MirrorAddCommand
   | RunCommand
   | RunClaimCommand
@@ -402,7 +414,7 @@ export type Decision =
       changeset: Changeset;
       /** Human-facing echoes the CLI must print loudly (e.g. "re-armed cron …"). */
       notices: string[];
-      result?: { id: string; existing?: boolean };
+      result?: { id: string; existing?: boolean; previousVersion?: number; version?: number };
     }
   | { ok: false; refusal: Refusal };
 

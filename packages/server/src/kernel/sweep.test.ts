@@ -157,6 +157,35 @@ test("an unknown alias leaves the run pending with zero wakes AND a durable, DED
   expect(again).toHaveLength(1);
 });
 
+test("a bare agent assignee leaves a durable invalid-address event instead of silently hanging", async () => {
+  const teamId = store.teamIdForUser("u1");
+  await store.ensureTeam(teamId, "u1's team", "u1");
+  const { decide } = await import("@loopany/kernel");
+  const d = decide({
+    op: "create",
+    title: "Bare address loop",
+    id: "bare-address-loop",
+    cron: "0 7 * * 1",
+    timezone: "UTC",
+    status: "in-progress",
+    assignee: "another-loop",
+  }, await kstore.readSnapshot(teamId), OWNER, T0);
+  if (!d.ok) throw new Error(d.refusal.message);
+  const applied = await kstore.applyChangesetForTeam(teamId, d.changeset);
+  if (!applied.ok) throw new Error("seed apply conflict");
+
+  const r = await sweep.kernelSweep(T1, () => {
+    throw new Error("a bare address cannot wake a machine");
+  });
+  expect(r).toMatchObject({ minted: 1, woken: 0 });
+  const blocked = (await kstore.readEvents(teamId)).filter(
+    (e) => e.objectId === "bare-address-loop" && (e.note ?? "").includes("dispatch blocked"),
+  );
+  expect(blocked).toHaveLength(1);
+  expect(blocked[0]!.note).toContain('invalid execution address "another-loop"');
+  expect(blocked[0]!.note).toContain("<machine>/<agent>");
+});
+
 test("one team's tick failure is ISOLATED: later teams still sweep; the report counts it", async () => {
   const teamA = store.teamIdForUser("uA");
   const teamB = store.teamIdForUser("uB");

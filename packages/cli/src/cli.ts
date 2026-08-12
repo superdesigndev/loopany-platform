@@ -247,6 +247,9 @@ function renderWriteResult(res: CommandResult, args: ParsedArgs, dryRun: boolean
   if (res.result) {
     const result = res.result.existing ? `${res.result.id} (existing)` : res.result.id;
     lines.push(dryRun ? `would write: ${result}` : `ok ${result}`);
+    if (res.result.previousVersion !== undefined && res.result.version !== undefined) {
+      lines.push(`version: ${res.result.previousVersion} -> ${res.result.version}`);
+    }
   } else lines.push(dryRun ? "would apply command" : "ok");
   if (context) {
     if (context.changed.length > 0) lines.push(`changed: ${context.changed.join(", ")}`);
@@ -524,11 +527,13 @@ function verbCreate(args: ParsedArgs, deps: CliDeps): CliOutcome {
 function verbUpdate(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const id = args.positionals[0];
   if (id === undefined) throw new UsageError("update needs an <id>");
-  if (args.assigns.length === 0 && args.flags.note === undefined) {
-    throw new UsageError("update needs at least one k=v pair or --note");
+  const body = bodyFromFile(args, deps, "body-file");
+  if (args.assigns.length === 0 && args.flags.note === undefined && body === undefined) {
+    throw new UsageError("update needs at least one k=v pair, --body-file, or --note");
   }
   const patch: Record<string, unknown> = {};
   for (const [k, v] of args.assigns) patch[k] = coercePatchValue(k, v);
+  if (body !== undefined) patch.body = body;
   // `--follow-up <date>` is the taught grammar for `status=follow-up` (CORE step 4,
   // SKILL.md, the once scenario). It parses (it is in the args OPTIONS table), so
   // dropping it would be the silent-flag-loss the args header bans — mirror
@@ -567,11 +572,26 @@ function verbNote(args: ParsedArgs, deps: CliDeps): CliOutcome {
 function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const sub = args.positionals[0];
   if (sub === "list") return docList(deps, args);
-  if (sub !== "put") throw new UsageError('doc supports "doc put <key> [--file f.md] [--task <id>]" and "doc list"');
+  if (sub !== "put" && sub !== "append") throw new UsageError('doc supports "doc put", "doc append", and "doc list"');
   const key = args.positionals[1];
-  if (key === undefined) throw new UsageError("doc put needs a <key>");
+  if (key === undefined) throw new UsageError(`doc ${sub} needs a <key>`);
   const backend = backendFor(deps, args);
   const fileBody = bodyFromFile(args, deps, "file");
+  if (sub === "append") {
+    if (fileBody === undefined) throw new UsageError("doc append requires --file <file>");
+    const rawVersion = args.flags["if-version"];
+    if (rawVersion === undefined) {
+      throw new UsageError("doc append requires --if-version <n> so retries cannot duplicate content");
+    }
+    const attachTask = args.flags.task ?? deps.env.LOOPANY_TASK_ID;
+    return execWrite(backend, {
+      op: "doc-append",
+      key,
+      body: fileBody,
+      ifVersion: parseIfVersion(rawVersion),
+      ...(attachTask ? { attachTask } : {}),
+    }, args, deps);
+  }
   // `doc put` is an upsert. Defaulting a missing --file to "" is fine for
   // CREATION (an empty-body doc is a legal first version), but on an EXISTING
   // doc it silently WIPES the stored body down to empty — confirmed data loss.
@@ -614,7 +634,11 @@ function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
     key,
     body,
     ...(attachTask ? { attachTask } : {}),
-    ...(bareCreate ? { ifVersion: 0 } : {}),
+    ...(bareCreate
+      ? { ifVersion: 0 }
+      : args.flags["if-version"] !== undefined
+        ? { ifVersion: parseIfVersion(args.flags["if-version"]) }
+        : {}),
   };
   return execWrite(backend, command, args, deps, guard);
 }
@@ -1207,9 +1231,10 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   unregister: ["json"],
   connect: ["token", "me", "clear", "json"],
   create: ["id", "parent", "tracks", "assignee", "owner", "workdir", "goal", "type", "priority", "status", "cron", "timezone", "follow-up", "body-file", ...WRITE_AUDIT_FLAGS],
-  update: ["note", "follow-up", "if-version", ...WRITE_AUDIT_FLAGS],
+  update: ["note", "follow-up", "if-version", "body-file", ...WRITE_AUDIT_FLAGS],
   note: [...WRITE_AUDIT_FLAGS],
-  "doc:put": ["file", "task", ...WRITE_AUDIT_FLAGS],
+  "doc:put": ["file", "task", "if-version", ...WRITE_AUDIT_FLAGS],
+  "doc:append": ["file", "task", "if-version", ...WRITE_AUDIT_FLAGS],
   "doc:list": ["json", "remote", "full"],
   "mirror:add": ["task", ...WRITE_AUDIT_FLAGS],
   "mirror:list": ["json", "remote"],
@@ -1389,7 +1414,7 @@ Show or change the global remote binding shared with the daemon.`,
 
 Create a task. A cron trigger makes it a recurring loop.
 ${COMMON_HELP}`,
-  update: `usage: lk update <id> k=v … [--note <text>] [--follow-up <date>]
+  update: `usage: lk update <id> [k=v …] [--body-file <file>] [--note <text>] [--follow-up <date>]
                  [--if-version <n>] [--dry-run]
 
 Patch task fields with optional optimistic concurrency.
@@ -1406,6 +1431,10 @@ ${COMMON_HELP}`,
       than wipe a stored body). --task attaches the doc to that task's refs
       atomically; inside a run LOOPANY_TASK_ID fills it in automatically.
       --if-version N refuses when the stored version differs (CAS).
+
+  doc append <key> --file f.md --if-version N [--task <id>] [--dry-run]
+      atomically append to an existing doc. --if-version is REQUIRED so an
+      ambiguous retry cannot duplicate the entry.
 
   doc list [--json [--full]]
       one line per doc: <id>  (v<version>)  <updatedAt>  <title>`,
@@ -1468,6 +1497,10 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
                      [--if-version <n>] [--dry-run] [--json]
 
 Create or replace a doc and optionally attach it to a task atomically.`,
+  "doc append": `usage: lk doc append <key> --file <file> --if-version <n>
+                        [--task <id>] [--dry-run] [--json]
+
+Atomically append to an existing doc. CAS is required to prevent duplicate retries.`,
   "doc list": `usage: lk doc list [--json [--full]]
 
 List every doc in the selected workspace or remote team.

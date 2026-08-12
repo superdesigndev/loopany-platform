@@ -110,7 +110,18 @@ export async function kernelSweep(
         minted += r.minted.length;
         for (const run of r.minted) {
           const seg = assigneeSegments(run.assignee);
-          if (!seg) continue; // person/bare assignee: nothing to wake
+          if (!seg) {
+            // Bare profiles are valid only for the local file driver. A server
+            // delivery needs the team-resolvable machine/agent address. The old
+            // silent continue left a pending run with no owner-visible reason.
+            await recordDispatchBlocked(
+              teamId,
+              run,
+              `invalid execution address "${run.assignee ?? ""}" - remote runs require <machine>/<agent>; ` +
+                `use parent=<loop-id> to transfer Task scope instead of assigning a Loop id`,
+            );
+            continue;
+          }
           const resolved = await store.resolveMachineByAlias(teamId, seg.machine);
           if (resolved.ambiguous) {
             logger.warn(

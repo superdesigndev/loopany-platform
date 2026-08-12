@@ -62,6 +62,6 @@ export function projectOperationalContext(
   }
   const changed = command.op === "update"
     ? Object.keys(targeted.patch ?? {})
-    : command.op === "note" ? ["note"] : command.op === "doc-put" ? ["doc"] : command.op === "mirror-add" ? ["mirror"] : command.op === "run" ? ["manual run"] : ["task"];
+    : command.op === "note" ? ["note"] : command.op === "doc-put" ? ["doc"] : command.op === "doc-append" ? ["doc appended"] : command.op === "mirror-add" ? ["mirror"] : command.op === "run" ? ["manual run"] : ["task"];
   return { changed, taskId, run: { createdId: created?.id ?? null, retainedId: retained?.id ?? null, supersededId: superseded?.id ?? null, consequence }, machine, nextTriggerAt: trigger?.nextFireAt ?? null, action, nextCommand };
 }

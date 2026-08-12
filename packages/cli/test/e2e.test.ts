@@ -653,6 +653,35 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(stored).toContain("from deps.cwd");
   });
 
+  it("update --body-file replaces task prose under CAS", () => {
+    call(["init"]);
+    call(["create", "Editable", "--id", "editable"]);
+    writeFileSync(join(dir, "task.md"), "# Updated spec\n\nDo the new work.\n");
+    const out = call(["update", "editable", "--body-file", "task.md", "--if-version", "1"]);
+    expect(out.stdout).toContain("changed: body");
+    const shown = JSON.parse(call(["show", "editable", "--json"]).stdout) as { object: { body: string; version: number } };
+    expect(shown.object).toMatchObject({ body: "# Updated spec\n\nDo the new work.\n", version: 2 });
+  });
+
+  it("doc append requires CAS and a retry cannot duplicate content", () => {
+    call(["init"]);
+    writeFileSync(join(dir, "diary.md"), "# Diary\n\nDay one.\n");
+    call(["doc", "put", "diary", "--file", "diary.md"]);
+    writeFileSync(join(dir, "entry.md"), "Day two.\n");
+
+    const noCas = run(["doc", "append", "diary", "--file", "entry.md"], deps());
+    expect(noCas.exitCode).toBe(2);
+    expect(noCas.stderr).toContain("requires --if-version");
+
+    const appended = call(["doc", "append", "diary", "--file", "entry.md", "--if-version", "1"]);
+    expect(appended.stdout).toContain("changed: doc appended");
+    const retry = run(["doc", "append", "diary", "--file", "entry.md", "--if-version", "1"], deps());
+    expect(retry.exitCode).toBe(1);
+    expect(retry.stderr).toContain("code: CONFLICT");
+    const shown = JSON.parse(call(["show", "diary", "--json"]).stdout) as { object: { body: string; version: number } };
+    expect(shown.object).toMatchObject({ body: "# Diary\n\nDay one.\n\nDay two.\n", version: 2 });
+  });
+
   it("--if-version parses a non-negative integer to a CAS token (a REAL bogus-version CONFLICT)", () => {
     call(["init"]);
     call(["create", "Versioned", "--id", "versioned"]);

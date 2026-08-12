@@ -316,6 +316,55 @@ describe("note / doc / mirror / run / delete", () => {
     expect(raced.world.snapshot.objects["brief"]).toMatchObject({ body: "b1", version: 1 });
   });
 
+  it("doc append is atomic, requires exact CAS, and separates entries", () => {
+    const first = run(emptyWorld(), { op: "doc-put", key: "diary", body: "# Diary\n\nDay one.\n" });
+    const appended = run(first.world, {
+      op: "doc-append",
+      key: "diary",
+      body: "Day two.\n",
+      ifVersion: 1,
+    });
+    expect(appended.d.ok).toBe(true);
+    expect(appended.world.snapshot.objects.diary).toMatchObject({
+      body: "# Diary\n\nDay one.\n\nDay two.\n",
+      version: 2,
+    });
+
+    // A transport retry carries the old token and cannot duplicate Day two.
+    const retry = run(appended.world, {
+      op: "doc-append",
+      key: "diary",
+      body: "Day two.\n",
+      ifVersion: 1,
+    });
+    expect(!retry.d.ok && retry.d.refusal.code).toBe("CONFLICT");
+    expect(retry.world.snapshot.objects.diary).toMatchObject({
+      body: "# Diary\n\nDay one.\n\nDay two.\n",
+      version: 2,
+    });
+  });
+
+  it("warns when an assignee matches a Task id instead of an executor address", () => {
+    const parent = seed({ op: "create", title: "SEO loop", id: "seo-loop", status: "in-progress" });
+    const created = run(parent, {
+      op: "create",
+      title: "Child",
+      id: "child",
+      assignee: "seo-loop",
+      status: "todo",
+    });
+    expect(created.d.ok && created.d.notices.join("\n")).toContain('assignee "seo-loop" matches an existing Task id');
+    expect(created.d.ok && created.d.notices.join("\n")).toContain("parent=seo-loop");
+
+    const other = run(created.world, { op: "create", title: "Other", id: "other" });
+    const updated = run(other.world, {
+      op: "update",
+      id: "other",
+      patch: { assignee: "seo-loop", status: "todo" },
+    });
+    expect(updated.d.ok && updated.d.notices.join("\n")).toContain('assignee "seo-loop" matches an existing Task id');
+  });
+
   it("mirror add is get-or-create on (kind, coords); unknown kind is a hard refusal", () => {
     const { world, d } = run(emptyWorld(), { op: "mirror-add", kind: "github-pr", coords: "app#482" });
     expect(d.ok && d.result?.existing).toBe(false);

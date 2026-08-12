@@ -198,7 +198,7 @@ function runVerbRefusal(
   if (req.tick) return { status: 403, code: "FORBIDDEN", message: "a run credential cannot host-tick (owner/host surface)" };
   if (req.read || req.timeline !== undefined) return null; // reads are team-scoped and safe (show/list/inbox/timeline)
   const op = isRecord(req.command) ? String((req.command as { op?: unknown }).op ?? "") : "";
-  const allowed = new Set(["create", "update", "note", "doc-put", "mirror-add", "run-finish"]);
+  const allowed = new Set(["create", "update", "note", "doc-put", "doc-append", "mirror-add", "run-finish"]);
   if (!allowed.has(op)) {
     return { status: 403, code: "FORBIDDEN", message: `a run credential cannot issue "${op}" (allowed: ${[...allowed].join(", ")})` };
   }

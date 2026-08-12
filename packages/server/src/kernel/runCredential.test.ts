@@ -237,6 +237,30 @@ test("POSTCONDITION: a doc PRODUCT (doc-put --task) is evidence - done stands", 
   expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)?.state).toBe("done");
 });
 
+test("a run credential may atomically append a doc with exact CAS", async () => {
+  const { teamId, rk } = await deliveredRun("bet-diary");
+  const put = await kgateway.kernelCli(rk, {
+    command: { op: "doc-put", key: "bet-diary-log", body: "# Diary\n", attachTask: "bet-diary" },
+  });
+  expect(put.status).toBe(200);
+  const append = await kgateway.kernelCli(rk, {
+    command: { op: "doc-append", key: "bet-diary-log", body: "Day one.\n", ifVersion: 1, attachTask: "bet-diary" },
+  });
+  expect(append.status).toBe(200);
+  const doc = (await kstore.readSnapshot(teamId)).objects["bet-diary-log"];
+  expect(doc).toMatchObject({ body: "# Diary\n\nDay one.\n", version: 2 });
+
+  const retry = await kgateway.kernelCli(rk, {
+    command: { op: "doc-append", key: "bet-diary-log", body: "Day one.\n", ifVersion: 1 },
+  });
+  expect(retry.status).toBe(422);
+  expect(retry.body.refusal?.code).toBe("CONFLICT");
+  expect((await kstore.readSnapshot(teamId)).objects["bet-diary-log"]).toMatchObject({
+    body: "# Diary\n\nDay one.\n",
+    version: 2,
+  });
+});
+
 test("FOLLOW-UP COHERENCE: status=follow-up without a date refuses at the bridge (never inconsistent state)", async () => {
   const { rk } = await deliveredRun("bet-fu");
   const bad = await kgateway.kernelCli(rk, {

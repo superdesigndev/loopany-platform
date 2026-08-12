@@ -22,6 +22,7 @@ import {
   type CreateCommand,
   type Decision,
   type DocPutCommand,
+  type DocAppendCommand,
   type KernelEvent,
   type KernelObject,
   type MirrorAddCommand,
@@ -316,6 +317,20 @@ function softVocabularyNotices(task: Pick<TaskObject, "type" | "priority">): str
   return notices;
 }
 
+/** Catch the common scope-vs-executor mix-up without rejecting a deliberately
+ *  same-named local profile. `parent` transfers tree ownership; `assignee`
+ *  addresses execution. The pure Kernel cannot inspect daemon profiles, but it
+ *  can reliably see that the supplied executor name is also a Task id. */
+function assigneeTaskCollisionNotices(snapshot: Snapshot, task: Pick<TaskObject, "id" | "assignee">): string[] {
+  if (!task.assignee) return [];
+  const target = getTask(snapshot, task.assignee);
+  if (!target && task.assignee !== task.id) return [];
+  return [
+    `assignee "${task.assignee}" matches an existing Task id - assignment targets an executor, not a Task. ` +
+      `To transfer scope to that Loop, set parent=${task.assignee} instead`,
+  ];
+}
+
 function referenceIssues(snapshot: Snapshot, taskId: string, parent: string | null, tracks: string | null): string[] {
   const issues: string[] = [];
   if (parent) {
@@ -570,6 +585,7 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
 
   const cs = emptyChangeset();
   const notices = softVocabularyNotices(task);
+  notices.push(...assigneeTaskCollisionNotices(snapshot, task));
   cs.objects.push({ object: task, expectedVersion: null });
   cs.events.push({
     id: eventId(id, 1, "created"),
@@ -840,6 +856,7 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
   }
 
   const notices = softVocabularyNotices(after);
+  notices.push(...assigneeTaskCollisionNotices(snapshot, after));
   cs.objects.push({ object: after, expectedVersion: before.version });
   cs.events.push(...events);
   cs.triggers.push(...byId.values());
@@ -854,7 +871,12 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
     );
   }
   cs.runs.push(...runMutations);
-  return { ok: true, changeset: cs, notices, result: { id: after.id } };
+  return {
+    ok: true,
+    changeset: cs,
+    notices,
+    result: { id: after.id, previousVersion: before.version, version: after.version },
+  };
 }
 
 // ---- note ----
@@ -880,7 +902,12 @@ function decideNote(cmd: NoteCommand, ctx: Ctx): Decision {
     ...(cmd.observation ? { observation: cmd.observation } : {}),
     provenance: actor,
   });
-  return { ok: true, changeset: cs, notices: [], result: { id: cmd.id } };
+  return {
+    ok: true,
+    changeset: cs,
+    notices: [],
+    result: { id: cmd.id, previousVersion: before.version, version: after.version },
+  };
 }
 
 // ---- doc put (no state machine => one upsert verb) ----
@@ -989,7 +1016,42 @@ function decideDocPut(cmd: DocPutCommand, ctx: Ctx): Decision {
         `Attach it: doc put ${id} --task <task-id> (in-run, LOOPANY_TASK_ID auto-fills)`,
     );
   }
-  return { ok: true, changeset: cs, notices, result: { id, existing: Boolean(existing) } };
+  return {
+    ok: true,
+    changeset: cs,
+    notices,
+    result: { id, existing: Boolean(existing), previousVersion: existing?.version ?? 0, version },
+  };
+}
+
+function decideDocAppend(cmd: DocAppendCommand, ctx: Ctx): Decision {
+  const { snapshot } = ctx;
+  const keyBad = requireString(cmd.key, "key", "INVALID_REFERENCE");
+  if (keyBad) return keyBad;
+  const bodyBad = requireString(cmd.body, "body", "INVALID_REFERENCE");
+  if (bodyBad) return bodyBad;
+  if (!Number.isSafeInteger(cmd.ifVersion) || cmd.ifVersion < 0) {
+    return refuse("INVALID_REFERENCE", "ifVersion is required and must be a non-negative safe integer");
+  }
+  const id = slugify(cmd.key);
+  const existing = getObject(snapshot, id);
+  if (!existing) return refuse("UNKNOWN_OBJECT", `doc "${id}" does not exist`, { hint: `create it with doc put ${id} --file <file>` });
+  if (existing.archetype !== "doc") return refuse("CONFLICT", `"${id}" exists and is a ${existing.archetype}`);
+  if (existing.version !== cmd.ifVersion) {
+    return refuse("CONFLICT", `version is ${existing.version}, expected ${cmd.ifVersion}`, {
+      hint: `run show ${id} --json, verify whether the entry already exists, then retry with version ${existing.version}`,
+    });
+  }
+  const separator = existing.body.length === 0 || cmd.body.length === 0 || existing.body.endsWith("\n\n") || cmd.body.startsWith("\n")
+    ? ""
+    : existing.body.endsWith("\n") ? "\n" : "\n\n";
+  return decideDocPut({
+    op: "doc-put",
+    key: id,
+    body: `${existing.body}${separator}${cmd.body}`,
+    ifVersion: cmd.ifVersion,
+    ...(cmd.attachTask ? { attachTask: cmd.attachTask } : {}),
+  }, ctx);
 }
 
 // ---- mirror add (get-or-create on external identity) ----
@@ -1334,6 +1396,7 @@ const KNOWN_OPS = [
   "update",
   "note",
   "doc-put",
+  "doc-append",
   "mirror-add",
   "run",
   "run-claim",
@@ -1364,6 +1427,8 @@ export function decide(command: Command, snapshot: Snapshot, actor: Provenance, 
       return decideNote(command, ctx);
     case "doc-put":
       return decideDocPut(command, ctx);
+    case "doc-append":
+      return decideDocAppend(command, ctx);
     case "mirror-add":
       return decideMirrorAdd(command, ctx);
     case "run":

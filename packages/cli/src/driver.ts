@@ -556,7 +556,7 @@ function persist(
 export interface CommandResult {
   snapshot: Snapshot;
   notices: string[];
-  result?: { id: string; existing?: boolean };
+  result?: { id: string; existing?: boolean; previousVersion?: number; version?: number };
   operationalContext?: OperationalContext;
 }
 
