@@ -69,9 +69,17 @@ function fieldLines(obj: KernelObject): string[] {
     return lines;
   }
   if (obj.archetype === "doc") {
-    return [`doc ${obj.id}  (v${obj.version})`, `key: ${obj.key}`, `title: ${obj.title ?? "—"}`];
+    return [`doc ${obj.id}  (v${obj.version})`, `key: ${obj.key}`, `title: ${docDisplayTitle(obj)}`];
   }
   return [`mirror ${obj.id}  (v${obj.version})`, `kind: ${obj.kind}`, `coords: ${obj.coords}`];
+}
+
+/** Explicit metadata wins. Older docs predate title indexing, so their first
+ * markdown H1 remains a useful read-time fallback without mutating history. */
+export function docDisplayTitle(doc: { title: string | null; body: string; key?: string }): string {
+  if (doc.title?.trim()) return doc.title.trim();
+  const heading = doc.body.match(/^#\s+(.+?)\s*$/m)?.[1]?.trim();
+  return heading || doc.key || "—";
 }
 
 function objectBody(obj: KernelObject): string | null {
@@ -131,7 +139,10 @@ export function renderShow(
         if (trace) loopLines.push(trace);
       }
       const machine = obj.assignee?.includes("/") ? obj.assignee.split("/", 1)[0] : null;
-      if (machine) loopLines.push(`  machine ${machine}: ${machinePresence[machine] ?? "unregistered"}`);
+      if (machine) {
+        const presence = machinePresence[machine] ?? "unregistered";
+        loopLines.push(`  machine ${machine}: ${presence === "unavailable" ? "presence unavailable (local backend)" : presence}`);
+      }
       if (loopLines.length > 0) parts.push("", "loop:", ...loopLines);
       if (detail.products.length > 0) {
         const maxProducts = 5;
@@ -192,14 +203,21 @@ export function renderShow(
       if (blocked?.note) parts.push("", "blocking condition:", `  ${clip(blocked.note, 220)}`);
       else if (humanDecision) parts.push("", "human decision:", `  waiting on ${obj.assignee}${handoffReason ? ` - ${clip(handoffReason, 160)}` : ""}`);
 
-      const next = blocked
-        ? `resolve the machine/configuration issue, then: ${"loopany-kernel"} run ${obj.id}`
+      const terminal = obj.status === "done" || obj.status === "archived";
+      const scheduled = trigs.find((trigger) => trigger.enabled && trigger.nextFireAt);
+      const next = terminal
+        ? `none - task is ${obj.status}`
+        : blocked
+          ? `resolve the machine/configuration issue, then: ${"loopany-kernel"} run ${obj.id}`
         : humanDecision
           ? `hand back: loopany-kernel update ${obj.id} assignee=<machine/agent> status=todo --note "<decision and context>"`
+          : scheduled
+            ? `none - next run scheduled for ${formatLocalTime(scheduled.nextFireAt!)} local (schedule timezone: ${scheduled.timezone ?? "host-local"})`
           : obj.assignee
             ? `continue the task, then record progress: loopany-kernel note ${obj.id} "<what changed and why>"`
             : `assign work: loopany-kernel update ${obj.id} assignee=<owner> status=todo --note "<handoff reason>"`;
       parts.push("", "commands:", `  full history: loopany-kernel show ${obj.id} --log`, `  next: ${next}`);
+      if (terminal) parts.push(`  reopen: loopany-kernel update ${obj.id} status=todo --note "<why>"`);
     }
   }
   const body = objectBody(obj);
@@ -216,8 +234,9 @@ export function renderShow(
 
 export function renderTriggerLine(t: Trigger): string {
   const state = t.enabled ? "enabled" : `disabled (${t.disabledBy ?? "?"})`;
-  const next = t.nextFireAt ? ` next=${formatLocalTime(t.nextFireAt)}` : "";
-  return `trigger ${t.kind}: ${t.spec} [${state}]${next}`;
+  const timezone = ` timezone=${t.timezone ?? "host-local"}`;
+  const next = t.nextFireAt ? ` next=${formatLocalTime(t.nextFireAt)} local` : "";
+  return `trigger ${t.kind}: ${t.spec} [${state}]${timezone}${next}`;
 }
 
 export function renderRunLine(r: RunRecord): string {
@@ -303,7 +322,7 @@ function countDescendants(node: TreeNode): number {
 
 /**
  * The default `list` view is a DECISION SURFACE (axi): live work renders as
- * rows; fully-done subtrees collapse into one `… N done` summary per sibling
+ * rows; fully-terminal subtrees collapse into one `… N terminal` summary per sibling
  * group (`--all` expands). Children connect with `├─`/`└─` guides; root
  * subtrees separate with a blank line. The tail counts ALWAYS cover the full
  * tree, collapsed and depth-cut nodes included.
@@ -336,10 +355,10 @@ export function renderTree(nodes: readonly TreeNode[], snapshot: Snapshot, now: 
       const conn = i === visible.length - 1 && hiddenHere === 0 ? "└─ " : "├─ ";
       lines.push(conn + nodeLine(c, snapshot, now, true));
     });
-    if (hiddenHere > 0) lines.push(`└─ … ${hiddenHere} done  (\`list --all\` shows them)`);
+    if (hiddenHere > 0) lines.push(`└─ … ${hiddenHere} terminal  (\`list --all\` shows them)`);
     blocks.push(lines.join("\n"));
   }
-  if (hiddenRootTasks > 0) blocks.push(`… ${hiddenRootTasks} done  (\`list --all\` shows them)`);
+  if (hiddenRootTasks > 0) blocks.push(`… ${hiddenRootTasks} terminal  (\`list --all\` shows them)`);
 
   // Pre-computed aggregate tail (axi): one orientation line, statuses in a
   // stable order so agents can pattern-match it.
@@ -399,7 +418,10 @@ function renderTaskRow(task: TaskObject, snapshot: Snapshot, now: string): strin
   // The title is the human-readable column; skip it only when the id IS the
   // slugified title (it would repeat the id verbatim).
   const title = slugify(task.title) === task.id ? "" : `  ${clip(task.title, 60)}`;
-  return `${task.id}  [${task.status}]${cron ? " [loop]" : ""} @${task.assignee ?? "—"}${title}${tail}`;
+  const assignee = task.assignee
+    ? task.assignee.includes("@") ? task.assignee : `@${task.assignee}`
+    : "@—";
+  return `${task.id}  [${task.status}]${cron ? " [loop]" : ""} ${assignee}${title}${tail}`;
 }
 
 /** Compact time-until-future, deterministic under --now: "due"/"in 50m"/"in 2h"/"in 3d". */
@@ -475,9 +497,9 @@ export function renderInbox(
       const target = handbackTargets?.[i.task.id];
       const hint =
         target != null
-          ? `hand back: update ${i.task.id} assignee=${target} status=todo --note "<your reply>"`
+          ? `hand back: loopany-kernel update ${i.task.id} assignee=${target} status=todo --note "<your reply>"`
           : target === null
-            ? `hand back: update ${i.task.id} assignee=<agent> status=todo --note "<your reply>"  (no prior agent - pick one)`
+            ? `hand back: loopany-kernel update ${i.task.id} assignee=<agent> status=todo --note "<your reply>"  (no prior agent - pick one)`
             : null;
       return `${head}\n      ${bits.join(" · ")}${hint ? `\n      ${hint}` : ""}`;
     })
@@ -498,7 +520,8 @@ export function renderLoops(rows: readonly LoopRow[]): string {
     .map((r) => {
       const human = cronText(r.trigger.spec);
       const cadence = human === r.trigger.spec ? r.trigger.spec : `${human} (${r.trigger.spec})`;
-      const head = `${r.task.id}  ${cadence}  next=${r.trigger.enabled ? (r.trigger.nextFireAt ? formatLocalTime(r.trigger.nextFireAt) : "—") : `paused(${r.trigger.disabledBy ?? "?"})`}`;
+      const timezone = ` [${r.trigger.timezone ?? "host-local"}]`;
+      const head = `${r.task.id}  ${cadence}${timezone}  next=${r.trigger.enabled ? (r.trigger.nextFireAt ? `${formatLocalTime(r.trigger.nextFireAt)} local` : "—") : `paused(${r.trigger.disabledBy ?? "?"})`}`;
       const state = r.blockedNote
         ? `blocked: ${clip(r.blockedNote)}`
         : r.activeRun
@@ -506,8 +529,9 @@ export function renderLoops(rows: readonly LoopRow[]): string {
           : r.lastRun
             ? `last: ${r.lastRun.state}${r.lastRun.note ? ` · ${clip(r.lastRun.note, 80)}` : ""}`
             : "quiet";
+      const target = r.task.assignee ? `  ·  agent ${r.task.assignee}` : "";
       const machine = r.machinePresence ? `  ·  machine ${r.machinePresence}` : "";
-      return `${head}${machine}\n      ${state}`;
+      return `${head}${target}${machine}\n      ${state}`;
     })
     .join("\n");
 }

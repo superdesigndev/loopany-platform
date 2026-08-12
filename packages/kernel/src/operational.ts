@@ -23,7 +23,7 @@ export function projectOperationalContext(
   command: Command,
   changeset: Changeset,
   after: Snapshot,
-  presence: Readonly<Record<string, string>> = {},
+  presence?: Readonly<Record<string, string>>,
 ): OperationalContext {
   const targeted = command as Command & { id?: string; attachTask?: string; patch?: Record<string, unknown> };
   const candidate = targeted.attachTask ?? targeted.id ?? (command.op === "create" ? changeset.objects[0]?.object.id : undefined);
@@ -39,24 +39,26 @@ export function projectOperationalContext(
   const consequence = superseded && created ? "superseded-and-replaced" : superseded ? "superseded" : created ? "created" : retained ? "retained" : "none";
   const task = taskId && after.objects[taskId]?.archetype === "task" ? after.objects[taskId] as TaskObject : null;
   const alias = task?.assignee?.includes("/") ? task.assignee.slice(0, task.assignee.indexOf("/")) : null;
-  const machine = alias ? { alias, presence: presence[alias] ?? "unregistered" } : null;
+  const machine = alias
+    ? { alias, presence: presence ? presence[alias] ?? "unregistered" : "unavailable" }
+    : null;
   const trigger = taskId
     ? after.triggers.filter((t) => t.taskId === taskId && t.enabled && t.nextFireAt).sort((a, b) => a.nextFireAt!.localeCompare(b.nextFireAt!))[0]
     : undefined;
   let action: string | null = null;
   let nextCommand: string | null = null;
-  if (machine && machine.presence !== "online" && (created || retained)) {
+  if (machine && machine.presence !== "online" && machine.presence !== "unavailable" && (created || retained)) {
     action = machine.presence === "unregistered"
       ? `human action needed: machine alias "${machine.alias}" is not registered; this pending run cannot be delivered`
       : `no action required if the daemon will reconnect; the pending run is retained for the ${machine.presence} machine`;
     if (machine.presence === "unregistered" && taskId) nextCommand = `loopany-kernel update ${taskId} assignee=<registered-machine/agent> --note "correct dispatch target"`;
-  } else if (task?.assignee && !task.assignee.includes("@") && !created && !retained && !trigger) {
+  } else if (created) {
+    action = "no action required; the run is queued for delivery";
+  } else if (task?.status === "todo" && task.assignee && !task.assignee.includes("@") && !retained && !trigger) {
     action = "manual dispatch is needed to run this task now";
     nextCommand = `loopany-kernel run ${task.id}`;
   } else if (trigger?.nextFireAt) {
-    action = `no action required; the next trigger fires at ${trigger.nextFireAt}`;
-  } else if (created) {
-    action = "no action required; the run is queued for delivery";
+    action = "no action required; the task has a future trigger";
   }
   const changed = command.op === "update"
     ? Object.keys(targeted.patch ?? {})

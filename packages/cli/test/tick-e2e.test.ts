@@ -135,7 +135,7 @@ describe("M3 time & dispatch (temp-dir E2E)", () => {
     call(["init"]);
     call(["create", "Ad-hoc", "--id", "adhoc", "--assignee", "claude", "--status", "in-progress"]);
     // No dispatchable auto-run yet (status is in-progress, not todo), so `run` mints one.
-    const dispatched = call(["run", "adhoc", "--wait"]); // --wait is an accepted no-op in M3
+    const dispatched = call(["run", "adhoc"]);
     expect(dispatched.stdout).toContain("ok adhoc");
     const active = JSON.parse(call(["show", "adhoc", "--json"]).stdout) as {
       activeRun: { cause: string; state: string } | null;

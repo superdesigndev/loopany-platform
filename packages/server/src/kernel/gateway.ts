@@ -59,6 +59,8 @@ export interface KernelCliResponse {
    *  every machine reachable in the team - the Loops projection's machine
    *  availability (review round 3). */
   machinePresence?: Record<string, string>;
+  /** Existing team identity for source labeling in remote human-facing clients. */
+  team?: { id: string; name: string };
   /** Immediate consequence derived from this write's applied changeset and
    * authoritative post-apply snapshot. */
   operationalContext?: OperationalContext;
@@ -421,7 +423,18 @@ async function readRequest(teamId: string): Promise<KernelHttpResult> {
   }
   // Machine availability per team alias (the Loops projection consumes it).
   const machinePresence = await readMachinePresence(teamId);
-  return { status: 200, body: { ok: true, notices: [], snapshot, events, machinePresence } };
+  const team = await store.getTeam(teamId);
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      notices: [],
+      snapshot,
+      events,
+      machinePresence,
+      team: { id: teamId, name: team?.name ?? teamId },
+    },
+  };
 }
 
 async function readMachinePresence(teamId: string): Promise<Record<string, string>> {

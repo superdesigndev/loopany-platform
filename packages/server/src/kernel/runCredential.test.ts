@@ -112,6 +112,7 @@ test("an rk_ kernel lease writes with RUN provenance; cross-task writes allowed;
   const read = await kgateway.kernelCli(rk, { read: true });
   expect(read.status).toBe(200);
   expect(read.body.machinePresence).toMatchObject({ mbp: "online" });
+  expect(read.body.team).toMatchObject({ id: teamId });
 
   // run-finish for the OWN run succeeds.
   const finish = await kgateway.kernelCli(rk, {

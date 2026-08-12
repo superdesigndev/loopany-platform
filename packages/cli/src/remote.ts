@@ -30,7 +30,9 @@ import {
   type Provenance,
   type Snapshot,
   type OperationalContext,
+  applyChangeset,
   decide,
+  projectOperationalContext,
 } from "@loopany/kernel";
 import { spawnSync } from "node:child_process";
 import type { Backend } from "./backend.js";
@@ -49,6 +51,7 @@ export interface KernelCliResponse {
   applied?: number;
   timeline?: TimelineItem[];
   machinePresence?: Record<string, string>;
+  team?: { id: string; name: string };
   operationalContext?: OperationalContext;
 }
 
@@ -64,7 +67,7 @@ export class RemoteBackend implements Backend {
   private readonly url: string;
 
   constructor(
-    serverUrl: string,
+    private readonly serverUrl: string,
     private readonly token: string,
     private readonly transport: SyncTransport = syncHttpTransport,
     /** The SIMULATOR time-authority capability (LOOPANY_KERNEL_SIM_AUTHORITY):
@@ -75,6 +78,12 @@ export class RemoteBackend implements Backend {
   ) {
     // POST target: <serverUrl>/api/kernel/cli. Tolerate a trailing slash.
     this.url = `${serverUrl.replace(/\/+$/, "")}/api/kernel/cli`;
+  }
+
+  private team: { id: string; name: string } | undefined;
+  sourceInfo(): { label: string; endpoint: string } {
+    const team = this.team ? `team ${this.team.name} (${this.team.id})` : "remote team";
+    return { label: team, endpoint: this.url };
   }
 
   command(
@@ -91,7 +100,14 @@ export class RemoteBackend implements Backend {
       if (opts.guard) opts.guard(before);
       const decision = decide(command, before, actor, now);
       if (!decision.ok) throw refusalError(decision.refusal);
-      return { snapshot: before, notices: decision.notices, result: decision.result };
+      const preview = applyChangeset(before, decision.changeset);
+      if (!preview.ok) throw conflictError(preview.conflict);
+      return {
+        snapshot: before,
+        notices: decision.notices,
+        result: decision.result,
+        operationalContext: projectOperationalContext(command, decision.changeset, preview.snapshot, this.machinePresence()),
+      };
     }
     // A live write: the guard is a pre-POST existence check against the current
     // remote snapshot — a fast, friendly reject, NOT the authority precondition.
@@ -118,6 +134,7 @@ export class RemoteBackend implements Backend {
     // round-trip (show --log reads snapshot() then events()).
     this.lastEvents = res.events ?? {};
     this.lastPresence = res.machinePresence ?? {};
+    this.team = res.team;
     return res.snapshot;
   }
 

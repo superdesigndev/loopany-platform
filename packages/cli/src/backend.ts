@@ -44,6 +44,7 @@ import { readGlobalConnect } from "./connect.js";
 export interface Backend {
   /** Human-facing label for errors/usage (e.g. "local" or the server origin). */
   readonly kind: "local" | "remote";
+  sourceInfo?(): { label: string; endpoint?: string };
   command(
     command: Command,
     actor: Provenance,
@@ -67,6 +68,9 @@ export interface Backend {
 class LocalBackend implements Backend {
   readonly kind = "local" as const;
   constructor(private readonly wsDir: string) {}
+  sourceInfo(): { label: string } {
+    return { label: `local workspace ${this.wsDir}` };
+  }
   command(
     command: Command,
     actor: Provenance,

@@ -78,6 +78,17 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
       expect(existsSync(join(dir, ".loopany", sub))).toBe(true);
     }
 
+    const home = call([]);
+    expect(home.stdout).toContain("Loopany Kernel");
+    expect(home.stdout).toContain("Recurring agent work that keeps its context and outputs");
+    expect(home.stdout).toContain("source: local workspace");
+    expect(home.stdout).toContain("tasks: 0");
+    expect(home.stdout).toContain("lk --help");
+    expect(home.stdout).not.toContain("workspace\n  init");
+    const homeJson = JSON.parse(call(["--json"]).stdout);
+    expect(homeJson.source.label).toContain("local workspace");
+    expect(homeJson.tasks.total).toBe(0);
+
     // --- create a small tree ---
     const root = call(["create", "Ship the redesign", "--assignee", "claude", "--status", "todo"]);
     expect(root.stdout).toContain("ok ship-the-redesign");
@@ -251,8 +262,8 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
       consequence: "superseded-and-replaced",
     });
     expect(body.operationalContext.run.createdId).toMatch(/^run-/);
-    expect(body.operationalContext.machine).toEqual({ alias: "studio", presence: "unregistered" });
-    expect(body.operationalContext.nextCommand).toContain("loopany-kernel update handoff-work assignee=<registered-machine/agent>");
+    expect(body.operationalContext.machine).toEqual({ alias: "studio", presence: "unavailable" });
+    expect(body.operationalContext.nextCommand).toBeNull();
   });
 
   it("returns compact operational context for note, doc, mirror, and manual run writes", () => {
@@ -323,6 +334,8 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(show.stdout).not.toContain("parent: —");
     expect(show.stdout).toContain("routing:");
     expect(show.stdout).toContain("loop:");
+    expect(show.stdout).toContain("timezone=");
+    expect(show.stdout).toContain("next: none - next run scheduled for");
     expect(show.stdout).toContain("children:");
     expect(show.stdout).toContain("bet-child");
 
@@ -334,6 +347,8 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     // Humanized cadence with the raw spec in parens (the edit surface), no icon.
     expect(loops.stdout).toContain("seo  daily 07:00 (0 7 * * *)");
     expect(loops.stdout).toContain("next=");
+    expect(loops.stdout).toContain(" local");
+    expect(loops.stdout).toContain("agent mbp/claude");
     const json = JSON.parse(call(["loops", "--json"]).stdout) as Array<{ task: { id: string }; blockedNote: unknown }>;
     expect(json[0]!.task.id).toBe("seo");
   });
@@ -486,9 +501,40 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     call(["init"]);
     const out = call(["create", "Phantom", "--dry-run"]);
     expect(out.stdout).toContain("dry-run");
+    expect(out.stdout).toContain("would write: phantom");
+    expect(out.stdout).not.toContain("\nok phantom");
     expect(existsSync(join(dir, ".loopany", "objects", "phantom.md"))).toBe(false);
     // The object dir stays empty.
     expect(readdirSync(join(dir, ".loopany", "objects"))).toHaveLength(0);
+
+    call(["create", "Runnable", "--id", "runnable", "--assignee", "mbp/codex", "--status", "in-progress"]);
+    const preview = JSON.parse(call(["run", "runnable", "--dry-run", "--json"]).stdout);
+    expect(preview.operationalContext.run.consequence).toBe("created");
+    expect(preview.operationalContext.run.createdId).toMatch(/^run-/);
+    expect(preview.operationalContext.machine).toEqual({ alias: "mbp", presence: "unavailable" });
+  });
+
+  it("renders a human assignee without a duplicate at-sign", () => {
+    call(["init"]);
+    call(["create", "Human review", "--assignee", "tim@example.com"]);
+    const out = call(["list"]);
+    expect(out.stdout).toContain(" tim@example.com");
+    expect(out.stdout).not.toContain("@tim@example.com");
+  });
+
+  it("bounds the default timeline to 20 meaningful items", () => {
+    call(["init"]);
+    call(["create", "Timeline target", "--id", "timeline-target"]);
+    for (let i = 0; i < 25; i++) call(["note", "timeline-target", `note ${i}`]);
+    expect(JSON.parse(call(["timeline", "--json"]).stdout)).toHaveLength(20);
+    expect(JSON.parse(call(["timeline", "--limit", "25", "--json"]).stdout)).toHaveLength(25);
+  });
+
+  it("rejects a zero timeline limit instead of silently using the default", () => {
+    call(["init"]);
+    const out = run(["timeline", "--limit", "0"], deps());
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).toContain("--limit must be a positive integer");
   });
 
   it("re-init self-heals a missing table dir instead of crashing on the next write", () => {

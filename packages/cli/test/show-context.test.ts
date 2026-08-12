@@ -116,4 +116,14 @@ describe("task show current context semantics", () => {
     const out = renderShow(task, snapshot, null, [], false, {}, events);
     expect(out).toContain("handoff:\n  Review commit 4aa1407 and its regression coverage");
   });
+
+  it("does not tell a terminal task to continue", () => {
+    const done = { ...task, status: "done" as const };
+    const snapshot: Snapshot = { objects: { [done.id]: done }, triggers: [], runs: [] };
+
+    const out = renderShow(done, snapshot, null, [], false, {}, []);
+    expect(out).toContain("next: none - task is done");
+    expect(out).toContain(`reopen: loopany-kernel update ${done.id} status=todo`);
+    expect(out).not.toContain("continue the task");
+  });
 });

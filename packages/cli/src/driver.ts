@@ -583,7 +583,14 @@ export function runCommand(
     const decision = decide(command, before, actor, now);
     if (!decision.ok) throw refusalToError(decision.refusal);
     if (opts.dryRun) {
-      return { snapshot: before, notices: decision.notices, result: decision.result };
+      const preview = applyChangeset(before, decision.changeset);
+      if (!preview.ok) throw conflictToError(preview.conflict);
+      return {
+        snapshot: before,
+        notices: decision.notices,
+        result: decision.result,
+        operationalContext: projectOperationalContext(command, decision.changeset, preview.snapshot),
+      };
     }
     const applied = applyChangeset(before, decision.changeset);
     if (!applied.ok) throw conflictToError(applied.conflict);

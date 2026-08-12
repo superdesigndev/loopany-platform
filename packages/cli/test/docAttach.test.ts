@@ -117,5 +117,22 @@ describe("doc put --task (atomic attach)", () => {
     const out = call(["doc", "list"]).stdout;
     expect(out).toContain("portfolio  (v1)");
     expect(out).toContain("conventions  (v1)");
+    expect(out).toContain("portfolio  (v1)  2026-08-09 20:00  portfolio");
+
+    const compact = JSON.parse(call(["doc", "list", "--json"]).stdout);
+    expect(compact[0].body).toBeUndefined();
+    expect(compact[0].bodyBytes).toBeGreaterThan(0);
+    expect(compact[0].bodyCommand).toContain("show");
+    expect(JSON.parse(call(["doc", "list", "--json", "--full"]).stdout)[0].body).toBe("# portfolio\n");
+
+    const search = JSON.parse(call(["search", "portfolio", "--json"]).stdout);
+    expect(search[0].body).toBeUndefined();
+    expect(search[0].bodyBytes).toBeGreaterThan(0);
+    expect(JSON.parse(call(["search", "portfolio", "--json", "--full"]).stdout)[0].body).toBe("# portfolio\n");
+
+    expect(call(["show", "portfolio"]).stdout).toContain("title: portfolio");
+
+    call(["doc", "put", "empty-doc"]);
+    expect(call(["doc", "list"]).stdout).toContain("empty-doc  (v1)  2026-08-09 20:00  empty-doc");
   });
 });

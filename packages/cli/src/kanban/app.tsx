@@ -191,7 +191,7 @@ export function detailLines(
     ...(handback !== undefined
       ? [
           handback !== null
-            ? `hand back: update ${task.id} assignee=${handback} status=todo --note "..."`
+            ? `hand back: loopany-kernel update ${task.id} assignee=${handback} status=todo --note "..."`
             : "hand back: pick an agent (no prior agent derivable)",
         ]
       : []),

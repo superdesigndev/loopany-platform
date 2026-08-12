@@ -42,7 +42,15 @@ function fakeTransport(): { transport: SyncTransport; calls: Array<{ url: string
   const calls: Array<{ url: string; token: string }> = [];
   const transport: SyncTransport = (url, token) => {
     calls.push({ url, token });
-    return { status: 200, response: { ok: true, snapshot: { objects: {}, triggers: [], runs: [] }, events: {} } };
+    return {
+      status: 200,
+      response: {
+        ok: true,
+        snapshot: { objects: {}, triggers: [], runs: [] },
+        events: {},
+        team: { id: "team-a", name: "Design Team" },
+      },
+    };
   };
   return { transport, calls };
 }
@@ -178,6 +186,9 @@ describe("the connect verb", () => {
     expect(show.stdout).toContain("https://fly.example");
     expect(show.stdout).toContain("dk_secr…1234");
     expect(show.stdout).not.toContain("dk_secret_1234"); // never the raw token
+    const homePage = run(["--remote"], deps as never);
+    expect(homePage.stdout).toContain("source: team Design Team (team-a)");
+    expect(homePage.stdout).toContain("endpoint: https://fly.example/api/kernel/cli");
     const clear = run(["connect", "--clear"], deps as never);
     expect(clear.stdout).toContain("cleared");
   });

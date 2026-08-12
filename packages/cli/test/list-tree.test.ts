@@ -129,10 +129,10 @@ describe("list tree (§10 depth cap + done collapse + row grammar)", () => {
       // done children of a live root: one summary line, not N rows
       expect(out.split("\n").some((r) => r.includes("done-a"))).toBe(false);
       expect(out.split("\n").some((r) => r.includes("done-b"))).toBe(false);
-      expect(out).toContain("└─ … 2 done  (`list --all` shows them)");
+      expect(out).toContain("└─ … 2 terminal  (`list --all` shows them)");
       // a fully-done ROOT subtree vanishes into the root-level summary
       expect(out).not.toContain("old-epic");
-      expect(out).toContain("… 2 done  (`list --all` shows them)");
+      expect(out).toContain("… 2 terminal  (`list --all` shows them)");
       // live rows still render; the connector marks the last VISIBLE child ├─
       // because the collapse summary takes the └─ slot
       expect(out).toContain("├─ live-one");

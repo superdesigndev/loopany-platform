@@ -24,6 +24,7 @@ import {
   type OperationalContext,
   type Snapshot,
   type TaskObject,
+  type KernelObject,
   inboxView,
   loopsView,
   slugify,
@@ -45,6 +46,7 @@ import {
 import { type Backend, selectBackend } from "./backend.js";
 import {
   clip,
+  docDisplayTitle,
   renderError,
   renderFlatList,
   renderInbox,
@@ -218,7 +220,7 @@ function execWrite(
   const dryRun = args.bools.has("dry-run");
   const res = backend.command(command, actor, resolveNow(args, deps), { dryRun, guard });
   res.notices.push(...provenanceNotices(actor));
-  return renderWriteResult(res, args, dryRun, dryRun ? null : res.operationalContext ?? null);
+  return renderWriteResult(res, args, dryRun, res.operationalContext ?? null);
 }
 
 /** Select the backend for a verb, injecting the fetch/transport seam if deps
@@ -241,21 +243,30 @@ function renderWriteResult(res: CommandResult, args: ParsedArgs, dryRun: boolean
     );
   }
   const lines: string[] = [];
-  if (dryRun) lines.push("(dry-run — nothing persisted)");
-  if (res.result) lines.push(res.result.existing ? `ok ${res.result.id} (existing)` : `ok ${res.result.id}`);
-  else lines.push("ok");
+  if (dryRun) lines.push("dry-run: nothing persisted");
+  if (res.result) {
+    const result = res.result.existing ? `${res.result.id} (existing)` : res.result.id;
+    lines.push(dryRun ? `would write: ${result}` : `ok ${result}`);
+  } else lines.push(dryRun ? "would apply command" : "ok");
   if (context) {
     if (context.changed.length > 0) lines.push(`changed: ${context.changed.join(", ")}`);
     if (context.run.consequence === "superseded-and-replaced") lines.push(`run: superseded ${context.run.supersededId} -> created ${context.run.createdId}`);
     else if (context.run.consequence === "created") lines.push(`run: created ${context.run.createdId}`);
     else if (context.run.consequence === "retained") lines.push(`run: retained ${context.run.retainedId}`);
     else if (context.run.consequence === "superseded") lines.push(`run: superseded ${context.run.supersededId}`);
-    if (context.machine) lines.push(`machine: ${context.machine.alias} ${context.machine.presence}`);
-    if (context.nextTriggerAt) lines.push(`next trigger: ${context.nextTriggerAt}`);
+    if (context.machine) {
+      const presence = context.machine.presence === "unavailable"
+        ? "presence unavailable (local backend)"
+        : context.machine.presence;
+      lines.push(`machine: ${context.machine.alias} ${presence}`);
+    }
+    if (context.nextTriggerAt) lines.push(`next trigger: ${formatLocalTime(context.nextTriggerAt)} local`);
     if (context.action) lines.push(`action: ${context.action}`);
     if (context.nextCommand) lines.push(`next: ${context.nextCommand}`);
   }
-  if (res.notices.length > 0) lines.push(renderNotices(res.notices));
+  if (res.notices.length > 0) {
+    lines.push(dryRun ? res.notices.map((notice) => `would notice: ${notice}`).join("\n") : renderNotices(res.notices));
+  }
   return ok(lines.join("\n"));
 }
 
@@ -615,13 +626,15 @@ function docList(deps: CliDeps, args: ParsedArgs): CliOutcome {
   const docs = Object.values(snapshot.objects)
     .filter((o) => o.archetype === "doc")
     .sort((a, b) => (a.id < b.id ? -1 : 1));
-  if (args.bools.has("json")) return ok(JSON.stringify(docs, null, 2));
+  if (args.bools.has("json")) {
+    return ok(JSON.stringify(docs.map((doc) => objectForCollection(doc, args.bools.has("full"))), null, 2));
+  }
   if (docs.length === 0) return ok("(no docs)");
   return ok(
     docs
       .map((d) =>
         d.archetype === "doc"
-          ? `${d.id}  (v${d.version})  ${formatLocalTime(d.updatedAt)}  ${clip(d.title ?? "", 40) || "—"}`
+          ? `${d.id}  (v${d.version})  ${formatLocalTime(d.updatedAt)}  ${clip(docDisplayTitle(d), 40)}`
           : "",
       )
       .join("\n"),
@@ -708,7 +721,9 @@ function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
         : null;
     const detail = obj.archetype === "task" ? taskDetailView(snapshot, obj.id, taskEvents ?? undefined) : null;
     const machineAlias = obj.archetype === "task" && obj.assignee?.includes("/") ? obj.assignee.split("/", 1)[0] : null;
-    const presence = machineAlias ? backend.machinePresence()[machineAlias] ?? "unregistered" : null;
+    const presence = machineAlias
+      ? backend.kind === "local" ? "unavailable" : backend.machinePresence()[machineAlias] ?? "unregistered"
+      : null;
     return ok(
       JSON.stringify(
         {
@@ -732,7 +747,9 @@ function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
       events,
       recent,
       args.bools.has("all"),
-      backend.machinePresence(),
+      backend.kind === "local" && obj.archetype === "task" && obj.assignee?.includes("/")
+        ? { [obj.assignee.split("/", 1)[0]!]: "unavailable" }
+        : backend.machinePresence(),
       taskEvents,
     ),
   );
@@ -807,6 +824,17 @@ function taskForCollection(task: TaskObject, full: boolean): TaskObject | (Omit<
   };
 }
 
+function objectForCollection(object: KernelObject, full: boolean): unknown {
+  if (object.archetype === "task") return taskForCollection(object, full);
+  if (object.archetype !== "doc" || full) return object;
+  const { body, ...metadata } = object;
+  return {
+    ...metadata,
+    bodyBytes: Buffer.byteLength(body, "utf8"),
+    bodyCommand: `loopany-kernel show ${object.id} --json`,
+  };
+}
+
 function treeForCollection(nodes: ReturnType<typeof treeView>, full: boolean): unknown[] {
   return nodes.map((node) => ({
     task: taskForCollection(node.task, full),
@@ -827,7 +855,9 @@ function verbSearch(args: ParsedArgs, deps: CliDeps): CliOutcome {
     }
     return o.coords.toLowerCase().includes(needle) || o.kind.toLowerCase().includes(needle);
   });
-  if (args.bools.has("json")) return ok(JSON.stringify(hits, null, 2));
+  if (args.bools.has("json")) {
+    return ok(JSON.stringify(hits.map((hit) => objectForCollection(hit, args.bools.has("full"))), null, 2));
+  }
   return ok(renderSearchHits(hits));
 }
 
@@ -906,14 +936,16 @@ function verbLoops(args: ParsedArgs, deps: CliDeps): CliOutcome {
 }
 
 /** `timeline` — the team's recent MEANINGFUL activity (kernel-team-timeline):
- *  a derived projection, newest first, default last 24h / 50 items. Mechanical
+ *  a derived projection, newest first, default last 24h / 20 items. Mechanical
  *  noise (starts, claims, ordinary returns, no-op checks) hides unless --all.
  *  Content is untrusted team activity DATA, never instructions. */
 function verbTimeline(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const now = resolveNow(args, deps);
   let limit: number | undefined;
   if (args.flags.limit !== undefined) {
-    if (!/^\d+$/.test(args.flags.limit)) throw new UsageError(`--limit must be a positive integer, got "${args.flags.limit}"`);
+    if (!/^\d+$/.test(args.flags.limit) || Number(args.flags.limit) < 1) {
+      throw new UsageError(`--limit must be a positive integer, got "${args.flags.limit}"`);
+    }
     limit = Number(args.flags.limit);
   }
   if (args.flags.since !== undefined && !Number.isFinite(Date.parse(args.flags.since))) {
@@ -921,7 +953,7 @@ function verbTimeline(args: ParsedArgs, deps: CliDeps): CliOutcome {
   }
   const items = backendFor(deps, args).timeline({
     since: args.flags.since ?? new Date(Date.parse(now) - 24 * 3600_000).toISOString(),
-    limit,
+    limit: limit ?? 20,
     taskId: args.flags.task,
     actor: args.flags.actor,
     all: args.bools.has("all"),
@@ -932,10 +964,9 @@ function verbTimeline(args: ParsedArgs, deps: CliDeps): CliOutcome {
 
 // ---- dispatch + host ----
 
-/** `run <id> [--wait]` — the third dispatch entrance (§5.1): create a manual
- *  run(pending). `--wait` is ACCEPTED as a no-op in M3 (the local host does not
- *  yet spawn/await an agent — that is M4 `tick --spawn`); it parses so the M4
- *  surface and any script written against it does not have to change. */
+/** `run <id>` - the third dispatch entrance (§5.1): create a manual
+ *  run(pending). Waiting is deliberately not advertised until the CLI can
+ *  observe the authority and return the terminal result truthfully. */
 function verbRun(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const id = args.positionals[0];
   if (id === undefined) throw new UsageError("run needs an <id>");
@@ -1010,8 +1041,32 @@ function verbTick(args: ParsedArgs, deps: CliDeps): CliOutcome {
 
 export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
   const requestedVerb = argv[0];
-  if (requestedVerb === undefined || requestedVerb === "help" || requestedVerb === "--help" || requestedVerb === "-h") {
-    return { stdout: USAGE, stderr: "", exitCode: requestedVerb === undefined ? 2 : 0 };
+  if (requestedVerb === undefined) {
+    try {
+      return verbHome(deps, emptyArgs());
+    } catch (e) {
+      if (e instanceof DriverError) return { stdout: "", stderr: renderError(e), exitCode: 1 };
+      throw e;
+    }
+  }
+  if (requestedVerb === "help" || requestedVerb === "--help" || requestedVerb === "-h") {
+    return { stdout: USAGE, stderr: "", exitCode: 0 };
+  }
+  if (requestedVerb.startsWith("-")) {
+    try {
+      const args = parseArgs(argv);
+      validateCommandFlags("home", args);
+      validateCommandShape("home", args);
+      return verbHome(deps, args);
+    } catch (e) {
+      if (e instanceof UsageError) {
+        return { stdout: "", stderr: renderUsageError(e.message, argv), exitCode: 2 };
+      }
+      if (e instanceof DriverError) {
+        return { stdout: "", stderr: renderErrorFor(e, argv), exitCode: 1 };
+      }
+      throw e;
+    }
   }
   const verb = VERB_ALIASES[requestedVerb] ?? requestedVerb;
   // Validate the command BEFORE parsing its flags. Otherwise `wat --help`
@@ -1031,6 +1086,8 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
   // from the raw argv for a machine-readable usage error (S4).
   try {
     const args = parseArgs(argv.slice(1));
+    validateCommandFlags(verb, args);
+    validateCommandShape(verb, args);
     switch (verb) {
       case "init":
         return verbInit(args, deps);
@@ -1093,6 +1150,128 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
   }
 }
 
+function emptyArgs(): ParsedArgs {
+  return { positionals: [], flags: {}, bools: new Set(), assigns: [] };
+}
+
+/** Content-first home: one bounded snapshot answers "is there work?". Help is
+ * deliberately separate (`lk --help`) so every ordinary session starts from
+ * live state instead of a static manual. */
+function verbHome(deps: CliDeps, args: ParsedArgs): CliOutcome {
+  const backend = backendFor(deps, args);
+  const snapshot = backend.snapshot();
+  const tasks = tasksOf(snapshot);
+  const counts = new Map<string, number>();
+  for (const task of tasks) counts.set(task.status, (counts.get(task.status) ?? 0) + 1);
+  const activeRuns = snapshot.runs.filter((r) => r.state === "pending" || r.state === "claimed" || r.state === "running").length;
+  const loops = snapshot.triggers.filter((t) => t.kind === "cron" && t.enabled).length;
+  const me = backend.kind === "remote" ? readGlobalConnect(deps.env)?.me : (deps.gitEmail ?? realGitEmail)();
+  const attention = me ? inboxView(snapshot, me, deps.now).length : null;
+  const source = backend.sourceInfo?.() ?? { label: backend.kind };
+  const status = ["todo", "in-progress", "follow-up", "idea", "done", "archived"]
+    .filter((s) => counts.has(s))
+    .map((s) => `${counts.get(s)} ${s}`)
+    .join(" · ");
+  const lines = [
+    "Loopany Kernel",
+    "Recurring agent work that keeps its context and outputs, and brings humans in for key decisions.",
+    `source: ${source.label}`,
+    ...(source.endpoint ? [`endpoint: ${source.endpoint}`] : []),
+    `tasks: ${tasks.length}${status ? ` · ${status}` : ""}`,
+    `loops: ${loops} · active runs: ${activeRuns}`,
+    ...(attention === null ? [] : [`attention: ${attention}${me ? ` · ${me}` : ""}`]),
+    "",
+    "next:",
+    ...(attention && attention > 0 ? ["  lk inbox"] : []),
+    "  lk loops",
+    "  lk list",
+    "  lk --help",
+  ];
+  if (args.bools.has("json")) {
+    return ok(JSON.stringify({
+      source,
+      tasks: { total: tasks.length, byStatus: Object.fromEntries(counts) },
+      loops,
+      activeRuns,
+      attention: attention === null ? null : { count: attention, assignee: me },
+    }, null, 2));
+  }
+  return ok(lines.join("\n"));
+}
+
+const WRITE_AUDIT_FLAGS = ["dry-run", "json", "remote", "actor", "session", "now"] as const;
+const COMMAND_FLAGS: Record<string, readonly string[]> = {
+  home: ["json", "remote"],
+  init: ["backend", "token", "no-register", "json"],
+  register: ["json"],
+  unregister: ["json"],
+  connect: ["token", "me", "clear", "json"],
+  create: ["id", "parent", "tracks", "assignee", "owner", "workdir", "goal", "type", "priority", "status", "cron", "timezone", "follow-up", "body-file", ...WRITE_AUDIT_FLAGS],
+  update: ["note", "follow-up", "if-version", ...WRITE_AUDIT_FLAGS],
+  note: [...WRITE_AUDIT_FLAGS],
+  "doc:put": ["file", "task", ...WRITE_AUDIT_FLAGS],
+  "doc:list": ["json", "remote", "full"],
+  "mirror:add": ["task", ...WRITE_AUDIT_FLAGS],
+  "mirror:list": ["json", "remote"],
+  show: ["limit", "all", "log", "json", "remote"],
+  list: ["status", "assignee", "due", "tree", "all", "json", "full", "remote", "now"],
+  search: ["json", "full", "remote"],
+  inbox: ["assignee", "actor", "json", "full", "remote", "now"],
+  loops: ["json", "full", "remote"],
+  timeline: ["since", "limit", "task", "actor", "all", "json", "remote", "now"],
+  kanban: ["remote"],
+  run: [...WRITE_AUDIT_FLAGS],
+  tick: ["spawn", "now", "json", "remote"],
+};
+
+/** parseArgs owns the global option TYPES; this second boundary owns which
+ * command may consume each option. Accepting a known-but-inapplicable flag is
+ * more dangerous than an unknown flag because the caller may believe a safety
+ * option such as --dry-run took effect. */
+function validateCommandFlags(verb: string, args: ParsedArgs): void {
+  const sub = (verb === "doc" || verb === "mirror") ? args.positionals[0] : undefined;
+  const key = sub ? `${verb}:${sub}` : verb;
+  if (sub && COMMAND_FLAGS[key] === undefined) return;
+  const allowed = new Set(COMMAND_FLAGS[key] ?? []);
+  const supplied = [...Object.keys(args.flags), ...args.bools].filter((name) => name !== "p");
+  for (const name of supplied) {
+    if (!allowed.has(name)) throw new UsageError(`--${name} is not supported by ${key.replace(":", " ")}`);
+  }
+  if (args.bools.has("full") && !args.bools.has("json")) {
+    throw new UsageError(`--full is not supported by ${key.replace(":", " ")} without --json`);
+  }
+}
+
+/** Reject surplus positionals and assignments before handlers can silently
+ * ignore them. A command line is an API request: extra input is usually a typo,
+ * not harmless prose. */
+function validateCommandShape(verb: string, args: ParsedArgs): void {
+  const sub = (verb === "doc" || verb === "mirror") ? args.positionals[0] : undefined;
+  const key = sub ? `${verb}:${sub}` : verb;
+  const arity: Record<string, readonly [number, number]> = {
+    home: [0, 0], init: [0, 0], register: [0, 0], unregister: [0, 0], connect: [0, 1],
+    create: [1, 1], update: [1, 1], note: [1, 2],
+    "doc:put": [2, 2], "doc:list": [1, 1],
+    "mirror:add": [3, 3], "mirror:list": [1, 1],
+    show: [1, 1], list: [0, 0], search: [1, 1], inbox: [0, 0],
+    loops: [0, 0], timeline: [0, 0], kanban: [0, 0], run: [1, 1], tick: [0, 0],
+  };
+  const range = arity[key];
+  // Unknown nested commands belong to their handler, which can name the valid
+  // alternatives more clearly than a generic arity error.
+  if (!range) return;
+  const [, max] = range;
+  // Let the handler retain its purpose-built missing-argument message. This
+  // boundary owns only surplus input, which handlers historically ignored.
+  if (args.positionals.length > max) {
+    throw new UsageError(`${key.replace(":", " ")} expects at most ${max} positional argument${max === 1 ? "" : "s"}, got ${args.positionals.length}`);
+  }
+  const noteTextRescue = verb === "note" && args.positionals.length === 1 && args.assigns.length === 1;
+  if (verb !== "update" && !noteTextRescue && args.assigns.length > 0) {
+    throw new UsageError(`${key.replace(":", " ")} does not accept k=v assignments`);
+  }
+}
+
 /** True when `--json` appears anywhere in argv. Used when a usage error fires
  *  before (or instead of) a successful parse — §10 wants EVERY surface to honor
  *  --json, including usage errors (S4). */
@@ -1132,7 +1311,7 @@ function renderErrorFor(e: DriverError, argv: readonly string[]): string {
 const USAGE = `Loopany Kernel CLI (Internal Testing)
 
 workspace
-  init [--backend local]            # remote backend lands in M6; seeds agent
+  init [--backend local|<url>]      # initialize local or bound remote workspace
        [--no-register]              #   profiles from PATH + auto-registers for
                                     #   daemon auto-tick (--no-register skips the
                                     #   registry, e.g. a virtual-clock sandbox)
@@ -1153,7 +1332,7 @@ read
   loops                             # every cron loop: next fire, last result,
                                     #   in-flight run, blocked/config state
   timeline [--since <iso>] [--limit N] [--task <id>] [--actor <id>] [--all]
-                                    # recent meaningful team activity (24h/50
+                                    # recent meaningful team activity (24h/20
                                     #   default); --all reveals mechanical rows
 
 write  (all accept --dry-run)
@@ -1165,7 +1344,7 @@ write  (all accept --dry-run)
   mirror add <kind> <coords>        # mirror --help for the full mirror surface
 
 dispatch
-  run <id> [--wait]                # the third dispatch entrance (a manual run)
+  run <id>                         # the third dispatch entrance (a manual run)
 
 host  (an agent never calls these)
   tick [--spawn]                   # fire due triggers; --spawn also runs each
@@ -1228,7 +1407,7 @@ ${COMMON_HELP}`,
       atomically; inside a run LOOPANY_TASK_ID fills it in automatically.
       --if-version N refuses when the stored version differs (CAS).
 
-  doc list [--json]
+  doc list [--json [--full]]
       one line per doc: <id>  (v<version>)  <updatedAt>  <title>`,
   mirror: `mirror — an ADDRESS for an external fact (no bytes, immutable, dedup by hash)
 
@@ -1252,9 +1431,10 @@ ${COMMON_HELP}`,
 List tasks. With no filters it renders the task tree; --all includes completed subtrees.
 JSON omits task body by default and reports bodyBytes/bodyCommand; --full restores it.
 ${COMMON_HELP}`,
-  search: `usage: lk search <keyword> [--json]
+  search: `usage: lk search <keyword> [--json [--full]]
 
 Search task ids, titles and bodies, docs, and mirror coordinates.
+JSON omits task and doc bodies by default; --full restores them.
 ${COMMON_HELP}`,
   inbox: `usage: lk inbox [--assignee <me>] [--json [--full]]
 
@@ -1274,7 +1454,7 @@ ${COMMON_HELP}`,
   kanban: `usage: lk kanban [--remote]
 
 Open the read-only interactive task board. Requires a TTY; intended for humans.`,
-  run: `usage: lk run <id> [--wait] [--dry-run] [--json]
+  run: `usage: lk run <id> [--dry-run] [--json]
 
 Queue a manual run for a task's current assignee.
 ${COMMON_HELP}`,
@@ -1288,9 +1468,10 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
                      [--if-version <n>] [--dry-run] [--json]
 
 Create or replace a doc and optionally attach it to a task atomically.`,
-  "doc list": `usage: lk doc list [--json]
+  "doc list": `usage: lk doc list [--json [--full]]
 
-List every doc in the selected workspace or remote team.`,
+List every doc in the selected workspace or remote team.
+JSON omits doc bodies by default; --full restores them.`,
   "mirror add": `usage: lk mirror add <kind> <coords> [--task <id>] [--dry-run] [--json]
 
 Record an immutable external pointer and optionally attach it to a task atomically.`,

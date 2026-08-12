@@ -66,4 +66,42 @@ describe("per-command help", () => {
     expect(help).toContain("--full");
     expect(help).toContain("bodyBytes/bodyCommand");
   });
+
+  it.each([
+    [["register", "--dry-run"], "--dry-run is not supported by register"],
+    [["show", "task-1", "--full"], "--full is not supported by show"],
+    [["list", "--full"], "--full is not supported by list without --json"],
+    [["run", "task-1", "--wait"], "--wait is not supported by run"],
+  ])("rejects an inapplicable flag before touching a backend: %j", (argv, message) => {
+    const out = run(argv, deps);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).toContain(message);
+  });
+
+  it("reports an unknown nested command before validating its flags", () => {
+    const out = run(["doc", "nope", "--json"], deps);
+    expect(out.exitCode).toBe(2);
+    expect(JSON.parse(out.stderr).message).toContain('doc supports "doc put');
+    expect(out.stderr).not.toContain("--json is not supported");
+  });
+
+  it.each([
+    ["register", "extra"],
+    ["list", "extra"],
+    ["show", "task-1", "extra"],
+    ["run", "task-1", "extra", "--dry-run"],
+    ["timeline", "extra"],
+    ["doc", "list", "extra"],
+    ["mirror", "list", "extra"],
+  ])("rejects surplus positional input: %j", (...argv) => {
+    const out = run(argv, deps);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).toContain("expects");
+  });
+
+  it("rejects k=v assignments on commands that do not consume them", () => {
+    const out = run(["list", "status=todo"], deps);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).toContain("does not accept k=v assignments");
+  });
 });
