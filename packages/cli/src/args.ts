@@ -75,6 +75,7 @@ const OPTIONS: NonNullable<ParseArgsConfig["options"]> = {
   wait: { type: "boolean" },
   // boolean flags
   json: { type: "boolean" },
+  full: { type: "boolean" },
   "dry-run": { type: "boolean" },
   log: { type: "boolean" },
   due: { type: "boolean" },

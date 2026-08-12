@@ -285,6 +285,38 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(json[0]!.task.id).toBe("seo");
   });
 
+  it("collection JSON is compact by default and --full restores complete task records", () => {
+    call(["init"]);
+    const body = "A representative remote-shaped task body.\n".repeat(300);
+    const bodyFile = join(dir, "body.md");
+    writeFileSync(bodyFile, body);
+    call(["create", "Large loop", "--id", "large-loop", "--body-file", bodyFile,
+      "--cron", "0 7 * * *", "--assignee", "reviewer@example.com"]);
+
+    const cases: Array<{ argv: string[]; taskOf: (value: any) => any }> = [
+      { argv: ["list", "--json"], taskOf: (value) => value[0].task },
+      { argv: ["loops", "--json"], taskOf: (value) => value[0].task },
+      { argv: ["inbox", "--assignee", "reviewer@example.com", "--json"], taskOf: (value) => value.items[0].task },
+    ];
+
+    for (const { argv, taskOf } of cases) {
+      const compactOutput = call(argv).stdout;
+      const compactTask = taskOf(JSON.parse(compactOutput));
+      expect(compactTask.body).toBeUndefined();
+      expect(compactTask.bodyBytes).toBe(Buffer.byteLength(body, "utf8"));
+      expect(compactTask.bodyCommand).toBe("loopany-kernel show large-loop --json");
+
+      const fullOutput = call([...argv, "--full"]).stdout;
+      const fullTask = taskOf(JSON.parse(fullOutput));
+      expect(fullTask.body).toBe(body);
+      expect(fullTask.bodyBytes).toBeUndefined();
+      expect(Buffer.byteLength(compactOutput)).toBeLessThan(Buffer.byteLength(fullOutput) / 4);
+    }
+
+    // The natural single-record read remains complete without another flag.
+    expect(JSON.parse(call(["show", "large-loop", "--json"]).stdout).object.body).toBe(body);
+  });
+
   it("timeline shows meaningful activity, hides no-op checks, honors --task/--json", () => {
     call(["init"]);
     call(["create", "Busy loop", "--id", "busy"]);

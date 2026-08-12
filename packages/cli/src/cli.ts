@@ -764,13 +764,17 @@ function verbList(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const filtered = Boolean(filters.status || filters.assignee || filters.due);
   if (args.bools.has("tree") || !filtered) {
     const tree = treeView(snapshot);
-    if (args.bools.has("json")) return ok(JSON.stringify(tree, null, 2));
+    if (args.bools.has("json")) {
+      return ok(JSON.stringify(treeForCollection(tree, args.bools.has("full")), null, 2));
+    }
     // Default view collapses fully-done subtrees (decision surface); --all
     // renders every node. Counts in the tail are full either way.
     return ok(renderTree(tree, snapshot, now, args.bools.has("all")));
   }
   const list = sortTasksForList(matchTasks(snapshot, filters, now));
-  if (args.bools.has("json")) return ok(JSON.stringify(list, null, 2));
+  if (args.bools.has("json")) {
+    return ok(JSON.stringify(list.map((task) => taskForCollection(task, args.bools.has("full"))), null, 2));
+  }
   return ok(renderFlatList(list, snapshot, now));
 }
 
@@ -792,6 +796,29 @@ function matchTasks(
 
 function tasksOf(snapshot: Snapshot): TaskObject[] {
   return Object.values(snapshot.objects).filter((o): o is TaskObject => o.archetype === "task");
+}
+
+/** Compact JSON collection record. Preserve the legacy shape while omitting
+ * the potentially unbounded curated body. Its exact UTF-8 size and full-read
+ * command make the omission explicit and actionable. */
+function taskForCollection(task: TaskObject, full: boolean): TaskObject | (Omit<TaskObject, "body"> & {
+  bodyBytes: number;
+  bodyCommand: string;
+}) {
+  if (full) return task;
+  const { body, ...metadata } = task;
+  return {
+    ...metadata,
+    bodyBytes: Buffer.byteLength(body, "utf8"),
+    bodyCommand: `loopany-kernel show ${task.id} --json`,
+  };
+}
+
+function treeForCollection(nodes: ReturnType<typeof treeView>, full: boolean): unknown[] {
+  return nodes.map((node) => ({
+    task: taskForCollection(node.task, full),
+    children: treeForCollection(node.children, full),
+  }));
 }
 
 function verbSearch(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -852,7 +879,11 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
     handbackTargets[i.task.id] = handbackTargetFor(backend.events(i.task.id), i.task, snapshot.runs);
   }
   if (args.bools.has("json")) {
-    return ok(JSON.stringify({ me, ...(derived ? { derivedFrom: derived.from } : {}), items, handbackTargets }, null, 2));
+    const jsonItems = items.map((item) => ({
+      ...item,
+      task: taskForCollection(item.task, args.bools.has("full")),
+    }));
+    return ok(JSON.stringify({ me, ...(derived ? { derivedFrom: derived.from } : {}), items: jsonItems, handbackTargets }, null, 2));
   }
   // A DERIVED identity is announced (never a silent guess): whose inbox this
   // is, where the identity came from, and how to override it.
@@ -871,7 +902,13 @@ function verbLoops(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const loopTaskIds = snapshot.triggers.filter((t) => t.kind === "cron").map((t) => t.taskId);
   const events = loopTaskIds.flatMap((id) => backend.events(id));
   const rows = loopsView(snapshot, events, backend.machinePresence());
-  if (args.bools.has("json")) return ok(JSON.stringify(rows, null, 2));
+  if (args.bools.has("json")) {
+    const jsonRows = rows.map((row) => ({
+      ...row,
+      task: taskForCollection(row.task, args.bools.has("full")),
+    }));
+    return ok(JSON.stringify(jsonRows, null, 2));
+  }
   return ok(renderLoops(rows));
 }
 
@@ -1148,7 +1185,8 @@ host  (an agent never calls these)
                                    #   pending run through its config profile
 
 flags
-  --json           machine-readable output
+  --json           machine-readable output; collection task bodies are omitted
+  --full           with collection --json, include complete task records
   --session <id>   coding-session provenance (also LOOPANY_SESSION_ID)
   --actor <id>     provenance actorId
   --now <iso>      pin the clock deterministically (also LOOPANY_NOW)`;
@@ -1222,21 +1260,24 @@ Show an object. Tasks include recent meaningful activity by default; --log
 shows the raw object event stream and --all expands products/activity.
 ${COMMON_HELP}`,
   list: `usage: lk list [--status <status>] [--assignee <who>] [--due]
-               [--tree] [--all] [--json]
+               [--tree] [--all] [--json [--full]]
 
 List tasks. With no filters it renders the task tree; --all includes completed subtrees.
+JSON omits task body by default and reports bodyBytes/bodyCommand; --full restores it.
 ${COMMON_HELP}`,
   search: `usage: lk search <keyword> [--json]
 
 Search task ids, titles and bodies, docs, and mirror coordinates.
 ${COMMON_HELP}`,
-  inbox: `usage: lk inbox [--assignee <me>] [--json]
+  inbox: `usage: lk inbox [--assignee <me>] [--json [--full]]
 
 Show tasks needing a human's attention. Remote identity defaults from connect --me.
+JSON omits task body by default and reports bodyBytes/bodyCommand; --full restores it.
 ${COMMON_HELP}`,
-  loops: `usage: lk loops [--json]
+  loops: `usage: lk loops [--json [--full]]
 
 Show every cron loop with next fire, active/last run, machine presence, and blockers.
+JSON omits task body by default and reports bodyBytes/bodyCommand; --full restores it.
 ${COMMON_HELP}`,
   timeline: `usage: lk timeline [--since <iso>] [--limit <n>] [--task <id>]
                    [--actor <id>] [--all] [--json]

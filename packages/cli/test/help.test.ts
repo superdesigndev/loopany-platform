@@ -60,4 +60,10 @@ describe("per-command help", () => {
     expect(help.stdout).toContain("ls is an alias of list");
     expect(help.stdout).toContain("usage: lk list");
   });
+
+  it.each(["list", "inbox", "loops"])("%s documents compact JSON and its --full compatibility escape hatch", (verb) => {
+    const help = run([verb, "--help"], deps).stdout;
+    expect(help).toContain("--full");
+    expect(help).toContain("bodyBytes/bodyCommand");
+  });
 });
