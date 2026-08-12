@@ -1,0 +1,60 @@
+# Loopany KERNEL LIVE on Fly.io — app "loopany-kernel-live". The TEAM-USABLE
+# kernel environment: real wall-clock, durable data, real agent sessions on
+# each member's machine. Its sibling "loopany-kernel-testing" (fly.kernel.toml)
+# stays the DISPOSABLE simulator target - the two profiles are intentionally
+# opposite and must not be merged:
+#
+#            live (this file)          testing (fly.kernel.toml)
+#   DB       volume-backed, durable    ephemeral (restart = wipe)
+#   clock    real (sweep 30s default)  client-driven (sweep 0)
+#   rk_ now  server time (invariant)   LOOPANY_KERNEL_TRUST_CLIENT_NOW=1
+#
+# ACCESS MODEL (phase 1): OPEN MODE - no GitHub gate. Any dk_-shaped token
+# self-registers into the ONE shared team, and the app URL is publicly
+# reachable, so treat this as a low-trust internal sandbox: no secrets in task
+# bodies/notes, nothing you wouldn't show the internet. Phase 2 = set
+# GITHUB_CLIENT_ID/SECRET + LOOPANY_AUTH_SECRET + LOOPANY_ALLOWED_LOGINS and
+# onboard machines through the web UI's connect flow (docs/kernel-live.md §7).
+#
+# Deploy (reuse the already-built branch image - no rebuild):
+#   fly apps create loopany-kernel-live --org superdesign
+#   fly volumes create loopany_kernel_data --size 1 -a loopany-kernel-live --region nrt --yes
+#   fly deploy --config fly.kernel-live.toml \
+#     --image registry.fly.io/loopany-kernel-testing:<current deployment tag>
+
+app = "loopany-kernel-live"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  LOOPANY_DATA_DIR = "/data"
+  PORT = "3000"
+  # Embedded pglite on the MOUNTED volume - durable across restarts/deploys.
+  LOOPANY_DB = "pglite"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Daemons long-poll and the kernel sweep is the clock: exactly one always-on
+  # machine (single-scheduler invariant, same as staging/prod).
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "get"
+    path = "/api/health/db"
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+
+[[mounts]]
+  source = "loopany_kernel_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # pglite (WASM) needs headroom - 512mb OOMs at boot (measured on -testing).
+  memory = "1024mb"
