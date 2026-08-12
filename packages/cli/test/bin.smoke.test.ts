@@ -64,6 +64,13 @@ describe("declared bin executes under bare node (process spawn)", () => {
     expect(out.stderr).not.toContain("NO_WORKSPACE");
   });
 
+  it("prints kanban help without requiring a TTY", () => {
+    const out = run("kanban", "--help");
+    expect(out.status).toBe(0);
+    expect(out.stdout).toContain("usage: lk kanban");
+    expect(out.stderr).toBe("");
+  });
+
   it("loads and starts the Kanban TSX entry through the real tsx runtime", () => {
     const out = spawnSync(process.execPath, [tsxCli, runtimeFixture], {
       cwd: dir,

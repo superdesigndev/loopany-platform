@@ -963,9 +963,9 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
   // Per-verb help short-circuits BEFORE parseArgs (`--help` is not in the strict
   // option table, so it would otherwise render as an unknown-flag usage error).
   // The default screen stays lean; the sub-verb detail lives here.
-  const verbHelp = VERB_USAGE[verb];
-  if (verbHelp !== undefined && wantsHelp(argv.slice(1))) {
-    return { stdout: verbHelp, stderr: "", exitCode: 0 };
+  const commandHelp = helpFor(argv);
+  if (commandHelp !== undefined) {
+    return { stdout: commandHelp, stderr: "", exitCode: 0 };
   }
   // parseArgs runs INSIDE the boundary (C2): a value-bearing flag with no value
   // or an unknown flag is a USAGE error rendered like any other, never an
@@ -1119,9 +1119,40 @@ flags
   --actor <id>     provenance actorId
   --now <iso>      pin the clock deterministically (also LOOPANY_NOW)`;
 
-/** `<verb> --help` short-circuit texts. A verb absent here degrades to the
- *  full USAGE screen via the normal unknown-flag/usage paths. */
+const COMMON_HELP = `Common flags: --json --remote --actor <id> --session <id> --now <iso>`;
+
+/** Command help is deliberately data, not handler branches. `helpFor` resolves
+ * it before argument parsing, workspace discovery, backend reads, or writes. */
 const VERB_USAGE: Record<string, string> = {
+  init: `usage: lk init [--backend local|<url>] [--token <dk_…>] [--no-register] [--json]
+
+Initialize the cwd's .loopany workspace and seed available agent profiles.`,
+  register: `usage: lk register [--json]
+
+Register the current local workspace for resident-daemon auto-tick.`,
+  unregister: `usage: lk unregister [--json]
+
+Remove the current local workspace from resident-daemon auto-tick.`,
+  connect: `usage: lk connect [<url> --token <dk_…> [--me <email>] | --clear] [--json]
+
+Show or change the global remote binding shared with the daemon.`,
+  create: `usage: lk create "<title>" [--id <id>] [--parent <id>] [--tracks <id>]
+                 [--assignee <who>] [--owner <who>] [--workdir <path>]
+                 [--type <type>] [-p <priority>] [--status <status>]
+                 [--goal <text>] [--cron <expr> --timezone <tz>]
+                 [--follow-up <date>] [--body-file <file>] [--dry-run]
+
+Create a task. A cron trigger makes it a recurring loop.
+${COMMON_HELP}`,
+  update: `usage: lk update <id> k=v … [--note <text>] [--follow-up <date>]
+                 [--if-version <n>] [--dry-run]
+
+Patch task fields with optional optimistic concurrency.
+${COMMON_HELP}`,
+  note: `usage: lk note <id> "<text>" [--dry-run]
+
+Append an auditable note to an object.
+${COMMON_HELP}`,
   doc: `doc — keyed prose the humans read (no state machine, one upsert verb)
 
   doc put <key> [--file f.md] [--task <id>] [--if-version N] [--dry-run]
@@ -1144,7 +1175,66 @@ const VERB_USAGE: Record<string, string> = {
 
   mirror list [--json]
       one line per mirror: <id>  [<kind>]  <coords>`,
+  show: `usage: lk show <id> [--limit <n>] [--all] [--log] [--json]
+
+Show an object. Tasks include recent meaningful activity by default; --log
+shows the raw object event stream and --all expands products/activity.
+${COMMON_HELP}`,
+  list: `usage: lk list [--status <status>] [--assignee <who>] [--due]
+               [--tree] [--all] [--json]
+
+List tasks. With no filters it renders the task tree; --all includes completed subtrees.
+${COMMON_HELP}`,
+  search: `usage: lk search <keyword> [--json]
+
+Search task ids, titles and bodies, docs, and mirror coordinates.
+${COMMON_HELP}`,
+  inbox: `usage: lk inbox [--assignee <me>] [--json]
+
+Show tasks needing a human's attention. Remote identity defaults from connect --me.
+${COMMON_HELP}`,
+  loops: `usage: lk loops [--json]
+
+Show every cron loop with next fire, active/last run, machine presence, and blockers.
+${COMMON_HELP}`,
+  timeline: `usage: lk timeline [--since <iso>] [--limit <n>] [--task <id>]
+                   [--actor <id>] [--all] [--json]
+
+Show recent meaningful team activity. Defaults to 24 hours and hides mechanical events.
+${COMMON_HELP}`,
+  kanban: `usage: lk kanban [--remote]
+
+Open the read-only interactive task board. Requires a TTY; intended for humans.`,
+  run: `usage: lk run <id> [--wait] [--dry-run] [--json]
+
+Queue a manual run for a task's current assignee.
+${COMMON_HELP}`,
+  tick: `usage: lk tick [--spawn] [--now <iso>] [--json]
+
+Host-only: fire due triggers. --spawn also executes local pending runs.`,
 };
+
+const SUBCOMMAND_USAGE: Record<string, string> = {
+  "doc put": `usage: lk doc put <key> [--file <file>] [--task <id>]
+                     [--if-version <n>] [--dry-run] [--json]
+
+Create or replace a doc and optionally attach it to a task atomically.`,
+  "doc list": `usage: lk doc list [--json]
+
+List every doc in the selected workspace or remote team.`,
+  "mirror add": `usage: lk mirror add <kind> <coords> [--task <id>] [--dry-run] [--json]
+
+Record an immutable external pointer and optionally attach it to a task atomically.`,
+  "mirror list": `usage: lk mirror list [--json]
+
+List every external mirror pointer.`,
+};
+
+function helpFor(argv: readonly string[]): string | undefined {
+  if (!wantsHelp(argv.slice(1))) return undefined;
+  const nested = argv[1] ? SUBCOMMAND_USAGE[`${argv[0]} ${argv[1]}`] : undefined;
+  return nested ?? VERB_USAGE[argv[0] ?? ""];
+}
 
 /** True when a post-verb argv asks for help (`--help`, `-h`, or a bare `help`). */
 function wantsHelp(rest: readonly string[]): boolean {
