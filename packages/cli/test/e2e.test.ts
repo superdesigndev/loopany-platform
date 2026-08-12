@@ -151,7 +151,7 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     // the status changes), rendered as compact one-liners. ---
     const show = call(["show", "ship-the-redesign", "--log"]);
     expect(show.stdout).toContain("task ship-the-redesign");
-    expect(show.stdout).toContain("status: in-progress");
+    expect(show.stdout).toContain("[in-progress]");
     expect(show.stdout).toContain("log:");
     expect(show.stdout).toContain("created");
     expect(show.stdout).toContain("kicked off the work");
@@ -257,6 +257,11 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(show.stdout).not.toContain("doc weekly-report  weekly-report");
     expect(show.stdout).not.toContain("doc report-1");
     expect(show.stdout).toContain("doc report-6");
+    expect(show.stdout).not.toContain("refs:");
+    expect(show.stdout).not.toContain("priority: —");
+    expect(show.stdout).not.toContain("parent: —");
+    expect(show.stdout).toContain("routing:");
+    expect(show.stdout).toContain("loop:");
     expect(show.stdout).toContain("children:");
     expect(show.stdout).toContain("bet-child");
 

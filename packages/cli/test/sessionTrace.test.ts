@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { KernelEvent, RunRecord } from "@loopany/kernel";
-import { renderEventLine, renderSessionTrace } from "../src/render.js";
+import { renderEventLine, renderSessionTrace, renderTimeline } from "../src/render.js";
 
 const run = (over?: Partial<RunRecord>): RunRecord => ({
   id: "run-8c14",
@@ -72,5 +72,24 @@ describe("renderEventLine session suffix (axi-concise)", () => {
   it("no session at all renders no suffix", () => {
     const line = renderEventLine(ev({ provenance: { entrance: "human", actorId: "tim@x.co" } }));
     expect(line).not.toContain("session=");
+  });
+});
+
+describe("renderTimeline agent session", () => {
+  it("renders an agent session id in full on a run item", () => {
+    const session = "opaque-agent-session-1234567890";
+    const out = renderTimeline([{
+      at: "2026-08-12T02:22:33.935Z",
+      kind: "run-activity",
+      objectId: "bet",
+      actor: "run:run-8c14",
+      summary: "published doc report",
+      eventIds: ["e1"],
+      runId: "run-8c14",
+      agent: "claude",
+      agentSessionId: session,
+    }]);
+    expect(out).toContain("agent claude");
+    expect(out).toContain(`session ${session}`);
   });
 });

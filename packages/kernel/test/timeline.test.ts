@@ -80,6 +80,7 @@ describe("timelineView", () => {
         runs: [{
           id: "run-1", taskId: "seo", cause: "manual", scheduledAt: T1,
           state: "done", assignee: "mbp/claude", triggerId: null, createdAt: T1,
+          agentSessionId: "claude-session-opaque-123",
         }],
       },
     };
@@ -87,6 +88,8 @@ describe("timelineView", () => {
     expect(item?.summary).toContain("doc seo-report-2026w33");
     expect(item?.summary).toContain("nothing else actionable");
     expect(item?.summary).not.toBe("refs");
+    expect(item?.agentSessionId).toBe("claude-session-opaque-123");
+    expect(item?.agent).toBe("claude");
   });
 
   it("hides mechanical activity by default; --all reveals it", () => {

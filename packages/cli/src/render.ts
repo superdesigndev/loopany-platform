@@ -50,21 +50,22 @@ export function renderNotices(notices: readonly string[]): string {
 function fieldLines(obj: KernelObject): string[] {
   if (obj.archetype === "task") {
     const t = obj;
-    return [
-      `task ${t.id}  (v${t.version})`,
-      `title: ${t.title}`,
-      `status: ${t.status}`,
-      `assignee: ${t.assignee ?? "—"}`,
-      `owner: ${t.owner ?? "—"}`,
-      `priority: ${t.priority ?? "—"}`,
-      `type: ${t.type ?? "—"}`,
-      `parent: ${t.parent ?? "—"}`,
-      `tracks: ${t.tracks ?? "—"}`,
-      `refs: ${t.refs.length > 0 ? t.refs.join(", ") : "—"}`,
-      `followUpAt: ${t.followUpAt ? formatLocalTime(t.followUpAt) : "—"}`,
-      `workdir: ${t.workdir ?? "—"}`,
-      ...(t.goal != null ? [`goal (finish line): ${t.goal}`] : []),
+    const lines = [`task ${t.id}  [${t.status}]  v${t.version}`, t.title];
+    const routing = [
+      ...(t.owner ? [`  owner: ${t.owner}`] : []),
+      ...(t.assignee ? [`  assignee: ${t.assignee}`] : []),
+      ...(t.workdir ? [`  workdir: ${t.workdir}`] : []),
     ];
+    if (routing.length > 0) lines.push("", "routing:", ...routing);
+    const metadata = [
+      ...(t.priority ? [`  priority: ${t.priority}`] : []),
+      ...(t.type ? [`  type: ${t.type}`] : []),
+      ...(t.parent ? [`  parent: ${t.parent}`] : []),
+      ...(t.followUpAt ? [`  follow-up: ${formatLocalTime(t.followUpAt)}`] : []),
+      ...(t.goal != null ? [`  goal: ${t.goal}`] : []),
+    ];
+    if (metadata.length > 0) lines.push("", "details:", ...metadata);
+    return lines;
   }
   if (obj.archetype === "doc") {
     return [`doc ${obj.id}  (v${obj.version})`, `key: ${obj.key}`, `title: ${obj.title ?? "—"}`];
@@ -92,19 +93,21 @@ export function renderShow(
   // key doc/mirror is findable here, never by reading raw events.
   if (obj.archetype === "task") {
     const trigs = snapshot.triggers.filter((t) => t.taskId === obj.id);
-    for (const t of trigs) parts.push(renderTriggerLine(t));
     const detail = taskDetailView(snapshot, obj.id, events ?? undefined);
     if (detail) {
+      const loopLines: string[] = [];
+      for (const t of trigs) loopLines.push(`  ${renderTriggerLine(t)}`);
       if (detail.activeRun) {
-        parts.push(renderRunLine(detail.activeRun));
+        loopLines.push(`  ${renderRunLine(detail.activeRun)}`);
         const trace = renderSessionTrace(detail.activeRun);
-        if (trace) parts.push(trace);
+        if (trace) loopLines.push(trace);
       } else if (detail.lastRun) {
         const note = detail.lastRun.note ? `  ·  ${clip(detail.lastRun.note)}` : "";
-        parts.push(`last run ${detail.lastRun.id}: ${detail.lastRun.state}${note}`);
+        loopLines.push(`  last run ${detail.lastRun.id}: ${detail.lastRun.state}${note}`);
         const trace = renderSessionTrace(detail.lastRun);
-        if (trace) parts.push(trace);
+        if (trace) loopLines.push(trace);
       }
+      if (loopLines.length > 0) parts.push("", "loop:", ...loopLines);
       if (detail.products.length > 0) {
         const maxProducts = 5;
         let products = detail.products;
@@ -114,6 +117,7 @@ export function renderShow(
           products = tracked ? [tracked, ...others.slice(-(maxProducts - 1))] : others.slice(-maxProducts);
         }
         parts.push(
+          "",
           !expanded && products.length < detail.products.length
             ? `products (latest ${products.length} of ${detail.products.length}; --all for all):`
             : "products:",
@@ -135,8 +139,17 @@ export function renderShow(
         }
       }
       if (detail.children.length > 0) {
-        parts.push("children:");
+        parts.push("", "children:");
         for (const c of detail.children) parts.push(`  ${c.id}  [${c.status}]  ${clip(c.title, 60)}`);
+      }
+      const productIds = new Set(detail.products.map(({ product }) => product.id));
+      const related = obj.refs
+        .filter((id) => !productIds.has(id) && id !== obj.tracks)
+        .map((id) => snapshot.objects[id])
+        .filter((ref): ref is TaskObject => ref?.archetype === "task");
+      if (related.length > 0) {
+        parts.push("", "related:");
+        for (const task of related) parts.push(`  task ${task.id}  [${task.status}]  ${clip(task.title, 60)}`);
       }
     }
   }

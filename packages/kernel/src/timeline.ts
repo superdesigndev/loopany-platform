@@ -53,6 +53,13 @@ export interface TimelineItem {
   eventIds: readonly string[];
   /** Present when the item is one agent run's collapsed activity. */
   runId?: string;
+  /** Executor profile derived from Run.assignee (`machine/agent`). This is a
+   *  view field, not another persisted source of truth. */
+  agent?: string;
+  /** The host coding agent's opaque session hint. Full and unmodified so a
+   *  human can use it for transcript drill-down; absent when the daemon did
+   *  not capture one. Never provenance or authorization evidence. */
+  agentSessionId?: string;
 }
 
 export interface TimelineOptions {
@@ -152,6 +159,7 @@ function collapseRun(
 ): TimelineItem | null {
   const last = events[events.length - 1]!;
   const run = runs.find((r) => r.id === runId);
+  const agent = run?.assignee?.includes("/") ? run.assignee.slice(run.assignee.lastIndexOf("/") + 1) : undefined;
   const taskId = run?.taskId ?? last.objectId;
 
   const bits: string[] = [];
@@ -217,6 +225,8 @@ function collapseRun(
       summary: clip(note),
       eventIds: events.map((e) => e.id),
       runId,
+      ...(agent ? { agent } : {}),
+      ...(run?.agentSessionId ? { agentSessionId: run.agentSessionId } : {}),
     };
   }
   if (bits.length === 0) return null; // start + claim + ordinary return (or note-only no-op)
@@ -230,6 +240,8 @@ function collapseRun(
     summary: clip(bits.join(" · ")),
     eventIds: events.map((e) => e.id),
     runId,
+    ...(agent ? { agent } : {}),
+    ...(run?.agentSessionId ? { agentSessionId: run.agentSessionId } : {}),
   };
 }
 
@@ -274,6 +286,8 @@ export function timelineView(
       items.push(collapsed);
     } else if (opts.all) {
       const last = group[group.length - 1]!;
+      const run = snapshot.runs.find((r) => r.id === runId);
+      const agent = run?.assignee?.includes("/") ? run.assignee.slice(run.assignee.lastIndexOf("/") + 1) : undefined;
       items.push({
         at: last.at,
         kind: "mechanical",
@@ -282,6 +296,8 @@ export function timelineView(
         summary: clip(group.map((e) => (e.note ? `${e.kind}: ${e.note}` : e.kind)).join(" · ")),
         eventIds: group.map((e) => e.id),
         runId,
+        ...(agent ? { agent } : {}),
+        ...(run?.agentSessionId ? { agentSessionId: run.agentSessionId } : {}),
       });
     }
   }

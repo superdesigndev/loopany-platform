@@ -32,7 +32,7 @@ describe("doc put --task (atomic attach)", () => {
     const out = call(["doc", "put", "portfolio", "--file", "body.md", "--task", "loop"]);
     expect(out.exitCode).toBe(0);
     expect(out.stdout).toContain("attached — loop refs += portfolio");
-    expect(call(["show", "loop"]).stdout).toContain("refs: portfolio");
+    expect(call(["show", "loop"]).stdout).toContain("doc portfolio");
 
     const again = call(["doc", "put", "portfolio", "--file", "body.md", "--task", "loop"]);
     expect(again.stdout).toContain("already attached");
@@ -72,7 +72,8 @@ describe("doc put --task (atomic attach)", () => {
     const bare = call(["mirror", "add", "url", "https://x.test/3"]);
     expect(bare.stdout).not.toContain("refs +=");
     expect(bare.stdout).toContain("unattached — no task refs this mirror");
-    expect(call(["show", "triage"]).stdout).toMatch(/refs: m-.*m-/);
+    const shown = call(["show", "triage"]).stdout;
+    expect(shown.match(/  mirror m-/g)).toHaveLength(2);
   });
 
   it("mirror list enumerates mirrors; empty state is definitive; add stays idempotent", () => {
