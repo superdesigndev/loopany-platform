@@ -85,7 +85,7 @@ export async function currentUser(): Promise<{ id: string; email: string | null;
   const { getRequest } = await import("@tanstack/react-start/server");
   const session = await auth.api.getSession({ headers: getRequest().headers });
   const u = session?.user;
-  return u ? { id: u.id, email: u.email ?? null, sessionId: session?.session.id ?? null } : null;
+  return u ? { id: u.id, email: u.email ?? null, sessionId: session?.session?.id ?? null } : null;
 }
 
 export async function currentUserId(): Promise<string | null> {
