@@ -27,6 +27,7 @@ import {
   loopsView,
   slugify,
   sortTasksForList,
+  taskDetailView,
   treeView,
 } from "@loopany/kernel";
 import { execFileSync } from "node:child_process";
@@ -698,7 +699,11 @@ function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
     }
     limit = Number(args.flags.limit);
   }
-  const rawEvents = args.bools.has("log") ? backend.events(id) : null;
+  // Task context derives handoff/blocking facts from its existing event stream
+  // even in the default view. The stream remains bounded/hidden in rendering;
+  // --log is still the explicit raw-history escape hatch.
+  const taskEvents = obj.archetype === "task" ? backend.events(id) : null;
+  const rawEvents = args.bools.has("log") ? (taskEvents ?? backend.events(id)) : null;
   const events = rawEvents && limit !== undefined ? rawEvents.slice(-limit) : rawEvents;
   const recent = obj.archetype === "task" && !args.bools.has("log")
     ? backend.timeline({ taskId: id, limit: limit ?? 8, all: args.bools.has("all") })
@@ -718,12 +723,17 @@ function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
               (r.state === "pending" || r.state === "claimed" || r.state === "running"),
           ) ?? null
         : null;
+    const detail = obj.archetype === "task" ? taskDetailView(snapshot, obj.id, taskEvents ?? undefined) : null;
+    const machineAlias = obj.archetype === "task" && obj.assignee?.includes("/") ? obj.assignee.split("/", 1)[0] : null;
+    const presence = machineAlias ? backend.machinePresence()[machineAlias] ?? "unregistered" : null;
     return ok(
       JSON.stringify(
         {
           object: obj,
           triggers,
           activeRun,
+          detail,
+          machinePresence: presence,
           events: events ?? undefined,
           recent: recent ?? undefined,
         },

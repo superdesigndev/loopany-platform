@@ -166,6 +166,8 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     const recentShow = call(["show", "ship-the-redesign"]);
     expect(recentShow.stdout).toContain("recent:");
     expect(recentShow.stdout).toContain("kicked off the work");
+    expect(recentShow.stdout).toContain("handoff:");
+    expect(recentShow.stdout).toContain("full history: loopany-kernel show ship-the-redesign --log");
     expect(recentShow.stdout).not.toContain("run-started:");
     const boundedShow = call(["show", "ship-the-redesign", "--limit", "1", "--json"]);
     const boundedJson = JSON.parse(boundedShow.stdout) as { recent: unknown[]; events?: unknown[] };
@@ -191,6 +193,12 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(list.stdout).toContain("nightly-audit");
     expect(list.stdout).toContain("[loop]"); // the cron loop tag (no icons)
     expect(list.stdout).toContain("daily 07:00"); // humanized cadence (kernel cronText)
+    const loopContext = call(["show", "nightly-audit"]);
+    expect(loopContext.stdout).toContain("trigger cron:");
+    expect(loopContext.stdout).toContain("next=");
+    const decisionContext = call(["show", "review-pr-42"]);
+    expect(decisionContext.stdout).toContain("human decision:");
+    expect(decisionContext.stdout).toContain("waiting on reviewer@acme.dev");
     expect(list.stdout).toContain(`tracks ${mirrorId}`); // the shepherd marker on the review task
     // The child connects below its parent (tree, not flat).
     const parentLine = list.stdout.split("\n").findIndex((l) => l.includes("ship-the-redesign"));

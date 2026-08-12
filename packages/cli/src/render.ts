@@ -61,6 +61,7 @@ function fieldLines(obj: KernelObject): string[] {
       ...(t.priority ? [`  priority: ${t.priority}`] : []),
       ...(t.type ? [`  type: ${t.type}`] : []),
       ...(t.parent ? [`  parent: ${t.parent}`] : []),
+      ...(t.tracks ? [`  tracks: ${t.tracks}`] : []),
       ...(t.followUpAt ? [`  follow-up: ${formatLocalTime(t.followUpAt)}`] : []),
       ...(t.goal != null ? [`  goal: ${t.goal}`] : []),
     ];
@@ -86,6 +87,8 @@ export function renderShow(
   events: readonly KernelEvent[] | null,
   recent: readonly TimelineItem[] | null = null,
   expanded = false,
+  machinePresence: Readonly<Record<string, string>> = {},
+  contextEvents: readonly KernelEvent[] | null = null,
 ): string {
   const parts: string[] = [fieldLines(obj).join("\n")];
   // A task's live schedule + run pair + products + children belong in `show` -
@@ -93,20 +96,30 @@ export function renderShow(
   // key doc/mirror is findable here, never by reading raw events.
   if (obj.archetype === "task") {
     const trigs = snapshot.triggers.filter((t) => t.taskId === obj.id);
-    const detail = taskDetailView(snapshot, obj.id, events ?? undefined);
+    const detail = taskDetailView(snapshot, obj.id, contextEvents ?? events ?? undefined);
     if (detail) {
+      const taskEvents = contextEvents ?? events ?? [];
+      const handoff = [...taskEvents].reverse().find((e) => e.kind === "assignee-changed" || e.kind === "created");
+      const handoffReason = handoff?.note;
+      if (handoffReason) parts.push("", "handoff:", `  ${clip(handoffReason, 180)}`);
       const loopLines: string[] = [];
       for (const t of trigs) loopLines.push(`  ${renderTriggerLine(t)}`);
       if (detail.activeRun) {
         loopLines.push(`  ${renderRunLine(detail.activeRun)}`);
+        const agent = detail.activeRun.assignee?.split("/").at(-1);
+        if (agent) loopLines.push(`  coding agent: ${agent}`);
         const trace = renderSessionTrace(detail.activeRun);
         if (trace) loopLines.push(trace);
       } else if (detail.lastRun) {
         const note = detail.lastRun.note ? `  ·  ${clip(detail.lastRun.note)}` : "";
         loopLines.push(`  last run ${detail.lastRun.id}: ${detail.lastRun.state}${note}`);
+        const agent = detail.lastRun.assignee?.split("/").at(-1);
+        if (agent) loopLines.push(`  coding agent: ${agent}`);
         const trace = renderSessionTrace(detail.lastRun);
         if (trace) loopLines.push(trace);
       }
+      const machine = obj.assignee?.includes("/") ? obj.assignee.split("/", 1)[0] : null;
+      if (machine) loopLines.push(`  machine ${machine}: ${machinePresence[machine] ?? "unregistered"}`);
       if (loopLines.length > 0) parts.push("", "loop:", ...loopLines);
       if (detail.products.length > 0) {
         const maxProducts = 5;
@@ -151,6 +164,22 @@ export function renderShow(
         parts.push("", "related:");
         for (const task of related) parts.push(`  task ${task.id}  [${task.status}]  ${clip(task.title, 60)}`);
       }
+
+      const blocked = [...taskEvents].reverse().find(
+        (e) => e.kind === "note" && e.provenance.entrance === "clock" && (e.note ?? "").includes("dispatch blocked"),
+      );
+      const humanDecision = obj.assignee?.includes("@") && obj.status !== "done" && obj.status !== "archived";
+      if (blocked?.note) parts.push("", "blocking condition:", `  ${clip(blocked.note, 220)}`);
+      else if (humanDecision) parts.push("", "human decision:", `  waiting on ${obj.assignee}${handoffReason ? ` - ${clip(handoffReason, 160)}` : ""}`);
+
+      const next = blocked
+        ? `resolve the machine/configuration issue, then: ${"loopany-kernel"} run ${obj.id}`
+        : humanDecision
+          ? `hand back: loopany-kernel update ${obj.id} assignee=<machine/agent> status=todo --note "<decision and context>"`
+          : obj.assignee
+            ? `continue the task, then record progress: loopany-kernel note ${obj.id} "<what changed and why>"`
+            : `assign work: loopany-kernel update ${obj.id} assignee=<owner> status=todo --note "<handoff reason>"`;
+      parts.push("", "commands:", `  full history: loopany-kernel show ${obj.id} --log`, `  next: ${next}`);
     }
   }
   const body = objectBody(obj);

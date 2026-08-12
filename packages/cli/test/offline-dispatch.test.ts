@@ -45,6 +45,13 @@ function deps(presence: Record<string, string>): CliDeps {
 }
 
 describe("remote dispatch feedback", () => {
+  it("show exposes an unregistered machine and a full-history escape hatch", () => {
+    const out = run(["show", "audit"], deps({}));
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("machine mbp: unregistered");
+    expect(out.stdout).toContain("full history: loopany-kernel show audit --log");
+  });
+
   it("says an offline machine's manual run is queued", () => {
     const out = run(["run", "audit", "--json"], deps({ mbp: "offline" }));
     expect(out.exitCode).toBe(0);
