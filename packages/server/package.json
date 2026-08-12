@@ -41,7 +41,8 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "recharts": "^3.9.1",
-    "@loopany/cli": "workspace:*"
+    "@loopany/cli": "workspace:*",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@loopany/cli": "workspace:*",

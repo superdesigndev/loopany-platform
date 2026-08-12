@@ -34,6 +34,7 @@ import * as store from "../db/store.js";
 import { isDeviceTokenShape, machineIdFromToken, resolveLease, retireLeasesForRun, sha256 } from "../gateway/tokens.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "./store.js";
 import { notifyKernelChangeset } from "./notify.js";
+import { authorizeKernelRequest } from "./authority.js";
 
 export interface KernelHttpResult {
   status: number;
@@ -184,33 +185,6 @@ async function deviceActor(
  *  leases outright so this state is normally unreachable, but production
  *  `terminalizeLease` targets by runId, so the guard is defense-in-depth
  *  (parity with production run-token semantics). Returns null when allowed. */
-function runVerbRefusal(
-  run: { runId: string; state: "active" | "terminal-grace" },
-  req: KernelCliBody,
-): { status: number; code: string; message: string } | null {
-  if (run.state === "terminal-grace") {
-    return {
-      status: 409,
-      code: "CONFLICT",
-      message: "this run was reclaimed; its credential can no longer read or write",
-    };
-  }
-  if (req.tick) return { status: 403, code: "FORBIDDEN", message: "a run credential cannot host-tick (owner/host surface)" };
-  if (req.read || req.timeline !== undefined) return null; // reads are team-scoped and safe (show/list/inbox/timeline)
-  const op = isRecord(req.command) ? String((req.command as { op?: unknown }).op ?? "") : "";
-  const allowed = new Set(["create", "update", "note", "doc-put", "doc-append", "mirror-add", "run-finish"]);
-  if (!allowed.has(op)) {
-    return { status: 403, code: "FORBIDDEN", message: `a run credential cannot issue "${op}" (allowed: ${[...allowed].join(", ")})` };
-  }
-  if (op === "run-finish") {
-    const runId = String((req.command as { runId?: unknown }).runId ?? "");
-    if (runId !== run.runId) {
-      return { status: 403, code: "FORBIDDEN", message: "a run may finish only ITS OWN run" };
-    }
-  }
-  return null;
-}
-
 /**
  * Dispatch one kernel request over a device credential — a write `Command`, a
  * host `tick`, or a `read` of the authority snapshot (the discriminated
@@ -265,7 +239,7 @@ export async function kernelCli(
   // Run-credential verb subset (stage D): team is the hard wall (already
   // resolved), the subset keeps owner/host surfaces off a run token.
   if (scope.run) {
-    const refusedVerb = runVerbRefusal(scope.run, req);
+    const refusedVerb = authorizeKernelRequest("agent-run", req, scope.run);
     if (refusedVerb) {
       return {
         status: refusedVerb.status,

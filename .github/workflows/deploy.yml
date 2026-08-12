@@ -20,7 +20,13 @@ on:
       - 'CLAUDE.md'
       - 'CONTRIBUTING.md'
       - 'docs/**'
-  workflow_dispatch: {}        # manual button in the Actions tab
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        type: choice
+        options: [testing, kernel-live]
+        default: testing
 
 # One deploy at a time; cancel an in-flight deploy if a newer commit lands.
 concurrency:
@@ -43,7 +49,18 @@ jobs:
         # GIT_SHA / BUILT_AT bake the pushed commit into the image so /api/health
         # reports it (the smoke check below asserts the promoted image matches).
         run: |
-          flyctl deploy --remote-only \
+          config='fly.toml'
+          if [ '${{ inputs.target }}' = 'kernel-live' ]; then
+            config='fly.kernel-live.toml'
+            flyctl secrets set \
+              LOOPANY_AUTH_MODE=shared-password \
+              LOOPANY_SHARED_LOGIN_PASSWORD="${{ secrets.KERNEL_LIVE_SHARED_PASSWORD }}" \
+              LOOPANY_AUTH_SECRET="${{ secrets.KERNEL_LIVE_AUTH_SECRET }}" \
+              LOOPANY_ALLOWED_LOGINS='*@superdesign.dev' \
+              LOOPANY_KERNEL_WEB_TEAM_ID=team-shared \
+              -a loopany-kernel-live
+          fi
+          flyctl deploy --config "$config" --remote-only \
             --build-arg GIT_SHA=${{ github.sha }} \
             --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         env:
@@ -53,9 +70,11 @@ jobs:
       - name: Smoke — /api/health serves the pushed SHA
         run: |
           expected='${{ github.sha }}'
+          host='loopany-testing.fly.dev'
+          if [ '${{ inputs.target }}' = 'kernel-live' ]; then host='loopany-kernel-live.fly.dev'; fi
           got=''
           for attempt in 1 2 3 4 5; do
-            if body="$(curl -fsS --max-time 15 https://loopany-testing.fly.dev/api/health)"; then
+            if body="$(curl -fsS --max-time 15 "https://$host/api/health")"; then
               echo "health: $body"
               got="$(printf '%s' "$body" | sed -n 's/.*"sha":"\([^"]*\)".*/\1/p')"
               [ "$got" = "$expected" ] && break

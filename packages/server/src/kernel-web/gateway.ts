@@ -1,0 +1,99 @@
+import {
+  type Command,
+  type Provenance,
+  decide,
+  inboxView,
+  taskDetailView,
+  timelineView,
+  treeView,
+} from "@loopany/kernel";
+
+import { currentUser, requestScope } from "../auth.js";
+import * as store from "../db/store.js";
+import { authorizeKernelRequest } from "../kernel/authority.js";
+import { notifyKernelChangeset } from "../kernel/notify.js";
+import { applyChangesetForTeam, readEvents, readSnapshot } from "../kernel/store.js";
+
+export class KernelWebError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+async function access(teamId: string) {
+  const user = await currentUser();
+  if (!user?.email) throw new KernelWebError(401, "Sign in required");
+  const scope = await requestScope(teamId);
+  if (scope.teamId !== teamId || !scope.userId) throw new KernelWebError(404, "Not found");
+  return { user, email: user.email.trim().toLowerCase() };
+}
+
+export async function workspace(teamId: string) {
+  const { user, email } = await access(teamId);
+  const [snapshot, events, team, members] = await Promise.all([
+    readSnapshot(teamId), readEvents(teamId), store.getTeam(teamId), store.listTeamMembers(teamId),
+  ]);
+  const tasks = Object.values(snapshot.objects).filter((o) => o.archetype === "task");
+  const documents = Object.values(snapshot.objects).filter((o) => o.archetype === "doc");
+  const activeRuns = snapshot.runs.filter((r) => ["pending", "claimed", "running"].includes(r.state));
+  const recentRuns = [...snapshot.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30);
+  return {
+    team: { id: teamId, name: team?.name ?? teamId },
+    me: { id: user.id, email },
+    members: members.flatMap((m) => m.email ? [{ id: m.userId, email: m.email.trim().toLowerCase(), role: m.role }] : []),
+    tasks,
+    tree: treeView(snapshot),
+    triggers: snapshot.triggers,
+    activeRuns,
+    recentRuns,
+    documents,
+    inbox: inboxView(snapshot, email, new Date().toISOString()),
+    recentTimeline: timelineView(snapshot, events, { limit: 30 }),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+export async function taskDetail(teamId: string, id: string) {
+  await access(teamId);
+  const [snapshot, events] = await Promise.all([readSnapshot(teamId), readEvents(teamId)]);
+  const detail = taskDetailView(snapshot, id, events);
+  if (!detail) throw new KernelWebError(404, "Task not found");
+  return { ...detail, runs: snapshot.runs.filter((r) => r.taskId === id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
+}
+
+export async function docDetail(teamId: string, id: string) {
+  await access(teamId);
+  const snapshot = await readSnapshot(teamId);
+  const doc = snapshot.objects[id];
+  if (doc?.archetype !== "doc") throw new KernelWebError(404, "Document not found");
+  const linkedTasks = Object.values(snapshot.objects).filter(
+    (o) => o.archetype === "task" && (o.tracks === id || o.refs.includes(id)),
+  );
+  return { doc, linkedTasks };
+}
+
+export async function runDetail(teamId: string, id: string) {
+  await access(teamId);
+  const [snapshot, events] = await Promise.all([readSnapshot(teamId), readEvents(teamId)]);
+  const run = snapshot.runs.find((r) => r.id === id);
+  if (!run) throw new KernelWebError(404, "Run not found");
+  return { run, task: snapshot.objects[run.taskId] ?? null, events: events.filter((e) => e.provenance.actorId === id || e.note?.includes(id)) };
+}
+
+export async function timeline(teamId: string, all = false) {
+  await access(teamId);
+  const [snapshot, events] = await Promise.all([readSnapshot(teamId), readEvents(teamId)]);
+  return timelineView(snapshot, events, { all, limit: 100 });
+}
+
+export async function command(teamId: string, raw: unknown) {
+  const { user, email } = await access(teamId);
+  const request = { command: raw };
+  const forbidden = authorizeKernelRequest("human-session", request);
+  if (forbidden) throw new KernelWebError(forbidden.status, forbidden.message);
+  const actor: Provenance = { entrance: "human", actorId: email, sessionId: user.id };
+  const decision = decide(raw as Command, await readSnapshot(teamId), actor, new Date().toISOString());
+  if (!decision.ok) return { status: 422, body: { ok: false, refusal: decision.refusal, notices: [] } };
+  const applied = await applyChangesetForTeam(teamId, decision.changeset);
+  if (!applied.ok) return { status: 409, body: { ok: false, conflict: applied.conflict, notices: decision.notices } };
+  await notifyKernelChangeset(teamId, decision.changeset);
+  return { status: 200, body: { ok: true, notices: decision.notices, result: decision.result } };
+}

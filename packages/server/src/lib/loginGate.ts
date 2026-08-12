@@ -5,9 +5,10 @@
  * (which sets the env vars per-case) without pulling betterAuth into the machine
  * hot path. Leaf module — no imports, no side effects.
  *
- * The gate is ON exactly when a GitHub OAuth app is configured (both id + secret).
- * OFF ⇒ open/dev mode (single shared workspace, anonymous self-registration).
+ * The gate is ON when an explicit shared-password mode is selected OR a GitHub
+ * OAuth app is configured. OFF means open/dev mode.
  */
 export function loginGateEnabled(): boolean {
-  return !!(process.env.GITHUB_CLIENT_ID?.trim() && process.env.GITHUB_CLIENT_SECRET?.trim());
+  return process.env.LOOPANY_AUTH_MODE?.trim() === "shared-password" ||
+    !!(process.env.GITHUB_CLIENT_ID?.trim() && process.env.GITHUB_CLIENT_SECRET?.trim());
 }

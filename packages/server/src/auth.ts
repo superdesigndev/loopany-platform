@@ -14,9 +14,11 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "./db/index.js";
 import * as store from "./db/store.js";
 import { loginGateEnabled } from "./lib/loginGate.js";
+import { sharedPasswordPlugin } from "./auth/sharedPassword.js";
 
 const clientId = process.env.GITHUB_CLIENT_ID?.trim();
 const clientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
+const authMode = process.env.LOOPANY_AUTH_MODE?.trim();
 
 /** Auth is enforced only when a GitHub OAuth app is configured. Single source of
  *  the condition is `loginGateEnabled()` — the machine-enrollment guard reads it
@@ -38,6 +40,14 @@ const allowlist = (process.env.LOOPANY_ALLOWED_LOGINS || "")
   .split(",")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
+
+const sharedLoginSecret = process.env.LOOPANY_SHARED_LOGIN_PASSWORD?.trim();
+const kernelWebTeamId = process.env.LOOPANY_KERNEL_WEB_TEAM_ID?.trim() || "team-shared";
+if (authMode === "shared-password" && (!sharedLoginSecret || allowlist.length === 0)) {
+  throw new Error(
+    "shared-password auth requires LOOPANY_SHARED_LOGIN_PASSWORD and a non-empty LOOPANY_ALLOWED_LOGINS",
+  );
+}
 
 /**
  * Whether an email may sign in. An empty allowlist means "allow anyone" (open
@@ -169,8 +179,12 @@ export const auth = betterAuth({
   secret: authSecret || "dev-insecure-secret-change-in-prod",
   database: drizzleAdapter(db, { provider: "pg" }),
   socialProviders: authEnabled
-    ? { github: { clientId: clientId!, clientSecret: clientSecret! } }
+    && clientId && clientSecret
+    ? { github: { clientId, clientSecret } }
     : {},
+  plugins: authMode === "shared-password"
+    ? [sharedPasswordPlugin({ secret: sharedLoginSecret!, teamId: kernelWebTeamId, emailAllowed })]
+    : [],
   databaseHooks: {
     user: {
       create: {
