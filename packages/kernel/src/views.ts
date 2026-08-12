@@ -174,6 +174,48 @@ export interface ArtifactRef {
   producedBy: { actor: string; runId?: string; sessionId?: string; at: string } | null;
 }
 
+export interface RunArtifactRef {
+  artifact: DocObject | MirrorObject;
+  actions: readonly ("created" | "updated" | "attached")[];
+  lastTouchedAt: string;
+}
+
+/** Artifacts actually touched by one Run. This is reconstructed from that
+ * run's provenance-stamped events, including attachment of a pre-existing
+ * artifact through a task's refs/tracks diff. Current task refs alone cannot
+ * answer this question because a run may write across tasks. */
+export function runArtifactsView(
+  snapshot: Snapshot,
+  events: readonly KernelEvent[],
+  runId: string,
+): RunArtifactRef[] {
+  const touched = new Map<string, { actions: Set<RunArtifactRef["actions"][number]>; lastTouchedAt: string }>();
+  const record = (id: unknown, action: RunArtifactRef["actions"][number], at: string) => {
+    if (typeof id !== "string") return;
+    const artifact = snapshot.objects[id];
+    if (artifact?.archetype !== "doc" && artifact?.archetype !== "mirror") return;
+    const current = touched.get(id) ?? { actions: new Set(), lastTouchedAt: at };
+    current.actions.add(action);
+    if (at > current.lastTouchedAt) current.lastTouchedAt = at;
+    touched.set(id, current);
+  };
+  for (const event of events) {
+    if (event.provenance.entrance !== "agent-run" || event.provenance.actorId !== runId) continue;
+    if (event.kind === "created") record(event.objectId, "created", event.at);
+    if (event.kind === "doc-updated") record(event.objectId, "updated", event.at);
+    for (const field of ["refs", "tracks"] as const) {
+      const change = event.diff?.[field];
+      if (!change) continue;
+      const oldIds = new Set(Array.isArray(change.old) ? change.old : change.old == null ? [] : [change.old]);
+      const newIds = Array.isArray(change.new) ? change.new : change.new == null ? [] : [change.new];
+      for (const id of newIds) if (!oldIds.has(id)) record(id, "attached", event.at);
+    }
+  }
+  return [...touched.entries()]
+    .map(([id, value]) => ({ artifact: snapshot.objects[id] as DocObject | MirrorObject, actions: [...value.actions], lastTouchedAt: value.lastTouchedAt }))
+    .sort((a, b) => b.lastTouchedAt.localeCompare(a.lastTouchedAt) || a.artifact.id.localeCompare(b.artifact.id));
+}
+
 export interface TaskDetail {
   task: TaskObject;
   /** The task's ARTIFACTS, resolved from `tracks` (first - the shepherd

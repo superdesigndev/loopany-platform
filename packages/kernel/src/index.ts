@@ -30,10 +30,12 @@ export {
   loopsView,
   sortTasksForList,
   taskDetailView,
+  runArtifactsView,
   type TreeNode,
   type InboxItem,
   type LoopRow,
   type TaskDetail,
+  type RunArtifactRef,
 } from "./views.js";
 export { timelineView, type TimelineItem, type TimelineKind, type TimelineOptions } from "./timeline.js";
 // checkInvariants: the EXECUTABLE SPEC — every structural constraint the

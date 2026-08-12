@@ -45,6 +45,7 @@ const EXPECTED = [
   "projectOperationalContext",
   "refuse",
   "runId",
+  "runArtifactsView",
   "shortHash",
   "slugify",
   "sortTasksForList",

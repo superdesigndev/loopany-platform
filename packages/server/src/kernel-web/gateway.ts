@@ -6,6 +6,7 @@ import {
   taskDetailView,
   timelineView,
   treeView,
+  runArtifactsView,
 } from "@loopany/kernel";
 
 import { currentUser, requestScope } from "../auth.js";
@@ -81,7 +82,12 @@ export async function runDetail(teamId: string, id: string) {
   const run = snapshot.runs.find((r) => r.id === id);
   if (!run) throw new KernelWebError(404, "Run not found");
   // Only the run's OWN writes (actorId = runId); a note merely mentioning the id is not this run's event.
-  return { run, task: snapshot.objects[run.taskId] ?? null, events: events.filter((e) => e.provenance.actorId === id) };
+  return {
+    run,
+    task: snapshot.objects[run.taskId] ?? null,
+    events: events.filter((e) => e.provenance.entrance === "agent-run" && e.provenance.actorId === id),
+    artifacts: runArtifactsView(snapshot, events, id),
+  };
 }
 
 export async function timeline(teamId: string, all = false) {
