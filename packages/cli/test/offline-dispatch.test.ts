@@ -52,6 +52,13 @@ describe("remote dispatch feedback", () => {
     expect(out.stdout).toContain("full history: loopany-kernel show audit --log");
   });
 
+  it("show exposes the machine's actual presence", () => {
+    const out = run(["show", "audit"], deps({ mbp: "online" }));
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("machine mbp: online");
+    expect(out.stdout).not.toContain("machine mbp: unregistered");
+  });
+
   it("says an offline machine's manual run is queued", () => {
     const out = run(["run", "audit", "--json"], deps({ mbp: "offline" }));
     expect(out.exitCode).toBe(0);

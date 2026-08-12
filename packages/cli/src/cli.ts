@@ -812,7 +812,17 @@ function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
       ),
     );
   }
-  return ok(renderShow(obj, snapshot, events, recent, args.bools.has("all")));
+  return ok(
+    renderShow(
+      obj,
+      snapshot,
+      events,
+      recent,
+      args.bools.has("all"),
+      backend.machinePresence(),
+      taskEvents,
+    ),
+  );
 }
 
 function verbList(args: ParsedArgs, deps: CliDeps): CliOutcome {
