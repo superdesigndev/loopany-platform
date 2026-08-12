@@ -14,13 +14,18 @@ const PROFILES: Profiles = {
 };
 
 describe("mapArgvAssignees", () => {
-  it("maps bare profile names in --assignee flags and assignee= assigns", () => {
+  it("maps bare profile names onto the machine's EXECUTOR SLOT (the daemon runs slots, not profile names)", () => {
     expect(
       mapArgvAssignees(["create", "x", "--assignee", "claude"], PROFILES, "sim-1"),
     ).toEqual(["create", "x", "--assignee", "sim-1/claude"]);
+    // The replay profile ALSO collapses onto the claude slot - which binary the
+    // slot executes is the driver's LOOPANY_SIM_CLAUDE_BIN binding.
     expect(
       mapArgvAssignees(["update", "t", "assignee=replay"], PROFILES, "sim-1"),
-    ).toEqual(["update", "t", "assignee=sim-1/replay"]);
+    ).toEqual(["update", "t", "assignee=sim-1/claude"]);
+    expect(
+      mapArgvAssignees(["update", "t", "assignee=replay"], PROFILES, "sim-1", "codex"),
+    ).toEqual(["update", "t", "assignee=sim-1/codex"]);
   });
 
   it("leaves person emails, addressed names, and non-profile names untouched", () => {

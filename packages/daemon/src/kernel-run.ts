@@ -61,6 +61,11 @@ export interface KernelRunDeps {
   ) => Promise<{ code: number | null; agentSessionId?: string | null }>;
   /** POST the kernel run-finish (network seam). */
   finish: (serverUrl: string, runToken: string, body: unknown) => Promise<void>;
+  /** EXTRA env merged into the spawned agent (after the allowlist, before the
+   *  identity keys). Production leaves it unset; the SIMULATOR driver injects
+   *  its virtual-clock context here (LOOPANY_NOW, the replay-script path, the
+   *  sim time authority) - an explicit seam, never an ambient env parser. */
+  agentEnv?: Record<string, string>;
   /** Backoff sleep between finish retries (timer seam - tests run instantly). */
   sleep: (ms: number) => Promise<void>;
   scratchDir: () => string;
@@ -222,6 +227,7 @@ export async function runKernelDelivery(
   const { bin, args } = buildAgentSpawn({ agent, prompt: kr.prompt });
   const env: NodeJS.ProcessEnv = {
     ...execEnv(agent),
+    ...(deps.agentEnv ?? {}),
     LOOPANY_KERNEL_BACKEND: serverUrl,
     LOOPANY_KERNEL_TOKEN: kr.runToken,
     LOOPANY_TASK_ID: kr.taskId,

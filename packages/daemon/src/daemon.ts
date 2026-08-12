@@ -16,7 +16,7 @@ import os from "node:os";
 
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
-import { runKernelDelivery, type KernelRunDelivery } from "./kernel-run.js";
+import { type KernelRunDelivery } from "./kernel-run.js";
 import { runDelivery, type Delivery } from "./runner.js";
 import { DEVICE_FILE, SERVER_FILE, persist, readStored } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
@@ -57,28 +57,11 @@ export function machineAlias(env: NodeJS.ProcessEnv = process.env, hostname: str
   return short || undefined;
 }
 
-/** Poll request body: machine identity + optional progress + long-poll opt-in
- *  (idle only — with a run in flight the short cadence keeps the progress
- *  heartbeat fresh) + the last watch digest echo (absent until a server sent
- *  one) + `kernelInFlight`: the runIds this daemon is executing, ALWAYS present
- *  (even empty) so the server's orphan reconcile can tell "executing nothing"
- *  from "old daemon that never reports" and reclaim kernel runs this process
- *  lost to a crash/restart. */
-export function buildPollBody(
-  info: Record<string, unknown>,
-  progress: Array<{ runId: string; step: number; label: string }>,
-  idle: boolean,
-  watchDigest: string | undefined,
-  kernelInFlight: string[] = [],
-): Record<string, unknown> {
-  return {
-    ...info,
-    ...(progress.length ? { progress } : {}),
-    ...(idle ? { wait: true } : {}),
-    ...(watchDigest ? { watchDigest } : {}),
-    kernelInFlight,
-  };
-}
+// The poll body builder moved into the shared kernel lifecycle module (the
+// simulator driver must build the SAME body); imported for the loop below and
+// re-exported so callers and tests keep their import site.
+import { buildPollBody, KernelLifecycle } from "./kernel-lifecycle.js";
+export { buildPollBody };
 
 /** Elapsed-based cadence: a response that consumed the poll interval was a
  *  server-held long-poll — re-poll almost immediately (the hold WAS the wait).
@@ -176,6 +159,11 @@ export async function runDaemon(): Promise<number> {
   // same delivery is ever returned twice.
   const inFlight = new Set<string>();
 
+  // The SHARED kernel-run lifecycle (dispatch/dedup/execute/settle) — the same
+  // module the simulator's remote driver runs, over the daemon's OWN in-flight
+  // set so production deliveries and kernel runs share one bookkeeping.
+  const kernelLifecycle = new KernelLifecycle({ server, token, info, roots, signal: ac.signal, inFlight });
+
   // Last watch digest the server sent (echoed on the next poll so an unchanged
   // watch set is omitted from the response — old servers never send one).
   let watchDigest: string | undefined;
@@ -212,16 +200,9 @@ export async function runDaemon(): Promise<number> {
             .finally(() => inFlight.delete(d.runId));
         }
         // Kernel runs (P0 stage E): server-claimed, CORE prompt prebuilt - the
-        // daemon only executes + reports. Same inFlight dedup + background run.
-        for (const kr of data.kernelRuns ?? []) {
-          if (inFlight.has(kr.runId)) continue;
-          inFlight.add(kr.runId);
-          logger.info({ runId: kr.runId, taskId: kr.taskId, agent: kr.agent }, "kernel run delivered — running");
-          void runKernelDelivery(kr, server, roots, ac.signal)
-            .then(() => logger.info({ runId: kr.runId }, "kernel run finished"))
-            .catch((err) => logger.error({ runId: kr.runId, err: err instanceof Error ? err.message : String(err) }, "kernel run failed"))
-            .finally(() => inFlight.delete(kr.runId));
-        }
+        // daemon only executes + reports, through the SHARED lifecycle (the
+        // same dispatch the simulator's remote driver runs - anti-drift).
+        kernelLifecycle.dispatch(data.kernelRuns);
       } else {
         logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
       }

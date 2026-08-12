@@ -21,8 +21,10 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Profiles } from "@loopany/cli";
 import { kernelBinPath, createSandbox, fixturesDir, plantRepo, type Sandbox } from "./sandbox.js";
 import { captureDay } from "./snapshot.js";
@@ -58,9 +60,10 @@ export interface RunOpts {
   extraEnv?: Record<string, string>;
   /** REMOTE tier: drive a deployed server instead of the local file driver.
    *  Every CLI invocation rides the device credential (LOOPANY_KERNEL_BACKEND/
-   *  TOKEN env), spawning goes through the remote-pump shim (poll -> rk_
-   *  delivery -> spawn -> run-finish; `tick --spawn` refuses remote by design),
-   *  and scenario assignees are machine-addressed (`<alias>/<name>`). The
+   *  TOKEN env); run execution goes through the REAL daemon kernel lifecycle
+   *  (src/remoteDaemon.ts over the daemon's shared kernel-lifecycle module -
+   *  `tick --spawn` refuses remote by design), and scenario assignees are
+   *  machine-addressed onto the executor slot (`<alias>/claude`). The
    *  deployment must hold LOOPANY_KERNEL_SIM_SECRET and the run must present
    *  it (RemoteWorld.simAuthority) so in-run events share the virtual clock. */
   remote?: RemoteWorld;
@@ -77,27 +80,35 @@ export interface RemoteWorld {
    *  LOOPANY_KERNEL_SIM_SECRET) - without it, in-run rk_ events land on SERVER
    *  time and the virtual world's determinism breaks. */
   simAuthority?: string;
+  /** The EXECUTOR SLOT the daemon runs profiles through (kernelAgentKind):
+   *  "claude" unless the scenario's real-agent tier is codex/grok. The daemon
+   *  maps an assignee's agent segment onto its executor enum, so every remote
+   *  assignee is `<alias>/<slot>` - profile NAMES are a local-tier notion. */
+  agentSlot?: string;
 }
 
-/** ONE bare profile name -> its dispatch address on the remote tier
- *  (`claude` -> `<alias>/claude`). Person assignees (emails), already-addressed
- *  names, and non-profile names pass through. */
-export function mapAssigneeName(name: string, profiles: Profiles, alias: string): string {
+/** ONE bare profile name -> its dispatch address on the remote tier. The
+ *  daemon executes through its EXECUTOR SLOTS (claude|codex|grok), so every
+ *  profile name collapses onto `<alias>/<slot>` - which binary the slot runs
+ *  is the driver's LOOPANY_SIM_CLAUDE_BIN binding, not the assignee's name.
+ *  Person assignees (emails) and already-addressed names pass through. */
+export function mapAssigneeName(name: string, profiles: Profiles, alias: string, slot = "claude"): string {
   return profiles[name] !== undefined && !name.includes("/") && !name.includes("@")
-    ? `${alias}/${name}`
+    ? `${alias}/${slot}`
     : name;
 }
 
 /** Rewrite BARE profile-named assignees into machine-addressed form for the
- *  remote tier: `--assignee replay` / `assignee=replay` -> `<alias>/replay`.
+ *  remote tier: `--assignee replay` / `assignee=replay` -> `<alias>/<slot>`.
  *  Pure - unit-tested without a server. */
-export function mapArgvAssignees(argv: string[], profiles: Profiles, alias: string): string[] {
+export function mapArgvAssignees(argv: string[], profiles: Profiles, alias: string, slot = "claude"): string[] {
   const out = [...argv];
   for (let i = 0; i < out.length; i++) {
     const tok = out[i]!;
-    if (tok === "--assignee" && out[i + 1] !== undefined) out[i + 1] = mapAssigneeName(out[i + 1]!, profiles, alias);
+    if (tok === "--assignee" && out[i + 1] !== undefined)
+      out[i + 1] = mapAssigneeName(out[i + 1]!, profiles, alias, slot);
     else if (tok.startsWith("assignee="))
-      out[i] = `assignee=${mapAssigneeName(tok.slice("assignee=".length), profiles, alias)}`;
+      out[i] = `assignee=${mapAssigneeName(tok.slice("assignee=".length), profiles, alias, slot)}`;
   }
   return out;
 }
@@ -113,8 +124,27 @@ export function substituteAgentTokens(
   remote: RemoteWorld | undefined,
 ): string {
   return content.replace(/\{\{agent:([A-Za-z0-9_-]+)\}\}/g, (_, name: string) =>
-    remote ? mapAssigneeName(name, profiles, remote.alias) : name,
+    remote ? mapAssigneeName(name, profiles, remote.alias, remote.agentSlot ?? "claude") : name,
   );
+}
+
+/** The binary the daemon's claude SLOT executes for this scenario: a real
+ *  executable profile (`claude`) passes through; the replay tier's
+ *  `node <shim>` form resolves to the SANDBOX's executable shim copy (the
+ *  daemon spawns ONE binary - argv is the executor's own, so the shim must be
+ *  directly executable and ignore claude-style argv, which replay-agent.mjs
+ *  does by contract). */
+export function claudeSlotBin(sandbox: Sandbox, profiles: Profiles): string | null {
+  const first = Object.values(profiles)[0];
+  if (!first) return null;
+  const isNodeScript =
+    (first.cmd === process.execPath || first.cmd.endsWith("/node")) && (first.args?.length ?? 0) === 1;
+  if (!isNodeScript) return first.cmd;
+  const src = first.args![0]!;
+  const copy = join(sandbox.root, "shims", basename(src));
+  if (!existsSync(copy)) cpSync(src, copy);
+  chmodSync(copy, 0o755);
+  return copy;
 }
 
 /** Run a scenario end to end. Returns the structured capture (setup + per-day
@@ -144,7 +174,7 @@ export function runScenario(scenario: Scenario, opts: RunOpts): SimResult {
       ? Object.fromEntries(
           Object.entries(scenario.replayScript).map(([key, seqs]) => [
             key,
-            seqs.map((argv) => mapArgvAssignees(argv, scenario.profiles, opts.remote!.alias)),
+            seqs.map((argv) => mapArgvAssignees(argv, scenario.profiles, opts.remote!.alias, opts.remote!.agentSlot ?? "claude")),
           ]),
         )
       : scenario.replayScript;
@@ -183,10 +213,15 @@ export function runScenario(scenario: Scenario, opts: RunOpts): SimResult {
     sandbox.env.LOOPANY_KERNEL_TOKEN = remote.token;
     sandbox.env.LOOPANY_SIM_ALIAS = remote.alias;
     if (remote.simAuthority) sandbox.env.LOOPANY_KERNEL_SIM_AUTHORITY = remote.simAuthority;
+    // The daemon's claude SLOT executes this scenario's profile binary (the
+    // replay shim made executable, or the real claude) - remoteDaemon.ts binds
+    // it onto LOOPANY_CLAUDE_BIN before dispatching.
+    const slotBin = claudeSlotBin(sandbox, scenario.profiles);
+    if (slotBin) sandbox.env.LOOPANY_SIM_CLAUDE_BIN = slotBin;
     setup.push(execPump(sandbox, "enroll", setupNow));
   }
   for (const argv of scenario.setup.tasks) {
-    const mapped = remote ? mapArgvAssignees(argv, scenario.profiles, remote.alias) : argv;
+    const mapped = remote ? mapArgvAssignees(argv, scenario.profiles, remote.alias, remote.agentSlot ?? "claude") : argv;
     setup.push(execCli(sandbox, mapped, setupNow, undefined, labelFor("setup", argv)));
   }
 
@@ -252,7 +287,7 @@ function runDay(
   const morningNow = instant(day.date, MORNING);
   const deferredMorning = applyEvents(sandbox, morning, morningNow, commands);
   commands.push(execCli(sandbox, tickArgv, morningNow, undefined, "07:00 tick"));
-  if (remote && !day.offline) commands.push(execPump(sandbox, "pump", morningNow));
+  if (remote && !day.offline) commands.push(execDaemonDriver(sandbox, morningNow));
 
   const eveningNow = instant(day.date, EVENING);
   const deferredEvening = applyEvents(sandbox, evening, eveningNow, commands);
@@ -262,7 +297,7 @@ function runDay(
     applyHumanReplies(sandbox, human, dayZeroIndex, eveningNow, commands, remote);
   }
   commands.push(execCli(sandbox, tickArgv, eveningNow, undefined, "19:00 tick"));
-  if (remote && !day.offline) commands.push(execPump(sandbox, "pump", eveningNow));
+  if (remote && !day.offline) commands.push(execDaemonDriver(sandbox, eveningNow));
 
   const snapshotDir = captureDay(sandbox.workspace, runId, dayNumber);
   // REMOTE tier: the kernel state lives on the server, not in the local
@@ -280,19 +315,45 @@ function runDay(
   };
 }
 
-/** Run the remote-pump shim (the per-sandbox copy - createSandbox copies the
- *  packaged shims) in the given mode, recorded like any CLI command. */
-function execPump(sandbox: Sandbox, mode: "enroll" | "pump" | "read", now: string): SimCommand {
-  const pump = join(sandbox.root, "shims", "remote-pump.mjs");
-  const child = spawnSync(process.execPath, [pump, mode], {
+/** Run the remote-gateway shim (enroll/read - gateway PROTOCOL only, zero run
+ *  lifecycle; the per-sandbox copy createSandbox laid down), recorded like any
+ *  CLI command. */
+function execPump(sandbox: Sandbox, mode: "enroll" | "read", now: string): SimCommand {
+  const shim = join(sandbox.root, "shims", "remote-gateway.mjs");
+  const child = spawnSync(process.execPath, [shim, mode], {
     cwd: sandbox.workspace,
     env: { ...sandbox.env, LOOPANY_NOW: now },
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024, // the read body carries the whole team state
   });
   return {
-    argv: ["remote-pump", mode],
-    label: `remote-pump: ${mode}`,
+    argv: ["remote-gateway", mode],
+    label: `remote-gateway: ${mode}`,
+    now,
+    stdout: child.stdout ?? "",
+    stderr: child.stderr ?? "",
+    exitCode: child.status ?? (child.error ? 127 : 1),
+  };
+}
+
+/** Consume the tick's pending runs through the REAL daemon kernel lifecycle
+ *  (kernel-real-daemon-simulator): src/remoteDaemon.ts runs the daemon's shared
+ *  kernel-lifecycle module (production poll body + dispatch + runKernelDelivery
+ *  + finish ladder) in a tsx subprocess, so the engine stays a sync day-driver
+ *  while execution is byte-for-byte the daemon's. */
+function execDaemonDriver(sandbox: Sandbox, now: string): SimCommand {
+  const require = createRequire(import.meta.url);
+  const tsxCli = require.resolve("tsx/cli");
+  const driver = join(dirname(fileURLToPath(import.meta.url)), "remoteDaemon.ts");
+  const child = spawnSync(process.execPath, [tsxCli, driver], {
+    cwd: sandbox.workspace,
+    env: { ...sandbox.env, LOOPANY_NOW: now, LOOPANY_LOG_LEVEL: "silent" },
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return {
+    argv: ["remote-daemon", "pump"],
+    label: "remote-daemon: pump",
     now,
     stdout: child.stdout ?? "",
     stderr: child.stderr ?? "",
@@ -329,7 +390,7 @@ function applyHumanReplies(
     commands.push(
       execCli(
         sandbox,
-        remote ? mapArgvAssignees(reassignArgv, remote.profiles, remote.world.alias) : reassignArgv,
+        remote ? mapArgvAssignees(reassignArgv, remote.profiles, remote.world.alias, remote.world.agentSlot ?? "claude") : reassignArgv,
         now,
         { LOOPANY_ACTOR: actor },
         `${actor} reassign ${reply.taskId} -> ${reply.reassignTo}`,

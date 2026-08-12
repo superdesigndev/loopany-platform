@@ -207,11 +207,20 @@ export function runCli(opts: RunnerOpts, deps: RunnerDeps = realRunnerDeps): Sim
   deps.log(`running ${scenario.name} (tier ${opts.tier}, run ${opts.runId})`);
   // Real tiers thread the seeded auth dir into the child env (spawn.ts inherits
   // the sandbox base env): CLAUDE_CONFIG_DIR for claude, CODEX_HOME for codex.
+  // On the REMOTE tier the model pin rides ANTHROPIC_MODEL (the daemon's
+  // executor builds its own claude argv - profile args are a local-tier notion;
+  // execEnv's ANTHROPIC_* allowlist carries it into the agent).
   const extraEnv: Record<string, string> | undefined = claudeConfigDir
-    ? { CLAUDE_CONFIG_DIR: claudeConfigDir }
+    ? {
+        CLAUDE_CONFIG_DIR: claudeConfigDir,
+        ...(opts.remote ? { ANTHROPIC_MODEL: opts.tier === "sonnet" ? SONNET_MODEL : HAIKU_MODEL } : {}),
+      }
     : codexHome
       ? { CODEX_HOME: codexHome }
       : undefined;
+  if (opts.remote && opts.tier === "codex") {
+    throw new Error("the remote tier's codex executor slot is not wired yet - use replay/haiku/sonnet");
+  }
   const remote = opts.remote
     ? {
         base: opts.remote.replace(/\/$/, ""),

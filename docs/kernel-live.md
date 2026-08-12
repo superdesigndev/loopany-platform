@@ -18,44 +18,80 @@
 
 - Node.js ≥ 20
 - Claude Code 已安装并登录（`claude` 命令可用）—— agent 会话用的就是它
-- 本仓库的 `fm/kernel-cli` 分支 checkout（安装脚本从源码打包）
+- 本仓库的 `fm/kernel-cli` 分支 checkout
 
 ## 2. 安装（一次）
 
 ```bash
 git clone git@github.com:superdesigndev/loopany-platform.git && cd loopany-platform
 git checkout fm/kernel-cli
-bash scripts/install-daemon.sh     # 全局装 loopany + loopany-kernel（npm -g，自包含）
-echo 'alias lk=loopany-kernel' >> ~/.zshrc && source ~/.zshrc   # 可选的短名
+bash scripts/install-daemon.sh     # 全局装 loopany daemon
+bash scripts/install-kernel-cli.sh # 内测期：lk 直接指向本 checkout 源码
 ```
+
+安装脚本只替换全局可执行文件，不会主动停止一个已经运行的 daemon；真正决定 daemon
+连接哪个环境的是下面的 `LOOPANY_HOME`。内测期间 `lk` 直接读当前 checkout，切分支或
+修改源码会立即改变它的行为。
 
 ## 3. 接入这台机器（token 从哪来）
 
 open mode 下 **token 是你自己造的**：一段 `dk_` 前缀随机串就是这台机器的身份凭证
 （服务器用它的哈希派生机器 id，首次 poll 即注册）。造一次、传给 `loopany up`，之后
-它保存在 `~/.loopany/device-token`（0600），重启复用，不需要再管。
+它保存在 `$LOOPANY_HOME/device-token`（0600），重启复用，不需要再管。
+
+### 先隔离正式环境（必须）
+
+kernel-live 使用独立 home。它把 device token、server URL、daemon pid、日志以及 `lk`
+的远端凭证一起放在 `~/.loopany-kernel-live`，不会读取或改写正式环境默认使用的
+`~/.loopany`：
 
 ```bash
-export LOOPANY_MACHINE_ALIAS=<你的名字>-<机器名>    # 例如 tim-mbp。这是任务指派用的地址，起个稳定的名字
+export LOOPANY_HOME="$HOME/.loopany-kernel-live"
+export LOOPANY_MACHINE_ALIAS=<你的名字>-<机器名>    # 例如 tim-mbp；团队内保持唯一且稳定
+```
+
+以上两个变量必须出现在每个操作 kernel-live 的 shell 中。建议写进项目专用的
+`.envrc` 或 shell function，**不要全局写进 `~/.zshrc`**，否则日常 `loopany` 命令也会
+默认切到测试环境。
+
+确认当前 shell 指向隔离 home 后，首次连接并启动 daemon：
+
+```bash
 loopany up \
   --server-url https://loopany-kernel-live.fly.dev \
   --connect-key "dk_$(openssl rand -hex 24)"
+
+loopany status
 ```
 
-- `loopany`（不带参数）随时查看本机连接状态。
+- `loopany up` 是幂等的：daemon 未运行时后台启动；已运行时只确认状态。
+- daemon 必须保持运行，才能 claim 指派给本机的 pending run 并启动 Claude Code。
+  服务器负责铸 run，但不会执行 agent；daemon 停止期间 run 只会排队，不会丢失。
+- `loopany status` 查看这个隔离 home 的 daemon、server 和连接状态；日志在
+  `$LOOPANY_HOME/daemon.log`。
+- `loopany down` 只停止当前 `LOOPANY_HOME` 的 daemon。先确认变量，避免误停正式环境。
 - **token = 机器的完全控制权**，别提交、别贴到聊天里。
-- 本机已有连着正式环境的 loopany？用 `LOOPANY_HOME=~/.loopany-kernel-live` 前缀
-  隔离所有命令（身份、pidfile、日志都会分家）。
+
+正式环境与 kernel-live 可以同时运行两个 daemon，因为 pidfile 和身份目录不同。分别检查：
+
+```bash
+env -u LOOPANY_HOME loopany status
+LOOPANY_HOME="$HOME/.loopany-kernel-live" loopany status
+```
 
 ## 4. 绑定 CLI（在任何目录使用 lk）
 
+`loopany up` 和 `lk` 共用当前 `LOOPANY_HOME` 里的 `server-url` 与 `device-token`，因此
+不需要再执行一次 `lk connect`。先确认当前 shell 仍有隔离变量，然后直接读取：
+
 ```bash
-lk connect https://loopany-kernel-live.fly.dev --token "$(cat ~/.loopany/device-token)"
+export LOOPANY_HOME="$HOME/.loopany-kernel-live"
+lk list
 ```
 
-绑定存 `~/.loopany/kernel-backend.json`（0600）。优先级：环境变量 > 当前目录的
-`.loopany` 工作区 > 这个全局绑定；站在某个本地工作区里想强制打远端，任何命令加
-`--remote`。
+CLI 优先级：环境变量 > 当前目录的 `.loopany` 工作区 > 当前 home 的远端绑定。站在
+某个本地 workspace 里想强制访问 kernel-live，命令加 `--remote`。不要在未设置隔离
+home 时运行 `lk connect` 指向 kernel-live，它会覆盖正式环境使用的共享凭证文件。
 
 ## 5. 日常使用
 
@@ -75,6 +111,7 @@ lk update research-x assignee=alice-mba/claude
 lk update research-x assignee=alice@superdesign.dev --note "两个方案你选一个"
 
 # 观察
+loopany status       # daemon 必须 online；否则 run 会停在 pending
 lk kanban            # 交互式看板（q 退出，/ 搜索，f 切换列）
 lk list              # 任务树
 lk show research-x --log   # 单任务全事件流
@@ -112,7 +149,7 @@ lk loops             # 所有 loop：下次触发、上次结果、卡住原因
 | 现象 | 查什么 |
 |---|---|
 | `lk` 报 401 | token 没注册过（daemon 先 `loopany up` 一次）或 token 打错 |
-| 任务一直 pending | `lk show <id> --log` 看 blocked note（别名错/机器离线）；`loopany` 看本机 daemon 状态 |
-| agent 起不来 | 目标机器 `claude` 是否可用已登录；`~/.loopany/daemon.log` |
+| 任务一直 pending | 先确认 `echo $LOOPANY_HOME` 是隔离 home，再运行 `loopany status`；然后用 `lk show <id> --log` 看 blocked note（别名错/机器离线） |
+| agent 起不来 | 目标机器 `claude` 是否可用已登录；`$LOOPANY_HOME/daemon.log` |
 | run 被改判 failed | agent 静默退出（没写任何事件）——完善 body 里的收尾要求 |
 | 想看服务器日志 | `fly logs -a loopany-kernel-live`（需要 fly 权限） |
