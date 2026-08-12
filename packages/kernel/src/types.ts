@@ -241,7 +241,9 @@ export interface NoteCommand {
 export interface DocPutCommand {
   op: "doc-put";
   key: string;
-  title?: string;
+  /** Derived from the Markdown body by the CLI. Explicit null clears a title
+   *  when the replacement body no longer has an H1; undefined preserves it. */
+  title?: string | null;
   body: string;
   ifVersion?: number;
   /** Attach the doc to this task in the SAME decision: append the doc id to the

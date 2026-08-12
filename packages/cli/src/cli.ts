@@ -476,6 +476,34 @@ function verbNote(args: ParsedArgs, deps: CliDeps): CliOutcome {
   return execWrite(backendFor(deps, args), { op: "note", id, note }, args, deps);
 }
 
+/** The body is the doc's one source of truth. Derive its display title from
+ *  the first real ATX H1, ignoring examples inside fenced code blocks. */
+function docTitle(body: string): string | null {
+  let fence: "`" | "~" | null = null;
+  let fenceLength = 0;
+  for (const line of body.split(/\r?\n/)) {
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1]!;
+      const char = marker[0] as "`" | "~";
+      if (fence === null) {
+        fence = char;
+        fenceLength = marker.length;
+      } else if (char === fence && marker.length >= fenceLength) {
+        fence = null;
+        fenceLength = 0;
+      }
+      continue;
+    }
+    if (fence !== null) continue;
+    const heading = /^ {0,3}#[ \t]+(.+?)\s*$/.exec(line)?.[1]
+      ?.replace(/[ \t]+#+[ \t]*$/, "")
+      .trim();
+    if (heading) return heading;
+  }
+  return null;
+}
+
 function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
   const sub = args.positionals[0];
   if (sub === "list") return docList(deps, args);
@@ -525,6 +553,7 @@ function verbDoc(args: ParsedArgs, deps: CliDeps): CliOutcome {
     op: "doc-put",
     key,
     body,
+    title: docTitle(body),
     ...(attachTask ? { attachTask } : {}),
     ...(bareCreate ? { ifVersion: 0 } : {}),
   };

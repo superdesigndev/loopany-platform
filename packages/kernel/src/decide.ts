@@ -882,7 +882,7 @@ function decideDocPut(cmd: DocPutCommand, ctx: Ctx): Decision {
     archetype: "doc",
     id,
     key: id,
-    title: cmd.title ?? (existing?.archetype === "doc" ? existing.title : null),
+    title: cmd.title === undefined ? (existing?.archetype === "doc" ? existing.title : null) : cmd.title,
     body: cmd.body,
     version,
     createdAt: existing?.createdAt ?? now,

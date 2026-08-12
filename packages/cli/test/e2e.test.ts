@@ -407,6 +407,23 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     expect(fresh.stdout).toContain("ok brand-new");
   });
 
+  it("doc put derives its title from the body H1 and clears it when the H1 is removed", () => {
+    call(["init"]);
+    const titled = writeBody(dir, "```md\n# Example only\n```\n\n# Live smoke report #\n\nResults.\n");
+    call(["doc", "put", "smoke-report", "--file", titled]);
+    let shown = JSON.parse(call(["show", "smoke-report", "--json"]).stdout) as {
+      object: { title: string | null };
+    };
+    expect(shown.object.title).toBe("Live smoke report");
+
+    const untitled = writeBody(dir, "Results without a heading.\n");
+    call(["doc", "put", "smoke-report", "--file", untitled]);
+    shown = JSON.parse(call(["show", "smoke-report", "--json"]).stdout) as {
+      object: { title: string | null };
+    };
+    expect(shown.object.title).toBeNull();
+  });
+
   // The data-loss guard must run against the LOCKED snapshot, not a pre-lock read
   // in the verb layer. Otherwise a `doc put <key>` whose pre-lock check saw NO doc
   // can be raced by a concurrent create in the window, and then wipe the body
