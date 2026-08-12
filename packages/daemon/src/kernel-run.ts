@@ -49,8 +49,16 @@ export function kernelAgentKind(agent: string): CodingAgent | null {
 export interface KernelRunDeps {
   /** True when the path exists AND is a directory (fs seam). */
   isDirectory: (path: string) => boolean;
-  /** Spawn the agent process (spawn seam). */
-  run: (bin: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; signal?: AbortSignal }) => Promise<{ code: number | null }>;
+  /** Spawn the agent process (spawn seam). `agentSessionId` is the host agent's
+   *  OWN session id when the stream exposed one (claude stream-json carries
+   *  `session_id` on every event) - it names the local transcript file
+   *  `<id>.jsonl` under `~/.claude/projects`, reported at run-finish so `show`
+   *  can render the trace hint. Null/absent when the stream has none. */
+  run: (
+    bin: string,
+    args: string[],
+    opts: { cwd: string; env: NodeJS.ProcessEnv; signal?: AbortSignal },
+  ) => Promise<{ code: number | null; agentSessionId?: string | null }>;
   /** POST the kernel run-finish (network seam). */
   finish: (serverUrl: string, runToken: string, body: unknown) => Promise<void>;
   /** Backoff sleep between finish retries (timer seam - tests run instantly). */
@@ -105,8 +113,23 @@ export const realKernelRunDeps: KernelRunDeps = {
     }
   },
   run: async (bin, args, opts) => {
-    const res = await runProcess(bin, args, { cwd: opts.cwd, env: opts.env, signal: opts.signal });
-    return { code: res.code };
+    // Scan the stream for the agent's own session id (first match wins; claude
+    // stream-json stamps it on every line). Cheap regex over chunks - no JSONL
+    // parser needed for one field, and a non-stream agent simply never matches.
+    let agentSessionId: string | null = null;
+    let carry = "";
+    const res = await runProcess(bin, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      signal: opts.signal,
+      onStdout: (chunk) => {
+        if (agentSessionId) return;
+        carry = (carry + chunk).slice(-4096); // bounded: the id never spans >4KB
+        const m = carry.match(/"session_id"\s*:\s*"([0-9a-fA-F-]{8,64})"/);
+        if (m) agentSessionId = m[1]!;
+      },
+    });
+    return { code: res.code, agentSessionId };
   },
   finish: async (serverUrl, runToken, body) => {
     const res = await boundedFetch(`${serverUrl}/api/kernel/cli`, {
@@ -142,8 +165,16 @@ export async function runKernelDelivery(
   signal?: AbortSignal,
   deps: KernelRunDeps = realKernelRunDeps,
 ): Promise<void> {
-  const finish = async (outcome: "done" | "failed", note: string) => {
-    const body = { command: { op: "run-finish", runId: kr.runId, outcome, note } };
+  const finish = async (outcome: "done" | "failed", note: string, agentSessionId?: string | null) => {
+    const body = {
+      command: {
+        op: "run-finish",
+        runId: kr.runId,
+        outcome,
+        note,
+        ...(agentSessionId ? { agentSessionId } : {}),
+      },
+    };
     for (let attempt = 0; ; attempt++) {
       try {
         await deps.finish(serverUrl, kr.runToken, body);
@@ -204,13 +235,20 @@ export async function runKernelDelivery(
   if (shimDir) env.PATH = env.PATH ? `${shimDir}:${env.PATH}` : shimDir;
 
   let code: number | null;
+  let agentSessionId: string | null = null;
   try {
-    code = (await deps.run(bin, args, { cwd, env, signal })).code;
+    let res = await deps.run(bin, args, { cwd, env, signal });
+    code = res.code;
+    agentSessionId = res.agentSessionId ?? null;
     if (code !== 0) {
       // ONE immediate retry - the cheapest transient shield (parity with the
       // local tick --spawn); a second failure reaches the kernel's re-arm ladder.
       logger.warn({ runId: kr.runId, code }, "kernel run: nonzero exit, one retry");
-      code = (await deps.run(bin, args, { cwd, env, signal })).code;
+      res = await deps.run(bin, args, { cwd, env, signal });
+      code = res.code;
+      // The retry is a FRESH agent session; its id names the transcript that
+      // produced the final outcome, so it wins when present.
+      agentSessionId = res.agentSessionId ?? agentSessionId;
     }
   } catch (err) {
     await finish("failed", `agent spawn failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -220,5 +258,6 @@ export async function runKernelDelivery(
   await finish(
     code === 0 ? "done" : "failed",
     code === 0 ? "agent run completed (exit 0)" : `agent run failed (exit ${code}, incl. one retry)`,
+    agentSessionId,
   );
 }

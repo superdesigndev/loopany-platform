@@ -71,6 +71,28 @@ test("a run executes in its workdir with the in-run env contract, then reports d
   expect(JSON.stringify(finishes[0]!.body)).toContain('"outcome":"done"');
 });
 
+test("the agent's OWN session id rides run-finish; the retry's session wins (fresh transcript)", async () => {
+  // First attempt fails with session A; the retry succeeds with session B - the
+  // reported id must name the transcript that produced the FINAL outcome.
+  const sessions = ["sess-A", "sess-B"];
+  let call = 0;
+  const { d, finishes } = deps();
+  d.run = async () => {
+    const i = call++;
+    return { code: i === 0 ? 1 : 0, agentSessionId: sessions[i] ?? null };
+  };
+  await runKernelDelivery(KR, "https://srv.example", [], undefined, d);
+  const body = JSON.stringify(finishes[0]!.body);
+  expect(body).toContain('"agentSessionId":"sess-B"');
+  expect(body).toContain('"outcome":"done"');
+
+  // No session captured (replay shim / non-claude stream): the field is ABSENT,
+  // never null-noise on the wire.
+  const plain = deps();
+  await runKernelDelivery(KR, "https://srv.example", [], undefined, plain.d);
+  expect(JSON.stringify(plain.finishes[0]!.body)).not.toContain("agentSessionId");
+});
+
 test("a MISSING workdir fails loud: no spawn, run-finish(failed) names the path", async () => {
   const { d, spawns, finishes } = deps({ isDirectory: () => false });
   await runKernelDelivery(KR, "https://srv.example", [], undefined, d);

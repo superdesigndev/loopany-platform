@@ -90,10 +90,15 @@ export function renderShow(
     for (const t of trigs) parts.push(renderTriggerLine(t));
     const detail = taskDetailView(snapshot, obj.id, events ?? undefined);
     if (detail) {
-      if (detail.activeRun) parts.push(renderRunLine(detail.activeRun));
-      else if (detail.lastRun) {
+      if (detail.activeRun) {
+        parts.push(renderRunLine(detail.activeRun));
+        const trace = renderSessionTrace(detail.activeRun);
+        if (trace) parts.push(trace);
+      } else if (detail.lastRun) {
         const note = detail.lastRun.note ? `  ·  ${clip(detail.lastRun.note)}` : "";
         parts.push(`last run ${detail.lastRun.id}: ${detail.lastRun.state}${note}`);
+        const trace = renderSessionTrace(detail.lastRun);
+        if (trace) parts.push(trace);
       }
       if (detail.products.length > 0) {
         parts.push("products:");
@@ -103,9 +108,13 @@ export function renderShow(
               ? `doc ${product.id}  ${clip(product.title ?? product.key, 60)}`
               : `mirror ${product.id}  [${product.kind}] ${product.coords}`;
           const shepherd = obj.tracks === product.id ? "  (tracked)" : "";
-          const by = producedBy
-            ? `  ·  by ${producedBy.actor}${producedBy.sessionId ? ` session=${producedBy.sessionId}` : ""}`
-            : "";
+          // Same axi-concise rule as the log lines: the kernel claim session
+          // (`spawn-<runId>`) is derivable from the producing run - drop it.
+          const bySession =
+            producedBy?.sessionId && producedBy.sessionId !== `spawn-${producedBy.runId ?? ""}`
+              ? ` session=${producedBy.sessionId}`
+              : "";
+          const by = producedBy ? `  ·  by ${producedBy.actor}${bySession}` : "";
           parts.push(`  ${label}${shepherd}${by}`);
         }
       }
@@ -134,18 +143,35 @@ export function renderRunLine(r: RunRecord): string {
   return `run ${r.id}: ${r.cause} ${r.state} @${r.scheduledAt} -> ${r.assignee ?? "—"}`;
 }
 
+/** The host agent's own session, with a COPYABLE trace command (axi practice:
+ *  a full never-clipped id plus the exact deep-dive invocation, so "what did
+ *  that session actually do" is one paste away). Only rendered when the run
+ *  carries an agentSessionId (claude runs report it at finish; replay shims and
+ *  non-claude agents have none). */
+export function renderSessionTrace(r: RunRecord): string | null {
+  if (!r.agentSessionId) return null;
+  return `  session ${r.agentSessionId}  ·  trace: find ~/.claude/projects -name '${r.agentSessionId}.jsonl'`;
+}
+
 /** ONE compact event line: 时间 / 类型 / actor / note (§7). The actor is the
  *  attributable identity `entrance:actorId` (§3) — the entrance alone collapses
  *  every human event to "human" and every agent event to "agent-run", losing the
  *  userId|runId|triggerId that actually attributes the action. sessionId is
- *  appended in FULL (never clipped). */
+ *  appended in FULL (never clipped) — but ONLY when it says something the actor
+ *  column doesn't: the kernel's own claim session is always `spawn-<runId>`, so
+ *  for an agent-run event it is derivable noise and axi-concise drops it. A
+ *  session that DIFFERS from that shape (a human-attributed write from inside a
+ *  session, a foreign host) still renders. */
 export function renderEventLine(e: KernelEvent): string {
   const actor = `${e.provenance.entrance}:${e.provenance.actorId}`;
   const bits = [e.at, e.kind, actor];
   if (e.note) bits.push(clip(e.note));
   else if (e.diff) bits.push(clip(summarizeDiff(e.diff)));
   let line = `  ${bits.join("  ·  ")}`;
-  if (e.provenance.sessionId) line += `  ·  session=${e.provenance.sessionId}`;
+  const sid = e.provenance.sessionId;
+  if (sid && !(e.provenance.entrance === "agent-run" && sid === `spawn-${e.provenance.actorId}`)) {
+    line += `  ·  session=${sid}`;
+  }
   return line;
 }
 

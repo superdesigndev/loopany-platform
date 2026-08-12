@@ -140,6 +140,37 @@ describe("run-finish", () => {
     expect(returned?.note).toContain("shipped");
   });
 
+  it("records the host agent's OWN session id (the transcript key) when reported", () => {
+    const w = claimed();
+    const run = onlyRun(w);
+    const uuid = "60d3f5a2-1111-4222-8333-444455556666";
+    const w1 = exec(
+      w,
+      { op: "run-finish", runId: run.id, outcome: "done", note: "ok", agentSessionId: uuid },
+      AGENT,
+      LATE,
+    );
+    const finished = onlyRun(w1);
+    expect(finished.agentSessionId).toBe(uuid);
+    // Distinct from the kernel's claim-time correlation session.
+    expect(finished.sessionId).toBe("sess-1");
+    // Absent stays absent (a replay shim / non-claude host reports none).
+    const w2 = claimed();
+    const r2 = onlyRun(w2);
+    const w3 = exec(w2, { op: "run-finish", runId: r2.id, outcome: "done" }, AGENT, LATE);
+    expect(onlyRun(w3).agentSessionId).toBeUndefined();
+    // Malformed: non-string / oversized are throw-free refusals.
+    for (const bad of [9 as unknown as string, "x".repeat(300)]) {
+      const d = decide(
+        { op: "run-finish", runId: r2.id, outcome: "done", agentSessionId: bad },
+        w2.snapshot,
+        AGENT,
+        LATE,
+      );
+      expect(d.ok).toBe(false);
+    }
+  });
+
   it("a failed one-shot run re-arms the follow-up alarm instead of stranding (haiku-5)", () => {
     const w = claimed();
     const run = onlyRun(w);

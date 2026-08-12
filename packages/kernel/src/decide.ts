@@ -1148,6 +1148,13 @@ function decideRunFinish(cmd: RunFinishCommand, ctx: Ctx): Decision {
     const noteBad = requireString(cmd.note, "note", "INVALID_OUTCOME");
     if (noteBad) return noteBad;
   }
+  if (cmd.agentSessionId !== undefined) {
+    const sidBad = requireString(cmd.agentSessionId, "agentSessionId", "INVALID_OUTCOME");
+    if (sidBad) return sidBad;
+    if (cmd.agentSessionId.length > 200) {
+      return refuse("INVALID_OUTCOME", "agentSessionId is too long (max 200 chars)");
+    }
+  }
   const run = findRun(snapshot, cmd.runId);
   if (!run) return refuse("UNKNOWN_RUN", `no run "${cmd.runId}"`);
   // Only a CLAIMED or RUNNING run can be finished. The §3 lifecycle is strict —
@@ -1173,6 +1180,7 @@ function decideRunFinish(cmd: RunFinishCommand, ctx: Ctx): Decision {
     ...run,
     state: cmd.outcome,
     ...(cmd.note !== undefined ? { note: cmd.note } : {}),
+    ...(cmd.agentSessionId !== undefined ? { agentSessionId: cmd.agentSessionId } : {}),
   };
   cs.runs.push({ op: "put", run: finished, expectedState: [...FINISHABLE_STATES] });
   // run-returned rides the TASK's stream. A DONE run advances nothing else — the

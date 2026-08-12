@@ -135,6 +135,13 @@ export interface RunRecord {
   /** The agent session that claimed this run (captured at claim, the key to the
    *  transcript deep-dive — context ladder rung ⑤). Null until claimed. */
   sessionId?: string | null;
+  /** The HOST AGENT's own session id (e.g. Claude Code's session UUID), reported
+   *  at run-finish by the executing host. Distinct from `sessionId` (the kernel's
+   *  correlation key stamped at claim): this one names the agent's LOCAL
+   *  transcript, so a human can trace what the session actually did
+   *  (`find ~/.claude/projects -name '<id>.jsonl'`). Null when the host has no
+   *  such notion (replay shim, non-Claude agents until their adapters land). */
+  agentSessionId?: string | null;
   /** The finishing note the agent left when it returned the run. Null until finished. */
   note?: string | null;
 }
@@ -278,6 +285,8 @@ export interface RunFinishCommand {
   runId: string;
   outcome: "done" | "failed";
   note?: string;
+  /** The host agent's own session id (see RunRecord.agentSessionId). */
+  agentSessionId?: string;
 }
 
 export interface DeleteCommand {
