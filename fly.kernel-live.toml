@@ -30,6 +30,9 @@ primary_region = "nrt"
 
 [env]
   LOOPANY_DATA_DIR = "/data"
+  # Better Auth emits this origin in device-login approval URLs. Without it,
+  # the production endpoint advertises the local development fallback.
+  LOOPANY_BASE_URL = "https://loopany-kernel-live.fly.dev"
   PORT = "3000"
   # Embedded pglite on the MOUNTED volume - durable across restarts/deploys.
   LOOPANY_DB = "pglite"
