@@ -118,6 +118,33 @@ describe("timelineView", () => {
     expect(all.some((i) => i.runId === "run-noop" && i.kind === "mechanical")).toBe(true);
   });
 
+  it("keeps a substantive note-only run in the default timeline", () => {
+    let w = emptyWorld();
+    w = step(w, { op: "create", title: "provider balances", id: "balances" }, TIM, T0);
+    const AGENT: Provenance = { entrance: "agent-run", actorId: "run-diagnosis", sessionId: "claude-session" };
+    w = step(w, { op: "note", id: "balances", note: "seranking: RESOLVED - subscription renewed" }, AGENT, T1);
+    w = {
+      ...w,
+      snapshot: {
+        ...w.snapshot,
+        runs: [{
+          id: "run-diagnosis", taskId: "balances", cause: "assignment", scheduledAt: T1,
+          state: "done", assignee: "jason-mbp/claude", triggerId: null, createdAt: T1,
+          agentSessionId: "claude-native-session",
+        }],
+      },
+    };
+
+    const item = timelineView(w.snapshot, w.events, {}).find((i) => i.runId === "run-diagnosis");
+    expect(item).toMatchObject({
+      kind: "run-activity",
+      objectId: "balances",
+      summary: "seranking: RESOLVED - subscription renewed",
+      agent: "claude",
+      agentSessionId: "claude-native-session",
+    });
+  });
+
   it("since/task/actor filters narrow; limit bounds; completion and blocked notes surface", () => {
     let w = busyWorld();
     // A closed-goal completion + a dispatch-blocked clock note.

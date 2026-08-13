@@ -9,8 +9,8 @@
  *    (with their reply notes), human notes, observations, Doc/Mirror artifacts,
  *    reference changes, FAILED runs, dispatch-blocked/config conditions.
  *  - hidden by default (--all reveals): run-started, claim-only status flips,
- *    ordinary successful run-returned, trigger cursor changes, and note-only
- *    agent passes (the repeated "nothing actionable" checks).
+ *    ordinary successful run-returned, trigger cursor changes, and explicitly
+ *    no-op note-only agent passes (the repeated "nothing actionable" checks).
  *
  * COLLAPSE: every event an agent RUN wrote (provenance agent-run, actorId =
  * runId) folds into ONE item summarizing the pass - a run that creates a doc,
@@ -79,6 +79,10 @@ export interface TimelineOptions {
 }
 
 const SUMMARY_CLIP = 140;
+
+function isExplicitNoopNote(note: string): boolean {
+  return note.toLowerCase().includes("nothing actionable");
+}
 
 function clip(s: string): string {
   return s.length <= SUMMARY_CLIP ? s : `${s.slice(0, SUMMARY_CLIP - 1)}…`;
@@ -236,8 +240,13 @@ function collapseRun(
       ...(run?.agentSessionId ? { agentSessionId: run.agentSessionId } : {}),
     };
   }
-  if (bits.length === 0) return null; // start + claim + ordinary return (or note-only no-op)
-  if (lastNote) bits.push(lastNote);
+  // A substantive note is the result of a note-only pass. Historically every
+  // note-only run fell through as mechanical, which hid real diagnoses such as
+  // "provider subscription renewed" from the default team timeline. Preserve
+  // the deliberate noise filter only for an explicitly stated no-op.
+  if (bits.length === 0 && lastNote && !isExplicitNoopNote(lastNote)) bits.push(lastNote);
+  if (bits.length === 0) return null; // start + claim + ordinary return, or explicit no-op
+  else if (lastNote && bits[bits.length - 1] !== lastNote) bits.push(lastNote);
 
   return {
     at: last.at,
