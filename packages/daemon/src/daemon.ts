@@ -25,6 +25,7 @@ import { WatchManager, type WatchSpec } from "./watcher.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion, writeRunningVersion } from "./version.js";
 import { startMoonlight } from "./moonlight.js";
+import { classifyPollFailure, PollHealth } from "./poll-health.js";
 
 const POLL_MS = Number(process.env.LOOPANY_POLL_MS || 3000);
 /** Per-poll fetch timeout — a hung connection must not stall the heartbeat
@@ -167,6 +168,7 @@ export async function runDaemon(): Promise<number> {
   // Last watch digest the server sent (echoed on the next poll so an unchanged
   // watch set is omitted from the response — old servers never send one).
   let watchDigest: string | undefined;
+  const pollHealth = new PollHealth(logger);
 
   while (!ac.signal.aborted) {
     const started = Date.now();
@@ -182,6 +184,9 @@ export async function runDaemon(): Promise<number> {
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
         const data = (await res.json()) as { deliveries?: Delivery[]; kernelRuns?: KernelRunDelivery[]; watch?: WatchSpec[]; watchDigest?: string };
+        // A 2xx transport response is not recovery until its payload is usable.
+        // In particular, a proxy-generated/truncated body must remain degraded.
+        pollHealth.success(Date.now() - started);
         // Reconcile the loop-folder watchers against the server's current set.
         // An ABSENT `watch` means "unchanged since the digest you echoed" (the
         // server omits it only after a matching echo) — never an empty set.
@@ -204,11 +209,11 @@ export async function runDaemon(): Promise<number> {
         // same dispatch the simulator's remote driver runs - anti-drift).
         kernelLifecycle.dispatch(data.kernelRuns);
       } else {
-        logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
+        pollHealth.failure({ kind: "http", detail: res.statusText || `HTTP ${res.status}`, status: res.status }, Date.now() - started);
       }
     } catch (err) {
       if (!ac.signal.aborted) {
-        logger.error({ err: err instanceof Error ? err.message : String(err) }, "poll failed");
+        pollHealth.failure(classifyPollFailure(err), Date.now() - started);
       }
     }
     await sleep(nextPollDelayMs(Date.now() - started), ac.signal);

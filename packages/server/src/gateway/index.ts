@@ -722,6 +722,8 @@ export class MachineGateway {
     if (!opts?.wait) return this.poll(deviceToken, info, progress, opts?.watchDigest);
     const machineId = machineIdFromToken(deviceToken);
     const waitMs = Math.min(Math.max(opts.waitMs ?? LONG_POLL_WAIT_MS, 0), LONG_POLL_WAIT_MS);
+    const started = Date.now();
+    let outcome: "immediate" | "timeout" | "woken" | "rejected" = "rejected";
     const waiter = this.armPollWaiter(machineId, waitMs);
     try {
       const first = await this.poll(deviceToken, info, progress, opts.watchDigest);
@@ -732,18 +734,30 @@ export class MachineGateway {
       // claimed delivery outright (only the orphan reconcile would ever settle
       // it, as a failure). Return the instant either kind of work exists.
       const firstBody = first.body as { deliveries: Delivery[]; kernelRuns?: unknown[] };
-      if (firstBody.deliveries.length || firstBody.kernelRuns?.length) return first;
+      if (firstBody.deliveries.length || firstBody.kernelRuns?.length) {
+        outcome = "immediate";
+        return first;
+      }
       const woken = await waiter.promise;
       if (!woken) {
         // Timed out empty: re-stamp before returning so the ~20s hold never eats
         // into the 30s ONLINE_TTL budget (the first pass's stamp is now that old).
         await store.setMachineOnline(machineId, true);
+        outcome = "timeout";
         return first;
       }
       // Woken: re-run the claim pass (identity/progress were already applied).
-      return await this.poll(deviceToken, undefined, undefined, opts.watchDigest);
+      const result = await this.poll(deviceToken, undefined, undefined, opts.watchDigest);
+      outcome = result.status === 200 ? "woken" : "rejected";
+      return result;
     } finally {
       waiter.cancel();
+      // Empty timeouts are the healthy steady state and would emit one line per
+      // machine every hold window. Log only actionable completions. The short
+      // opaque ref correlates one machine without exposing its token or host.
+      if (outcome !== "timeout") {
+        log.debug({ machineRef: machineId.slice(-8), outcome, elapsedMs: Date.now() - started, waitMs }, "machine long-poll completed");
+      }
     }
   }
 
