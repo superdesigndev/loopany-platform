@@ -17,7 +17,7 @@ const deps: CliDeps = {
 describe("per-command help", () => {
   const topLevel = [
     "init", "register", "unregister", "connect", "create", "update", "note",
-    "doc", "mirror", "show", "list", "ls", "search", "inbox", "loops", "timeline",
+    "doc", "mirror", "workflow", "show", "list", "ls", "search", "inbox", "loops", "timeline",
     "kanban", "run", "tick",
   ];
 
@@ -33,6 +33,10 @@ describe("per-command help", () => {
     ["doc", "list"],
     ["mirror", "add"],
     ["mirror", "list"],
+    ["workflow", "show"],
+    ["workflow", "set"],
+    ["workflow", "clear"],
+    ["workflow", "validate"],
   ])("%s %s --help is specific to the nested command", (verb, sub) => {
     const out = run([verb, sub, "--help"], deps);
     expect(out.exitCode).toBe(0);

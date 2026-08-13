@@ -16,6 +16,7 @@ import {
   type KernelObject,
   type TaskStatus,
   TASK_STATUSES,
+  validateWorkflowDefinition,
 } from "@loopany/kernel";
 import {
   ArtifactFormatError,
@@ -52,6 +53,7 @@ const TASK_KEYS = [
   "owner",
   "workdir",
   "goal",
+  "workflow",
   "version",
   "createdAt",
   "updatedAt",
@@ -120,6 +122,14 @@ function reqStringArray(fm: ArtifactFrontMatter, key: string): string[] {
   return [...(v as string[])];
 }
 
+function optWorkflow(fm: ArtifactFrontMatter): Extract<KernelObject, { archetype: "task" }>["workflow"] {
+  const value = fm.workflow;
+  if (value === null || value === undefined) return null;
+  const checked = validateWorkflowDefinition(value);
+  if (!checked.ok) throw new CodecError(`object field "workflow" is invalid: ${checked.message}`);
+  return checked.value;
+}
+
 /** Validate a status field against the kernel's closed status set. A workspace
  *  file hand-edited to `status: banana` must be refused as corrupt, never cast
  *  blindly to TaskStatus and loaded (C6). */
@@ -169,6 +179,7 @@ export function documentToObject(doc: ArtifactDocument): KernelObject {
       owner: optString(fm, "owner"),
       workdir: optString(fm, "workdir"),
       goal: optString(fm, "goal"),
+      workflow: optWorkflow(fm),
       body: doc.body,
       version: reqNumber(fm, "version"),
       createdAt: reqString(fm, "createdAt"),

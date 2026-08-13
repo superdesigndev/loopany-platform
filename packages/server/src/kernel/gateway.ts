@@ -262,7 +262,10 @@ export async function kernelCli(
   // never second-guessed.
   let command = req.command;
   if (scope.run && isRecord(command) && command.op === "run-finish" && command.outcome === "done") {
-    if (!(await runProducedEvidence(teamId, scope.run.runId))) {
+    const workflowOnly =
+      isRecord(command.workflow) &&
+      (command.workflow.outcome === "silent" || command.workflow.outcome === "direct");
+    if (!workflowOnly && !(await runProducedEvidence(teamId, scope.run.runId))) {
       command = {
         ...command,
         outcome: "failed",

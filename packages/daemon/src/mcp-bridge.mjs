@@ -39,7 +39,7 @@ const num = (name, fallback) => {
 export const argsCap = () => num("LOOPANY_WORKFLOW_TOOL_ARGS_CAP", 16 * 1024);
 /** Max chars of tool result text/data returned into the sandbox (default 256KB). */
 export const resultCap = () => num("LOOPANY_WORKFLOW_TOOL_RESULT_CAP", 256 * 1024);
-/** Per-call wall-clock timeout in ms (default 30s, mirrors the workflow timeout). */
+/** Per-call wall-clock timeout in ms (default 30s, independently bounded inside the 180s workflow budget). */
 export const callTimeoutMs = () => num("LOOPANY_WORKFLOW_TOOL_TIMEOUT_SECONDS", 30) * 1000;
 
 /** Split "server.tool" on the FIRST dot (a tool name may itself contain dots). */

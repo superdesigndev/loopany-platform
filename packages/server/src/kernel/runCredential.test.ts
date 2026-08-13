@@ -206,6 +206,42 @@ test("POSTCONDITION: a zero-evidence run-finish(done) settles as FAILED", async 
   expect(run?.note ?? "").toContain("postcondition");
 });
 
+test("POSTCONDITION: a successful workflow-only Run is valid evidence", async () => {
+  const { teamId, runId, rk } = await deliveredRun("bet-workflow-silent");
+  const res = await kgateway.kernelCli(rk, {
+    command: {
+      op: "run-finish",
+      runId,
+      outcome: "done",
+      note: "workflow completed (silent)",
+      workflow: { format: "loopany-js-v1", outcome: "silent", state: { cursor: 4 } },
+    },
+  });
+  expect(res.status).toBe(200);
+  expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)).toMatchObject({
+    state: "done",
+    workflow: { format: "loopany-js-v1", outcome: "silent", state: { cursor: 4 } },
+  });
+});
+
+test("an agent-run credential may edit workflow through the ordinary update surface", async () => {
+  const { teamId, rk } = await deliveredRun("bet-workflow-edit");
+  const task = (await kstore.readSnapshot(teamId)).objects["bet-workflow-edit"];
+  if (!task || task.archetype !== "task") throw new Error("missing task");
+  const res = await kgateway.kernelCli(rk, {
+    command: {
+      op: "update",
+      id: task.id,
+      patch: { workflow: { format: "loopany-js-v1", source: "return { state: { cursor: 1 } };" } },
+      ifVersion: task.version,
+    },
+  });
+  expect(res.status).toBe(200);
+  expect((await kstore.readSnapshot(teamId)).objects[task.id]).toMatchObject({
+    workflow: { format: "loopany-js-v1" },
+  });
+});
+
 test("POSTCONDITION: an explicit no-op note is honest evidence - done stands", async () => {
   const { teamId, runId, rk } = await deliveredRun("bet-noop");
   await kgateway.kernelCli(rk, {

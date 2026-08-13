@@ -16,6 +16,7 @@ let db: typeof import("../db/index.js");
 let store: typeof import("../db/store.js");
 let kstore: typeof import("./store.js");
 let sweep: typeof import("./sweep.js");
+let kgateway: typeof import("./gateway.js");
 let tokens: typeof import("../gateway/tokens.js");
 let gatewayMod: typeof import("../gateway/index.js");
 
@@ -33,6 +34,7 @@ beforeAll(async () => {
   store = await import("../db/store.js");
   kstore = await import("./store.js");
   sweep = await import("./sweep.js");
+  kgateway = await import("./gateway.js");
   tokens = await import("../gateway/tokens.js");
   gatewayMod = await import("../gateway/index.js");
 });
@@ -75,6 +77,7 @@ async function seedLoop(teamId: string, assignee = "mbp/claude") {
       assignee,
       workdir: "/Users/u1/work/superdesign",
       owner: "u1@x.co",
+      workflow: { format: "loopany-js-v1", source: "return { state: { cursor: (prev?.cursor ?? 0) + 1 } };" },
     },
     await kstore.readSnapshot(teamId),
     OWNER,
@@ -110,6 +113,8 @@ test("a pending kernel run rides the poll as a claimed kernelRuns delivery, exac
   expect(kr.taskId).toBe("seo-bet-manager");
   expect(kr.agent).toBe("claude");
   expect(kr.workdir).toBe("/Users/u1/work/superdesign");
+  expect(kr.workflow).toMatchObject({ format: "loopany-js-v1" });
+  expect(kr.prevWorkflowState).toBeNull();
   expect(String(kr.runToken)).toMatch(/^rk_/);
   // The server-built CORE prompt is the agent's whole first user turn.
   expect(String(kr.prompt)).toContain("[loop run · seo bet manager]");
@@ -126,6 +131,22 @@ test("a pending kernel run rides the poll as a claimed kernelRuns delivery, exac
   // Second poll: nothing pending anymore - no duplicate delivery.
   const res2 = await gw.poll(deviceToken, { host: "mbp.local", alias: "mbp" });
   expect((res2.body as { kernelRuns?: unknown[] }).kernelRuns).toBeUndefined();
+
+  // A successful workflow cursor lives on this Run. The following cron fire
+  // derives it from history and receives it without mutating Task config.
+  const finished = await kgateway.kernelCli(String(kr.runToken), {
+    command: {
+      op: "run-finish",
+      runId: String(kr.runId),
+      outcome: "done",
+      workflow: { format: "loopany-js-v1", outcome: "silent", state: { cursor: 1 } },
+    },
+  });
+  expect(finished.status).toBe(200);
+  await sweep.kernelSweep("2026-09-14T07:00:01.000Z", () => {});
+  const next = await gw.poll(deviceToken, { host: "mbp.local", alias: "mbp" });
+  const nextRun = (next.body as { kernelRuns?: Array<Record<string, unknown>> }).kernelRuns?.[0];
+  expect(nextRun?.prevWorkflowState).toEqual({ cursor: 1 });
 });
 
 test("pollWait returns a claimed kernel run IMMEDIATELY - never parks it behind the long-poll hold", async () => {

@@ -65,7 +65,8 @@ export interface WorkflowRun {
   stderr: string;
 }
 
-const TIMEOUT_MS = (Number(process.env.LOOPANY_WORKFLOW_TIMEOUT_SECONDS) || 30) * 1000;
+export const DEFAULT_WORKFLOW_TIMEOUT_SECONDS = 180;
+const TIMEOUT_MS = (Number(process.env.LOOPANY_WORKFLOW_TIMEOUT_SECONDS) || DEFAULT_WORKFLOW_TIMEOUT_SECONDS) * 1000;
 
 function buildWrapper(body: string, prevState: unknown): string {
   const prevLiteral = JSON.stringify(JSON.stringify(prevState ?? null));

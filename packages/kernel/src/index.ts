@@ -8,6 +8,12 @@
  */
 export * from "./types.js";
 export { decide, EDITABLE_TASK_FIELDS, isPersonAssignee, isDispatchable, activeRun } from "./decide.js";
+export {
+  LOOPANY_WORKFLOW_FORMAT,
+  WORKFLOW_SOURCE_MAX_BYTES,
+  validateWorkflowDefinition,
+  type WorkflowValidation,
+} from "./workflow.js";
 export { tick, type TickResult } from "./tick.js";
 export {
   applyChangeset,

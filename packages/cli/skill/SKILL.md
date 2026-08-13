@@ -27,6 +27,13 @@ Run. The assigned agent performs one bounded pass, updates durable state, and
 stops. Nothing found is a valid result. Never manufacture activity to make a
 Loop appear productive.
 
+A Loop may use a Workflow to preserve repeatable monitoring logic as code and
+carry state between Runs. Put stable fetching, filtering, and checks there so
+they run programmatically without spending an agent turn; involve the agent only
+when observation, judgment, or correction is needed. This saves tokens without
+giving up agent oversight or failure recovery. When creating, editing, or
+diagnosing one, read [references/workflow.md](references/workflow.md).
+
 ### Run
 
 A Run is one execution of a Task by its assigned agent. It is bounded, not a

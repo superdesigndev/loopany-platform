@@ -64,6 +64,7 @@ function fieldLines(obj: KernelObject): string[] {
       ...(t.tracks ? [`  tracks: ${t.tracks}`] : []),
       ...(t.followUpAt ? [`  follow-up: ${formatLocalTime(t.followUpAt)}`] : []),
       ...(t.goal != null ? [`  goal: ${t.goal}`] : []),
+      ...(t.workflow ? [`  workflow: ${t.workflow.format}`] : []),
     ];
     if (metadata.length > 0) lines.push("", "details:", ...metadata);
     return lines;
@@ -240,7 +241,8 @@ export function renderTriggerLine(t: Trigger): string {
 }
 
 export function renderRunLine(r: RunRecord): string {
-  return `run ${r.id}: ${r.cause} ${r.state} @${formatLocalTime(r.scheduledAt)} -> ${r.assignee ?? "—"}`;
+  const workflow = r.workflow ? ` workflow=${r.workflow.outcome}` : "";
+  return `run ${r.id}: ${r.cause} ${r.state}${workflow} @${formatLocalTime(r.scheduledAt)} -> ${r.assignee ?? "—"}`;
 }
 
 /** The host agent's own session, with a COPYABLE trace command when its local

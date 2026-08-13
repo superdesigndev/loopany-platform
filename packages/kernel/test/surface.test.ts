@@ -9,12 +9,14 @@ import * as kernel from "../src/index.js";
 const EXPECTED = [
   "ACTIVE_RUN_STATES",
   "EDITABLE_TASK_FIELDS",
+  "LOOPANY_WORKFLOW_FORMAT",
   "MIRROR_KINDS",
   "REFUSAL_CODES",
   "TASK_PRIORITIES",
   "TASK_STATUSES",
   "TASK_TYPES",
   "TERMINAL_STATUSES",
+  "WORKFLOW_SOURCE_MAX_BYTES",
   "activeRun",
   "applyChangeset",
   "applyToWorld",
@@ -56,6 +58,9 @@ const EXPECTED = [
   // shared derivation for CLI + server endpoint + future web surfaces.
   "timelineView",
   "treeView",
+  // validateWorkflowDefinition: one compile-only validator shared by every
+  // loopany-js-v1 write surface; it never executes source.
+  "validateWorkflowDefinition",
 ].sort();
 
 describe("public surface", () => {

@@ -26,6 +26,26 @@ import { logger } from "./logger.js";
 import { isWithinRoots } from "./roots.js";
 import { buildAgentSpawn } from "./runner.js";
 import { execEnv, runProcess } from "./spawn.js";
+import { runWorkflow, type WorkflowRun } from "./workflow.js";
+
+interface WorkflowDefinition {
+  format: "loopany-js-v1";
+  source: string;
+}
+
+interface WorkflowRunResult {
+  format: "loopany-js-v1";
+  outcome: "silent" | "direct" | "escalated" | "failed";
+  state?: unknown;
+  message?: string;
+}
+
+const WORKFLOW_FAILURE_SOURCE_CAP = 16 * 1024;
+const WORKFLOW_SIGNAL_CAP = 32 * 1024;
+
+function boundedText(value: string, cap: number): string {
+  return value.length <= cap ? value : `${value.slice(0, cap)}\n...[truncated]`;
+}
 
 /** What the poll body's `kernelRuns` field carries (server kernel/dispatch.ts). */
 export interface KernelRunDelivery {
@@ -35,6 +55,8 @@ export interface KernelRunDelivery {
   prompt: string;
   workdir: string | null;
   agent: string;
+  workflow?: WorkflowDefinition | null;
+  prevWorkflowState?: unknown;
 }
 
 /** Map the assignee's agent segment onto the daemon's executor enum. `claude`
@@ -80,6 +102,7 @@ export interface KernelRunDeps {
   /** A directory holding a `loopany-kernel` shim to PREPEND to the child PATH
    *  (null = none found; the agent then relies on a global install). */
   kernelBinDir: () => string | null;
+  runWorkflow: (source: string, prev: unknown, cwd: string, signal?: AbortSignal) => Promise<WorkflowRun>;
 }
 
 /** Locate the kernel CLI entry this daemon can hand its agents: the bundled
@@ -154,6 +177,7 @@ export const realKernelRunDeps: KernelRunDeps = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   scratchDir: () => mkdtempSync(join(tmpdir(), "loopany-kernel-run-")),
   kernelBinDir: ensureKernelBinDir,
+  runWorkflow,
 };
 
 /** Finish-POST retry ladder (~8.5 min total). Losing the final report is what
@@ -177,7 +201,12 @@ export async function runKernelDelivery(
   signal?: AbortSignal,
   deps: KernelRunDeps = realKernelRunDeps,
 ): Promise<void> {
-  const finish = async (outcome: "done" | "failed", note: string, agentSessionId?: string | null) => {
+  const finish = async (
+    outcome: "done" | "failed",
+    note: string,
+    agentSessionId?: string | null,
+    workflow?: WorkflowRunResult,
+  ) => {
     const body = {
       command: {
         op: "run-finish",
@@ -185,6 +214,7 @@ export async function runKernelDelivery(
         outcome,
         note,
         ...(agentSessionId ? { agentSessionId } : {}),
+        ...(workflow ? { workflow } : {}),
       },
     };
     for (let attempt = 0; ; attempt++) {
@@ -231,7 +261,51 @@ export async function runKernelDelivery(
     cwd = deps.scratchDir();
   }
 
-  const { bin, args } = buildAgentSpawn({ agent, prompt: kr.prompt });
+  // Deterministic pre-stage (`loopany-js-v1`). It may finish this Run without
+  // an Agent, or collect one or more signals that are folded into the existing
+  // CORE prompt before the Task's addressed Agent starts. A failure preserves
+  // the old production behavior: fall back to the Agent with bounded diagnostic
+  // context, while the failed workflow never advances its cursor.
+  let workflowResult: WorkflowRunResult | undefined;
+  let prompt = kr.prompt;
+  if (kr.workflow) {
+    if (kr.workflow.format !== "loopany-js-v1") {
+      await finish("failed", `unsupported workflow format: ${String(kr.workflow.format)}`, null, {
+        format: "loopany-js-v1",
+        outcome: "failed",
+      });
+      return;
+    }
+    const wf = await deps.runWorkflow(kr.workflow.source, kr.prevWorkflowState ?? null, cwd, signal);
+    if (!wf.ok) {
+      const detail = [wf.error, wf.stderr.trim().slice(-1200)].filter(Boolean).join("\n");
+      workflowResult = { format: "loopany-js-v1", outcome: "failed", message: detail };
+      const source = boundedText(kr.workflow.source, WORKFLOW_FAILURE_SOURCE_CAP);
+      prompt = `${kr.prompt}\n\nWorkflow pre-stage failed. Complete the original Task, then diagnose this failure. Do not claim the workflow cursor advanced.\n\nError:\n${detail}\n\nWorkflow source:\n\`\`\`js\n${source}\n\`\`\``;
+    } else {
+      const result = wf.result!;
+      const base = {
+        format: "loopany-js-v1" as const,
+        ...(Object.prototype.hasOwnProperty.call(result, "state") ? { state: result.state } : {}),
+        ...(result.message ? { message: result.message } : {}),
+      };
+      if (result.agentCalls.length === 0) {
+        const outcome = result.message ? "direct" : "silent";
+        await finish("done", result.message ?? `workflow completed (${outcome})`, null, { ...base, outcome });
+        return;
+      }
+      workflowResult = { ...base, outcome: "escalated" };
+      const signals = result.agentCalls
+        .map((call, index) => {
+          const data = call.data === undefined ? "" : `\n${JSON.stringify(call.data, null, 2)}`;
+          return `${index + 1}. ${call.message ?? "Workflow requested Agent judgment."}${data}`;
+        })
+        .join("\n\n");
+      prompt = `${kr.prompt}\n\nWorkflow signal:\n${boundedText(signals, WORKFLOW_SIGNAL_CAP)}`;
+    }
+  }
+
+  const { bin, args } = buildAgentSpawn({ agent, prompt });
   const env: NodeJS.ProcessEnv = {
     ...execEnv(agent),
     ...(deps.agentEnv ?? {}),
@@ -264,7 +338,7 @@ export async function runKernelDelivery(
       agentSessionId = res.agentSessionId ?? agentSessionId;
     }
   } catch (err) {
-    await finish("failed", `agent spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+    await finish("failed", `agent spawn failed: ${err instanceof Error ? err.message : String(err)}`, null, workflowResult);
     return;
   }
 
@@ -272,5 +346,6 @@ export async function runKernelDelivery(
     code === 0 ? "done" : "failed",
     code === 0 ? "agent run completed (exit 0)" : `agent run failed (exit ${code}, incl. one retry)`,
     agentSessionId,
+    workflowResult,
   );
 }

@@ -5,6 +5,8 @@
  * immediate retry, and the agent-segment mapping.
  */
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   agentSessionIdFromText,
@@ -15,6 +17,7 @@ import {
   type KernelRunDelivery,
   type KernelRunDeps,
 } from "./kernel-run.js";
+import { runWorkflow } from "./workflow.js";
 
 test("host session ids are treated as opaque provider values", () => {
   expect(agentSessionIdFromText('{"type":"system","session_id":"sess-claude_01"}')).toBe("sess-claude_01");
@@ -55,6 +58,7 @@ function deps(over: Partial<KernelRunDeps> & { codes?: Array<number | null>; fin
     },
     scratchDir: () => "/tmp/scratch",
     kernelBinDir: over.kernelBinDir ?? (() => "/shim/kernel-bin"),
+    runWorkflow: over.runWorkflow ?? (async () => ({ ok: true, result: { agentCalls: [] }, stdout: "", stderr: "" })),
   };
   return { d, spawns, finishes, sleeps };
 }
@@ -75,6 +79,76 @@ test("a run executes in its workdir with the in-run env contract, then reports d
   expect(finishes).toHaveLength(1);
   expect(finishes[0]).toMatchObject({ url: "https://srv.example", token: "rk_test" });
   expect(JSON.stringify(finishes[0]!.body)).toContain('"outcome":"done"');
+});
+
+test("a silent workflow completes the same Run without spawning an Agent", async () => {
+  const { d, spawns, finishes } = deps({
+    runWorkflow: async (_source, prev) => ({
+      ok: true,
+      result: { state: { previous: prev, cursor: 3 }, agentCalls: [] },
+      stdout: "",
+      stderr: "",
+    }),
+  });
+  await runKernelDelivery({
+    ...KR,
+    workflow: { format: "loopany-js-v1", source: "return { state: { cursor: 3 } };" },
+    prevWorkflowState: { cursor: 2 },
+  }, "https://srv.example", [], undefined, d);
+  expect(spawns).toHaveLength(0);
+  expect(finishes[0]!.body).toMatchObject({ command: { outcome: "done", workflow: { outcome: "silent", state: { previous: { cursor: 2 }, cursor: 3 } } } });
+});
+
+test("a real workflow subprocess receives prev and completes without spawning an Agent", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-kernel-workflow-"));
+  try {
+    const { d, spawns, finishes } = deps({ isDirectory: (candidate) => candidate === cwd, runWorkflow });
+    await runKernelDelivery({
+      ...KR,
+      workdir: cwd,
+      workflow: {
+        format: "loopany-js-v1",
+        source: "return { message: `cursor ${prev.cursor + 1}`, state: { cursor: prev.cursor + 1 } };",
+      },
+      prevWorkflowState: { cursor: 4 },
+    }, "https://srv.example", [], undefined, d);
+
+    expect(spawns).toHaveLength(0);
+    expect(finishes[0]!.body).toMatchObject({
+      command: {
+        outcome: "done",
+        workflow: { outcome: "direct", message: "cursor 5", state: { cursor: 5 } },
+      },
+    });
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("an escalated workflow folds its signal into the CORE prompt and advances state", async () => {
+  const { d, spawns, finishes } = deps({
+    runWorkflow: async () => ({
+      ok: true,
+      result: { state: { cursor: 4 }, agentCalls: [{ message: "Review anomaly", data: { count: 7 } }] },
+      stdout: "",
+      stderr: "",
+    }),
+  });
+  await runKernelDelivery({ ...KR, workflow: { format: "loopany-js-v1", source: "agent('x')" } }, "https://srv.example", [], undefined, d);
+  expect(spawns).toHaveLength(1);
+  expect(spawns[0]!.args.join(" ")).toContain("Workflow signal");
+  expect(spawns[0]!.args.join(" ")).toContain("Review anomaly");
+  expect(finishes[0]!.body).toMatchObject({ command: { workflow: { outcome: "escalated", state: { cursor: 4 } } } });
+});
+
+test("a failed workflow falls back to the Agent without advancing state", async () => {
+  const { d, spawns, finishes } = deps({
+    runWorkflow: async () => ({ ok: false, error: "workflow exited with code 1", stdout: "", stderr: "boom" }),
+  });
+  await runKernelDelivery({ ...KR, workflow: { format: "loopany-js-v1", source: "throw new Error('boom')" } }, "https://srv.example", [], undefined, d);
+  expect(spawns[0]!.args.join(" ")).toContain("Workflow pre-stage failed");
+  expect(finishes[0]!.body).toMatchObject({ command: { outcome: "done", workflow: { outcome: "failed" } } });
+  expect(JSON.stringify(finishes[0]!.body)).not.toContain('"state"');
 });
 
 test("the agent's OWN session id rides run-finish; the retry's session wins (fresh transcript)", async () => {

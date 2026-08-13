@@ -31,6 +31,7 @@ import {
   sortTasksForList,
   taskDetailView,
   treeView,
+  validateWorkflowDefinition,
 } from "@loopany/kernel";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -698,6 +699,56 @@ function verbMirror(args: ParsedArgs, deps: CliDeps): CliOutcome {
   );
 }
 
+function workflowSource(args: ParsedArgs, deps: CliDeps): { format: "loopany-js-v1"; source: string } {
+  const file = args.flags.file;
+  if (!file) throw new UsageError("workflow requires --file <workflow.js>");
+  let source: string;
+  try {
+    source = readFileSync(resolve(deps.cwd, file), "utf8");
+  } catch (error) {
+    throw new UsageError(`cannot read workflow file "${file}": ${(error as Error).message}`);
+  }
+  const checked = validateWorkflowDefinition({ format: "loopany-js-v1", source });
+  if (!checked.ok) throw new UsageError(checked.message);
+  return checked.value;
+}
+
+/** Versioned executable Task configuration. This deliberately compiles down to
+ * the ordinary update command: human sessions and agent-run credentials share
+ * the current team-scoped write model and the Kernel keeps one CAS/event path. */
+function verbWorkflow(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const sub = args.positionals[0];
+  if (sub === "validate") {
+    const workflow = workflowSource(args, deps);
+    return args.bools.has("json")
+      ? ok(JSON.stringify({ ok: true, format: workflow.format, bytes: new TextEncoder().encode(workflow.source).byteLength }, null, 2))
+      : ok(`valid workflow (${workflow.format}, ${new TextEncoder().encode(workflow.source).byteLength} bytes)`);
+  }
+  if (sub !== "show" && sub !== "set" && sub !== "clear") {
+    throw new UsageError('workflow supports "show", "set", "clear", and "validate"');
+  }
+  const id = args.positionals[1];
+  if (!id) throw new UsageError(`workflow ${sub} needs a <task>`);
+  const backend = backendFor(deps, args);
+  if (sub === "show") {
+    const object = backend.snapshot().objects[id];
+    if (!object) throw new DriverError("UNKNOWN_OBJECT", `no task "${id}"`);
+    if (object.archetype !== "task") throw new DriverError("UNKNOWN_OBJECT", `"${id}" is a ${object.archetype}; workflows belong to tasks`);
+    const workflow = object.workflow ?? null;
+    if (args.bools.has("json")) return ok(JSON.stringify({ taskId: id, workflow }, null, 2));
+    return workflow ? ok(`workflow ${id}  [${workflow.format}]\n\n${workflow.source}`) : ok(`workflow ${id}: —`);
+  }
+  const rawVersion = args.flags["if-version"];
+  if (rawVersion === undefined) throw new UsageError(`workflow ${sub} requires --if-version <n>`);
+  const workflow = sub === "set" ? workflowSource(args, deps) : null;
+  return execWrite(
+    backend,
+    { op: "update", id, patch: { workflow }, ifVersion: parseIfVersion(rawVersion) },
+    args,
+    deps,
+  );
+}
+
 // ---- reads ----
 
 function verbShow(args: ParsedArgs, deps: CliDeps): CliOutcome {
@@ -835,16 +886,20 @@ function tasksOf(snapshot: Snapshot): TaskObject[] {
 /** Compact JSON collection record. Preserve the legacy shape while omitting
  * the potentially unbounded curated body. Its exact UTF-8 size and full-read
  * command make the omission explicit and actionable. */
-function taskForCollection(task: TaskObject, full: boolean): TaskObject | (Omit<TaskObject, "body"> & {
-  bodyBytes: number;
-  bodyCommand: string;
-}) {
+function taskForCollection(task: TaskObject, full: boolean): unknown {
   if (full) return task;
-  const { body, ...metadata } = task;
+  const { body, workflow, ...metadata } = task;
   return {
     ...metadata,
     bodyBytes: Buffer.byteLength(body, "utf8"),
     bodyCommand: `loopany-kernel show ${task.id} --json`,
+    workflow: workflow
+      ? {
+          format: workflow.format,
+          sourceBytes: Buffer.byteLength(workflow.source, "utf8"),
+          sourceCommand: `loopany-kernel workflow show ${task.id} --json`,
+        }
+      : null,
   };
 }
 
@@ -1131,6 +1186,8 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
         return verbDoc(args, deps);
       case "mirror":
         return verbMirror(args, deps);
+      case "workflow":
+        return verbWorkflow(args, deps);
       case "show":
         return verbShow(args, deps);
       case "list":
@@ -1238,6 +1295,10 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   "doc:list": ["json", "remote", "full"],
   "mirror:add": ["task", ...WRITE_AUDIT_FLAGS],
   "mirror:list": ["json", "remote"],
+  "workflow:show": ["json", "remote"],
+  "workflow:set": ["file", "if-version", ...WRITE_AUDIT_FLAGS],
+  "workflow:clear": ["if-version", ...WRITE_AUDIT_FLAGS],
+  "workflow:validate": ["file", "json"],
   show: ["limit", "all", "log", "json", "remote"],
   list: ["status", "assignee", "due", "tree", "all", "json", "full", "remote", "now"],
   search: ["json", "full", "remote"],
@@ -1254,7 +1315,7 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
  * more dangerous than an unknown flag because the caller may believe a safety
  * option such as --dry-run took effect. */
 function validateCommandFlags(verb: string, args: ParsedArgs): void {
-  const sub = (verb === "doc" || verb === "mirror") ? args.positionals[0] : undefined;
+  const sub = (verb === "doc" || verb === "mirror" || verb === "workflow") ? args.positionals[0] : undefined;
   const key = sub ? `${verb}:${sub}` : verb;
   if (sub && COMMAND_FLAGS[key] === undefined) return;
   const allowed = new Set(COMMAND_FLAGS[key] ?? []);
@@ -1271,13 +1332,15 @@ function validateCommandFlags(verb: string, args: ParsedArgs): void {
  * ignore them. A command line is an API request: extra input is usually a typo,
  * not harmless prose. */
 function validateCommandShape(verb: string, args: ParsedArgs): void {
-  const sub = (verb === "doc" || verb === "mirror") ? args.positionals[0] : undefined;
+  const sub = (verb === "doc" || verb === "mirror" || verb === "workflow") ? args.positionals[0] : undefined;
   const key = sub ? `${verb}:${sub}` : verb;
   const arity: Record<string, readonly [number, number]> = {
     home: [0, 0], init: [0, 0], register: [0, 0], unregister: [0, 0], connect: [0, 1],
     create: [1, 1], update: [1, 1], note: [1, 2],
     "doc:put": [2, 2], "doc:list": [1, 1],
     "mirror:add": [3, 3], "mirror:list": [1, 1],
+    "workflow:show": [2, 2], "workflow:set": [2, 2], "workflow:clear": [2, 2],
+    "workflow:validate": [1, 1],
     show: [1, 1], list: [0, 0], search: [1, 1], inbox: [0, 0],
     loops: [0, 0], timeline: [0, 0], kanban: [0, 0], run: [1, 1], tick: [0, 0],
   };
@@ -1367,6 +1430,7 @@ write  (all accept --dry-run)
   note <id> "<text>"
   doc put <key> [--file f.md]       # doc --help for the full doc surface
   mirror add <kind> <coords>        # mirror --help for the full mirror surface
+  workflow show|set|clear|validate  # versioned deterministic pre-stage
 
 dispatch
   run <id>                         # the third dispatch entrance (a manual run)
@@ -1387,7 +1451,7 @@ const COMMON_HELP = `Common flags: --json --remote --actor <id> --session <id> -
 const VERB_ALIASES: Record<string, string> = { ls: "list" };
 const KNOWN_VERBS = new Set([
   "init", "register", "unregister", "connect", "create", "update", "note",
-  "doc", "mirror", "show", "list", "search", "inbox", "loops", "timeline",
+  "doc", "mirror", "workflow", "show", "list", "search", "inbox", "loops", "timeline",
   "kanban", "run", "tick",
 ]);
 
@@ -1449,6 +1513,19 @@ ${COMMON_HELP}`,
 
   mirror list [--json]
       one line per mirror: <id>  [<kind>]  <coords>`,
+  workflow: `workflow — a versioned deterministic pre-stage on a Task
+
+  workflow validate --file workflow.js [--json]
+      compile-check loopany-js-v1 without executing it.
+
+  workflow show <task> [--json]
+      print the active format and source.
+
+  workflow set <task> --file workflow.js --if-version N [--dry-run]
+      atomically install loopany-js-v1 source on the Task.
+
+  workflow clear <task> --if-version N [--dry-run]
+      remove the deterministic pre-stage.`,
   show: `usage: lk show <id> [--limit <n>] [--all] [--log] [--json]
 
 Show an object. Tasks include recent meaningful activity by default; --log
@@ -1511,6 +1588,19 @@ Record an immutable external pointer and optionally attach it to a task atomical
   "mirror list": `usage: lk mirror list [--json]
 
 List every external mirror pointer.`,
+  "workflow validate": `usage: lk workflow validate --file <workflow.js> [--json]
+
+Compile-check a loopany-js-v1 async function body without executing it.`,
+  "workflow show": `usage: lk workflow show <task> [--json]
+
+Show the Task's active workflow format and source.`,
+  "workflow set": `usage: lk workflow set <task> --file <workflow.js> --if-version <n>
+                          [--dry-run] [--json]
+
+Install a versioned deterministic pre-stage through the Task's normal CAS path.`,
+  "workflow clear": `usage: lk workflow clear <task> --if-version <n> [--dry-run] [--json]
+
+Remove the Task's deterministic pre-stage through the normal CAS path.`,
 };
 
 function helpFor(argv: readonly string[]): string | undefined {

@@ -120,6 +120,25 @@ lk inbox --assignee alice@superdesign.dev   # 某人的决策收件箱（附交�
 lk loops             # 所有 loop：下次触发、上次结果、卡住原因
 ```
 
+### 可选 Workflow 前置阶段
+
+Task 可以安装一个版本化的确定性前置脚本。目前唯一格式是 `loopany-js-v1`：脚本是
+async 函数体，可直接使用 `prev`、`agent(message, data)`、`tools.call(name, args)` 和
+`fetch`。没有调用 `agent()` 时本轮可以 silent/direct 完成；调用后信号会注入同一 Run
+的 CORE prompt，再启动 Task 的 assignee Agent；脚本失败则带诊断上下文回退给 Agent。
+
+```bash
+lk workflow validate --file workflow.js
+lk workflow set release-radar --file workflow.js --if-version 1
+lk workflow show release-radar
+lk workflow clear release-radar --if-version 2
+```
+
+成功返回的 `state` 记录在 Run 上，并作为下一轮的 `prev`。Workflow 是 Task 的可选
+执行配置，不是独立实体；set/clear 使用普通 Task update 的团队权限、CAS 和审计事件。
+整个 Workflow 默认最多运行 180 秒，可通过 daemon 的
+`LOOPANY_WORKFLOW_TIMEOUT_SECONDS` 调整；单次 `tools.call` 仍默认最多 30 秒。
+
 要点：
 
 - **task 的 body 就是 agent 的任务书**（`--body-file`），写清楚做什么、边界、怎样算完成。

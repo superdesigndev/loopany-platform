@@ -17,7 +17,7 @@
  * this machine.
  */
 import { buildCorePromptForRun, handbackReplyFor, wakeReasonFor } from "@loopany/cli";
-import { decide, type Provenance, type RunRecord, type TaskObject } from "@loopany/kernel";
+import { decide, type Provenance, type RunRecord, type TaskObject, type WorkflowDefinition } from "@loopany/kernel";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { kernelRuns } from "../db/schema.js";
@@ -43,6 +43,12 @@ export interface KernelRunDelivery {
   /** The assignee's agent segment (`claude` in `mbp/claude`) - the daemon maps
    *  it onto its own executor profile. */
   agent: string;
+  /** Versioned deterministic pre-stage. Null/absent Tasks follow the existing
+   * single-Agent path. */
+  workflow: WorkflowDefinition | null;
+  /** Cursor from the newest successful workflow Run that explicitly returned
+   * state. Derived from Run history, never duplicated on the Task. */
+  prevWorkflowState: unknown;
 }
 
 /** Pending kernel runs for one team - indexed columns only, data blob parsed
@@ -146,6 +152,17 @@ async function claimAndPackage(
     claimedTask as TaskObject,
     wakeReasonFor(claimedRun, claimedTask as TaskObject, handback),
   );
+  const previousWorkflowRun = [...snapshot.runs]
+    .filter(
+      (candidate) =>
+        candidate.taskId === run.taskId &&
+        candidate.id !== run.id &&
+        candidate.state === "done" &&
+        candidate.workflow?.format === "loopany-js-v1" &&
+        candidate.workflow.outcome !== "failed" &&
+        Object.prototype.hasOwnProperty.call(candidate.workflow, "state"),
+    )
+    .sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt))[0];
 
   // Mint the lease BEFORE the claim commits: a mint failure leaves the run
   // pending; a CAS loss below retires the orphan lease right away.
@@ -174,5 +191,7 @@ async function claimAndPackage(
     prompt,
     workdir: (claimedTask as TaskObject).workdir,
     agent,
+    workflow: (claimedTask as TaskObject).workflow ?? null,
+    prevWorkflowState: previousWorkflowRun?.workflow?.state ?? null,
   };
 }

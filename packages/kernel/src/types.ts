@@ -31,6 +31,27 @@ export function isTerminal(status: TaskStatus): boolean {
 export const TASK_TYPES = ["goal", "strategy", "experiment"] as const;
 export const TASK_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
 
+// ---- workflow execution config ----
+
+/** Versioned executable Task configuration. The format is explicit so a future
+ * runtime can coexist with the original Loopany protocol without reinterpreting
+ * stored source. This is a Task field, not a fifth Kernel entity. */
+export interface WorkflowDefinition {
+  format: "loopany-js-v1";
+  source: string;
+}
+
+export type WorkflowOutcome = "silent" | "direct" | "escalated" | "failed";
+
+export interface WorkflowRunResult {
+  format: WorkflowDefinition["format"];
+  outcome: WorkflowOutcome;
+  /** Cursor produced by a successful workflow and supplied to the next pass. */
+  state?: unknown;
+  /** Direct workflow message, bounded by the wire gateway like other notes. */
+  message?: string;
+}
+
 // ---- objects ----
 
 export interface TaskObject {
@@ -64,6 +85,10 @@ export interface TaskObject {
    *  note as evidence, and completion pauses its triggers (the existing
    *  terminal-status invariant). A goal is prose, never a separate entity. */
   goal: string | null;
+  /** Optional deterministic pre-stage executed by the addressed daemon before
+   * the Coding Agent. Optional for backward compatibility with stored v1 Tasks;
+   * newly-created Tasks write an explicit null. */
+  workflow?: WorkflowDefinition | null;
   /** Curated present (Spec / current understanding). */
   body: string;
   version: number;
@@ -144,6 +169,10 @@ export interface RunRecord {
   agentSessionId?: string | null;
   /** The finishing note the agent left when it returned the run. Null until finished. */
   note?: string | null;
+  /** Present when this Run executed a Task workflow. Kept on the Run so cursor
+   * history stays auditable; the next delivery derives prev from the newest
+   * successful result instead of maintaining a second Task-level truth. */
+  workflow?: WorkflowRunResult;
 }
 
 // ---- events (the past; Objects are authoritative, Events are the audit) ----
@@ -221,6 +250,7 @@ export interface CreateCommand {
   timezone?: string;
   followUpAt?: string;
   goal?: string;
+  workflow?: WorkflowDefinition;
 }
 
 export interface UpdateCommand {
@@ -300,6 +330,9 @@ export interface RunFinishCommand {
   note?: string;
   /** The host agent's own session id (see RunRecord.agentSessionId). */
   agentSessionId?: string;
+  /** Workflow execution result. A workflow-only silent/direct completion is
+   * valid evidence even when no Agent wrote another durable event. */
+  workflow?: WorkflowRunResult;
 }
 
 export interface DeleteCommand {

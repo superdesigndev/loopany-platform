@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { runWorkflow } from "./workflow.js";
+import { DEFAULT_WORKFLOW_TIMEOUT_SECONDS, runWorkflow } from "./workflow.js";
 
 let dir: string;
 let cwd: string;
@@ -35,6 +35,10 @@ afterEach(() => {
 });
 
 describe("existing sandbox contract stays green", () => {
+  test("the default workflow wall-clock budget is three minutes", () => {
+    expect(DEFAULT_WORKFLOW_TIMEOUT_SECONDS).toBe(180);
+  });
+
   test("pure workflow returns a direct message", async () => {
     const r = await runWorkflow(`return { message: "hi", state: { n: 1 } };`, null, cwd);
     expect(r.ok).toBe(true);

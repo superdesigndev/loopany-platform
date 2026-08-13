@@ -50,6 +50,7 @@ import {
   refuse,
 } from "./types.js";
 import { cronTriggerId, eventId, mirrorId, onceTriggerId, runId, slugify } from "./ids.js";
+import { validateWorkflowDefinition } from "./workflow.js";
 
 const PARENT_MAX_HOPS = 64;
 
@@ -68,6 +69,7 @@ export const EDITABLE_TASK_FIELDS = [
   "owner",
   "workdir",
   "goal",
+  "workflow",
   "cron",
   "timezone",
 ] as const;
@@ -104,8 +106,8 @@ type EditableField = (typeof EDITABLE_TASK_FIELDS)[number];
 interface FieldRule {
   /** Refusal for a value of the wrong TYPE (non-string / non-array / bad null). */
   badType: (v: unknown) => Decision;
-  /** "string" fields hold a string (or an allowed null); "stringArray" is refs. */
-  kind: "string" | "stringArray";
+  /** Most fields are strings; refs and workflow carry structured values. */
+  kind: "string" | "stringArray" | "workflow";
   /** Context-free VALUE check on a present string (enum, format, path shape). */
   check?: (v: string) => Decision | null;
 }
@@ -156,6 +158,10 @@ const FIELD_RULES: Record<EditableField, FieldRule> = {
         : null,
   },
   goal: { kind: "string", badType: mustBeString("goal") },
+  workflow: {
+    kind: "workflow",
+    badType: () => refuse("INVALID_REFERENCE", "workflow must be {format, source} or null"),
+  },
   cron: {
     kind: "string",
     badType: () => refuse("INVALID_CRON", `cron must be a string expression`),
@@ -177,6 +183,7 @@ const UPDATE_NULLABLE: ReadonlySet<EditableField> = new Set<EditableField>([
   "parent",
   "tracks",
   "goal",
+  "workflow",
   "owner",
   "workdir",
   "followUpAt",
@@ -201,6 +208,11 @@ function fieldTypeRefusals(
     }
     if (rule.kind === "stringArray") {
       if (!Array.isArray(v) || !v.every((r) => typeof r === "string")) return rule.badType(v);
+      continue;
+    }
+    if (rule.kind === "workflow") {
+      const checked = validateWorkflowDefinition(v);
+      if (!checked.ok) return refuse("INVALID_REFERENCE", checked.message);
       continue;
     }
     if (typeof v !== "string") return rule.badType(v);
@@ -530,6 +542,8 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
   }
   const fieldBad = fieldTypeRefusals(cmd, CREATE_NULLABLE);
   if (fieldBad) return fieldBad;
+  const workflow = cmd.workflow === undefined ? null : validateWorkflowDefinition(cmd.workflow);
+  if (workflow && !workflow.ok) return refuse("INVALID_REFERENCE", workflow.message);
 
   const id = cmd.id ?? slugify(cmd.title);
   if (getObject(snapshot, id)) {
@@ -570,6 +584,7 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
     followUpAt: status === "follow-up" ? (cmd.followUpAt as string) : null,
     workdir: cmd.workdir ?? null,
     goal: cmd.goal ?? null,
+    workflow: workflow ? workflow.value : null,
     body: cmd.body ?? "",
     version: 1,
     createdAt: now,
@@ -672,6 +687,12 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
   }
   const fieldIssue = fieldTypeRefusals(patch, UPDATE_NULLABLE);
   if (fieldIssue) return fieldIssue;
+  const workflow = patch.workflow === undefined || patch.workflow === null
+    ? patch.workflow
+    : validateWorkflowDefinition(patch.workflow);
+  if (workflow && typeof workflow === "object" && "ok" in workflow && !workflow.ok) {
+    return refuse("INVALID_REFERENCE", workflow.message);
+  }
 
   const after: TaskObject = {
     ...before,
@@ -688,6 +709,11 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
     owner: patch.owner !== undefined ? (patch.owner as string | null) : before.owner,
     workdir: patch.workdir !== undefined ? (patch.workdir as string | null) : before.workdir,
     goal: patch.goal !== undefined ? (patch.goal as string | null) : before.goal,
+    workflow: patch.workflow !== undefined
+      ? patch.workflow === null
+        ? null
+        : (workflow as { ok: true; value: NonNullable<TaskObject["workflow"]> }).value
+      : before.workflow ?? null,
     version: before.version + 1,
     updatedAt: now,
   };
@@ -776,7 +802,7 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
     });
   };
   const fieldDiff: NonNullable<KernelEvent["diff"]> = {};
-  for (const key of ["title", "priority", "type", "parent", "tracks", "refs", "body", "followUpAt", "owner", "workdir", "goal"] as const) {
+  for (const key of ["title", "priority", "type", "parent", "tracks", "refs", "body", "followUpAt", "owner", "workdir", "goal", "workflow"] as const) {
     const oldValue = before[key];
     const newValue = after[key];
     if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
@@ -1267,6 +1293,28 @@ function decideRunFinish(cmd: RunFinishCommand, ctx: Ctx): Decision {
       return refuse("INVALID_OUTCOME", "agentSessionId is too long (max 200 chars)");
     }
   }
+  if (cmd.workflow !== undefined) {
+    if (cmd.workflow === null || typeof cmd.workflow !== "object" || Array.isArray(cmd.workflow)) {
+      return refuse("INVALID_OUTCOME", "workflow result must be an object");
+    }
+    if (cmd.workflow.format !== "loopany-js-v1") {
+      return refuse("INVALID_OUTCOME", 'workflow result format must be "loopany-js-v1"');
+    }
+    if (!["silent", "direct", "escalated", "failed"].includes(cmd.workflow.outcome)) {
+      return refuse("INVALID_OUTCOME", `unknown workflow outcome "${String(cmd.workflow.outcome)}"`);
+    }
+    if (cmd.workflow.message !== undefined && typeof cmd.workflow.message !== "string") {
+      return refuse("INVALID_OUTCOME", "workflow result message must be a string");
+    }
+    try {
+      const encoded = JSON.stringify(cmd.workflow);
+      if (encoded === undefined || new TextEncoder().encode(encoded).byteLength > 512 * 1024) {
+        return refuse("INVALID_OUTCOME", "workflow result exceeds 524288 bytes");
+      }
+    } catch {
+      return refuse("INVALID_OUTCOME", "workflow result must be JSON-serializable");
+    }
+  }
   const run = findRun(snapshot, cmd.runId);
   if (!run) return refuse("UNKNOWN_RUN", `no run "${cmd.runId}"`);
   // Only a CLAIMED or RUNNING run can be finished. The §3 lifecycle is strict —
@@ -1293,6 +1341,7 @@ function decideRunFinish(cmd: RunFinishCommand, ctx: Ctx): Decision {
     state: cmd.outcome,
     ...(cmd.note !== undefined ? { note: cmd.note } : {}),
     ...(cmd.agentSessionId !== undefined ? { agentSessionId: cmd.agentSessionId } : {}),
+    ...(cmd.workflow !== undefined ? { workflow: cmd.workflow } : {}),
   };
   cs.runs.push({ op: "put", run: finished, expectedState: [...FINISHABLE_STATES] });
   // run-returned rides the TASK's stream. A DONE run advances nothing else — the
