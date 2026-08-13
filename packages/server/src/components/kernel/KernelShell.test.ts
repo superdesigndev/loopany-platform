@@ -164,6 +164,16 @@ describe("Kernel shell", () => {
     expect(closeDetail).toHaveBeenCalled();
   });
 
+  it("resizes and remembers the desktop detail pane", async () => {
+    await render("tasks", { kind: "task", id: "task-1" });
+    const separator = host!.querySelector<HTMLElement>('[role="separator"]')!;
+    expect(separator).toBeTruthy();
+    const before = Number(separator.getAttribute("aria-valuenow"));
+    await act(async () => { separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })); });
+    expect(Number(separator.getAttribute("aria-valuenow"))).toBe(before + 24);
+    expect(window.localStorage.getItem("loopany-kernel:detail-width:acme")).toBe(String(before + 24));
+  });
+
   it("gates the main pane until the workspace payload lands", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
     host = document.createElement("div");
