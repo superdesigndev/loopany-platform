@@ -6,12 +6,13 @@ describe("kernel web task layouts", () => {
     expect(BOARD_STATUSES).toEqual(["todo", "in-progress", "follow-up", "done"]);
   });
 
-  it("hides idea and archived nodes without hiding active descendants", () => {
+  it("hides idea, done, and archived nodes without hiding active descendants", () => {
     const child = { task: { status: "todo", id: "child" }, children: [] };
-    const tree = [{ task: { status: "idea", id: "parent" }, children: [child] }];
+    const doneParent = { task: { status: "done", id: "done-parent" }, children: [child] };
+    const tree = [{ task: { status: "idea", id: "parent" }, children: [doneParent] }];
     expect(visibleTaskTree(tree, false)).toEqual([child]);
     expect(visibleTaskTree(tree, true)).toEqual(tree);
-    expect(hiddenTaskCount([{ status: "idea" }, { status: "todo" }, { status: "archived" }])).toBe(2);
+    expect(hiddenTaskCount([{ status: "idea" }, { status: "todo" }, { status: "done" }, { status: "archived" }])).toBe(3);
   });
 
   it("resumes an agent session from its task workdir with shell-safe values", () => {

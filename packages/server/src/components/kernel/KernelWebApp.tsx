@@ -135,7 +135,7 @@ function Tasks({ data, select }: { data: Obj; select: Function }) {
     <div className="kw-switch">
       {(["tree", "board"] as TaskLayout[]).map((item) => <button key={item} className={layout === item ? "active" : ""} aria-pressed={layout === item} onClick={() => chooseLayout(item)}>{item[0]!.toUpperCase() + item.slice(1)}</button>)}
     </div>
-    {hidden > 0 && <button className="kw-hidden-toggle" onClick={() => setShowHidden((value) => !value)}>{showHidden ? "Hide" : "Show"} idea + archived ({hidden})</button>}
+    {hidden > 0 && <button className="kw-hidden-toggle" onClick={() => setShowHidden((value) => !value)}>{showHidden ? "Hide" : "Show"} done + idea + archived ({hidden})</button>}
   </div>;
   if (layout === "board") {
     const statuses = showHidden ? ["idea", ...BOARD_STATUSES, "archived"] : BOARD_STATUSES;

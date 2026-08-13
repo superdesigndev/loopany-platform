@@ -1,5 +1,5 @@
 export const BOARD_STATUSES = ["todo", "in-progress", "follow-up", "done"] as const;
-export const HIDDEN_STATUSES = ["idea", "archived"] as const;
+export const HIDDEN_STATUSES = ["idea", "done", "archived"] as const;
 
 type TreeNode = { task: { status: string }; children: TreeNode[] };
 
