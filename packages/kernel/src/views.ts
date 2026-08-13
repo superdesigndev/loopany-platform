@@ -246,6 +246,7 @@ export function taskDetailView(
    *  enables producer provenance on artifacts and the coherent `recent` view.
    *  Optional - projections stay usable from a bare snapshot. */
   events?: readonly KernelEvent[],
+  options?: { recentLimit?: number },
 ): TaskDetail | null {
   const task = snapshot.objects[id];
   if (task?.archetype !== "task") return null;
@@ -278,7 +279,7 @@ export function taskDetailView(
   const activeRun = runs.find((r) => ACTIVE_RUN_STATES.includes(r.state)) ?? null;
   const settled = runs.filter((r) => !ACTIVE_RUN_STATES.includes(r.state));
   const lastRun = settled.length > 0 ? settled.reduce((a, b) => (a.createdAt > b.createdAt ? a : b)) : null;
-  const recent = events ? timelineView(snapshot, events, { taskId: id, limit: 8 }) : [];
+  const recent = events ? timelineView(snapshot, events, { taskId: id, limit: options?.recentLimit ?? 8 }) : [];
   return { task, artifacts, children, activeRun, lastRun, recent };
 }
 

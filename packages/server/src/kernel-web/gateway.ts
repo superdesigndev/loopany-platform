@@ -48,7 +48,12 @@ export async function workspace(teamId: string) {
   return {
     team: { id: teamId, name: team?.name ?? teamId, slug: team?.slug ?? teamId },
     me: { id: user?.id ?? null, email },
-    members: members.flatMap((m) => m.email ? [{ id: m.userId, email: m.email.trim().toLowerCase(), role: m.role }] : []),
+    members: members.map((m) => ({
+      id: m.userId,
+      email: m.email?.trim().toLowerCase() ?? null,
+      name: m.displayName,
+      role: m.role,
+    })),
     machines: visibleMachines.map((machine) => ({
       id: machine.id, name: machine.name, hostname: machine.hostname, platform: machine.platform,
       online: machine.online, lastSeen: machine.lastSeen, enrolledBy: machine.enrolledBy,
@@ -69,10 +74,26 @@ export async function workspace(teamId: string) {
   };
 }
 
+export async function memberDetail(teamId: string, id: string) {
+  await access(teamId);
+  const [snapshot, members, machines] = await Promise.all([
+    readSnapshot(teamId), store.listTeamMembers(teamId), store.listMachinesForTeam(teamId),
+  ]);
+  const member = members.find((item) => item.userId === id);
+  if (!member) throw new KernelWebError(404, "Member not found");
+  const address = personAddress(id);
+  return {
+    member: { id, email: member.email?.trim().toLowerCase() ?? null, name: member.displayName, role: member.role },
+    tasks: Object.values(snapshot.objects).filter((item) => item.archetype === "task" && item.assignee === address && !["done", "archived"].includes(item.status)),
+    machines: machines.filter((machine) => machine.enrolledBy === id && !machine.revokedAt),
+  };
+}
+
 export async function taskDetail(teamId: string, id: string) {
   await access(teamId);
   const [snapshot, events] = await Promise.all([readSnapshot(teamId), readEvents(teamId)]);
-  const detail = taskDetailView(snapshot, id, events);
+  const recentWindow = taskDetailView(snapshot, id, events, { recentLimit: 51 });
+  const detail = recentWindow ? { ...recentWindow, recent: recentWindow.recent.slice(0, 50), recentHasMore: recentWindow.recent.length > 50 } : null;
   if (!detail) throw new KernelWebError(404, "Task not found");
   return { ...detail, runs: snapshot.runs.filter((r) => r.taskId === id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
 }

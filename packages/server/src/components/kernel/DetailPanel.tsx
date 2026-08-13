@@ -1,0 +1,108 @@
+import type { AssigneeOption } from "./AssigneePicker";
+import { useEffect, useState } from "react";
+import { agentProfile, type Obj, type Select, type Selection } from "./model";
+import { Empty, Field, Fields } from "./primitives";
+import { MUTED, PRE_BODY } from "./styles";
+import { TaskActions } from "./TaskActions";
+import { AssigneeRef, PersonRef } from "./IdentityRefs";
+import { TimelineList } from "./TimelineView";
+import { AgentSessionRef } from "./AgentSessionRef";
+import { ArtifactRef, MachineRef, RunRef, TaskRef } from "./ObjectRefs";
+import { LocalTime } from "./DisplayPrimitives";
+
+const TITLE = "mb-1.5 text-[18px]";
+const HEADING = "mt-6 mb-2 text-[12px] uppercase";
+const EVENT = "border-b border-[#ddd] py-[7px]";
+
+/** The right-hand inspector. One pane, three object shapes. */
+export function DetailPanel({ selection, detail, data, select, teamSlug, reload, assignees }: { selection: Selection; detail: Obj | null; data: Obj; select: Select; teamSlug: string; reload: () => Promise<void>; assignees: AssigneeOption[] }) {
+  if (!detail) return <Empty text="Loading detail..." />;
+  if (selection.kind === "doc") return <DocumentDetail detail={detail} select={select} />;
+  if (selection.kind === "run") return <RunDetail detail={detail} data={data} select={select} />;
+  if (selection.kind === "member") return <MemberDetail detail={detail} data={data} select={select} />;
+  return <TaskDetail detail={detail} data={data} selection={selection} select={select} teamSlug={teamSlug} reload={reload} assignees={assignees} />;
+}
+
+function MemberDetail({ detail, data, select }: { detail: Obj; data: Obj; select: Select }) {
+  const member = detail.member;
+  return <div>
+    <h2 className={TITLE}>{member.name || member.email || "Team member"}</h2>
+    <div className={MUTED}>PERSON · {member.role}</div>
+    <Fields>
+      <Field label="Email">{member.email ?? "-"}</Field>
+      <Field label="Open Tasks">{detail.tasks.length}</Field>
+      <Field label="Machines">{detail.machines.length}</Field>
+    </Fields>
+    <h3 className={HEADING}>Assigned Tasks</h3>
+    {detail.tasks.length ? detail.tasks.map((task: Obj) => <div key={task.id} className={EVENT}><TaskRef task={task} select={select} showStatus /></div>) : <Empty text="No open Tasks" />}
+    <h3 className={HEADING}>Machines</h3>
+    {detail.machines.length ? detail.machines.map((machine: Obj) => <div className={EVENT} key={machine.id}><MachineRef machine={machine} data={data} select={select} /></div>) : <Empty text="No Machines" />}
+  </div>;
+}
+
+function DocumentDetail({ detail, select }: { detail: Obj; select: Select }) {
+  const doc = detail.doc;
+  return <div>
+    <h2 className={TITLE}>{doc.title ?? doc.key}</h2>
+    <div className={MUTED}>DOC · v{doc.version} · <LocalTime value={doc.updatedAt} /></div>
+    <pre className={PRE_BODY}>{doc.body}</pre>
+    {detail.linkedTasks.map((task: Obj) => <div key={task.id} className={EVENT}>Task: <TaskRef task={task} select={select} /></div>)}
+  </div>;
+}
+
+function RunDetail({ detail, data, select }: { detail: Obj; data: Obj; select: Select }) {
+  const run = detail.run;
+  const profile = agentProfile(run.assignee);
+  return <div>
+    <h2 className={TITLE}>{run.id}</h2>
+    <div className={MUTED}>RUN · {run.state} · {profile ?? "agent unknown"}</div>
+    <Fields>
+      <Field label="Task">{detail.task ? <TaskRef task={detail.task} select={select} /> : run.taskId}</Field>
+      <Field label="Cause">{run.cause}</Field>
+      <Field label="Assignee"><AssigneeRef value={run.assignee} data={data} select={select} /></Field>
+      <Field label="Workdir">{detail.task?.workdir ?? "-"}</Field>
+      <Field label="Started"><LocalTime value={run.createdAt} /></Field>
+      <Field label="Workflow">{run.workflow ? `${run.workflow.format} · ${run.workflow.outcome}` : "not configured"}</Field>
+      <Field label="Agent session"><AgentSessionRef sessionId={run.agentSessionId} assignee={run.assignee} workdir={detail.task?.workdir} /></Field>
+    </Fields>
+    <pre className={PRE_BODY}>{run.note ?? "No return note yet"}</pre>
+    <h3 className={HEADING}>Artifacts touched</h3>
+    {detail.artifacts.length
+      ? detail.artifacts.map((item: Obj) => <div className={EVENT} key={item.artifact.id}><ArtifactRef entry={item} actions={item.actions} select={select} /></div>)
+      : <Empty text="No artifacts recorded for this run" />}
+  </div>;
+}
+
+function TaskDetail({ detail, data, selection, select, teamSlug, reload, assignees }: { detail: Obj; data: Obj; selection: Selection; select: Select; teamSlug: string; reload: () => Promise<void>; assignees: AssigneeOption[] }) {
+  const task = detail.task;
+  const [recentLimit, setRecentLimit] = useState(8);
+  useEffect(() => setRecentLimit(8), [task.id]);
+  return <div>
+    <div className="flex justify-between">
+      <h2 className={TITLE}>{task.title}</h2>
+      {detail.activeRun && <RunRef run={detail.activeRun} select={select} compact />}
+    </div>
+    <div className={MUTED}>{task.id} · v{task.version}</div>
+    <Fields>
+      <Field label="Status">{task.status}</Field>
+      <Field label="Owner">{task.owner ? <PersonRef value={task.owner} data={data} select={select} /> : "-"}</Field>
+      <Field label="Assignee"><AssigneeRef value={task.assignee} data={data} select={select} /></Field>
+      <Field label="Workdir">{task.workdir ?? "-"}</Field>
+      <Field label="Goal">{task.goal ?? "-"}</Field>
+      <Field label="Workflow">{task.workflow?.format ?? "-"}</Field>
+    </Fields>
+    <TaskActions key={task.id} task={task} teamSlug={teamSlug} reload={reload} assignees={assignees} />
+    <h3 className={HEADING}>Spec</h3>
+    <pre className={PRE_BODY}>{task.body || "No spec"}</pre>
+    <h3 className={HEADING}>Children</h3>
+    {detail.children.length ? detail.children.map((child: Obj) => <div key={child.id} className={EVENT}><TaskRef task={child} select={select} showStatus /></div>) : <Empty text="No child Tasks" />}
+    <h3 className={HEADING}>Artifacts</h3>
+    {detail.artifacts.length ? detail.artifacts.map((entry: Obj) => <div key={entry.artifact.id} className={EVENT}><ArtifactRef entry={entry} select={select} /></div>) : <Empty text="No artifacts" />}
+    <h3 className={HEADING}>Recent</h3>
+    <TimelineList items={detail.recent.slice(0, recentLimit)} data={data} selection={selection} select={select} compact />
+    {recentLimit < detail.recent.length && <button className="mx-auto my-3 block cursor-pointer border-0 bg-transparent p-1 text-center text-[#174f78] underline decoration-[#aaa] underline-offset-2" onClick={() => setRecentLimit((value) => value + 8)}>Load more</button>}
+    {recentLimit >= detail.recent.length && detail.recentHasMore && <div className="py-2 text-center text-[11px] text-[#777]">More activity exists outside this recent window</div>}
+    <h3 className={HEADING}>Runs</h3>
+    {detail.runs.length ? detail.runs.slice(0, 10).map((run: Obj) => <div key={run.id} className={EVENT}><RunRef run={run} select={select} /></div>) : <Empty text="No Runs" />}
+  </div>;
+}
