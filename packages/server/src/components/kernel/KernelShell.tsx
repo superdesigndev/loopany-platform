@@ -132,7 +132,7 @@ export function KernelShell({ teamSlug, view, selection, select, closeDetail, ch
         </div>
       </nav>
 
-      <main className="overflow-auto p-[18px]">
+      <main className="overflow-auto p-3">
         <KernelProvider value={{ teamSlug, data, error, reload, selection, select, agents, assignees }}>
           {data ? children : <Empty text={error || "Loading workspace..."} />}
         </KernelProvider>
@@ -152,7 +152,7 @@ export function KernelShell({ teamSlug, view, selection, select, closeDetail, ch
         }}
       ><span className="absolute top-1/2 left-1/2 h-8 w-px -translate-x-1/2 -translate-y-1/2 bg-[#888]" /></div>}
 
-      {view !== "settings" && <aside className={cx("overflow-auto p-[18px]", DETAIL_OVERLAY, !selection && "max-[900px]:hidden")}>
+      {view !== "settings" && <aside className={cx("overflow-auto p-3", DETAIL_OVERLAY, !selection && "max-[900px]:hidden")}>
         {selection
           ? <DetailPanel selection={selection} detail={detail} data={data ?? {}} select={select} teamSlug={teamSlug} reload={reload} assignees={assignees} />
           : <Empty text="Select an item to inspect" />}

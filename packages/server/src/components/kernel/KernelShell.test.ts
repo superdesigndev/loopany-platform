@@ -24,6 +24,7 @@ vi.mock("@tanstack/react-router", () => ({
 
 const task = { id: "task-1", title: "Ship it", status: "todo", assignee: "stone-mbp/codex", version: 3, body: "spec", workdir: "/tmp", priority: "P1", owner: "person:1", goal: null, workflow: null };
 const run = { id: "run-1", state: "running", taskId: "task-1", cause: "assignment", assignee: "stone-mbp/codex", createdAt: "2026-08-13T00:00:00.000Z", workflow: null, agentSessionId: "sess-1", note: null };
+const workflowRun = { id: "run-workflow", state: "done", taskId: "task-1", cause: "cron", assignee: "stone-mbp/claude", createdAt: "2026-08-13T00:30:00.000Z", workflow: { format: "loopany-js-v1", outcome: "direct", message: "All providers are healthy" }, agentSessionId: null, note: "All providers are healthy" };
 const doc = { id: "doc-1", key: "notes", title: "Notes", version: 2, updatedAt: "2026-08-13T00:00:00.000Z", body: "hello" };
 
 const workspace = {
@@ -50,10 +51,14 @@ const workspace = {
 
 const detail = {
   task, run, doc,
+  events: [
+    { id: "evt-start", kind: "run-started", at: "2026-08-13T00:00:00.000Z", note: "run started" },
+    { id: "evt-result", kind: "note", at: "2026-08-13T00:01:00.000Z", note: "Run complete: no balance alerts" },
+  ],
   linkedTasks: [task], children: [{ id: "task-3", title: "Child" }],
   artifacts: [{ artifact: { id: "doc-1", archetype: "doc", title: "Notes", key: "notes" }, actions: ["update"] }],
   recent: [{ eventIds: ["e1"], at: "2026-08-13T00:00:00.000Z", summary: "Updated", actor: "human:anonymous", kind: "status", runId: null, objectId: "task-1" }],
-  runs: [run], activeRun: run,
+  runs: [workflowRun, run], activeRun: run,
 };
 
 // The four view routes, inlined exactly as `routes/t.$teamSlug_.kernel.*.tsx`
@@ -157,11 +162,21 @@ describe("Kernel shell", () => {
     await render("tasks", { kind: "run", id: "run-1" });
     const aside = host!.querySelector("aside")!;
     expect(aside.textContent).toContain("Artifacts touched");
+    expect(aside.textContent).toContain("Run complete: no balance alerts");
+    expect(aside.textContent).toContain("Runtime");
+    expect(aside.textContent).toContain("Activity");
     expect(aside.textContent).toContain("Copy resume");
     expect(aside.textContent).not.toContain("cd --");
 
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
     expect(closeDetail).toHaveBeenCalled();
+  });
+
+  it("identifies a workflow-only Run without pretending Claude executed it", async () => {
+    await render("tasks", { kind: "task", id: "task-1" });
+    const aside = host!.querySelector("aside")!;
+    expect(aside.textContent).toContain("Workflow · direct");
+    expect(aside.textContent).toContain("All providers are healthy");
   });
 
   it("resizes and remembers the desktop detail pane", async () => {

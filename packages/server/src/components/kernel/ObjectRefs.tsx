@@ -24,11 +24,15 @@ export function TaskRef({ task, select, compact = false }: { task: Obj; select: 
 
 export function RunRef({ run, select, compact = false }: { run: Obj; select: Select; compact?: boolean }) {
   const profile = run.assignee?.includes("/") ? run.assignee.slice(run.assignee.lastIndexOf("/") + 1) : "agent";
-  if (compact) return <button className={LINK} onClick={() => select("run", run.id)} title={run.id}>{profile} Run · {run.state}</button>;
+  const workflowOnly = Boolean(run.workflow && !run.agentSessionId);
+  const executor = workflowOnly ? "Workflow" : profile;
+  const outcome = workflowOnly ? run.workflow.outcome : run.state;
+  const workflowSummary = run.workflow?.message?.trim() || (workflowOnly ? run.note : null);
+  if (compact) return <button className={LINK} onClick={() => select("run", run.id)} title={run.id}>{executor} Run · {outcome}</button>;
   return <RefRow
     tag="RUN"
-    title={<>{profile} · {run.state}</>}
-    meta={<><LocalTime value={run.createdAt} />{run.agentSessionId ? <> · session {run.agentSessionId.length > 12 ? `${run.agentSessionId.slice(0, 8)}…` : run.agentSessionId}</> : null}</>}
+    title={<>{executor} · {outcome}</>}
+    meta={<><LocalTime value={run.createdAt} />{run.agentSessionId ? <> · session {run.agentSessionId.length > 12 ? `${run.agentSessionId.slice(0, 8)}…` : run.agentSessionId}</> : null}{workflowSummary ? <span className="mt-1 block line-clamp-2 text-[#555]">{workflowSummary}</span> : null}</>}
     onClick={() => select("run", run.id)}
   />;
 }

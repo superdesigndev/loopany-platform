@@ -54,9 +54,13 @@ function DocumentDetail({ detail, select }: { detail: Obj; select: Select }) {
 function RunDetail({ detail, data, select }: { detail: Obj; data: Obj; select: Select }) {
   const run = detail.run;
   const profile = agentProfile(run.assignee);
+  const workflowOnly = Boolean(run.workflow && !run.agentSessionId);
+  const executor = workflowOnly ? "workflow" : (profile ?? "agent unknown");
+  const eventResult = [...(detail.events ?? [])].reverse().find((event: Obj) => event.kind === "note" && event.note?.trim())?.note;
+  const result = eventResult ?? run.workflow?.message?.trim() ?? null;
   return <div>
     <h2 className={TITLE}>{run.id}</h2>
-    <div className={MUTED}>RUN · {run.state} · {profile ?? "agent unknown"}</div>
+    <div className={MUTED}>RUN · {run.state} · {executor}</div>
     <Fields>
       <Field label="Task">{detail.task ? <TaskRef task={detail.task} select={select} compact /> : run.taskId}</Field>
       <Field label="Cause">{run.cause}</Field>
@@ -64,14 +68,45 @@ function RunDetail({ detail, data, select }: { detail: Obj; data: Obj; select: S
       <Field label="Workdir">{detail.task?.workdir ?? "-"}</Field>
       <Field label="Started"><LocalTime value={run.createdAt} /></Field>
       <Field label="Workflow">{run.workflow ? `${run.workflow.format} · ${run.workflow.outcome}` : "not configured"}</Field>
-      <Field label="Agent session"><AgentSessionRef sessionId={run.agentSessionId} assignee={run.assignee} workdir={detail.task?.workdir} /></Field>
+      <Field label="Agent session">{workflowOnly ? "Not started - workflow completed directly" : <AgentSessionRef sessionId={run.agentSessionId} assignee={run.assignee} workdir={detail.task?.workdir} />}</Field>
     </Fields>
-    <pre className={PRE_BODY}>{run.note ?? "No return note yet"}</pre>
+    <h3 className={HEADING}>Result</h3>
+    <div className="border-y border-[#ccc] py-3 leading-[1.55] whitespace-pre-wrap">{result ?? "No substantive result note recorded"}</div>
+    <h3 className={HEADING}>Runtime</h3>
+    <div className="border-y border-[#ccc] py-3 leading-[1.55]">{run.note ?? "No runtime outcome recorded"}</div>
+    <h3 className={HEADING}>Activity</h3>
+    <RunActivity events={detail.events ?? []} />
     <h3 className={HEADING}>Artifacts touched</h3>
     {detail.artifacts.length
       ? detail.artifacts.map((item: Obj) => <ArtifactRef key={item.artifact.id} entry={item} actions={item.actions} select={select} />)
       : <Empty text="No artifacts recorded for this run" />}
   </div>;
+}
+
+function RunActivity({ events }: { events: Obj[] }) {
+  if (!events.length) return <Empty text="No Run activity recorded" />;
+  return <div className="relative">
+    {events.map((event, index) => <div key={event.id} className="grid grid-cols-[76px_18px_minmax(0,1fr)] text-[11px] leading-[1.5]">
+      <div className="py-3 pr-2 text-right text-[#777]"><LocalTime value={event.at} variant="timeline" /></div>
+      <span className="relative flex justify-center" aria-hidden="true">
+        <span className={`absolute left-1/2 w-px -translate-x-1/2 bg-[#bbb] ${index === 0 ? "top-1/2" : "top-0"} ${index === events.length - 1 ? "bottom-1/2" : "bottom-0"}`} />
+        <span className="relative mt-[18px] size-[7px] bg-[#555]" />
+      </span>
+      <div className="min-w-0 border-b border-[#ddd] py-3 pr-2 pl-3">
+        <code className="inline-block border border-[#aaa] px-1.5 py-0.5 text-[9px] uppercase text-[#666]">{event.kind}</code>
+        <div className="mt-2 wrap-anywhere whitespace-pre-wrap">{event.note ?? describeEventDiff(event.diff) ?? "Recorded"}</div>
+      </div>
+    </div>)}
+  </div>;
+}
+
+function describeEventDiff(diff: Obj | null | undefined): string | null {
+  if (!diff) return null;
+  const fields = Object.entries(diff).map(([field, value]) => {
+    const change = value as { old?: unknown; new?: unknown };
+    return `${field}: ${String(change?.old ?? "-")} → ${String(change?.new ?? "-")}`;
+  });
+  return fields.length ? fields.join(" · ") : null;
 }
 
 function TaskDetail({ detail, data, selection, select, teamSlug, reload, assignees }: { detail: Obj; data: Obj; selection: Selection; select: Select; teamSlug: string; reload: () => Promise<void>; assignees: AssigneeOption[] }) {
@@ -94,7 +129,7 @@ function TaskDetail({ detail, data, selection, select, teamSlug, reload, assigne
     </Fields>
     <TaskActions key={task.id} task={task} teamSlug={teamSlug} reload={reload} assignees={assignees} />
     <h3 className={HEADING}>Spec</h3>
-    <pre className={PRE_BODY}>{task.body || "No spec"}</pre>
+    <MarkdownDocument body={task.body || "_No spec_"} />
     <h3 className={HEADING}>Children</h3>
     {detail.children.length ? detail.children.map((child: Obj) => <TaskRef key={child.id} task={child} select={select} />) : <Empty text="No child Tasks" />}
     <h3 className={HEADING}>Artifacts</h3>

@@ -24,7 +24,7 @@ export function SettingsView({ data, teamId, teamSlug, section, agents, select }
           className={railButton(section === item)}
         >{item[0]!.toUpperCase() + item.slice(1)}</Link>)}
       </nav>
-      <section className="p-[18px]">
+      <section className="p-3">
         {section === "team" ? <TeamDirectory data={data} agents={agents} select={select} />
           : section === "machines" ? (teamId ? <AccountMachines teamId={teamId} /> : <Empty text="Team unavailable." />)
           : <>
