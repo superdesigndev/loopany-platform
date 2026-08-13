@@ -211,3 +211,33 @@ test("the (teamId, alias) unique index rejects a duplicate alias write in one ho
   // Bypass the suffix probe and write the colliding alias directly: the DB refuses.
   await expect(store.updateMachine(b.machineId, { alias: "mbp" })).rejects.toThrow();
 });
+
+test("legacy alias adoption atomically retargets the address and revokes the offline legacy Machine", async () => {
+  const teamId = "team-shared";
+  await store.ensureTeam(teamId, "Shared", "u1");
+  const legacy = "m-legacy000001";
+  await store.createMachine({ id: legacy, userId: "shared", teamId, name: "old.local", alias: "stonex-mbp", tokenHash: "legacy", online: false });
+  const replacement = "m-replacement01";
+  await store.createMachine({ id: replacement, userId: "u1", teamId, name: "new.local", alias: "new-mbp", tokenHash: "new", online: true });
+
+  expect(await store.adoptLegacyMachineAlias({ teamId, newMachineId: replacement, retireMachineId: legacy, alias: "stonex-mbp", actorUserId: "u1" })).toBe("ok");
+  expect((await store.resolveMachineByAlias(teamId, "stonex-mbp")).machine?.id).toBe(replacement);
+  expect((await store.getMachine(legacy))?.revokedAt).toBeTruthy();
+  expect((await store.listTeamMachineBindings(teamId)).find((row) => row.machineId === legacy)).toMatchObject({ enabled: false });
+});
+
+test("legacy alias adoption refuses an online legacy Machine or a replacement owned by someone else", async () => {
+  const teamId = "team-adopt-guard";
+  await store.ensureTeam(teamId, "Guard", "u1");
+  await store.addTeamMember(teamId, "u2", "member");
+  const legacy = "m-onlinelegacy";
+  await store.createMachine({ id: legacy, userId: "shared", teamId, name: "old.local", alias: "mbp", tokenHash: "legacy", online: true });
+  const replacement = "m-otherowner01";
+  await store.createMachine({ id: replacement, userId: "u2", teamId: store.teamIdForUser("u2"), name: "new.local", alias: "new", tokenHash: "new", online: true });
+  await store.bindMachineToTeam(teamId, replacement, "u2");
+
+  expect(await store.adoptLegacyMachineAlias({ teamId, newMachineId: replacement, retireMachineId: legacy, alias: "mbp", actorUserId: "u1" })).toBe("not-allowed");
+  await store.updateMachine(replacement, { enrolledBy: "u1" });
+  expect(await store.adoptLegacyMachineAlias({ teamId, newMachineId: replacement, retireMachineId: legacy, alias: "mbp", actorUserId: "u1" })).toBe("old-machine-online");
+  expect((await store.resolveMachineByAlias(teamId, "mbp")).machine?.id).toBe(legacy);
+});

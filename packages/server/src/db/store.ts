@@ -485,6 +485,48 @@ export async function setTeamMachineBindingEnabled(teamId: string, machineId: st
   return true;
 }
 
+/**
+ * Atomically move a legacy execution alias onto a user's replacement Machine,
+ * disable the legacy binding, and revoke the old credential. This is deliberately
+ * narrower than a general rename: only an unowned, offline legacy Machine may be
+ * retired, while the replacement must be online, owned by the actor, and already
+ * bound to a Team the actor belongs to.
+ */
+export async function adoptLegacyMachineAlias(input: {
+  teamId: string;
+  newMachineId: string;
+  retireMachineId: string;
+  alias: string;
+  actorUserId: string;
+}): Promise<"ok" | "not-allowed" | "not-found" | "old-machine-online"> {
+  const alias = input.alias.trim();
+  if (!alias || alias.includes("/") || alias.length > 80 || input.newMachineId === input.retireMachineId) return "not-allowed";
+  return db.transaction(async (tx) => {
+    const [replacement] = await tx.select().from(machines).where(eq(machines.id, input.newMachineId));
+    const [legacy] = await tx.select().from(machines).where(eq(machines.id, input.retireMachineId));
+    const [membership] = await tx.select({ id: teamMembers.id }).from(teamMembers).where(and(eq(teamMembers.teamId, input.teamId), eq(teamMembers.userId, input.actorUserId)));
+    if (!replacement || !legacy) return "not-found" as const;
+    if (!membership || replacement.enrolledBy !== input.actorUserId || replacement.revokedAt || !replacement.online || legacy.enrolledBy !== null || legacy.revokedAt) return "not-allowed" as const;
+    if (legacy.online) return "old-machine-online" as const;
+
+    const bindings = await tx.select().from(teamMachineBindings).where(eq(teamMachineBindings.teamId, input.teamId));
+    const replacementBinding = bindings.find((row) => row.machineId === replacement.id && row.enabled);
+    const legacyBinding = bindings.find((row) => row.machineId === legacy.id && row.enabled && row.alias === alias);
+    if (!replacementBinding || !legacyBinding) return "not-found" as const;
+
+    const taken = new Set(bindings.map((row) => row.alias));
+    const retiredBase = `${alias}-retired-${legacy.id.slice(2, 8)}`.slice(0, 80);
+    let retiredAlias = retiredBase;
+    for (let n = 2; taken.has(retiredAlias) && n <= 60; n++) retiredAlias = `${retiredBase}-${n}`.slice(0, 80);
+    if (taken.has(retiredAlias)) return "not-allowed" as const;
+    const at = nowIso();
+    await tx.update(teamMachineBindings).set({ alias: retiredAlias, enabled: false, disabledAt: at }).where(and(eq(teamMachineBindings.teamId, input.teamId), eq(teamMachineBindings.machineId, legacy.id)));
+    await tx.update(teamMachineBindings).set({ alias, enabled: true, disabledAt: null }).where(and(eq(teamMachineBindings.teamId, input.teamId), eq(teamMachineBindings.machineId, replacement.id)));
+    await tx.update(machines).set({ revokedAt: at, online: false }).where(eq(machines.id, legacy.id));
+    return "ok" as const;
+  });
+}
+
 export async function isMachineBoundToTeam(teamId: string, machineId: string): Promise<boolean> {
   const row = (await db.select({ machineId: teamMachineBindings.machineId }).from(teamMachineBindings).innerJoin(machines, eq(teamMachineBindings.machineId, machines.id)).where(and(eq(teamMachineBindings.teamId, teamId), eq(teamMachineBindings.machineId, machineId), eq(teamMachineBindings.enabled, true), isNull(machines.revokedAt))))[0];
   if (!row) return false;
