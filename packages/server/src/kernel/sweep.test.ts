@@ -45,7 +45,7 @@ afterAll(() => {
 beforeEach(async () => {
   await (db.client as any).exec(
     "DELETE FROM kernel_runs; DELETE FROM kernel_triggers; DELETE FROM kernel_events; DELETE FROM kernel_objects; " +
-      "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
+      "DELETE FROM team_machine_bindings; DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
   );
 });
 
@@ -93,7 +93,7 @@ async function enrollMbp() {
   const machineId = tokens.machineIdFromToken(deviceToken);
   const teamId = store.teamIdForUser("u1");
   await store.ensureTeam(teamId, "u1's team", "u1");
-  await tokens.rememberConnectKey(deviceToken, { userId: "u1", teamId });
+  await store.createMachine({ id: machineId, userId: "u1", teamId, name: "mbp.local", alias: "mbp", tokenHash: tokens.sha256(deviceToken), online: false });
   const res = await gw.poll(deviceToken, { host: "mbp.local", alias: "mbp" });
   expect(res.status).toBe(200);
   return { machineId, teamId };

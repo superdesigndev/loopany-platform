@@ -119,6 +119,15 @@ function isBlockedIPv4(ip: string): boolean {
   );
 }
 
+/** Proxy clients such as Clash commonly synthesize 198.18/15 addresses for
+ * domain interception. This remains blocked generally; only an already exact-
+ * allowlisted Feishu/Lark HTTPS host may use it below. */
+function isBenchmarkProxyIPv4(ip: string): boolean {
+  const n = ipv4ToInt(ip);
+  const base = ipv4ToInt("198.18.0.0")!;
+  return n !== null && (n & 0xfffe0000) === (base & 0xfffe0000);
+}
+
 /** Expand an IPv6 string to its 8 16-bit hextet words, or null if malformed. */
 function ipv6Words(ip: string): number[] | null {
   let s = ip;
@@ -220,7 +229,8 @@ export async function assertPublicHost(
   if (!addrs.length) throw new Error(`webhook host ${hostname} did not resolve`);
   for (const { address } of addrs) {
     const reason = classifyAddress(address);
-    if (reason) throw new Error(`webhook host ${hostname} ${reason} (${address})`);
+    const proxyFakeIp = FEISHU_WEBHOOK_HOSTS.has(hostname.toLowerCase()) && isBenchmarkProxyIPv4(address);
+    if (reason && !proxyFakeIp) throw new Error(`webhook host ${hostname} ${reason} (${address})`);
   }
   return addrs.map((a) => a.address);
 }

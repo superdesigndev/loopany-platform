@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
 import { machineRouteLimit } from '../gateway/rateLimit'
+import { auth as betterAuth } from '../auth'
 
 /**
  * POST /api/kernel/cli — the SERVER host for `@loopany/kernel` (milestone M5).
@@ -31,8 +32,8 @@ export const Route = createFileRoute('/api/kernel/cli')({
   server: {
     handlers: {
       POST: async ({ request }: { request: Request }) => {
-        const auth = request.headers.get('authorization') ?? ''
-        const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+        const authorization = request.headers.get('authorization') ?? ''
+        const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : ''
         const limited = machineRouteLimit(request, token || undefined)
         // machineRouteLimit's own 429 body is the text-sink `{error,text,exitCode}`
         // shape; re-wrap it in the kernel envelope (preserving Retry-After) so this
@@ -60,7 +61,13 @@ export const Route = createFileRoute('/api/kernel/cli')({
         // gateway normalizes a bare Command for back-compat.
         const body = parsed.body ?? {}
         const { kernelCli } = await import('../kernel/gateway.js')
-        const r = await kernelCli(token, body)
+        const session = token.startsWith('rk_') || token.startsWith('mk_') || token.startsWith('dk_')
+          ? null
+          : await betterAuth.api.getSession({ headers: request.headers })
+        const teamId = request.headers.get('x-loopany-team-id') ?? (typeof body === 'object' && body ? String((body as any).teamId ?? '') : '')
+        if (session?.user && !teamId)
+          return Response.json(envelope('TEAM_REQUIRED', 'select a team with --team'), { status: 400 })
+        const r = await kernelCli(token, body, session?.user ? { userId: session.user.id, teamId } : undefined)
         return Response.json(r.body, { status: r.status })
       },
     },

@@ -26,6 +26,7 @@ vi.mock('../server/machineFns', () => ({
   createMachine: vi.fn(async () => ({ id: 'm-1', token: 'dk_test' })),
   machineStatus: vi.fn(async () => (h.online ? { online: true, hostname: 'sim-host' } : { online: false })),
   finalizeMachine: vi.fn(async () => ({ ok: true })),
+  listMachines: vi.fn(async () => h.online ? [{ id: 'm-1', online: true, hostname: 'sim-host' }] : []),
 }))
 vi.mock('../server/loopApi', () => ({
   getConfig: vi.fn(async () => ({ loopanyCli: 'npx @crewlet/loopany@latest', customCli: false, onboardingSim: h.sim })),
@@ -115,7 +116,7 @@ afterEach(() => {
 })
 
 describe('OnboardingWizard step machine', () => {
-  it('advances welcome → machine → (detected connect) → meet → prompt → (detected loop) → done', async () => {
+  it('advances through session-auth machine enrollment to the prompt', async () => {
     render()
     await poll(0) // flush getConfig
     expect(host!.textContent).toContain('Your first loop')
@@ -123,8 +124,8 @@ describe('OnboardingWizard step machine', () => {
     click('Get started')
     await poll(0) // flush createMachine
     expect(host!.textContent).toContain('Get your machine online')
-    // The connect command is rendered from the minted device token.
-    expect(host!.textContent).toContain('--connect-key dk_test')
+    expect(host!.textContent).toContain('lk login http://localhost:3000')
+    expect(host!.textContent).not.toContain('--connect-key')
 
     // Detected reality: Continue is disabled while the machine is offline.
     expect(findButton('Continue')!.disabled).toBe(true)
@@ -147,29 +148,14 @@ describe('OnboardingWizard step machine', () => {
     click('Set it up')
     await poll(0) // flush mintClaim
     expect(host!.textContent).toContain('Copy the prompt')
-    // The paste snippet carries the bootstrap line, the claim key, and the template intent.
+    // The paste snippet carries an explicit team and no credential.
     expect(host!.textContent).toContain('/api/bootstrap')
-    expect(host!.textContent).toContain('connect-key: ck_test')
+    expect(host!.textContent).toContain('team-id: teamA')
+    expect(host!.textContent).not.toContain('connect-key')
     expect(host!.textContent).toContain('keeps this codebase tidy')
 
-    // Detected reality: nothing advances until a real loop lands.
-    expect(host!.textContent).not.toContain('Housekeeper is live')
-    h.done = true
-    await poll()
-    // Lands on the `live` step: celebration + first-run wait (still running).
-    expect(host!.textContent).toContain('Housekeeper is live')
-    expect(host!.textContent).toContain('Running its first pass')
-    expect(host!.textContent).toContain('Get notified')
-    // Go to dashboard is always available (never trap).
-    expect(findButton('Go to dashboard')).toBeDefined()
-
-    // First run completes → the payoff CTA into the Loop page appears.
-    h.firstRun = 'done'
-    await poll()
-    const cta = findButton('See your first result')
-    expect(cta).toBeDefined()
-    act(() => cta!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-    expect(onSeeResult).toHaveBeenCalledWith('loop-1', 'run-1')
+    click('Review it on the dashboard')
+    expect(onExit).toHaveBeenCalled()
   })
 
   it('resumes mid-flow from persisted state (lands on the prompt step)', async () => {
@@ -177,7 +163,8 @@ describe('OnboardingWizard step machine', () => {
     render()
     await poll(0)
     expect(host!.textContent).toContain('Copy the prompt')
-    expect(host!.textContent).toContain('connect-key: ck_test')
+    expect(host!.textContent).toContain('team-id: teamA')
+    expect(host!.textContent).not.toContain('connect-key')
   })
 
   it('lights up the creation checklist as milestones are reported (best-effort, never gates)', async () => {

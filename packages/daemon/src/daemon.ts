@@ -18,7 +18,7 @@ import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { type KernelRunDelivery } from "./kernel-run.js";
 import { runDelivery, type Delivery } from "./runner.js";
-import { DEVICE_FILE, SERVER_FILE, persist, readStored } from "./config.js";
+import { DEVICE_FILE, SERVER_FILE, MACHINE_TERMINAL_FILE, persist, readStored, machineHeaders } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
 import { snapshotProgress } from "./progress.js";
 import { WatchManager, type WatchSpec } from "./watcher.js";
@@ -26,6 +26,8 @@ import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion, writeRunningVersion } from "./version.js";
 import { startMoonlight } from "./moonlight.js";
 import { classifyPollFailure, PollHealth } from "./poll-health.js";
+import { startLocalSocket } from "./local-socket.js";
+import { detectAgentProfiles } from "./agent-profiles.js";
 
 const POLL_MS = Number(process.env.LOOPANY_POLL_MS || 3000);
 /** Per-poll fetch timeout — a hung connection must not stall the heartbeat
@@ -38,6 +40,23 @@ const REPOLL_MS = 250;
 /** On SIGTERM/`down`, wait at most this long for in-flight runs to settle (the
  *  abort SIGTERMs their claude children; KILL_GRACE is 5s, so 10s covers it). */
 const DRAIN_MS = 10_000;
+
+export function versionBelow(value: string, minimum: string): boolean {
+  const parse = (v: string) => v.split(".").slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);
+  const a = parse(value), b = parse(minimum);
+  for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i]! < b[i]!; }
+  return false;
+}
+
+export function nextCredentialRejection(
+  failures: number,
+  reason: string | undefined,
+): { failures: number; terminal: boolean } {
+  if (reason === "machine_revoked") return { failures, terminal: true };
+  if (reason !== "invalid_credential") return { failures: 0, terminal: false };
+  const next = failures + 1;
+  return { failures: next, terminal: next >= 3 };
+}
 
 /** Read a `--flag value` from argv. */
 function flag(name: string): string | undefined {
@@ -112,6 +131,7 @@ export async function runDaemon(): Promise<number> {
     arch: process.arch,
     version: daemonVersion(),
     alias: machineAlias(),
+    agentProfiles: detectAgentProfiles(),
   };
 
   // Refuse to boot when a live, VERIFIED daemon already owns the pidfile — a
@@ -159,6 +179,7 @@ export async function runDaemon(): Promise<number> {
   // reclaimed any queued run as "machine offline"). `inFlight` dedups in case the
   // same delivery is ever returned twice.
   const inFlight = new Set<string>();
+  const stopLocalSocket = await startLocalSocket(() => ({ pid: process.pid, server, inFlight: inFlight.size }));
 
   // The SHARED kernel-run lifecycle (dispatch/dedup/execute/settle) — the same
   // module the simulator's remote driver runs, over the daemon's OWN in-flight
@@ -170,6 +191,7 @@ export async function runDaemon(): Promise<number> {
   let watchDigest: string | undefined;
   const pollHealth = new PollHealth(logger);
 
+  let invalidCredentialFailures = 0;
   while (!ac.signal.aborted) {
     const started = Date.now();
     try {
@@ -179,11 +201,18 @@ export async function runDaemon(): Promise<number> {
       // ac.signal rides along so SIGTERM/`down` aborts an in-flight poll too.
       const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: machineHeaders(token, { "Content-Type": "application/json" }),
         body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest, [...inFlight])),
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
-        const data = (await res.json()) as { deliveries?: Delivery[]; kernelRuns?: KernelRunDelivery[]; watch?: WatchSpec[]; watchDigest?: string };
+        invalidCredentialFailures = 0;
+        const data = (await res.json()) as { minDaemonVersion?: string; deliveries?: Delivery[]; kernelRuns?: KernelRunDelivery[]; watch?: WatchSpec[]; watchDigest?: string };
+        const currentVersion = daemonVersion() ?? "0.0.0";
+        if (data.minDaemonVersion && versionBelow(currentVersion, data.minDaemonVersion)) {
+          persist(MACHINE_TERMINAL_FILE, JSON.stringify({ reason: "daemon_version_too_old", minimum: data.minDaemonVersion, at: new Date().toISOString() }));
+          logger.error({ currentVersion, minimum: data.minDaemonVersion }, "daemon is too old for this server; run loopany update");
+          break;
+        }
         // A 2xx transport response is not recovery until its payload is usable.
         // In particular, a proxy-generated/truncated body must remain degraded.
         pollHealth.success(Date.now() - started);
@@ -209,6 +238,19 @@ export async function runDaemon(): Promise<number> {
         // same dispatch the simulator's remote driver runs - anti-drift).
         kernelLifecycle.dispatch(data.kernelRuns);
       } else {
+        if (res.status === 401) {
+          const reason = await res.clone().json().then((v: unknown) => (v as { error?: string }).error).catch(() => undefined);
+          const rejection = nextCredentialRejection(invalidCredentialFailures, reason);
+          invalidCredentialFailures = rejection.failures;
+          if (rejection.terminal) {
+            persist(MACHINE_TERMINAL_FILE, JSON.stringify({ reason, at: new Date().toISOString() }));
+            logger.error({ reason }, "machine credential rejected permanently; run lk login and loopany up to reconnect");
+            break;
+          }
+          if (reason === "invalid_credential") {
+            logger.warn({ failures: invalidCredentialFailures, terminalAfter: 3 }, "machine credential rejected; retrying before declaring it invalid");
+          }
+        }
         pollHealth.failure({ kind: "http", detail: res.statusText || `HTTP ${res.status}`, status: res.status }, Date.now() - started);
       }
     } catch (err) {
@@ -226,6 +268,7 @@ export async function runDaemon(): Promise<number> {
     await new Promise((r) => setTimeout(r, 200));
   }
   stopMoonlight();
+  await stopLocalSocket();
   await watchManager.closeAll();
   // Only clear the pidfile if it still records OUR pid — never delete a file a
   // newer daemon has since claimed.

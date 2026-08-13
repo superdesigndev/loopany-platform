@@ -303,7 +303,7 @@ export function TeamsModal({
                     onClick={() => {
                       setActiveTeamCookie(detail.id)
                       onClose()
-                      void navigate({ to: '/t/$teamId', params: { teamId: detail.id } })
+                      void navigate({ to: '/t/$teamSlug', params: { teamSlug: detail.slug } })
                     }}
                   >
                     Open dashboard →

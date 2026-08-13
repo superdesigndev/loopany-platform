@@ -54,24 +54,16 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('ComposeModal New-Loop waiting state', () => {
-  it('shows the live checklist while waiting, and lights it up as milestones arrive', async () => {
+describe('ComposeModal session-auth capture', () => {
+  it('shows team-scoped session instructions without embedding a credential', async () => {
     act(() => root!.render(createElement(ComposeModal, { open: true, template: HK, onClose: () => {}, onCreated: () => {} })))
     await advance(0) // flush mintClaim → token
-    // The waiting state renders the shared checklist (every milestone label).
-    expect(host!.textContent).toContain('Waiting for your coding agent')
-    expect(host!.textContent).toContain('Reading the setup instructions')
-    expect(host!.textContent).toContain('Creating the loop')
-    // Degraded (no reports) → the first step pulses as "working…".
-    expect(host!.textContent).toContain('working…')
-    // The lean snippet carries no reporting protocol (round 8).
+    expect(host!.textContent).toContain('Authentication stays with your human CLI session')
+    expect(host!.textContent).toContain('server-url: http://localhost:3000')
+    expect(host!.textContent).not.toContain('connect-key')
+    expect(host!.textContent).not.toContain('ck_test')
     expect(host!.textContent).not.toContain('curl')
     expect(host!.textContent).not.toContain('/api/claim/progress')
 
-    // Real reports arrive (via `loopany progress`) → the checklist advances.
-    h.steps = ['reading', 'inspecting', 'configuring']
-    await advance(1600)
-    // Three done → the active cursor moved past them (still "working…" on authoring).
-    expect(host!.textContent).toContain('working…')
   })
 })

@@ -11,6 +11,19 @@ import type { ChannelSummary } from '../types'
  * two binding surfaces can never drift. This modal owns the list + per-row test/delete.
  */
 export function NotificationsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Modal open={open} onClose={onClose}>
+      <ModalHead
+        title="Notifications"
+        sub="Your personal destinations across every team. The newest one receives new Task assignments."
+      />
+      <NotificationSettings active={open} />
+    </Modal>
+  )
+}
+
+/** Shared notification manager for both the dashboard modal and settings pages. */
+export function NotificationSettings({ active = true }: { active?: boolean }) {
   const [channels, setChannels] = useState<ChannelSummary[]>([])
   const [err, setErr] = useState<string | null>(null)
   // Per-row transient test result (id → 'sending' | 'ok' | error text).
@@ -25,12 +38,12 @@ export function NotificationsModal({ open, onClose }: { open: boolean; onClose: 
   }, [])
 
   useEffect(() => {
-    if (!open) {
+    if (!active) {
       setErr(null)
       return
     }
     void load()
-  }, [open, load])
+  }, [active, load])
 
   async function remove(id: string) {
     setErr(null)
@@ -50,12 +63,7 @@ export function NotificationsModal({ open, onClose }: { open: boolean; onClose: 
   }
 
   return (
-    <Modal open={open} onClose={onClose}>
-      <ModalHead
-        title="Notifications"
-        sub="Push channels for this team. A loop routes its run messages to the channel you pick on it."
-      />
-
+    <>
       {err && <ErrorBanner message={err} onDismiss={() => setErr(null)} className="mb-2 mt-3" />}
 
       <ModalSection>Channels</ModalSection>
@@ -68,7 +76,7 @@ export function NotificationsModal({ open, onClose }: { open: boolean; onClose: 
               <div className="flex min-w-0 items-center gap-2.5">
                 <span className="text-[15px] font-medium text-display">{c.name}</span>
                 <span className="text-label text-secondary">
-                  {typeLabel(c.type)} · {c.hint}
+                  {typeLabel(c.type)} · {c.hint}{c.active ? ' · Active' : ''}
                 </span>
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -95,6 +103,6 @@ export function NotificationsModal({ open, onClose }: { open: boolean; onClose: 
       <div className="mt-6">
         <ChannelAddForm onCreated={() => load()} />
       </div>
-    </Modal>
+    </>
   )
 }

@@ -26,7 +26,7 @@ import os from "node:os";
 import { resolveDurableBinPath } from "./bin-shim.js";
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printText } from "./cli-client.js";
-import { resolveServerUrl } from "./config.js";
+import { resolveServerUrl, machineHeaders } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { verifiedRunningPid } from "./pidfile.js";
 
@@ -81,7 +81,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   // ancient server yields no `text` → the definitive `tooOldHome` below. Retained here
   // (its own upgrade-window gate) even though the render fallback is gone.
   const legacy: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
-    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: machineHeaders(token) });
     return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
   };
 

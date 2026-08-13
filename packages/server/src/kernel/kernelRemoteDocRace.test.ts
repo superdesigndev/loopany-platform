@@ -27,9 +27,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { run, WORKSPACE_DIR, type CliDeps } from "@loopany/cli";
 
-// The device token the server resolves to the race team. Hand-shaped `dk_` demo
-// token (legit per isDeviceTokenShape); the machine id derives from it.
-const TOKEN = "dk_remote_doc_race";
+const TOKEN = "session_remote_doc_race";
 const OWNER_USER = "u_remote_doc_race";
 const SERVER_URL = "https://kernel.example.test";
 const NOW = "2026-08-10T09:00:00.000Z";
@@ -51,7 +49,6 @@ async function seedMachine(token: string, userId: string): Promise<string> {
     teamId,
     name: `m-${userId}`,
     tokenHash: tokens.sha256(token),
-    token,
   });
   return teamId;
 }
@@ -107,7 +104,7 @@ beforeAll(async () => {
   const bCreate = await gateway.kernelCli(TOKEN, {
     command: { op: "doc-put", key: "brief", body: "B's real content\n", ifVersion: 0 },
     now: NOW,
-  });
+  }, { userId: OWNER_USER, teamId: TEAM });
   expect(bCreate.status).toBe(200);
   const afterB = await kstore.readSnapshot(TEAM);
   const doc = afterB.objects["brief"];
@@ -125,7 +122,7 @@ beforeAll(async () => {
   raceResponse = await gateway.kernelCli(TOKEN, {
     command: { op: "doc-put", key: "brief", body: "", ifVersion: 0 },
     now: NOW,
-  });
+  }, { userId: OWNER_USER, teamId: TEAM });
 
   // A workspace whose backend is the remote URL, so `run(...)` selects the
   // RemoteBackend and the injected transport carries the POST.

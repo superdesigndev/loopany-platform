@@ -39,19 +39,21 @@ describe('/api/bootstrap', () => {
   test('carries the first-capture onboarding (connect + fetch references over HTTP)', async () => {
     const body = flat(await (await GET()).text())
     // Interpret the pasted values and connect the machine.
-    expect(body).toContain('connect-key')
-    expect(body).toContain('loopany up')
+    expect(body).toContain('lk setup /<team-slug> --server <server-url>')
+    expect(body).toContain('starts the resident runtime')
+    expect(body).not.toContain('lk team use')
+    expect(body).toContain('No pasted value is a credential')
     // The skill isn't on disk yet, so the references are fetched over HTTP.
     expect(body).toContain('/api/skill/references/create.md')
     // Still a quick check-in, not a full interview.
-    expect(body).toContain('keep questions to quick')
+    expect(body).toContain('Keep the conversation focused')
   })
 
   test('hands decide-what-to-build off to create.md §1 (logic moved out in batch 3)', async () => {
     const body = flat(await (await GET()).text())
     // Bootstrap points at the create reference for everything from "what should this
     // loop be?" onward — the session-situation fork now lives in create.md §1.
-    expect(body).toContain('Follow it from its §1')
+    expect(body).toContain('read the create reference')
     expect(body).toContain('/api/skill/references/create.md')
   })
 })

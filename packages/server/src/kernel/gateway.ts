@@ -31,10 +31,11 @@ import {
 
 import { timingSafeEqual } from "node:crypto";
 import * as store from "../db/store.js";
-import { isDeviceTokenShape, machineIdFromToken, resolveLease, retireLeasesForRun, sha256 } from "../gateway/tokens.js";
+import { resolveLease, retireLeasesForRun } from "../gateway/tokens.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "./store.js";
 import { notifyKernelChangeset } from "./notify.js";
 import { authorizeKernelRequest } from "./authority.js";
+import { normalizePersonFields, personAddress } from "./person.js";
 
 export interface KernelHttpResult {
   status: number;
@@ -62,6 +63,7 @@ export interface KernelCliResponse {
   machinePresence?: Record<string, string>;
   /** Existing team identity for source labeling in remote human-facing clients. */
   team?: { id: string; name: string };
+  people?: Record<string, { email: string | null; name: string | null }>;
   /** Immediate consequence derived from this write's applied changeset and
    * authoritative post-apply snapshot. */
   operationalContext?: OperationalContext;
@@ -83,6 +85,8 @@ export interface KernelCliBody {
   command?: unknown;
   /** Audit hint from an owner CLI. It never affects credential scope. */
   provenance?: unknown;
+  /** Claimed local Machine for audit refinement only; ownership + Team binding are verified server-side. */
+  machineId?: unknown;
   tick?: boolean;
   read?: boolean;
   /** The BOUNDED team-timeline query (kernel-team-timeline): the server runs
@@ -117,9 +121,7 @@ function checkSimAuthority(presented: unknown): "absent" | "granted" | "refused"
  *  (enumeration-safe: unknown machine and wrong token hash are indistinct).
  *  Every request kind (command/tick/read) shares this ONE auth chokepoint.
  *
- *  Two credential classes (P0 stage D):
- *  - `dk_` device token -> the OWNER scope (human actor, full verb surface).
- *  - `rk_` run lease with kernel markers -> the RUN scope: team from the lease,
+ *  A kernel `rk_` run lease resolves to the RUN scope: team from the lease,
  *    actor {agent-run, runId, sessionId} so every write is attributed to the
  *    run, and a VERB SUBSET enforced by the caller (`runVerbRefusal`). A
  *    production (non-kernel) rk_ lease resolves to null here - it has no kernel
@@ -136,43 +138,25 @@ async function resolveScope(
       run: { runId: lease.runId, state: lease.state },
     };
   }
-  if (!isDeviceTokenShape(credential)) return null;
-  const machineId = machineIdFromToken(credential);
-  const machine = await store.getMachine(machineId);
-  if (!machine) return null;
-  if (machine.tokenHash && machine.tokenHash !== sha256(credential)) return null;
-  const teamId = machine.teamId ?? store.teamIdForUser(machine.userId);
-  // This is the safe fallback. A bounded audit hint may refine it later, but
-  // never changes the credential's authority or team scope.
-  const actor: Provenance = { entrance: "human", actorId: machine.userId ?? "shared" };
-  return { teamId, actor, machineId };
+  return null;
 }
 
-/** Accept a bounded audit hint only for a device credential. The credential
- * still owns authorization and team scope. Agent machine aliases are derived
- * server-side from that credential, never accepted from the request body. */
-async function deviceActor(
-  scope: { teamId: string; actor: Provenance; machineId?: string },
+/** Refine only the audit label of a signed-in human to a verified local agent.
+ * Team scope and permissions remain session-derived. */
+async function humanActor(
+  userId: string,
+  teamId: string,
+  machineId: unknown,
   raw: unknown,
 ): Promise<Provenance> {
-  if (!isRecord(raw)) return scope.actor.actorId === "shared" ? { entrance: "device", actorId: "shared" } : scope.actor;
-  const entrance = raw.entrance;
-  const actorId = raw.actorId;
-  const sessionId = raw.sessionId;
-  if (
-    (entrance !== "human" && entrance !== "agent" && entrance !== "device") ||
-    typeof actorId !== "string" ||
-    actorId.length < 1 ||
-    actorId.length > 200 ||
-    (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.length > 200))
-  ) {
-    return scope.actor;
-  }
-  if (entrance === "agent" && scope.machineId && (actorId === "codex" || actorId === "claude")) {
-    const alias = (await store.listTeamAliases(scope.teamId)).find((row) => row.machineId === scope.machineId)?.alias;
-    return { entrance, actorId: `${alias ?? "device"}/${actorId}`, ...(sessionId ? { sessionId } : {}) };
-  }
-  return { entrance, actorId, ...(sessionId ? { sessionId } : {}) };
+  const fallback: Provenance = { entrance: "human", actorId: personAddress(userId) };
+  if (!isRecord(raw) || raw.entrance !== "agent" || (raw.actorId !== "codex" && raw.actorId !== "claude")) return fallback;
+  if (typeof machineId !== "string" || (raw.sessionId !== undefined && (typeof raw.sessionId !== "string" || raw.sessionId.length > 200))) return fallback;
+  const machine = await store.getMachine(machineId);
+  if (!machine || machine.enrolledBy !== userId) return fallback;
+  const binding = (await store.listTeamAliases(teamId)).find((row) => row.machineId === machine.id);
+  if (!binding) return fallback;
+  return { entrance: "agent", actorId: `${binding.alias}/${raw.actorId}`, ...(raw.sessionId ? { sessionId: raw.sessionId } : {}) };
 }
 
 /** The RUN credential's verb subset (P0 stage D). The hard wall is the TEAM
@@ -186,20 +170,24 @@ async function deviceActor(
  *  `terminalizeLease` targets by runId, so the guard is defense-in-depth
  *  (parity with production run-token semantics). Returns null when allowed. */
 /**
- * Dispatch one kernel request over a device credential — a write `Command`, a
- * host `tick`, or a `read` of the authority snapshot (the discriminated
+ * Dispatch one kernel request over a human session or run credential: a write
+ * `Command` or a read of the authority snapshot (the discriminated
  * {@link KernelCliBody}). Back-compat: passing a bare Command (the old `command`
  * arg) is still accepted and routed as a write.
  *
- * `deviceToken` is the `dk_` machine credential (same machinery as every other
- * machine route). The body may refine audit attribution, but cannot change the
- * credential's team, permissions, or machine alias.
+ * Machine credentials are deliberately rejected at this boundary. The body may
+ * refine audit attribution, but cannot change the credential's team or permissions.
  */
 export async function kernelCli(
   deviceToken: string,
   body: KernelCliBody | unknown,
+  human?: { userId: string; teamId: string },
 ): Promise<KernelHttpResult> {
-  const scope = await resolveScope(deviceToken);
+  const scope = human
+    ? (await store.isTeamMember(human.teamId, human.userId))
+      ? { teamId: human.teamId, actor: { entrance: "human" as const, actorId: personAddress(human.userId) }, human: true, run: undefined, machineId: undefined }
+      : null
+    : await resolveScope(deviceToken);
   if (!scope) return unauth();
   const { teamId } = scope;
 
@@ -208,10 +196,12 @@ export async function kernelCli(
     isRecord(body) && ("command" in body || body.tick === true || body.read === true || "timeline" in body)
       ? (body as KernelCliBody)
       : { command: body };
-  const actor = scope.run ? scope.actor : await deviceActor(scope, req.provenance);
+  const actor = "human" in scope
+    ? await humanActor(human!.userId, teamId, req.machineId, req.provenance)
+    : scope.actor;
   // A RUN credential never dictates time: honoring body.now would let a run
   // backdate its own history or steer follow-up/backoff math. The deterministic
-  // `now` override stays an owner/test seam on DEVICE credentials only.
+  // `now` override stays an owner/test seam on HUMAN sessions only.
   //
   // The ONE exception is a CAPABILITY, never a mode: a simulator deployment
   // configures LOOPANY_KERNEL_SIM_SECRET, and only a request PRESENTING that
@@ -247,6 +237,15 @@ export async function kernelCli(
       };
     }
   }
+  if ("human" in scope) {
+    const refusedVerb = authorizeKernelRequest("human-session", req);
+    if (refusedVerb) return { status: refusedVerb.status, body: { ok: false, notices: [], refusal: { code: refusedVerb.code, message: refusedVerb.message } } };
+  }
+  if (req.command !== undefined) {
+    const normalized = await normalizePersonFields(teamId, req.command);
+    if ("error" in normalized) return { status: 422, body: { ok: false, notices: [], refusal: { code: "INVALID_PERSON", message: normalized.error } } };
+    req.command = normalized;
+  }
 
   if (req.read) return await readRequest(teamId);
   if (req.timeline !== undefined) return await timelineRequest(teamId, req.timeline);
@@ -258,8 +257,7 @@ export async function kernelCli(
   // failure (missing CLI, forgotten protocol, no-op process) and settles as
   // FAILED with a note naming it — so a silent agent can never mark a one-shot
   // task's run done. An explicit no-op note ("nothing actionable") is an honest
-  // result and passes. A DEVICE credential's finish is an owner override and is
-  // never second-guessed.
+  // result and passes. Humans cannot call run-finish through this boundary.
   let command = req.command;
   if (scope.run && isRecord(command) && command.op === "run-finish" && command.outcome === "done") {
     const workflowOnly =
@@ -401,6 +399,7 @@ async function readRequest(teamId: string): Promise<KernelHttpResult> {
   // Machine availability per team alias (the Loops projection consumes it).
   const machinePresence = await readMachinePresence(teamId);
   const team = await store.getTeam(teamId);
+  const people = Object.fromEntries((await store.listTeamMembers(teamId)).map(member => [personAddress(member.userId), { email: member.email, name: member.displayName }]));
   return {
     status: 200,
     body: {
@@ -410,6 +409,7 @@ async function readRequest(teamId: string): Promise<KernelHttpResult> {
       events,
       machinePresence,
       team: { id: teamId, name: team?.name ?? teamId },
+      people,
     },
   };
 }

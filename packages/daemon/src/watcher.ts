@@ -40,6 +40,7 @@ import { watch, type FSWatcher } from "chokidar";
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { resolveLoopDir } from "./loopdir.js";
+import { machineHeaders } from "./config.js";
 import { isScratchDir, isWithinResolvedRoots, resolveRoots } from "./roots.js";
 
 const log = logger.child({ mod: "watcher" });
@@ -571,7 +572,7 @@ class LoopWatcher {
     try {
       const res = await this.fetchImpl(`${this.server}/api/machine/sync`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
+        headers: machineHeaders(this.token, { "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       }, SYNC_TIMEOUT_MS);
       if (!res.ok) {
@@ -589,7 +590,7 @@ class LoopWatcher {
     try {
       const res = await this.fetchImpl(`${this.server}/api/machine/blob/${hash}`, {
         method: "PUT",
-        headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/octet-stream" },
+        headers: machineHeaders(this.token, { "Content-Type": "application/octet-stream" }),
         body: new Uint8Array(buf),
       }, BLOB_PUT_TIMEOUT_MS);
       return res.ok;

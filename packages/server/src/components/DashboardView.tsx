@@ -19,7 +19,7 @@ import { TemplatesPreview } from './TemplatesPreview'
 import { DISCORD_URL, DiscordIcon, GITHUB_URL, GitHubIcon } from './SocialLinks'
 
 /** The seed the route loader hands the dashboard: the live fan-out plus the
- *  static-per-deploy bundles. Both `/` (open mode) and `/t/<id>` render from it. */
+ *  static-per-deploy bundles. Both `/` (open mode) and `/t/<slug>` render from it. */
 export interface DashboardData {
   jobs: JobSummary[]
   /** Curated template groupings for the carousel. Each bundle embeds its resolved
@@ -35,7 +35,7 @@ export interface DashboardData {
  *  so only the route loader fetches them; the poll must not re-ship the thumb SVGs
  *  every 3-10s.
  *
- *  `teamId` (the `/t/<id>` route's team, in id form or undefined in open mode)
+ *  `teamId` (the `/t/<slug>` route's resolved id, or undefined in open mode)
  *  scopes every list fn EXPLICITLY - so a tab on /t/A and one on /t/B show
  *  different teams simultaneously, independent of the shared last-used cookie. */
 export async function fetchLiveData(teamId?: string) {
@@ -52,14 +52,16 @@ export async function fetchLiveData(teamId?: string) {
  * renders from its own fetch-then-set poll state, seeded once from the route
  * loader's data, and scopes every fetch to `teamId` so the view is pinned to the
  * URL's team (multi-tab safe). The route mounts it with `key={teamId}` so a
- * team switch (a `/t/<id>` navigation) re-seeds state from the new loader data.
+ * team switch (a `/t/<slug>` navigation) re-seeds state from the new loader data.
  */
 export function DashboardView({
   teamId,
+  teamSlug,
   initial,
   openTemplate,
 }: {
   teamId?: string
+  teamSlug?: string
   initial: DashboardData
   /** A template NAME deep-linked from the public market (`/?template=<name>`): on mount
    *  the compose modal opens preselected on it, reusing the exact single-template flow
@@ -172,11 +174,11 @@ export function DashboardView({
             </button>
           )}
           {/* The cross-loop timeline is a PAGE, not a modal (it owns a zoom +
-              window in its own right). Open mode has no /t/<id>, so it links to
+              window in its own right). Open mode has no /t/<slug>, so it links to
               the bare /timeline route instead — the view must be reachable in
               BOTH modes or self-hosters never find it. */}
-          {teamId ? (
-            <Link to="/t/$teamId/timeline" params={{ teamId }} className={headerBtn}>
+          {teamSlug ? (
+            <Link to="/t/$teamSlug/timeline" params={{ teamSlug }} className={headerBtn}>
               Timeline
             </Link>
           ) : (
@@ -205,7 +207,7 @@ export function DashboardView({
             empty workspace and offers a quiet re-entry while the user has no loops.
             Its own component so this dashboard body stays untouched. */}
         <div className="pt-6">
-          <OnboardingEntry teamId={teamId} noLoops={jobs.length === 0} noMachines={machines.length === 0} />
+          <OnboardingEntry teamId={teamId} teamSlug={teamSlug} noLoops={jobs.length === 0} noMachines={machines.length === 0} />
         </div>
         {/* Hero - invite creation first (serif = the one editorial moment), then the
             auto-playing bundle carousel, then a prominent blank-loop entry. */}

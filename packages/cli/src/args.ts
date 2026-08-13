@@ -39,6 +39,7 @@ export class UsageError extends Error {
 const OPTIONS: NonNullable<ParseArgsConfig["options"]> = {
   // value-bearing flags
   backend: { type: "string" },
+  server: { type: "string" },
   // `init --backend <url> --token <dk_…>` stores the device token for a remote
   // backend (§13 M6). LOOPANY_KERNEL_TOKEN overrides it at run time.
   token: { type: "string" },
@@ -72,6 +73,7 @@ const OPTIONS: NonNullable<ParseArgsConfig["options"]> = {
   // `connect <url> --token <dk_…> --me <email>` declares WHO the human behind
   // the credential is (the remote inbox's default identity).
   me: { type: "string" },
+  team: { type: "string" },
   wait: { type: "boolean" },
   // boolean flags
   json: { type: "boolean" },

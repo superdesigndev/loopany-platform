@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { machineCredential } from '../gateway/http'
 import { safeDecode } from '../lib/url'
 
 /**
@@ -18,8 +19,7 @@ export const Route = createFileRoute('/api/machine/blob/$hash')({
   server: {
     handlers: {
       PUT: async ({ request }: { request: Request }) => {
-        const auth = request.headers.get('authorization') ?? ''
-        const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+        const token = machineCredential(request)
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         // Malformed percent-encoding must be a clean 400, never a thrown 500.
         const hash = safeDecode(new URL(request.url).pathname.split('/').pop() ?? '')

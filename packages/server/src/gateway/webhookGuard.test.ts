@@ -165,6 +165,16 @@ describe("safeWebhookFetch — end-to-end guarded send", () => {
     ).rejects.toThrow(/non-public/);
   });
 
+  test("allows proxy fake-IP space only for an exact Feishu/Lark host", async () => {
+    let fetched = false;
+    const res = await safeWebhookFetch(OK_URL, okBody, {
+      lookup: async () => [{ address: "198.18.2.136" }],
+      fetchImpl: (async () => { fetched = true; return new Response(JSON.stringify({ code: 0 })); }) as unknown as typeof fetch,
+    });
+    expect(fetched).toBe(true);
+    expect(res.json).toEqual({ code: 0 });
+  });
+
   test("does NOT follow a redirect to a blocked target — re-validates and rejects", async () => {
     const fetchImpl = (async (url: string) => {
       if (url.startsWith(OK_URL)) {

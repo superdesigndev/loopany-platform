@@ -1,78 +1,53 @@
-# Loopany — first capture: connect this machine, then build a loop
+# Loopany first capture
 
-You're reading this because the user pasted a Loopany capture snippet (`Fetch
-<server-url>/api/bootstrap and help me build a loop.`) into your session. Loopany
-turns a task into a **scheduled agent loop** that runs automatically on this machine.
-Their Loopany web tab is open and waiting for the loop to appear, so work end to end
-and keep questions to quick check-ins — don't run a full interview.
+The user pasted a Loopany capture snippet into this coding-agent session. Help
+them create a durable Task or recurring Loop in the selected team. Keep the
+conversation focused and confirm material choices before writing.
 
-This bootstrap doc is served over HTTP on first contact, before the loopany skill is
-installed on disk. Do the two steps below, then hand off to the create reference,
-which owns everything from "what should this loop be?" onward. (`loopany up`
-installs the skill at USER scope for each coding agent loopany knows about (Claude
-Code `~/.claude/skills/loopany/`, Codex `~/.agents/skills/loopany/`) and `loopany
-new` refreshes it, so a later session in ANY folder on this machine auto-triggers the
-installed skill and reads the same references from disk.)
+## Pasted values
 
-## The pasted values
+- `server-url` is the Loopany server base URL.
+- `team-id` is the explicit destination team when present.
+- `loopany-cli` is an optional command prefix. If absent, use
+  `npx @crewlet/loopany@latest` for daemon commands and `lk` for Kernel commands.
+- Text below the values is the template intent, when the user started from a
+  template card.
 
-The user pasted these along with the capture link — use them verbatim:
+No pasted value is a credential. Never ask the user to paste a session token or
+machine key into chat, a prompt, a file, or a command line.
 
-- **server-url** — the Loopany server base URL (e.g. `http://localhost:3000`).
-- **connect-key** — a one-time token (starts with `dk_`). It both authorizes a NEW
-  machine and tags the loop back to the web dialog (its `claim`).
-- **loopany-cli** *(optional)* — the command prefix for every `loopany` invocation.
-  **If it's not pasted, use `npx @crewlet/loopany@latest`.** (A dev server may paste
-  a local command instead.)
+## 1. Set up this computer for the selected Team
 
-The paste may also carry a short **task description** below those values — the user
-started from a template card on the dashboard. That description is the loop to build;
-the create reference (step 2) treats it as the intent.
-
-## 1 · Connect this machine
-
-One idempotent command does the whole thing — run it verbatim (substitute
-**loopany-cli**):
+Use the selected Team's stable workspace path and ask the user to run one command:
 
 ```bash
-<loopany-cli> up --server-url <server-url> --connect-key <connect-key>
+lk setup /<team-slug> --server <server-url>
 ```
 
-`loopany up` resolves this machine's stable identity (reuses the stored device
-token, else adopts the connect-key), starts a single detached daemon if none is live
-— it survives this session and never doubles up — and waits until the server reports
-the machine online. Once connected it also best-effort refreshes the loopany skill
-at USER scope for each coding agent loopany knows about (Claude Code
-`~/.claude/skills/loopany/`, Codex `~/.agents/skills/loopany/`), announced in one
-line, never blocking.
+This starts browser login only when needed, enrolls or reuses the physical
+Machine, starts the resident runtime, binds the Machine to the Team after a live
+membership check, and makes that Team the default human CLI workspace. No setup
+token or Machine credential is pasted. Do not approve browser login for the user.
 
-It exits `0` once connected (printing `daemon online …` or `daemon already running
-…`); then continue. If it can't come online, it says where the log is.
+The runtime's restricted Machine credential can poll, claim Runs, sync artifacts,
+and identify the Machine. It cannot perform human Task or Kernel writes. A Run's
+lease fixes its Team and ignores the human CLI default.
 
-## 2 · Build the loop
+If the local machine is already enrolled to another account, do not overwrite it.
+Follow the CLI instruction to stop the old daemon or use a separate
+`LOOPANY_HOME`.
 
-With the machine connected, fetch and follow the **create** reference end to end.
-The skill isn't on disk yet, so fetch it over HTTP from the **server-url**:
+## 2. Build the Task or Loop
 
-```
+Use the installed `loopany-kernel` skill and `lk` commands. For a recurring Loop,
+read the create reference:
+
+```text
 <server-url>/api/skill/references/create.md
 ```
 
-Follow it from its §1: it decides *what* loop to build (the task already in this
-session, or — if the session is empty — brainstorming loops for this project and
-letting the user pick), settles the cadence and per-run output, authors the loop's
-task file and config, and runs `loopany new`. Pass the **connect-key** as
-`--connect-key` so the created loop resolves back to the web dialog, and declare
-which coding agent you are with `--agent claude-code` (or `--agent codex` / `--agent grok`).
-create.md carries the flow through to telling the user it's live — you don't need
-to add anything here.
-
-## Editing and evolving, later
-
-Those flows normally run from the installed skill, but you can fetch them over HTTP
-the same way if needed:
-
-- **Editing an existing loop** (reschedule, rename, pause, set/clear a goal, or
-  change what it does): `<server-url>/api/skill/references/update.md`.
-- **How a loop refines itself over time** — the evolution pass that improves the
-  loop from its own run history: `<server-url>/api/skill/references/evolve.md`.
+Determine the standing specification, cadence, assignment, workflow, and durable
+outputs. Human emails and names are input aliases only. The server stores the
+canonical `person:<user-id>` identity and refuses ambiguous names. Use the selected
+team throughout. Do not use `connect-key`, `dk_`, or a machine credential for
+authoring.

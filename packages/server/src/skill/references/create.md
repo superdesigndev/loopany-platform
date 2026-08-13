@@ -1,277 +1,90 @@
-# Create a loop
+# Create a Task or recurring Loop
 
-This machine is already connected — `loopany up` on first capture (see `bootstrap.md`)
-or the daemon that's been running since. Decide what to build, author it, create it.
-Use the **loopany-cli** prefix the user pasted (default `npx @crewlet/loopany@latest`)
-and, on the first-capture path, the **connect-key** from the capture snippet.
+Use this reference after the human CLI session and destination team are selected.
+Never accept or pass a machine key, session token, `dk_` value, or connect key.
 
-## As you go · report progress (best-effort)
+## 1. Understand the intent
 
-When the capture came from the web (there's a **connect-key**), a live checklist is
-waiting on the other side. As you pass each milestone below, report it so the user
-watches it light up — reusing that same connect-key:
+Read the current conversation and repository before asking questions. If the user
+just completed a repeatable task, propose turning that observed workflow into a
+Loop. Otherwise ask what outcome should recur. A template description in the
+capture prompt is the intended workflow and its hard rules, not optional flavor.
 
-    <loopany-cli> progress <milestone> --connect-key <connect-key>
+Confirm:
 
-Milestones, in order (skip any that don't apply): `reading` (reading these
-instructions), `inspecting` (looking at the project), `configuring` (settling the
-schedule/config in §2/§4), `authoring` (writing the task file + dashboard in §3),
-`creating` (running `loopany new` in §5). This is **best-effort only** — it never
-blocks or fails the real work; if the command isn't there or errors, carry on. With no
-connect-key (a non-capture create), skip reporting entirely.
+- the standing outcome and important boundaries
+- whether this is a one-time Task or recurring Loop
+- the cadence and IANA timezone for a Loop
+- the execution assignment, normally `<machine>/<agent>`
+- the durable outputs and the clean nothing-found behavior
+- the finish line when the work is goal-bound
 
-## 1 · Decide what to build
+Do not create anything until the user confirms these material choices.
 
-A loop only makes sense with a real task behind it. Read the session you're in and
-pick the starting point:
+## 2. Verify the observation and execution path
 
-- **The user already did a clear task this session** (the common case — they just
-  finished something and want it to keep happening). Turn *that task* into the loop:
-  recap it in one line, then build around the real URLs, paths, commands, and
-  thresholds from what you just did together.
-- **The capture snippet itself carries a task description** (the user started from a
-  template card on the dashboard). That description IS the intent — build exactly
-  that loop, grounded in this project's real paths and commands, and still confirm
-  anything it leaves open in §2.
-- **There's no task yet** (the session is essentially empty). **Don't invent a loop
-  from thin air.** Look at what *this project actually is* (its README, its code,
-  its purpose), brainstorm a few concrete loops that would be useful FOR IT, and let
-  the user pick. Make the options specific to what you see, e.g.:
-  - "Each morning, summarize new commits/issues in this repo and flag anything risky."
-  - "Every hour, run the health check against <the service this deploys> and alert
-    only when it's down."
-  - "Iterate on <the failing test suite> until it's green, then finish."
+For monitoring work, identify a concrete source and smoke-test access once. Never
+create a blind Loop. For code work, keep repositories, worktrees, dependencies,
+and build output outside the Loopany content folder. Use a fresh worktree from
+`main`, one PR at a time, and do not stack work on an unmerged PR.
 
-Only continue once there's a real intent — the task already in this session, or the
-loop the user picked.
+Never copy credentials, tokens, PII, or large raw transcripts into a Task, Doc,
+report, dashboard, or PR.
 
-## 2 · Settle cadence, output, and the finish line
+## 3. Write the standing body
 
-**Never silently guess** how often the loop runs or what each run produces. Reason
-out sensible defaults for *this specific task*, propose them in plain language in
-one short message, and get a yes (or an adjustment) before you create — **propose →
-confirm → build**.
+Author a Markdown file with the stable specification. Include the per-Run
+workflow, hard rules, boundaries, quality gates, expected products, and the
+honest nothing-found stop. Do not put an execution diary in the body. Events and
+notes record what happened.
 
-- **Cadence.** Propose a schedule that fits the task: a daily digest → "every day at
-  9am your time"; a monitor → "every hour"; a weekly roundup → "Monday mornings".
-  State it in human terms; you turn it into cron in §4.
-- **Per-run output.** Propose a concrete artifact or message format: "a short markdown
-  summary in `report.md`", "a one-line status, alert only when something looks off",
-  "an article at `articles/<date>.md`". This becomes the Spec + notify rule.
-- **Product format — when the loop writes markdown products.** Design their shape now
-  so the dashboard can index them. Each product opens with a fenced `---` front-matter
-  block of **flat top-level `key: value` scalars** (no nested YAML, no lists — the
-  parser reads only flat scalars): `type:` the loop's own one-word classification
-  label, `title:` a display title, `date:` the product's day (`YYYY-MM-DD`; omit it
-  for a living doc that isn't a dated product). All three are optional. Pick the
-  loop's small, fixed **`type` vocabulary** up front — e.g. `idea | draft | published`,
-  or `research | in-progress | done` — and write it into the Spec so every run reuses
-  the same words; a `<loop-kanban>` dashboard board keys its columns on it (see
-  evolve.md §3). The dashboard treats `date:` as the authoritative calendar date and
-  shows `type`/`title` as quiet chips in the Files list. A compact example:
-
-  ```markdown
-  ---
-  type: draft
-  title: Q3 outreach plan
-  date: 2026-07-01
-  ---
-
-  # Q3 outreach plan
-  …body…
-  ```
-- **Finish line — only for goal-shaped tasks.** Some tasks have a definite done state:
-  the user says "until", "reach", "iterate to", "get X to Y". Those are **closed
-  loops** — they carry a one-line, checkable **goal** and finish themselves when it's
-  met. Propose that finish line too ("…and stop once the suite passes"). Most loops
-  are **monitor-shaped** — digests, watches, health checks that run indefinitely.
-  For those, there is no goal: don't propose one or mention finishing.
-
-Propose all applicable pieces together — e.g. *"I'll run this every hour and iterate
-on the failing tests, dropping a status in `report.md`, and finish once the whole
-suite is green — sound good?"* — so the user confirms in one reply. (This pairs with
-§1: no task → ask first; loose parameters → propose and confirm. Quick check-ins,
-not an interview.)
-
-## 3 · Create the loop's folder and task file
-
-Every loop gets its **own folder** under the project: `<project>/loopany/<slug>/`
-(make it if needed; pick a short `<slug>` from the loop name). Its task file lives
-there, and by default the lightweight products it produces (reports, exports, dashboard
-`ui`, small artifacts) land there too, so its output stays self-contained.
-
-**This folder is a synced content home, not a scratch workspace.** The daemon
-continuously syncs it to the server, so heavy work products MUST live elsewhere: when a
-run needs to clone a repo, open a git worktree, install `node_modules`, or produce build
-output or caches, it does that work **outside** the loop folder (a sibling directory or a
-temp dir) and writes only the finished report/artifact back in. Author the Spec so runs
-naturally keep bulk out — e.g. *"do the fix in a git worktree created outside this loop
-folder"*, never inside it. A repo checkout dropped in the loop folder floods the sync.
-
-Write the **task file** at `<project>/loopany/<slug>/README.md` — the loop's durable
-brief and running memory. Each scheduled run reads it for context and maintains it
-(see `evolve.md`). Fill it from what we ACTUALLY just did — real URLs, paths,
-commands, thresholds:
+Use front matter on durable report Docs when useful:
 
 ```markdown
-# <Loop name>
-
-## Spec
-What this loop checks or does and why, plus the concrete steps / commands /
-endpoints / files involved — the real ones from this session. State when to message
-the user vs. stay silent. If the loop writes markdown products, state their
-front-matter convention here too: the fixed `type:` vocabulary this loop uses and
-whether products carry a `date:` (see §2). For a goal-driven (closed) loop, open the
-Spec with a sentence or two restating the mission and the finish line — prose only;
-the authoritative, checkable setpoint lives in the config `goal`, not here. There is
-NO `## Goal` section.
-
-## Current understanding
-The baseline / known state / open issues — what the loop currently expects. Seed it
-with what we established this session; each run updates it.
-
-## Timeline
-<!-- one dated entry per run, appended below by the loop -->
+---
+type: report
+title: <human title>
+date: YYYY-MM-DD
+---
 ```
 
-Keep the absolute path to `README.md` — it goes in the config as `taskFile`.
+## 4. Preview
 
-## 4 · Author the loop config
-
-A loop fires on a cron schedule. Each run is **either**:
-
-- **workflow** *(preferred when the task is deterministic — zero-LLM, cheap)*: a JS
-  **function body** run in Node with global `fetch`, a `prev` cursor (the last run's
-  returned `state`), and `tools.call(...)` (the machine's configured MCP servers; see
-  `evolve.md`). Contract: `return { message?: string, state?: any }`. `message` goes
-  to the user verbatim (no LLM); `state` persists and comes back as `prev` next run
-  (use it to diff / avoid repeating). To escalate to the coding agent instead, call
-  `agent(message?, data?)`. Prefer this whenever the task reduces to hitting an API,
-  reading a value, or computing a digest.
-- **the coding agent**: for runs that need reasoning, code, or file work. It
-  runs via your loop's host coding agent in `workdir`, driven by a server-composed trigger that points
-  it at your **task file** — no per-run instruction to write; the brief lives
-  entirely in the task file's `## Spec`.
-
-### Workflow syntax contract — read this before writing one
-
-A workflow **IS** a plain **JavaScript statement sequence** that Loopany runs
-*inside* an async function — so top-level `await` is fine and you end with
-`return { message?, state? }`. The injected globals `prev`, `agent(message?, data?)`,
-`tools.call(name, args)`, and `fetch` are already in scope — use them directly.
-It runs **locally on the loop's machine** as a bare `node` subprocess (isolation =
-subprocess + timeout + allowlisted env, not a capability sandbox): every node builtin
-works via dynamic `await import(...)`, so a script may read a local credential file at
-runtime and call an authenticated API with plain `fetch` — an MCP server is one way to
-reach an external tool, never the only one. One hard rule: **never embed a secret
-literal in the body** — it is stored server-side; credentials belong on the machine
-(a local file read at runtime, or `LOOPANY_WORKFLOW_ENV` passthrough), never in the
-script text.
-
-A workflow is **NOT an ES module** and **not the Claude Code `Workflow` tool**. Do
-**not** start it with `export const meta = {…}`; any top-level `export`/`import` is a
-parse error that fails the whole run before any line executes. Need a module? Use
-dynamic `await import('node:os')`. There is no `require`. The server parse-checks
-the body at write time and rejects a bad one with this same guidance — a rejected
-`loopany new`/`edit`/`set-workflow` means fix the syntax.
-
-**Canonical example** (the whole surface — no header, no imports):
-
-```js
-const res = await tools.call("posthog.exec", { query: "select 1" });
-const rows = res.data?.results ?? [];
-if (rows.length === (prev?.count ?? -1)) return { state: prev };   // nothing new → silent tick
-agent("summarize what changed", rows);                            // escalate to the agent
-return { message: `${rows.length} rows`, state: { count: rows.length } };
-```
-
-Author the config **inline** and pass it to `loopany new --json` (§5) — no config
-file to write. Only the loop's real intent goes in it; the CLI fills the envelope:
-
-```json
-{
-  "name": "short human name",
-  "cron": "m h dom mon dow",
-  "workflow": "<JS function body>",
-  "goal": "<one-line checkable finish line — omit for a monitor loop>",
-  "workdir": "<absolute project dir>",
-  "taskFile": "<absolute path to the task file above>",
-  "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
-  "ui": "<small dashboard HTML — optional; see 'Dashboard at create' below>",
-  "notify": "auto"
-}
-```
-
-Rules:
-- Include **`workflow` or `taskFile`** (or both, if the workflow escalates to the
-  agent). There is no `task` field — the agent's brief is the task file, so set
-  `workdir` + `taskFile` for any agent loop. Make any `workflow` self-contained and
-  defensive (handle fetch failures).
-- **`goal` makes the loop closed**: with a goal set, each run judges it and calls
-  `loopany finish` when met, ending the loop. Omit `goal` for a monitor/digest loop
-  that runs indefinitely (§2).
-- `stateSchema` is optional — declare numeric per-run metrics to get a chart.
-- `ui` is optional — the loop's dashboard panel as small HTML (see **Dashboard at
-  create** below).
-- `notify`: `auto` (only when there's something to say) | `always` | `never`.
-- **Don't add `timezone`, `claim`, or any auth** — `loopany new` injects the
-  timezone, the connect-key claim, and this machine's device token. (If the user
-  states a different zone, pass `--tz <IANA>` in §5.)
-
-### Dashboard at create — when the product shape is already known
-
-The dashboard is usually left to a later evolve pass, but when you ALREADY know the
-loop's product shape at create time — a template-driven loop, or any loop whose Spec
-fixes the artifacts/metrics up front — author the initial `ui` NOW and include it in
-the config, so the loop has a day-one dashboard instead of a blank one until it
-evolves. Use the same panel primitives and `{{latest.<key>}}` bindings documented in
-`evolve.md` §3 (`<loop-chart>` for a metric trend, `<loop-kanban>`/`<loop-embed>`/
-`<loop-calendar>` for the loop's typed products, `<loop-tabs>` to split several panels
-into tabs) — don't duplicate that guidance here;
-just bind only keys your `stateSchema` declares and columns your Spec's `type`
-vocabulary uses. Keep it small. Skip it when the product shape isn't settled yet — a
-speculative dashboard is worse than none.
-
-**Template references (on demand).** When the task came from a dashboard template,
-it may ship a per-template reference with a validated dashboard layout and state
-schema at `<server-url>/api/skill/references/templates/<template-name>/reference.md`
-— fetch it when you reach this step (never earlier; it's deliberately not in the
-paste prompt). Start from that layout and adapt it to the vocabulary you agreed
-with the user, rather than composing a dashboard from scratch.
-
-## 5 · Validate, then create
-
-Preview first with `--dry-run` — the server validates the config and echoes the
-normalized envelope, detected timezone, the next 3 fire times, and the open/closed
-classification, persisting nothing:
+Use the human CLI session and selected team. Preview the exact command first:
 
 ```bash
-<loopany-cli> new --json '<config>' --dry-run
+lk create "<title>" \
+  --id <stable-id> \
+  --assignee <machine>/<agent> \
+  --status todo \
+  --body-file <spec.md> \
+  --dry-run
 ```
 
-Check the classification matches your intent (a `goal` → `closed: will self-finish`;
-no goal → `open: runs until paused`) and the fire times look right. `workflow` and
-`ui` are echoed as presence flags (`yes`/`no`), not their source — if you authored a
-`ui` and the preview says `ui: no` (plus a warning), it validated to nothing; fix the
-HTML before creating. Then create for real — pass the connect-key so the web dialog
-learns the loop was created, and declare which coding agent you are:
+For a recurring Loop add:
 
 ```bash
-<loopany-cli> new \
-  --json '<config>' \
-  --connect-key <connect-key> \
-  --agent claude-code          # which coding agent you are (claude-code | codex | grok); omit to auto-detect
+  --cron '<five-field-cron>' --timezone '<IANA-timezone>'
 ```
 
-`loopany new` detects the IANA timezone, injects the claim, records the coding agent
-(the `--agent` you pass, or — preferred — the host it sniffs from its own env),
-authenticates, validates, and POSTs it. On success it prints `created loop <name> —
-<cron> <timezone>`; the loop now appears in the web UI and runs on schedule. If the
-config carried a `ui`, it also prints `dashboard ui: applied` — `not applied` plus a
-`loopany: warning:` means the dashboard was dropped (the loop was still created);
-fix the HTML and push it with `loopany edit <id> --ui-file <path>` (`update.md`).
-(For a large inline config, `--json -` reads it from stdin.) On `loopany: <error>`,
-fix the config and re-run.
+For goal-bound work add `--goal '<finish line>'`. Use `--team <team-id>` as an
+explicit one-command override when the selected team should not be persisted.
 
-Finally, tell the user it's created (name + cadence) and that the first run comes
-automatically shortly — point them at the Loopany web UI to watch for the result.
+Show the normalized preview to the user and resolve every refusal before writing.
+
+## 5. Create and verify
+
+Run the same `lk create` command without `--dry-run`. Then run:
+
+```bash
+lk show <task-id>
+```
+
+Verify the canonical assignment, status, body, cadence, timezone, and goal. Human
+emails and names are only input aliases. The stored value must be a stable
+`person:<user-id>` identity. If a name is ambiguous, stop and ask the user to
+choose a specific team member.
+
+For a recurring Loop, confirm its assigned machine is enrolled and online with
+the daemon. Machine authority is execution-only. All Task and Kernel writes must
+continue through the human session or the least-privilege Run credential.

@@ -10,7 +10,7 @@ import { describe, expect, test } from "vitest";
 
 import { machineInScope, tokenVisibleTo } from "./machineScope.js";
 
-const machine = { id: "m_1", userId: "u_owner" };
+const machine = { id: "m_1", enrolledBy: "u_owner" };
 const none = () => new Set<string>();
 const teamSet =
   (...ids: string[]) =>

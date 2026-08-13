@@ -109,10 +109,11 @@ export const simulateNotifyBind = createServerFn({ method: 'POST' })
     if (!onboardingSimEnabled()) return { ok: false, error: 'simulation disabled' }
     await ensureServer()
     const { requestScope } = await import('../auth.js')
-    const { teamId } = await requestScope()
+    const { userId } = await requestScope()
+    if (!userId) return { ok: false, error: 'sign in required' }
     const name = 'Demo Slack · #loopany'
     const ch = await store.createChannel({
-      teamId,
+      userId,
       type: 'slack',
       name,
       config: { token: 'xoxb-demo-onboarding', channel: '#loopany' },

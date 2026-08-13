@@ -1,26 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
-import type { BundleView, CodingAgent, TemplateInfo } from '../types'
-import { claimStatus, getConfig, mintClaim } from '../server/loopApi'
+import { useEffect, useState } from 'react'
+import type { BundleView, TemplateInfo } from '../types'
+import { getConfig } from '../server/loopApi'
 import { Modal, ModalHead } from './Modal'
 import { LoopFlow } from './LoopFlow'
 import { hasLoopFlow } from '../lib/templateFlow'
-import { CreationChecklist, useCreationProgress } from './CreationChecklist'
 import { AgentMarksRow } from './AgentMarks'
 import { buildBundlePrompt } from '../lib/bundlePrompt'
 import { btn, btnPrimary, btnPrimaryPill, btnSm } from './ui'
-
-// How long to wait on a silent paste before nudging the user to check things.
-const SLOW_WAIT_MS = 100_000
-
-// Display label for the coding agent the daemon MEASURED on the host and the
-// server recorded on the loop. There is no manual picker: `loopany new` resolves
-// the agent from the host env fingerprint (Claude Code, Codex, or Grok), so the
-// dialog only ever displays the recorded value — it never declares one.
-const AGENT_LABEL: Record<CodingAgent, string> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  grok: 'Grok Build',
-}
 
 // The one human-readable instruction the snippet carries. `/api/bootstrap` serves the
 // BOOTSTRAP doc (skill/bootstrap.md) — it owns ALL first-capture intelligence: it
@@ -33,13 +19,10 @@ const instructionFor = (origin: string) => `Fetch ${origin}/api/bootstrap and he
 
 /**
  * New loop = capture-from-Claude-Code (paste-forward, no machine picker). The web
- * mints a claim token, shows ONE instruction block, and waits. The user pastes it
+ * shows one session-auth instruction block. The user pastes it
  * into their own Claude Code session (where they just did the task); Claude
- * follows /api/bootstrap — ensures a daemon is running (the token authorizes a new
- * machine, or the machine's stored token reuses an existing one) and POSTs the
- * loop to /api/machine/loop with this token as `claim`. We poll the claim until
- * the loop lands, then close. No machine selection: the binding is decided on the
- * machine, the claim just correlates the result back to this dialog.
+ * follows /api/bootstrap, completes human login when needed, and writes through
+ * the session-authenticated Kernel CLI. No credential appears in the prompt.
  *
  * A `template` (a canned loop intent picked from the dashboard cards) reuses this exact
  * machinery: it skips the host chooser, goes straight to the snippet, and appends the
@@ -74,17 +57,8 @@ export function ComposeModal({
   const [picked, setPicked] = useState<'local'>('local') // step-1 selection (local pre-selected; hosted is disabled)
   const [token, setToken] = useState<string | null>(null)
   const [config, setConfig] = useState<{ loopanyCli: string; customCli: boolean } | null>(null)
-  // Carries the MEASURED agent (`loops.agent`, from the daemon's env fingerprint)
-  // back from `claimStatus`, so the confirmation shows what actually ran, not a pick.
-  const [created, setCreated] = useState<{ id: string; name: string; agent: CodingAgent } | null>(null)
   const [copied, setCopied] = useState(false)
-  const [slow, setSlow] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  // Hold the callback in a ref so the poll effect doesn't re-subscribe (and
-  // restart the slow-wait timer) every time the parent passes a fresh onCreated.
-  const onCreatedRef = useRef(onCreated)
-  onCreatedRef.current = onCreated
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
 
@@ -98,7 +72,7 @@ export function ComposeModal({
   const configLines = token
     ? [
         `server-url: ${origin}`,
-        `connect-key: ${token}`,
+        ...(teamId ? [`team-id: ${teamId}`] : []),
         ...(config?.customCli ? [`loopany-cli: ${config.loopanyCli}`] : []),
       ].join('\n')
     : ''
@@ -122,53 +96,16 @@ export function ComposeModal({
     setHost(template || bundle ? 'local' : null)
     setPicked('local')
     setToken(null)
-    setCreated(null)
     setError(null)
     setCopied(false)
-    setSlow(false)
   }, [open, template, bundle])
 
-  // Mint a claim + load config once the user picks the local agent.
+  // Load the CLI command once the user picks the local agent. Authentication is
+  // performed by the human device-login flow, never by a pasted machine key.
   useEffect(() => {
     if (!open || host !== 'local') return
-    void getConfig().then(setConfig)
-    void mintClaim({ data: teamId })
-      .then((r) => ('token' in r ? setToken(r.token) : setError(r.error)))
-      .catch(() => setError('could not mint a connect key'))
+    void getConfig().then((value) => { setConfig(value); setToken('ready') })
   }, [open, host, teamId])
-
-  // Wait on the claim: Claude Code POSTs the loop with this token as `claim`.
-  // If nothing lands within SLOW_WAIT_MS the paste likely didn't reach us
-  // (wrong project, daemon down) — flip `slow` to surface a troubleshoot nudge.
-  // BUNDLE mode skips this correlation entirely: a bundle yields SEVERAL loops over
-  // one conversation, so there's no single "created" event to close on — the new
-  // loops just surface via the dashboard's own poll (the connect-key still binds
-  // the machine/team). The copy UI + a waiting hint stay put.
-  useEffect(() => {
-    if (bundle) return
-    if (!open || host !== 'local' || created || !token) return
-    if (pollRef.current) clearInterval(pollRef.current)
-    pollRef.current = setInterval(() => {
-      void claimStatus({ data: token })
-        .then((s) => {
-          if (s.done && s.id) {
-            if (pollRef.current) clearInterval(pollRef.current)
-            // The agent is the daemon's measured value; default only guards an older
-            // server that doesn't yet return it on the claim.
-            setCreated({ id: s.id, name: s.name ?? 'loop', agent: s.agent ?? 'claude-code' })
-            onCreatedRef.current()
-          }
-        })
-        // A transient server blip mustn't surface an unhandled rejection every
-        // tick — swallow it; the next tick retries.
-        .catch(() => {})
-    }, 2500)
-    const slowTimer = setTimeout(() => setSlow(true), SLOW_WAIT_MS)
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-      clearTimeout(slowTimer)
-    }
-  }, [open, host, created, token, bundle])
 
   async function copy() {
     try {
@@ -206,7 +143,7 @@ export function ComposeModal({
           </pre>
         ) : (
           <div className="mt-3 border-t border-hairline pt-3 leading-relaxed text-secondary">
-            minting a connect key…
+            preparing session instructions…
           </div>
         )}
         {/* Template intent - the canned task description, appended below the config. */}
@@ -217,24 +154,18 @@ export function ComposeModal({
         )}
       </div>
       <p className="mt-2 text-body leading-snug text-secondary">
-        Paste it in that same session - reuses this machine automatically. Your agent will{' '}
+        Paste it in that same session. If needed, your agent will ask you to complete `lk login` in the browser. It will{' '}
         {template ? 'set the loop up from here.' : 'ask what the loop should do.'}
       </p>
     </div>
   )
 
-  const wait = slow
-    ? {
-        dot: 'bg-secondary',
-        text: 'Still waiting - check your coding agent is running in the right project, then paste again.',
-      }
-    : { dot: 'animate-pulse bg-rubik-orange', text: 'Waiting for your coding agent…' }
+  const wait = { dot: 'bg-rubik-green', text: 'Authentication stays with your human CLI session.' }
 
   // Live milestone checklist — the SAME shared component + polling the onboarding
   // wizard uses (so the surfaces can't drift). Best-effort: the agent reports via
   // `loopany progress`; an agent that reports nothing just shows the first step
   // pulsing. Never gates — the claim poll above is the authoritative signal.
-  const steps = useCreationProgress(token, open && host === 'local' && !created)
 
   // The primary CTA, shared by both compose modals: copies the full snippet, with
   // the supported-agent marks. Sits flush-right in the waiting row.
@@ -254,26 +185,8 @@ export function ComposeModal({
         <span className="text-label leading-relaxed text-secondary">{wait.text}</span>
         {copyPromptButton}
       </div>
-      <CreationChecklist steps={steps} />
     </div>
   )
-
-  if (created) {
-    return (
-      <Modal open={open} onClose={onClose}>
-        <ModalHead title="Loop created" sub={`${AGENT_LABEL[created.agent]} built and registered it.`} />
-        <div className="mt-5 rounded-card border border-hairline bg-surface p-5 shadow-card">
-          <div className="text-[17px] font-medium text-display">✓ {created.name}</div>
-          <div className="mt-1 text-body text-secondary">It’s scheduled now and will run on the machine.</div>
-        </div>
-        <div className="mt-4">
-          <button className={btnPrimary} onClick={onClose}>
-            Done
-          </button>
-        </div>
-      </Modal>
-    )
-  }
 
   // Bundle screen — the self-contained candidate menu (preamble + each member's full
   // setup). No host chooser; no "created" correlation (a bundle spawns several loops
@@ -301,7 +214,7 @@ export function ComposeModal({
             {snippet ? (
               <pre className="whitespace-pre-wrap leading-relaxed">{snippet}</pre>
             ) : (
-              <div className="leading-relaxed text-secondary">minting a connect key…</div>
+              <div className="leading-relaxed text-secondary">preparing session instructions…</div>
             )}
           </div>
           <p className="mt-2 text-body leading-snug text-secondary">

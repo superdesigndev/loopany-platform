@@ -33,10 +33,10 @@ afterEach(() => {
 
 describe('OnboardingEntry trigger', () => {
   it('auto-starts the wizard for a genuinely empty workspace (no loops, no machines)', () => {
-    render(createElement(OnboardingEntry, { teamId: 'teamA', noLoops: true, noMachines: true }))
+    render(createElement(OnboardingEntry, { teamId: 'teamA', teamSlug: 'team-a', noLoops: true, noMachines: true }))
     // The dashboard's team rides along, so the wizard binds to the SAME team the
     // banner was shown for (never the last-used-team cookie, which can drift).
-    expect(nav).toHaveBeenCalledWith({ to: '/onboarding', search: { team: 'teamA' } })
+    expect(nav).toHaveBeenCalledWith({ to: '/onboarding', search: { team: 'team-a' } })
   })
 
   it('open mode (no team) starts the wizard with no team segment', () => {
@@ -45,7 +45,7 @@ describe('OnboardingEntry trigger', () => {
   })
 
   it('does NOT auto-start when the user already has a loop', () => {
-    render(createElement(OnboardingEntry, { teamId: 'teamA', noLoops: false, noMachines: true }))
+    render(createElement(OnboardingEntry, { teamId: 'teamA', teamSlug: 'team-a', noLoops: false, noMachines: true }))
     expect(nav).not.toHaveBeenCalled()
     // ...and it renders nothing at all for a user with loops.
     expect(host!.textContent).toBe('')
@@ -53,19 +53,19 @@ describe('OnboardingEntry trigger', () => {
 
   it('does NOT auto-start again once dismissed, but still offers a manual entry banner', () => {
     // First empty render auto-starts and marks dismissed.
-    render(createElement(OnboardingEntry, { teamId: 'teamA', noLoops: true, noMachines: true }))
+    render(createElement(OnboardingEntry, { teamId: 'teamA', teamSlug: 'team-a', noLoops: true, noMachines: true }))
     expect(nav).toHaveBeenCalledTimes(1)
     act(() => root!.unmount())
     nav.mockClear()
 
     // A second visit (still no loops) must not auto-redirect — but keeps a manual hook.
-    render(createElement(OnboardingEntry, { teamId: 'teamA', noLoops: true, noMachines: true }))
+    render(createElement(OnboardingEntry, { teamId: 'teamA', teamSlug: 'team-a', noLoops: true, noMachines: true }))
     expect(nav).not.toHaveBeenCalled()
     expect(host!.textContent).toContain('Guided setup')
   })
 
   it('does NOT auto-start when a machine is already connected (only fully empty auto-starts)', () => {
-    render(createElement(OnboardingEntry, { teamId: 'teamA', noLoops: true, noMachines: false }))
+    render(createElement(OnboardingEntry, { teamId: 'teamA', teamSlug: 'team-a', noLoops: true, noMachines: false }))
     expect(nav).not.toHaveBeenCalled()
     // No loops yet ⇒ the manual banner is still offered.
     expect(host!.textContent).toContain('Guided setup')

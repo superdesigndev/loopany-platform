@@ -110,18 +110,15 @@ export const machines = pgTable(
   {
     /** m-sha256(deviceToken)[:16] */
     id: text("id").primaryKey(),
-    /** Owning user (Better Auth user.id) — creator attribution. */
-    userId: text("user_id").notNull(),
-    /** Owning team — the scope machines/loops/channels are listed by. Backfilled
+    /** Sole machine ownership authority after the auth cutover. */
+    enrolledBy: text("enrolled_by"),
+    /** Owning team — the scope machines/loops are listed by. Backfilled
      *  from userId for pre-team rows (`team-<userId>`); see migration. */
     teamId: text("team_id"),
     /** Friendly name (set AFTER the daemon connects; empty string = pending/unnamed). */
     name: text("name").notNull(),
-    /** Stable, human-typable machine handle unique WITHIN the owning team — the
-     *  target of a kernel assignee's machine segment (`mbp` in `mbp/claude`). The
-     *  daemon reports it on enroll (`LOOPANY_MACHINE_ALIAS`, else the short
-     *  hostname); the kernel remote-dispatch adapter resolves an assignee to a
-     *  machines row by (teamId, alias). Null for pre-alias rows / older daemons. */
+    /** Stable base handle reported by the daemon. Team-scoped execution
+     * addresses live in team_machine_bindings. */
     alias: text("alias"),
     /** Daemon-reported machine identity (captured on first connect). */
     hostname: text("hostname"),
@@ -131,14 +128,13 @@ export const machines = pgTable(
      *  daemons that don't report it (and until the first poll). Drives the web's
      *  "update available" hint against the cached npm latest. */
     daemonVersion: text("daemon_version"),
-    /** Hash of the device token (machine identity derives from the token). */
+    /** Last capability set reported by the daemon. Null means an older daemon
+     * has never reported; [] means the current daemon found no executable agent. */
+    agentProfiles: jsonb("agent_profiles").$type<string[]>(),
+    /** Hash of the rotatable machine key. */
     tokenHash: text("token_hash").notNull(),
-    /**
-     * Plaintext device token. Stored so the UI can re-show the connect command
-     * anytime (MVP convenience — deviates from "store only the hash"; acceptable
-     * for a self-hosted team tool where the DB is already the trust root).
-     */
-    token: text("token"),
+    revokedAt: text("revoked_at"),
+    keyRotatedAt: text("key_rotated_at"),
     /** Workdir allowlist the daemon enforces as cwd jail; null/[] = unrestricted. */
     roots: jsonb("roots").$type<string[]>(),
     /** Last WS contact (ISO). */
@@ -148,14 +144,10 @@ export const machines = pgTable(
     createdAt: text("created_at").notNull(),
   },
   (t) => [
-    index("machines_user_idx").on(t.userId),
+    index("machines_enrolled_by_idx").on(t.enrolledBy),
     index("machines_team_idx").on(t.teamId),
-    // Alias is unique WITHIN the home team at the DB level (Postgres treats
-    // NULLs as distinct, so pre-alias rows coexist). The app-level suffixing in
-    // enroll is the friendly path; this index is what makes a suffixing RACE an
-    // error instead of two identical aliases. Shared-team ambiguity (the same
-    // alias arriving via two different home teams) is handled by
-    // resolveMachineByAlias's ambiguous refusal, not constrainable here.
+    // The base alias is unique within the cosmetic home team. Each explicit
+    // Team binding separately owns its immutable execution alias.
     uniqueIndex("machines_team_alias_uq").on(t.teamId, t.alias),
   ],
 );
@@ -301,8 +293,7 @@ export const runs = pgTable(
 // the run was falsely failed by the sweep ~20min later) and a long-sleep
 // wake-report died the same way. Durable rows make a restart invisible to a
 // running run. Only the sha256 of the wire token is stored — a DB leak must not
-// hand out live run credentials (unlike `machines.token`, there is no re-show
-// need). Lifecycle: `active` (expiresAt null = no expiry; the inactivity sweep
+// hand out live run credentials. Lifecycle: `active` (expiresAt null = no expiry; the inactivity sweep
 // is the vanished-machine guard) → `terminal-grace` (bounded expiry, exactly one
 // reconciling wake-report) → deleted.
 
@@ -334,17 +325,7 @@ export const runLeases = pgTable(
   (t) => [index("run_leases_run_idx").on(t.runId), index("run_leases_loop_idx").on(t.loopId)],
 );
 
-// ---- connect_keys: a minted connect-key's owner + team binding (durable) ----
-//
-// One row per minted connect-key/claim token, keyed by the machine id DERIVED
-// from it (`m-sha256(token)[:16]`) so both consumers resolve without storing the
-// key itself: the self-register owner lookup (by machine id) and the createLoop
-// team binding (derives the id from the presented claim). Replaces the two
-// in-process maps (`deviceOwners` + `claimIntents`) whose loss on deploy made a
-// post-restart paste silently mis-file the loop into the machine's home team.
-// Rows expire after CONNECT_KEY_TTL_MS (lazy on read + pruned on write).
-
-// ---- machine_team_aliases: the PER-TEAM alias register (review round 3) ----
+// ---- team_machine_bindings: explicit Team authorization for a Machine ----
 //
 // A machine's `alias` column is only its BASE handle, unique within its HOME
 // team - two members of a SHARED team can both own a "mbp". The kernel
@@ -354,31 +335,24 @@ export const runLeases = pgTable(
 // IMMUTABLE afterwards (an assignee string must never silently re-target).
 // Ambiguity is impossible by construction; an unknown alias stays a loud
 // blocked state that lists this register.
-export const machineTeamAliases = pgTable(
-  "machine_team_aliases",
+export const teamMachineBindings = pgTable(
+  "team_machine_bindings",
   {
     teamId: text("team_id").notNull(),
     machineId: text("machine_id").notNull(),
     alias: text("alias").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    createdBy: text("created_by"),
+    disabledAt: text("disabled_at"),
     createdAt: text("created_at").notNull(),
   },
   (t) => [
-    uniqueIndex("mta_team_alias_uq").on(t.teamId, t.alias),
-    uniqueIndex("mta_team_machine_uq").on(t.teamId, t.machineId),
+    uniqueIndex("tmb_team_alias_uq").on(t.teamId, t.alias),
+    uniqueIndex("tmb_team_machine_uq").on(t.teamId, t.machineId),
+    index("tmb_machine_idx").on(t.machineId),
   ],
 );
 
-export const connectKeys = pgTable("connect_keys", {
-  /** m-sha256(connectKey)[:16] — the machine id this key self-registers as. */
-  machineId: text("machine_id").primaryKey(),
-  /** The user who minted the key (the authenticated dashboard session). */
-  userId: text("user_id").notNull(),
-  /** The validated active team the key was minted under (null: no team bound —
-   *  e.g. the pre-created-machine path, where the machine row carries the team). */
-  teamId: text("team_id"),
-  /** Mint time (ISO) — drives the TTL. */
-  mintedAt: text("minted_at").notNull(),
-});
 
 // ---- kernel_* : the @loopany/kernel four-record model, server-hosted (M5) ----
 //
@@ -488,6 +462,8 @@ export const kernelRuns = pgTable(
 export const teams = pgTable("teams", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
+  /** Stable, server-unique workspace path segment used by `lk setup /slug`. */
+  slug: text("slug").notNull().unique(),
   /** The user whose personal team this is (null for the open-mode shared team). */
   ownerUserId: text("owner_user_id"),
   createdAt: text("created_at").notNull(),
@@ -512,8 +488,7 @@ export const teamMembers = pgTable(
 // and a signed-in recipient redeems it into membership. Single-use (`redeemedAt`
 // stamps it spent), short TTL (`expiresAt`), and the granted `role` is baked in
 // (capped at the inviter's role at mint time). The token is stored plaintext as
-// the primary key — same trust model as `machines.token`/`connect_keys` (a
-// self-hosted small-team tool whose DB is already the trust root); the link only
+// the primary key. The database is already the trust root; the link only
 // grants membership WITHIN the app and never bypasses the login allowlist
 // (decision 3 — the redeemer must already have signed in through the gate).
 export const teamInvites = pgTable(
@@ -537,26 +512,21 @@ export const teamInvites = pgTable(
   (t) => [index("team_invites_team_idx").on(t.teamId)],
 );
 
-// ---- notification channels: per-team push targets a loop can route to ----
+// ---- notification channels: personal push destinations ----
 
 export const notificationChannels = pgTable(
   "notification_channels",
   {
     id: text("id").primaryKey(),
-    /** Owning team (channels are listed/selected within a team). */
-    teamId: text("team_id").notNull(),
+    /** Canonical Better Auth user who alone owns and manages this destination. */
+    userId: text("user_id").notNull(),
     type: text("type", { enum: ["telegram", "slack", "feishu"] }).notNull(),
     name: text("name").notNull(),
     /** Transport secrets (shape per `type`). Stored as JSON; never sent to the client raw. */
     config: jsonb("config").$type<ChannelConfig>().notNull(),
-    /** OWNER ROUTING (review round 3, the smallest user->channel mapping):
-     *  when set, kernel owner-notifications for a task whose `owner` equals
-     *  this email route HERE first; null = a plain team channel (the
-     *  fallback). No new entity - one nullable column on the existing row. */
-    userEmail: text("user_email"),
     createdAt: text("created_at").notNull(),
   },
-  (t) => [index("notification_channels_team_idx").on(t.teamId)],
+  (t) => [index("notification_channels_user_idx").on(t.userId, t.createdAt)],
 );
 
 // ---- artifacts: content-addressed live-synced loop files (Phase 1 foundation) ----
@@ -676,10 +646,9 @@ export type NewArtifactFile = typeof artifactFiles.$inferInsert;
 export type RunSnapshot = typeof runSnapshots.$inferSelect;
 export type NewRunSnapshot = typeof runSnapshots.$inferInsert;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
-export type ConnectKeyRow = typeof connectKeys.$inferSelect;
 
 /** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, connectKeys };
+export const businessSchema = { machines, teamMachineBindings, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases };
 
 // Keep a default no-op SQL reference so `sql` import isn't flagged before use.
 export const _schemaVersion = sql`1`;

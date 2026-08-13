@@ -12,6 +12,30 @@ agents, preserve useful outputs, and involve humans in important decisions.
 Use `lk` to inspect the current team state. Before using an unfamiliar command,
 run `lk <command> --help`. Do not guess commands or flags.
 
+## Authentication and team scope
+
+The normal first-contact command sets up the entire computer for one Team:
+
+```bash
+lk setup /superdesign --server https://your-loopany-server.example
+lk me
+```
+
+It signs in through the browser when needed, enrolls or reuses the physical
+Machine, starts the single resident runtime, explicitly binds that Machine to
+the named Team, and makes the Team the default human CLI workspace. It is safe
+to repeat. The server checks current membership and Machine ownership; no setup
+token is needed. `lk login` and `lk team list/use` remain diagnostic and advanced
+controls, not normal onboarding.
+
+Use `--team <team-id>` for a one-command override. The server checks current
+team membership on every request, so a cached team selection is never authority.
+Use `lk logout` to revoke the server session and remove the local credential.
+
+The resident runtime receives its own restricted `mk_` credential and cannot
+perform human Task or Kernel writes. Inside a Run, the run lease fixes the Team
+scope and always overrides the human CLI's default workspace.
+
 ## Core model
 
 ### Task
@@ -68,6 +92,9 @@ Tasks may form a tree through `parent`. The tree expresses scope and ownership,
 not execution. Use child Tasks when work needs its own lifecycle, responsibility,
 or history.
 
+Before assigning work to a coding agent, run `lk team` and choose an Agent
+address reported there. Do not guess a `<machine>/<agent>` address from memory.
+
 ## Coordinator Loops
 
 Some Loops use their children as a durable work queue. Use this pattern only
@@ -110,11 +137,13 @@ focused Task:
 lk doc put q3-seo-verdict --file verdict.md
 lk create "Decide whether to ship the SEO engine" \
   --parent <source-task> --tracks q3-seo-verdict \
-  --assignee <human-email> --status todo
+    --assignee <human-email-or-name> --status todo
 ```
 
 State the required action, safe context, recommendation, and relevant artifact.
 Reuse an existing open Task instead of creating a duplicate.
+Emails and names are input aliases only. The server stores human assignment and
+ownership as the stable `person:<user-id>` identity and refuses ambiguous names.
 
 ## Task outcomes
 

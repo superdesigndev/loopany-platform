@@ -40,6 +40,7 @@ import {
 } from "./driver.js";
 import { RemoteBackend, type SyncTransport } from "./remote.js";
 import { readGlobalConnect } from "./connect.js";
+import { readLocalMachineId, readUserSession } from "./userSession.js";
 
 export interface Backend {
   /** Human-facing label for errors/usage (e.g. "local" or the server origin). */
@@ -114,6 +115,7 @@ export function selectBackend(
     /** `--remote`: force the GLOBAL binding (`connect`) even inside a local
      *  workspace - the cwd-workspace shadowing escape hatch. */
     remote?: boolean;
+    teamId?: string;
   },
 ): Backend {
   // In-run remote override (P0 stage E): a daemon-spawned agent works in the
@@ -135,6 +137,8 @@ export function selectBackend(
   // `--remote` forces the GLOBAL binding, checked BEFORE workspace discovery -
   // the flag exists exactly because a cwd workspace would otherwise shadow it.
   if (opts?.remote) {
+    const user = readUserSession(env);
+    if (user) return new RemoteBackend(user.server, user.accessToken, transport ?? undefined, env.LOOPANY_KERNEL_SIM_AUTHORITY, opts?.teamId ?? user.teamId, readLocalMachineId(env));
     const g = readGlobalConnect(env);
     if (!g) {
       throw new DriverError("NO_CREDENTIAL", "--remote needs a global binding", {
@@ -150,6 +154,8 @@ export function selectBackend(
   try {
     wsDir = requireWorkspace(cwd);
   } catch (e) {
+    const user = readUserSession(env);
+    if (user) return new RemoteBackend(user.server, user.accessToken, transport ?? undefined, env.LOOPANY_KERNEL_SIM_AUTHORITY, opts?.teamId ?? user.teamId, readLocalMachineId(env));
     const g = readGlobalConnect(env);
     if (g) return new RemoteBackend(g.backend, g.token, transport ?? undefined, env.LOOPANY_KERNEL_SIM_AUTHORITY);
     throw e;

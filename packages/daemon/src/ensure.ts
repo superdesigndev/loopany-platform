@@ -25,9 +25,11 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import readline from "node:readline/promises";
 
 import { ensureBinShim } from "./bin-shim.js";
-import { DEVICE_FILE, LOOPANY_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
+import { DEVICE_FILE, LOOPANY_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl, persistMachineState, readMachineState } from "./config.js";
 import { fetchMachineStatus, type MachineStatus } from "./control.js";
 import { verifiedRunningPid } from "./pidfile.js";
 import { refreshHooks } from "./setup.js";
@@ -81,6 +83,9 @@ export type EnsureDeps = {
   persist?: (file: string, value: string) => void;
   readToken?: () => string | undefined;
   readServer?: () => string | undefined;
+  readUserSession?: () => { server?: string; accessToken?: string; teamId?: string; user?: { id?: string } } | undefined;
+  /** Attached poll loop used by `up --foreground`. */
+  runForeground?: () => Promise<number>;
   /** Refresh the user-scope skill (best-effort, announced). Injected in tests. */
   installSkill?: (opts: InstallOpts) => Promise<InstallOutcome>;
   /** Install/refresh the `loopany` PATH shim (best-effort, feedback #4). Injected in tests. */
@@ -90,6 +95,55 @@ export type EnsureDeps = {
   out?: (s: string) => void;
   err?: (s: string) => void;
 };
+
+function readUserSessionDefault(): { server?: string; accessToken?: string; teamId?: string; user?: { id?: string } } | undefined {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(LOOPANY_DIR, "user-session.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+export function enrollmentChoiceError(
+  existing: { name?: string } | undefined,
+  choice: "reclaim" | "new" | undefined,
+  interactive: boolean,
+  hostname: string,
+): string | undefined {
+  if (choice === "reclaim" && !existing) return `No existing Machine matches hostname '${hostname}'; use --new to register it.`;
+  if (existing && !choice && !interactive) return `Found an existing Machine '${existing.name ?? hostname}'. Non-interactive setup must choose --reclaim or --new.`;
+  return undefined;
+}
+
+async function enrollFromUserSession(server: string, choice: "reclaim" | "new" | undefined): Promise<{ id: string; key: string; enrolledBy: string } | undefined> {
+  let session: { server?: string; accessToken?: string; teamId?: string; user?: { id?: string } };
+  try { session = JSON.parse(fs.readFileSync(path.join(LOOPANY_DIR, "user-session.json"), "utf8")); } catch { return undefined; }
+  if (session.server?.replace(/\/$/, "") !== server || !session.accessToken || !session.user?.id) return undefined;
+  const headers = { Authorization: `Bearer ${session.accessToken}`, "Content-Type": "application/json" };
+  const listed = await fetch(`${server}/api/machines`, { headers });
+  if (!listed.ok) return undefined;
+  const hostname = os.hostname();
+  const existing = ((await listed.json()) as { machines?: Array<{ id: string; hostname?: string; name?: string }> }).machines?.find(m => m.hostname === hostname);
+  const choiceError = enrollmentChoiceError(existing, choice, !!process.stdin.isTTY, hostname);
+  if (choiceError) throw new Error(choiceError);
+  let useExisting = choice === "reclaim";
+  if (existing && !choice && process.stdin.isTTY) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    try { useExisting = /^y(es)?$/i.test(await rl.question(`Found your machine '${existing.name ?? hostname}'. Reclaim it? [y/N] `)); } finally { rl.close(); }
+  }
+  const response = existing && useExisting
+    ? await fetch(`${server}/api/machines/${encodeURIComponent(existing.id)}`, { method: "POST", headers, body: JSON.stringify({ action: "reclaim", teamId: session.teamId }) })
+    : await fetch(`${server}/api/machines`, { method: "POST", headers, body: JSON.stringify({ name: hostname, hostname, platform: process.platform, arch: process.arch, alias: hostname.split('.')[0], teamId: session.teamId }) });
+  if (!response.ok) return undefined;
+  const value = await response.json() as { id: string; key: string };
+  const preflight = await fetch(`${server}/api/machines/self`, {
+    headers: { Authorization: `Bearer ${value.key}`, "X-Loopany-Machine-Id": value.id },
+  });
+  if (!preflight.ok) return undefined;
+  const identity = await preflight.json() as { id?: string; enrolledBy?: string };
+  if (identity.id !== value.id || identity.enrolledBy !== session.user.id) return undefined;
+  return { ...value, enrolledBy: session.user.id };
+}
 
 export type EnsureOpts = {
   /** Skip the "already running" short-circuits and start a fresh daemon
@@ -111,12 +165,23 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
     persist: injected.persist ?? persist,
     readToken: injected.readToken ?? (() => readStored(DEVICE_FILE)),
     readServer: injected.readServer ?? (() => readStored(SERVER_FILE)),
+    readUserSession: injected.readUserSession ?? readUserSessionDefault,
+    runForeground: injected.runForeground ?? (async () => (await import("./daemon.js")).runDaemon()),
     installSkill: injected.installSkill ?? installSkill,
     ensureBinShim: injected.ensureBinShim ?? (() => void ensureBinShim()),
     refreshHooks: injected.refreshHooks ?? (() => refreshHooks()),
     out: injected.out ?? ((s: string) => process.stdout.write(s)),
     err: injected.err ?? ((s: string) => process.stderr.write(s)),
   };
+  // `lk setup` owns public onboarding. Its hidden runtime-only invocation must
+  // not mutate agent configuration, install skills, or publish the legacy
+  // `loopany` shim into the user's PATH.
+  const runtimeOnly = args.includes("--runtime-only");
+  const enrollmentChoice = args.includes("--reclaim") ? "reclaim" : args.includes("--new") ? "new" : undefined;
+  if (args.includes("--reclaim") && args.includes("--new")) {
+    d.err("loopany: choose only one of --reclaim or --new\n");
+    return 2;
+  }
 
   /** Best-effort integration refresh — the user-scope skill, the `loopany` PATH shim
    *  (feedback #4), and the SessionStart hooks (P7) — each announced in one line, none
@@ -124,6 +189,7 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
    *  install has always been best-effort + awaited (may delay `up` on a cold npx, but
    *  never changes the outcome). */
   const refreshSkill = async (): Promise<void> => {
+    if (runtimeOnly) return;
     try {
       const r = await d.installSkill({ global: true });
       d.out(r.line + "\n");
@@ -138,14 +204,33 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
     await d.refreshHooks();
   };
 
+  const userSession = d.readUserSession();
   const requestedServer = (flag(args, "server-url") || process.env.LOOPANY_SERVER_URL || "").replace(/\/$/, "");
   const storedServer = d.readServer()?.replace(/\/$/, "");
-  const server = resolveServerUrl(flag(args, "server-url"));
-  // Reuse this machine's stored identity first (so we stay the SAME machine across
-  // runs); only adopt the connect-key the first time, when nothing is stored yet.
-  const token = d.readToken() || flag(args, "connect-key") || process.env.LOOPANY_TOKEN;
+  const sessionServer = userSession?.server?.replace(/\/$/, "");
+  const server = requestedServer || storedServer || sessionServer || resolveServerUrl(undefined);
+  // Reuse only a clean-cutover machine key. Legacy dk_/connect-key values are
+  // deliberately not credentials and force enrollment through the human session.
+  const loggedInUser = userSession?.user?.id;
+  const boundMachine = readMachineState();
+  const switchingAccount = !!(loggedInUser && boundMachine?.enrolledBy && loggedInUser !== boundMachine.enrolledBy);
+  if (switchingAccount && !opts.force && d.localPid() !== undefined) {
+    d.err("loopany: this daemon belongs to the previous account; run `loopany down` before switching accounts\n");
+    return 1;
+  }
+  const storedKey = boundMachine?.key ?? d.readToken();
+  let token = !switchingAccount && storedKey?.startsWith("mk_") ? storedKey : undefined;
+  if (server && !token) {
+    let enrolled;
+    try { enrolled = await enrollFromUserSession(server, enrollmentChoice); }
+    catch (error) { d.err(`loopany: ${error instanceof Error ? error.message : String(error)}\n`); return 2; }
+    if (enrolled) {
+      token = enrolled.key;
+      persistMachineState({ kind: "loopany-machine", schemaVersion: 1, id: enrolled.id, key: enrolled.key, enrolledBy: enrolled.enrolledBy });
+    }
+  }
   if (!server || !token) {
-    d.err("loopany: usage: loopany up --server-url <url> --connect-key <dk_…>\n");
+    d.err("loopany: sign in with `lk login <server>`, then run `loopany up --server-url <url>`\n");
     return 2;
   }
 
@@ -192,6 +277,11 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
   // byte-preserving and a cross-environment mistake unable to clobber the home.
   d.persist(SERVER_FILE, server);
   d.persist(DEVICE_FILE, token);
+
+  if (args.includes("--foreground")) {
+    await refreshSkill();
+    return d.runForeground();
+  }
 
   d.out("starting daemon…\n");
   const childPid = d.spawnDaemon(server, token, logFile);

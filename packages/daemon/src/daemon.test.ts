@@ -55,6 +55,22 @@ describe("runDaemon", () => {
 });
 
 describe("poll transport helpers", () => {
+  test("invalid credentials require three consecutive failures, while revocation is immediate", async () => {
+    const { nextCredentialRejection } = await import("./daemon.js");
+    expect(nextCredentialRejection(0, "invalid_credential")).toEqual({ failures: 1, terminal: false });
+    expect(nextCredentialRejection(1, "invalid_credential")).toEqual({ failures: 2, terminal: false });
+    expect(nextCredentialRejection(2, "invalid_credential")).toEqual({ failures: 3, terminal: true });
+    expect(nextCredentialRejection(2, "proxy_unauthorized")).toEqual({ failures: 0, terminal: false });
+    expect(nextCredentialRejection(0, "machine_revoked")).toEqual({ failures: 0, terminal: true });
+  });
+
+  test("daemon version comparison supports the minimum-version handshake", async () => {
+    const { versionBelow } = await import("./daemon.js");
+    expect(versionBelow("0.1.0", "0.1.0")).toBe(false);
+    expect(versionBelow("0.1.0", "0.2.0")).toBe(true);
+    expect(versionBelow("1.0.0", "0.9.9")).toBe(false);
+  });
+
   test("buildPollBody: idle ⇒ long-poll opt-in; in-flight ⇒ classic short poll (no wait)", async () => {
     const { buildPollBody } = await import("./daemon.js");
     const info = { host: "mac", platform: "darwin" };

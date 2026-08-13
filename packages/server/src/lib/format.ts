@@ -23,7 +23,7 @@ export const rel = (t: string | null | undefined): string => {
 // kernel CLI's list surface reads it too); re-exported here so the web UI's
 // import path is unchanged. Same rendering everywhere: "every 3h", "daily
 // 07:00", "Mon 09:00", raw cron for uncommon shapes.
-export { cronText } from '@loopany/kernel'
+export { cronText } from '@loopany/kernel/format'
 
 /** Compact time-until-future: "due" / "in 50m" / "in 2h" / "in 3d". */
 export const until = (t: string | null | undefined): string => {

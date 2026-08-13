@@ -38,6 +38,7 @@ import { type KernelEvent, type Provenance, type Snapshot } from "@loopany/kerne
 import { loadEvents, loadSnapshot, runCommand, runTick, initWorkspace } from "@loopany/cli";
 
 import { BAD_COMMANDS, GOLDEN_SCRIPT, SCRIPT_START } from "./conformance.script.js";
+import { user as authUser } from "../db/auth-schema.js";
 
 // The device token the server resolves to the golden team. Hand-shaped `dk_` demo
 // token (legit per isDeviceTokenShape); the machine id derives from it.
@@ -50,8 +51,8 @@ const BAD_USER = "u_conformance_refusal";
 
 // The server derives THIS actor from the credential for every command — so the
 // local runner uses it too, and provenance sequences compare across backends.
-const DERIVED_ACTOR: Provenance = { entrance: "human", actorId: OWNER_USER };
-const BAD_DERIVED_ACTOR: Provenance = { entrance: "human", actorId: BAD_USER };
+const DERIVED_ACTOR: Provenance = { entrance: "human", actorId: `person:${OWNER_USER}` };
+const BAD_DERIVED_ACTOR: Provenance = { entrance: "human", actorId: `person:${BAD_USER}` };
 
 // ---- a driver-agnostic, comparable projection of authority state ----
 
@@ -128,7 +129,14 @@ function replayLocal(actor: Provenance): { wsDir: string; cwd: string } {
     if (step.kind === "tick") runTick(wsDir, step.now);
     // Drive with the DERIVED actor (not step.actor) so provenance matches the
     // server, which ignores the body actor and derives it from the credential.
-    else runCommand(wsDir, step.command, actor, step.now);
+    else {
+      const command = {
+        ...step.command,
+        ...('assignee' in step.command && step.command.assignee === 'tim@x.com' ? { assignee: 'person:u-tim' } : {}),
+        ...('owner' in step.command && step.command.owner === 'tim@x.com' ? { owner: 'person:u-tim' } : {}),
+      };
+      runCommand(wsDir, command, actor, step.now);
+    }
   }
   return { wsDir, cwd };
 }
@@ -145,21 +153,22 @@ function projectLocal(wsDir: string): Projection {
 // ---- the SERVER host runner (kernelCli over pglite) ----
 
 let store: typeof import("../db/store.js");
+let db: typeof import("../db/index.js");
 let tokens: typeof import("../gateway/tokens.js");
 let gateway: typeof import("./gateway.js");
 let kstore: typeof import("./store.js");
 let GOLDEN_TEAM: string;
 let BAD_TEAM: string;
 
-async function replayServer(token: string): Promise<void> {
+async function replayServer(userId: string, teamId: string): Promise<void> {
   for (const step of GOLDEN_SCRIPT) {
     if (step.kind === "tick") {
-      const r = await gateway.kernelCli(token, { tick: true, now: step.now });
-      if (r.status !== 200) throw new Error(`server tick failed: ${JSON.stringify(r.body)}`);
+      const r = await gateway.tickTeamAtAuthority(teamId, step.now);
+      if (r.conflict) throw new Error(`server tick failed: ${JSON.stringify(r.conflict)}`);
     } else {
       // The server ignores the body actor (credential-derived); `now` is the
       // deterministic instant, matching the local driver.
-      const r = await gateway.kernelCli(token, { command: step.command, now: step.now });
+      const r = await gateway.kernelCli('', { command: step.command, now: step.now }, { userId, teamId });
       if (r.status !== 200) {
         throw new Error(`server command failed (${step.command.op}): ${JSON.stringify(r.body)}`);
       }
@@ -178,13 +187,13 @@ async function projectServer(teamId: string): Promise<Projection> {
 async function seedMachine(token: string, userId: string): Promise<string> {
   const machineId = tokens.machineIdFromToken(token);
   const teamId = store.teamIdForUser(userId);
+  await store.ensureTeam(teamId, `${userId}'s team`, userId);
   await store.createMachine({
     id: machineId,
     userId,
     teamId,
     name: `m-${userId}`,
     tokenHash: tokens.sha256(token),
-    token,
   });
   return teamId;
 }
@@ -202,7 +211,7 @@ beforeAll(async () => {
   process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
   process.env.LOOPANY_LOG_LEVEL = "silent";
 
-  const db = await import("../db/index.js");
+  db = await import("../db/index.js");
   await db.runMigrations();
   store = await import("../db/store.js");
   tokens = await import("../gateway/tokens.js");
@@ -211,12 +220,15 @@ beforeAll(async () => {
 
   GOLDEN_TEAM = await seedMachine(TOKEN, OWNER_USER);
   BAD_TEAM = await seedMachine(BAD_TOKEN, BAD_USER);
+  await db.db.insert(authUser).values({ id: 'u-tim', name: 'Tim', email: 'tim@x.com', emailVerified: true });
+  await store.addTeamMember(GOLDEN_TEAM, 'u-tim', 'member');
+  await store.addTeamMember(BAD_TEAM, 'u-tim', 'member');
 
   // Golden double-run.
   const local = replayLocal(DERIVED_ACTOR);
   cleanup.push(local.cwd);
   localGolden = projectLocal(local.wsDir);
-  await replayServer(TOKEN);
+  await replayServer(OWNER_USER, GOLDEN_TEAM);
   serverGolden = await projectServer(GOLDEN_TEAM);
 
   // Isolated state for the refusal-parity cases (its own local workspace + its
@@ -224,7 +236,7 @@ beforeAll(async () => {
   const bad = replayLocal(BAD_DERIVED_ACTOR);
   cleanup.push(bad.cwd);
   badWsDir = bad.wsDir;
-  await replayServer(BAD_TOKEN);
+  await replayServer(BAD_USER, BAD_TEAM);
 });
 
 afterAll(() => {
@@ -276,8 +288,14 @@ describe("M6 conformance — refusal parity on deliberately bad commands", () =>
       }
       expect(localCode, `local should refuse "${bad.label}"`).toBe(bad.code);
 
-      // SERVER: a 422 with the same refusal code.
-      const r = await gateway.kernelCli(BAD_TOKEN, { command: bad.command, now: bad.now });
+      // SERVER: authorization rejects unknown verbs before the pure kernel. For
+      // known-but-invalid commands, the pure-kernel refusal remains identical.
+      const r = await gateway.kernelCli('', { command: bad.command, now: bad.now }, { userId: BAD_USER, teamId: BAD_TEAM });
+      if (bad.code === 'UNKNOWN_COMMAND') {
+        expect(r.status).toBe(403);
+        expect(r.body.refusal?.code).toBe('FORBIDDEN');
+        continue;
+      }
       expect(r.status, `server should refuse "${bad.label}" (422)`).toBe(422);
       expect(r.body.refusal?.code, `server code for "${bad.label}"`).toBe(bad.code);
 

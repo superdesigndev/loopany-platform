@@ -91,9 +91,8 @@ export interface ChannelSummary {
   name: string
   /** A redacted hint so the row reads as configured without leaking the secret. */
   hint: string
-  /** Optional PERSONAL binding: kernel owner-routed notifications addressed to
-   *  this email land here instead of the plain team channel. Null = team-wide. */
-  userEmail?: string | null
+  /** Newest first. The first destination receives new Task assignments. */
+  active: boolean
 }
 
 /** One Slack channel offered by the add-channel picker (`listSlackChannels`),
@@ -299,7 +298,7 @@ export interface JobDetail {
    *  when the auth gate is on (open mode has a single workspace, so no chip). Lets
    *  the loop header show which team owns the loop and, when a member opens it from
    *  outside their active team, offer a "switch to this team" affordance. */
-  team?: { id: string; name: string; isActive: boolean } | null
+  team?: { id: string; name: string; slug: string; isActive: boolean } | null
   runs: RunSummary[]
 }
 
@@ -559,7 +558,7 @@ export interface TemplatePrereq {
 
 /** The team switcher's data: the teams this user may view + the active selection. */
 export interface TeamsView {
-  teams: { id: string; name: string }[]
+  teams: { id: string; name: string; slug: string }[]
   /** The active team id. */
   activeTeamId: string
 }

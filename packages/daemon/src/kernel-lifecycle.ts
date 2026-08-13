@@ -20,6 +20,7 @@
  * unified set; the driver lets the lifecycle own one).
  */
 import { boundedFetch } from "./http.js";
+import { machineHeaders } from "./config.js";
 import { logger } from "./logger.js";
 import { runKernelDelivery, type KernelRunDelivery, type KernelRunDeps } from "./kernel-run.js";
 
@@ -105,7 +106,7 @@ export class KernelLifecycle {
       `${this.opts.server}/api/machine/poll`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${this.opts.token}`, "Content-Type": "application/json" },
+        headers: machineHeaders(this.opts.token, { "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       },
       POLL_TIMEOUT_MS,

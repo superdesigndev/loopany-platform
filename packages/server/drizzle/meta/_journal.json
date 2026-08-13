@@ -64,6 +64,55 @@
       "when": 1786454472522,
       "tag": "0008_outgoing_human_cannonball",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786595660858,
+      "tag": "0009_medical_juggernaut",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786596950947,
+      "tag": "0010_powerful_sunfire",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786597885966,
+      "tag": "0011_thin_sharon_ventura",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786602890498,
+      "tag": "0012_light_invaders",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786603859164,
+      "tag": "0013_safe_psylocke",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786605742807,
+      "tag": "0014_outgoing_la_nuit",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1786610775737,
+      "tag": "0015_material_genesis",
+      "breakpoints": true
     }
   ]
 }

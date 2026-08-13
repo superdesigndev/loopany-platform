@@ -51,7 +51,7 @@ const LoopView = lazy(() => import('./LoopView').then((m) => ({ default: m.LoopV
 export function LoopDetailView({ id }: { id: string }) {
   const navigate = useNavigate()
   const [detail, setDetail] = useState<JobDetail | null>(null)
-  const [channels, setChannels] = useState<ChannelSummary[]>([]) // team push channels for the inline picker
+  const [channels, setChannels] = useState<ChannelSummary[]>([]) // signed-in user's destinations
   const [err, setErr] = useState<string | null>(null) // fatal load error - replaces the whole view
   const [actionErr, setActionErr] = useState<string | null>(null) // inline action error - never nukes the view
   const [editing, setEditing] = useState(false) // manual field form (LoopForm) - the demoted fallback
@@ -540,11 +540,11 @@ export function LoopDetailView({ id }: { id: string }) {
   // loop's own context WITHOUT silently switching the active team; this makes the
   // switch explicit so the dashboard/back-nav can follow if the user wants it.
   const crossTeam = detail.team && !detail.team.isActive ? detail.team : null
-  const switchTeam = (teamId: string) => {
+  const switchTeam = (teamId: string, teamSlug: string) => {
     // Persist the last-used default, then open that team's explicit dashboard
     // (`/t/<id>`) — the Phase 2 home for a team, instead of a full reload.
     setActiveTeamCookie(teamId)
-    void navigate({ to: '/t/$teamId', params: { teamId } })
+    void navigate({ to: '/t/$teamSlug', params: { teamSlug } })
   }
   const crossTeamEl = crossTeam && (
     <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border border-hairline bg-raised px-4 py-2.5">
@@ -555,7 +555,7 @@ export function LoopDetailView({ id }: { id: string }) {
       <span className="text-meta text-secondary">- not your active team.</span>
       <button
         type="button"
-        onClick={() => switchTeam(crossTeam.id)}
+        onClick={() => switchTeam(crossTeam.id, crossTeam.slug)}
         className="ml-auto cursor-pointer text-meta font-medium text-interactive underline underline-offset-2 transition-colors hover:text-display"
       >
         Switch to this team

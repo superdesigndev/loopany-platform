@@ -52,14 +52,13 @@ describe('LoopDetailView poll/error resilience', () => {
   })
 })
 
-describe('ComposeModal claim-poll rejection handling', () => {
+describe('ComposeModal session-auth capture', () => {
   const src = read('ComposeModal.tsx')
 
-  it('catches a failed claimStatus tick (no unhandled rejection every 2.5s)', () => {
-    const tick = /pollRef\.current = setInterval\(\(\) => \{[\s\S]*?\}, 2500\)/.exec(src)?.[0]
-    expect(tick, 'the claim poll tick should exist').toBeTruthy()
-    expect(tick).toContain('.catch(')
-    // The old shape passed a bare async fn to setInterval — its rejection had no handler.
+  it('has no claim polling or pasted credential path', () => {
+    expect(src).not.toContain('claimStatus')
+    expect(src).not.toContain('mintClaim')
+    expect(src).not.toContain('connect-key:')
     expect(src).not.toMatch(/setInterval\(async /)
   })
 })

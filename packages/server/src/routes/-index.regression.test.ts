@@ -14,9 +14,9 @@ import { describe, expect, it } from 'vitest'
  */
 // The route file keeps only the loader + errorComponent; the dashboard BODY (poll,
 // switcher, bundle carousel) moved to the shared DashboardView (rendered by both `/`
-// in open mode and `/t/$teamId`), so the body guards read from there.
+// in open mode and `/t/$teamSlug`), so the body guards read from there.
 const src = readFileSync(fileURLToPath(new URL('./index.tsx', import.meta.url)), 'utf8')
-const teamRoute = readFileSync(fileURLToPath(new URL('./t.$teamId.tsx', import.meta.url)), 'utf8')
+const teamRoute = readFileSync(fileURLToPath(new URL('./t.$teamSlug.tsx', import.meta.url)), 'utf8')
 const view = readFileSync(
   fileURLToPath(new URL('../components/DashboardView.tsx', import.meta.url)),
   'utf8',
@@ -51,14 +51,14 @@ describe('dashboard poll resilience', () => {
     expect(tick).not.toContain('invalidate')
   })
 
-  it('team switch NAVIGATES to /t/<id>, never router.invalidate', () => {
+  it('team switch NAVIGATES to /t/<slug>, never router.invalidate', () => {
     // The dashboard renders from its own fetch-then-set state (seeded once from
     // the loader), so router.invalidate would leave the visible data stale. Phase
     // 2: switching NAVIGATES to the team's explicit URL (the loader re-scopes),
-    // and the /t/$teamId route re-seeds via key={teamId}.
+    // and the /t/$teamSlug route re-seeds via key={teamId}.
     expect(view).toContain('<TeamSwitcher data={teams} />')
     expect(teamRoute).toContain('key={loaded!.teamId}')
-    expect(switcher).toContain("to: '/t/$teamId'")
+    expect(switcher).toContain("to: '/t/$teamSlug'")
     expect(switcher).not.toContain('useRouter')
     expect(switcher).not.toContain('invalidate()')
   })

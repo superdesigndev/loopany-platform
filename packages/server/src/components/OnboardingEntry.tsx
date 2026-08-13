@@ -15,10 +15,12 @@ import { markOnboardingDismissed, onboardingDismissed } from '../lib/onboardingS
  */
 export function OnboardingEntry({
   teamId,
+  teamSlug,
   noLoops,
   noMachines,
 }: {
   teamId?: string
+  teamSlug?: string
   noLoops: boolean
   noMachines: boolean
 }) {
@@ -29,8 +31,8 @@ export function OnboardingEntry({
   // to the team the banner was shown for. Without it the wizard falls back to the
   // last-used-team cookie, which can point elsewhere on a bookmarked/shared `/t/<id>`.
   const start = useCallback(
-    () => navigate({ to: '/onboarding', search: teamId ? { team: teamId } : {} }),
-    [navigate, teamId],
+    () => navigate({ to: '/onboarding', search: teamSlug ? { team: teamSlug } : {} }),
+    [navigate, teamSlug],
   )
 
   useEffect(() => {

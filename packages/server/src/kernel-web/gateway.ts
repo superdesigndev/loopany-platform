@@ -13,6 +13,8 @@ import { currentUser, requestScope } from "../auth.js";
 import * as store from "../db/store.js";
 import { authorizeKernelRequest } from "../kernel/authority.js";
 import { notifyKernelChangeset } from "../kernel/notify.js";
+import { normalizePersonFields, personAddress } from "../kernel/person.js";
+import { agentDirectory } from "../kernel/agentDirectory.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "../kernel/store.js";
 
 export class KernelWebError extends Error {
@@ -34,24 +36,34 @@ async function access(teamId: string): Promise<{ user: Awaited<ReturnType<typeof
 
 export async function workspace(teamId: string) {
   const { user, email } = await access(teamId);
-  const [snapshot, events, team, members] = await Promise.all([
+  const [snapshot, events, team, members, machines, aliases] = await Promise.all([
     readSnapshot(teamId), readEvents(teamId), store.getTeam(teamId), store.listTeamMembers(teamId),
+    store.listMachinesForTeam(teamId), store.listTeamAliases(teamId),
   ]);
   const tasks = Object.values(snapshot.objects).filter((o) => o.archetype === "task");
   const documents = Object.values(snapshot.objects).filter((o) => o.archetype === "doc");
   const activeRuns = snapshot.runs.filter((r) => ["pending", "claimed", "running"].includes(r.state));
   const recentRuns = [...snapshot.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30);
+  const visibleMachines = machines.filter((machine) => !machine.revokedAt);
   return {
-    team: { id: teamId, name: team?.name ?? teamId },
+    team: { id: teamId, name: team?.name ?? teamId, slug: team?.slug ?? teamId },
     me: { id: user?.id ?? null, email },
     members: members.flatMap((m) => m.email ? [{ id: m.userId, email: m.email.trim().toLowerCase(), role: m.role }] : []),
+    machines: visibleMachines.map((machine) => ({
+      id: machine.id, name: machine.name, hostname: machine.hostname, platform: machine.platform,
+      online: machine.online, lastSeen: machine.lastSeen, enrolledBy: machine.enrolledBy,
+      alias: aliases.find((item) => item.machineId === machine.id)?.alias ?? null,
+      mine: machine.enrolledBy != null && machine.enrolledBy === user?.id,
+      agentProfiles: machine.agentProfiles,
+    })),
+    agentAddresses: agentDirectory(visibleMachines, aliases, snapshot.runs),
     tasks,
     tree: treeView(snapshot),
     triggers: snapshot.triggers,
     activeRuns,
     recentRuns,
     documents,
-    inbox: inboxView(snapshot, email ?? "", new Date().toISOString()),
+    inbox: inboxView(snapshot, user?.id ? personAddress(user.id) : "", new Date().toISOString()),
     recentTimeline: timelineView(snapshot, events, { limit: 30 }),
     generatedAt: new Date().toISOString(),
   };
@@ -97,15 +109,17 @@ export async function timeline(teamId: string, all = false) {
 }
 
 export async function command(teamId: string, raw: unknown) {
-  const { user, email } = await access(teamId);
+  const { user } = await access(teamId);
   if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) {
     throw new KernelWebError(400, "body must be { command: { op, ... } }");
   }
   const request = { command: raw };
   const forbidden = authorizeKernelRequest("human-session", request);
   if (forbidden) throw new KernelWebError(forbidden.status, forbidden.message);
-  const actor: Provenance = { entrance: "human", actorId: email ?? "anonymous", ...(user?.sessionId ? { sessionId: user.sessionId } : {}) };
-  const decision = decide(raw as Command, await readSnapshot(teamId), actor, new Date().toISOString());
+  const actor: Provenance = { entrance: "human", actorId: user?.id ? personAddress(user.id) : "anonymous", ...(user?.sessionId ? { sessionId: user.sessionId } : {}) };
+  const normalized = await normalizePersonFields(teamId, raw);
+  if ("error" in normalized) return { status: 422, body: { ok: false, refusal: { code: "INVALID_PERSON", message: normalized.error }, notices: [] } };
+  const decision = decide(normalized as Command, await readSnapshot(teamId), actor, new Date().toISOString());
   if (!decision.ok) return { status: 422, body: { ok: false, refusal: decision.refusal, notices: [] } };
   const applied = await applyChangesetForTeam(teamId, decision.changeset);
   if (!applied.ok) return { status: 409, body: { ok: false, conflict: applied.conflict, notices: decision.notices } };

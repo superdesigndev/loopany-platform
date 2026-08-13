@@ -26,6 +26,7 @@ import path from "node:path";
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printTextOrTooOld } from "./cli-client.js";
 import { resolveLoopDir } from "./loopdir.js";
+import { machineHeaders } from "./config.js";
 
 export interface LoopRow {
   id: string;
@@ -222,7 +223,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   // 1. List the machine's loops so we can resolve which one this directory belongs
   //    to (client-side — the server's unified `log` needs an explicit loop id).
   const legacyLoops: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
-    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: machineHeaders(token) });
     return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
   };
   const listed = await postCli(["loops"], legacyLoops, cliDeps);
@@ -242,7 +243,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   const legacyLog: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
     const qs = new URLSearchParams({ loopId: resolved.id });
     if (limit) qs.set("limit", limit);
-    const res = await fetchImpl(`${server}/api/machine/log?${qs.toString()}`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetchImpl(`${server}/api/machine/log?${qs.toString()}`, { method: "GET", headers: machineHeaders(token) });
     return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
   };
   const got = await postCli(logArgv, legacyLog, cliDeps);

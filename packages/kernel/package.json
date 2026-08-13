@@ -5,6 +5,10 @@
   "description": "Loopany task kernel — the pure-function rulebook: entities (task/doc/mirror + events/triggers/runs), the six-state machine with entry invariants, decide(command) -> Changeset | Refusal, and tick(now). Zero I/O by design; it runs wherever the authority lives (local driver or the loopany server).",
   "type": "module",
   "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./format": "./src/format.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

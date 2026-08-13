@@ -20,6 +20,7 @@ import { artifactMeta } from "../server/frontmatter.js";
 import { pickTaskPath } from "../lib/fileEntries.js";
 import { loopBytesCap } from "../env.js";
 import { machineIdFromToken } from "./tokens.js";
+import { authenticateMachineCredential, machineCanAccessTeam } from "./machineAuth.js";
 import { clipText, nowIso, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 
 // Same `mod` tag as the rest of the gateway - these log lines predate the split.
@@ -52,13 +53,15 @@ export class ArtifactSync {
     },
   ): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    const machine = await store.getMachine(machineId);
-    if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const authenticated = await authenticateMachineCredential(deviceToken);
+    if (authenticated.kind !== "ok") return { status: 401, body: { error: authenticated.kind === "revoked" ? "machine_revoked" : "invalid_credential" } };
+    const machine = authenticated.machine;
 
     const loopId = typeof body.loopId === "string" ? body.loopId : "";
     if (!loopId) return { status: 400, body: { error: "loopId required" } };
     const loop = await store.getLoop(loopId);
     if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
+    if (!loop.teamId || !(await machineCanAccessTeam(machine, loop.teamId))) return { status: 403, body: { error: "machine owner is no longer a member of this loop's team" } };
 
     // runId attribution (Phase 3 seam): honored only when it names a run on this loop.
     let runId: string | null = null;
@@ -277,19 +280,21 @@ export class ArtifactSync {
    */
   async putBlob(deviceToken: string, hash: string, bytes: Buffer): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const authenticated = await authenticateMachineCredential(deviceToken);
+    if (authenticated.kind !== "ok") return { status: 401, body: { error: authenticated.kind === "revoked" ? "machine_revoked" : "invalid_credential" } };
     if (!isValidHash(hash)) return { status: 400, body: { error: "invalid hash (expect sha256 hex)" } };
     if (bytes.length > BLOB_CAP) return { status: 413, body: { error: "blob exceeds size cap" } };
     if (sha256Buf(bytes) !== hash) return { status: 400, body: { error: "hash mismatch (sha256(body) !== :hash)" } };
+    const referencedTeams = await store.machineBlobTeamIds(machineId, hash);
+    if (!referencedTeams.length || !(await Promise.all(referencedTeams.map(teamId => machineCanAccessTeam(authenticated.machine, teamId)))).every(Boolean)) {
+      return { status: 403, body: { error: "hash was not requested by an authorized loop on this machine" } };
+    }
     // Upload gate: only accept bytes the sync handshake actually asked THIS machine
     // for — i.e. a hash a live artifact_files row on one of its loops points at
     // (the row sync wrote when it returned the hash in needHashes). Any other PUT
     // (an arbitrary self-hashed blob nothing references) is refused, so a device
     // token can't be used as an uncapped R2 write channel. A re-PUT of a still-
     // referenced hash stays accepted (idempotent — daemon retries are safe).
-    if (!(await store.machineReferencesBlob(machineId, hash))) {
-      return { status: 403, body: { error: "hash was not requested for this machine (sync a manifest first)" } };
-    }
 
     // Per-loop storage cap, authoritative re-check (defense in depth). sync() caps
     // from the daemon-reported size; a NEW blob (one the server doesn't already

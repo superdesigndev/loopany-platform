@@ -22,7 +22,8 @@ import * as store from "../db/store.js";
 import type { ControlAction, Loop, NotifyPolicy, RunRole, RunStatus, StateField } from "../db/schema.js";
 import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
 import { selfCronFloorMinutes, selfRescheduleFloorMinutes } from "../env.js";
-import { machineIdFromToken, resolveLease, type RunLease } from "./tokens.js";
+import { machineIdFromToken, resolveLease, isDeviceTokenShape, type RunLease } from "./tokens.js";
+import { authenticateMachineCredential } from "./machineAuth.js";
 import {
   ABSENT,
   codeForStatus,
@@ -102,7 +103,7 @@ export class CliGateway {
    * through the reused `dispatch`/`createLoop`/`editLoop`/`loopLog` unchanged.
    */
   async cli(token: string, argv: string[]): Promise<HttpResult> {
-    const res = token.startsWith("dk_") ? await this.deviceCli(token, argv) : await this.runCli(token, argv);
+    const res = isDeviceTokenShape(token) ? await this.deviceCli(token, argv) : await this.runCli(token, argv);
     return finalizeCli(res);
   }
 
@@ -114,8 +115,9 @@ export class CliGateway {
     // DEFINITIVE state for an unregistered machine ("not connected — run `loopany
     // up`") rather than a 401, so the ambient dashboard is never an error/empty —
     // handled BEFORE the unknown-machine guard the other verbs sit behind.
+    const authenticated = await authenticateMachineCredential(deviceToken);
+    if (authenticated.kind !== "ok") return { status: 401, body: { error: authenticated.kind === "revoked" ? "machine_revoked" : "invalid_credential" } };
     if (verb === "home") return { status: 200, body: { ok: true, text: await this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     const flags = parseFlags(argv.slice(1));
     const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
 

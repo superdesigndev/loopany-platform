@@ -14,6 +14,7 @@ import path from "node:path";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printTextOrTooOld } from "./cli-client.js";
+import { machineHeaders } from "./config.js";
 import { type LoopRow, renderResolveError, resolveLoopId } from "./log.js";
 
 export type ShowDeps = {
@@ -76,7 +77,7 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   // 1. List the machine's loops so the target can be resolved (client-side — the
   //    server's `show` needs an explicit id, just like `log`).
   const legacyLoops: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
-    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: machineHeaders(token) });
     return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
   };
   const listed = await postCli(["loops"], legacyLoops, cliDeps);

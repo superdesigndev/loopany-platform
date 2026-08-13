@@ -169,8 +169,8 @@ describe("classify — CLI routing table (Batch 6)", () => {
     });
   });
 
-  test("the foreground poll loop moved: `up --foreground` → daemon, plain `up` → ensure", () => {
-    expect(classify(["up", "--foreground"], {})).toEqual({ kind: "daemon" });
+  test("both up forms pass through enrollment before starting their poll loop", () => {
+    expect(classify(["up", "--foreground"], {})).toEqual({ kind: "ensure", args: ["--foreground"] });
     expect(classify(["up"], {})).toEqual({ kind: "ensure", args: [] });
     expect(classify(["up", "--server-url", "http://x"], {})).toEqual({ kind: "ensure", args: ["--server-url", "http://x"] });
   });

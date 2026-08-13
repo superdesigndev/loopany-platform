@@ -46,7 +46,7 @@ afterAll(() => {
 beforeEach(async () => {
   await (db.client as any).exec(
     "DELETE FROM kernel_runs; DELETE FROM kernel_triggers; DELETE FROM kernel_events; DELETE FROM kernel_objects; " +
-      "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
+      "DELETE FROM team_machine_bindings; DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
   );
 });
 
@@ -71,7 +71,8 @@ async function deliveredRun(taskId = "seo-bet-manager") {
   const deviceToken = tokens.mintDeviceToken();
   const teamId = store.teamIdForUser("u1");
   await store.ensureTeam(teamId, "u1's team", "u1");
-  await tokens.rememberConnectKey(deviceToken, { userId: "u1", teamId });
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  await store.createMachine({ id: machineId, userId: "u1", teamId, name: "mbp.local", alias: "mbp", tokenHash: tokens.sha256(deviceToken), online: false });
   await gw.poll(deviceToken, { host: "mbp.local", alias: "mbp" });
 
   const { decide } = await import("@loopany/kernel");
@@ -306,24 +307,23 @@ test("FOLLOW-UP COHERENCE: status=follow-up without a date refuses at the bridge
   expect(JSON.stringify(bad.body)).toContain("FOLLOWUP_NEEDS_DATE");
 });
 
-test("POSTCONDITION: a DEVICE credential's finish is an owner override - never second-guessed", async () => {
-  const { teamId, deviceToken, runId } = await deliveredRun("bet-owner");
-  const res = await kgateway.kernelCli(deviceToken, {
+test("a HUMAN session cannot forge the run protocol's finish verb", async () => {
+  const { teamId, runId } = await deliveredRun("bet-owner");
+  const res = await kgateway.kernelCli("", {
     command: { op: "run-finish", runId, outcome: "done", note: "owner closes it manually" },
-  });
-  expect(res.status).toBe(200);
-  expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)?.state).toBe("done");
+  }, { userId: "u1", teamId });
+  expect(res.status).toBe(403);
+  expect((await kstore.readSnapshot(teamId)).runs.find((r) => r.id === runId)?.state).not.toBe("done");
 });
 
-test("TIMELINE endpoint: bounded, team-scoped, readable by BOTH credentials, run-collapsed", async () => {
-  const { teamId, runId, rk, deviceToken } = await deliveredRun();
+test("TIMELINE endpoint: bounded, team-scoped, readable by human and run credentials, run-collapsed", async () => {
+  const { teamId, runId, rk } = await deliveredRun();
 
   // The run writes an artifact + a note (collapses into one item).
   await kgateway.kernelCli(rk, { command: { op: "doc-put", key: "w33-report", body: "# w33", attachTask: "seo-bet-manager" } });
   await kgateway.kernelCli(rk, { command: { op: "note", id: "seo-bet-manager", note: "progress" } });
 
-  // Device credential reads the timeline.
-  const dres = await kgateway.kernelCli(deviceToken, { timeline: { since: "2020-01-01T00:00:00.000Z" } });
+  const dres = await kgateway.kernelCli("", { timeline: { since: "2020-01-01T00:00:00.000Z" } }, { userId: "u1", teamId });
   expect(dres.status).toBe(200);
   const items = dres.body.timeline!;
   const runItems = items.filter((i) => i.runId === runId);
@@ -336,18 +336,14 @@ test("TIMELINE endpoint: bounded, team-scoped, readable by BOTH credentials, run
   expect(rres.body.timeline!.length).toBeGreaterThan(0);
 
   // The limit is CAPPED server-side (bounded endpoint, never a full dump).
-  const capped = await kgateway.kernelCli(deviceToken, { timeline: { since: "2020-01-01T00:00:00.000Z", limit: 99999 } });
+  const capped = await kgateway.kernelCli("", { timeline: { since: "2020-01-01T00:00:00.000Z", limit: 99999 } }, { userId: "u1", teamId });
   expect(capped.status).toBe(200);
   expect(capped.body.timeline!.length).toBeLessThanOrEqual(200);
 
   // TEAM ISOLATION: another team's credential sees none of this team's items.
-  const otherToken = tokens.mintDeviceToken();
   const otherTeam = store.teamIdForUser("u2");
   await store.ensureTeam(otherTeam, "u2's team", "u2");
-  await tokens.rememberConnectKey(otherToken, { userId: "u2", teamId: otherTeam });
-  const gw2 = gateway();
-  await gw2.poll(otherToken, { host: "other.local", alias: "other" });
-  const ores = await kgateway.kernelCli(otherToken, { timeline: { since: "2020-01-01T00:00:00.000Z" } });
+  const ores = await kgateway.kernelCli("", { timeline: { since: "2020-01-01T00:00:00.000Z" } }, { userId: "u2", teamId: otherTeam });
   expect(ores.status).toBe(200);
   expect(ores.body.timeline!).toHaveLength(0);
 });

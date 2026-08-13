@@ -7,7 +7,7 @@ import { setActiveTeamCookie } from '../lib/teamCookie'
  * sees a quiet pill naming the active team (so the workspace context is never
  * invisible); anyone who can reach more than one team gets the select.
  *
- * Switching NAVIGATES to `/t/<id>` (the explicit team URL — bookmarkable, and
+ * Switching NAVIGATES to `/t/<slug>` (the explicit team URL - bookmarkable, and
  * each tab keeps its own team). The cookie is still written, now only as the
  * last-used default that the bare `/` redirect falls back to (no longer an
  * authorization key). The navigation (and the route's `key={teamId}` remount) is
@@ -21,7 +21,8 @@ export function TeamSwitcher({ data }: { data?: TeamsView }) {
     // Persist the last-used default (the `/` redirect hint), then navigate to the
     // team's explicit dashboard URL — the loader re-scopes every list fn to it.
     setActiveTeamCookie(id)
-    void navigate({ to: '/t/$teamId', params: { teamId: id } })
+    const team = data.teams.find((candidate) => candidate.id === id)
+    if (team) void navigate({ to: '/t/$teamSlug', params: { teamSlug: team.slug } })
   }
 
   if (data.teams.length === 1)

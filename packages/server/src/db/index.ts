@@ -31,8 +31,8 @@ import postgres, { type Sql } from "postgres";
 import { dataDir, databaseUrl, dbPoolMode } from "../env.js";
 import { logger } from "../logger.js";
 import { isTransactionPooler, poolOptionsFor } from "./poolOptions.js";
-import { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runLeases, connectKeys, kernelObjects, kernelEvents, kernelTriggers, kernelRuns } from "./schema.js";
-import { user, session, account, verification } from "./auth-schema.js";
+import { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runLeases, kernelObjects, kernelEvents, kernelTriggers, kernelRuns } from "./schema.js";
+import { user, session, account, verification, deviceCode } from "./auth-schema.js";
 
 // Business tables + Better Auth tables share one Drizzle instance (the auth
 // drizzleAdapter reads its tables from here).
@@ -47,7 +47,6 @@ const schema = {
   blobs,
   artifactFiles,
   runLeases,
-  connectKeys,
   kernelObjects,
   kernelEvents,
   kernelTriggers,
@@ -56,6 +55,7 @@ const schema = {
   session,
   account,
   verification,
+  deviceCode,
 };
 
 // The postgres-js handle is the canonical type; the pglite handle exposes an

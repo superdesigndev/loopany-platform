@@ -70,9 +70,9 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   // surface (besides `up --foreground`) that still launches the daemon. Checked BEFORE
   // the verb switch so a leading daemon flag never reads as an unknown verb.
   if (verb !== undefined && DAEMON_FLAGS.has(verb)) return { kind: "daemon" };
-  // `up --foreground` runs the poll loop attached (the old bare behavior); plain `up`
-  // ensures a detached daemon (idempotent) as before.
-  if (verb === "up") return argv.includes("--foreground") ? { kind: "daemon" } : { kind: "ensure", args: argv.slice(1) };
+  // Both forms pass through ensure so a freshly authenticated human session can
+  // enroll the machine before either the detached or attached poll loop starts.
+  if (verb === "up") return { kind: "ensure", args: argv.slice(1) };
   if (verb === "new") return { kind: "create", args: argv.slice(1) };
   if (verb === "skill") return { kind: "skill", args: argv.slice(1) };
   if (verb === "setup") return { kind: "setup", args: argv.slice(1) };

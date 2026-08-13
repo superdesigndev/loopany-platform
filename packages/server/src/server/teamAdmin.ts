@@ -94,6 +94,7 @@ export interface TeamInviteView {
 export interface TeamAdminDetail {
   id: string;
   name: string;
+  slug: string;
   role: Role;
   personal: boolean;
   /** Loops the team owns — non-zero blocks deletion (decision 1). */
@@ -117,6 +118,7 @@ export async function getTeamDetail(userId: string, teamId: string): Promise<Tea
   return {
     id: team.id,
     name: team.name,
+    slug: team.slug,
     role: myRole,
     personal: store.isPersonalTeam(team),
     loopCount,
@@ -305,7 +307,7 @@ export async function redeemInvite(
   userId: string,
   token: string,
   nowMs: number,
-): Promise<Result<{ teamId: string; teamName: string; alreadyMember: boolean }>> {
+): Promise<Result<{ teamId: string; teamName: string; teamSlug: string; alreadyMember: boolean }>> {
   const invite = await store.getInvite(token);
   if (!invite) return { ok: false, error: "This invite link is invalid." };
   if (invite.redeemedAt) return { ok: false, error: "This invite link has already been used." };
@@ -326,5 +328,5 @@ export async function redeemInvite(
     already ? null : { teamId: invite.teamId, role: invite.role },
   );
   if (!won) return { ok: false, error: "This invite link has already been used." };
-  return { ok: true, teamId: invite.teamId, teamName: team.name, alreadyMember: already };
+  return { ok: true, teamId: invite.teamId, teamName: team.name, teamSlug: team.slug, alreadyMember: already };
 }

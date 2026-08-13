@@ -14,13 +14,14 @@
  * server fetch, output) is an injectable seam so the tests need no real process
  * or network.
  */
-import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
+import { DEVICE_FILE, readStored, resolveServerUrl, machineHeaders } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { PID_FILE, readPidFile, clearPidFile, isAlive, processStartTime, verifiedRunningPid, type PidRecord } from "./pidfile.js";
 import { readRegistryFile, type RegistryEntry } from "./moonlight.js";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { queryLocalSocket } from "./local-socket.js";
 
 export type MachineStatus = { online: boolean; name: string | null };
 
@@ -32,7 +33,7 @@ export async function fetchMachineStatus(server: string, token: string): Promise
   try {
     const res = await boundedFetch(
       `${server}/api/machine/status`,
-      { headers: { Authorization: `Bearer ${token}` } },
+      { headers: machineHeaders(token) },
       3000,
     );
     if (!res.ok) return undefined;
@@ -85,6 +86,7 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
   const token = "token" in injected ? injected.token : readStored(DEVICE_FILE);
   // The shared pidfile.verifiedRunningPid check (reused-pid safe), fed our seams.
   const pid = verifiedRunningPid(d);
+  const socketStatus = pid !== undefined && Object.keys(injected).length === 0 ? await queryLocalSocket("status") : undefined;
 
   d.out("loopany status:\n");
   d.out(
@@ -95,6 +97,7 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
   d.out(`  server:    ${server || "not configured — run `loopany up --server-url <url>`"}\n`);
   d.out(`  identity:  ${token ? tokenFingerprint(token) : "no device token — run `loopany up`"}\n`);
   d.out(`  pidfile:   ${PID_FILE}\n`);
+  if (socketStatus?.ok) d.out(`  local API: connected${typeof socketStatus.inFlight === "number" ? ` (${socketStatus.inFlight} run${socketStatus.inFlight === 1 ? "" : "s"} active)` : ""}\n`);
   const registry = injected.registry ?? readRegistryFile();
   const pathExists = injected.pathExists ?? existsSync;
   const tempRoots = [path.resolve(tmpdir()), "/tmp", "/private/tmp"].map((p) => p + path.sep);

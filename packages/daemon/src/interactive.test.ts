@@ -149,6 +149,18 @@ describe("runInteractive — text sink (new server renders TOON in `text`)", () 
     expect(cap.stdout()).toContain("code: SERVER_TOO_OLD");
     expect(cap.stdout()).toContain("too old for this CLI");
   });
+
+  test("a modern structured 403 prints its real migration instruction", async () => {
+    const { fetchFn } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "loops"
+        ? { ok: false, status: 403, body: { error: "owner commands moved to lk; run lk setup /team" } }
+        : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["loops"], cap)).toBe(1);
+    expect(cap.stdout()).toContain("owner commands moved to lk");
+    expect(cap.stdout()).not.toContain("SERVER_TOO_OLD");
+  });
 });
 
 describe("runInteractive — loops forwards its flags (F1–F4: the old bug hardcoded ['loops'])", () => {

@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { buildDaemonSpawn, runEnsure, type EnsureDeps } from "./ensure.js";
+import { buildDaemonSpawn, enrollmentChoiceError, runEnsure, type EnsureDeps } from "./ensure.js";
 import type { InstallOpts } from "./skill-install.js";
 
 type Cap = EnsureDeps & {
@@ -15,6 +15,19 @@ type Cap = EnsureDeps & {
   killed: () => Array<[number, string]>;
   skillInstalls: () => InstallOpts[];
 };
+
+describe("machine enrollment choice", () => {
+  test("non-interactive reuse fails loud unless reclaim or new is explicit", () => {
+    const existing = { name: "StoneX MacBook" };
+    expect(enrollmentChoiceError(existing, undefined, false, "mbp.local")).toContain("--reclaim or --new");
+    expect(enrollmentChoiceError(existing, "reclaim", false, "mbp.local")).toBeUndefined();
+    expect(enrollmentChoiceError(existing, "new", false, "mbp.local")).toBeUndefined();
+  });
+
+  test("reclaim fails loud when no matching hostname exists", () => {
+    expect(enrollmentChoiceError(undefined, "reclaim", false, "mbp.local")).toContain("use --new");
+  });
+});
 
 /** Baseline seams: nothing running, server unreachable, spawn returns pid 555. The
  *  skill refresh is stubbed so no test spawns npx / hits the network. */
@@ -31,7 +44,10 @@ function seams(extra: EnsureDeps = {}): Cap {
     sleep: async () => {},
     localPid: () => undefined,
     persist: () => {},
-    readToken: () => "dk_stored",
+    readToken: () => "mk_stored_machine_credential",
+    readServer: () => "http://srv",
+    readUserSession: () => undefined,
+    runForeground: async () => 0,
     installSkill: async (opts) => { skillInstalls.push(opts); return { ok: true, line: "loopany skill: installed → ~/.claude/skills/loopany" }; },
     // No-op the integration refreshers so no test ever writes the real ~/.claude
     // settings or ~/.local/bin (the real defaults are exercised in their own tests).
@@ -96,6 +112,33 @@ describe("runEnsure — local pidfile first (no daemon leaks)", () => {
 });
 
 describe("runEnsure — readiness", () => {
+  test("uses the logged-in session server when up has no server flag", async () => {
+    const writes: Array<[string, string]> = [];
+    const cap = seams({
+      readServer: () => undefined,
+      readUserSession: () => ({ server: "http://session-server/", user: { id: "u1" } }),
+      fetchStatus: async (server) => ({ online: server === "http://session-server" }),
+      persist: (file, value) => { writes.push([file, value]); },
+    });
+    const code = await runEnsure([], cap);
+    expect(code).toBe(0);
+    expect(cap.spawned()).toBe(0);
+  });
+
+  test("foreground enroll/resolve path persists credentials then runs attached", async () => {
+    const writes: Array<[string, string]> = [];
+    let foregroundRuns = 0;
+    const cap = seams({
+      persist: (file, value) => { writes.push([file, value]); },
+      runForeground: async () => { foregroundRuns += 1; return 7; },
+    });
+    const code = await runEnsure(["--foreground"], cap);
+    expect(code).toBe(7);
+    expect(cap.spawned()).toBe(0);
+    expect(foregroundRuns).toBe(1);
+    expect(writes.map(([, value]) => value)).toEqual(["http://srv", "mk_stored_machine_credential"]);
+  });
+
   test("daemon comes online → success, spawned once, never killed", async () => {
     let calls = 0;
     const cap = seams({
@@ -146,6 +189,23 @@ describe("runEnsure — force (update's replace path)", () => {
 });
 
 describe("runEnsure — user-scope skill refresh on every success path", () => {
+  test("lk setup's runtime-only path leaves skills, shims, and agent hooks untouched", async () => {
+    let shims = 0;
+    let hooks = 0;
+    const cap = seams({
+      localPid: () => 4242,
+      readServer: () => "http://srv",
+      fetchStatus: async () => ({ online: true, name: "Mac" }),
+      ensureBinShim: () => { shims += 1; },
+      refreshHooks: async () => { hooks += 1; },
+    });
+    const code = await runEnsure(["--runtime-only"], cap);
+    expect(code).toBe(0);
+    expect(cap.skillInstalls()).toEqual([]);
+    expect(shims).toBe(0);
+    expect(hooks).toBe(0);
+  });
+
   test("live local daemon + server online → refreshes the skill (global), announced", async () => {
     const cap = seams({ localPid: () => 4242, readServer: () => "http://srv", fetchStatus: async () => ({ online: true, name: "Mac" }) });
     const code = await runEnsure(["--server-url", "http://srv"], cap);

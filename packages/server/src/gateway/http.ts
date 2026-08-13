@@ -79,3 +79,11 @@ export function stripNul(s: string): string {
 export function clipText(s: string, cap: number): string {
   return stripNul(s.slice(0, cap));
 }
+import { presentedMachineCredential } from './tokens.js'
+
+export function machineCredential(request: Request): string {
+  const auth = request.headers.get('authorization') ?? ''
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+  const machineId = request.headers.get('x-loopany-machine-id')
+  return token.startsWith('mk_') && machineId ? presentedMachineCredential(machineId, token) : token
+}

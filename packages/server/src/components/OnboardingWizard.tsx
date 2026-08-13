@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { TemplateInfo } from '../types'
-import { createMachine, finalizeMachine, machineStatus } from '../server/machineFns'
-import { claimStatus, firstRunStatus, getConfig, mintClaim } from '../server/loopApi'
+import { listMachines } from '../server/machineFns'
+import { firstRunStatus, getConfig } from '../server/loopApi'
 import { testChannel } from '../server/notifyFns'
 import { simulateFirstRun, simulateLoopCreated, simulateMachineConnect, simulateNotifyBind } from '../server/onboardingSim'
 import { CREATION_STEP_KEYS } from '../lib/creationSteps'
@@ -94,52 +94,26 @@ export function OnboardingWizard({
     void getConfig().then(setConfig)
   }, [])
 
-  // Step "machine" — mint a device token + pending machine row once we arrive.
+  // Poll the session-owned machine list. Enrollment itself happens locally after
+  // browser login, so the web page never mints or displays a machine secret.
   useEffect(() => {
-    if (step !== 'machine' || machineId) return
-    let cancelled = false
-    void createMachine({ data: teamId })
-      .then((r) => {
-        if (cancelled) return
-        if ('error' in r) setError(r.error)
-        else patch({ machineId: r.id, machineToken: r.token })
-      })
-      .catch(() => !cancelled && setError('could not prepare a connect command'))
-    return () => {
-      cancelled = true
-    }
-  }, [step, machineId, teamId, patch])
-
-  // Step "machine" — poll until the daemon actually connects (detected reality),
-  // then silently name it so it lands in the machine list + online count.
-  useEffect(() => {
-    if (step !== 'machine' || !machineId || machineOnline) return
+    if (step !== 'machine' || machineOnline) return
     const tick = async () => {
-      const s = await machineStatus({ data: machineId }).catch(() => undefined)
-      if (s?.online) {
+      const machines = await listMachines({ data: teamId }).catch(() => [])
+      const online = machines.find((machine) => machine.online)
+      if (online) {
         setMachineOnline(true)
-        void finalizeMachine({ data: { id: machineId, name: s.hostname || 'My machine' } }).catch(() => {})
+        patch({ machineId: online.id })
       }
     }
     void tick()
     const t = setInterval(tick, 2000)
     return () => clearInterval(t)
-  }, [step, machineId, machineOnline])
+  }, [step, machineOnline, teamId, patch])
 
-  // Step "prompt" — mint the claim token that correlates the created loop back here.
   useEffect(() => {
     if (step !== 'prompt' || claimToken) return
-    let cancelled = false
-    void mintClaim({ data: teamId })
-      .then((r) => {
-        if (cancelled) return
-        if ('token' in r) patch({ claimToken: r.token })
-        else setError(r.error)
-      })
-      .catch(() => !cancelled && setError('could not mint a connect key'))
-    return () => {
-      cancelled = true
-    }
+    patch({ claimToken: 'session-auth' })
   }, [step, claimToken, teamId, patch])
 
   // The live milestone checklist (best-effort) — the SHARED hook, identical to the
@@ -149,16 +123,6 @@ export function OnboardingWizard({
   // Step "prompt" — poll until the loop record actually lands (detected reality),
   // then advance to the celebration. claimStatus.done is the AUTHORITATIVE signal;
   // the checklist above is best-effort and never gates.
-  useEffect(() => {
-    if (step !== 'prompt' || !claimToken) return
-    const tick = async () => {
-      const s = await claimStatus({ data: claimToken }).catch(() => undefined)
-      if (s?.done && s.id) patch({ loopId: s.id, step: 'live' })
-    }
-    void tick()
-    const t = setInterval(tick, 1500)
-    return () => clearInterval(t)
-  }, [step, claimToken, patch])
 
   // Step "live" — wait on the FIRST run reaching a terminal outcome (detected reality
   // again), then surface the hand-off CTA into the run page. Polling stops once the
@@ -187,10 +151,10 @@ export function OnboardingWizard({
     return () => clearTimeout(t)
   }, [step, claimToken, steps.length])
 
-  const connectCommand = machineToken ? `${cli} up --server-url ${origin} --connect-key ${machineToken}` : ''
+  const connectCommand = `lk login ${origin}\n${cli} up --server-url ${origin}`
   const instruction = `Fetch ${origin}/api/bootstrap and help me build a loop.`
   const configLines = claimToken
-    ? [`server-url: ${origin}`, `connect-key: ${claimToken}`, ...(config?.customCli ? [`loopany-cli: ${cli}`] : [])].join('\n')
+    ? [`server-url: ${origin}`, ...(teamId ? [`team-id: ${teamId}`] : []), ...(config?.customCli ? [`loopany-cli: ${cli}`] : [])].join('\n')
     : ''
   const description = housekeeper?.description?.trim() ?? ''
   // The milestone-reporting protocol now lives in the loop-creation SKILL (create.md),
@@ -212,9 +176,8 @@ export function OnboardingWizard({
   }
 
   async function simConnect() {
-    if (!machineId) return
     setSimBusy(true)
-    const r = await simulateMachineConnect({ data: machineId }).catch(() => ({ ok: false, error: 'simulation failed' }))
+    const r = await simulateMachineConnect({ data: machineId ?? '' }).catch(() => ({ ok: false, error: 'simulation failed' }))
     if (!r.ok) setError(r.error ?? 'simulation failed')
     setSimBusy(false)
   }
@@ -422,7 +385,7 @@ export function OnboardingWizard({
                       {configLines}
                     </pre>
                   ) : (
-                    <div className="mt-3 border-t border-hairline pt-3 text-secondary">minting a connect key…</div>
+                    <div className="mt-3 border-t border-hairline pt-3 text-secondary">preparing session instructions…</div>
                   )}
                   {description && configLines && (
                     <p className="mt-3 max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-primary">
@@ -457,7 +420,9 @@ export function OnboardingWizard({
                 <SimButton busy={simBusy} onClick={() => void simLoop()} label="Simulate agent building the loop" />
               )}
 
-              <StepFooter onBack={back} canBack />
+              <StepFooter onBack={back} canBack>
+                <button className={btnPrimary} onClick={onExit}>Review it on the dashboard →</button>
+              </StepFooter>
             </Section>
           )}
 

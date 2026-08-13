@@ -59,7 +59,7 @@ export interface KernelCliResponse {
  *  response (or throw a DriverError on any transport/decode failure). The default
  *  blocks via a child process; the conformance harness injects an in-process one. */
 export interface SyncTransport {
-  (url: string, token: string, body: unknown): { status: number; response: KernelCliResponse };
+  (url: string, token: string, body: unknown, teamId?: string): { status: number; response: KernelCliResponse };
 }
 
 export class RemoteBackend implements Backend {
@@ -75,6 +75,8 @@ export class RemoteBackend implements Backend {
      *  authority. Absent in every normal use - see the server's
      *  kernel-authority-clock-seam invariant. */
     private readonly simAuthority?: string,
+    private readonly teamId?: string,
+    private readonly machineId?: string,
   ) {
     // POST target: <serverUrl>/api/kernel/cli. Tolerate a trailing slash.
     this.url = `${serverUrl.replace(/\/+$/, "")}/api/kernel/cli`;
@@ -160,8 +162,9 @@ export class RemoteBackend implements Backend {
   /** POST the envelope, translate a Refusal/ApplyConflict to a DriverError, and
    *  return the ok response. FAIL LOUD on any transport/status failure. */
   private send(body: Record<string, unknown>): KernelCliResponse {
-    const withAuthority = this.simAuthority ? { ...body, simAuthority: this.simAuthority } : body;
-    const { status, response } = this.transport(this.url, this.token, withAuthority);
+    const withMachine = this.machineId ? { ...body, machineId: this.machineId } : body;
+    const withAuthority = this.simAuthority ? { ...withMachine, simAuthority: this.simAuthority } : withMachine;
+    const { status, response } = this.transport(this.url, this.token, withAuthority, this.teamId);
     if (response.refusal) throw refusalError(response.refusal);
     if (response.conflict) throw conflictError(response.conflict);
     if (status !== 200 || !response.ok) {
@@ -196,13 +199,13 @@ function conflictError(c: { kind: string; id: string; message: string }): Driver
  * prints a single JSON line `{status, body}` on success or `{error}` on a
  * transport failure; anything else (a crash, a timeout) is a loud DriverError.
  */
-export const syncHttpTransport: SyncTransport = (url, token, body) => {
+export const syncHttpTransport: SyncTransport = (url, token, body, teamId) => {
   const script = `
-    const url = process.env.__U, token = process.env.__T;
+    const url = process.env.__U, token = process.env.__T, team = process.env.__TEAM;
     const payload = process.env.__B;
     fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer " + token },
+      headers: { "content-type": "application/json", authorization: "Bearer " + token, ...(team ? {"x-loopany-team-id":team} : {}) },
       body: payload,
     })
       .then(async (r) => {
@@ -213,7 +216,7 @@ export const syncHttpTransport: SyncTransport = (url, token, body) => {
       .catch((e) => { process.stdout.write(JSON.stringify({ error: String(e && e.message || e) })); });
   `;
   const out = spawnSync(process.execPath, ["-e", script], {
-    env: { ...process.env, __U: url, __T: token, __B: JSON.stringify(body) },
+    env: { ...process.env, __U: url, __T: token, __B: JSON.stringify(body), __TEAM: teamId ?? "" },
     encoding: "utf8",
     timeout: 30_000,
     maxBuffer: 16 * 1024 * 1024,

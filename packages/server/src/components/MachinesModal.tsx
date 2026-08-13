@@ -5,7 +5,6 @@ import { rel } from '../lib/format'
 import { machinePresence } from '../lib/machinePresence'
 import {
   listMachines,
-  createMachine,
   machineStatus,
   finalizeMachine,
   deleteMachine,
@@ -19,9 +18,9 @@ import type { MachineSummary } from '../types'
  *  the terminal (the old bare-flags foreground form died with the shell) and
  *  waits for a readiness probe. The device token rides as `--connect-key` — `up`
  *  adopts it as this machine's stored identity on first run. */
-function connectCmd(token: string, cli: string): string {
+function connectCmd(_token: string, cli: string): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3000'
-  return `${cli} up --server-url ${origin} --connect-key ${token}`
+  return `lk login ${origin}\n${cli} up --server-url ${origin}`
 }
 
 /** The one-liner that updates an outdated daemon (the invoked CLI is the new
@@ -60,6 +59,7 @@ export function MachinesModal({
   const [status, setStatus] = useState<MachineSummary | null>(null)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showSetup, setShowSetup] = useState(false)
   const [delErr, setDelErr] = useState<string | null>(null)
   const [cliCmd, setCliCmd] = useState('npx @crewlet/loopany@latest')
 
@@ -112,14 +112,7 @@ export function MachinesModal({
     setBusy(true)
     setDelErr(null)
     try {
-      const r = await createMachine({ data: teamId })
-      if ('error' in r) {
-        setDelErr(r.error)
-        return
-      }
-      setStatus(null)
-      setName('')
-      setPending(r)
+      setShowSetup(true)
     } finally {
       setBusy(false)
     }
@@ -151,6 +144,22 @@ export function MachinesModal({
   }
 
   const connected = !!status?.online
+
+  if (showSetup) {
+    const command = connectCmd('', cliCmd)
+    return (
+      <Modal open={open} onClose={() => setShowSetup(false)}>
+        <ModalHead title="Connect computer" sub="Sign in as yourself, then let the daemon enroll a restricted machine identity." />
+        <div className="mt-5 text-body font-medium text-display">Run these commands on the computer:</div>
+        <div className="mt-2 flex items-start gap-2">
+          <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-control bg-display p-4 font-mono text-label leading-relaxed text-paper">{command}</pre>
+          <CopyButton text={command} />
+        </div>
+        <p className="mt-3 text-body text-secondary">The browser login creates a revocable human session. The daemon receives a separate machine key and never gets owner CLI authority.</p>
+        <div className="mt-6 flex justify-end"><button className={btnPrimary} onClick={() => { setShowSetup(false); void load() }}>Done</button></div>
+      </Modal>
+    )
+  }
 
   // ---- Connect dialog (two acts) ----
   if (pending) {

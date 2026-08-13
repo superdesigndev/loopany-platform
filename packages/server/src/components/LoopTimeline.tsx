@@ -134,18 +134,18 @@ const backLink = 'ml-auto text-label text-secondary hover:underline'
 
 /**
  * The whole timeline PAGE — header, back link, view. Both routes (`/timeline` in
- * open mode and `/t/<id>/timeline` under the gate) render this and differ only in
+ * open mode and `/t/<slug>/timeline` under the gate) render this and differ only in
  * whether a team is in scope, so the chrome lives here rather than being copied
  * into two route files that would drift.
  */
-export function TimelinePage({ teamId }: { teamId?: string }) {
+export function TimelinePage({ teamId, teamSlug }: { teamId?: string; teamSlug?: string }) {
   return (
     <main className="mx-auto min-w-0 max-w-[1180px] px-8 pb-16 pt-10 max-sm:px-4">
       <div className="mb-6 flex flex-wrap items-baseline gap-3">
         <h1 className="text-xl font-semibold tracking-tight text-display">Timeline</h1>
         <p className="text-label text-secondary">Every loop&apos;s runs and upcoming fires on one axis.</p>
-        {teamId ? (
-          <Link to="/t/$teamId" params={{ teamId }} className={backLink}>
+        {teamSlug ? (
+          <Link to="/t/$teamSlug" params={{ teamSlug }} className={backLink}>
             ← Back to loops
           </Link>
         ) : (

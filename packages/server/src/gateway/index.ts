@@ -29,13 +29,12 @@ import { autopauseMessage, completionMessage, deferredMessage, dispatchNotificat
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { machinePresence } from "../lib/machinePresence.js";
+import { authenticateMachineCredential, machineCanAccessTeam } from "./machineAuth.js";
 import { loginGateEnabled } from "../lib/loginGate.js";
 import { snapshotRetention } from "../env.js";
 import {
   machineIdFromToken,
   isDeviceTokenShape,
-  getDeviceOwner,
-  readClaimIntent,
   registerRunLease,
   resolveLease,
   retireLease,
@@ -46,6 +45,7 @@ import {
   readNewIdempotency,
   recordNewIdempotency,
   sha256,
+  credentialSecret,
   type ClaimResult,
   type RunLease,
 } from "./tokens.js";
@@ -485,7 +485,7 @@ export class MachineGateway {
 
   async poll(
     deviceToken: string,
-    info?: { host?: string; platform?: string; arch?: string; version?: string; alias?: string },
+    info?: { host?: string; platform?: string; arch?: string; version?: string; alias?: string; agentProfiles?: string[] },
     progress?: Array<{ runId: string; step: number; label: string }>,
     /** The daemon's echo of the last watch digest it applied — matching ⇒ the
      *  watch array is omitted from the response (an old daemon never echoes). */
@@ -497,64 +497,9 @@ export class MachineGateway {
       return { status: 401, body: { error: "invalid device token" } };
     }
     const machineId = machineIdFromToken(deviceToken);
-    let machine = await store.getMachine(machineId);
-    if (machine) {
-      // Already enrolled: the derived machine id matched. Verify the FULL token hash
-      // too — defense against a 64-bit machine-id truncation collision handing one
-      // machine's authority to a different token (audit H-01 criterion (a)).
-      if (machine.tokenHash && machine.tokenHash !== sha256(deviceToken)) {
-        return { status: 401, body: { error: "device token mismatch" } };
-      }
-    } else {
-      // First contact — self-register, but ONLY an enrollable token:
-      //  - open/dev mode (gate off): any well-shaped token enrolls into the shared
-      //    workspace (anonymous BYOA is intentional there);
-      //  - gated mode (GitHub login on): the token MUST resolve to a live, unexpired
-      //    connect key bound to a signed-in user (getDeviceOwner) — i.e. the owner
-      //    ran the web/AI-First connect flow. An unknown/forged token is REJECTED,
-      //    never minted into a "shared" machine (audit H-01 / M2). This closes the
-      //    unauthenticated self-registration + resource-creation hole.
-      const owner = await getDeviceOwner(machineId);
-      if (loginGateEnabled() && owner == null) {
-        return { status: 401, body: { error: "unknown device token — connect this machine first" } };
-      }
-      const ownerId = owner ?? "shared";
-      // Home/default team for this machine: ALWAYS the owner's personal team (the
-      // no-claim fallback for loops created on it later). A loop's actual team comes
-      // from the validated claim intent at createLoop time, never from this home
-      // team — so cross-team capture still lands in team B. Keeping home = personal
-      // team preserves the safe invariant that a machine's fallback can never be a
-      // shared team the owner is merely a (possibly later-revoked) member of.
-      const teamId = store.teamIdForUser(ownerId);
-      await store.ensureTeam(teamId, ownerId === "shared" ? "Shared Workspace" : "Personal Team", ownerId === "shared" ? null : ownerId);
-      // Team-unique alias (the kernel assignee's machine segment resolves to it).
-      // A collision inside the team suffixes rather than fails loud — enrollment
-      // must never block on a name clash, and the daemon can pin an explicit
-      // LOOPANY_MACHINE_ALIAS if it wants a stable handle.
-      const alias = await this.uniqueAlias(teamId, str(info?.alias) ?? str(info?.host), machineId);
-      const row = {
-        id: machineId,
-        userId: ownerId,
-        teamId,
-        // Always name it (never blank) — listMachines hides empty-name rows, so a
-        // self-registered machine must carry a name to show up + be counted.
-        name: info?.host || `machine-${machineId.slice(2, 8)}`,
-        alias,
-        tokenHash: sha256(deviceToken),
-        token: deviceToken,
-        online: true,
-      };
-      try {
-        machine = await store.createMachine(row);
-      } catch (err) {
-        // Two same-hostname machines enrolling concurrently can both pass the
-        // suffix probe and race the (teamId, alias) unique index. Retry ONCE
-        // with the machine-id suffix (collision-free by construction).
-        if (!alias) throw err;
-        machine = await store.createMachine({ ...row, alias: `${alias}-${machineId.slice(2, 8)}` });
-      }
-      log.info({ machineId, host: info?.host, alias: machine.alias }, "poll: self-registered machine");
-    }
+    const authenticated = await authenticateMachineCredential(deviceToken);
+    if (authenticated.kind !== "ok") return { status: 401, body: { error: authenticated.kind === "revoked" ? "machine_revoked" : "invalid_credential" } };
+    let machine = authenticated.machine;
     // Stamp online + lastSeen — THROTTLED: only when the flag must flip or the
     // stamp is older than LAST_SEEN_REFRESH_MS. Only the sweep (ONLINE_TTL_MS)
     // and presence reads consume it, so the hot path stays read-only.
@@ -566,6 +511,9 @@ export class MachineGateway {
     if (info) {
       // Untrusted wire input: a version is a short semver, so clip defensively.
       const version = typeof info.version === "string" ? clipText(info.version, 64) : undefined;
+      const agentProfiles = Array.isArray(info.agentProfiles)
+        ? [...new Set(info.agentProfiles.filter((value): value is string => typeof value === "string" && /^[a-z0-9][a-z0-9-]{0,39}$/.test(value)))].slice(0, 20).sort()
+        : undefined;
       // Backfill the alias only when the row has none yet (an older-daemon or
       // pre-column machine that just upgraded) — never re-suffix a live alias on
       // every poll (that would churn the handle a kernel assignee points at). The
@@ -574,7 +522,7 @@ export class MachineGateway {
       if (!machine.alias?.trim()) {
         const wanted = str(info.alias) ?? str(info.host);
         if (wanted) {
-          const teamId = machine.teamId ?? store.teamIdForUser(machine.userId);
+          const teamId = machine.teamId ?? store.teamIdForUser(machine.enrolledBy);
           aliasPatch = { alias: await this.uniqueAlias(teamId, wanted, machineId) };
         }
       }
@@ -583,6 +531,7 @@ export class MachineGateway {
         ...(info.platform && info.platform !== machine.platform ? { platform: info.platform } : {}),
         ...(info.arch && info.arch !== machine.arch ? { arch: info.arch } : {}),
         ...(version && version !== machine.daemonVersion ? { daemonVersion: version } : {}),
+        ...(agentProfiles && JSON.stringify(agentProfiles) !== JSON.stringify(machine.agentProfiles) ? { agentProfiles } : {}),
         ...(info.host && !machine.name?.trim() ? { name: info.host } : {}),
         ...aliasPatch,
       };
@@ -595,6 +544,8 @@ export class MachineGateway {
           if (!aliasPatch.alias) throw err;
           await store.updateMachine(machineId, { ...patch, alias: `${aliasPatch.alias}-${machineId.slice(2, 8)}` });
         }
+        machine = (await store.getMachine(machineId)) ?? machine;
+        if (machine.alias) await store.bindMachineToTeam(machine.teamId ?? store.teamIdForUser(machine.enrolledBy), machineId, machine.enrolledBy);
       }
     }
 
@@ -629,6 +580,7 @@ export class MachineGateway {
         await store.updateRun(run.id, { phase: "error", outcome: "error", error: "loop removed", ts: nowIso() });
         continue;
       }
+      if (!loop.teamId || !(await machineCanAccessTeam(machine, loop.teamId))) continue;
       // ATOMIC claim (pending -> running, conditional on the phase): with an async
       // session, two concurrent polls (an HTTP retry racing its timed-out original,
       // or two daemons sharing one device token = the same machineId) could both
@@ -664,7 +616,8 @@ export class MachineGateway {
     // the actual folder per loop (dirname(taskFile) → workdir).
     let cached = this.watchCache.get(machineId);
     if (!cached || deliveries.length || Date.now() - cached.at > WATCH_CACHE_TTL_MS) {
-      const watch: WatchEntry[] = (await store.loopsForMachine(machineId))
+      const authorizedLoops = (await Promise.all((await store.loopsForMachine(machineId)).map(async loop => ({ loop, allowed: !!loop.teamId && await machineCanAccessTeam(machine, loop.teamId) })))).filter(row => row.allowed).map(row => row.loop);
+      const watch: WatchEntry[] = authorizedLoops
         .map((l) => ({
           loopId: l.id,
           workdir: l.workdir ?? null,
@@ -697,6 +650,7 @@ export class MachineGateway {
     return {
       status: 200,
       body: {
+        minDaemonVersion: process.env.LOOPANY_MIN_DAEMON_VERSION ?? "0.1.0",
         deliveries,
         ...(kernelRunDeliveries.length ? { kernelRuns: kernelRunDeliveries } : {}),
         watchDigest: cached.digest,
@@ -715,7 +669,7 @@ export class MachineGateway {
    */
   async pollWait(
     deviceToken: string,
-    info?: { host?: string; platform?: string; arch?: string; version?: string; alias?: string },
+    info?: { host?: string; platform?: string; arch?: string; version?: string; alias?: string; agentProfiles?: string[] },
     progress?: Array<{ runId: string; step: number; label: string }>,
     opts?: { wait?: boolean; watchDigest?: string; waitMs?: number },
   ): Promise<HttpResult> {
@@ -770,7 +724,10 @@ export class MachineGateway {
    */
   async status(deviceToken: string): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    const machine = await store.getMachine(machineId);
+    const authenticated = await authenticateMachineCredential(deviceToken);
+    const machine = authenticated.kind === "ok" ? authenticated.machine : undefined;
+    if (authenticated.kind === "revoked") return { status: 401, body: { error: "machine_revoked" } };
+    if (authenticated.kind === "invalid" && credentialSecret(deviceToken).startsWith("mk_")) return { status: 401, body: { error: "invalid_credential" } };
     // Unknown token ⇒ not connected yet (the daemon self-registers on first poll),
     // so report offline rather than erroring — keeps the skill's check uniform.
     if (!machine) return { status: 200, body: { online: false, name: null, lastSeen: null } };
@@ -820,8 +777,9 @@ export class MachineGateway {
     },
   ): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    const machine = await store.getMachine(machineId);
-    if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const authenticated = await authenticateMachineCredential(deviceToken);
+    if (authenticated.kind !== "ok") return { status: 401, body: { error: authenticated.kind === "revoked" ? "machine_revoked" : "invalid_credential" } };
+    const machine = authenticated.machine;
 
     const cron = str(body.cron);
     if (!cron) return { status: 400, body: { error: "cron required (5-field, e.g. \"0 8 * * *\")" } };
@@ -942,32 +900,13 @@ export class MachineGateway {
     // team — decides where the loop lands. This is what lets ONE machine/daemon
     // serve MANY teams (report §2.1). With no claim intent (older daemon, CLI
     // direct path) we fall back to the machine's home team, exactly as before.
-    const homeTeam = machine.teamId ?? store.teamIdForUser(machine.userId);
-    let teamId = homeTeam;
-    const intent = await readClaimIntent(str(body.claim));
-    if (intent && intent.teamId !== homeTeam) {
-      // CROSS-TEAM create. SECURITY (report §4) — fail CLOSED, never silently
-      // mis-file into the home team (the original bug):
-      //  - bind the claim to its minter: the same human who minted it under a
-      //    validated team session must be the one creating the loop;
-      //  - RE-VALIDATE authorization NOW (membership can change after mint),
-      //    mirroring requestScope: a current team member. The team value itself
-      //    is server-minted, never client input.
-      if (machine.userId !== intent.userId) {
-        return { status: 403, body: { error: "connect-key was minted by a different user" } };
-      }
-      const authorized = await store.isTeamMember(intent.teamId, machine.userId);
-      if (!authorized) {
-        return { status: 403, body: { error: "not authorized to create loops in that team" } };
-      }
-      teamId = intent.teamId;
-    }
-    // Default to the team's most recently configured channel (listChannels is
-    // newest-first) so a freshly-added Feishu/Telegram channel auto-applies to new
-    // loops — computed against the RESOLVED team so it routes to that team's channel.
-    const channelId = await store.defaultChannelId(teamId);
+    const teamId = machine.teamId ?? store.teamIdForUser(machine.enrolledBy);
+    if (!(await machineCanAccessTeam(machine, teamId))) return { status: 403, body: { error: "machine owner is not a member of the target team" } };
+    // A notification destination follows its user across teams. The newest
+    // personal destination is the active one until explicit routing exists.
+    const channelId = machine.enrolledBy ? await store.defaultChannelId(machine.enrolledBy) : null;
     const loop = await store.createLoop({
-      userId: machine.userId ?? "shared",
+      userId: machine.enrolledBy ?? "shared",
       teamId,
       channelId,
       machineId,
@@ -1021,7 +960,8 @@ export class MachineGateway {
    *  (first byte `[`), mirroring `show --json` — the daemon prints `text` either way. */
   async listLoops(deviceToken: string, fieldsFlag?: string, json?: boolean): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const authenticated = await authenticateMachineCredential(deviceToken);
+    if (authenticated.kind !== "ok") return { status: 401, body: { error: authenticated.kind === "revoked" ? "machine_revoked" : "invalid_credential" } };
 
     // --fields extends the default columns with any of the optional set; an unknown
     // field fails loud (exit 1) listing what IS available (matches gh-axi's shape).
@@ -1094,7 +1034,8 @@ export class MachineGateway {
    */
   async loopLog(deviceToken: string, loopId: unknown, limit?: unknown): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const authenticated = await authenticateMachineCredential(deviceToken);
+    if (authenticated.kind !== "ok") return { status: 401, body: { error: authenticated.kind === "revoked" ? "machine_revoked" : "invalid_credential" } };
     return this.renderLoopLog(machineId, loopId, limit);
   }
 
@@ -1183,7 +1124,8 @@ export class MachineGateway {
     dryRun = false,
   ): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    const authenticated = await authenticateMachineCredential(deviceToken);
+    if (authenticated.kind !== "ok") return { status: 401, body: { error: authenticated.kind === "revoked" ? "machine_revoked" : "invalid_credential" } };
     if (typeof id !== "string" || !id) return { status: 400, body: { error: "loop id required" } };
     const loop = await store.getLoop(id);
     if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };

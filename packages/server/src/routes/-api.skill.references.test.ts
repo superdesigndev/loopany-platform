@@ -36,56 +36,47 @@ describe('/api/skill/references/$', () => {
 
   test('serves the real create.md body (the create flow)', async () => {
     const body = await (await call('/api/skill/references/create.md')).text()
-    expect(body).toContain('loopany new')
+    expect(body).toContain('lk create')
+    expect(body).not.toContain('--connect-key')
   })
 
   test('create.md carries the §2 propose → confirm → build guidance', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // The new constraint: never silently guess cadence/output — propose, confirm, then build.
-    expect(body).toContain('2 · Settle cadence, output')
-    expect(body).toContain('propose → confirm → build')
-    expect(body).toContain('Never silently guess')
-    // The parameters the agent must settle before `loopany new`.
-    expect(body).toContain('Cadence.')
-    expect(body).toContain('Per-run output.')
-    // Batch 3: a goal-shaped task also proposes a finish line (closed loop); a
-    // monitor-shaped task never mentions a goal.
-    expect(body).toContain('Finish line — only for goal-shaped tasks')
-    // Concrete proposed defaults the guidance offers as examples.
-    expect(body).toContain('every day at 9am your time')
-    expect(body).toContain('every hour')
-    expect(body).toContain('a short markdown summary in `report.md`')
+    expect(body).toContain('Do not create anything until the user confirms')
+    expect(body).toContain('the cadence and IANA timezone')
+    expect(body).toContain('the durable outputs')
+    expect(body).toContain('the finish line when the work is goal-bound')
   })
 
   test('create.md §1 owns decide-what-to-build (moved from bootstrap in batch 3)', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // Session already has a task → turn THAT into the loop; empty session → brainstorm
     // loops FOR THIS project and let the user pick. This fork used to live in bootstrap.
-    expect(body).toContain('already did a clear task')
-    expect(body).toContain("There's no task yet")
-    expect(body).toContain('useful FOR IT')
+    expect(body).toContain('just completed a repeatable task')
+    expect(body).toContain('ask what outcome should recur')
+    expect(body).toContain('template description')
   })
 
-  test('create.md drops the removed `task` field + tmp.json ritual, uses inline --json', async () => {
+  test('create.md uses the human Kernel CLI and previews before writing', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // Batch 2 removed the `task` column and the loop.tmp.json config file; create.md
     // now authors an inline config passed to `loopany new --json` and previews with --dry-run.
     expect(body).not.toContain('loop.tmp.json')
     expect(body).not.toContain('--config')
-    expect(body).toContain('loopany new --json')
+    expect(body).toContain('lk create')
+    expect(body).toContain('--body-file')
     expect(body).toContain('--dry-run')
   })
 
-  test('create.md carries the optional Dashboard-at-create step (author ui now when the shape is known)', async () => {
+  test('create.md pins canonical identity and machine least privilege', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // The follow-up round: when the product shape is already known (template-driven
     // loops), author the initial `ui` in the create config instead of deferring to an
     // evolve pass — and cross-reference evolve.md §3 rather than duplicating it.
-    expect(body).toContain('Dashboard at create')
-    expect(body).toContain('day-one dashboard')
-    expect(body).toContain('evolve.md` §3')
-    // `ui` is now a documented (optional) config field.
-    expect(body).toContain('`ui` is optional')
+    expect(body).toContain('person:<user-id>')
+    expect(body).toContain('Machine authority is execution-only')
+    expect(body).toContain('human session')
   })
 
   test('run.md carries the runtime protocol depth (batch 3: extracted from exec-loop §1-§4)', async () => {

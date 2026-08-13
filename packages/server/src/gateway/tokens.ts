@@ -1,15 +1,13 @@
 /**
- * Machine + run credential helpers. Device tokens (`dk_…`) identify a machine
- * (its id is derived from the token: `m-sha256(token)[:16]`, BYOA §2). A RUN
+ * Machine + run credential helpers. Machine keys (`mk_…`) authenticate a
+ * separately identified machine. A RUN
  * LEASE (`rk_…`) is minted per delivery, bound to one run, and carries the
  * run's least-privilege caps — the CLI dispatch authorizes the `loopany` shim
  * against it. Its lifecycle is a small state machine (`active` →
  * `terminal-grace` → expired), not a mint→revoke pair; see `RunLease` below.
  *
- * Leases and connect-key bindings are DURABLE (run_leases / connect_keys
- * tables): they must survive a deploy, or every restart 401s the in-flight
- * runs' callbacks/finalize and silently mis-files a post-restart paste into the
- * machine's home team. The short-lived UI correlations (`claimResults`) and the
+ * Leases are durable in run_leases so a deploy does not break in-flight Runs.
+ * The short-lived UI correlations (`claimResults`) and the
  * 15-min `new` idempotency window stay in-process (accepted restart gaps —
  * losing one only degrades a dialog wait / a retry dedupe, never data).
  */
@@ -18,96 +16,55 @@ import { createHash, randomBytes } from "node:crypto";
 import { and, eq, isNotNull, lt } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { connectKeys, runLeases, type CodingAgent, type RunRole } from "../db/schema.js";
+import { runLeases, type CodingAgent, type RunRole } from "../db/schema.js";
 import { isCreationStep } from "../lib/creationSteps.js";
 
 export function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
 }
 
-/** Mint a fresh device token (`dk_…`) — the one wire format `machineIdFromToken` consumes. */
+/** Test/backfill alias. New machine credentials are always `mk_`. */
 export function mintDeviceToken(): string {
-  return `dk_${randomBytes(15).toString("hex")}`;
+  return mintMachineKey();
+}
+export function mintMachineKey(): string { return `mk_${randomBytes(24).toString("hex")}`; }
+
+const PRESENTED = "\n";
+export function presentedMachineCredential(machineId: string, token: string): string {
+  return `${machineId}${PRESENTED}${token}`;
+}
+export function credentialSecret(value: string): string {
+  const at = value.indexOf(PRESENTED);
+  return at < 0 ? value : value.slice(at + 1);
 }
 
-/** Derive the stable machine id from its device token. */
+/** Read the explicit machine id from the presented wire credential. */
 export function machineIdFromToken(token: string): string {
-  return `m-${sha256(token).slice(0, 16)}`;
+  const at = token.indexOf(PRESENTED);
+  return at < 0 ? `m-${sha256(token).slice(0, 16)}` : token.slice(0, at);
 }
 
 /**
- * Whether a string is shaped like a device token (`dk_…`). A cheap malformed-input
- * filter at the enrollment surface — it rejects junk (empty / wrong prefix / absurd
- * length / stray whitespace) BEFORE any lookup work. It is NOT the auth boundary: a
- * well-shaped but unknown token is still rejected by the connect-key gate in
- * gated mode (`gateway/index.ts` `poll`). The charset is deliberately permissive
- * past the prefix — real tokens are `dk_`+hex (`mintDeviceToken`), but hand-minted
- * demo/dev tokens (e.g. `dk_demo_cookie_unified`) are legitimately word-shaped, and
- * only the login gate decides who may enroll.
+ * Cheap malformed-input filter. Authentication still requires an explicit
+ * machine id, row lookup, and constant-time hash comparison.
  */
-const DEVICE_TOKEN_RE = /^dk_[A-Za-z0-9_-]{3,120}$/;
 export function isDeviceTokenShape(token: string): boolean {
-  return DEVICE_TOKEN_RE.test(token);
+  const secret = credentialSecret(token);
+  return /^mk_[A-Za-z0-9_-]{16,160}$/.test(secret);
 }
 
-// ---- connect keys (minted device token → owner + team binding, durable) ----
-// A connect-key/claim is minted from a SPECIFIC team's dashboard session; we bind
-// the minter and the VALIDATED active team to the key so (a) the daemon's first
-// poll self-registers the machine under the minting user, and (b) `createLoop`
-// lands the loop in that team — this is what lets ONE machine/daemon serve MANY
-// teams. The teamId is captured server-side from the authenticated session (never
-// from client input); the gateway re-validates membership at create time (§4).
-//
-// Durable rows (the Phase-3 Option C upgrade): the old in-memory maps meant a
-// deploy between mint and paste silently mis-filed the loop into the machine's
-// home team. Keyed by the DERIVED machine id, so the key itself is never stored.
-// Not single-read: one paste may create several loops, and the self-register
-// seed reads it too.
-
-export interface ClaimIntent {
-  /** The user who minted the key (the authenticated dashboard session). */
-  userId: string;
-  /** The validated active team the key was minted under. */
-  teamId: string;
-}
-
-/** Keep bindings long enough for a leisurely paste, then drop (bounded table).
- *  Also bounds the self-register owner lookup: a key unused for >24h registers
- *  as shared — strictly better than the old map, which lost it on any restart. */
+/** Transitional dialog correlation only. These values grant no machine or
+ * kernel authority and intentionally do not survive a deploy. */
 export const CONNECT_KEY_TTL_MS = 24 * 60 * 60 * 1000;
-
-function connectKeyFresh(mintedAt: string, now: number): boolean {
-  return now - Date.parse(mintedAt) <= CONNECT_KEY_TTL_MS;
+const claimIntents = new Map<string, { userId: string; teamId?: string | null; mintedAt: number }>();
+export async function rememberConnectKey(key: string, intent: { userId: string; teamId?: string | null }): Promise<void> {
+  claimIntents.set(key, { ...intent, mintedAt: Date.now() });
 }
-
-/** Bind a freshly-minted connect-key to its minter (+ team, when the mint came
- *  from a team dashboard session). Prunes expired rows on write. */
-export async function rememberConnectKey(connectKey: string, intent: { userId: string; teamId?: string | null }): Promise<void> {
-  const now = new Date();
-  await db.delete(connectKeys).where(lt(connectKeys.mintedAt, new Date(now.getTime() - CONNECT_KEY_TTL_MS).toISOString()));
-  const row = {
-    machineId: machineIdFromToken(connectKey),
-    userId: intent.userId,
-    teamId: intent.teamId ?? null,
-    mintedAt: now.toISOString(),
-  };
-  await db.insert(connectKeys).values(row).onConflictDoUpdate({ target: connectKeys.machineId, set: row });
+export async function readClaimIntent(key: string | null | undefined, now = Date.now()): Promise<{ userId: string; teamId: string } | undefined> {
+  const row = key ? claimIntents.get(key) : undefined;
+  return row?.teamId && now - row.mintedAt <= CONNECT_KEY_TTL_MS ? { userId: row.userId, teamId: row.teamId } : undefined;
 }
-
-/** Peek (NON-evicting) the team/minter a connect-key was minted under, if still live. */
-export async function readClaimIntent(connectKey: string | null | undefined, now: number = Date.now()): Promise<ClaimIntent | undefined> {
-  if (!connectKey) return undefined;
-  const row = (await db.select().from(connectKeys).where(eq(connectKeys.machineId, machineIdFromToken(connectKey))))[0];
-  if (!row || row.teamId == null || !connectKeyFresh(row.mintedAt, now)) return undefined;
-  return { userId: row.userId, teamId: row.teamId };
-}
-
-/** The remembered owner of a self-registering machine, if any (still-live key). */
-export async function getDeviceOwner(machineId: string, now: number = Date.now()): Promise<string | undefined> {
-  const row = (await db.select().from(connectKeys).where(eq(connectKeys.machineId, machineId)))[0];
-  if (!row || !connectKeyFresh(row.mintedAt, now)) return undefined;
-  return row.userId;
-}
+export async function getDeviceOwner(_machineId?: string, _now?: number): Promise<undefined> { return undefined; }
 
 /** The least-privilege capability set a run lease carries, minted at poll time
  *  from the run's role + the loop's config (see gateway `poll`). Identical to the

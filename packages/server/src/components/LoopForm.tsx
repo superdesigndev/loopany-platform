@@ -144,7 +144,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
     // Inline validation for the one client-parsed field (everything else is
     // validated server-side); shown under the field, never an alert().
     const [schemaErr, setSchemaErr] = useState<string | null>(null)
-    // The parent (LoopDetailView) already holds the team's channel list — reuse it
+    // The parent already holds the signed-in user's destination list - reuse it
     // when handed down, and only self-fetch when rendered standalone.
     const [fetched, setFetched] = useState<ChannelSummary[]>([])
     const channels = channelsProp ?? fetched

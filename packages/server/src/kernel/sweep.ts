@@ -26,6 +26,7 @@ import { kernelTriggers } from "../db/schema.js";
 import * as store from "../db/store.js";
 import { logger } from "../logger.js";
 import { recordDispatchBlocked } from "./blocked.js";
+import { machineSupportsAgent } from "./agentDirectory.js";
 import { tickTeamAtAuthority } from "./gateway.js";
 import { sweepOfflineKernelRuns } from "./recover.js";
 
@@ -148,6 +149,14 @@ export async function kernelSweep(
               teamId,
               run,
               `no machine in this team has alias "${seg.machine}" (assignee "${run.assignee}") - the run stays pending until that machine enrolls.${available}`,
+            );
+            continue;
+          }
+          if (machineSupportsAgent(resolved.machine, seg.agent) === false) {
+            await recordDispatchBlocked(
+              teamId,
+              run,
+              `machine "${seg.machine}" does not report agent profile "${seg.agent}" - choose an address from lk team`,
             );
             continue;
           }

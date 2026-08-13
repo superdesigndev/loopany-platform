@@ -2,9 +2,8 @@
  * OWNER NOTIFICATIONS (kernel-owner-notifications) - notify humans ONLY when
  * attention is required; normal loop execution stays quiet.
  *
- * The channel: the team's newest notification channel (the SAME
- * `notification_channels` infra production loops push through - no new
- * entity, no rule language). Three attention conditions, all derived from the
+ * The destination: the assignee's newest User-owned notification channel,
+ * shared across every Team they belong to. Three attention conditions derive from the
  * changeset that JUST APPLIED (so this is event-driven, never a poller):
  *
  *  1. HUMAN ASSIGNMENT - a task created with, or handed to, a person assignee
@@ -20,34 +19,30 @@
  *     one such event per blocked run, so at most one notification - and a later
  *     fire (a NEW run) legitimately re-notifies on a new event basis.
  *
- * Every message links the task and its key artifact (tracks first, else the
- * first doc/mirror ref) so the notification is actionable. A bounded seen-set
- * on event ids is the double-send safety (retries/races), not the dedup policy.
- * Best-effort by design: a notify failure never breaks the write that caused it.
+ * Every message links the task and its key artifact. The assignment event is
+ * the durable intent; delivery is best-effort and never rolls back the write.
  */
 import { isPersonAssignee, type Changeset, type KernelEvent, type TaskObject } from "@loopany/kernel";
 import * as store from "../db/store.js";
 import { CHANNELS } from "../gateway/notify.js";
 import { logger } from "../logger.js";
 
-export type KernelNotifier = (teamId: string, title: string, message: string, ownerEmail?: string | null) => Promise<void>;
+export type KernelNotifier = (teamId: string, userId: string, title: string, message: string, eventId: string) => Promise<void>;
 
-async function realNotifier(teamId: string, title: string, message: string, ownerEmail?: string | null): Promise<void> {
-  const channels = await store.listChannels(teamId);
-  if (channels.length === 0) return; // no channel = dashboard/timeline only
-  // OWNER ROUTING (review rounds 3-4): the channel bound to the notification's
-  // human (channels.userEmail) wins; a plain TEAM channel (userEmail null) is
-  // the only fallback. NEVER another person's personal channel - when only
-  // other people's bound channels exist, we push NOTHING (the event is already
-  // in the timeline/inbox; a mis-routed push is a privacy leak, a missed push
-  // is not data loss).
-  const wanted = ownerEmail?.trim().toLowerCase();
-  const channel =
-    (wanted ? channels.find((c) => c.userEmail?.trim().toLowerCase() === wanted) : undefined) ??
-    channels.find((c) => !c.userEmail);
-  if (!channel) return;
+async function realNotifier(teamId: string, userId: string, title: string, message: string, eventId: string): Promise<void> {
+  if (!(await store.isTeamMember(teamId, userId))) {
+    logger.info({ teamId, userId, eventId, result: "not-member" }, "kernel notification skipped");
+    return;
+  }
+  const channel = (await store.listChannels(userId))[0];
+  if (!channel) {
+    logger.info({ teamId, userId, eventId, result: "no-channel" }, "kernel notification skipped");
+    return;
+  }
   const r = await CHANNELS[channel.type].send(channel.config, title, message);
-  if (!r.ok) logger.warn({ teamId, err: r.error }, "kernel notify dispatch failed");
+  const fields = { teamId, userId, eventId, channelId: channel.id, channelType: channel.type };
+  if (r.ok) logger.info({ ...fields, result: "sent" }, "kernel notification sent");
+  else logger.warn({ ...fields, result: "failed", err: r.error }, "kernel notification failed");
 }
 
 let notifier: KernelNotifier = realNotifier;
@@ -56,11 +51,6 @@ let notifier: KernelNotifier = realNotifier;
 export function setKernelNotifier(n: KernelNotifier | null): void {
   notifier = n ?? realNotifier;
 }
-
-/** Double-send safety across retries (bounded; the POLICY dedup is structural -
- *  see the module doc). */
-const notified = new Set<string>();
-const NOTIFIED_CAP = 4000;
 
 function taskIn(cs: Changeset, id: string): TaskObject | undefined {
   const obj = cs.objects.find((m) => m.object.id === id)?.object;
@@ -79,10 +69,16 @@ export async function notifyKernelChangeset(teamId: string, cs: Changeset): Prom
     try {
       const condition = classify(e, cs);
       if (!condition) continue;
-      if (notified.has(e.id)) continue;
-      if (notified.size >= NOTIFIED_CAP) notified.clear();
-      notified.add(e.id);
-      await notifier(teamId, condition.title, condition.message, condition.owner);
+      const userId = personUserId(condition.owner);
+      if (!userId) continue;
+      const member = (await store.listTeamMembers(teamId)).find((item) => item.userId === userId);
+      if (!member) {
+        logger.info({ teamId, userId, eventId: e.id, result: "not-member" }, "kernel notification skipped");
+        continue;
+      }
+      const display = member.email ?? member.displayName ?? condition.owner!;
+      const message = condition.message.replaceAll(condition.owner!, display);
+      await notifier(teamId, userId, condition.title, message, e.id);
     } catch (err) {
       logger.warn(
         { teamId, eventId: e.id, err: err instanceof Error ? err.message : String(err) },
@@ -90,6 +86,12 @@ export async function notifyKernelChangeset(teamId: string, cs: Changeset): Prom
       );
     }
   }
+}
+
+function personUserId(address?: string | null): string | null {
+  if (!address?.startsWith("person:")) return null;
+  const userId = address.slice("person:".length);
+  return userId || null;
 }
 
 function classify(e: KernelEvent, cs: Changeset): { title: string; message: string; owner?: string | null } | null {

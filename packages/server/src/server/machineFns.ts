@@ -21,7 +21,6 @@ import { createServerFn } from '@tanstack/react-start'
 import * as store from '../db/store.js'
 import type { Machine } from '../db/schema.js'
 import { requestScope, type RequestScope } from '../auth.js'
-import { machineIdFromToken, mintDeviceToken, rememberConnectKey, sha256 } from '../gateway/tokens.js'
 import { machineInScope, tokenVisibleTo } from './machineScope.js'
 import { latestDaemonVersion } from './daemonVersion.js'
 import { ensureServer } from './boot.js'
@@ -69,7 +68,7 @@ async function toSummary(m: Machine, scope: RequestScope): Promise<MachineSummar
     daemonVersion: m.daemonVersion ?? null,
     // Same for every machine (cached npm latest); non-blocking + fail-silent.
     latestDaemonVersion: latestDaemonVersion.get(),
-    token: tokenVisibleTo(m, scope) ? (m.token ?? null) : null,
+    token: null,
     loopCount: (await store.loopsForMachine(m.id)).length,
   }
 }
@@ -98,17 +97,9 @@ export const createMachine = createServerFn({ method: 'POST' })
   .validator((teamId?: string) => teamId)
   .handler(async ({ data: teamId }): Promise<{ id: string; token: string } | { error: string }> => {
     await ensureServer()
-    const { enforce, userId, teamId: active } = await requestScope(teamId)
+    const { enforce, userId } = await requestScope(teamId)
     if (enforce && !userId) return { error: 'not signed in' }
-    const token = mintDeviceToken()
-    const id = machineIdFromToken(token)
-    const owner = userId ?? 'shared'
-    // Belt-and-braces: the machine row below already carries the owner, but the
-    // connect-key binding also covers a daemon that first polls AFTER this row
-    // was deleted/recreated (self-register falls back to the key's minter).
-    await rememberConnectKey(token, { userId: owner, teamId: active })
-    await store.createMachine({ id, userId: owner, teamId: active, name: '', tokenHash: sha256(token), token, online: false })
-    return { id, token }
+    return { error: 'Machine enrollment now starts from the authenticated CLI. Run `lk login`, then `loopany up`.' }
   })
 
 /** Poll while the connect dialog is open. Scoped like listMachines; the token

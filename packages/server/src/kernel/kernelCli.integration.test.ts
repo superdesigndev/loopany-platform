@@ -29,6 +29,7 @@ const TOK_B = 'dk_kernel_team_b'
 async function seedMachine(token: string, userId: string): Promise<{ machineId: string; teamId: string }> {
   const machineId = tokens.machineIdFromToken(token)
   const teamId = store.teamIdForUser(userId)
+  await store.ensureTeam(teamId, `${userId}'s team`, userId)
   await store.createMachine({
     id: machineId,
     userId,
@@ -36,10 +37,11 @@ async function seedMachine(token: string, userId: string): Promise<{ machineId: 
     name: `m-${userId}`,
     alias: userId === 'u_alice' ? 'alice-mbp' : 'bob-mbp',
     tokenHash: tokens.sha256(token),
-    token,
   })
   return { machineId, teamId }
 }
+
+const humanCli = (userId: string, teamId: string, body: unknown) => gateway.kernelCli('', body, { userId, teamId })
 
 let TEAM_A: string
 let TEAM_B: string
@@ -77,8 +79,8 @@ describe('kernelCli — unauthorized credentials', () => {
     expect(r.body.refusal?.code).toBe('UNAUTHORIZED')
   })
 
-  it('rejects a well-shaped but unregistered machine token (401)', async () => {
-    const r = await gateway.kernelCli('dk_unregistered_machine', { op: 'create', title: 'x' })
+  it('rejects a registered machine credential from the human kernel surface (401)', async () => {
+    const r = await gateway.kernelCli(TOK_A, { op: 'create', title: 'x' })
     expect(r.status).toBe(401)
     expect(r.body.ok).toBe(false)
   })
@@ -87,7 +89,7 @@ describe('kernelCli — unauthorized credentials', () => {
 describe('kernelCli — golden-shaped command sequence lands + reads back', () => {
   it('create -> note -> doc-put -> update persists to pglite for the token team', async () => {
     // create a task
-    const created = await gateway.kernelCli(TOK_A, {
+    const created = await humanCli('u_alice', TEAM_A, {
       op: 'create',
       title: 'ship the kernel host',
       status: 'in-progress',
@@ -100,7 +102,7 @@ describe('kernelCli — golden-shaped command sequence lands + reads back', () =
     expect(taskId).toBe('ship-the-kernel-host')
 
     // note on the task (captures an event on its stream)
-    const noted = await gateway.kernelCli(TOK_A, {
+    const noted = await humanCli('u_alice', TEAM_A, {
       op: 'note',
       id: taskId,
       note: 'started implementation',
@@ -108,7 +110,7 @@ describe('kernelCli — golden-shaped command sequence lands + reads back', () =
     expect(noted.status).toBe(200)
 
     // a doc upsert
-    const doc = await gateway.kernelCli(TOK_A, {
+    const doc = await humanCli('u_alice', TEAM_A, {
       op: 'doc-put',
       key: 'kernel ledger',
       body: 'step | status\nM5 | in-progress\n',
@@ -116,7 +118,7 @@ describe('kernelCli — golden-shaped command sequence lands + reads back', () =
     expect(doc.status).toBe(200)
 
     // update the task status -> done, with a note
-    const done = await gateway.kernelCli(TOK_A, {
+    const done = await humanCli('u_alice', TEAM_A, {
       op: 'update',
       id: taskId,
       patch: { status: 'done' },
@@ -140,27 +142,35 @@ describe('kernelCli — golden-shaped command sequence lands + reads back', () =
     expect(kinds).toContain('status-changed')
     // Every event is attributed to the credential's owner, never the body.
     expect(events.every((e) => e.provenance.entrance === 'human')).toBe(true)
-    expect(events.every((e) => e.provenance.actorId === 'u_alice')).toBe(true)
+    expect(events.every((e) => e.provenance.actorId === 'person:u_alice')).toBe(true)
   })
 
-  it('accepts agent audit context but derives the machine alias from the credential', async () => {
-    const r = await gateway.kernelCli(TOK_A, {
+  it('allows a bound owned machine to refine human attribution to its interactive agent', async () => {
+    const r = await humanCli('u_alice', TEAM_A, {
       command: { op: 'create', id: 'audit-context', title: 'audit context' },
       provenance: { entrance: 'agent', actorId: 'codex', sessionId: 'thread-123' },
+      machineId: tokens.machineIdFromToken(TOK_A),
     })
     expect(r.status).toBe(200)
     const events = await kstore.readEvents(TEAM_A, 'audit-context')
-    expect(events[0]?.provenance).toEqual({
-      entrance: 'agent',
-      actorId: 'alice-mbp/codex',
-      sessionId: 'thread-123',
+    expect(events[0]?.provenance).toEqual({ entrance: 'agent', actorId: 'alice-mbp/codex', sessionId: 'thread-123' })
+  })
+
+  it('does not accept agent attribution without a bound owned machine', async () => {
+    const r = await humanCli('u_alice', TEAM_A, {
+      command: { op: 'create', id: 'spoofed-audit-context', title: 'spoofed audit context' },
+      provenance: { entrance: 'agent', actorId: 'codex', sessionId: 'thread-456' },
+      machineId: tokens.machineIdFromToken(TOK_B),
     })
+    expect(r.status).toBe(200)
+    const events = await kstore.readEvents(TEAM_A, 'spoofed-audit-context')
+    expect(events[0]?.provenance).toEqual({ entrance: 'human', actorId: 'person:u_alice' })
   })
 })
 
 describe('kernelCli — decide-time Refusal (422)', () => {
   it('surfaces an unknown-object update as a typed refusal', async () => {
-    const r = await gateway.kernelCli(TOK_A, {
+    const r = await humanCli('u_alice', TEAM_A, {
       op: 'update',
       id: 'no-such-task',
       patch: { status: 'done' },
@@ -172,13 +182,13 @@ describe('kernelCli — decide-time Refusal (422)', () => {
   })
 
   it('surfaces a malformed command as UNKNOWN_COMMAND without throwing', async () => {
-    const r = await gateway.kernelCli(TOK_A, { op: 'nonsense' })
-    expect(r.status).toBe(422)
-    expect(r.body.refusal?.code).toBe('UNKNOWN_COMMAND')
+    const r = await humanCli('u_alice', TEAM_A, { op: 'nonsense' })
+    expect(r.status).toBe(403)
+    expect(r.body.refusal?.code).toBe('FORBIDDEN')
   })
 
   it('teaches archived instead of delete', async () => {
-    const r = await gateway.kernelCli(TOK_A, { op: 'delete', id: 'ship-the-kernel-host' })
+    const r = await humanCli('u_alice', TEAM_A, { op: 'delete', id: 'ship-the-kernel-host' })
     expect(r.status).toBe(422)
     expect(r.body.refusal?.code).toBe('DELETE_TAUGHT')
   })
@@ -187,7 +197,7 @@ describe('kernelCli — decide-time Refusal (422)', () => {
 describe('kernelCli — persist-time CAS conflict (409)', () => {
   it('an update decided against a stale version loses at apply', async () => {
     // Seed a fresh task.
-    const created = await gateway.kernelCli(TOK_A, { op: 'create', title: 'cas race target' })
+    const created = await humanCli('u_alice', TEAM_A, { op: 'create', title: 'cas race target' })
     const id = created.body.result!.id
     expect(created.status).toBe(200)
 
@@ -206,7 +216,7 @@ describe('kernelCli — persist-time CAS conflict (409)', () => {
     expect(stale.ok).toBe(true)
 
     // A concurrent writer advances the version first (via the real gateway).
-    const winner = await gateway.kernelCli(TOK_A, { op: 'update', id, patch: { title: 'winner rename' } })
+    const winner = await humanCli('u_alice', TEAM_A, { op: 'update', id, patch: { title: 'winner rename' } })
     expect(winner.status).toBe(200)
 
     // Now apply the stale changeset — it expected version 1 but the row is 2.
@@ -231,7 +241,7 @@ describe('kernelCli — cross-team isolation', () => {
     expect(Object.keys(aSnap.objects).length).toBeGreaterThan(0)
 
     // Team B creates its own object with the SAME slug id as one of A's.
-    const created = await gateway.kernelCli(TOK_B, {
+    const created = await humanCli('u_bob', TEAM_B, {
       op: 'create',
       title: 'ship the kernel host',
       body: "team B's own task",
@@ -251,6 +261,6 @@ describe('kernelCli — cross-team isolation', () => {
     // B's event stream is its own, single created event — never A's note/status.
     const bEvents = await kstore.readEvents(TEAM_B, 'ship-the-kernel-host')
     expect(bEvents.map((e) => e.kind)).toEqual(['created'])
-    expect(bEvents[0]?.provenance.actorId).toBe('u_bob')
+    expect(bEvents[0]?.provenance.actorId).toBe('person:u_bob')
   })
 })

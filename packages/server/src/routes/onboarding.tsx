@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { canViewTeam, getAuthState, getDefaultTeam, listTemplates } from '../server/loopApi'
+import { getAuthState, getDefaultTeamRoute, listTemplates, resolveTeamRoute } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
 import type { TemplateInfo } from '../types'
 import { OnboardingWizard } from '../components/OnboardingWizard'
@@ -17,7 +17,7 @@ import { LoadErrorCard } from '../components/actionUi'
  * right one) and shows the sign-in CTA when signed out. The team comes from the
  * `?team=` search param when the entry point knows it — the dashboard the banner was
  * shown on — because the cookie-backed default can point at a DIFFERENT team on a
- * bookmarked/shared `/t/<id>`. A team the caller can't view is ignored (never trusted
+ * bookmarked/shared `/t/<slug>`. A team the caller can't view is ignored (never trusted
  * from the URL), falling back to the default. Open mode renders with no team segment.
  */
 export const Route = createFileRoute('/onboarding')({
@@ -33,6 +33,7 @@ export const Route = createFileRoute('/onboarding')({
     mode: 'signin' | 'wizard'
     auth: { enabled: boolean }
     teamId?: string
+    teamSlug?: string
     housekeeper: TemplateInfo | null
   }> => {
     const auth = await getAuthState()
@@ -40,9 +41,9 @@ export const Route = createFileRoute('/onboarding')({
     if (auth.enabled) {
       const { data: session } = await authClient.getSession()
       if (!session) return { mode: 'signin', auth, housekeeper }
-      const requested = deps.team
-      const teamId = requested && (await canViewTeam({ data: requested })) ? requested : await getDefaultTeam()
-      return { mode: 'wizard', auth, teamId, housekeeper }
+      const requested = deps.team ? await resolveTeamRoute({ data: deps.team }) : null
+      const team = requested ?? await getDefaultTeamRoute()
+      return { mode: 'wizard', auth, teamId: team.id, teamSlug: team.slug, housekeeper }
     }
     return { mode: 'wizard', auth, housekeeper }
   },
@@ -68,7 +69,7 @@ function Onboarding() {
   if (loaded?.mode === 'signin') return <SignIn />
 
   const exit = () => {
-    if (loaded.teamId) void navigate({ to: '/t/$teamId', params: { teamId: loaded.teamId } })
+    if (loaded.teamSlug) void navigate({ to: '/t/$teamSlug', params: { teamSlug: loaded.teamSlug } })
     else void navigate({ to: '/' })
   }
 

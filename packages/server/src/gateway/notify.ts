@@ -1,6 +1,6 @@
 /**
  * Notification dispatch — routes a finished run's message to the loop's chosen
- * push channel (per-team `notification_channels` row). A loop with no channel set
+ * personal push destination (`notification_channels` row). A loop with no channel set
  * pushes nowhere (dashboard only), regardless of its `notify` policy.
  *
  * `shouldNotify` (when) is orthogonal to the channel (where): the policy gates
@@ -337,7 +337,7 @@ export async function fetchSlackChannels(token: string): Promise<{
 export async function dispatchNotification(loop: Loop, message: string): Promise<void> {
   if (!loop.channelId) return; // no channel ⇒ dashboard only
   const channel = await store.getChannel(loop.channelId);
-  if (!channel) return; // channel deleted out from under the loop
+  if (!channel || channel.userId !== loop.userId) return;
   const r = await CHANNELS[channel.type].send(channel.config, loop.name || loop.id, message);
   if (!r.ok) log.warn({ err: r.error, channel: channel.id }, "notify dispatch failed");
 }

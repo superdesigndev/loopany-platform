@@ -34,8 +34,8 @@ import {
   validateWorkflowDefinition,
 } from "@loopany/kernel";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { UsageError, parseArgs, type ParsedArgs } from "./args.js";
 import {
   DriverError,
@@ -62,6 +62,7 @@ import { handbackTargetFor } from "./prompt.js";
 import { realSpawn, resolveSelfBin, spawnPendingRuns, type SpawnFn, type SpawnReport } from "./spawn.js";
 import { RemoteBackend, type SyncTransport } from "./remote.js";
 import { clearGlobalConnect, liveDaemonPid, readGlobalConnect, redactToken, writeGlobalConnect } from "./connect.js";
+import { bindMachineToWorkspace, clearUserSession, deviceLogin, fetchTeamDirectory, fetchTeams, readUserSession, revokeUserSession, selectTeam, type SessionTeam, type TeamDirectory, type UserSession } from "./userSession.js";
 import { realProbe, seedProfiles, type ProbeFn } from "./seedProfiles.js";
 import { formatLocalTime } from "./time.js";
 import {
@@ -102,6 +103,11 @@ export interface CliDeps {
    *  in tests; undefined falls back to the real pidfile probe (connect.ts
    *  liveDaemonPid). */
   daemonPid?: () => number | undefined;
+  login?: (server: string, env: Record<string, string | undefined>) => UserSession;
+  teams?: (session: UserSession) => SessionTeam[];
+  teamDirectory?: (session: UserSession, teamId: string) => TeamDirectory;
+  setupRuntime?: (server: string, env: Record<string, string | undefined>, binPath?: string) => string;
+  bindMachine?: (session: UserSession, slug: string, machineId: string) => { team: SessionTeam; machine: { id: string; alias?: string } };
 }
 
 /** The real `git config user.email` probe - the machine-local human identity
@@ -230,6 +236,7 @@ function execWrite(
 function backendFor(deps: CliDeps, args?: ParsedArgs): Backend {
   return selectBackend(deps.cwd, deps.env, deps.transport, {
     remote: args?.bools.has("remote") ?? false,
+    teamId: args?.flags.team,
   });
 }
 
@@ -469,6 +476,109 @@ function verbConnect(args: ParsedArgs, deps: CliDeps): CliOutcome {
   return ok(
     `connected: ${url.replace(/\/+$/, "")}${me ? `\nme: ${me}` : ""}\ntoken stored (0600) at ${path}`,
   );
+}
+
+function verbLogin(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const server = (args.positionals[0] ?? readGlobalConnect(deps.env)?.backend ?? deps.env.LOOPANY_KERNEL_BACKEND)?.replace(/\/+$/, "");
+  if (!server || !/^https?:\/\//.test(server)) throw new UsageError("login needs a server URL on first use");
+  let session;
+  let teams;
+  try { session = deviceLogin(server, deps.env); teams = fetchTeams(session); }
+  catch (error) { throw new DriverError("AUTH_FAILED", (error as Error).message, { hint: "retry lk login and approve the new code" }); }
+  if (teams.length === 1) selectTeam(deps.env, teams[0]!.id);
+  return ok(`logged in as ${session.user.email}${teams.length === 1 ? `\nworkspace available: ${teams[0]!.path}` : `\nworkspaces available: ${teams.map((team) => team.path).join(", ")}`}\nrun lk setup /<workspace> to set up this computer`);
+}
+
+function defaultSetupRuntime(server: string, env: Record<string, string | undefined>, binPath?: string): string {
+  const sibling = binPath ? join(dirname(binPath), "cli.js") : "";
+  if (sibling && existsSync(sibling)) execFileSync(process.execPath, [sibling, "up", "--server-url", server, "--runtime-only"], { stdio: "inherit", env: { ...process.env, ...env } });
+  else execFileSync(env.LOOPANY_RUNTIME_BIN || "loopany", ["up", "--server-url", server, "--runtime-only"], { stdio: "inherit", env: { ...process.env, ...env } });
+  try {
+    const value = JSON.parse(readFileSync(join(env.LOOPANY_HOME || join(process.env.HOME || "", ".loopany"), "machine.json"), "utf8")) as { id?: string };
+    if (value.id) return value.id;
+  } catch {}
+  throw new Error("Machine setup completed without a local Machine identity");
+}
+
+function verbSetup(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  try {
+    return verbSetupCore(args, deps);
+  } catch (error) {
+    if (error instanceof UsageError || error instanceof DriverError) throw error;
+    throw new DriverError("SETUP_FAILED", (error as Error).message, { hint: "retry the same lk setup command" });
+  }
+}
+
+function verbSetupCore(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const raw = args.positionals[0] ?? "";
+  if (!/^\/[a-z0-9][a-z0-9-]*$/.test(raw)) throw new UsageError("setup needs a workspace path such as /superdesign");
+  const slug = raw.slice(1);
+  let session = readUserSession(deps.env);
+  const requestedServer = (args.flags.server || deps.env.LOOPANY_SERVER_URL || "").replace(/\/+$/, "");
+  if (session && requestedServer && session.server.replace(/\/+$/, "") !== requestedServer) {
+    clearUserSession(deps.env);
+    session = null;
+  }
+  if (!session) {
+    const server = requestedServer;
+    if (!server || !/^https?:\/\//.test(server)) throw new UsageError("first setup needs --server <url>");
+    session = (deps.login ?? deviceLogin)(server, deps.env);
+  }
+  let teams: SessionTeam[];
+  try {
+    teams = (deps.teams ?? fetchTeams)(session);
+  } catch (error) {
+    if (!/session expired/i.test((error as Error).message)) throw error;
+    const server = session.server;
+    clearUserSession(deps.env);
+    session = (deps.login ?? deviceLogin)(server, deps.env);
+    teams = (deps.teams ?? fetchTeams)(session);
+  }
+  const target = teams.find((team) => team.slug === slug);
+  if (!target) throw new DriverError("NOT_FOUND", `you are not a member of ${raw}`);
+  const machineId = (deps.setupRuntime ?? defaultSetupRuntime)(session.server, deps.env, deps.binPath);
+  const result = (deps.bindMachine ?? bindMachineToWorkspace)(session, slug, machineId);
+  selectTeam(deps.env, result.team.id);
+  if (args.bools.has("json")) return ok(JSON.stringify({ ok: true, user: session.user, workspace: result.team, machine: result.machine, daemon: "running" }, null, 2));
+  return ok(`Ready\nSigned in as ${session.user.email}\nMachine: ${result.machine.alias ?? result.machine.id}\nWorkspace: ${result.team.path}\nDaemon: running`);
+}
+
+function verbLogout(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const session = readUserSession(deps.env);
+  if (session) {
+    try { revokeUserSession(session); } catch (error) { throw new DriverError("OFFLINE", (error as Error).message); }
+  }
+  const cleared = clearUserSession(deps.env);
+  return ok(cleared ? "logged out of this CLI profile; machine enrollment is unchanged" : "not logged in");
+}
+
+function verbMe(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const session = readUserSession(deps.env);
+  if (!session) throw new DriverError("NO_CREDENTIAL", "not logged in", { hint: "run lk login <server>" });
+  return ok(args.bools.has("json") ? JSON.stringify({ user: session.user, address: `person:${session.user.id}`, teamId: session.teamId ?? null }, null, 2) : `${session.user.name} <${session.user.email}>\naddress: person:${session.user.id}\nteam: ${session.teamId ?? "not selected"}`);
+}
+
+function verbTeam(args: ParsedArgs, deps: CliDeps): CliOutcome {
+  const session = readUserSession(deps.env);
+  if (!session) throw new DriverError("NO_CREDENTIAL", "not logged in", { hint: "run lk login <server>" });
+  if (args.positionals.length === 0 || args.positionals[0] === "show") {
+    const teamId = session.teamId;
+    if (!teamId) throw new UsageError("select a Team first with lk team use <id>");
+    const directory = (deps.teamDirectory ?? fetchTeamDirectory)(session, teamId);
+    if (args.bools.has("json")) return ok(JSON.stringify(directory, null, 2));
+    const people = directory.people.map((person) => `  ${person.email}  person:${person.id}  ${person.role}`).join("\n") || "  (none)";
+    const agents = directory.agents.map((item) => `  ${item.address}  ${item.availability}${item.lastSucceededAt ? `  last-success ${item.lastSucceededAt}` : ""}`).join("\n") || "  (none reported)";
+    return ok(`${directory.team.name} (${directory.team.id})\n\nPeople\n${people}\n\nAgents\n${agents}`);
+  }
+  const teams = (deps.teams ?? fetchTeams)(session);
+  if (args.positionals[0] === "use") {
+    const id = args.positionals[1];
+    if (!id || !teams.some(team => team.id === id)) throw new UsageError("team use needs a team id from lk team list");
+    selectTeam(deps.env, id);
+    return ok(`using team ${teams.find(team => team.id === id)!.name} (${id})`);
+  }
+  if (args.positionals[0] !== "list") throw new UsageError('team supports "show", "list", and "use <id>"');
+  return ok(args.bools.has("json") ? JSON.stringify({ teams, selected: session.teamId ?? null }, null, 2) : teams.map(team => `${team.id === session.teamId ? "*" : " "} ${team.id}  ${team.name}`).join("\n"));
 }
 
 /** The repo root holding a `.loopany/` dir is its parent. */
@@ -952,8 +1062,12 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
   let derived: { me: string; from: string } | null = null;
   if (explicit === undefined) {
     if (backend.kind === "remote") {
-      const bound = readGlobalConnect(deps.env)?.me;
-      if (bound) derived = { me: bound, from: "connect --me" };
+      const session = readUserSession(deps.env);
+      if (session) derived = { me: `person:${session.user.id}`, from: "authenticated CLI session" };
+      else {
+        const bound = readGlobalConnect(deps.env)?.me;
+        if (bound) derived = { me: bound, from: "legacy connect --me" };
+      }
     } else {
       const git = (deps.gitEmail ?? realGitEmail)();
       if (git) derived = { me: git, from: "git user.email" };
@@ -963,7 +1077,7 @@ function verbInbox(args: ParsedArgs, deps: CliDeps): CliOutcome {
   if (me === undefined) {
     throw new UsageError(
       backend.kind === "remote"
-        ? "inbox needs an identity: pass --assignee <me>, or bind one to the credential with `connect <url> --token <dk_…> --me <you@email>`"
+        ? "inbox needs an authenticated identity: run `lk login <server>`"
         : "inbox needs --assignee <me> (or set LOOPANY_ACTOR / LOOPANY_INBOX, or configure git user.email)",
     );
   }
@@ -1176,6 +1290,11 @@ export function run(argv: readonly string[], deps: CliDeps): CliOutcome {
         return verbUnregister(args, deps);
       case "connect":
         return verbConnect(args, deps);
+      case "login": return verbLogin(args, deps);
+      case "setup": return verbSetup(args, deps);
+      case "logout": return verbLogout(args, deps);
+      case "me": return verbMe(args, deps);
+      case "team": return verbTeam(args, deps);
       case "create":
         return verbCreate(args, deps);
       case "update":
@@ -1287,6 +1406,7 @@ const COMMAND_FLAGS: Record<string, readonly string[]> = {
   register: ["json"],
   unregister: ["json"],
   connect: ["token", "me", "clear", "json"],
+  login: ["json"], setup: ["server", "json"], logout: ["json"], me: ["json"], team: ["json"],
   create: ["id", "parent", "tracks", "assignee", "owner", "workdir", "goal", "type", "priority", "status", "cron", "timezone", "follow-up", "body-file", ...WRITE_AUDIT_FLAGS],
   update: ["note", "follow-up", "if-version", "body-file", ...WRITE_AUDIT_FLAGS],
   note: [...WRITE_AUDIT_FLAGS],
@@ -1319,7 +1439,7 @@ function validateCommandFlags(verb: string, args: ParsedArgs): void {
   const key = sub ? `${verb}:${sub}` : verb;
   if (sub && COMMAND_FLAGS[key] === undefined) return;
   const allowed = new Set(COMMAND_FLAGS[key] ?? []);
-  const supplied = [...Object.keys(args.flags), ...args.bools].filter((name) => name !== "p");
+  const supplied = [...Object.keys(args.flags), ...args.bools].filter((name) => name !== "p" && name !== "team");
   for (const name of supplied) {
     if (!allowed.has(name)) throw new UsageError(`--${name} is not supported by ${key.replace(":", " ")}`);
   }
@@ -1335,7 +1455,7 @@ function validateCommandShape(verb: string, args: ParsedArgs): void {
   const sub = (verb === "doc" || verb === "mirror" || verb === "workflow") ? args.positionals[0] : undefined;
   const key = sub ? `${verb}:${sub}` : verb;
   const arity: Record<string, readonly [number, number]> = {
-    home: [0, 0], init: [0, 0], register: [0, 0], unregister: [0, 0], connect: [0, 1],
+    home: [0, 0], init: [0, 0], register: [0, 0], unregister: [0, 0], connect: [0, 1], login: [0, 1], setup: [1, 1], logout: [0, 0], me: [0, 0], team: [0, 2],
     create: [1, 1], update: [1, 1], note: [1, 2],
     "doc:put": [2, 2], "doc:list": [1, 1],
     "mirror:add": [3, 3], "mirror:list": [1, 1],
@@ -1396,7 +1516,15 @@ function renderErrorFor(e: DriverError, argv: readonly string[]): string {
   return renderError(e);
 }
 
-const USAGE = `Loopany Kernel CLI (Internal Testing)
+const USAGE = `Loopany Kernel
+
+setup
+  setup /<workspace> [--server <url>] # set up this computer in one command:
+                                      # login, Machine, daemon, Team binding
+  me                                  # show signed-in person and workspace
+  team                                # people and executable Agent addresses
+  team list                           # advanced workspace discovery
+  logout                              # revoke the human CLI session
 
 workspace
   init [--backend local|<url>]      # initialize local or bound remote workspace
@@ -1450,7 +1578,7 @@ const COMMON_HELP = `Common flags: --json --remote --actor <id> --session <id> -
 
 const VERB_ALIASES: Record<string, string> = { ls: "list" };
 const KNOWN_VERBS = new Set([
-  "init", "register", "unregister", "connect", "create", "update", "note",
+  "init", "register", "unregister", "connect", "login", "setup", "logout", "me", "team", "create", "update", "note",
   "doc", "mirror", "workflow", "show", "list", "search", "inbox", "loops", "timeline",
   "kanban", "run", "tick",
 ]);
@@ -1458,6 +1586,11 @@ const KNOWN_VERBS = new Set([
 /** Command help is deliberately data, not handler branches. `helpFor` resolves
  * it before argument parsing, workspace discovery, backend reads, or writes. */
 const VERB_USAGE: Record<string, string> = {
+  team: `usage: lk team [show|list|use <id>] [--json]
+
+Show the selected Team's people and executable Agent addresses. "list" discovers
+workspaces; "use" changes the selected workspace. Agent addresses are safe to
+copy into assignee=<machine>/<agent>.`,
   init: `usage: lk init [--backend local|<url>] [--token <dk_…>] [--no-register] [--json]
 
 Initialize the cwd's .loopany workspace and seed available agent profiles.`,
@@ -1470,6 +1603,11 @@ Remove the current local workspace from resident-daemon auto-tick.`,
   connect: `usage: lk connect [<url> --token <dk_…> [--me <email>] | --clear] [--json]
 
 Show or change the global remote binding shared with the daemon.`,
+  setup: `usage: lk setup /<workspace> [--server <url>] [--json]
+
+Set up this computer for a Team workspace. On first use, --server starts browser
+login. The command enrolls or reuses this Machine, starts the daemon, binds the
+Machine to the Team, and makes the Team the default human CLI workspace.`,
   create: `usage: lk create "<title>" [--id <id>] [--parent <id>] [--tracks <id>]
                  [--assignee <who>] [--owner <who>] [--workdir <path>]
                  [--type <type>] [-p <priority>] [--status <status>]

@@ -74,11 +74,10 @@ export const EDITABLE_TASK_FIELDS = [
   "timezone",
 ] as const;
 
-/** The kernel's one addressing heuristic: an email is a person (inbox),
- *  anything else is an agent/loop name (dispatchable). Resolution beyond
- *  this is the driver's job. */
+/** Person addresses are canonical server ids or human-friendly email input at
+ * a normalization boundary. Persisted remote objects use `person:<userId>`. */
 export function isPersonAssignee(assignee: string): boolean {
-  return assignee.includes("@");
+  return assignee.startsWith("person:") || assignee.includes("@");
 }
 
 /** An assignee a dispatch can actually target: a non-empty, non-person name. */

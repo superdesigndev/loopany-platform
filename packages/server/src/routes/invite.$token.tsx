@@ -75,7 +75,7 @@ function RedeemInvite() {
       const r = await redeemTeamInvite({ data: loaded.token })
       if (r.ok) {
         setActiveTeamCookie(r.teamId)
-        void navigate({ to: '/t/$teamId', params: { teamId: r.teamId } })
+        void navigate({ to: '/t/$teamSlug', params: { teamSlug: r.teamSlug } })
         return
       }
       setMessage(r.error)

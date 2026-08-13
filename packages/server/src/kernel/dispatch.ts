@@ -25,6 +25,7 @@ import * as store from "../db/store.js";
 import { registerRunLease, retireLease } from "../gateway/tokens.js";
 import { logger } from "../logger.js";
 import { recordDispatchBlocked } from "./blocked.js";
+import { machineSupportsAgent } from "./agentDirectory.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "./store.js";
 import { assigneeSegments } from "./sweep.js";
 
@@ -70,11 +71,11 @@ async function pendingKernelRuns(teamId: string): Promise<RunRecord[]> {
  *  silently; a prompt/lease failure leaves the run pending for the next poll. */
 export async function kernelDeliveriesForMachine(machineId: string): Promise<KernelRunDelivery[]> {
   const machine = await store.getMachine(machineId);
-  if (!machine?.userId) return [];
+  if (!machine?.enrolledBy || machine.revokedAt) return [];
 
   // The owner's member teams PLUS the machine's home team - open mode's
   // anonymous (shared) machines have no membership rows, only a home teamId.
-  const teamIds = new Set((await store.listTeamsForUser(machine.userId)).map((t) => t.id));
+  const teamIds = new Set((await store.listTeamsForUser(machine.enrolledBy)).map((t) => t.id));
   if (machine.teamId) teamIds.add(machine.teamId);
 
   const out: KernelRunDelivery[] = [];
@@ -96,6 +97,14 @@ export async function kernelDeliveriesForMachine(machineId: string): Promise<Ker
         continue;
       }
       if (resolved.machine?.id !== machineId) continue;
+      if (machineSupportsAgent(resolved.machine, seg.agent) === false) {
+        await recordDispatchBlocked(
+          teamId,
+          run,
+          `machine "${seg.machine}" does not report agent profile "${seg.agent}" - choose an address from lk team`,
+        );
+        continue;
+      }
       const delivery = await claimAndPackage(teamId, machineId, run, seg.agent);
       if (delivery) out.push(delivery);
     }

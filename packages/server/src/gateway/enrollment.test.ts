@@ -1,18 +1,8 @@
-/**
- * Machine ENROLLMENT hardening (audit H-01 / M2). The poll route is the ONE
- * surface that self-registers a machine on first contact; before this fix it
- * minted a "shared" machine for ANY bearer string even under the GitHub login
- * gate, letting an unauthenticated caller create unbounded machine/loop rows.
- *
- * These tests reproduce the audit's two curl calls (poll → loop) and assert they
- * are now REJECTED in gated mode, prove the legitimate connect-key flow still
- * registers + polls + creates a loop end to end, cover the `dk_` shape filter, and
- * pin that OPEN mode keeps its permissive anonymous self-registration.
- */
+/** Clean-cutover machine enrollment: poll never creates machine authority. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
@@ -37,20 +27,8 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
-  await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+  await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
-
-/** Restore the gate env after every case so it can't leak between tests. */
-afterEach(() => {
-  delete process.env.GITHUB_CLIENT_ID;
-  delete process.env.GITHUB_CLIENT_SECRET;
-});
-
-/** Turn the GitHub login gate ON for the current test (read live by poll). */
-function enableGate(): void {
-  process.env.GITHUB_CLIENT_ID = "gh-client-id";
-  process.env.GITHUB_CLIENT_SECRET = "gh-client-secret";
-}
 
 function gateway() {
   return new gatewayMod.MachineGateway(
@@ -68,8 +46,7 @@ function gateway() {
 
 // ---- gated mode: forged tokens are rejected (the audit's H-01 reproduction) ----
 
-test("gated mode: a forged bearer token cannot self-register via poll", async () => {
-  enableGate();
+test("a forged bearer token cannot self-register via poll", async () => {
   const gw = gateway();
   const forged = "dk_unauthenticated_gated_repro"; // the audit's exact repro token
   const res = await gw.poll(forged, { host: "attacker-gated" });
@@ -78,8 +55,7 @@ test("gated mode: a forged bearer token cannot self-register via poll", async ()
   expect(await store.getMachine(tokens.machineIdFromToken(forged))).toBeUndefined();
 });
 
-test("gated mode: a forged token cannot create a loop (no machine exists)", async () => {
-  enableGate();
+test("a forged token cannot create a loop (no machine exists)", async () => {
   const gw = gateway();
   const forged = "dk_unauthenticated_gated_repro";
   // The daemon's first poll was rejected, so the machine never registered — and
@@ -90,42 +66,36 @@ test("gated mode: a forged token cannot create a loop (no machine exists)", asyn
   expect((await store.listMachines()).length).toBe(0);
 });
 
-// ---- gated mode: the legitimate connect-key flow still works end to end ----
-
-test("gated mode: a live connect-key registers, polls, and creates a loop", async () => {
-  enableGate();
+test("an explicitly enrolled machine polls but cannot use human loop-authoring authority", async () => {
   const gw = gateway();
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  // The owner ran the web/AI-First connect flow, binding this token to their team.
-  await tokens.rememberConnectKey(deviceToken, { userId: "u1", teamId: store.teamIdForUser("u1") });
-
-  // First poll self-registers under the remembered owner (not "shared").
+  await store.createMachine({
+    id: machineId,
+    enrolledBy: "u1",
+    teamId: store.teamIdForUser("u1"),
+    name: "owner-laptop",
+    tokenHash: tokens.sha256(deviceToken),
+    online: false,
+  });
   const poll1 = await gw.poll(deviceToken, { host: "owner-laptop" });
   expect(poll1.status).toBe(200);
   const machine = await store.getMachine(machineId);
-  expect(machine?.userId).toBe("u1");
+  expect(machine?.enrolledBy).toBe("u1");
 
-  // The daemon can then create a loop and keep polling.
+  // Machine authority is execution-only. Loop authoring belongs to a human session.
   const created = await gw.createLoop(deviceToken, { name: "L", cron: "0 8 * * *", workflow: "return { message: 1 };" });
-  expect(created.status).toBe(200);
-  expect((created.body as { ok: boolean }).ok).toBe(true);
+  expect(created.status).toBe(403);
   const loops = await store.loopsForMachine(machineId);
-  expect(loops.map((l) => l.name)).toContain("L");
+  expect(loops).toHaveLength(0);
 
   const poll2 = await gw.poll(deviceToken);
   expect(poll2.status).toBe(200);
 });
 
-test("gated mode: an EXPIRED connect-key does not enroll", async () => {
-  enableGate();
+test("an unknown well-shaped machine key does not enroll", async () => {
   const gw = gateway();
   const deviceToken = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(deviceToken, { userId: "u1", teamId: store.teamIdForUser("u1") });
-  // Age the key past its TTL.
-  await (db.client as any).exec(
-    `UPDATE connect_keys SET minted_at = '${new Date(Date.now() - tokens.CONNECT_KEY_TTL_MS - 1000).toISOString()}'`,
-  );
   const res = await gw.poll(deviceToken, { host: "late" });
   expect(res.status).toBe(401);
   expect(await store.getMachine(tokens.machineIdFromToken(deviceToken))).toBeUndefined();
@@ -142,16 +112,12 @@ test("malformed device tokens are rejected early with 401", async () => {
   }
 });
 
-// ---- open mode: anonymous self-registration is preserved ----
-
-test("open mode: an unknown dk_ token still self-registers into the shared workspace", async () => {
-  // Gate OFF (default in tests) ⇒ open/dev mode keeps anonymous BYOA enrollment.
+test("open mode also refuses anonymous self-registration", async () => {
   const gw = gateway();
   const token = tokens.mintDeviceToken();
   const res = await gw.poll(token, { host: "dev-box" });
-  expect(res.status).toBe(200);
-  const machine = await store.getMachine(tokens.machineIdFromToken(token));
-  expect(machine?.userId).toBe("shared");
+  expect(res.status).toBe(401);
+  expect(await store.getMachine(tokens.machineIdFromToken(token))).toBeUndefined();
 });
 
 // ---- token-hash binding: a machine-id collision can't impersonate ----
@@ -164,5 +130,5 @@ test("a token whose id collides with a registered machine but whose hash differs
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "some-other-hash", online: true });
   const res = await gw.poll(token, { host: "x" });
   expect(res.status).toBe(401);
-  expect((res.body as { error: string }).error).toMatch(/mismatch/);
+  expect((res.body as { error: string }).error).toBe("invalid_credential");
 });

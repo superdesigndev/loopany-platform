@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printTextOrTooOld } from "./cli-client.js";
+import { machineHeaders } from "./config.js";
 
 type Flags = Record<string, string | boolean>;
 
@@ -156,7 +157,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     if (flags["help"] === true) cliArgv.push("--help");
     // Legacy fallback (old server, no /api/machine/cli): GET /api/machine/loop.
     const legacy: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
-      const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: machineHeaders(token) });
       return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
     };
     const r = await postCli(cliArgv, legacy, cliDeps);
@@ -193,7 +194,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     const legacy: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
       const res = await fetchImpl(`${server}/api/machine/loop`, {
         method: "PATCH",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: machineHeaders(token, { "Content-Type": "application/json" }),
         body: JSON.stringify({ id, patch, dryRun }),
       });
       return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };

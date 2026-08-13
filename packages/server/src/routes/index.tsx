@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { getAuthState, getDefaultTeam, listBundles } from '../server/loopApi'
+import { getAuthState, getDefaultTeamRoute, listBundles } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
 import { DashboardView, fetchLiveData, type DashboardData } from '../components/DashboardView'
 import { SignIn } from '../components/SignIn'
@@ -30,8 +30,8 @@ export const Route = createFileRoute('/')({
       // Signed in ⇒ hand off to the explicit team URL. getDefaultTeam validates the
       // last-used cookie (else the personal team) server-side; a single-team user
       // lands on their only team with zero friction. Forward the deep-linked template.
-      const teamId = await getDefaultTeam()
-      throw redirect({ to: '/t/$teamId', params: { teamId }, search: deps.template ? { template: deps.template } : {} })
+      const team = await getDefaultTeamRoute()
+      throw redirect({ to: '/t/$teamSlug', params: { teamSlug: team.slug }, search: deps.template ? { template: deps.template } : {} })
     }
     // Open mode: one shared workspace, no team segment. Render the dashboard here.
     // Bundles already embed every TemplateInfo, so the registry ships ONCE.

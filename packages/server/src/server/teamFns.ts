@@ -132,7 +132,7 @@ export const revokeTeamInvite = createServerFn({ method: "POST" })
 export const redeemTeamInvite = createServerFn({ method: "POST" })
   .validator((token: string) => token)
   .handler(
-    async ({ data: token }): Promise<Result<{ teamId: string; teamName: string; alreadyMember: boolean }>> => {
+    async ({ data: token }): Promise<Result<{ teamId: string; teamName: string; teamSlug: string; alreadyMember: boolean }>> => {
       await ensureServer();
       const userId = await actor();
       if (!userId) return SIGNIN_REQUIRED;

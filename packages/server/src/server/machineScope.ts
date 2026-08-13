@@ -17,13 +17,13 @@ import type { RequestScope } from '../auth.js'
  * usually by the owner) pays no query.
  */
 export function machineInScope(
-  m: Pick<Machine, 'id' | 'userId'>,
+  m: Pick<Machine, 'id' | 'enrolledBy'>,
   scope: Pick<RequestScope, 'enforce' | 'userId'>,
   teamMachineIds: () => ReadonlySet<string>,
 ): boolean {
   if (!scope.enforce) return true
   if (!scope.userId) return false
-  if (m.userId === scope.userId) return true
+  if (m.enrolledBy === scope.userId) return true
   return teamMachineIds().has(m.id)
 }
 
@@ -35,8 +35,8 @@ export function machineInScope(
  * reconnect command).
  */
 export function tokenVisibleTo(
-  m: Pick<Machine, 'userId'>,
+  m: Pick<Machine, 'enrolledBy'>,
   scope: Pick<RequestScope, 'enforce' | 'userId'>,
 ): boolean {
-  return !scope.enforce || m.userId === scope.userId
+  return !scope.enforce || m.enrolledBy === scope.userId
 }

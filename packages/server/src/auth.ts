@@ -10,6 +10,7 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { bearer, deviceAuthorization } from "better-auth/plugins";
 
 import { db } from "./db/index.js";
 import * as store from "./db/store.js";
@@ -110,7 +111,7 @@ export interface RequestScope {
 }
 
 /**
- * Per-request data scope. Machines / loops / channels are scoped by `teamId`.
+ * Per-request Team data scope. Personal notification channels instead follow `userId`.
  * The active team is resolved from (in precedence order) an EXPLICIT team — the
  * `/t/<teamId>` route param, so a tab/bookmark pins its own team independent of
  * any cookie (Phase 2) — else the `loopany.team` cookie (now only a last-used
@@ -185,9 +186,19 @@ export const auth = betterAuth({
     && clientId && clientSecret
     ? { github: { clientId, clientSecret } }
     : {},
-  plugins: authMode === "shared-password"
-    ? [sharedPasswordPlugin({ secret: sharedLoginSecret!, teamId: kernelWebTeamId, emailAllowed })]
-    : [],
+  plugins: [
+    bearer(),
+    deviceAuthorization({
+      verificationUri: "/device",
+      validateClient: async (value) => value === "loopany-cli",
+      // better-auth 1.6.19's option schema requires this key even though the
+      // plugin's public type marks it as an extension point.
+      schema: {},
+    }),
+    ...(authMode === "shared-password"
+      ? [sharedPasswordPlugin({ secret: sharedLoginSecret!, teamId: kernelWebTeamId, emailAllowed })]
+      : []),
+  ],
   databaseHooks: {
     user: {
       create: {

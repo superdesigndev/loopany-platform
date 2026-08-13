@@ -218,13 +218,13 @@ describe("identity follows the credential (remote inbox)", () => {
     expect(inbox.stdout).not.toContain("wrong@git.local");
   });
 
-  it("remote with NO bound identity refuses with the connect --me hint (git is never consulted)", () => {
+  it("remote with NO authenticated identity refuses with the login hint (git is never consulted)", () => {
     const { transport } = fakeTransport();
     writeGlobalConnect(env, { backend: "https://fly.example", token: "dk_g" });
     const deps = { cwd, env, transport, gitEmail: () => "wrong@git.local", now: "2026-08-12T00:00:00.000Z" };
     const res = run(["inbox"], deps as never);
     expect(res.exitCode).not.toBe(0);
-    expect(res.stderr).toContain("--me");
+    expect(res.stderr).toContain("lk login");
     expect(res.stderr).not.toContain("git");
   });
 

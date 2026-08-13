@@ -1,23 +1,24 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { canViewTeam, getAuthState, listBundles } from '../server/loopApi'
+import { getAuthState, listBundles, resolveTeamRoute } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
 import { DashboardView, fetchLiveData, type DashboardData } from '../components/DashboardView'
 import { SignIn } from '../components/SignIn'
 import { LoadErrorCard } from '../components/actionUi'
 
 /**
- * The explicit-team dashboard (`/t/<teamId>`, Phase 2): the same dashboard scoped
+ * The explicit-team dashboard (`/t/<teamSlug>`): the same dashboard scoped
  * to the team in the PATH, so a view is bookmarkable and each browser tab keeps
  * its own team (the list server fns take an explicit `teamId`, independent of the
- * shared last-used cookie). A team id rides the URL verbatim.
+ * shared last-used cookie). The human-readable slug rides in the URL; data access
+ * resolves it once and continues with the stable internal id.
  *
  * The loader validates membership (`canViewTeam`) and, on failure, throws the SAME
  * generic not-found as a missing loop — never confirming a team exists to a
  * non-member (enumeration safety). Open mode has no gate: any `/t/<x>` renders the
  * single shared workspace.
  */
-export const Route = createFileRoute('/t/$teamId')({
+export const Route = createFileRoute('/t/$teamSlug')({
   ssr: false,
   // `?template=<name>` is forwarded from `/` (the public-market deep link) and preselects
   // the compose modal on this team's dashboard.
@@ -26,24 +27,25 @@ export const Route = createFileRoute('/t/$teamId')({
   }),
   loader: async ({
     params,
-  }): Promise<{ mode: 'signin' | 'dashboard'; auth: { enabled: boolean }; teamId: string; initial?: DashboardData }> => {
-    const teamId = params.teamId
+  }): Promise<{ mode: 'signin' | 'dashboard'; auth: { enabled: boolean }; teamId?: string; teamSlug: string; initial?: DashboardData }> => {
+    const teamSlug = params.teamSlug
     const auth = await getAuthState()
     if (auth.enabled) {
       const { data: session } = await authClient.getSession()
       // Signed out under the gate ⇒ the sign-in CTA (the loader runs in the browser,
       // so the session cookie rides along once signed in).
-      if (!session) return { mode: 'signin', auth, teamId }
+      if (!session) return { mode: 'signin', auth, teamSlug }
       // Enumeration-safe gate: a team the caller can't view throws the same generic
       // message as a missing loop — existence never leaks to a non-member.
-      if (!(await canViewTeam({ data: teamId }))) {
+    }
+    const team = await resolveTeamRoute({ data: teamSlug })
+    if (!team) {
         throw new Error('This team does not exist, or you do not have access to it.')
-      }
     }
     // Bundles already embed every TemplateInfo, so the registry ships ONCE.
-    const [live, bundles] = await Promise.all([fetchLiveData(teamId), listBundles()])
+    const [live, bundles] = await Promise.all([fetchLiveData(team.id), listBundles()])
     const initial = { ...live, bundles }
-    return { mode: 'dashboard', auth, teamId, initial }
+    return { mode: 'dashboard', auth, teamId: team.id, teamSlug: team.slug, initial }
   },
   component: TeamDashboard,
   errorComponent: LoadError,
@@ -65,10 +67,10 @@ function TeamDashboard() {
   const { template } = Route.useSearch()
   const { data: session, isPending } = useSession()
   // Keep the deep-linked template through the OAuth round-trip back to this team URL.
-  const callbackURL = `/t/${loaded!.teamId}${template ? `?template=${encodeURIComponent(template)}` : ''}`
+  const callbackURL = `/t/${loaded!.teamSlug}${template ? `?template=${encodeURIComponent(template)}` : ''}`
   if (loaded?.auth?.enabled && !isPending && !session) return <SignIn callbackURL={callbackURL} />
   if (loaded?.mode === 'signin') return <SignIn callbackURL={callbackURL} />
   // key={teamId} re-seeds DashboardView's fetch-then-set state when the switcher
   // navigates from /t/A to /t/B (same route, new param ⇒ no natural remount).
-  return <DashboardView key={loaded!.teamId} teamId={loaded!.teamId} initial={loaded!.initial!} openTemplate={template} />
+  return <DashboardView key={loaded!.teamId} teamId={loaded!.teamId} teamSlug={loaded!.teamSlug} initial={loaded!.initial!} openTemplate={template} />
 }

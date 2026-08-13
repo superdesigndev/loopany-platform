@@ -74,6 +74,7 @@ describe('create / rename / delete lifecycle', () => {
     expect(detail?.name).toBe('Alpha Co')
     expect(detail?.role).toBe('owner')
     expect(detail?.personal).toBe(false)
+    expect((await store.getTeam(id))?.slug).toBe('alpha-co')
     expect(detail?.members.map((m) => m.userId)).toEqual([ALICE])
 
     const mine = await team.listManagedTeams(ALICE)
@@ -93,6 +94,17 @@ describe('create / rename / delete lifecycle', () => {
     const asOwner = await team.renameTeam(ALICE, id, 'Renamed Squad')
     expect(asOwner.ok).toBe(true)
     expect((await team.getTeamDetail(ALICE, id))?.name).toBe('Renamed Squad')
+    expect((await store.getTeam(id))?.slug).toBe('growth-squad')
+  })
+
+  it('assigns stable unique workspace slugs without changing them on rename', async () => {
+    const first = await freshTeam('Design Ops')
+    const second = await freshTeam('Design Ops')
+    expect((await store.getTeam(first))?.slug).toBe('design-ops')
+    expect((await store.getTeam(second))?.slug).toBe('design-ops-2')
+    await team.renameTeam(ALICE, first, 'New Display Name')
+    expect((await store.getTeam(first))?.slug).toBe('design-ops')
+    expect((await store.getTeamBySlug('design-ops'))?.id).toBe(first)
   })
 
   it('delete is blocked while the team owns loops, then succeeds after cleanup', async () => {
@@ -112,15 +124,15 @@ describe('create / rename / delete lifecycle', () => {
     expect(await store.getTeam(id)).toBeUndefined()
   })
 
-  it('deleteTeam cascades channels, members, and invites but leaves other teams', async () => {
+  it('deleteTeam cascades members and invites but leaves User-owned channels', async () => {
     const id = await freshTeam('Cascade')
     await store.addTeamMember(id, BOB, 'member')
-    await store.createChannel({ teamId: id, type: 'telegram', name: 'ch', config: { botToken: 'x', chatId: 'y' } })
+    await store.createChannel({ userId: ALICE, type: 'telegram', name: 'ch', config: { botToken: 'x', chatId: 'y' } })
     await team.createInvite(ALICE, id, 'member', Date.now())
-    expect((await store.listChannels(id)).length).toBe(1)
+    expect((await store.listChannels(ALICE)).length).toBe(1)
 
     await team.deleteTeam(ALICE, id)
-    expect((await store.listChannels(id)).length).toBe(0)
+    expect((await store.listChannels(ALICE)).length).toBe(1)
     expect(await store.getTeamMember(id, BOB)).toBeUndefined()
     expect((await store.listPendingInvites(id)).length).toBe(0)
     // Bob's own personal team is untouched.
@@ -129,6 +141,12 @@ describe('create / rename / delete lifecycle', () => {
 })
 
 describe('personal-team rules (decision 5)', () => {
+  it('uses a readable email-derived slug instead of exposing the user id', async () => {
+    const personal = await store.getTeam(store.teamIdForUser(ALICE))
+    expect(personal?.slug).toBe('alice')
+    expect(personal?.slug).not.toContain(ALICE)
+  })
+
   it('the personal team is renamable but not deletable and not leavable', async () => {
     const personal = store.teamIdForUser(ALICE)
     const renamed = await team.renameTeam(ALICE, personal, 'My Space')

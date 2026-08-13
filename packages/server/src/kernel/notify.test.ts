@@ -14,7 +14,8 @@ let tmp: string;
 let db: typeof import("../db/index.js");
 let store: typeof import("../db/store.js");
 let kstore: typeof import("./store.js");
-let kgateway: typeof import("./gateway.js");
+let kernelGateway: typeof import("./gateway.js");
+const kgateway = { kernelCli: (_credential: string, body: unknown) => kernelGateway.kernelCli('', body, { userId: 'u1', teamId: 'team-u1' }) };
 let knotify: typeof import("./notify.js");
 let blocked: typeof import("./blocked.js");
 let tokens: typeof import("../gateway/tokens.js");
@@ -31,7 +32,7 @@ beforeAll(async () => {
   await db.runMigrations();
   store = await import("../db/store.js");
   kstore = await import("./store.js");
-  kgateway = await import("./gateway.js");
+  kernelGateway = await import("./gateway.js");
   knotify = await import("./notify.js");
   blocked = await import("./blocked.js");
   tokens = await import("../gateway/tokens.js");
@@ -42,17 +43,17 @@ afterAll(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-let pushes: Array<{ teamId: string; title: string; message: string }>;
+let pushes: Array<{ teamId: string; userId: string; title: string; message: string }>;
 
 beforeEach(async () => {
   await (db.client as any).exec(
     "DELETE FROM kernel_runs; DELETE FROM kernel_triggers; DELETE FROM kernel_events; DELETE FROM kernel_objects; " +
-      "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines; " +
+      "DELETE FROM team_machine_bindings; DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines; " +
       "DELETE FROM notification_channels;",
   );
   pushes = [];
-  knotify.setKernelNotifier(async (teamId, title, message) => {
-    pushes.push({ teamId, title, message });
+  knotify.setKernelNotifier(async (teamId, userId, title, message) => {
+    pushes.push({ teamId, userId, title, message });
   });
 });
 
@@ -79,7 +80,16 @@ async function enrolledDevice() {
   const deviceToken = tokens.mintDeviceToken();
   const teamId = store.teamIdForUser("u1");
   await store.ensureTeam(teamId, "u1's team", "u1");
-  await tokens.rememberConnectKey(deviceToken, { userId: "u1", teamId });
+  const { user } = await import('../db/auth-schema.js');
+  for (const member of [
+    { id: 'u-tim', name: 'Tim', email: 'tim@x.co' },
+    { id: 'u-alice', name: 'Alice', email: 'alice@x.co' },
+    { id: 'u-bob', name: 'Bob', email: 'bob@x.co' },
+  ]) {
+    await db.db.insert(user).values({ ...member, emailVerified: true }).onConflictDoNothing();
+    await store.addTeamMember(teamId, member.id, 'member');
+  }
+  await store.createMachine({ id: tokens.machineIdFromToken(deviceToken), userId: "u1", teamId, name: "mbp.local", alias: "mbp", tokenHash: tokens.sha256(deviceToken), online: false });
   await gw.poll(deviceToken, { host: "mbp.local", alias: "mbp" });
   return { gw, deviceToken, teamId };
 }
@@ -97,6 +107,7 @@ test("a HUMAN assignment notifies with the reply and the artifact link; agent wo
     command: { op: "create", title: "decide: variant A or B", id: "decide-v", assignee: "tim@x.co", tracks: "w33" },
   });
   expect(pushes).toHaveLength(1);
+  expect(pushes[0]!.userId).toBe("u-tim");
   expect(pushes[0]!.title).toContain("decision needed");
   expect(pushes[0]!.message).toContain("tim@x.co");
   expect(pushes[0]!.message).toContain("inspect: w33");
@@ -115,48 +126,12 @@ test("a HUMAN assignment notifies with the reply and the artifact link; agent wo
   expect(pushes).toHaveLength(2);
 });
 
-test("OWNER ROUTING: the channel bound to the notification's human wins; team channel is the fallback", async () => {
+test("the newest user-owned channel receives assignments across teams", async () => {
   const { teamId, deviceToken } = await enrolledDevice();
-  // Two channels: tim's personal-bound one + a plain team channel.
-  await store.createChannel({ teamId, type: "slack", name: "tim-dm", config: { token: "x", channel: "#tim" }, userEmail: "tim@x.co" });
-  await store.createChannel({ teamId, type: "slack", name: "team-wide", config: { token: "x", channel: "#team" } });
-  // Use the REAL notifier path but capture the send seam? The notifier seam
-  // replaces routing too - so test the routing DIRECTLY: restore the real
-  // notifier and stub the channel send at the CHANNELS layer instead.
-  knotify.setKernelNotifier(null);
-  const sent: Array<{ name: string; ownerHint: string }> = [];
-  const { CHANNELS } = await import("../gateway/notify.js");
-  const realSend = CHANNELS.slack.send;
-  CHANNELS.slack.send = async (config: any, title: string) => {
-    sent.push({ name: String(config.channel), ownerHint: title });
-    return { ok: true } as any;
-  };
-  try {
-    // Task OWNED by tim gets blocked -> routes to tim's channel.
-    await kgateway.kernelCli(deviceToken, {
-      command: { op: "create", title: "owned loop", id: "owned", assignee: "ghost/claude", owner: "tim@x.co" },
-    });
-    const run = (await kstore.readSnapshot(teamId)).runs.find((r) => r.taskId === "owned")!;
-    await blocked.recordDispatchBlocked(teamId, run, "no machine for ghost");
-    expect(sent.at(-1)?.name).toBe("#tim");
-
-    // A task with NO owner falls back to the plain team channel.
-    await kgateway.kernelCli(deviceToken, {
-      command: { op: "create", title: "unowned loop", id: "unowned", assignee: "ghost2/claude" },
-    });
-    const run2 = (await kstore.readSnapshot(teamId)).runs.find((r) => r.taskId === "unowned")!;
-    await blocked.recordDispatchBlocked(teamId, run2, "no machine for ghost2");
-    expect(sent.at(-1)?.name).toBe("#team");
-  } finally {
-    CHANNELS.slack.send = realSend;
-  }
-});
-
-test("NEVER another person's personal channel: without an exact or team channel, nothing is pushed (review round 4)", async () => {
-  const { teamId, deviceToken } = await enrolledDevice();
-  // The ONLY channel in the team is Alice's personal binding - Bob's
-  // notification must not leak into her DM, and there is no team channel.
-  await store.createChannel({ teamId, type: "slack", name: "alice-dm", config: { token: "x", channel: "#alice" }, userEmail: "alice@x.co" });
+  await store.createChannel({ userId: "u-tim", type: "slack", name: "old", config: { token: "x", channel: "#old" } });
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const current = await store.createChannel({ userId: "u-tim", type: "slack", name: "current", config: { token: "x", channel: "#current" } });
+  await store.createChannel({ userId: "u-alice", type: "slack", name: "alice", config: { token: "x", channel: "#alice" } });
   knotify.setKernelNotifier(null);
   const sent: string[] = [];
   const { CHANNELS } = await import("../gateway/notify.js");
@@ -166,27 +141,52 @@ test("NEVER another person's personal channel: without an exact or team channel,
     return { ok: true } as any;
   };
   try {
-    // Bob-owned task gets blocked: NO push at all (timeline/inbox carry it).
     await kgateway.kernelCli(deviceToken, {
-      command: { op: "create", title: "bob loop", id: "bob-loop", assignee: "ghost/claude", owner: "bob@x.co" },
+      command: { op: "create", title: "Tim decides", id: "tim-one", assignee: "tim@x.co" },
     });
-    const run = (await kstore.readSnapshot(teamId)).runs.find((r) => r.taskId === "bob-loop")!;
-    await blocked.recordDispatchBlocked(teamId, run, "no machine for ghost");
-    expect(sent).toEqual([]);
+    expect(sent).toEqual(["#current"]);
 
-    // Alice's OWN notification (case-insensitive email match) still routes to her.
+    const otherTeam = "team-other";
+    await store.ensureTeam(otherTeam, "Other", "u-tim");
+    await kernelGateway.kernelCli("", {
+      command: { op: "create", title: "Tim decides elsewhere", id: "tim-two", assignee: "tim@x.co" },
+    }, { userId: "u-tim", teamId: otherTeam });
+    expect(sent).toEqual(["#current", "#current"]);
+
     await kgateway.kernelCli(deviceToken, {
-      command: { op: "create", title: "alice decision", id: "alice-d", assignee: "Alice@X.co" },
+      command: { op: "create", title: "Bob decides", id: "bob", assignee: "bob@x.co" },
     });
-    expect(sent).toEqual(["#alice"]);
+    expect(sent).toEqual(["#current", "#current"]);
+
+    await store.deleteChannel(current.id);
+    await kgateway.kernelCli(deviceToken, {
+      command: { op: "create", title: "Tim decides after delete", id: "tim-three", assignee: "tim@x.co" },
+    });
+    expect(sent).toEqual(["#current", "#current", "#old"]);
   } finally {
     CHANNELS.slack.send = realSend;
   }
 });
 
+test("a departed member is not notified even when an already-built assignment changeset is applied", async () => {
+  const { teamId } = await enrolledDevice();
+  const { decide } = await import("@loopany/kernel");
+  const decision = decide(
+    { op: "create", title: "Late assignment", id: "late", assignee: "person:u-tim" },
+    await kstore.readSnapshot(teamId),
+    { entrance: "human", actorId: "person:u1" },
+    T0,
+  );
+  if (!decision.ok) throw new Error(decision.refusal.code);
+  expect(await store.removeTeamMemberGuarded(teamId, "u-tim")).toBe("ok");
+  await kstore.applyChangesetForTeam(teamId, decision.changeset);
+  await knotify.notifyKernelChangeset(teamId, decision.changeset);
+  expect(pushes).toEqual([]);
+});
+
 test("a dispatch-blocked condition notifies ONCE per blocked run (dedup inherited from the event)", async () => {
   const { teamId, deviceToken } = await enrolledDevice();
-  await kgateway.kernelCli(deviceToken, { command: { op: "create", title: "ghost loop", id: "ghost", assignee: "nowhere/claude" } });
+  await kgateway.kernelCli(deviceToken, { command: { op: "create", title: "ghost loop", id: "ghost", assignee: "nowhere/claude", owner: "tim@x.co" } });
   pushes = [];
 
   const run = (await kstore.readSnapshot(teamId)).runs[0]!;
@@ -202,7 +202,7 @@ test("a dispatch-blocked condition notifies ONCE per blocked run (dedup inherite
 test("an AUTO-PARK (persistent failure) notifies the owner once", async () => {
   const { teamId, deviceToken } = await enrolledDevice();
   await kgateway.kernelCli(deviceToken, {
-    command: { op: "create", title: "flaky once", id: "flaky", assignee: "mbp/claude", status: "todo" },
+    command: { op: "create", title: "flaky once", id: "flaky", assignee: "mbp/claude", owner: "tim@x.co", status: "todo" },
   });
   pushes = [];
 

@@ -12,7 +12,7 @@
  */
 import fs from "node:fs";
 
-import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
+import { DEVICE_FILE, readStored, resolveServerUrl, machineHeaders } from "./config.js";
 
 /**
  * In-run file flags: claude writes a large body to a temp file and passes its path;
@@ -118,7 +118,7 @@ export async function postCli(argv: string[], legacy: LegacyFallback, deps: Post
   try {
     const res = await fetchImpl(`${server}/api/machine/cli`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${cred.token}`, "Content-Type": "application/json" },
+      headers: cred.isRun ? { Authorization: `Bearer ${cred.token}`, "Content-Type": "application/json" } : machineHeaders(cred.token, { "Content-Type": "application/json" }),
       body: JSON.stringify({ argv: inlined.argv }),
     });
     if (res.status === 404) {
@@ -168,6 +168,16 @@ export function printTextOrTooOld(
 ): number {
   const code = printText(body, status, out);
   if (code !== null) return code;
+  const refusal = typeof body.refusal === "object" && body.refusal !== null && !Array.isArray(body.refusal)
+    ? (body.refusal as Record<string, unknown>).message
+    : undefined;
+  const structured = [body.error, body.message, refusal]
+    .find((value): value is string => typeof value === "string" && value.length > 0);
+  if (structured) {
+    out(`error: ${JSON.stringify(structured)}\n`);
+    if (typeof body.code === "string" && body.code.length > 0) out(`code: ${body.code}\n`);
+    return 1;
+  }
   out(
     `error: ${JSON.stringify(
       "this Loopany server is too old for this CLI (no rendered `text`) — update the server, or pin an older `@crewlet/loopany`",
@@ -182,7 +192,7 @@ export function printTextOrTooOld(
 export const legacyRun: LegacyFallback = async ({ server, token, argv, fetchImpl }) => {
   const res = await fetchImpl(`${server.replace(/\/$/, "")}/agent-api/loop`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    headers: machineHeaders(token, { "Content-Type": "application/json" }),
     body: JSON.stringify({ argv }),
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;

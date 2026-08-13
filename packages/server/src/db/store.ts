@@ -15,7 +15,7 @@ import { user } from "./auth-schema.js";
 import {
   loops,
   machines,
-  machineTeamAliases,
+  teamMachineBindings,
   runs,
   teams,
   teamMembers,
@@ -115,7 +115,10 @@ export async function loopsForMachine(machineId: string): Promise<Loop[]> {
 
 export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "updatedAt"> & { id?: string }): Promise<Loop> {
   const ts = nowIso();
-  const row: NewLoop = { ...input, id: input.id ?? newLoopId(), createdAt: ts, updatedAt: ts };
+  const teamId = input.teamId ?? teamIdForUser(input.userId);
+  if (input.userId !== "shared") await ensureTeam(teamId, `${input.userId}'s team`, input.userId);
+  if (input.userId !== "shared") await addTeamMember(teamId, input.userId, "owner");
+  const row: NewLoop = { ...input, teamId, id: input.id ?? newLoopId(), createdAt: ts, updatedAt: ts };
   return (await db.insert(loops).values(row).returning())[0]!;
 }
 
@@ -422,20 +425,18 @@ export async function listMachines(teamId?: string): Promise<Machine[]> {
   return teamId ? await q.where(eq(machines.teamId, teamId)) : await q;
 }
 
-/**
- * Machines usable/visible in a team, MEMBERSHIP-scoped: every machine whose owner
- * belongs to the team (join `machines.userId` → a `team_members` row for this
- * team). One machine therefore appears in every team its owner is a member of —
- * the decoupling that lets a single daemon serve multiple teams (report §2.3).
- * A user has at most one membership row per team, so no machine is duplicated.
- */
+/** Machines explicitly bound to a team and still owned by a current member. */
 export async function listMachinesForTeam(teamId: string): Promise<Machine[]> {
   const rows = await db
     .select({ m: machines })
     .from(machines)
-    .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
-    .where(eq(teamMembers.teamId, teamId));
-  return rows.map((r) => r.m);
+    .innerJoin(teamMachineBindings, eq(machines.id, teamMachineBindings.machineId))
+    .where(and(eq(teamMachineBindings.teamId, teamId), eq(teamMachineBindings.enabled, true), isNull(machines.revokedAt)));
+  const visible: Machine[] = [];
+  for (const row of rows) {
+    if (!row.m.enrolledBy || await isTeamMember(teamId, row.m.enrolledBy)) visible.push(row.m);
+  }
+  return visible;
 }
 
 export async function getMachine(id: string): Promise<Machine | undefined> {
@@ -457,50 +458,46 @@ export async function getMachine(id: string): Promise<Machine | undefined> {
  * arbitrarily. `{}` = no match — the caller keeps the run pending (deferred
  * inbox), never an error.
  */
-/** Every machine REACHABLE in a team: the members' machines (membership join)
- *  plus home-team machines (open mode's anonymous machines have no membership
- *  rows, only a home teamId). Deduped, ordered by createdAt then id - the
- *  DETERMINISTIC minting order for the per-team alias register. */
-async function machinesReachableInTeam(teamId: string): Promise<Machine[]> {
-  const viaMembership = await db
-    .select({ m: machines })
-    .from(machines)
-    .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
-    .where(eq(teamMembers.teamId, teamId));
-  const viaHome = await db.select({ m: machines }).from(machines).where(eq(machines.teamId, teamId));
-  const byId = new Map<string, Machine>();
-  for (const r of [...viaMembership, ...viaHome]) byId.set(r.m.id, r.m);
-  return [...byId.values()].sort((a, b) =>
-    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1,
-  );
+/** Explicitly authorize one Team to use one Machine. Existing rows retain their
+ * immutable alias when re-enabled, so an execution address never retargets. */
+export async function bindMachineToTeam(teamId: string, machineId: string, createdBy: string | null = null): Promise<void> {
+  const existing = (await db.select().from(teamMachineBindings).where(and(eq(teamMachineBindings.teamId, teamId), eq(teamMachineBindings.machineId, machineId))))[0];
+  if (existing) {
+    await db.update(teamMachineBindings).set({ enabled: true, disabledAt: null }).where(and(eq(teamMachineBindings.teamId, teamId), eq(teamMachineBindings.machineId, machineId)));
+    return;
+  }
+  const machine = await getMachine(machineId);
+  if (!machine || machine.revokedAt) return;
+  const base = (machine.alias?.trim() || machine.hostname?.split(".")[0]?.trim() || machine.name.trim() || `machine-${machine.id.slice(2, 8)}`).replace(/\//g, "-").slice(0, 80);
+  const taken = new Set((await db.select({ alias: teamMachineBindings.alias }).from(teamMachineBindings).where(eq(teamMachineBindings.teamId, teamId))).map((row) => row.alias));
+  let alias = base;
+  for (let n = 2; taken.has(alias) && n <= 60; n++) alias = `${base}-${n}`;
+  if (taken.has(alias)) alias = `${base}-${machine.id.slice(2, 8)}`;
+  await db.insert(teamMachineBindings).values({ teamId, machineId, alias, enabled: true, createdBy, disabledAt: null, createdAt: nowIso() });
 }
 
-/** Mint any MISSING per-team alias rows (review round 3): machines in
- *  deterministic order take their base handle, then base-2, base-3 ... within
- *  THIS team. Rows are IMMUTABLE once minted - a later machine never re-suffixes
- *  an earlier one, and an assignee string can never silently re-target. A
- *  base-less machine (no alias, pre-column daemon that never re-polled) is
- *  unaddressable and skipped. Idempotent; the unique index absorbs races. */
-export async function ensureTeamAliases(teamId: string): Promise<void> {
-  const reachable = await machinesReachableInTeam(teamId);
-  if (reachable.length === 0) return;
-  const rows = await db.select().from(machineTeamAliases).where(eq(machineTeamAliases.teamId, teamId));
-  const taken = new Set(rows.map((r) => r.alias));
-  const have = new Set(rows.map((r) => r.machineId));
-  for (const m of reachable) {
-    if (have.has(m.id)) continue;
-    const base = m.alias?.trim();
-    if (!base) continue;
-    let candidate = base;
-    for (let n = 2; taken.has(candidate) && n <= 60; n++) candidate = `${base}-${n}`;
-    if (taken.has(candidate)) candidate = `${base}-${m.id.slice(2, 8)}`;
-    try {
-      await db.insert(machineTeamAliases).values({ teamId, machineId: m.id, alias: candidate, createdAt: nowIso() });
-      taken.add(candidate);
-    } catch {
-      // Unique-index race: another writer minted concurrently - re-read next call.
-    }
-  }
+export async function setTeamMachineBindingEnabled(teamId: string, machineId: string, enabled: boolean, actorUserId: string): Promise<boolean> {
+  const machine = await getMachine(machineId);
+  if (!machine || machine.enrolledBy !== actorUserId || !(await isTeamMember(teamId, actorUserId))) return false;
+  if (!enabled && teamId === teamIdForUser(actorUserId)) return false;
+  if (enabled) await bindMachineToTeam(teamId, machineId, actorUserId);
+  else await db.update(teamMachineBindings).set({ enabled: false, disabledAt: nowIso() }).where(and(eq(teamMachineBindings.teamId, teamId), eq(teamMachineBindings.machineId, machineId)));
+  return true;
+}
+
+export async function isMachineBoundToTeam(teamId: string, machineId: string): Promise<boolean> {
+  const row = (await db.select({ machineId: teamMachineBindings.machineId }).from(teamMachineBindings).innerJoin(machines, eq(teamMachineBindings.machineId, machines.id)).where(and(eq(teamMachineBindings.teamId, teamId), eq(teamMachineBindings.machineId, machineId), eq(teamMachineBindings.enabled, true), isNull(machines.revokedAt))))[0];
+  if (!row) return false;
+  const machine = await getMachine(machineId);
+  return !machine?.enrolledBy || isTeamMember(teamId, machine.enrolledBy);
+}
+
+export async function listMachineBindings(machineId: string) {
+  return db.select().from(teamMachineBindings).where(eq(teamMachineBindings.machineId, machineId));
+}
+
+export async function listTeamMachineBindings(teamId: string) {
+  return db.select().from(teamMachineBindings).where(eq(teamMachineBindings.teamId, teamId));
 }
 
 /** REVOCATION GUARD (review round 4): a register row is immutable IDENTITY,
@@ -511,40 +508,35 @@ export async function ensureTeamAliases(teamId: string): Promise<void> {
  *  machine can never silently steal it) but resolution and discovery both
  *  refuse - the team can no longer route work to the departed member's machine. */
 async function machineReachableInTeam(teamId: string, machine: Machine): Promise<boolean> {
-  if (machine.teamId === teamId) return true; // home team
-  if (!machine.userId) return false;
-  const rows = await db
-    .select({ userId: teamMembers.userId })
-    .from(teamMembers)
-    .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, machine.userId)));
-  return rows.length > 0;
+  return isMachineBoundToTeam(teamId, machine.id);
 }
 
 /** The team's alias register (owner-facing discovery: the blocked note lists
  *  it). Filtered to CURRENTLY REACHABLE machines - a departed member's alias
  *  is not advertised, matching the resolver's revocation guard. */
 export async function listTeamAliases(teamId: string): Promise<Array<{ alias: string; machineId: string; name: string }>> {
-  await ensureTeamAliases(teamId);
-  const reachableIds = new Set((await machinesReachableInTeam(teamId)).map((m) => m.id));
   const rows = await db
-    .select({ alias: machineTeamAliases.alias, machineId: machineTeamAliases.machineId, name: machines.name })
-    .from(machineTeamAliases)
-    .innerJoin(machines, eq(machineTeamAliases.machineId, machines.id))
-    .where(eq(machineTeamAliases.teamId, teamId));
-  return rows.filter((r) => reachableIds.has(r.machineId)).sort((a, b) => (a.alias < b.alias ? -1 : 1));
+    .select({ alias: teamMachineBindings.alias, machineId: teamMachineBindings.machineId, name: machines.name, enrolledBy: machines.enrolledBy })
+    .from(teamMachineBindings)
+    .innerJoin(machines, eq(teamMachineBindings.machineId, machines.id))
+    .where(and(eq(teamMachineBindings.teamId, teamId), eq(teamMachineBindings.enabled, true), isNull(machines.revokedAt)));
+  const visible = [] as Array<{ alias: string; machineId: string; name: string }>;
+  for (const row of rows) {
+    if (!row.enrolledBy || await isTeamMember(teamId, row.enrolledBy)) visible.push({ alias: row.alias, machineId: row.machineId, name: row.name });
+  }
+  return visible.sort((a, b) => (a.alias < b.alias ? -1 : 1));
 }
 
 export async function resolveMachineByAlias(
   teamId: string,
   alias: string,
 ): Promise<{ machine?: Machine; ambiguous?: boolean }> {
-  await ensureTeamAliases(teamId);
   const row = (
     await db
       .select({ m: machines })
-      .from(machineTeamAliases)
-      .innerJoin(machines, eq(machineTeamAliases.machineId, machines.id))
-      .where(and(eq(machineTeamAliases.teamId, teamId), eq(machineTeamAliases.alias, alias)))
+      .from(teamMachineBindings)
+      .innerJoin(machines, eq(teamMachineBindings.machineId, machines.id))
+      .where(and(eq(teamMachineBindings.teamId, teamId), eq(teamMachineBindings.alias, alias), eq(teamMachineBindings.enabled, true), isNull(machines.revokedAt)))
   )[0];
   // Ambiguity is IMPOSSIBLE by construction now (unique(teamId, alias)); the
   // field stays on the signature for the callers' defensive branches.
@@ -558,15 +550,23 @@ export async function resolveMachineByAlias(
  *  suffix a colliding alias. */
 export async function aliasTakenInTeam(teamId: string, alias: string, exceptId: string): Promise<boolean> {
   const rows = await db
-    .select({ id: machines.id })
-    .from(machines)
-    .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
-    .where(and(eq(teamMembers.teamId, teamId), eq(machines.alias, alias)));
+    .select({ id: teamMachineBindings.machineId })
+    .from(teamMachineBindings)
+    .where(and(eq(teamMachineBindings.teamId, teamId), eq(teamMachineBindings.alias, alias)));
   return rows.some((r) => r.id !== exceptId);
 }
 
-export async function createMachine(input: Omit<NewMachine, "createdAt"> & { id: string }): Promise<Machine> {
-  return (await db.insert(machines).values({ ...input, createdAt: nowIso() }).returning())[0]!;
+export async function createMachine(input: Omit<NewMachine, "createdAt"> & { id: string; userId?: string }): Promise<Machine> {
+  const { userId, ...values } = input;
+  let homeTeamId = values.teamId ?? teamIdForUser(userId);
+  if (userId && userId !== "shared") {
+    await ensureTeam(homeTeamId, `${userId}'s team`, userId);
+    await addTeamMember(homeTeamId, userId, "owner");
+    values.teamId = homeTeamId;
+  }
+  const machine = (await db.insert(machines).values({ ...values, enrolledBy: values.enrolledBy ?? (userId === "shared" ? null : userId), createdAt: nowIso() }).returning())[0]!;
+  await bindMachineToTeam(homeTeamId, machine.id, machine.enrolledBy);
+  return machine;
 }
 
 export async function updateMachine(id: string, patch: Partial<NewMachine>): Promise<Machine | undefined> {
@@ -575,6 +575,7 @@ export async function updateMachine(id: string, patch: Partial<NewMachine>): Pro
 }
 
 export async function deleteMachine(id: string): Promise<boolean> {
+  await db.delete(teamMachineBindings).where(eq(teamMachineBindings.machineId, id));
   const deleted = await db.delete(machines).where(eq(machines.id, id)).returning({ id: machines.id });
   return deleted.length > 0;
 }
@@ -603,8 +604,10 @@ const ensuredTeams = new Set<string>();
 export async function ensureTeam(id: string, name: string, ownerUserId: string | null): Promise<void> {
   if (ensuredTeams.has(id)) return;
   const ts = nowIso();
+  const personalName = name.replace(/['’]s\s+team$/i, "").replace(/\s+team$/i, "").trim();
+  const slug = await availableTeamSlug(ownerUserId ? personalName : name);
   await db.transaction(async (tx) => {
-    await tx.insert(teams).values({ id, name, ownerUserId, createdAt: ts }).onConflictDoNothing();
+    await tx.insert(teams).values({ id, name, slug, ownerUserId, createdAt: ts }).onConflictDoNothing();
     if (ownerUserId) {
       await tx
         .insert(teamMembers)
@@ -613,6 +616,10 @@ export async function ensureTeam(id: string, name: string, ownerUserId: string |
     }
   });
   ensuredTeams.add(id);
+  if (ownerUserId && id === teamIdForUser(ownerUserId)) {
+    const owned = await db.select({ id: machines.id }).from(machines).where(and(eq(machines.enrolledBy, ownerUserId), isNull(machines.revokedAt)));
+    for (const machine of owned) await bindMachineToTeam(id, machine.id, ownerUserId);
+  }
 }
 
 /** A fresh non-personal team id. Random (never `team-<userId>`, which is reserved
@@ -627,18 +634,33 @@ export function isPersonalTeam(team: Team): boolean {
   return !!team.ownerUserId && team.id === teamIdForUser(team.ownerUserId);
 }
 
+function teamSlugBase(value: string): string {
+  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "team";
+}
+
+async function availableTeamSlug(value: string, exceptId?: string): Promise<string> {
+  const base = teamSlugBase(value);
+  const rows = await db.select({ id: teams.id, slug: teams.slug }).from(teams);
+  const taken = new Set(rows.filter((row) => row.id !== exceptId).map((row) => row.slug));
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 10_000; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+  return `${base}-${randomUUID().slice(0, 8)}`;
+}
+
 /** Create a non-personal team owned by `ownerUserId` (creator = owner in both
  *  `teams.ownerUserId` and a `team_members` owner row), transactionally. */
 export async function createTeam(name: string, ownerUserId: string): Promise<Team> {
   const ts = nowIso();
   const id = newTeamId();
-  return db.transaction(async (tx) => {
-    const [team] = await tx.insert(teams).values({ id, name, ownerUserId, createdAt: ts }).returning();
+  const slug = await availableTeamSlug(name);
+  const team = await db.transaction(async (tx) => {
+    const [team] = await tx.insert(teams).values({ id, name, slug, ownerUserId, createdAt: ts }).returning();
     await tx
       .insert(teamMembers)
       .values({ id: `${id}:${ownerUserId}`, teamId: id, userId: ownerUserId, role: "owner", createdAt: ts });
     return team!;
   });
+  return team;
 }
 
 /** Rename a team (no name-sync fights this — see ensureTeam). */
@@ -791,7 +813,7 @@ export async function setTeamMemberRoleGuarded(
  * loop count INSIDE the transaction and abort (`has-loops`) if any loop exists,
  * closing the check-then-cascade gap where a loop created between the caller's
  * guard and here would be orphaned at a now-deleted team. On success we cascade
- * the team's own resources: channels, pending invites, memberships, and reassign
+ * the team's own resources: pending invites, memberships, and reassign
  * every machine whose cosmetic home-team was this team back to its owner's
  * personal team (machines are user-owned; the team pointer is only a home hint).
  */
@@ -805,10 +827,10 @@ export async function deleteTeamCascade(teamId: string): Promise<"ok" | "has-loo
     // personal team, so no row dangles at a deleted team.
     const homed = await tx.select().from(machines).where(eq(machines.teamId, teamId));
     for (const m of homed) {
-      await tx.update(machines).set({ teamId: teamIdForUser(m.userId) }).where(eq(machines.id, m.id));
+      await tx.update(machines).set({ teamId: teamIdForUser(m.enrolledBy) }).where(eq(machines.id, m.id));
     }
-    await tx.delete(notificationChannels).where(eq(notificationChannels.teamId, teamId));
     await tx.delete(teamInvites).where(eq(teamInvites.teamId, teamId));
+    await tx.delete(teamMachineBindings).where(eq(teamMachineBindings.teamId, teamId));
     await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
     await tx.delete(teams).where(eq(teams.id, teamId));
     return "ok" as const;
@@ -892,6 +914,10 @@ export async function getTeam(id: string): Promise<Team | undefined> {
   return (await db.select().from(teams).where(eq(teams.id, id)))[0];
 }
 
+export async function getTeamBySlug(slug: string): Promise<Team | undefined> {
+  return (await db.select().from(teams).where(eq(teams.slug, teamSlugBase(slug))))[0];
+}
+
 /** Teams the user belongs to (membership join), newest first. Drives the team
  *  switcher — a regular user has just their personal team (no dropdown). */
 export async function listTeamsForUser(userId: string): Promise<Team[]> {
@@ -916,22 +942,21 @@ export async function isTeamMember(teamId: string, userId: string): Promise<bool
 
 // ---- notification channels ----
 
-export async function listChannels(teamId: string): Promise<NotificationChannel[]> {
+export async function listChannels(userId: string): Promise<NotificationChannel[]> {
   return db
     .select()
     .from(notificationChannels)
-    .where(eq(notificationChannels.teamId, teamId))
-    .orderBy(desc(notificationChannels.createdAt));
+    .where(eq(notificationChannels.userId, userId))
+    .orderBy(desc(notificationChannels.createdAt), desc(notificationChannels.id));
 }
 
 export async function getChannel(id: string): Promise<NotificationChannel | undefined> {
   return (await db.select().from(notificationChannels).where(eq(notificationChannels.id, id)))[0];
 }
 
-/** The channel a new loop auto-routes to when none is picked — the team's newest
- *  (listChannels is newest-first), or null when the team has none. */
-export async function defaultChannelId(teamId: string): Promise<string | null> {
-  return (await listChannels(teamId))[0]?.id ?? null;
+/** The user's newest destination is the only active one in the first version. */
+export async function defaultChannelId(userId: string): Promise<string | null> {
+  return (await listChannels(userId))[0]?.id ?? null;
 }
 
 export async function createChannel(input: Omit<NewNotificationChannel, "id" | "createdAt"> & { id?: string }): Promise<NotificationChannel> {
@@ -983,6 +1008,15 @@ export async function machineReferencesBlob(machineId: string, hash: string): Pr
       .where(and(eq(loops.machineId, machineId), eq(artifactFiles.hash, hash), eq(artifactFiles.deleted, false)))
       .limit(1)
   )[0];
+}
+
+export async function machineBlobTeamIds(machineId: string, hash: string): Promise<string[]> {
+  return (await db
+    .selectDistinct({ teamId: loops.teamId })
+    .from(artifactFiles)
+    .innerJoin(loops, eq(artifactFiles.loopId, loops.id))
+    .where(and(eq(loops.machineId, machineId), eq(artifactFiles.hash, hash), eq(artifactFiles.deleted, false))))
+    .map(row => row.teamId).filter((teamId): teamId is string => teamId !== null);
 }
 
 // ---- artifact_files (the current file set of each loop) ----

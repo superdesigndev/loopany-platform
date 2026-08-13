@@ -129,24 +129,23 @@ test("bare-UUID back-compat: resolveLease keys on the FULL token, doing no prefi
   expect(await tokens.resolveLease("00000000-0000-0000-0000-000000000000")).toBeUndefined();
 });
 
-// ---- connect keys (owner + team binding, durable) ----
+// ---- transient dialog correlation (never machine authority) ----
 
-test("rememberConnectKey binds minter + team; readClaimIntent and getDeviceOwner both read it", async () => {
+test("dialog correlation binds a minter and team without granting machine ownership", async () => {
   const key = tokens.mintDeviceToken();
   await tokens.rememberConnectKey(key, { userId: "u-mint", teamId: "team-b" });
   expect(await tokens.readClaimIntent(key)).toEqual({ userId: "u-mint", teamId: "team-b" });
   // NON-evicting: one paste may create several loops.
   expect(await tokens.readClaimIntent(key)).toEqual({ userId: "u-mint", teamId: "team-b" });
-  expect(await tokens.getDeviceOwner(tokens.machineIdFromToken(key))).toBe("u-mint");
+  expect(await tokens.getDeviceOwner(tokens.machineIdFromToken(key))).toBeUndefined();
 });
 
-test("a teamless connect-key (pre-created machine path) still records the owner", async () => {
+test("a teamless correlation has no routable intent", async () => {
   const key = tokens.mintDeviceToken();
   await tokens.rememberConnectKey(key, { userId: "u-own", teamId: null });
   // No team bound ⇒ no claim intent (createLoop falls back to the home team)…
   expect(await tokens.readClaimIntent(key)).toBeUndefined();
-  // …but the self-register owner lookup still resolves.
-  expect(await tokens.getDeviceOwner(tokens.machineIdFromToken(key))).toBe("u-own");
+  expect(await tokens.getDeviceOwner(tokens.machineIdFromToken(key))).toBeUndefined();
 });
 
 test("connect-key bindings expire after the TTL (lazy on read)", async () => {

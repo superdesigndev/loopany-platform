@@ -30,7 +30,7 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
-  await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+  await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 /** The core gateway MERGED with the CLI verb surface (`agentApi`/`cli` moved to
@@ -84,7 +84,7 @@ async function seededExecRun(notify: "always" | "auto" | "never" = "auto") {
  *  memo/rename side effects so each test controls membership precisely. */
 async function makeTeam(id: string, memberUserIds: string[] = []): Promise<void> {
   const ts = new Date().toISOString();
-  await (db.client as any).exec(`INSERT INTO teams (id, name, owner_user_id, created_at) VALUES ('${id}', '${id}', NULL, '${ts}') ON CONFLICT DO NOTHING`);
+  await (db.client as any).exec(`INSERT INTO teams (id, name, slug, owner_user_id, created_at) VALUES ('${id}', '${id}', '${id.replace(/^team-/, "")}', NULL, '${ts}') ON CONFLICT DO NOTHING`);
   for (const u of memberUserIds) {
     await (db.client as any).exec(
       `INSERT INTO team_members (id, team_id, user_id, role, created_at) VALUES ('${id}:${u}', '${id}', '${u}', 'member', '${ts}') ON CONFLICT DO NOTHING`,
@@ -707,9 +707,9 @@ test("an edit run's report routes to finishEdit (the pending edit marker is clea
   expect((await store.getLoop(loop.id))!.editRequest).toBeNull();
 });
 
-// ---- per-team connect-key: createLoop resolves the team from the claim intent ----
+// ---- clean cutover: legacy claim input never changes machine authority ----
 
-test("createLoop lands the loop in the connect-key's team, not the machine's home team (existing-machine reuse)", async () => {
+test("createLoop ignores a legacy claim and stays in the machine's home team", async () => {
   (await makeTeam("team-reuse", ["u1"]));
   // The machine's durable identity (home team = its personal team).
   const deviceToken = tokens.mintDeviceToken();
@@ -722,10 +722,10 @@ test("createLoop lands the loop in the connect-key's team, not the machine's hom
 
   const res = (await gateway().createLoop(deviceToken, { name: "B loop", cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: connectKey }));
   expect(res.status).toBe(200);
-  expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-reuse");
+  expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-u1");
 });
 
-test("createLoop rejects (403) a claim minted by a different user — fail closed, nothing created", async () => {
+test("a legacy claim minted by a different user cannot retarget createLoop", async () => {
   (await makeTeam("team-x", ["u2"]));
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -733,11 +733,11 @@ test("createLoop rejects (403) a claim minted by a different user — fail close
   await tokens.rememberConnectKey(token, { userId: "u2", teamId: "team-x" }); // minted by someone else
 
   const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
-  expect(res.status).toBe(403);
-  expect((await store.listLoops()).length).toBe(0); // never mis-filed
+  expect(res.status).toBe(200);
+  expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-u1");
 });
 
-test("createLoop rejects (403) when the minter is no longer a member of the claim team", async () => {
+test("a legacy claim for a team without membership cannot retarget createLoop", async () => {
   (await makeTeam("team-y", [])); // team exists, u1 is NOT a member
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -745,8 +745,8 @@ test("createLoop rejects (403) when the minter is no longer a member of the clai
   await tokens.rememberConnectKey(token, { userId: "u1", teamId: "team-y" });
 
   const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "loopany/x/README.md", claim: token }));
-  expect(res.status).toBe(403);
-  expect((await store.listLoops()).length).toBe(0);
+  expect(res.status).toBe(200);
+  expect((await store.getLoop((res.body as any).id))!.teamId).toBe("team-u1");
 });
 
 test("createLoop with no claim falls back to the machine's home team (back-compat)", async () => {
@@ -785,7 +785,7 @@ test("claimStatus surfaces the MEASURED agent so the New-loop confirmation shows
   expect(gateway().claimStatus(claim)?.agent).toBe("codex");
 });
 
-test("listMachinesForTeam is membership-scoped — a machine shows in its owner's team regardless of its home team", async () => {
+test("listMachinesForTeam requires an explicit binding in addition to membership", async () => {
   (await makeTeam("team-lm", ["u1"])); // only u1 is a member
   const t1 = tokens.mintDeviceToken();
   const m1 = tokens.machineIdFromToken(t1);
@@ -793,7 +793,9 @@ test("listMachinesForTeam is membership-scoped — a machine shows in its owner'
   const t2 = tokens.mintDeviceToken();
   (await store.createMachine({ id: tokens.machineIdFromToken(t2), userId: "u2", teamId: "team-u2", name: "Other", tokenHash: tokens.sha256(t2), online: true }));
 
-  // u1's machine (home team-u1) appears under team-lm via membership; u2's doesn't.
+  // Existing memberships do not silently gain access to machines enrolled later.
+  expect((await store.listMachinesForTeam("team-lm")).map((m) => m.id)).toEqual([]);
+  await store.bindMachineToTeam("team-lm", m1, "u1");
   expect((await store.listMachinesForTeam("team-lm")).map((m) => m.id)).toEqual([m1]);
 });
 
@@ -1537,8 +1539,8 @@ test("execFailureStreak counts only consecutive trailing exec errors, ignoring e
 // ---- loopLog (device-token-scoped run-log read for `loopany log`) ----
 
 /** A machine + a loop on it, with `count` exec runs (newest ts last). */
-async function seededLoopWithRuns(machineId: string, count: number) {
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h-" + machineId, online: true }));
+async function seededLoopWithRuns(machineId: string, token: string, count: number) {
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   for (let i = 0; i < count; i++) {
     (await store.addRun({
@@ -1563,7 +1565,7 @@ async function seededLoopWithRuns(machineId: string, count: number) {
 test("loopLog returns the loop's recent runs newest-first with transcript text", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  const loop = (await seededLoopWithRuns(machineId, 3));
+  const loop = (await seededLoopWithRuns(machineId, token, 3));
 
   const res = (await gateway().loopLog(token, loop.id));
   expect(res.status).toBe(200);
@@ -1588,7 +1590,7 @@ test("loopLog returns the loop's recent runs newest-first with transcript text",
 test("loopLog honors and caps the run limit", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  const loop = (await seededLoopWithRuns(machineId, 5));
+  const loop = (await seededLoopWithRuns(machineId, token, 5));
 
   expect(((await gateway().loopLog(token, loop.id, 2)).body as { runs: any[] }).runs).toHaveLength(2);
   // Limit is clamped to the max (20), so a huge value just returns everything.
@@ -1600,7 +1602,7 @@ test("loopLog honors and caps the run limit", async () => {
 test("loopLog truncates an over-cap transcript and flags it", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true }));
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
   (await store.addRun({
     loopId: loop.id,
@@ -1619,12 +1621,12 @@ test("loopLog truncates an over-cap transcript and flags it", async () => {
 test("loopLog refuses a token whose machine does not own the loop (cross-device)", async () => {
   const tokenA = tokens.mintDeviceToken();
   const machineA = tokens.machineIdFromToken(tokenA);
-  const loop = (await seededLoopWithRuns(machineA, 2));
+  const loop = (await seededLoopWithRuns(machineA, tokenA, 2));
 
   // A different device with its own token cannot read machine A's loop's runs.
   const tokenB = tokens.mintDeviceToken();
   const machineB = tokens.machineIdFromToken(tokenB);
-  (await store.createMachine({ id: machineB, userId: "u2", name: "MB", tokenHash: "hb", online: true }));
+  (await store.createMachine({ id: machineB, userId: "u2", name: "MB", tokenHash: tokens.sha256(tokenB), online: true }));
   const res = (await gateway().loopLog(tokenB, loop.id));
   expect(res.status).toBe(404);
 });
@@ -1632,7 +1634,7 @@ test("loopLog refuses a token whose machine does not own the loop (cross-device)
 test("loopLog rejects an unknown loop id and an unregistered token", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true }));
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   // Loop that doesn't exist → 404 (existence never leaks).
   expect((await gateway().loopLog(token, "loop-nope")).status).toBe(404);
   // Missing loop id → 400.
@@ -1867,7 +1869,8 @@ test("report clips sessionId and error (untrusted wire input, same discipline as
 test("poll persists the daemon version, updating only when it changes", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  // First poll self-registers and records the reported version.
+  await store.createMachine({ id: machineId, userId: "u1", name: "mac", tokenHash: tokens.sha256(token), online: false });
+  // First poll records the reported version on an enrolled machine.
   (await gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" }));
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.8.0");
   // A newer version on the next poll updates it.
@@ -1879,6 +1882,20 @@ test("poll persists the daemon version, updating only when it changes", async ()
   // An over-long version is clipped defensively (untrusted wire input).
   (await gateway().poll(token, { host: "mac", version: "9".repeat(200) }));
   expect((await store.getMachine(machineId))!.daemonVersion!.length).toBe(64);
+});
+
+test("poll persists the daemon's bounded agent profile capabilities", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "mac", tokenHash: tokens.sha256(token), online: false });
+  await gateway().poll(token, { agentProfiles: ["codex", "claude", "claude", "invalid/profile", "x".repeat(100)] });
+  expect((await store.getMachine(machineId))!.agentProfiles).toEqual(["claude", "codex"]);
+  // Missing means an old daemon and must not erase the last capability report.
+  await gateway().poll(token, { host: "mac" });
+  expect((await store.getMachine(machineId))!.agentProfiles).toEqual(["claude", "codex"]);
+  // An explicit empty report is meaningful: this daemon sees no executable agents.
+  await gateway().poll(token, { agentProfiles: [] });
+  expect((await store.getMachine(machineId))!.agentProfiles).toEqual([]);
 });
 
 // ---- /api/machine/cli — unified dispatch, verb × credential matrix (§4.1) ----
@@ -2772,17 +2789,10 @@ test("cli edit --dry-run: a rejection flips the header, lists changes + rejectio
 
 // ---- content-first home (P8/§5.1, Batch 6) ----------------------------------
 
-test("cli home [device]: an unregistered machine renders the DEFINITIVE not-connected state (never a 401/empty)", async () => {
+test("cli home [device]: an unregistered machine credential is rejected", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const res = (await gateway().cli(deviceToken, ["home"]));
-  expect(res.status).toBe(200);
-  const body = res.body as { ok: boolean; text: string; exitCode: number };
-  expect(body.exitCode).toBe(0);
-  expect(body.text).toContain("machine: not connected — run `loopany up`");
-  expect(body.text).toContain("description:");
-  expect(body.text).toContain("help[");
-  // No loops/recent blocks when not connected, but never empty output.
-  expect(body.text).not.toContain("loops[");
+  expect(res.status).toBe(401);
 });
 
 test("cli home [device]: a registered machine shows presence + its loops + recent runs + help, with the daemon-passed context", async () => {
@@ -2846,11 +2856,9 @@ test("F7: cli home [device] ALWAYS leads with a `bin:` line — the durable path
   expect(noBin.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
 });
 
-test("F7: the not-connected home also leads with the `bin:` fallback line", async () => {
+test("F7: an unknown machine receives no home metadata", async () => {
   const deviceToken = tokens.mintDeviceToken(); // unregistered → not-connected branch
-  const text = ((await gateway().cli(deviceToken, ["home"])).body as { text: string }).text;
-  expect(text.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @crewlet/loopany`)");
-  expect(text).toContain("machine: not connected — run `loopany up`");
+  expect((await gateway().cli(deviceToken, ["home"])).status).toBe(401);
 });
 
 test("cli home [run]: renders the run's OWN loop context (role + goal + recent) scoped to the lease's loop", async () => {
@@ -2870,8 +2878,9 @@ test("cli home [run]: renders the run's OWN loop context (role + goal + recent) 
 test("poll throttles the lastSeen stamp: fresh ⇒ read-only, stale ⇒ re-stamped, offline ⇒ flipped", async () => {
   const token = tokens.mintDeviceToken();
   const gw = gateway();
-  (await gw.poll(token, { host: "mac" })); // self-registers + stamps
   const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "mac", tokenHash: tokens.sha256(token), online: false });
+  (await gw.poll(token, { host: "mac" }));
   const first = (await store.getMachine(machineId))!.lastSeen;
   expect(first).toBeTruthy();
 

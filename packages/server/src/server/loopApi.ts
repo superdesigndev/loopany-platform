@@ -63,7 +63,7 @@ async function ownedLoop(id: string) {
   if (!(await canAccessLoop(loop.teamId, scope))) return undefined
   // Hand back the scope too — callers that mutate (e.g. patchJob) need `enforce`
   // and would otherwise re-run requestScope() (a second session decrypt).
-  return { loop, enforce: scope.enforce, teamId: scope.teamId }
+  return { loop, enforce: scope.enforce, teamId: scope.teamId, userId: scope.userId }
 }
 
 /** Whether the auth gate is active (a GitHub OAuth app is configured). */
@@ -109,6 +109,7 @@ export const listMyTeams = createServerFn({ method: 'GET' })
     const teams = (await store.listTeamsForUser(userId)).map((t) => ({
       id: t.id,
       name: t.name,
+      slug: t.slug,
     }))
     return { teams, activeTeamId: active }
   })
@@ -136,6 +137,32 @@ export const getDefaultTeam = createServerFn({ method: 'GET' }).handler(async ()
   const scope = await requestScope()
   return scope.teamId
 })
+
+/** Resolve a human-facing team slug to the stable internal id, while applying
+ * the same enumeration-safe membership check as the team routes. */
+export const resolveTeamRoute = createServerFn({ method: 'GET' })
+  .validator((slug: string) => slug)
+  .handler(async ({ data: slug }): Promise<{ id: string; slug: string } | null> => {
+    await backend()
+    const team = await store.getTeamBySlug(slug)
+    if (!team) return null
+    const scope = await requestScope(team.id)
+    if (scope.enforce && (!scope.userId || scope.teamId !== team.id)) return null
+    if (!scope.enforce && scope.teamId !== team.id) return null
+    return { id: team.id, slug: team.slug }
+  })
+
+/** The caller's default team route. Storage and authorization keep using the id;
+ * browser paths use the mutable, human-readable slug. */
+export const getDefaultTeamRoute = createServerFn({ method: 'GET' }).handler(
+  async (): Promise<{ id: string; slug: string }> => {
+    await backend()
+    const scope = await requestScope()
+    const team = await store.getTeam(scope.teamId)
+    if (!team) throw new Error('Default team does not exist.')
+    return { id: team.id, slug: team.slug }
+  },
+)
 
 /** GET — the signed-in user's loops as compact summaries (newest first).
  *  Gate on ⇒ only the given/active team's loops; open mode ⇒ the full shared list.
@@ -234,7 +261,7 @@ export const getJobDetail = createServerFn({ method: 'GET' })
     // offers a "switch to this team" affordance.
     if (owned.enforce && owned.loop.teamId) {
       const team = await store.getTeam(owned.loop.teamId)
-      detail.team = { id: owned.loop.teamId, name: team?.name ?? 'Unknown team', isActive: owned.loop.teamId === owned.teamId }
+      detail.team = { id: owned.loop.teamId, name: team?.name ?? 'Unknown team', slug: team?.slug ?? owned.loop.teamId, isActive: owned.loop.teamId === owned.teamId }
     }
     return detail
   })
@@ -339,12 +366,10 @@ export const patchJob = createServerFn({ method: 'POST' })
     const { scheduler } = await backend()
     const owned = await ownedLoop(data.id)
     if (!owned) return { error: 'not found' }
-    const { enforce } = owned
     const p = data.patch
-    // A chosen channel must belong to the LOOP's team — not the requester's active
-    // team (an admin patching from another team's view, or the All-teams aggregate,
-    // would otherwise reject the loop's own valid channels / accept foreign ones).
-    if (p.channelId && enforce && (await store.getChannel(p.channelId))?.teamId !== owned.loop.teamId) {
+    // A personal destination follows its owner across teams. A collaborator may
+    // edit the loop but can attach only their own destination.
+    if (p.channelId && (!owned.userId || (await store.getChannel(p.channelId))?.userId !== owned.userId)) {
       return { error: 'channel not found' }
     }
     // Enforce the SAME agent enum as the gateway/CLI edit surface via the shared

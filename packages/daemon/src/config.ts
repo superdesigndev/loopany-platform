@@ -14,6 +14,8 @@ import path from "node:path";
 
 export const LOOPANY_DIR = process.env.LOOPANY_HOME || path.join(os.homedir(), ".loopany");
 export const DEVICE_FILE = path.join(LOOPANY_DIR, "device-token");
+export const MACHINE_FILE = path.join(LOOPANY_DIR, "machine.json");
+export const MACHINE_TERMINAL_FILE = path.join(LOOPANY_DIR, "machine-terminal.json");
 export const SERVER_FILE = path.join(LOOPANY_DIR, "server-url");
 
 /** Best-effort 0600 persistence (so a stable identity survives restarts). */
@@ -32,6 +34,19 @@ export function readStored(file: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+export type MachineState = { kind: "loopany-machine"; schemaVersion: 1; id: string; key: string; enrolledBy?: string };
+export function readMachineState(): MachineState | undefined {
+  try {
+    const value = JSON.parse(fs.readFileSync(MACHINE_FILE, "utf8")) as MachineState;
+    return value.kind === "loopany-machine" && value.schemaVersion === 1 && value.id && value.key.startsWith("mk_") ? value : undefined;
+  } catch { return undefined; }
+}
+export function persistMachineState(value: MachineState): void { persist(MACHINE_FILE, JSON.stringify(value, null, 2)); try { fs.rmSync(MACHINE_TERMINAL_FILE, { force: true }); } catch {} }
+export function machineHeaders(token: string, extra: Record<string, string> = {}): Record<string, string> {
+  const machine = readMachineState();
+  return { Authorization: `Bearer ${token}`, ...(machine?.key === token ? { "X-Loopany-Machine-Id": machine.id } : {}), ...extra };
 }
 
 /** Read a `--flag value` from an argv slice (bare/terminal `--flag` → ""). */

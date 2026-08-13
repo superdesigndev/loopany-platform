@@ -1,11 +1,8 @@
 /**
  * Machine ALIAS (P0 stage A + review rounds 2-3): enroll mints the machine
- * BASE handle (unique within its home team, DB-backed); the PER-TEAM alias
- * REGISTER (machine_team_aliases, review round 3) then gives every execution
- * team its own unique(team, alias) mapping, minted deterministically by
- * machine age and immutable afterwards - so a shared team where two members
- * both own a "mbp" resolves BOTH machines (mbp / mbp-2), never an ambiguous
- * permanently-pending run. resolveMachineByAlias is THE ONE resolver.
+ * BASE handle (unique within its home team, DB-backed); explicit Team Machine
+ * Bindings give each authorized Team its own unique(team, alias) execution
+ * address. Two members who both own a "mbp" therefore resolve as mbp / mbp-2.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -37,7 +34,7 @@ afterAll(() => {
 beforeEach(async () => {
   await (db.client as any).exec(
     "DELETE FROM kernel_runs; DELETE FROM kernel_triggers; DELETE FROM kernel_events; DELETE FROM kernel_objects; " +
-      "DELETE FROM machine_team_aliases; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
+      "DELETE FROM team_machine_bindings; DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
   );
 });
 
@@ -61,7 +58,9 @@ async function enroll(gw: ReturnType<typeof gateway>, alias: string, host = "som
   const machineId = tokens.machineIdFromToken(deviceToken);
   const teamId = store.teamIdForUser("u1");
   await store.ensureTeam(teamId, "u1's team", "u1");
-  await tokens.rememberConnectKey(deviceToken, { userId: "u1", teamId });
+  let enrolledAlias = alias;
+  for (let n = 2; await store.aliasTakenInTeam(teamId, enrolledAlias, machineId); n++) enrolledAlias = `${alias}-${n}`;
+  await store.createMachine({ id: machineId, userId: "u1", teamId, name: host, alias: enrolledAlias, tokenHash: tokens.sha256(deviceToken), online: false });
   const res = await gw.poll(deviceToken, { host, alias });
   expect(res.status).toBe(200);
   return { machineId, teamId, deviceToken };
@@ -108,7 +107,7 @@ test("a SHARED team where two members' machines share a base handle resolves BOT
   const machine2 = tokens.machineIdFromToken(deviceToken2);
   const team2 = store.teamIdForUser("u2");
   await store.ensureTeam(team2, "u2's team", "u2");
-  await tokens.rememberConnectKey(deviceToken2, { userId: "u2", teamId: team2 });
+  await store.createMachine({ id: machine2, userId: "u2", teamId: team2, name: "mbp.local", alias: "mbp", tokenHash: tokens.sha256(deviceToken2), online: false });
   expect((await gw.poll(deviceToken2, { host: "mbp.local", alias: "mbp" })).status).toBe(200);
   expect((await store.getMachine(machine2))?.alias).toBe("mbp");
 
@@ -117,6 +116,8 @@ test("a SHARED team where two members' machines share a base handle resolves BOT
   // addressable - no ambiguity, no permanently pending run.
   await store.ensureTeam("team-shared", "Shared", "u1");
   await store.addTeamMember("team-shared", "u2", "member");
+  await store.bindMachineToTeam("team-shared", a.machineId, "u1");
+  await store.bindMachineToTeam("team-shared", machine2, "u2");
   const first = await store.resolveMachineByAlias("team-shared", "mbp");
   expect(first.ambiguous).toBeUndefined();
   expect(first.machine?.id).toBe(a.machineId);
@@ -140,11 +141,12 @@ test("MEMBER REVOCATION: a departed member's machine stops resolving, drops from
   const machine2 = tokens.machineIdFromToken(deviceToken2);
   const team2 = store.teamIdForUser("u2");
   await store.ensureTeam(team2, "u2's team", "u2");
-  await tokens.rememberConnectKey(deviceToken2, { userId: "u2", teamId: team2 });
+  await store.createMachine({ id: machine2, userId: "u2", teamId: team2, name: "wall.local", alias: "wall", tokenHash: tokens.sha256(deviceToken2), online: false });
   expect((await gw.poll(deviceToken2, { host: "wall.local", alias: "wall" })).status).toBe(200);
 
   await store.ensureTeam("team-wall", "Wall", "u1");
   await store.addTeamMember("team-wall", "u2", "member");
+  await store.bindMachineToTeam("team-wall", machine2, "u2");
   // While a member: resolves + advertised in the register.
   expect((await store.resolveMachineByAlias("team-wall", "wall")).machine?.id).toBe(machine2);
   expect((await store.listTeamAliases("team-wall")).map((r) => r.alias)).toContain("wall");
@@ -179,6 +181,27 @@ test("MEMBER REVOCATION: a departed member's machine stops resolving, drops from
   expect((await store.resolveMachineByAlias(team2, "wall")).machine?.id).toBe(machine2);
   await store.addTeamMember("team-wall", "u2", "member");
   expect((await store.resolveMachineByAlias("team-wall", "wall")).machine?.id).toBe(machine2);
+});
+
+test("BINDING REVOCATION: membership alone cannot route work after the explicit binding is disabled", async () => {
+  const gw = gateway();
+  const enrolled = await enroll(gw, "private-mbp");
+  await store.ensureTeam("team-client", "Client", "u-owner");
+  await store.addTeamMember("team-client", "u1", "member");
+  await store.bindMachineToTeam("team-client", enrolled.machineId, "u1");
+  expect((await store.resolveMachineByAlias("team-client", "private-mbp")).machine?.id).toBe(enrolled.machineId);
+
+  await store.setTeamMachineBindingEnabled("team-client", enrolled.machineId, false, "u1");
+  expect(await store.isMachineBoundToTeam("team-client", enrolled.machineId)).toBe(false);
+  expect((await store.listMachinesForTeam("team-client")).map((machine) => machine.id)).not.toContain(enrolled.machineId);
+  expect((await store.resolveMachineByAlias("team-client", "private-mbp")).machine).toBeUndefined();
+  expect((await store.listTeamAliases("team-client")).map((row) => row.machineId)).not.toContain(enrolled.machineId);
+
+  // Membership remains intact: compute authorization, not team access, was revoked.
+  expect(await store.isTeamMember("team-client", "u1")).toBe(true);
+  // A Machine must remain available to its owner's personal Team.
+  expect(await store.setTeamMachineBindingEnabled(enrolled.teamId, enrolled.machineId, false, "u1")).toBe(false);
+  expect(await store.isMachineBoundToTeam(enrolled.teamId, enrolled.machineId)).toBe(true);
 });
 
 test("the (teamId, alias) unique index rejects a duplicate alias write in one home team", async () => {

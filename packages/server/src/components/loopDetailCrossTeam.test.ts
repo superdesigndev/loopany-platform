@@ -99,7 +99,7 @@ afterEach(async () => {
 
 describe('loop detail cross-team header', () => {
   it('a member viewing a cross-team loop sees the team chip + explicit switch banner', async () => {
-    h.detail = detailWithTeam({ id: 'team-b', name: 'Acme Web', isActive: false })
+    h.detail = detailWithTeam({ id: 'team-b', name: 'Acme Web', slug: 'acme-web', isActive: false })
     await mount()
     const text = host!.textContent ?? ''
     // The banner (the explicit, non-silent switch affordance).
@@ -111,16 +111,10 @@ describe('loop detail cross-team header', () => {
     // The loop itself renders (NOT "not found") — its name is present.
     expect(text).toContain('Daily react-doctor triage')
 
-    // Write the rendered header as an evidence artifact.
-    const header = host!.querySelector('header')
-    const dir = '/var/folders/5h/2z3x38y52m5c9scwr9vdx8qc0000gn/T/no-mistakes-evidence/01KX02HH6YWJR9M8HHA4CKXYCX'
-    const fs = await import('node:fs')
-    fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(`${dir}/loop-header-cross-team.html`, header?.outerHTML ?? '', 'utf8')
   })
 
   it('the switch banner is a button that sets the team cookie and does NOT silently switch', async () => {
-    h.detail = detailWithTeam({ id: 'team-b', name: 'Acme Web', isActive: false })
+    h.detail = detailWithTeam({ id: 'team-b', name: 'Acme Web', slug: 'acme-web', isActive: false })
     await mount()
     // No cookie was written just by rendering the cross-team loop.
     expect(document.cookie).not.toContain('loopany.team')
@@ -136,7 +130,7 @@ describe('loop detail cross-team header', () => {
   })
 
   it('a loop in the caller’s ACTIVE team shows no chip and no switch banner', async () => {
-    h.detail = detailWithTeam({ id: 'team-a', name: 'Acme Web', isActive: true })
+    h.detail = detailWithTeam({ id: 'team-a', name: 'Acme Web', slug: 'acme-web', isActive: true })
     await mount()
     const text = host!.textContent ?? ''
     expect(text).not.toContain('Switch to this team')
