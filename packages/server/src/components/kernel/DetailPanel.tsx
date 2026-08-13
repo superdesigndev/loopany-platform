@@ -9,6 +9,7 @@ import { TimelineList } from "./TimelineView";
 import { AgentSessionRef } from "./AgentSessionRef";
 import { ArtifactRef, MachineRef, RunRef, TaskRef } from "./ObjectRefs";
 import { LocalTime } from "./DisplayPrimitives";
+import { MarkdownDocument } from "./MarkdownDocument";
 
 const TITLE = "mb-1.5 text-[18px]";
 const HEADING = "mt-7 mb-3 text-[12px] uppercase tracking-[0.02em]";
@@ -45,7 +46,7 @@ function DocumentDetail({ detail, select }: { detail: Obj; select: Select }) {
   return <div>
     <h2 className={TITLE}>{doc.title ?? doc.key}</h2>
     <div className={MUTED}>DOC · v{doc.version} · <LocalTime value={doc.updatedAt} /></div>
-    <pre className={PRE_BODY}>{doc.body}</pre>
+    <MarkdownDocument body={doc.body} />
     {detail.linkedTasks.map((task: Obj) => <TaskRef key={task.id} task={task} select={select} />)}
   </div>;
 }
