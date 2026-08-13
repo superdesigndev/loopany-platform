@@ -64,7 +64,7 @@ export function TimelineList({ items, data, selection, select, compact = false }
             <span className="min-w-0 flex-1 leading-[1.55]">{summary(item, data, select)}</span>
             <span className="shrink-0 border border-[#aaa] px-1.5 py-0.5 text-[9px] uppercase text-[#666]">{item.kind}</span>
           </div>
-          {!compact && task?.title && <div className="mt-1 text-[11px] font-semibold"><TaskRef task={task} select={select} /></div>}
+          {!compact && task?.title && <div className="mt-1 text-[11px] font-semibold"><TaskRef task={task} select={select} compact /></div>}
           <div className="mt-1 text-[10px] text-[#777]">
             {item.runId ? (run ? <RunRef run={run} select={select} compact /> : <>run:{item.runId}</>) : <ActorRef value={item.actor} data={data} select={select} />}
             {item.agentSessionId ? <> · <AgentSessionRef sessionId={item.agentSessionId} assignee={item.agent} compact /></> : null}

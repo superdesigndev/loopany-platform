@@ -11,7 +11,7 @@ import { ArtifactRef, MachineRef, RunRef, TaskRef } from "./ObjectRefs";
 import { LocalTime } from "./DisplayPrimitives";
 
 const TITLE = "mb-1.5 text-[18px]";
-const HEADING = "mt-6 mb-2 text-[12px] uppercase";
+const HEADING = "mt-7 mb-3 text-[12px] uppercase tracking-[0.02em]";
 const EVENT = "border-b border-[#ddd] py-[7px]";
 
 /** The right-hand inspector. One pane, three object shapes. */
@@ -34,7 +34,7 @@ function MemberDetail({ detail, data, select }: { detail: Obj; data: Obj; select
       <Field label="Machines">{detail.machines.length}</Field>
     </Fields>
     <h3 className={HEADING}>Assigned Tasks</h3>
-    {detail.tasks.length ? detail.tasks.map((task: Obj) => <div key={task.id} className={EVENT}><TaskRef task={task} select={select} showStatus /></div>) : <Empty text="No open Tasks" />}
+    {detail.tasks.length ? detail.tasks.map((task: Obj) => <TaskRef key={task.id} task={task} select={select} />) : <Empty text="No open Tasks" />}
     <h3 className={HEADING}>Machines</h3>
     {detail.machines.length ? detail.machines.map((machine: Obj) => <div className={EVENT} key={machine.id}><MachineRef machine={machine} data={data} select={select} /></div>) : <Empty text="No Machines" />}
   </div>;
@@ -46,7 +46,7 @@ function DocumentDetail({ detail, select }: { detail: Obj; select: Select }) {
     <h2 className={TITLE}>{doc.title ?? doc.key}</h2>
     <div className={MUTED}>DOC · v{doc.version} · <LocalTime value={doc.updatedAt} /></div>
     <pre className={PRE_BODY}>{doc.body}</pre>
-    {detail.linkedTasks.map((task: Obj) => <div key={task.id} className={EVENT}>Task: <TaskRef task={task} select={select} /></div>)}
+    {detail.linkedTasks.map((task: Obj) => <TaskRef key={task.id} task={task} select={select} />)}
   </div>;
 }
 
@@ -57,7 +57,7 @@ function RunDetail({ detail, data, select }: { detail: Obj; data: Obj; select: S
     <h2 className={TITLE}>{run.id}</h2>
     <div className={MUTED}>RUN · {run.state} · {profile ?? "agent unknown"}</div>
     <Fields>
-      <Field label="Task">{detail.task ? <TaskRef task={detail.task} select={select} /> : run.taskId}</Field>
+      <Field label="Task">{detail.task ? <TaskRef task={detail.task} select={select} compact /> : run.taskId}</Field>
       <Field label="Cause">{run.cause}</Field>
       <Field label="Assignee"><AssigneeRef value={run.assignee} data={data} select={select} /></Field>
       <Field label="Workdir">{detail.task?.workdir ?? "-"}</Field>
@@ -68,7 +68,7 @@ function RunDetail({ detail, data, select }: { detail: Obj; data: Obj; select: S
     <pre className={PRE_BODY}>{run.note ?? "No return note yet"}</pre>
     <h3 className={HEADING}>Artifacts touched</h3>
     {detail.artifacts.length
-      ? detail.artifacts.map((item: Obj) => <div className={EVENT} key={item.artifact.id}><ArtifactRef entry={item} actions={item.actions} select={select} /></div>)
+      ? detail.artifacts.map((item: Obj) => <ArtifactRef key={item.artifact.id} entry={item} actions={item.actions} select={select} />)
       : <Empty text="No artifacts recorded for this run" />}
   </div>;
 }
@@ -95,14 +95,14 @@ function TaskDetail({ detail, data, selection, select, teamSlug, reload, assigne
     <h3 className={HEADING}>Spec</h3>
     <pre className={PRE_BODY}>{task.body || "No spec"}</pre>
     <h3 className={HEADING}>Children</h3>
-    {detail.children.length ? detail.children.map((child: Obj) => <div key={child.id} className={EVENT}><TaskRef task={child} select={select} showStatus /></div>) : <Empty text="No child Tasks" />}
+    {detail.children.length ? detail.children.map((child: Obj) => <TaskRef key={child.id} task={child} select={select} />) : <Empty text="No child Tasks" />}
     <h3 className={HEADING}>Artifacts</h3>
-    {detail.artifacts.length ? detail.artifacts.map((entry: Obj) => <div key={entry.artifact.id} className={EVENT}><ArtifactRef entry={entry} select={select} /></div>) : <Empty text="No artifacts" />}
+    {detail.artifacts.length ? detail.artifacts.map((entry: Obj) => <ArtifactRef key={entry.artifact.id} entry={entry} select={select} />) : <Empty text="No artifacts" />}
     <h3 className={HEADING}>Recent</h3>
     <TimelineList items={detail.recent.slice(0, recentLimit)} data={data} selection={selection} select={select} compact />
     {recentLimit < detail.recent.length && <button className="mx-auto my-3 block cursor-pointer border-0 bg-transparent p-1 text-center text-[#174f78] underline decoration-[#aaa] underline-offset-2" onClick={() => setRecentLimit((value) => value + 8)}>Load more</button>}
     {recentLimit >= detail.recent.length && detail.recentHasMore && <div className="py-2 text-center text-[11px] text-[#777]">More activity exists outside this recent window</div>}
     <h3 className={HEADING}>Runs</h3>
-    {detail.runs.length ? detail.runs.slice(0, 10).map((run: Obj) => <div key={run.id} className={EVENT}><RunRef run={run} select={select} /></div>) : <Empty text="No Runs" />}
+    {detail.runs.length ? detail.runs.slice(0, 10).map((run: Obj) => <RunRef key={run.id} run={run} select={select} />) : <Empty text="No Runs" />}
   </div>;
 }

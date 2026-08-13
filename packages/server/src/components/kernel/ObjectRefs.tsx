@@ -4,26 +4,42 @@ import { LocalTime } from "./DisplayPrimitives";
 import { pill, statusDot } from "./styles";
 
 const LINK = "cursor-pointer border-0 bg-transparent p-0 text-left text-[#174f78] underline decoration-[#aaa] underline-offset-2";
+const ROW = "group/ref flex w-full cursor-pointer items-start gap-3 border-0 border-b border-[#ddd] bg-transparent px-2 py-3 text-left hover:bg-[#f0f0ed]";
+const TAG = "mt-px w-12 shrink-0 border border-[#aaa] px-1.5 py-0.5 text-center text-[9px] uppercase text-[#666]";
 
-export function TaskRef({ task, select, showStatus = false }: { task: Obj; select: Select; showStatus?: boolean }) {
-  return <button className={LINK} onClick={() => select("task", task.id)}>
-    {task.title ?? task.id}{showStatus && <span className="ml-2 text-[#666] no-underline">· {task.status}</span>}
+function RefRow({ tag, title, meta, onClick }: { tag: string; title: React.ReactNode; meta?: React.ReactNode; onClick: () => void }) {
+  return <button className={ROW} onClick={onClick}>
+    <code className={TAG}>{tag}</code>
+    <span className="min-w-0 flex-1">
+      <strong className="block leading-[1.4] text-[#171717] group-hover/ref:text-[#174f78]">{title}</strong>
+      {meta && <small className="mt-1.5 block leading-[1.4] text-[#777]">{meta}</small>}
+    </span>
   </button>;
+}
+
+export function TaskRef({ task, select, compact = false }: { task: Obj; select: Select; compact?: boolean }) {
+  if (compact) return <button className={LINK} onClick={() => select("task", task.id)}>{task.title ?? task.id}</button>;
+  return <RefRow tag="TASK" title={task.title ?? task.id} meta={`${task.status}${task.priority ? ` · ${task.priority}` : ""}`} onClick={() => select("task", task.id)} />;
 }
 
 export function RunRef({ run, select, compact = false }: { run: Obj; select: Select; compact?: boolean }) {
   const profile = run.assignee?.includes("/") ? run.assignee.slice(run.assignee.lastIndexOf("/") + 1) : "agent";
-  return <button className={LINK} onClick={() => select("run", run.id)} title={run.id}>
-    {profile} Run · {run.state}{!compact && <> · <LocalTime value={run.createdAt} /></>}
-  </button>;
+  if (compact) return <button className={LINK} onClick={() => select("run", run.id)} title={run.id}>{profile} Run · {run.state}</button>;
+  return <RefRow
+    tag="RUN"
+    title={<>{profile} · {run.state}</>}
+    meta={<><LocalTime value={run.createdAt} />{run.agentSessionId ? <> · session {run.agentSessionId.length > 12 ? `${run.agentSessionId.slice(0, 8)}…` : run.agentSessionId}</> : null}</>}
+    onClick={() => select("run", run.id)}
+  />;
 }
 
 export function ArtifactRef({ entry, select, actions }: { entry: Obj; select: Select; actions?: string[] }) {
   const artifact = entry.artifact ?? entry;
   const label = artifact.title ?? artifact.key ?? artifact.coords ?? artifact.id;
   const suffix = actions?.length ? ` · ${actions.join(" + ")}` : "";
-  if (artifact.archetype === "doc") return <button className={LINK} onClick={() => select("doc", artifact.id)}>doc · {label}{suffix}</button>;
-  return <span>mirror · {label}{suffix}</span>;
+  const meta = <>{artifact.key && artifact.key !== label ? artifact.key : artifact.id}{suffix}</>;
+  if (artifact.archetype === "doc") return <RefRow tag="DOC" title={label} meta={meta} onClick={() => select("doc", artifact.id)} />;
+  return <div className={ROW}><code className={TAG}>MIRROR</code><span className="min-w-0 flex-1"><strong className="block leading-[1.45]">{label}</strong><small className="mt-1 block text-[#777]">{meta}</small></span></div>;
 }
 
 export function MachineRef({ machine, data, select, detailed = false }: { machine: Obj; data: Obj; select: Select; detailed?: boolean }) {
