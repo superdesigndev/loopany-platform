@@ -142,7 +142,7 @@ export function selectBackend(
     const g = readGlobalConnect(env);
     if (!g) {
       throw new DriverError("NO_CREDENTIAL", "--remote needs a global binding", {
-        hint: "run `loopany-kernel connect <url> --token <dk_…>` first",
+        hint: "run `lk connect <url> --token <dk_…>` first",
       });
     }
     return new RemoteBackend(g.backend, g.token, transport ?? undefined, env.LOOPANY_KERNEL_SIM_AUTHORITY);

@@ -16,6 +16,7 @@ import { notifyKernelChangeset } from "../kernel/notify.js";
 import { normalizePersonFields, personAddress } from "../kernel/person.js";
 import { agentDirectory } from "../kernel/agentDirectory.js";
 import { applyChangesetForTeam, readEvents, readSnapshot } from "../kernel/store.js";
+import { readRunTranscript } from "../kernel/transcript.js";
 
 export class KernelWebError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -125,6 +126,13 @@ export async function runDetail(teamId: string, id: string) {
     events: events.filter((e) => e.provenance.entrance === "agent-run" && e.provenance.actorId === id),
     artifacts: runArtifactsView(snapshot, events, id),
   };
+}
+
+export async function runTranscript(teamId: string, id: string, after = -1, limit = 200) {
+  await access(teamId);
+  const page = await readRunTranscript(teamId, id, after, limit);
+  if (!page) throw new KernelWebError(404, "Run not found");
+  return page;
 }
 
 export async function timeline(teamId: string, all = false) {

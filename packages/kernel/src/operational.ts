@@ -51,12 +51,12 @@ export function projectOperationalContext(
     action = machine.presence === "unregistered"
       ? `human action needed: machine alias "${machine.alias}" is not registered; this pending run cannot be delivered`
       : `no action required if the daemon will reconnect; the pending run is retained for the ${machine.presence} machine`;
-    if (machine.presence === "unregistered" && taskId) nextCommand = `loopany-kernel update ${taskId} assignee=<registered-machine/agent> --note "correct dispatch target"`;
+    if (machine.presence === "unregistered" && taskId) nextCommand = `lk update ${taskId} assignee=<registered-machine/agent> --note "correct dispatch target"`;
   } else if (created) {
     action = "no action required; the run is queued for delivery";
   } else if (task?.status === "todo" && task.assignee && !task.assignee.includes("@") && !retained && !trigger) {
     action = "manual dispatch is needed to run this task now";
-    nextCommand = `loopany-kernel run ${task.id}`;
+    nextCommand = `lk run ${task.id}`;
   } else if (trigger?.nextFireAt) {
     action = "no action required; the task has a future trigger";
   }

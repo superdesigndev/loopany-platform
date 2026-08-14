@@ -36,6 +36,7 @@ const KR: KernelRunDelivery = {
 function deps(over: Partial<KernelRunDeps> & { codes?: Array<number | null>; finishFailures?: number } = {}) {
   const spawns: Array<{ bin: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
   const finishes: Array<{ url: string; token: string; body: unknown }> = [];
+  const transcripts: unknown[] = [];
   const sleeps: number[] = [];
   const codes = over.codes ?? [0];
   let call = 0;
@@ -53,6 +54,7 @@ function deps(over: Partial<KernelRunDeps> & { codes?: Array<number | null>; fin
       }
       finishes.push({ url, token, body });
     },
+    uploadTranscript: async (_url, _token, _runId, body) => { transcripts.push(body); },
     sleep: async (ms) => {
       sleeps.push(ms);
     },
@@ -60,7 +62,7 @@ function deps(over: Partial<KernelRunDeps> & { codes?: Array<number | null>; fin
     kernelBinDir: over.kernelBinDir ?? (() => "/shim/kernel-bin"),
     runWorkflow: over.runWorkflow ?? (async () => ({ ok: true, result: { agentCalls: [] }, stdout: "", stderr: "" })),
   };
-  return { d, spawns, finishes, sleeps };
+  return { d, spawns, finishes, sleeps, transcripts };
 }
 
 test("a run executes in its workdir with the in-run env contract, then reports done", async () => {
@@ -79,6 +81,24 @@ test("a run executes in its workdir with the in-run env contract, then reports d
   expect(finishes).toHaveLength(1);
   expect(finishes[0]).toMatchObject({ url: "https://srv.example", token: "rk_test" });
   expect(JSON.stringify(finishes[0]!.body)).toContain('"outcome":"done"');
+});
+
+test("a real Claude stream is uploaded as a shared transcript before run-finish", async () => {
+  const { d, transcripts, finishes } = deps();
+  d.run = async (_bin, _args, opts) => {
+    opts.onStdout?.('{"type":"assistant","session_id":"sess-shared","message":{"content":[{"type":"text","text":"Reviewing the notification path"},{"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":"/work/superdesign/src/notify.ts"}}]}}\n');
+    opts.onStdout?.('{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","content":"export function notify() {}"}]}}\n');
+    opts.onStdout?.('{"type":"result","session_id":"sess-shared","total_cost_usd":0.01,"usage":{"input_tokens":12,"output_tokens":5}}');
+    return { code: 0 };
+  };
+  await runKernelDelivery(KR, "https://srv.example", [], undefined, d);
+
+  expect(transcripts).toHaveLength(1);
+  const body = transcripts[0] as { final: boolean; entries: Array<{ kind: string; text?: string }> };
+  expect(body.final).toBe(true);
+  expect(body.entries.map((entry) => entry.kind)).toEqual(["phase", "agent-message", "tool", "tool", "usage", "phase"]);
+  expect(body.entries.find((entry) => entry.kind === "agent-message")?.text).toContain("notification path");
+  expect(JSON.stringify(finishes[0]!.body)).toContain('"agentSessionId":"sess-shared"');
 });
 
 test("a silent workflow completes the same Run without spawning an Agent", async () => {
@@ -233,7 +253,7 @@ test("a workdir OUTSIDE the local LOOPANY_ROOTS jail fails loud without spawning
   expect(scratch.spawns[0]!.cwd).toBe("/tmp/scratch");
 });
 
-test("the kernel shim dir is PREPENDED to the child PATH so `loopany-kernel` resolves", async () => {
+test("the kernel shim dir is PREPENDED to the child PATH so `lk` resolves", async () => {
   const { d, spawns } = deps();
   await runKernelDelivery(KR, "https://srv.example", [], undefined, d);
   expect(spawns[0]!.env.PATH!.startsWith("/shim/kernel-bin:")).toBe(true);
@@ -245,16 +265,20 @@ test("the kernel shim dir is PREPENDED to the child PATH so `loopany-kernel` res
   expect(bare.spawns[0]!.env.PATH ?? "").not.toContain("/shim/kernel-bin");
 });
 
-test("ensureKernelBinDir writes an absolute-path sh shim named loopany-kernel", () => {
+test("ensureKernelBinDir pins both lk and loopany-kernel to the same absolute entry", () => {
   const dir = ensureKernelBinDir();
   // In the repo the workspace launcher always exists, so this resolves.
   expect(dir).toBeTruthy();
-  const shim = fs.readFileSync(`${dir}/loopany-kernel`, "utf8");
-  expect(shim.startsWith("#!/bin/sh\n")).toBe(true);
-  expect(shim).toContain(process.execPath); // absolute node - never PATH-dependent
-  expect(shim).toContain('.mjs"'); // absolute entry path
-  const mode = fs.statSync(`${dir}/loopany-kernel`).mode & 0o777;
-  expect(mode & 0o111).not.toBe(0); // executable
+  const lkShim = fs.readFileSync(`${dir}/lk`, "utf8");
+  const compatibilityShim = fs.readFileSync(`${dir}/loopany-kernel`, "utf8");
+  expect(lkShim).toBe(compatibilityShim);
+  expect(lkShim.startsWith("#!/bin/sh\n")).toBe(true);
+  expect(lkShim).toContain(process.execPath); // absolute node - never PATH-dependent
+  expect(lkShim).toContain('.mjs"'); // absolute entry path
+  for (const name of ["lk", "loopany-kernel"]) {
+    const mode = fs.statSync(`${dir}/${name}`).mode & 0o777;
+    expect(mode & 0o111).not.toBe(0); // executable
+  }
   expect(ensureKernelBinDir()).toBe(dir); // cached per process
 });
 

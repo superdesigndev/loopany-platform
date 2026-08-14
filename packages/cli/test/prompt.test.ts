@@ -66,8 +66,9 @@ describe("buildCorePrompt", () => {
     expect(prompt).toContain("KERNEL MODEL:");
     expect(prompt).toContain("AUTHORITY AND TRUST:");
     expect(prompt).toContain("PROTOCOL - one pass, then stop:");
-    expect(prompt).toContain("show bet");
-    expect(prompt).toContain("note bet");
+    expect(prompt).toContain("`lk show bet`");
+    expect(prompt).toContain("`lk note bet");
+    expect(prompt).not.toContain("`loopany-kernel ");
     expect(prompt).toContain("mirror add <kind> <coords> --task <task-id>");
     expect(prompt).toContain("update bet status=<status>");
     expect(prompt).toContain("WHY YOU WOKE:");

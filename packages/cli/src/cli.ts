@@ -1002,12 +1002,12 @@ function taskForCollection(task: TaskObject, full: boolean): unknown {
   return {
     ...metadata,
     bodyBytes: Buffer.byteLength(body, "utf8"),
-    bodyCommand: `loopany-kernel show ${task.id} --json`,
+    bodyCommand: `lk show ${task.id} --json`,
     workflow: workflow
       ? {
           format: workflow.format,
           sourceBytes: Buffer.byteLength(workflow.source, "utf8"),
-          sourceCommand: `loopany-kernel workflow show ${task.id} --json`,
+          sourceCommand: `lk workflow show ${task.id} --json`,
         }
       : null,
   };
@@ -1020,7 +1020,7 @@ function objectForCollection(object: KernelObject, full: boolean): unknown {
   return {
     ...metadata,
     bodyBytes: Buffer.byteLength(body, "utf8"),
-    bodyCommand: `loopany-kernel show ${object.id} --json`,
+    bodyCommand: `lk show ${object.id} --json`,
   };
 }
 

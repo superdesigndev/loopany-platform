@@ -180,7 +180,7 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
     // Creation context remains in recent activity. It is not mislabeled as a
     // handoff unless an assignee-change event supplied a reason.
     expect(recentShow.stdout).not.toContain("handoff:");
-    expect(recentShow.stdout).toContain("full history: loopany-kernel show ship-the-redesign --log");
+    expect(recentShow.stdout).toContain("full history: lk show ship-the-redesign --log");
     expect(recentShow.stdout).not.toContain("run-started:");
     const boundedShow = call(["show", "ship-the-redesign", "--limit", "1", "--json"]);
     const boundedJson = JSON.parse(boundedShow.stdout) as { recent: unknown[]; events?: unknown[] };
@@ -372,7 +372,7 @@ describe("M2 local read/write loop (temp-dir E2E)", () => {
       const compactTask = taskOf(JSON.parse(compactOutput));
       expect(compactTask.body).toBeUndefined();
       expect(compactTask.bodyBytes).toBe(Buffer.byteLength(body, "utf8"));
-      expect(compactTask.bodyCommand).toBe("loopany-kernel show large-loop --json");
+      expect(compactTask.bodyCommand).toBe("lk show large-loop --json");
 
       const fullOutput = call([...argv, "--full"]).stdout;
       const fullTask = taskOf(JSON.parse(fullOutput));

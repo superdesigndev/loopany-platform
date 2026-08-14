@@ -457,6 +457,33 @@ export const kernelRuns = pgTable(
   ],
 );
 
+/** Bounded, normalized execution transcript for one Kernel Run. Chunks are a
+ * physical append store, not a Kernel entity: they never ride the Team snapshot
+ * or participate in Task/Run CAS. `(teamId, runId, startSeq)` makes daemon
+ * retries idempotent. Provider-native transcripts remain on the execution
+ * machine; `data` contains only the allowlisted Loopany transcript projection. */
+export const kernelRunTranscriptChunks = pgTable(
+  "kernel_run_transcript_chunks",
+  {
+    teamId: text("team_id").notNull(),
+    runId: text("run_id").notNull(),
+    startSeq: integer("start_seq").notNull(),
+    endSeq: integer("end_seq").notNull(),
+    receivedAt: text("received_at").notNull(),
+    byteLength: integer("byte_length").notNull(),
+    entryCount: integer("entry_count").notNull(),
+    final: boolean("final").notNull().default(false),
+    partial: boolean("partial").notNull().default(false),
+    truncated: boolean("truncated").notNull().default(false),
+    data: jsonb("data").$type<unknown>().notNull(),
+  },
+  (t) => [
+    uniqueIndex("kernel_run_transcript_chunks_pk").on(t.teamId, t.runId, t.startSeq),
+    index("kernel_run_transcript_run_idx").on(t.teamId, t.runId, t.startSeq),
+    index("kernel_run_transcript_received_idx").on(t.receivedAt),
+  ],
+);
+
 // ---- teams: the ownership/scope unit (every user gets a personal team) ----
 
 export const teams = pgTable("teams", {

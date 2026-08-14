@@ -58,6 +58,38 @@ export function useDetail(selected: Selection | null, teamSlug: string, generate
   return detail.value;
 }
 
+/** Incremental Run transcript reader. The large append stream stays out of the
+ * 5s Team workspace payload; only an open running Run polls it every 2s. */
+export function useRunTranscript(runId: string, teamSlug: string, active: boolean): Obj {
+  const [entries, setEntries] = useState<Obj[]>([]);
+  const [capture, setCapture] = useState<Obj>({ status: "unavailable", entries: 0, bytes: 0, truncated: false });
+  const [nextSeq, setNextSeq] = useState(-1);
+
+  useEffect(() => { setEntries([]); setNextSeq(-1); setCapture({ status: "unavailable", entries: 0, bytes: 0, truncated: false }); }, [runId]);
+  useEffect(() => {
+    let stopped = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/kernel/web/run-transcript/${encodeURIComponent(runId)}?teamSlug=${encodeURIComponent(teamSlug)}&after=${nextSeq}&limit=200`);
+        if (!res.ok || stopped) return;
+        const page = await res.json();
+        if (stopped) return;
+        setEntries((current) => {
+          const seen = new Set(current.map((entry) => entry.seq));
+          return [...current, ...(page.entries ?? []).filter((entry: Obj) => !seen.has(entry.seq))].sort((a, b) => a.seq - b.seq);
+        });
+        setNextSeq((value) => Math.max(value, Number(page.nextSeq ?? value)));
+        setCapture(page.capture ?? capture);
+      } catch { /* workspace-level connectivity UI already reports outages */ }
+    };
+    void load();
+    if (!active) return () => { stopped = true; };
+    const timer = window.setInterval(() => void load(), 2_000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [runId, teamSlug, active, nextSeq]);
+  return { entries, capture };
+}
+
 /** `r` refreshes, `Esc` closes the detail pane - unless the user is typing. */
 export function useHotkeys(refresh: () => void, escape: () => void) {
   useEffect(() => {

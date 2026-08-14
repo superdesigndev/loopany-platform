@@ -66,7 +66,7 @@ describe("remote dispatch feedback", () => {
     const out = run(["show", "audit"], deps({}));
     expect(out.exitCode).toBe(0);
     expect(out.stdout).toContain("machine mbp: unregistered");
-    expect(out.stdout).toContain("full history: loopany-kernel show audit --log");
+    expect(out.stdout).toContain("full history: lk show audit --log");
   });
 
   it("show exposes the machine's actual presence", () => {

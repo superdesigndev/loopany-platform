@@ -30,7 +30,7 @@ export const SCENARIO_PROSE_WORD_BUDGET = 100;
 
 /** The invariant shared contract every Run receives. Keep this self-sufficient:
  * an absent installable skill may reduce finesse, never basic correctness. */
-export function sharedCoreProse(taskId: string, bin = "loopany-kernel"): string {
+export function sharedCoreProse(taskId: string, bin = "lk"): string {
   return [
     "KERNEL MODEL:",
     "  A Task is durable work: its body is the standing specification; its status,",
@@ -104,7 +104,7 @@ export function buildCorePrompt(
    *  HOME - the codex round-1 finding; same lesson as the daemon's
    *  resolveDurableCommand: durable means absolute, never a transient npx
    *  PATH entry). */
-  bin = "loopany-kernel",
+  bin = "lk",
 ): string {
   return [
     // ── identity ────────────────────────────────────────────────────────────

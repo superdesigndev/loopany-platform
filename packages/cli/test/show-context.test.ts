@@ -123,7 +123,7 @@ describe("task show current context semantics", () => {
 
     const out = renderShow(done, snapshot, null, [], false, {}, []);
     expect(out).toContain("next: none - task is done");
-    expect(out).toContain(`reopen: loopany-kernel update ${done.id} status=todo`);
+    expect(out).toContain(`reopen: lk update ${done.id} status=todo`);
     expect(out).not.toContain("continue the task");
   });
 });

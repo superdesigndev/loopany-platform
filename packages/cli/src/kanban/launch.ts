@@ -33,7 +33,7 @@ function localGitEmail(cwd: string): string | null {
 /** TTY refusal runs before the dynamic import, so pipes never load React/Ink. */
 export async function launchKanban(options: KanbanLaunchOptions): Promise<number> {
   if (!options.stdin.isTTY || !options.stdout.isTTY) {
-    options.stderr.write("loopany-kernel kanban requires an interactive TTY\n");
+    options.stderr.write("lk kanban requires an interactive TTY\n");
     return 1;
   }
   const backend = selectBackend(options.cwd, options.env, undefined, { remote: options.remote ?? false });

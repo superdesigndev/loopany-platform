@@ -212,16 +212,16 @@ export function renderShow(
       const next = terminal
         ? `none - task is ${obj.status}`
         : blocked
-          ? `resolve the machine/configuration issue, then: ${"loopany-kernel"} run ${obj.id}`
+          ? `resolve the machine/configuration issue, then: lk run ${obj.id}`
         : humanDecision
-          ? `hand back: loopany-kernel update ${obj.id} assignee=<machine/agent> status=todo --note "<decision and context>"`
+          ? `hand back: lk update ${obj.id} assignee=<machine/agent> status=todo --note "<decision and context>"`
           : scheduled
             ? `none - next run scheduled for ${formatLocalTime(scheduled.nextFireAt!)} local (schedule timezone: ${scheduled.timezone ?? "host-local"})`
           : obj.assignee
-            ? `continue the task, then record progress: loopany-kernel note ${obj.id} "<what changed and why>"`
-            : `assign work: loopany-kernel update ${obj.id} assignee=<owner> status=todo --note "<handoff reason>"`;
-      parts.push("", "commands:", `  full history: loopany-kernel show ${obj.id} --log`, `  next: ${next}`);
-      if (terminal) parts.push(`  reopen: loopany-kernel update ${obj.id} status=todo --note "<why>"`);
+            ? `continue the task, then record progress: lk note ${obj.id} "<what changed and why>"`
+            : `assign work: lk update ${obj.id} assignee=<owner> status=todo --note "<handoff reason>"`;
+      parts.push("", "commands:", `  full history: lk show ${obj.id} --log`, `  next: ${next}`);
+      if (terminal) parts.push(`  reopen: lk update ${obj.id} status=todo --note "<why>"`);
     }
   }
   const body = objectBody(obj);
@@ -502,9 +502,9 @@ export function renderInbox(
       const target = handbackTargets?.[i.task.id];
       const hint =
         target != null
-          ? `hand back: loopany-kernel update ${i.task.id} assignee=${target} status=todo --note "<your reply>"`
+          ? `hand back: lk update ${i.task.id} assignee=${target} status=todo --note "<your reply>"`
           : target === null
-            ? `hand back: loopany-kernel update ${i.task.id} assignee=<agent> status=todo --note "<your reply>"  (no prior agent - pick one)`
+            ? `hand back: lk update ${i.task.id} assignee=<agent> status=todo --note "<your reply>"  (no prior agent - pick one)`
             : null;
       return `${head}\n      ${bits.join(" · ")}${hint ? `\n      ${hint}` : ""}`;
     })

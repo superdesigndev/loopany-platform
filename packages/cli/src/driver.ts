@@ -120,7 +120,7 @@ export function requireWorkspace(start: string): string {
   const ws = findWorkspace(start);
   if (!ws) {
     throw new DriverError("NO_WORKSPACE", "no .loopany/ workspace found", {
-      hint: "run `loopany-kernel init` here (or in a parent directory)",
+      hint: "run `lk init` here (or in a parent directory)",
     });
   }
   return ws;
@@ -179,7 +179,7 @@ function acquireLock(wsDir: string): () => void {
     // holds the workspace). No retry loop — the demo driver fails loud.
     fd = openSync(lockPath, "wx");
   } catch {
-    throw new DriverError("WORKSPACE_LOCKED", "another loopany-kernel command holds this workspace", {
+    throw new DriverError("WORKSPACE_LOCKED", "another lk command holds this workspace", {
       hint: "wait for it to finish, or remove .loopany/lock if it is stale",
     });
   }

@@ -23,6 +23,7 @@ import {
 } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
 import { kernelSweep, kernelSweepIntervalMs } from "../kernel/sweep.js";
+import { pruneRunTranscripts } from "../kernel/transcript.js";
 import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
@@ -107,7 +108,7 @@ async function boot(): Promise<Booted> {
   }
 
   const gc = setInterval(
-    () => void gateway.maintainStorage().catch((err) => logger.error({ err: String(err) }, "gc tick failed")),
+    () => void Promise.all([gateway.maintainStorage(), pruneRunTranscripts()]).catch((err) => logger.error({ err: String(err) }, "gc tick failed")),
     gcIntervalMs(),
   );
   gc.unref?.();

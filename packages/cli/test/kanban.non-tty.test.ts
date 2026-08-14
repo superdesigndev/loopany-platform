@@ -12,6 +12,6 @@ describe("kanban terminal boundary", () => {
       stderr: { isTTY: false, write },
     });
     expect(exitCode).toBe(1);
-    expect(write).toHaveBeenCalledWith("loopany-kernel kanban requires an interactive TTY\n");
+    expect(write).toHaveBeenCalledWith("lk kanban requires an interactive TTY\n");
   });
 });

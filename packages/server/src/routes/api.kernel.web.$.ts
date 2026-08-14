@@ -22,6 +22,11 @@ async function dispatch(request: Request): Promise<Response> {
     if (request.method === "GET" && path[0] === "tasks" && path[1]) return Response.json(await web.taskDetail(teamId, decodeURIComponent(path[1])));
     if (request.method === "GET" && path[0] === "docs" && path[1]) return Response.json(await web.docDetail(teamId, decodeURIComponent(path[1])));
     if (request.method === "GET" && path[0] === "runs" && path[1]) return Response.json(await web.runDetail(teamId, decodeURIComponent(path[1])));
+    if (request.method === "GET" && path[0] === "run-transcript" && path[1]) {
+      const after = Number(url.searchParams.get("after") ?? -1);
+      const limit = Number(url.searchParams.get("limit") ?? 200);
+      return Response.json(await web.runTranscript(teamId, decodeURIComponent(path[1]), Number.isSafeInteger(after) ? after : -1, Number.isSafeInteger(limit) ? limit : 200));
+    }
     if (request.method === "GET" && path[0] === "members" && path[1]) return Response.json(await web.memberDetail(teamId, decodeURIComponent(path[1])));
     if (request.method === "GET" && path[0] === "timeline") return Response.json(await web.timeline(teamId, url.searchParams.get("all") === "true"));
     if (request.method === "POST" && path[0] === "command") {

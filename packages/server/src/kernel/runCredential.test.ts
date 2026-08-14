@@ -19,6 +19,8 @@ let kgateway: typeof import("./gateway.js");
 let sweep: typeof import("./sweep.js");
 let tokens: typeof import("../gateway/tokens.js");
 let gatewayMod: typeof import("../gateway/index.js");
+let transcript: typeof import("./transcript.js");
+let transcriptRoute: typeof import("../routes/api.kernel.runs.$runId.transcript.js");
 
 const OWNER: Provenance = { entrance: "human", actorId: "u1" };
 const T0 = "2026-09-07T06:00:00.000Z";
@@ -37,6 +39,8 @@ beforeAll(async () => {
   sweep = await import("./sweep.js");
   tokens = await import("../gateway/tokens.js");
   gatewayMod = await import("../gateway/index.js");
+  transcript = await import("./transcript.js");
+  transcriptRoute = await import("../routes/api.kernel.runs.$runId.transcript.js");
 });
 
 afterAll(() => {
@@ -45,7 +49,7 @@ afterAll(() => {
 
 beforeEach(async () => {
   await (db.client as any).exec(
-    "DELETE FROM kernel_runs; DELETE FROM kernel_triggers; DELETE FROM kernel_events; DELETE FROM kernel_objects; " +
+    "DELETE FROM kernel_run_transcript_chunks; DELETE FROM kernel_runs; DELETE FROM kernel_triggers; DELETE FROM kernel_events; DELETE FROM kernel_objects; " +
       "DELETE FROM team_machine_bindings; DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
   );
 });
@@ -63,6 +67,32 @@ function gateway() {
     undefined,
   );
 }
+
+test("a Run uploads an idempotent team-readable normalized transcript", async () => {
+  const { teamId, runId, rk } = await deliveredRun("transcript-task");
+  const chunk = {
+    entries: [
+      { seq: 0, at: T1, kind: "agent-message", text: "Inspecting Authorization: Bearer sk_secretvalue123" },
+      { seq: 1, at: T1, kind: "tool", toolCallId: "t1", title: "Read route", status: "done", path: "src/route.ts" },
+    ],
+    endSeq: 1,
+  };
+  const upload = await transcriptRoute.putRunTranscript(new Request(`http://kernel.test/api/kernel/runs/${runId}/transcript`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${rk}`, "content-type": "application/json" },
+    body: JSON.stringify(chunk),
+  }), runId);
+  expect(upload.status).toBe(200);
+  expect(await upload.json()).toMatchObject({ ok: true, duplicate: false, nextSeq: 2 });
+  expect(await transcript.appendRunTranscript(rk, runId, chunk)).toMatchObject({ ok: true, duplicate: true, nextSeq: 2 });
+  expect(await transcript.appendRunTranscript(rk, "another-run", chunk)).toMatchObject({ ok: false, status: 401 });
+  expect(await transcript.appendRunTranscript(rk, runId, { entries: [], endSeq: 2, final: true })).toMatchObject({ ok: true });
+
+  const page = await transcript.readRunTranscript(teamId, runId);
+  expect(page?.capture).toMatchObject({ status: "complete", entries: 2, truncated: false });
+  expect(page?.entries).toHaveLength(2);
+  expect(page?.entries[0]).toMatchObject({ kind: "agent-message", text: "Inspecting Authorization=[redacted]" });
+});
 
 /** Full stage A-C pipeline: enroll mbp, seed the weekly loop, sweep, poll -
  *  returns the delivered kernel run's rk_ token + ids. */

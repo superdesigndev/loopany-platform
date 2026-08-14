@@ -10,6 +10,8 @@ import { AgentSessionRef } from "./AgentSessionRef";
 import { ArtifactRef, MachineRef, RunRef, TaskRef } from "./ObjectRefs";
 import { LocalTime } from "./DisplayPrimitives";
 import { MarkdownDocument } from "./MarkdownDocument";
+import { RunTranscript } from "./RunTranscript";
+import { useRunTranscript } from "./useWorkspace";
 
 const TITLE = "mb-1.5 text-[18px]";
 const HEADING = "mt-7 mb-3 text-[12px] uppercase tracking-[0.02em]";
@@ -19,7 +21,7 @@ const EVENT = "border-b border-[#ddd] py-[7px]";
 export function DetailPanel({ selection, detail, data, select, teamSlug, reload, assignees }: { selection: Selection; detail: Obj | null; data: Obj; select: Select; teamSlug: string; reload: () => Promise<void>; assignees: AssigneeOption[] }) {
   if (!detail) return <Empty text="Loading detail..." />;
   if (selection.kind === "doc") return <DocumentDetail detail={detail} select={select} />;
-  if (selection.kind === "run") return <RunDetail detail={detail} data={data} select={select} />;
+  if (selection.kind === "run") return <RunDetail detail={detail} data={data} select={select} teamSlug={teamSlug} />;
   if (selection.kind === "member") return <MemberDetail detail={detail} data={data} select={select} />;
   return <TaskDetail detail={detail} data={data} selection={selection} select={select} teamSlug={teamSlug} reload={reload} assignees={assignees} />;
 }
@@ -51,8 +53,9 @@ function DocumentDetail({ detail, select }: { detail: Obj; select: Select }) {
   </div>;
 }
 
-function RunDetail({ detail, data, select }: { detail: Obj; data: Obj; select: Select }) {
+function RunDetail({ detail, data, select, teamSlug }: { detail: Obj; data: Obj; select: Select; teamSlug: string }) {
   const run = detail.run;
+  const transcript = useRunTranscript(run.id, teamSlug, ["pending", "claimed", "running"].includes(run.state));
   const profile = agentProfile(run.assignee);
   const workflowOnly = Boolean(run.workflow && !run.agentSessionId);
   const executor = workflowOnly ? "workflow" : (profile ?? "agent unknown");
@@ -74,7 +77,9 @@ function RunDetail({ detail, data, select }: { detail: Obj; data: Obj; select: S
     <div className="border-y border-[#ccc] py-3 leading-[1.55] whitespace-pre-wrap">{result ?? "No substantive result note recorded"}</div>
     <h3 className={HEADING}>Runtime</h3>
     <div className="border-y border-[#ccc] py-3 leading-[1.55]">{run.note ?? "No runtime outcome recorded"}</div>
-    <h3 className={HEADING}>Activity</h3>
+    <h3 className={HEADING}>Transcript</h3>
+    <RunTranscript value={transcript} />
+    <h3 className={HEADING}>Task changes</h3>
     <RunActivity events={detail.events ?? []} />
     <h3 className={HEADING}>Artifacts touched</h3>
     {detail.artifacts.length

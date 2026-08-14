@@ -167,7 +167,8 @@ describe("Kernel shell", () => {
     expect(aside.textContent).toContain("Artifacts touched");
     expect(aside.textContent).toContain("Run complete: no balance alerts");
     expect(aside.textContent).toContain("Runtime");
-    expect(aside.textContent).toContain("Activity");
+    expect(aside.textContent).toContain("Transcript");
+    expect(aside.textContent).toContain("Task changes");
     expect(aside.textContent).toContain("Copy resume");
     expect(aside.textContent).not.toContain("cd --");
 

@@ -27,6 +27,7 @@ import { isWithinRoots } from "./roots.js";
 import { buildAgentSpawn } from "./runner.js";
 import { execEnv, runProcess } from "./spawn.js";
 import { runWorkflow, type WorkflowRun } from "./workflow.js";
+import { createClaudeTranscriptParser, KernelTranscriptCapture, type TranscriptUploadBody } from "./kernel-transcript.js";
 
 interface WorkflowDefinition {
   format: "loopany-js-v1";
@@ -87,8 +88,9 @@ export interface KernelRunDeps {
   run: (
     bin: string,
     args: string[],
-    opts: { cwd: string; env: NodeJS.ProcessEnv; signal?: AbortSignal },
+    opts: { cwd: string; env: NodeJS.ProcessEnv; signal?: AbortSignal; onStdout?: (chunk: string) => void },
   ) => Promise<{ code: number | null; agentSessionId?: string | null }>;
+  uploadTranscript: (serverUrl: string, runToken: string, runId: string, body: TranscriptUploadBody) => Promise<void>;
   /** POST the kernel run-finish (network seam). */
   finish: (serverUrl: string, runToken: string, body: unknown) => Promise<void>;
   /** EXTRA env merged into the spawned agent (after the allowlist, before the
@@ -99,7 +101,7 @@ export interface KernelRunDeps {
   /** Backoff sleep between finish retries (timer seam - tests run instantly). */
   sleep: (ms: number) => Promise<void>;
   scratchDir: () => string;
-  /** A directory holding a `loopany-kernel` shim to PREPEND to the child PATH
+  /** A directory holding `lk` and `loopany-kernel` shims to PREPEND to the child PATH
    *  (null = none found; the agent then relies on a global install). */
   kernelBinDir: () => string | null;
   runWorkflow: (source: string, prev: unknown, cwd: string, signal?: AbortSignal) => Promise<WorkflowRun>;
@@ -118,12 +120,12 @@ export function resolveKernelCliEntry(): string | null {
 
 let cachedKernelBinDir: string | null | undefined;
 
-/** The CORE prompt (frozen server-side) instructs `loopany-kernel <verb>`, so
- *  that name MUST resolve in the spawned agent's PATH even on an npx-launched
- *  daemon with no global install. We write a one-line sh shim with ABSOLUTE
- *  node + entry paths (the PATH-clobber lesson: login shells rebuild PATH, so
- *  the shim's own content must never depend on it) into a scratch dir the
- *  caller prepends to the child PATH. Cached per process. */
+/** The CORE prompt instructs `lk <verb>`, while `loopany-kernel` remains the
+ *  compatibility binary. BOTH names must resolve to this daemon's pinned CLI
+ *  entry inside a Run. Otherwise `lk` can bypass the Run shim and silently use
+ *  a different globally installed checkout. Each shim uses ABSOLUTE node and
+ *  entry paths, so neither depends on a child shell preserving PATH. Cached per
+ *  process. */
 export function ensureKernelBinDir(): string | null {
   if (cachedKernelBinDir !== undefined) return cachedKernelBinDir;
   const entry = resolveKernelCliEntry();
@@ -133,9 +135,10 @@ export function ensureKernelBinDir(): string | null {
     return cachedKernelBinDir;
   }
   const dir = mkdtempSync(join(tmpdir(), "loopany-kernel-bin-"));
-  writeFileSync(join(dir, "loopany-kernel"), `#!/bin/sh\nexec "${process.execPath}" "${entry}" "$@"\n`, {
-    mode: 0o755,
-  });
+  const shim = `#!/bin/sh\nexec "${process.execPath}" "${entry}" "$@"\n`;
+  for (const name of ["lk", "loopany-kernel"]) {
+    writeFileSync(join(dir, name), shim, { mode: 0o755 });
+  }
   cachedKernelBinDir = dir;
   return cachedKernelBinDir;
 }
@@ -159,12 +162,21 @@ export const realKernelRunDeps: KernelRunDeps = {
       env: opts.env,
       signal: opts.signal,
       onStdout: (chunk) => {
+        opts.onStdout?.(chunk);
         if (agentSessionId) return;
         carry = (carry + chunk).slice(-4096); // bounded: the id never spans >4KB
         agentSessionId = agentSessionIdFromText(carry);
       },
     });
     return { code: res.code, agentSessionId };
+  },
+  uploadTranscript: async (serverUrl, runToken, runId, body) => {
+    const res = await boundedFetch(`${serverUrl}/api/kernel/runs/${encodeURIComponent(runId)}/transcript`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${runToken}` },
+      body: JSON.stringify(body),
+    }, 30_000);
+    if (!res.ok) throw new Error(`transcript upload HTTP ${res.status}`);
   },
   finish: async (serverUrl, runToken, body) => {
     const res = await boundedFetch(`${serverUrl}/api/kernel/cli`, {
@@ -201,12 +213,17 @@ export async function runKernelDelivery(
   signal?: AbortSignal,
   deps: KernelRunDeps = realKernelRunDeps,
 ): Promise<void> {
+  let transcript: KernelTranscriptCapture | null = null;
   const finish = async (
     outcome: "done" | "failed",
     note: string,
     agentSessionId?: string | null,
     workflow?: WorkflowRunResult,
   ) => {
+    if (transcript) {
+      transcript.append({ kind: "phase", phase: "finishing", text: outcome === "done" ? "Run completed" : `Run failed: ${note}` });
+      await transcript.finish();
+    }
     const body = {
       command: {
         op: "run-finish",
@@ -261,6 +278,8 @@ export async function runKernelDelivery(
     cwd = deps.scratchDir();
   }
 
+  transcript = new KernelTranscriptCapture((body) => deps.uploadTranscript(serverUrl, kr.runToken, kr.runId, body));
+
   // Deterministic pre-stage (`loopany-js-v1`). It may finish this Run without
   // an Agent, or collect one or more signals that are folded into the existing
   // CORE prompt before the Task's addressed Agent starts. A failure preserves
@@ -269,6 +288,7 @@ export async function runKernelDelivery(
   let workflowResult: WorkflowRunResult | undefined;
   let prompt = kr.prompt;
   if (kr.workflow) {
+    transcript.append({ kind: "phase", phase: "workflow", text: "Workflow pre-stage started" });
     if (kr.workflow.format !== "loopany-js-v1") {
       await finish("failed", `unsupported workflow format: ${String(kr.workflow.format)}`, null, {
         format: "loopany-js-v1",
@@ -280,6 +300,7 @@ export async function runKernelDelivery(
     if (!wf.ok) {
       const detail = [wf.error, wf.stderr.trim().slice(-1200)].filter(Boolean).join("\n");
       workflowResult = { format: "loopany-js-v1", outcome: "failed", message: detail };
+      transcript.append({ kind: "error", text: `Workflow failed: ${detail}` });
       const source = boundedText(kr.workflow.source, WORKFLOW_FAILURE_SOURCE_CAP);
       prompt = `${kr.prompt}\n\nWorkflow pre-stage failed. Complete the original Task, then diagnose this failure. Do not claim the workflow cursor advanced.\n\nError:\n${detail}\n\nWorkflow source:\n\`\`\`js\n${source}\n\`\`\``;
     } else {
@@ -291,10 +312,12 @@ export async function runKernelDelivery(
       };
       if (result.agentCalls.length === 0) {
         const outcome = result.message ? "direct" : "silent";
+        transcript.append({ kind: "phase", phase: "workflow", text: result.message ?? `Workflow completed (${outcome})` });
         await finish("done", result.message ?? `workflow completed (${outcome})`, null, { ...base, outcome });
         return;
       }
       workflowResult = { ...base, outcome: "escalated" };
+      transcript.append({ kind: "phase", phase: "workflow", text: "Workflow requested Agent judgment" });
       const signals = result.agentCalls
         .map((call, index) => {
           const data = call.data === undefined ? "" : `\n${JSON.stringify(call.data, null, 2)}`;
@@ -306,6 +329,7 @@ export async function runKernelDelivery(
   }
 
   const { bin, args } = buildAgentSpawn({ agent, prompt });
+  transcript.append({ kind: "phase", phase: "agent", text: `${agent} started` });
   const env: NodeJS.ProcessEnv = {
     ...execEnv(agent),
     ...(deps.agentEnv ?? {}),
@@ -324,18 +348,23 @@ export async function runKernelDelivery(
   let code: number | null;
   let agentSessionId: string | null = null;
   try {
-    let res = await deps.run(bin, args, { cwd, env, signal });
+    let parser = agent === "claude-code" ? createClaudeTranscriptParser((entry) => transcript!.append(entry)) : null;
+    let res = await deps.run(bin, args, { cwd, env, signal, ...(parser ? { onStdout: parser.feed } : {}) });
     code = res.code;
-    agentSessionId = res.agentSessionId ?? null;
+    const parsedSession = parser?.finish() ?? null;
+    agentSessionId = res.agentSessionId ?? parsedSession;
     if (code !== 0) {
       // ONE immediate retry - the cheapest transient shield (parity with the
       // local tick --spawn); a second failure reaches the kernel's re-arm ladder.
       logger.warn({ runId: kr.runId, code }, "kernel run: nonzero exit, one retry");
-      res = await deps.run(bin, args, { cwd, env, signal });
+      transcript.append({ kind: "error", text: `${agent} exited ${code}; retrying once` });
+      parser = agent === "claude-code" ? createClaudeTranscriptParser((entry) => transcript!.append(entry)) : null;
+      res = await deps.run(bin, args, { cwd, env, signal, ...(parser ? { onStdout: parser.feed } : {}) });
       code = res.code;
       // The retry is a FRESH agent session; its id names the transcript that
       // produced the final outcome, so it wins when present.
-      agentSessionId = res.agentSessionId ?? agentSessionId;
+      const retrySession = parser?.finish() ?? null;
+      agentSessionId = res.agentSessionId ?? retrySession ?? agentSessionId;
     }
   } catch (err) {
     await finish("failed", `agent spawn failed: ${err instanceof Error ? err.message : String(err)}`, null, workflowResult);
