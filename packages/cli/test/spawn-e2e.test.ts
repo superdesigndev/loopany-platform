@@ -179,8 +179,8 @@ describe("M4 local agent loop (fake-agent E2E)", () => {
     expect(report.spawned[0].outcome).toBe("done");
 
     const prompt = readFileSync(captureFile, "utf8");
-    expect(prompt).toContain("SCENARIO — a new task, first pass:");
-    expect(prompt).not.toContain("SCENARIO — handed back to you:");
+    expect(prompt).toContain("SCENARIO - a new task, first pass:");
+    expect(prompt).not.toContain("SCENARIO - handed back to you:");
   });
 
   it("a re-queued task with prior work gets the reassigned scenario (real spawn path)", () => {
@@ -212,8 +212,8 @@ describe("M4 local agent loop (fake-agent E2E)", () => {
     // Second pass: this run must see prior history → reassigned.
     call(["tick", "--spawn", "--now", "2026-08-10T11:00:00.000Z", "--json"], capEnv);
     const prompt = readFileSync(captureFile, "utf8");
-    expect(prompt).toContain("SCENARIO — handed back to you:");
-    expect(prompt).not.toContain("SCENARIO — a new task, first pass:");
+    expect(prompt).toContain("SCENARIO - handed back to you:");
+    expect(prompt).not.toContain("SCENARIO - a new task, first pass:");
   });
 
   it("a run whose assignee has no profile is left pending, never spawned", () => {

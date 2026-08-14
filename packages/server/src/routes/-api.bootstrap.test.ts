@@ -51,9 +51,9 @@ describe('/api/bootstrap', () => {
 
   test('hands decide-what-to-build off to create.md §1 (logic moved out in batch 3)', async () => {
     const body = flat(await (await GET()).text())
-    // Bootstrap points at the create reference for everything from "what should this
-    // loop be?" onward — the session-situation fork now lives in create.md §1.
-    expect(body).toContain('read the create reference')
+    // Every Task and Loop gets the same authoring floor; the detailed contract
+    // lives in create.md instead of being duplicated in bootstrap.
+    expect(body).toContain('For every Task or recurring Loop, read the create reference')
     expect(body).toContain('/api/skill/references/create.md')
   })
 })

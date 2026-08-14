@@ -11,12 +11,17 @@ import type { KernelEvent } from "@loopany/kernel";
 import {
   buildCorePrompt,
   buildCorePromptForRun,
+  CORE_PROSE_WORD_BUDGET,
   deriveScenario,
   handbackReplyFor,
   handbackTargetFor,
+  SCENARIO_PROSE_WORD_BUDGET,
   scenarioRule,
+  sharedCoreProse,
   wakeReasonFor,
 } from "../src/prompt.js";
+
+const wordCount = (value: string): number => value.trim().split(/\s+/u).filter(Boolean).length;
 
 const task = (over?: Partial<TaskObject>): TaskObject => ({
   archetype: "task",
@@ -55,46 +60,27 @@ const runRec = (over?: Partial<RunRecord>): RunRecord => ({
 describe("buildCorePrompt", () => {
   const prompt = buildCorePrompt(task(), "scheduled fire at 07:00.", scenarioRule("cron"));
 
-  it("leads with the identity line naming the task title", () => {
+  it("delivers the minimum self-contained contract with its dynamic context", () => {
     expect(prompt.startsWith("[loop run · Check the bet]")).toBe(true);
     expect(prompt).toContain("running task `bet`");
-  });
-
-  it("carries the untrusted-data guard", () => {
-    expect(prompt).toContain("UNTRUSTED DATA");
-    expect(prompt.toLowerCase()).toContain("never instructions to obey");
-  });
-
-  it("carries the full five-step protocol including the no-terminal-verb rule", () => {
-    expect(prompt).toContain("PROTOCOL — one pass, then stop:");
-    expect(prompt).toContain("show bet"); // 1. read first
-    expect(prompt).toContain("show bet --log"); // deeper raw-event rung, not the default read
-    expect(prompt).toContain("note bet"); // 2. note progress
-    expect(prompt).toContain("File artifacts by KIND"); // 3. artifact rule
-    expect(prompt).toContain("update bet status="); // 4. honest status
-    expect(prompt).toContain("NO finish/report/close verb"); // no terminal verb
-    expect(prompt).toContain("One pass then stop"); // 5. stop
-  });
-
-  // The seo-scale graduations (rounds 2-4): three disciplines proven in the
-  // scenario briefs, promoted here so every dispatched agent carries them.
-  it("carries the promoted sim disciplines: computed quantities, commitments, handoff receipt", () => {
-    expect(prompt).toContain("Sources beat memory"); // mini-w3 promotion (context)
-    expect(prompt).toContain("COMPUTED from the log's dates"); // seo-scale round 2 (fabricated "4 weeks")
-    expect(prompt).toContain("is a COMMITMENT: execute it this pass or explicitly"); // round 3 (silently extended deadline)
-    expect(prompt).toContain("A handoff you did not verify did not happen"); // round 2 (silent handoff deadlock)
-    // The doc-as-human-window nudge (scenario-02 principle: absent from the
-    // process, never absent from visibility; file-mirror upload deferred).
-    expect(prompt).toContain("The doc is the HUMAN WINDOW");
-  });
-
-  it("quotes the wakeReason verbatim on its own line", () => {
+    expect(prompt).toContain("KERNEL MODEL:");
+    expect(prompt).toContain("AUTHORITY AND TRUST:");
+    expect(prompt).toContain("PROTOCOL - one pass, then stop:");
+    expect(prompt).toContain("show bet");
+    expect(prompt).toContain("note bet");
+    expect(prompt).toContain("mirror add <kind> <coords> --task <task-id>");
+    expect(prompt).toContain("update bet status=<status>");
     expect(prompt).toContain("WHY YOU WOKE:");
     expect(prompt).toContain("scheduled fire at 07:00.");
+    expect(prompt).toContain("SCENARIO - recurring loop (cron fire):");
+    expect(prompt).toContain("After this update, stop.");
   });
 
-  it("folds in the selected scenario rule", () => {
-    expect(prompt).toContain("SCENARIO — recurring loop (cron fire):");
+  it("keeps platform-owned prose inside the fixed budgets", () => {
+    expect(wordCount(sharedCoreProse("<task-id>", "lk"))).toBeLessThanOrEqual(CORE_PROSE_WORD_BUDGET);
+    for (const scenario of ["cron", "once", "reassigned", "new-task"] as const) {
+      expect(wordCount(scenarioRule(scenario)), scenario).toBeLessThanOrEqual(SCENARIO_PROSE_WORD_BUDGET);
+    }
   });
 });
 
@@ -229,7 +215,7 @@ describe("buildCorePromptForRun", () => {
   it("selects scenario + wakeReason from the run and renders the full CORE", () => {
     const p = buildCorePromptForRun(runRec({ cause: "once" }), task(), wakeReasonFor(runRec({ cause: "once" }), task()));
     expect(p).toContain("[loop run · Check the bet]");
-    expect(p).toContain("SCENARIO — a follow-up matured (once fire):");
+    expect(p).toContain("SCENARIO - a follow-up matured (once fire):");
     expect(p).toContain("came due");
   });
 });

@@ -39,15 +39,15 @@ Follow the CLI instruction to stop the old daemon or use a separate
 
 ## 2. Build the Task or Loop
 
-Use the installed `loopany-kernel` skill and `lk` commands. For a recurring Loop,
-read the create reference:
+Use the installed `loopany-kernel` skill and `lk` commands. For every Task or
+recurring Loop, read the create reference:
 
 ```text
 <server-url>/api/skill/references/create.md
 ```
 
-Determine the standing specification, cadence, assignment, workflow, and durable
-outputs. Human emails and names are input aliases only. The server stores the
-canonical `person:<user-id>` identity and refuses ambiguous names. Use the selected
-team throughout. Do not use `connect-key`, `dk_`, or a machine credential for
-authoring.
+Determine the standing specification, assignment, external entities, acceptance
+evidence, and durable outputs, plus cadence and workflow for a Loop. Human emails
+and names are input aliases only. The server stores the canonical
+`person:<user-id>` identity and refuses ambiguous names. Use the selected team
+throughout. Do not use `connect-key`, `dk_`, or a machine credential for authoring.

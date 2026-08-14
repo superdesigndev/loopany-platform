@@ -47,6 +47,9 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('the cadence and IANA timezone')
     expect(body).toContain('the durable outputs')
     expect(body).toContain('the finish line when the work is goal-bound')
+    expect(body).toContain('observable evidence that proves the work is complete')
+    expect(body).toContain('lk mirror add <kind> <coords> --task <task-id>')
+    expect(body).toContain('most specific Task that owns that case')
   })
 
   test('create.md §1 owns decide-what-to-build (moved from bootstrap in batch 3)', async () => {

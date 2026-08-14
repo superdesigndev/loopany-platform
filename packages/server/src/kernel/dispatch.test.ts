@@ -118,7 +118,7 @@ test("a pending kernel run rides the poll as a claimed kernelRuns delivery, exac
   expect(String(kr.runToken)).toMatch(/^rk_/);
   // The server-built CORE prompt is the agent's whole first user turn.
   expect(String(kr.prompt)).toContain("[loop run · seo bet manager]");
-  expect(String(kr.prompt)).toContain("SCENARIO — recurring loop (cron fire):");
+  expect(String(kr.prompt)).toContain("SCENARIO - recurring loop (cron fire):");
 
   // The kernel run was CLAIMED: running, sessionId captured.
   const snap = await kstore.readSnapshot(teamId);
