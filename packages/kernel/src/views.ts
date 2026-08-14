@@ -16,6 +16,7 @@ import {
   isTerminal,
 } from "./types.js";
 import { timelineView, type TimelineItem } from "./timeline.js";
+import { taskExecutionMachine } from "./affinity.js";
 
 function tasks(snapshot: Snapshot): TaskObject[] {
   return Object.values(snapshot.objects).filter((o): o is TaskObject => o.archetype === "task");
@@ -218,6 +219,8 @@ export function runArtifactsView(
 
 export interface TaskDetail {
   task: TaskObject;
+  /** Derived execution home for machine-local work. Null means portable. */
+  executionMachine: string | null;
   /** The task's ARTIFACTS, resolved from `tracks` (first - the shepherd
    *  reference) then `refs`, in that order: the latest key doc/mirror is
    *  findable WITHOUT reading raw events. Ids that resolve to tasks (or to
@@ -280,7 +283,7 @@ export function taskDetailView(
   const settled = runs.filter((r) => !ACTIVE_RUN_STATES.includes(r.state));
   const lastRun = settled.length > 0 ? settled.reduce((a, b) => (a.createdAt > b.createdAt ? a : b)) : null;
   const recent = events ? timelineView(snapshot, events, { taskId: id, limit: options?.recentLimit ?? 8 }) : [];
-  return { task, artifacts, children, activeRun, lastRun, recent };
+  return { task, executionMachine: taskExecutionMachine(snapshot, task), artifacts, children, activeRun, lastRun, recent };
 }
 
 export function sortTasksForList(list: TaskObject[]): TaskObject[] {

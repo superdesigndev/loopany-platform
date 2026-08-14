@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AssigneePicker, type AssigneeOption } from "./AssigneePicker";
 import type { Obj } from "./model";
 import { button, BUTTON_DISABLED, cx, ERROR, FIELD } from "./styles";
@@ -12,13 +12,16 @@ const ROW = "grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-[7px] p-[
 /** The two write surfaces on a Task: set its status, or hand it to a person or
  *  an Agent. Both post the same Kernel command envelope. */
 export function TaskActions({ task, teamSlug, reload, assignees }: { task: Obj; teamSlug: string; reload: () => Promise<void>; assignees: AssigneeOption[] }) {
+  const handoffOptions = useMemo(() => task.executionMachine
+    ? assignees.filter((option) => option.kind === "person" || option.value.startsWith(`${task.executionMachine}/`))
+    : assignees, [assignees, task.executionMachine]);
   const [note, setNote] = useState("");
-  const [assignee, setAssignee] = useState(assignees.some((option) => option.value === task.assignee) ? task.assignee : "");
+  const [assignee, setAssignee] = useState(handoffOptions.some((option) => option.value === task.assignee) ? task.assignee : "");
   const [status, setStatus] = useState(task.status);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => setStatus(task.status), [task.status]);
-  useEffect(() => { if (assignee && !assignees.some((option) => option.value === assignee)) setAssignee(""); }, [assignees, assignee]);
+  useEffect(() => { if (assignee && !handoffOptions.some((option) => option.value === assignee)) setAssignee(""); }, [handoffOptions, assignee]);
 
   async function send(command: Obj) {
     setBusy(true); setError("");
@@ -48,7 +51,7 @@ export function TaskActions({ task, teamSlug, reload, assignees }: { task: Obj; 
     <div className="border-t border-[#bbb] p-[9px]">
       <label className="flex flex-col gap-[3px]" htmlFor={`handoff-${task.id}`}>
         <strong>Hand off</strong>
-        <span className={CONTROL_HINT}>{assignee.startsWith("person:") ? "This sends the Task to the person's Inbox." : "Choosing an Agent sets the Task to todo and starts an assignment Run."}</span>
+        <span className={CONTROL_HINT}>{assignee.startsWith("person:") ? "This sends the Task to the person's Inbox." : task.executionMachine ? `Agent execution stays on ${task.executionMachine}, where this Task's workdir lives.` : "Choosing an Agent sets the Task to todo and starts an assignment Run."}</span>
       </label>
       <textarea
         id={`handoff-${task.id}`}
@@ -59,7 +62,7 @@ export function TaskActions({ task, teamSlug, reload, assignees }: { task: Obj; 
         onChange={(event) => setNote(event.target.value)}
       />
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-[7px] pt-[7px]">
-        <AssigneePicker className={FIELD} value={assignee} options={assignees} disabled={busy} onChange={setAssignee} />
+        <AssigneePicker className={FIELD} value={assignee} options={handoffOptions} disabled={busy} onChange={setAssignee} />
         <button
           className={cx(button("primary"), BUTTON_DISABLED)}
           disabled={busy || !note.trim() || !assignee}

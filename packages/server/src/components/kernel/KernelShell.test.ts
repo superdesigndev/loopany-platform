@@ -22,7 +22,7 @@ vi.mock("@tanstack/react-router", () => ({
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const task = { id: "task-1", title: "Ship it", status: "todo", assignee: "stone-mbp/codex", version: 3, body: "spec", workdir: "/tmp", priority: "P1", owner: "person:1", goal: null, workflow: null };
+const task = { id: "task-1", title: "Ship it", status: "todo", assignee: "stone-mbp/codex", version: 3, body: "spec", workdir: "/tmp", executionMachine: "stone-mbp", priority: "P1", owner: "person:1", goal: null, workflow: null };
 const run = { id: "run-1", state: "running", taskId: "task-1", cause: "assignment", assignee: "stone-mbp/codex", createdAt: "2026-08-13T00:00:00.000Z", workflow: null, agentSessionId: "sess-1", note: null };
 const workflowRun = { id: "run-workflow", state: "done", taskId: "task-1", cause: "cron", assignee: "stone-mbp/claude", createdAt: "2026-08-13T00:30:00.000Z", workflow: { format: "loopany-js-v1", outcome: "direct", message: "All providers are healthy" }, agentSessionId: null, note: "All providers are healthy" };
 const doc = { id: "doc-1", key: "notes", title: "Notes", version: 2, updatedAt: "2026-08-13T00:00:00.000Z", body: "hello" };
@@ -33,7 +33,10 @@ const workspace = {
   me: { email: "tim@example.com" },
   members: [{ id: "1", email: "tim@example.com", name: "Tim", role: "owner" }],
   machines: [{ id: "m1", name: "stone-mbp", alias: null, platform: "darwin", online: true, mine: true, enrolledBy: "1", agentProfiles: ["codex"] }],
-  agentAddresses: [{ address: "stone-mbp/codex", availability: "available", lastSucceededAt: null }],
+  agentAddresses: [
+    { address: "stone-mbp/codex", availability: "available", lastSucceededAt: null },
+    { address: "other-mbp/claude", availability: "available", lastSucceededAt: null },
+  ],
   inbox: [{ task, reason: "assigned" }],
   tasks: [task, { ...task, id: "task-2", status: "done", title: "Old" }],
   tree: [{ task, children: [{ task: { ...task, id: "task-3", title: "Child", assignee: "person:1" }, children: [] }] }],
@@ -177,6 +180,15 @@ describe("Kernel shell", () => {
     const aside = host!.querySelector("aside")!;
     expect(aside.textContent).toContain("Workflow · direct");
     expect(aside.textContent).toContain("All providers are healthy");
+  });
+
+  it("only offers Agents on the Task's derived execution Machine", async () => {
+    await render("tasks", { kind: "task", id: "task-1" });
+    const picker = host!.querySelector<HTMLSelectElement>('select[aria-label="Assignee"]')!;
+    const values = [...picker.options].map((option) => option.value);
+    expect(values).toContain("stone-mbp/codex");
+    expect(values).not.toContain("other-mbp/claude");
+    expect(values).toContain("person:1");
   });
 
   it("resizes and remembers the desktop detail pane", async () => {

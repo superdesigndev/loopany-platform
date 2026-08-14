@@ -77,7 +77,7 @@ async function deliveredRun(taskId = "seo-bet-manager") {
 
   const { decide } = await import("@loopany/kernel");
   const d = decide(
-    { op: "create", title: "seo bet manager", id: taskId, cron: "0 7 * * 1", timezone: "UTC", status: "in-progress", assignee: "mbp/claude" },
+    { op: "create", title: "seo bet manager", id: taskId, cron: "0 7 * * 1", timezone: "UTC", status: "in-progress", assignee: "mbp/claude", owner: "person:u1", workdir: "/work/seo" },
     await kstore.readSnapshot(teamId),
     OWNER,
     T0,
@@ -102,6 +102,25 @@ test("an rk_ kernel lease writes with RUN provenance; cross-task writes allowed;
     command: { op: "create", title: "bet: ai design agent", id: "bet-a" },
   });
   expect(create.status).toBe(200);
+
+  // Run-created work is a real child by default and keeps the source Task's
+  // human owner + machine-local execution context.
+  const created = (await kstore.readSnapshot(teamId)).objects["bet-a"];
+  expect(created).toMatchObject({
+    archetype: "task",
+    parent: "seo-bet-manager",
+    owner: "person:u1",
+    workdir: "/work/seo",
+    assignee: null,
+  });
+
+  // A person handoff remains valid, but a coding-agent target on another
+  // Machine is rejected at the authority rather than failing much later at spawn.
+  const crossMachine = await kgateway.kernelCli(rk, {
+    command: { op: "update", id: "bet-a", patch: { assignee: "other-mbp/codex", status: "todo" }, ifVersion: 1 },
+  });
+  expect(crossMachine.status).toBe(422);
+  expect(crossMachine.body.refusal?.message).toContain('belongs to machine "mbp"');
 
   // Every event carries the RUN's provenance, not a human actor.
   const events = await kstore.readEvents(teamId);

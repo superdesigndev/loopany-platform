@@ -10,6 +10,7 @@ import {
   type LoopRow,
   slugify,
   taskDetailView,
+  taskExecutionMachine,
   type TimelineItem,
   type InboxItem,
   type KernelEvent,
@@ -47,14 +48,16 @@ export function renderNotices(notices: readonly string[]): string {
 
 // ---- objects ----
 
-function fieldLines(obj: KernelObject): string[] {
+function fieldLines(obj: KernelObject, snapshot: Snapshot): string[] {
   if (obj.archetype === "task") {
     const t = obj;
+    const executionMachine = taskExecutionMachine(snapshot, t);
     const lines = [`task ${t.id}  [${t.status}]  v${t.version}`, t.title];
     const routing = [
       ...(t.owner ? [`  owner: ${t.owner}`] : []),
       ...(t.assignee ? [`  assignee: ${t.assignee}`] : []),
       ...(t.workdir ? [`  workdir: ${t.workdir}`] : []),
+      ...(executionMachine ? [`  execution machine: ${executionMachine}`] : []),
     ];
     if (routing.length > 0) lines.push("", "routing:", ...routing);
     const metadata = [
@@ -99,7 +102,7 @@ export function renderShow(
   machinePresence: Readonly<Record<string, string>> = {},
   contextEvents: readonly KernelEvent[] | null = null,
 ): string {
-  const parts: string[] = [fieldLines(obj).join("\n")];
+  const parts: string[] = [fieldLines(obj, snapshot).join("\n")];
   // A task's live schedule + run pair + artifacts + children belong in `show`.
   // This is the Task Detail projection: the latest
   // key doc/mirror is findable here, never by reading raw events.

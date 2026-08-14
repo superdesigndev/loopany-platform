@@ -33,6 +33,9 @@ const EXPECTED = [
   "emptySnapshot",
   "emptyWorld",
   "eventId",
+  // Machine affinity is derived from Task tree + Run history, never persisted
+  // as a second Task.machineId truth. Web and authority share these helpers.
+  "executionAddressMachine",
   // foldChangeset / foldToWorld are intentionally NOT public — the
   // unconditional folds are internal + test only (A1). tests import them from
   // ../src/apply.js directly. A driver bypassing CAS via a public fold would
@@ -53,6 +56,7 @@ const EXPECTED = [
   "sortTasksForList",
   // taskDetailView: artifacts from tracks+refs, children, active/last run.
   "taskDetailView",
+  "taskExecutionMachine",
   "tick",
   // timelineView: the kernel-team-timeline projection (2026-08-11) - one
   // shared derivation for CLI + server endpoint + future web surfaces.

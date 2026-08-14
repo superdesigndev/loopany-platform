@@ -53,6 +53,7 @@ export { checkInvariants, type Violation } from "./invariants.js";
 // two different ways. Pure string derivation, zero I/O.
 export { cronText } from "./format.js";
 export { projectOperationalContext, type OperationalContext } from "./operational.js";
+export { executionAddressMachine, taskExecutionMachine } from "./affinity.js";
 export {
   slugify,
   shortHash,

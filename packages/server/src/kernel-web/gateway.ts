@@ -95,7 +95,11 @@ export async function taskDetail(teamId: string, id: string) {
   const recentWindow = taskDetailView(snapshot, id, events, { recentLimit: 51 });
   const detail = recentWindow ? { ...recentWindow, recent: recentWindow.recent.slice(0, 50), recentHasMore: recentWindow.recent.length > 50 } : null;
   if (!detail) throw new KernelWebError(404, "Task not found");
-  return { ...detail, runs: snapshot.runs.filter((r) => r.taskId === id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
+  return {
+    ...detail,
+    task: { ...detail.task, executionMachine: detail.executionMachine },
+    runs: snapshot.runs.filter((r) => r.taskId === id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  };
 }
 
 export async function docDetail(teamId: string, id: string) {

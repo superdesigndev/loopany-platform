@@ -51,6 +51,7 @@ import {
 } from "./types.js";
 import { cronTriggerId, eventId, mirrorId, onceTriggerId, runId, slugify } from "./ids.js";
 import { validateWorkflowDefinition } from "./workflow.js";
+import { executionAddressMachine, taskExecutionMachine } from "./affinity.js";
 
 const PARENT_MAX_HOPS = 64;
 
@@ -568,20 +569,26 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
     if (bad) return bad;
   }
 
+  const sourceRun = actor.entrance === "agent-run" ? snapshot.runs.find((run) => run.id === actor.actorId) : undefined;
+  const sourceTask = sourceRun ? getTask(snapshot, sourceRun.taskId) : undefined;
+  // An explicit parent is an explicit scope transfer, so inherit its execution
+  // context rather than the Run's source Task. Without one, a Run-created Task
+  // becomes a child of the source Task and inherits from that same source.
+  const parentTask = cmd.parent ? getTask(snapshot, cmd.parent) : sourceTask;
   const task: TaskObject = {
     archetype: "task",
     id,
     title: cmd.title,
     status,
     assignee: cmd.assignee ?? null,
-    owner: cmd.owner ?? null,
+    owner: cmd.owner ?? parentTask?.owner ?? null,
     priority: cmd.priority ?? null,
     type: cmd.type ?? null,
-    parent: cmd.parent ?? null,
+    parent: cmd.parent ?? sourceTask?.id ?? null,
     tracks: cmd.tracks ?? null,
     refs: cmd.refs ?? [],
     followUpAt: status === "follow-up" ? (cmd.followUpAt as string) : null,
-    workdir: cmd.workdir ?? null,
+    workdir: cmd.workdir ?? parentTask?.workdir ?? null,
     goal: cmd.goal ?? null,
     workflow: workflow ? workflow.value : null,
     body: cmd.body ?? "",
@@ -595,6 +602,13 @@ function decideCreate(cmd: CreateCommand, ctx: Ctx): Decision {
     return issues.some((i) => i.includes("cycle"))
       ? refuse("PARENT_CYCLE", "parent would create a cycle", { issues })
       : refuse("INVALID_REFERENCE", "invalid references", { issues });
+  }
+  const requestedMachine = executionAddressMachine(task.assignee);
+  const homeMachine = taskExecutionMachine(snapshot, { ...task, assignee: null });
+  if (requestedMachine && homeMachine && requestedMachine !== homeMachine) {
+    return refuse("INVALID_REFERENCE", `task "${task.id}" belongs to machine "${homeMachine}" through its workdir and Task tree; cannot assign it to "${requestedMachine}"`, {
+      hint: `choose ${homeMachine}/<agent>, assign a person, or explicitly remove the machine-local workdir`,
+    });
   }
 
   const cs = emptyChangeset();
@@ -749,6 +763,13 @@ function decideUpdate(cmd: UpdateCommand, ctx: Ctx): Decision {
     return issues.some((i) => i.includes("cycle"))
       ? refuse("PARENT_CYCLE", "parent would create a cycle", { issues })
       : refuse("INVALID_REFERENCE", "invalid references", { issues });
+  }
+  const requestedMachine = executionAddressMachine(after.assignee);
+  const homeMachine = taskExecutionMachine(snapshot, { ...after, assignee: before.assignee });
+  if (requestedMachine && homeMachine && requestedMachine !== homeMachine) {
+    return refuse("INVALID_REFERENCE", `task "${after.id}" belongs to machine "${homeMachine}" through its workdir and Task tree; cannot assign it to "${requestedMachine}"`, {
+      hint: `choose ${homeMachine}/<agent>, assign a person, or explicitly remove the machine-local workdir`,
+    });
   }
 
   // ---- resolve the cron intent (a timezone-only update re-derives the cron
