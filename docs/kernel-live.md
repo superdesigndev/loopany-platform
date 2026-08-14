@@ -2,22 +2,24 @@
 
 团队共用的 kernel 任务环境：**服务器管状态和时钟，执行发生在每个人自己的机器上**。
 你在服务器上创建 task / loop 并指派给某台机器的 agent；那台机器上的 daemon 领取任务、
-拉起真实的 Claude Code 会话完成工作、把结果写回服务器。所有人看同一份任务树。
+拉起真实的 coding agent 会话完成工作、把结果写回服务器。所有人看同一份任务树。
 
 - 服务器：`https://loopany-kernel-live.fly.dev`（真实时钟，cron 每 30s 扫描；数据持久化）
 - 模型：task（一次性/审批）、loop（cron 循环）、run（一次执行）、事件流全程可审计
-- 执行：BYOA —— 任务指派到 `<机器别名>/claude`，就在那台机器上跑真实 agent
+- 执行：BYOA —— 任务指派到 `<机器别名>/<agent>`，就在那台机器上跑真实 agent
+- 接入需要**设备码登录 + workspace 成员身份**，自造 token 不再能注册
 
-> **安全边界（重要）**：当前是 open mode —— 知道 URL 的任何人都能自注册进同一个共享
-> 空间，且 URL 公网可达。**当作低信任沙盒用：task 正文 / note / 产物里不要放任何
-> 密钥、内网信息、隐私。** 收紧到 GitHub 登录门是二阶段（见文末）。
+> **信任边界**：登录门已经生效，但一个 workspace 内是**完全共享**的 —— 所有成员都能看到
+> 彼此的 task 正文、note、事件流和产物，也能把任务指派到你的机器上执行。**不要在
+> task 正文 / note / 产物里放密钥、内网信息或隐私。**
 
 ---
 
 ## 1. 前提
 
 - Node.js ≥ 20
-- Claude Code 已安装并登录（`claude` 命令可用）—— agent 会话用的就是它
+- 至少一个 coding agent 已安装并登录，`claude` / `codex` / `grok` 命令可用 ——
+  daemon 会自动探测 PATH 上有哪几个，并把它们作为可指派的 agent 上报给服务器
 - 本仓库的 `fm/kernel-cli` 分支 checkout
 
 ## 2. 安装（一次）
@@ -25,78 +27,126 @@
 ```bash
 git clone git@github.com:superdesigndev/loopany-platform.git && cd loopany-platform
 git checkout fm/kernel-cli
-bash scripts/install-daemon.sh     # 全局装 loopany daemon
-bash scripts/install-kernel-cli.sh # 内测期：lk 直接指向本 checkout 源码
+bash scripts/install-daemon.sh     # 全局装 loopany daemon（正式环境用的那个）
+bash scripts/install-kernel-cli.sh # 内测期：lk / lk-runtime 直接指向本 checkout 源码
 ```
 
-安装脚本只替换全局可执行文件，不会主动停止一个已经运行的 daemon；真正决定 daemon
-连接哪个环境的是下面的 `LOOPANY_HOME`。内测期间 `lk` 直接读当前 checkout，切分支或
-修改源码会立即改变它的行为。
+第二个脚本装三个可执行文件：
 
-## 3. 接入这台机器（token 从哪来）
+| 命令 | 作用 |
+|---|---|
+| `lk`（`loopany-kernel` 的软链） | kernel CLI，日常都用它 |
+| `lk-runtime` | kernel-live 的 **daemon 半边**，`up` / `status` / `down` 都走它 |
+| `loopany` | 由第一个脚本安装，**属于正式环境，本文档不会用到它** |
 
-open mode 下 **token 是你自己造的**：一段 `dk_` 前缀随机串就是这台机器的身份凭证
-（服务器用它的哈希派生机器 id，首次 poll 即注册）。造一次、传给 `loopany up`，之后
-它保存在 `$LOOPANY_HOME/device-token`（0600），重启复用，不需要再管。
+内测期间 `lk` 直接读当前 checkout，切分支或修改源码会立即改变它的行为，不需要重新安装。
 
-### 先隔离正式环境（必须）
+### 为什么会多一个 `lk-runtime`
 
-kernel-live 使用独立 home。它把 device token、server URL、daemon pid、日志以及 `lk`
-的远端凭证一起放在 `~/.loopany-kernel-live`，不会读取或改写正式环境默认使用的
-`~/.loopany`：
+kernel CLI 和 daemon **共用一个凭证目录**（`server-url`、机器密钥、pid、日志都在同一个
+home 里），这是设计如此。所以有两件事必须钉死，脚本已经把它们烤进 wrapper，你不需要在
+每个 shell 里 export：
+
+1. **独立的 home**：`lk` 和 `lk-runtime` 默认使用 `~/.loopany-kernel-live`，**不碰正式环境
+   的 `~/.loopany`**。没有这层隔离，一次 `lk setup` 就会把正式环境的 server URL 和机器
+   密钥就地改写，让你线上的 daemon 指向错误的环境。
+2. **runtime 指向本 checkout**：`lk setup` 注册机器时要调一个 runtime 二进制。它先找发布
+   版布局里紧挨着 launcher 的 `cli.js`，源码安装下找不到，就会回退到 PATH 上的裸
+   `loopany` —— 那可能是另一个更旧的 checkout，既不认识 `--runtime-only` 也没有 `mk_`
+   注册逻辑，结果是卡在 `starting daemon…` 一路 401。
+
+两个默认值都是 `${VAR:-default}` 形式，显式设置环境变量仍然优先。
+
+## 3. 接入这台机器（一条命令）
 
 ```bash
-export LOOPANY_HOME="$HOME/.loopany-kernel-live"
-export LOOPANY_MACHINE_ALIAS=<你的名字>-<机器名>    # 例如 tim-mbp；团队内保持唯一且稳定
+lk setup /<workspace> --server https://loopany-kernel-live.fly.dev
 ```
 
-以上两个变量必须出现在每个操作 kernel-live 的 shell 中。建议写进项目专用的
-`.envrc` 或 shell function，**不要全局写进 `~/.zshrc`**，否则日常 `loopany` 命令也会
-默认切到测试环境。
+它一次做完四件事：设备码登录 → 注册这台机器 → 启动 daemon → 绑定 workspace。
 
-确认当前 shell 指向隔离 home 后，首次连接并启动 daemon：
+```
+Open https://loopany-kernel-live.fly.dev/device?user_code=XXXXXXXX
+Code: XXXXXXXX
+Waiting for approval...
+starting daemon…
+daemon online — this machine is connected (Your-Machine)
+Ready
+Signed in as you@superdesign.dev
+Machine: Your-Machine
+Workspace: /<workspace>
+Daemon: running
+```
+
+- 浏览器打开那个 URL 批准设备码，命令会自己继续。
+- `--server` 只有**首次**需要；之后 `lk setup /另一个空间` 会复用已有会话。换服务器会自动
+  清掉旧会话要求重新登录。
+- 不是该 workspace 的成员会直接报 `you are not a member of /<workspace>` —— 找管理员把你
+  加进去，不要换个名字重试。
+- 如果服务器上已经有一台 **hostname 相同**的机器，会问你 `Reclaim it? [y/N]`：接管旧身份
+  选 y，注册成新机器选 n。非交互环境（脚本/CI）必须显式给 `--reclaim` 或 `--new`。
+
+机器密钥是 `mk_` 前缀，由你的登录会话换取，存在 `~/.loopany-kernel-live/machine.json`
+（0600）。**它等于这台机器的完全控制权**，别提交、别贴到聊天里。遗留的 `dk_` 自造 token
+不再被 daemon 采信。
+
+### 机器别名
+
+别名是任务路由的地址（`<别名>/claude` 里的前半段），默认取**短主机名**（`mbp.local` → `mbp`）。
+想自定义就在启动 daemon 的环境里设 `LOOPANY_MACHINE_ALIAS`，daemon 每次 poll 都会上报它：
 
 ```bash
-loopany up \
-  --server-url https://loopany-kernel-live.fly.dev \
-  --connect-key "dk_$(openssl rand -hex 24)"
-
-loopany status
+LOOPANY_MACHINE_ALIAS=tim-mbp lk-runtime up
 ```
 
-- `loopany up` 是幂等的：daemon 未运行时后台启动；已运行时只确认状态。
-- daemon 必须保持运行，才能 claim 指派给本机的 pending run 并启动 Claude Code。
-  服务器负责铸 run，但不会执行 agent；daemon 停止期间 run 只会排队，不会丢失。
-- `loopany status` 查看这个隔离 home 的 daemon、server 和连接状态；日志在
-  `$LOOPANY_HOME/daemon.log`。
-- `loopany down` 只停止当前 `LOOPANY_HOME` 的 daemon。先确认变量，避免误停正式环境。
-- **token = 机器的完全控制权**，别提交、别贴到聊天里。
+别名在**同一个 workspace 内唯一**：注册时如果撞名，服务器会自动追加一段机器 id 片段
+（`mbp` → `mbp-3f9a2c`），所以撞名不会失败，但你会得到一个不好记的地址。**定下来就别改**，
+任务指派靠它路由；`lk team` 显示的永远是当前真实地址，以它为准。
 
-正式环境与 kernel-live 可以同时运行两个 daemon，因为 pidfile 和身份目录不同。分别检查：
+### 管理 kernel-live 的 daemon
+
+一律用 `lk-runtime`，它已经钉住隔离 home，所以永远不会碰到正式环境：
 
 ```bash
-env -u LOOPANY_HOME loopany status
-LOOPANY_HOME="$HOME/.loopany-kernel-live" loopany status
+lk-runtime status   # daemon 是否在跑、连的哪个 server
+lk-runtime up       # 幂等：没跑就后台起，跑着就只确认状态
+lk-runtime down     # 只停 kernel-live 这个 daemon
 ```
 
-## 4. 绑定 CLI（在任何目录使用 lk）
-
-`loopany up` 和 `lk` 共用当前 `LOOPANY_HOME` 里的 `server-url` 与 `device-token`，因此
-不需要再执行一次 `lk connect`。先确认当前 shell 仍有隔离变量，然后直接读取：
+正式环境依旧用裸 `loopany status` / `loopany down`，两个 daemon 因为 home 和 pidfile 不同
+可以同时运行，互不干扰。日志分别在各自 home 的 `daemon.log`：
 
 ```bash
-export LOOPANY_HOME="$HOME/.loopany-kernel-live"
-lk list
+tail -f ~/.loopany-kernel-live/daemon.log
 ```
 
-CLI 优先级：环境变量 > 当前目录的 `.loopany` 工作区 > 当前 home 的远端绑定。站在
-某个本地 workspace 里想强制访问 kernel-live，命令加 `--remote`。不要在未设置隔离
-home 时运行 `lk connect` 指向 kernel-live，它会覆盖正式环境使用的共享凭证文件。
+daemon 必须保持运行，才能 claim 指派给本机的 pending run 并拉起 agent。服务器负责铸 run，
+但不会执行 agent；daemon 停止期间 run 只会排队，不会丢失（笔记本合盖不丢任务）。
+
+## 4. 确认身份和空间
+
+```bash
+lk me      # 当前登录的人 + 选中的 team
+lk team    # 空间里的人（person:<id>）和可执行的 agent 地址
+lk logout  # 只撤销 CLI 会话，机器注册不受影响
+```
+
+`lk team` 的 Agents 一栏就是**所有可以写进 `--assignee` 的地址**，例如：
+
+```
+Agents
+  tim-mbp/claude     available  last-success 2026-08-14T01:30:15.655Z
+  tim-mbp/codex      available
+  alice-mba/claude   available
+```
+
+CLI 解析顺序：环境变量 > 当前目录的 `.loopany` 工作区 > 当前 home 的远端绑定。站在某个
+本地 workspace 里想强制访问 kernel-live，命令加 `--remote`。
 
 ## 5. 日常使用
 
 ```bash
-# 一次性任务，指派到自己机器的 agent（<别名>/claude）
+# 一次性任务，指派到自己机器的 agent
 lk create "调研 X 方案" --id research-x --assignee tim-mbp/claude \
   --workdir /Users/tim/Workspace/proj --body-file brief.md
 
@@ -110,8 +160,11 @@ lk update research-x assignee=alice-mba/claude
 # 交给人决策（email = 人，进对方 inbox，不会派发 agent）
 lk update research-x assignee=alice@superdesign.dev --note "两个方案你选一个"
 
+# 手动跑一轮（不等 cron）
+lk run release-radar
+
 # 观察
-loopany status       # daemon 必须 online；否则 run 会停在 pending
+lk-runtime status    # daemon 必须 online；否则 run 会停在 pending
 lk kanban            # 交互式看板（q 退出，/ 搜索，f 切换列）
 lk list              # 任务树
 lk show research-x --log   # 单任务全事件流
@@ -119,6 +172,17 @@ lk timeline          # 团队最近动态
 lk inbox --assignee alice@superdesign.dev   # 某人的决策收件箱（附交还命令）
 lk loops             # 所有 loop：下次触发、上次结果、卡住原因
 ```
+
+要点：
+
+- **task 的 body 就是 agent 的任务书**（`--body-file`），写清楚做什么、边界、怎样算完成。
+- `--workdir` 必须是**目标机器上存在的绝对路径**（agent 在那里工作）；不存在会 fail loud。
+- 指派了 agent 的 task 创建即派发一次；loop 按 cron 触发；给人的（email）只进 inbox。
+- 机器别名或 agent 名写错不会报错 —— run 会 pending，task 上出现一条 "dispatch blocked"
+  note，**里面列出本空间所有可用地址**，改一下 assignee 即可。
+- agent 静默退出不算成功：没有留下任何事件的 "done" 会被服务器改判 failed（协议要求
+  每轮至少留一条诚实 note）。连续失败会自动 park，不会无限重试烧钱。
+- 谁的机器执行，消耗谁机器上的 coding agent 账号额度。
 
 ### 可选 Workflow 前置阶段
 
@@ -139,36 +203,15 @@ lk workflow clear release-radar --if-version 2
 整个 Workflow 默认最多运行 180 秒，可通过 daemon 的
 `LOOPANY_WORKFLOW_TIMEOUT_SECONDS` 调整；单次 `tools.call` 仍默认最多 30 秒。
 
-要点：
-
-- **task 的 body 就是 agent 的任务书**（`--body-file`），写清楚做什么、边界、怎样算完成。
-- `--workdir` 必须是**目标机器上存在的绝对路径**（agent 在那里工作）；不存在会 fail loud。
-- 指派了 agent 的 task 创建即派发一次；loop 按 cron 触发；给人的（email）只进 inbox。
-- 机器别名写错不会报错——run 会 pending，task 上出现一条 "dispatch blocked" note，
-  **里面列出本空间所有可用别名**，改一下 assignee 即可。
-- agent 静默退出不算成功：没有留下任何事件的 "done" 会被服务器改判 failed（协议要求
-  每轮至少留一条诚实 note）。连续失败会自动 park，不会无限重试烧钱。
-
-## 6. 多机协作规则
-
-- 全员一个共享空间：所有 task / 事件互相可见（这也是特性——直接把任务丢给同事的机器）。
-- 别名在空间内唯一：重名会自动加 `-2` 后缀；`LOOPANY_MACHINE_ALIAS` 定下来就别改，
-  任务指派靠它路由。
-- 谁的机器执行，消耗谁机器上的 Claude 账号额度；daemon 掉线时任务会排队等它回来
-  （笔记本合盖不丢任务）。
-
-## 7. 二阶段：收紧访问（待办）
-
-给 fly app 配 `GITHUB_CLIENT_ID/SECRET + LOOPANY_AUTH_SECRET + LOOPANY_ALLOWED_LOGINS`
-后进入 gated mode：自造 token 不再能注册，机器需经 Web UI 的 GitHub 登录 + connect
-流程发 key，每人有独立 team。到时会更新本文档；现有机器的身份不受影响需重新接入。
-
-## 8. 故障排查
+## 6. 故障排查
 
 | 现象 | 查什么 |
 |---|---|
-| `lk` 报 401 | token 没注册过（daemon 先 `loopany up` 一次）或 token 打错 |
-| 任务一直 pending | 先确认 `echo $LOOPANY_HOME` 是隔离 home，再运行 `loopany status`；然后用 `lk show <id> --log` 看 blocked note（别名错/机器离线） |
-| agent 起不来 | 目标机器 `claude` 是否可用已登录；`$LOOPANY_HOME/daemon.log` |
-| run 被改判 failed | agent 静默退出（没写任何事件）——完善 body 里的收尾要求 |
+| 卡在 `starting daemon…` | 用的是不是 `lk`（而不是手写的 wrapper）。`lk setup` 必须能拿到本 checkout 的 runtime；回退到 PATH 上别的 `loopany` 会一路 401。看 `~/.loopany-kernel-live/daemon.log` 里有没有连续的 `poll non-ok status: 401` |
+| `you are not a member of /x` | workspace 名写错，或还没被加进去 —— 找管理员，别换名重试 |
+| `lk` 报 not logged in | 会话过期，重跑 `lk setup /<workspace>`（或 `lk login <server>`）批准新设备码 |
+| 任务一直 pending | `lk-runtime status` 看 daemon 是否 online；再用 `lk show <id> --log` 看 blocked note（别名错 / agent 没装 / 机器离线） |
+| agent 起不来 | 目标机器上对应的 `claude` / `codex` / `grok` 是否可用且已登录；看 `~/.loopany-kernel-live/daemon.log` |
+| run 被改判 failed | agent 静默退出（没写任何事件）—— 完善 body 里的收尾要求 |
+| 正式环境被带偏 | `env \| grep LOOPANY_HOME` 应该是空的；正式命令用裸 `loopany`，kernel-live 用 `lk` / `lk-runtime`，不要混 |
 | 想看服务器日志 | `fly logs -a loopany-kernel-live`（需要 fly 权限） |
