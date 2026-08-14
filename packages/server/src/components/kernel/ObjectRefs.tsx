@@ -43,7 +43,10 @@ export function ArtifactRef({ entry, select, actions }: { entry: Obj; select: Se
   const suffix = actions?.length ? ` · ${actions.join(" + ")}` : "";
   const meta = <>{artifact.key && artifact.key !== label ? artifact.key : artifact.id}{suffix}</>;
   if (artifact.archetype === "doc") return <RefRow tag="DOC" title={label} meta={meta} onClick={() => select("doc", artifact.id)} />;
-  return <div className={ROW}><code className={TAG}>MIRROR</code><span className="min-w-0 flex-1"><strong className="block leading-[1.45]">{label}</strong><small className="mt-1 block text-[#777]">{meta}</small></span></div>;
+  const mirrorLabel = artifact.kind === "url"
+    ? <a className="text-[#174f78] underline decoration-[#aaa] underline-offset-2 hover:decoration-[#174f78] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#174f78]" href={artifact.coords} target="_blank" rel="noreferrer">{label}</a>
+    : label;
+  return <div className={ROW}><code className={TAG}>MIRROR</code><span className="min-w-0 flex-1"><strong className="block [overflow-wrap:anywhere] leading-[1.45]">{mirrorLabel}</strong><small className="mt-1 block [overflow-wrap:anywhere] text-[#777]">{meta}</small></span></div>;
 }
 
 export function MachineRef({ machine, data, select, detailed = false }: { machine: Obj; data: Obj; select: Select; detailed?: boolean }) {
