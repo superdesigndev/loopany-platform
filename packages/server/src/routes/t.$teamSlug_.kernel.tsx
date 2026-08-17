@@ -13,9 +13,12 @@ import { formatOpen, parseOpen, viewFromPathname } from "../components/kernel/ro
  * loader would refetch on every view change and race the poll.
  */
 export const Route = createFileRoute("/t/$teamSlug_/kernel")({
-  validateSearch: (search: Record<string, unknown>): { open?: string; row?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { open?: string; row?: string; q?: string; owner?: string; status?: string } => ({
     open: typeof search.open === "string" && search.open ? search.open : undefined,
     row: typeof search.row === "string" && search.row ? search.row : undefined,
+    q: typeof search.q === "string" && search.q ? search.q : undefined,
+    owner: typeof search.owner === "string" && search.owner ? search.owner : undefined,
+    status: typeof search.status === "string" && search.status ? search.status : undefined,
   }),
   component: KernelLayout,
 });
@@ -36,7 +39,10 @@ function KernelLayout() {
     // while it is already open is not (browsing a list would flood history).
     replace: selection != null,
   });
-  const closeDetail = () => void navigate({ to: ".", search: () => ({}) });
+  const closeDetail = () => void navigate({
+    to: ".",
+    search: (prev: Record<string, unknown>) => ({ ...prev, open: undefined, row: undefined }),
+  });
 
   return <KernelShell teamSlug={teamSlug} view={view} selection={selection} select={select} closeDetail={closeDetail}>
     <Outlet />
